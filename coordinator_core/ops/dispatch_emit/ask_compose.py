@@ -58,6 +58,7 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+_DOC_NEW = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new"'
 _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
@@ -580,8 +581,10 @@ def compose_ask_script(
         f"{head}\n\n{anchor}\n\n",
         "Author the plan for the sizing at ",
         "js:_sizingRel",
-        ": scaffold `docs/plans/<sizing-stem>.md` with `scope_mode: spec-dispatch` through the plan "
-        "skill (never hand-write frontmatter), derive its spine from the sizing, then FILL the "
+        f": scaffold it with `{_DOC_NEW} --type plan --sizing-object <that sizing path> --title "
+        "\"<title>\" --out docs/plans/<sizing-stem>.md` (that launcher, never `python3` on the "
+        "script; never hand-write frontmatter) and set `scope_mode: spec-dispatch`, derive its "
+        "spine from the sizing, then FILL the "
         "scaffold: no PLACEHOLDER, `path/to/file` or `<REPLACE:` marker may remain anywhere in the "
         "plan -- stage refuses a plan that still carries one. Return its repo-relative path as plan_rel."
         + (

@@ -273,3 +273,9 @@ def test_every_digest_var_read_is_declared(over):
     for name in (*RUNTIME_VARS, PLAN_HELD_VAR):
         if re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", script):
             assert re.search(rf"\b(const|let) {re.escape(name)}\b", script), name
+
+
+def test_s_plan_author_is_handed_the_scaffold_launcher_not_a_skill():
+    script = _compose()
+    assert "/bin/coordinator-doc-new" in script and "--sizing-object" in script
+    assert "through the plan skill" not in script

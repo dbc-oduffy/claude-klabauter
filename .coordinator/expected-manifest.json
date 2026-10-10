@@ -2042,8 +2042,8 @@
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "018292d1c1746cb48730a9b20c5b46329a020b8a",
-    "coordinator_core/_engine_stamp": "5ab8ee4f884aa04c0cc17df2ac8282736b9216e9",
+    "coordinator_core/_engine_published_at": "bdf2dfcbe817ca96e06265ea56549a35d5757ac0",
+    "coordinator_core/_engine_stamp": "332f87ee52a6617bde098cc9ffe19d54cf0be815",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4045,7 +4045,7 @@
     "coordinator_core/ops/dispatch_emit/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/dispatch_emit/admission.py": "0d1a88cd69598bd2ded7870f3f28cfbbdc44a93e",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "1b6a36ff5d977af6c5cc1583dd370267805e5aba",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "f3f8468dbcf3572b2942c97b69346739667674a5",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "daae6de7242f4e6fba53c524e6062a6db8130d43",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "c1379059e3a8a7d3be81931cc79a6084f5742f2d",
     "coordinator_core/ops/dispatch_emit/ask_gate.py": "f6c8bcc3376474bf07af766bb6935e04211d319a",
     "coordinator_core/ops/dispatch_emit/ask_plan_blitz.py": "91eaf4b35c10a607c0ea089948236c874ba7e282",
@@ -4138,7 +4138,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_agent_type_resolution.py": "f4667965bd3cde2eed3a4ae68cdc1719f74c8fb8",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_baton_input.py": "e1e219216b4ea9137c67495db15b224b81f936aa",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_brief.py": "7316b6faaac6b19f96d9b0f9781a0ca2efb5bd8d",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose.py": "d0746ff9fe12c020c028ce4bc47f5cf15f233dc2",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose.py": "ab8dc747ed044c4b0012a12a7348fb88e37ba1f9",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_apm_accept.py": "d9399402335d6546e0705d02721e666256bfc312",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_em_brief.py": "9fbe60a7f79d1f6618520a7e97756241aa26f331",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_gated_and_halt.py": "ef35413b4e093f5509734bb48a56fa8f9acb532d",
@@ -7246,5 +7246,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "ade8c6c26a2a49c37f1b4ce01cb8ba706237edb3"
+  "source_head": "8c6960fce699f283deaff5680b519a417fc85fce"
 }
