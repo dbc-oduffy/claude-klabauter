@@ -78,14 +78,18 @@ def _read_config() -> Mapping[str, Any]:
 _UNRESOLVED_RUN = "unresolved"
 
 
-def _logged_run(payload: Mapping[str, Any]) -> Optional[str]:
-    """The workflow run a logged verifier call belongs to, or None. A subagent's payload names its
-    parent session's transcript, so the run is found the way the identity leg finds it, not by
-    parsing the path alone. Only verifier rows are resolved: they are what the flip gate counts,
-    and an unlisted caller never pays for the lookup."""
-    if not payload.get("agent_id") or payload.get("agent_type") not in _VERIFIER_TYPES:
+def _run_in_transcript_path(payload: Mapping[str, Any]) -> Optional[str]:
+    """The workflow run id named in the subagent's own transcript path, or None. Path parse only,
+    no filesystem access, so the log can carry it on every record."""
+    transcript = payload.get("transcript_path")
+    if not payload.get("agent_id") or not isinstance(transcript, str):
         return None
-    return next(iter(_workflow_runs_of(payload)), None)
+    parts = transcript.replace("\\", "/").split("/")
+    if "subagents" not in parts:
+        return None
+    kind, *rest = parts[parts.index("subagents") + 1:] or [None]
+    run, *agent = rest or [None]
+    return run if kind == "workflows" and agent else None
 
 
 def _workflow_runs_of(payload: Mapping[str, Any]) -> List[str]:
@@ -285,7 +289,7 @@ def _record(
         "session_id": payload.get("session_id"),
         "agent_id": payload.get("agent_id"),
         "agent_type": payload.get("agent_type"),
-        "workflow_run": _logged_run(payload),
+        "workflow_run": _run_in_transcript_path(payload),
         "cwd": payload.get("cwd"),
         "caller_pid": _caller_pid(payload),
         "pid_source": _pid_and_source(payload)[1],

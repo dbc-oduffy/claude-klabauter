@@ -109,6 +109,38 @@ def test_darwin_snapshot_from_stubbed_libproc(monkeypatch):
     assert [(r.pid, r.ppid, r.ctime, r.name) for r in rows] == [(1, 0, 7, "launchd")]
 
 
+def test_darwin_snapshot_names_native_claude_install(monkeypatch):
+    monkeypatch.setattr(hp, "_darwin_pids", lambda: [1, 2, 3])
+    names = {1: "2.1.296", 2: "2.1.296", 3: "node"}
+    paths = {
+        1: "u/.local/share/claude/versions/2.1.296",
+        2: "opt/other/versions/2.1.296",
+    }
+    monkeypatch.setattr(hp, "_darwin_bsdinfo", lambda p: (names[p], 0, p))
+    monkeypatch.setattr(hp, "_darwin_exe_path", lambda p: paths[p])
+    assert [r.name for r in hp._darwin_snapshot()] == ["claude", "2.1.296", "node"]
+
+
+def test_linux_snapshot_names_native_claude_install(monkeypatch):
+    real_listdir = os.listdir
+    monkeypatch.setattr(hp.os, "listdir", lambda d: ["5", "self"] if d == "/proc" else real_listdir(d))
+    monkeypatch.setattr(hp, "_linux_stat", lambda pid: ("2.1.296", 1, 9))
+    monkeypatch.setattr(hp, "_linux_exe_path", lambda pid: "u/.local/share/claude/versions/2.1.296")
+    assert [r.name for r in hp._linux_snapshot()] == ["claude"]
+
+
+def test_version_name_keeps_its_name_when_path_unreadable(monkeypatch):
+    def unreadable(pid):
+        raise OSError
+    assert hp._named_for_anchor(1, "2.1.296", unreadable) == "2.1.296"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="libproc is macOS-only")
+def test_darwin_exe_path_reads_this_process():
+    path = hp._darwin_exe_path(os.getpid())
+    assert path and os.path.isfile(path)
+
+
 def test_darwin_unreadable_table_is_none(monkeypatch):
     monkeypatch.setattr(hp, "_darwin_pids", lambda: None)
     assert hp._darwin_snapshot() is None
