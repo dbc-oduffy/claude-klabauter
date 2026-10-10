@@ -127,6 +127,30 @@ def test_m_sizing_binds_the_minted_baton(tmp_path, monkeypatch):
     assert b["sizingObject"] == SIZING_REL
 
 
+def test_absent_trail_dir_inside_the_repo_is_scaffolded(tmp_path, monkeypatch):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("M"))
+    (tmp_path / "trail").rmdir()
+    assert _fire(tmp_path) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
+
+
+def test_absent_trail_dir_outside_the_repo_refuses(tmp_path, monkeypatch, capsys):
+    _stub_mint(monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _setup(repo, _sizing("M"))
+    outside = tmp_path / "elsewhere"
+    rc = ewf.main([
+        "--repo-root", str(repo), "--trail-dir", str(outside),
+        "--plugin-root", str(_plugin(repo)), "--from-sizing", SIZING_REL, "--live-engine-tree",
+        "--plan-only",
+    ])
+    assert rc != ewf.EXIT_OK
+    assert not outside.exists()
+    assert "outside --repo-root" in capsys.readouterr().err
+
+
 def test_second_fire_reuses_the_same_baton(tmp_path, monkeypatch):
     _stub_mint(monkeypatch)
     _setup(tmp_path, _sizing("M"))

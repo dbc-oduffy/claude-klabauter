@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.warm import push_cadence
 
 BRANCH = "work/m/2026-10-10"
@@ -131,15 +132,66 @@ def test_rejected_push_stays_registered_and_feeds_detector(repo, monkeypatch):
     assert rows and rows[0][1] == BRANCH
 
 
-def test_a_pair_rejected_max_times_is_dropped(repo, monkeypatch):
-    root, bare = repo
+def _reject_hook(bare):
     hook = bare / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\nexit 1\n")
     hook.chmod(0o755)
+    return hook
+
+
+def test_a_pair_rejected_max_times_is_dropped(repo, monkeypatch):
+    root, bare = repo
+    _reject_hook(bare)
     rows = []
     monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **k: rows.append(a))
     push_cadence.note_foreign_delivery(root, BRANCH)
-    for _ in range(push_cadence.FOREIGN_PUSH_MAX_REJECTS):
+    for _ in range(push_cadence.FOREIGN_PUSH_MAX_REJECTS - 1):
         _tick()
+        assert push_cadence.foreign_deliveries() == [(root, BRANCH)]
+    _tick()
     assert push_cadence.foreign_deliveries() == []
     assert len(rows) == push_cadence.FOREIGN_PUSH_MAX_REJECTS
+
+
+def test_re_registration_resets_the_reject_count(repo, monkeypatch):
+    root, bare = repo
+    _reject_hook(bare)
+    monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **k: None)
+    push_cadence.note_foreign_delivery(root, BRANCH)
+    for _ in range(push_cadence.FOREIGN_PUSH_MAX_REJECTS - 1):
+        _tick()
+    push_cadence.note_foreign_delivery(root, BRANCH)
+    for _ in range(push_cadence.FOREIGN_PUSH_MAX_REJECTS - 1):
+        _tick()
+        assert push_cadence.foreign_deliveries() == [(root, BRANCH)]
+    _tick()
+    assert push_cadence.foreign_deliveries() == []
+
+
+def test_transient_failures_never_drop_the_pair(repo, monkeypatch):
+    root, _bare = repo
+    rows = []
+    monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **k: rows.append(a))
+    push_cadence.note_foreign_delivery(root, BRANCH)
+    transient = (
+        "fatal: unable to access 'https://x/': Could not resolve host: x",
+        "ssh: connect to host x port 22: Connection timed out",
+        "fatal: unable to access 'https://x/': Failed to connect: Connection refused",
+        "",
+    )
+    for stderr in transient * 2:
+        monkeypatch.setattr(
+            push_cadence, "push_refspec",
+            lambda *a, _e=stderr, **k: GitResult(returncode=128, stdout="", stderr=_e),
+        )
+        _tick()
+        assert push_cadence.foreign_deliveries() == [(root, BRANCH)]
+    assert len(rows) == len(transient) * 2
+
+
+def test_success_forgets_the_pair_even_if_the_tracking_cas_fails(repo, monkeypatch):
+    root, _bare = repo
+    push_cadence.note_foreign_delivery(root, BRANCH)
+    monkeypatch.setattr(push_cadence, "cas_ref", lambda *a, **k: False)
+    _tick()
+    assert push_cadence.foreign_deliveries() == []

@@ -1220,10 +1220,14 @@ def _emit_single_from_sizing(
     """
     import yaml  # local import: only this code path needs it
 
+    # The Workflow has no filesystem primitive, so the trail must exist before the fire; a
+    # single fire from a sizing scaffolds its own rather than handing the EM a mkdir.
     if not trail_dir.is_dir():
-        return _refuse_from_sizing(
-            f"trail dir {trail_dir} does not exist. Scaffold it before emitting."
-        )
+        if not trail_dir.is_relative_to(repo_root):
+            return _refuse_from_sizing(
+                f"trail dir {trail_dir} does not exist and is outside --repo-root {repo_root}."
+            )
+        trail_dir.mkdir(parents=True, exist_ok=True)
     script_source = plugin_root / "workflows" / "plan-blitz.mjs"
     if not script_source.is_file():
         return _refuse_from_sizing(

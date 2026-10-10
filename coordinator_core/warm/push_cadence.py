@@ -528,6 +528,26 @@ def _note_foreign_reject(pair: tuple) -> None:
             _foreign_deliveries.pop(pair, None)
 
 
+#: stderr fragments (lowercased) of a remote that answered and refused. A
+#: timeout or transport failure carries none of them and retries next sweep.
+_DEFINITIVE_REJECT_MARKERS = (
+    "[rejected]",
+    "[remote rejected]",
+    "non-fast-forward",
+    "protected branch",
+    "permission denied",
+    "authentication failed",
+    "access denied",
+    "denied to",
+    "pre-receive hook declined",
+)
+
+
+def _is_definitive_reject(stderr: str) -> bool:
+    text = (stderr or "").lower()
+    return any(marker in text for marker in _DEFINITIVE_REJECT_MARKERS)
+
+
 def _foreign_remote(root: Path, branch: str) -> Optional[str]:
     """`branch.<b>.remote`, else the sole configured remote, else `origin`; None if none."""
     text = _read_git_config_text(root)
@@ -576,7 +596,8 @@ def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
                 )
             except Exception:  # noqa: BLE001 -- feeding the detector must never raise
                 pass
-            _note_foreign_reject(pair)
+            if _is_definitive_reject(result.stderr):
+                _note_foreign_reject(pair)
             return
         _forget_foreign(pair)
         if _ref_sha(common_dir, tracking) != local:

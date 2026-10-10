@@ -287,6 +287,34 @@ class TestSessionCapLeg:
         host.config[KEY_SESSION_HEAVY_CAP] = "1"
         assert guard.check(_payload("pnpm build")) is None
 
+    def _chain(self, base, ctime):
+        """pnpm -> tsx (node) -> node under the tool shell: one command, three heavy images."""
+        return [
+            ProcRow(pid=base, ppid=TOOL.pid, ctime=ctime, name="pnpm.exe"),
+            ProcRow(pid=base + 1, ppid=base, ctime=ctime + 1, name="node.exe"),
+            ProcRow(pid=base + 2, ppid=base + 1, ctime=ctime + 2, name="node.exe"),
+        ]
+
+    def test_one_multi_process_chain_counts_as_one_command(self, host):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30)
+        assert guard.check(_payload("pnpm build")) is None
+
+    def test_two_separate_chains_at_cap_deny_naming_the_roots(self, host):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
+        text = _reason(guard.check(_payload("pnpm build")))
+        assert "holds 2 heavy commands" in text and "300" in text and "310" in text
+        assert "301" not in text and "312" not in text
+
+    def test_three_chains_over_cap_deny(self, host):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40) + self._chain(320, 50)
+        assert "holds 3 heavy commands" in _reason(guard.check(_payload("pnpm build")))
+
+    def test_a_heavy_launcher_above_claude_still_counts_the_sessions_commands(self, host):
+        launcher = ProcRow(pid=50, ppid=1, ctime=5, name="npx.exe")
+        claude = ProcRow(pid=100, ppid=50, ctime=10, name="claude.exe")
+        host.rows = [launcher, claude, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
+        assert "holds 2 heavy commands" in _reason(guard.check(_payload("pnpm build")))
+
     def test_background_shells_over_cap_deny_naming_the_pids(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
@@ -826,6 +854,13 @@ class TestOrphanAttribution:
         out = guard.check(_payload("pnpm build"))
         assert out is not None and "session holds 2 heavy commands" in _reason(out)
         assert {r.holder_pid for r in leases.live_leases()} == {500, 600}
+
+    def test_a_claimed_orphan_chain_counts_once_beside_a_live_command(self, host, monkeypatch):
+        chain = [ProcRow(500, 9999, 22, "bash.exe"), ProcRow(501, 500, 23, "pnpm.exe"), ProcRow(502, 501, 24, "node.exe")]
+        host.rows = [CLAUDE, TOOL, CALLER] + chain
+        self._live(monkeypatch, host)
+        self._open("build", 20)
+        assert guard.check(_payload("pnpm build")) is None
 
     def test_a_claimed_orphan_typecheck_holds_the_one_typecheck_rule(self, host, monkeypatch):
         host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 22)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
@@ -235,30 +236,89 @@ def _linux_stat(pid: int) -> Optional[tuple]:
 # kernel's process name is the bare version ("2.1.296"), never "claude". Only a version-shaped
 # name pays the executable-path read.
 
+_VERSION_RE = re.compile(r"\d+(\.\d+)+")
+_NPM_CLAUDE_MARKER = "@anthropic-ai/claude-code"
+_ARGV_PROBE_IMAGES = frozenset({"node", "nodejs"})
+
+
 def _looks_like_version(name: str) -> bool:
-    return "." in name and name.replace(".", "").isdigit()
+    return _VERSION_RE.fullmatch(name) is not None
 
 
-def _named_for_anchor(pid: int, name: str, exe_path: Callable[[int], Optional[str]]) -> str:
-    """name, or "claude" when a version-shaped name runs from a claude/versions/ directory."""
-    if not _looks_like_version(name):
-        return name
-    path = _safe(exe_path, pid)
-    if not path:
-        return name
-    parent = Path(path).parent
-    return "claude" if parent.name == "versions" and parent.parent.name == "claude" else name
+def _is_npm_claude_argv(argv: Sequence[str]) -> bool:
+    """True when node's script argument is the npm/Homebrew-installed Claude Code CLI entry."""
+    script = argv[1].replace("\\", "/") if len(argv) > 1 else ""
+    return _NPM_CLAUDE_MARKER in script and script.rsplit("/", 1)[-1] in ("cli.js", "cli.mjs", "claude")
+
+
+def _named_for_anchor(
+    pid: int,
+    name: str,
+    exe_path: Callable[[int], Optional[str]],
+    argv: Optional[Callable[[int], Optional[Sequence[str]]]] = None,
+) -> str:
+    """"claude" when the process is Claude Code under a name that does not say so: a
+    version-shaped name run from a claude/versions/ directory (native install), or a node
+    process whose script is the npm-global/Homebrew CLI entry; else name."""
+    if _looks_like_version(name):
+        path = _safe(exe_path, pid)
+        if not path:
+            return name
+        parent = Path(path).parent
+        return "claude" if parent.name == "versions" and parent.parent.name == "claude" else name
+    if argv is not None and name.lower().removesuffix(".exe") in _ARGV_PROBE_IMAGES:
+        args = _safe(argv, pid)
+        if args and _is_npm_claude_argv(args):
+            return "claude"
+    return name
 
 
 def _linux_exe_path(pid: int) -> Optional[str]:
     return os.readlink(f"/proc/{int(pid)}/exe")
 
 
+def _linux_argv(pid: int) -> Optional[List[str]]:
+    with open(f"/proc/{int(pid)}/cmdline", "rb") as fh:
+        raw = fh.read(4096)
+    return [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a] or None
+
+
+_libc_cache: dict = {}
+
+
+def _libc():
+    """The process's own libc handle (proc_*, sysctl); cached."""
+    if "c" not in _libc_cache:
+        _libc_cache["c"] = ctypes.CDLL(None)
+    return _libc_cache["c"]
+
+
 def _darwin_exe_path(pid: int) -> Optional[str]:
-    lp = ctypes.CDLL(None, use_errno=True)
     buf = ctypes.create_string_buffer(4096)
-    n = lp.proc_pidpath(int(pid), buf, ctypes.sizeof(buf))
+    n = _libc().proc_pidpath(int(pid), buf, ctypes.sizeof(buf))
     return buf.value.decode("utf-8", "replace") if n > 0 else None
+
+
+_CTL_KERN = 1
+_KERN_PROCARGS2 = 49
+
+
+def _darwin_argv(pid: int) -> Optional[List[str]]:
+    """argv from sysctl KERN_PROCARGS2: int argc, exec path, NUL padding, then argc strings."""
+    lc = _libc()
+    mib = (ctypes.c_int * 3)(_CTL_KERN, _KERN_PROCARGS2, int(pid))
+    size = ctypes.c_size_t(8192)
+    buf = ctypes.create_string_buffer(size.value)
+    if lc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0 or size.value <= 4:
+        return None
+    raw = buf.raw[: size.value]
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    rest = raw[4:].split(b"\0", 1)
+    if len(rest) < 2:
+        return None
+    tail = rest[1].lstrip(b"\0")
+    args = [a.decode("utf-8", "replace") for a in tail.split(b"\0")[:argc]]
+    return args or None
 
 
 def _linux_alive(pid: int, ctime: int) -> bool:
@@ -276,7 +336,7 @@ def _linux_snapshot() -> Optional[List]:
         if e.isdigit():
             st = _linux_stat(int(e))
             if st is not None:
-                rows.append(ProcRow(int(e), st[1], st[2], _named_for_anchor(int(e), st[0], _linux_exe_path)))
+                rows.append(ProcRow(int(e), st[1], st[2], _named_for_anchor(int(e), st[0], _linux_exe_path, _linux_argv)))
     return rows or None
 
 
@@ -304,7 +364,7 @@ class _BSDInfo(ctypes.Structure):
 def _darwin_bsdinfo(pid: int) -> Optional[tuple]:
     """(name, ppid, start_us) via proc_pidinfo, or None (gone, or another uid)."""
     try:
-        lp = ctypes.CDLL(None, use_errno=True)
+        lp = _libc()
         b = _BSDInfo()
         n = lp.proc_pidinfo(int(pid), _PROC_PIDTBSDINFO, 0, ctypes.byref(b), ctypes.sizeof(b))
         if n != ctypes.sizeof(b):
@@ -330,7 +390,7 @@ def _darwin_alive(pid: int, ctime: int) -> bool:
 
 def _darwin_pids() -> Optional[List[int]]:
     try:
-        lp = ctypes.CDLL(None, use_errno=True)
+        lp = _libc()
         need = lp.proc_listpids(_PROC_ALL_PIDS, 0, None, 0)
         if need <= 0:
             return None
@@ -351,7 +411,7 @@ def _darwin_snapshot() -> Optional[List]:
     for p in pids:
         info = _darwin_bsdinfo(p)
         if info is not None:
-            rows.append(ProcRow(p, info[1], info[2], _named_for_anchor(p, info[0], _darwin_exe_path)))
+            rows.append(ProcRow(p, info[1], info[2], _named_for_anchor(p, info[0], _darwin_exe_path, _darwin_argv)))
     return rows or None
 
 

@@ -118,7 +118,72 @@ def test_darwin_snapshot_names_native_claude_install(monkeypatch):
     }
     monkeypatch.setattr(hp, "_darwin_bsdinfo", lambda p: (names[p], 0, p))
     monkeypatch.setattr(hp, "_darwin_exe_path", lambda p: paths[p])
+    monkeypatch.setattr(hp, "_darwin_argv", lambda p: ["node", "/srv/app/server.js"])
     assert [r.name for r in hp._darwin_snapshot()] == ["claude", "2.1.296", "node"]
+
+
+@pytest.mark.parametrize("name", ["1.", ".1", "...", "2", "claude", "2.1.296x"])
+def test_looks_like_version_rejects_non_versions(name):
+    assert not hp._looks_like_version(name)
+
+
+def test_looks_like_version_accepts_semver():
+    assert hp._looks_like_version("2.1.296") and hp._looks_like_version("10.0")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["node", "/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"],
+        ["node", "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js", "--resume"],
+        ["node", "C:\\Users\\u\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"],
+    ],
+)
+def test_node_running_the_claude_cli_entry_is_the_anchor(argv):
+    assert hp._named_for_anchor(7, "node", lambda p: None, lambda p: argv) == "claude"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["node", "/srv/app/server.js"],
+        ["node", "/x/@anthropic-ai/claude-code/other.js"],
+        ["node"],
+        None,
+    ],
+)
+def test_other_node_processes_keep_their_name(argv):
+    assert hp._named_for_anchor(7, "node", lambda p: None, lambda p: argv) == "node"
+
+
+def test_a_non_node_image_never_pays_the_argv_read():
+    def boom(pid):
+        raise AssertionError("argv read")
+    assert hp._named_for_anchor(7, "python", lambda p: None, boom) == "python"
+
+
+def test_linux_snapshot_names_npm_global_claude(monkeypatch):
+    real_listdir = os.listdir
+    monkeypatch.setattr(hp.os, "listdir", lambda d: ["5"] if d == "/proc" else real_listdir(d))
+    monkeypatch.setattr(hp, "_linux_stat", lambda pid: ("node", 1, 9))
+    monkeypatch.setattr(hp, "_linux_argv", lambda pid: ["node", "/l/node_modules/@anthropic-ai/claude-code/cli.js"])
+    assert [r.name for r in hp._linux_snapshot()] == ["claude"]
+
+
+def test_linux_argv_reads_this_process_when_proc_exists():
+    if not os.path.exists("/proc/self/cmdline"):
+        pytest.skip("no procfs")
+    assert hp._linux_argv(os.getpid())
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="sysctl KERN_PROCARGS2 is macOS-only")
+def test_darwin_argv_reads_this_process():
+    argv = hp._darwin_argv(os.getpid())
+    assert argv and argv[0]
+
+
+def test_darwin_libc_handle_is_cached():
+    assert hp._libc() is hp._libc()
 
 
 def test_linux_snapshot_names_native_claude_install(monkeypatch):

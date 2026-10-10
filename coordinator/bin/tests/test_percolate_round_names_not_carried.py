@@ -73,3 +73,29 @@ def test_subject_counts_only_real_drops(round_module):
 
     assert "not carried" not in all_unchanged
     assert "1 reported change(s) not carried" in one_lost
+
+
+def test_gitignored_and_absent_drops_are_benign_in_subject_and_body(round_module):
+    dropped = [
+        ("MODIFY", "x.pyc"),
+        ("DELETE", "gone.py"),
+        ("MODIFY", "lib/lost.py"),
+    ]
+    explained = ["x.pyc", "gone.py"]
+
+    body = round_module._not_carried_prose(dropped, (), explained)
+
+    assert "lib/lost.py" in body
+    assert "  x.pyc" not in body and "  gone.py" not in body
+    assert "2 reported change(s) explained" in body
+
+    real_changes = list(dropped)
+    benign_only = round_module._build_commit_subject(
+        "row", real_changes + [], ["lib/lost.py"], explained_paths=explained + ["lib/lost.py"],
+        source_sha="0" * 12,
+    )
+    mixed = round_module._build_commit_subject(
+        "row", real_changes, ["a.py"], explained_paths=explained, source_sha="0" * 12
+    )
+    assert "not carried" not in benign_only
+    assert "1 reported change(s) not carried" in mixed

@@ -131,13 +131,17 @@ def check_repo_pointers(required_keys: "list[str]", registry_get: "Callable[[str
     return items
 
 
+# derive_defaults' key set does not depend on its RAM argument.
+_KEY_SET_PROBE_MB = 16 * 1024
+
+
 def check_heavy_admission(registry_get: "Callable[[str], Optional[str]]") -> CheckItem:
     """Every heavy_admission.* key the admission guard reads is a positive integer; an absent one
     denies every heavy launch once the guard enforces, and reads as healthy until then."""
     from coordinator_core.bash_guards._heavy_admission_seed import derive_defaults
 
     bad = []
-    for key in sorted(derive_defaults(16 * 1024)):
+    for key in sorted(derive_defaults(_KEY_SET_PROBE_MB)):
         value = registry_get(key)
         try:
             ok = int(str(value)) > 0

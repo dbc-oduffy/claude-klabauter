@@ -83,8 +83,9 @@ def test_per_guard_strict_hardens_one_guard_alone(monkeypatch):
     assert _decision(_run(_FIND)) == "deny"
     out = _run(_PYTEST, session="sess-policy-2")
     # guard-heavy-command-admission is a floor guard and may still deny; the suite guard must not.
-    reason = ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason") or ""
-    assert "check-test-suite-invocation" not in reason
+    if out is not None:
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "deny" and "guard-heavy-command-admission" in hso["permissionDecisionReason"]
 
 
 def test_suite_guard_defaults_strict_under_a_global_warn(monkeypatch):

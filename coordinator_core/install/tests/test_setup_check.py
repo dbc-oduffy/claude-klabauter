@@ -62,18 +62,14 @@ def test_guards_flag_unresolvable_hook_command(tmp_path):
 
 
 def test_heavy_admission_flags_an_unseeded_key():
-    seeded = {
-        "heavy_admission.free_ram_floor_mb": "2457",
-        "heavy_admission.lease_reserve_mb": "2048",
-        "heavy_admission.session_background_cap": "4",
-        "heavy_admission.session_heavy_cap": "2",
-        "heavy_admission.vitest_max_workers": "4",
-        "heavy_admission.worker_rss_ceiling_mb": "4096",
-    }
+    from coordinator_core.bash_guards._heavy_admission_contract import KEY_SESSION_HEAVY_CAP
+    from coordinator_core.bash_guards._heavy_admission_seed import derive_defaults
+
+    seeded = {k: str(v) for k, v in derive_defaults(setup_check._KEY_SET_PROBE_MB).items()}
     assert setup_check.check_heavy_admission(seeded.get).ok
-    partial = dict(seeded, **{"heavy_admission.session_heavy_cap": "0"})
+    partial = dict(seeded, **{KEY_SESSION_HEAVY_CAP: "0"})
     item = setup_check.check_heavy_admission(partial.get)
-    assert not item.ok and "heavy_admission.session_heavy_cap" in item.detail
+    assert not item.ok and KEY_SESSION_HEAVY_CAP in item.detail
 
 
 def test_door_fails_when_not_installed(tmp_path):

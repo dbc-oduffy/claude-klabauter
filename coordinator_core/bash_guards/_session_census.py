@@ -137,11 +137,13 @@ def session_census(
     return SessionCensus(anchor=anchor, heavy=tuple(heavy), shells=tuple(shells))
 
 
-def heavy_roots(heavy: Sequence[ProcRow], rows: Sequence[ProcRow]) -> List[ProcRow]:
+def heavy_roots(
+    heavy: Sequence[ProcRow], rows: Sequence[ProcRow], anchor_pid: Optional[int] = None
+) -> List[ProcRow]:
     """The heavy rows with no heavy ancestor: one per command, so `pnpm -> tsx -> node` is one.
 
-    Ancestry is walked through rows by ppid; a hop to an older-than-child parent (pid reuse) or a
-    missing parent ends the walk.
+    Ancestry is walked through rows by ppid and ends at anchor_pid (whatever launched the session
+    is not part of it), at a missing parent, or at an older-than-child parent (pid reuse).
     """
     heavy_pids = {r.pid for r in heavy}
     by_pid = {r.pid: r for r in rows}
@@ -151,6 +153,8 @@ def heavy_roots(heavy: Sequence[ProcRow], rows: Sequence[ProcRow]) -> List[ProcR
         for _ in range(_MAX_HOPS):
             parent = by_pid.get(node.ppid)
             if parent is None or parent.pid == node.pid or parent.ctime > node.ctime:
+                break
+            if parent.pid == anchor_pid:
                 break
             if parent.pid in heavy_pids:
                 nested = True

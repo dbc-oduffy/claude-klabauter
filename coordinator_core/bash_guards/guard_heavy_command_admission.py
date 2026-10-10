@@ -486,7 +486,7 @@ def _cap_leg(
             census,
             launch,
         )
-    commands = census_mod.heavy_roots(census.heavy, rows) if heavy else ()
+    commands = census_mod.heavy_roots(census.heavy, rows, anchor.pid) if heavy else ()
     if heavy and len(commands) >= heavy_cap:
         pids = ", ".join(str(r.pid) for r in commands)
         return (

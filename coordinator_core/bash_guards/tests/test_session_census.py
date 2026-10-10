@@ -154,3 +154,14 @@ def test_two_commands_count_twice():
         R(3, 2, 3, "pnpm"), R(4, 3, 4, "node"), R(7, 6, 7, "vitest"),
     ]
     assert sorted(r.pid for r in heavy_roots([rows[3], rows[4], rows[5]], rows)) == [3, 7]
+
+
+def test_a_heavy_launcher_above_the_anchor_does_not_zero_the_count():
+    # npx -> claude -> bash -> pnpm -> node: the launcher is not part of the session.
+    rows = [
+        R(1, 0, 1, "npx"), R(2, 1, 2, "claude"), R(3, 2, 3, "bash"),
+        R(4, 3, 4, "pnpm"), R(5, 4, 5, "node"),
+    ]
+    heavy = [rows[0]] + rows[3:]
+    assert [r.pid for r in heavy_roots(heavy, rows)] == [1]
+    assert sorted(r.pid for r in heavy_roots(heavy, rows, anchor_pid=2)) == [1, 4]
