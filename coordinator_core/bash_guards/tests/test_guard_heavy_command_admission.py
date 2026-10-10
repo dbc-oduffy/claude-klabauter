@@ -154,7 +154,7 @@ class TestIdentityLeg:
 
     @pytest.mark.parametrize(
         "agent_type",
-        ["general-purpose", "Explore", "coordinator:executor", "workflow-subagent", "unknown", "", "aliza-0123456789abcdef"],
+        ["general-purpose", "Explore", "workflow-subagent", "unknown", "", "aliza-0123456789abcdef"],
     )
     def test_unlisted_caller_classes_are_denied(self, host, agent_type):
         out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type=agent_type))
@@ -708,3 +708,41 @@ class TestForwardedCallerPid:
         host.config = dict(host.config, **{KEY_FREE_RAM_FLOOR_MB: "999999"})
         guard.check(self._no_pid("pnpm build"))
         assert _log_lines(tmp_path)[-1]["pid_source"] == "caller-env"
+
+
+class TestExecutorCarveOut:
+    """Group EM ruling 2026-10-10: limit what agents run, not who they are."""
+
+    EXEC = {"agent_id": "deadbeef0123", "agent_type": "coordinator:executor"}
+
+    def test_an_executor_noemit_tsc_is_admitted(self, host):
+        assert guard.check(_payload("pnpm exec tsc --noEmit", **self.EXEC)) is None
+
+    @pytest.mark.parametrize("cmd", ["tsc", "tsc --noEmit --watch", "pnpm typecheck", "pnpm build", "tsc --noEmit; pnpm build"])
+    def test_an_executor_running_anything_else_heavy_is_denied(self, host, cmd):
+        out = guard.check(_payload(cmd, **self.EXEC))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_the_carve_out_is_the_executor_only(self, host):
+        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_an_executor_tsc_is_still_bounded_by_one_typecheck_per_session(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_second_typecheck", lambda anchor, primitives: [4242])
+        out = guard.check(_payload("tsc --noEmit", **self.EXEC))
+        assert out is not None and "already runs a typecheck" in _reason(out)
+
+    def test_any_subagent_may_run_a_capped_file_scoped_vitest(self, host):
+        host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
+        cmd = "pnpm vitest run src/a.test.ts --maxWorkers=2"
+        assert guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type="general-purpose")) is None
+
+    def test_an_unscoped_capped_vitest_from_a_subagent_stays_denied(self, host):
+        host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
+        out = guard.check(_payload("pnpm vitest run --maxWorkers=2", agent_id="deadbeef0123", agent_type="general-purpose"))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_an_executor_scoped_vitest_and_noemit_tsc_together_are_admitted(self, host):
+        host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
+        cmd = "pnpm vitest run a.test.ts --maxWorkers=1 2>&1 | tail -5; pnpm exec tsc --noEmit"
+        assert guard.check(_payload(cmd, **self.EXEC)) is None

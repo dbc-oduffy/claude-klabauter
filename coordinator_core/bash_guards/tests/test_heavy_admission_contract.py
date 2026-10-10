@@ -45,7 +45,7 @@ def test_allowlist_path_and_ttl():
 
 
 def test_record_fields():
-    assert c.Classification.__dataclass_fields__.keys() == {"heavy_class", "scoped", "background"}
+    assert c.Classification.__dataclass_fields__.keys() == {"heavy_class", "scoped", "background", "noemit_tsc"}
     assert c.MemoryReading.__dataclass_fields__.keys() == {"avail_mb", "trusted", "source"}
     assert c.ProcRow.__dataclass_fields__.keys() == {"pid", "ppid", "ctime", "name"}
     assert c.LeaseRecord.__dataclass_fields__.keys() == {

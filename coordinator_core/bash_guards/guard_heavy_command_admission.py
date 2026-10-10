@@ -12,7 +12,9 @@ What this guard is, in four points (DoE tripwire A-BOX-CAP-COUNTS-COMMANDS-NOT-A
 
 Legs, in order, each denying once (no hold, sleep or retry):
   identity     the main thread, or an agent_type exactly on heavy_command_allowlist.txt that a
-               workflow did not spawn (read off where the agent's own transcript lives)
+               workflow did not spawn (read off where the agent's own transcript lives); a
+               coordinator:executor running only one-shot `tsc --noEmit` is admitted here and
+               bounded by the one-typecheck-per-session rule
   ram-floor    available RAM minus the reserve of every still-unattributed lease stays at or
                above the machine-local floor; scoped test runs skip it
   session-cap  the session's live heavy and background-shell descendants stay under the
@@ -305,7 +307,10 @@ def _flag_runaway_workers(config, payload, command, cls, anchor, census) -> None
 
 # --------------------------------------------------------------------------- legs
 
-def _identity_leg(payload: Dict[str, Any], heavy_name: str) -> Optional[Dict[str, Any]]:
+_EXECUTOR_TYPE = "coordinator:executor"
+
+
+def _identity_leg(payload: Dict[str, Any], heavy_name: str, cls) -> Optional[Dict[str, Any]]:
     from coordinator_core.bash_guards._heavy_identity import identity_verdict, load_allowlist
 
     allowlist = load_allowlist()
@@ -316,6 +321,10 @@ def _identity_leg(payload: Dict[str, Any], heavy_name: str) -> Optional[Dict[str
         workflow_runs=_workflow_runs_of(payload) if listed else (),
     )
     if verdict.allowed:
+        return None
+    # Group EM ruling 2026-10-10: an executor verifies its own chunk with `tsc --noEmit`; the
+    # session-cap leg's one-typecheck rule still bounds it.
+    if payload.get("agent_type") == _EXECUTOR_TYPE and payload.get("agent_id") and cls.noemit_tsc:
         return None
     return _deny_text(
         LEG_IDENTITY,
@@ -510,7 +519,9 @@ def check(
         return None
 
     config = None
-    if cls.heavy_class is HeavyClass.TEST_TIER and "vitest" in command.lower():
+    # Any heavy command naming vitest re-classifies with the cap: a capped scoped vitest segment
+    # beside a `tsc --noEmit` must not hold the executor carve-out shut.
+    if cls.heavy_class is not None and "vitest" in command.lower():
         config = _read_config()
         cls = classify(command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS))
         if cls.heavy_class is None and not cls.background:
@@ -534,7 +545,7 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
         return envelope
 
     if heavy and not _bypassed(LEG_IDENTITY, payload, command):
-        envelope = _identity_leg(payload, heavy_name)
+        envelope = _identity_leg(payload, heavy_name, cls)
         if envelope is not None:
             return denied(LEG_IDENTITY, envelope)
 

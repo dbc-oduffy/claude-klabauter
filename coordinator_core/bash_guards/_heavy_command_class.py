@@ -55,6 +55,15 @@ _VITEST_CONFIGS = tuple(
     for ext in ("ts", "mts", "cts", "js", "mjs", "cjs")
 )
 _MAX_WORKERS_FLAG = "--maxworkers"
+# vitest flags that take a separate value, so the value is never read as a test filter.
+_VITEST_VALUE_FLAGS = frozenset({
+    "--project", "-c", "--config", "-r", "--root", "--dir", "--reporter", "--outputfile", "--pool",
+    "--environment", "-t", "--testnamepattern", "--maxworkers", "--minworkers", "--shard", "--mode",
+    "--exclude", "--browser", "--coverage.provider", "--retry", "--testtimeout", "--hooktimeout",
+})
+_TEST_FILE_RE = re.compile(r"\.[cm]?[jt]sx?$", re.IGNORECASE)
+_TSC_BUILD_FLAGS = frozenset({"-b", "--build"})
+_NOEMIT = "noemit"
 _MAX_WORKERS_CONFIG_RE = re.compile(r"\bmaxWorkers\s*:\s*(\d+)?")
 
 
@@ -156,8 +165,30 @@ def _repo_worker_pin(cwd: Optional[str]) -> Optional[int]:
         cur = parent
 
 
+def _vitest_filters(args: Sequence[str]) -> List[str]:
+    """Positional filters of a vitest invocation: the run word and every flag value skipped."""
+    out: List[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("-"):
+            skip = "=" not in a and a.lower() in _VITEST_VALUE_FLAGS
+            continue
+        out.append(a)
+    if out and out[0].lower() in _VITEST_RUN_WORDS | _VITEST_WATCH_WORDS:
+        out = out[1:]
+    return out
+
+
 def _vitest_class(args: Sequence[str], cwd: Optional[str], worker_cap: Optional[int]) -> Optional[HeavyClass]:
-    """TEST_TIER unless the run exits on its own and its workers are capped under worker_cap."""
+    """TEST_TIER unless the run exits on its own, names only explicit test-file paths, and its
+    workers are capped under worker_cap.
+
+    TRAP: a vitest filter is a substring match, so a bare word (`vitest run audit`) can select the
+    whole suite; only a token naming a script file counts as scoped.
+    """
     low = [a.lower() for a in args]
     pos = [a.lower() for a in _positionals(args)]
     runs_once = (pos and pos[0] in _VITEST_RUN_WORDS) or "--run" in low
@@ -167,6 +198,9 @@ def _vitest_class(args: Sequence[str], cwd: Optional[str], worker_cap: Optional[
         or not runs_once
     )
     if watching or worker_cap is None:
+        return HeavyClass.TEST_TIER
+    filters = _vitest_filters(args)
+    if not filters or not all(_TEST_FILE_RE.search(f) for f in filters):
         return HeavyClass.TEST_TIER
     workers = _flag_int(args, _MAX_WORKERS_FLAG)
     if workers is None:
@@ -191,6 +225,21 @@ def _watch_or_fanout_class(argv: Sequence[str]) -> Optional[HeavyClass]:
         if test_script and any(a in _WATCH_FLAGS for a in args):
             return HeavyClass.TEST_TIER
     return None
+
+
+def _is_noemit_tsc(argv: Sequence[str]) -> bool:
+    """A one-shot `tsc --noEmit`: no watch, no build mode, and `--noEmit` not set false."""
+    if _suite._base(argv[0]) != "tsc":
+        return False
+    low = [a.lower() for a in argv[1:]]
+    if any(a in _WATCH_FLAGS or a in _TSC_BUILD_FLAGS for a in low):
+        return False
+    if "--noemit=false" in low:
+        return False
+    i = low.index("--noemit") if "--noemit" in low else -1
+    if i < 0:
+        return "--noemit=true" in low
+    return not (i + 1 < len(low) and low[i + 1] == "false")
 
 
 def _argv_class(argv: Sequence[str]) -> Optional[HeavyClass]:
@@ -260,6 +309,8 @@ def _scan(
         heavy = _argv_class(argv)
         if heavy is not None:
             found.append(heavy)
+            if heavy is HeavyClass.TYPECHECK and _is_noemit_tsc(argv):
+                found.append(_NOEMIT)
             continue
         if _suite._classify_tokens(argv, testpaths, cwd) is not None:
             found.append(HeavyClass.TEST_TIER)
@@ -299,7 +350,11 @@ def classify(
         _scan(command, _suite._read_testpaths(cwd), cwd, 0, found, vitest_worker_cap)
     except Exception:
         return light
+    heavies = [f for f in found if isinstance(f, HeavyClass)]
+    noemit = bool(heavies) and all(f is HeavyClass.TYPECHECK for f in heavies) and (
+        found.count(_NOEMIT) == len(heavies)
+    )
     for cls in _PRECEDENCE:
         if cls in found:
-            return Classification(cls, False, background)
+            return Classification(cls, False, background, noemit)
     return Classification(None, "scoped" in found, background)

@@ -61,11 +61,13 @@ class HeavyClass(str, enum.Enum):
 @dataclass(frozen=True)
 class Classification:
     """heavy_class is None for a command that is not heavy; scoped marks the RAM-leg-exempt
-    explicit-test-target carve-out; background mirrors tool_input.run_in_background."""
+    explicit-test-target carve-out; background mirrors tool_input.run_in_background; noemit_tsc
+    marks a command whose every heavy segment is a one-shot `tsc --noEmit` (the executor carve-out)."""
 
     heavy_class: Optional[HeavyClass]
     scoped: bool
     background: bool
+    noemit_tsc: bool = False
 
 
 @dataclass(frozen=True)

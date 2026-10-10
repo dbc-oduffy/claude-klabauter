@@ -132,7 +132,8 @@ def test_a_scoped_vitest_file_with_uncapped_workers_is_heavy(cmd, tmp_path):
     "cmd",
     [
         "vitest run src/a.test.ts --maxWorkers=2",
-        "vitest run --maxWorkers 4",
+        "vitest run --maxWorkers 4 src/b.spec.tsx",
+        "vitest run --project ddct packages/x/a.test.ts --maxWorkers=2",
         "npx vitest run a.test.ts --maxWorkers=1",
         "pnpm exec vitest run a.test.ts --maxWorkers=1",
     ],
@@ -181,3 +182,48 @@ def test_repo_vitest_config_pin_decides(config, expected, tmp_path):
 )
 def test_a_launcher_flag_never_hides_the_binary(cmd, expected):
     assert classify(cmd, CWD, ".", 4).heavy_class is expected
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "vitest run --maxWorkers=2",
+        "vitest run audit --maxWorkers=2",
+        "vitest run src/a.test.ts audit --maxWorkers=2",
+        "vitest run src/ --maxWorkers=2",
+    ],
+)
+def test_a_capped_vitest_run_without_only_file_paths_stays_heavy(cmd, tmp_path):
+    assert classify(cmd, None, str(tmp_path), 4).heavy_class is H.TEST_TIER
+
+
+@pytest.mark.parametrize(
+    "cmd,noemit",
+    [
+        ("tsc --noEmit", True),
+        ("pnpm exec tsc --noEmit -p .", True),
+        ("npx --no-install tsc --noEmit true", True),
+        ("tsc --noEmit=true", True),
+        ("tsc", False),
+        ("tsc --noEmit false", False),
+        ("tsc --noEmit=false", False),
+        ("tsc --noEmit --watch", False),
+        ("tsc -b --noEmit", False),
+        ("pnpm typecheck", False),
+        ("tsc --noEmit; pnpm build", False),
+        ("tsc --noEmit && pnpm typecheck", False),
+        ("tsc --noEmit && tsc --noEmit -p packages/a", True),
+    ],
+)
+def test_noemit_tsc_marks_only_commands_whose_every_heavy_segment_is_one(cmd, noemit, tmp_path):
+    assert classify(cmd, None, str(tmp_path)).noemit_tsc is noemit
+
+
+def test_a_capped_scoped_vitest_beside_noemit_tsc_keeps_the_mark(tmp_path):
+    c = classify("vitest run a.test.ts --maxWorkers=1 && tsc --noEmit", None, str(tmp_path), 4)
+    assert c.heavy_class is H.TYPECHECK and c.noemit_tsc is True
+
+
+def test_an_uncapped_vitest_beside_noemit_tsc_drops_the_mark(tmp_path):
+    c = classify("vitest run a.test.ts && tsc --noEmit", None, str(tmp_path), 4)
+    assert c.heavy_class is H.TYPECHECK and c.noemit_tsc is False
