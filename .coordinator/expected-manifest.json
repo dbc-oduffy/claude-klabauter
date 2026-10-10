@@ -2042,8 +2042,8 @@
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "0de3ab0cb75a6607f5de2c51a65cd2875720e114",
-    "coordinator_core/_engine_stamp": "11c23881e18ee3ea32e709eff2879361f04240c0",
+    "coordinator_core/_engine_published_at": "2ef418e0422fab33aaecbe3bffca3299cf2640b6",
+    "coordinator_core/_engine_stamp": "bf7efc0b8185b4724e2c885ddfb61232cb635212",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6708,7 +6708,7 @@
     "coordinator_core/warm/http_listener.py": "3b0d103b3d1d71fbd54fb334b1025a0eab48bac6",
     "coordinator_core/warm/idle.py": "c9ae1c871c315cec8b41f65dd0abc161a61e9507",
     "coordinator_core/warm/lifecycle.py": "578084ec6451c799363f73b285903b40afc73f34",
-    "coordinator_core/warm/push_cadence.py": "b7a33afac48fc27a5b3fcc96fa274ead7f19d5b4",
+    "coordinator_core/warm/push_cadence.py": "cfd817fc228b52701c21d7fd38b03eb35e9740f3",
     "coordinator_core/warm/serve_classifier.py": "5fd3229569129272549b89efe624ded1f28a4f04",
     "coordinator_core/warm/server.py": "26539c660fabd28f7a0c728e96ab3a38d971f12d",
     "coordinator_core/warm/settings.py": "2dd31b738a88a3b46cb71c1d24332a7088953890",
@@ -6805,10 +6805,10 @@
     "coordinator_core/warm/tests/test_process_global_characterization_fast.py": "3f0abf8e6633bba3ae17295e92673bea779660fc",
     "coordinator_core/warm/tests/test_publish_drain.py": "de0e7227b87974264104ce979810e96514647e66",
     "coordinator_core/warm/tests/test_publish_lag.py": "f3ee18c16c18457061bbe048740f52c747b616df",
-    "coordinator_core/warm/tests/test_push_cadence.py": "548699f262cf5425536c0376b05c5b768089fa32",
+    "coordinator_core/warm/tests/test_push_cadence.py": "437752ed63c667ce53015c88ca6c55f37a022763",
     "coordinator_core/warm/tests/test_push_cadence_foreign_delivery.py": "e2f47d8c4a847b2f3a28abfd9d7afabb4c2f017f",
     "coordinator_core/warm/tests/test_push_cadence_per_repo_ceiling.py": "c35ee18bc8145a934d4317b3f6292c9b21433804",
-    "coordinator_core/warm/tests/test_push_cadence_registry_sweep.py": "bbfe40dcebb0a52ed9bea6dc4ebb81ba1e47a2e0",
+    "coordinator_core/warm/tests/test_push_cadence_registry_sweep.py": "11d59658aecef9cd0cca77acfa9da064550ecd47",
     "coordinator_core/warm/tests/test_queue_drain_preserves_unstarted_request.py": "b096a428c195b01c94910b4f071825e98e531234",
     "coordinator_core/warm/tests/test_reconcile_poll_cannot_false_negative.py": "6b92e719b65a2966d427617f2b7473274f64c0d1",
     "coordinator_core/warm/tests/test_reentry_goes_through_the_seam.py": "6baa0167ff59e071bc18abeb85de162cd90016d2",
@@ -7251,5 +7251,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "d3179322e85295c87392aa2f28c06a90bd829f77"
+  "source_head": "9c63bbc4d6310893a60e5bbd08deae16f2c63564"
 }

@@ -139,7 +139,7 @@ from coordinator_core.ops.ceremony.push_ceiling import (
     resolve_push_ceiling,
 )
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
-from coordinator_core.ops.push_outstanding import push_outstanding
+from coordinator_core.ops.push_outstanding import _upstream_sha, push_outstanding
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
 from coordinator_core.warm import telemetry
 
@@ -253,13 +253,12 @@ def reset_cadence_for_test() -> None:
 
 
 def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
-    """True once every `interval_secs` of ticks, false otherwise -- the
-    counter-on-an-existing-tick this module's docstring names. The FIRST
-    tick after boot or a test reset primes the clock and does not itself
-    sweep (there is nothing to have accumulated yet in the time between
-    server boot and the first tick); every tick after that fires once
-    `interval_secs` has actually elapsed since the last sweep (or since
-    priming), never before.
+    """True on the first tick after boot or a test reset, then once every
+    `interval_secs` -- the counter-on-an-existing-tick this module's
+    docstring names. The first tick sweeps because a successor generation
+    inherits whatever its predecessor's exit sweep could not reach (a
+    publish restart lands mid-cadence), and a sweep of clean repos costs no
+    spawn.
     """
     global _last_sweep_monotonic
     now = clock()
@@ -267,7 +266,7 @@ def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
         last = _last_sweep_monotonic
         if last is None:
             _last_sweep_monotonic = now
-            return False
+            return True
         if now - last < interval_secs:
             return False
         _last_sweep_monotonic = now
@@ -462,6 +461,15 @@ def _no_upstream_and_no_new_commits(root: Path, branch: str, sha: str) -> bool:
                 if psha == sha:
                     return True
     return False
+
+
+def _nothing_outstanding(root: Path) -> bool:
+    """HEAD's branch already sits at its remote-tracking sha. Zero spawns."""
+    branch = head_branch(root)
+    if branch is None:
+        return False
+    sha = head_sha(root)
+    return sha is not None and _upstream_sha(root, branch) == sha
 
 
 def _sweep_one(repo_root: Union[str, Path]) -> str:
@@ -694,6 +702,11 @@ def sweep_repos(
     failed: list = []
     reached = len(ordered)
     for index, root in enumerate(ordered):
+        if _nothing_outstanding(root):
+            # Admission reserves a whole push ceiling; a clean repo must not
+            # spend it, or the tail behind a few clean repos is never reached.
+            skipped.append(root)
+            continue
         ceiling = (
             per_repo_budget_secs
             if per_repo_budget_secs is not None

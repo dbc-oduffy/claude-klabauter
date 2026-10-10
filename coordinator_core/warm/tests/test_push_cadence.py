@@ -47,7 +47,7 @@ def _make_context():
 def _author_profile(monkeypatch):
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
 
-def test_on_idle_tick_does_not_sweep_before_interval_elapses():
+def test_on_idle_tick_sweeps_first_tick_then_waits_for_interval():
     fake_now = [0.0]
     calls = []
 
@@ -60,8 +60,8 @@ def test_on_idle_tick_does_not_sweep_before_interval_elapses():
         interval_secs=600.0,
         sweep_fn=_fake_sweep,
     )
-    assert ran_first is False
-    assert calls == []
+    assert ran_first is True
+    assert calls == [["r"]]
 
     fake_now[0] = 300.0
     ran_second = push_cadence.on_idle_tick(
@@ -71,7 +71,7 @@ def test_on_idle_tick_does_not_sweep_before_interval_elapses():
         sweep_fn=_fake_sweep,
     )
     assert ran_second is False
-    assert calls == []
+    assert calls == [["r"]]
 
 
 def test_on_idle_tick_fires_once_interval_has_elapsed():
@@ -95,7 +95,7 @@ def test_on_idle_tick_fires_once_interval_has_elapsed():
         sweep_fn=_fake_sweep,
     )
     assert ran is True
-    assert calls == [["r"]]
+    assert calls == [["r"], ["r"]]
 
 
 def test_push_cadence_interval_is_strictly_under_idle_deadline():

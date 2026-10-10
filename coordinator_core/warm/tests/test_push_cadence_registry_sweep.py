@@ -98,13 +98,8 @@ def test_idle_tick_with_empty_served_set_pushes_registry_repo(tmp_path, monkeypa
     _registry(monkeypatch, {"reg": repo})
     assert _remote_head(repo) != _local_head(repo)
 
-    push_cadence.on_idle_tick(
-        served_repos=lambda: push_cadence.registry_sweep_repos([]), clock=lambda: 0.0
-    )
     ran = push_cadence.on_idle_tick(
-        served_repos=lambda: push_cadence.registry_sweep_repos([]),
-        clock=lambda: 601.0,
-        interval_secs=600.0,
+        served_repos=lambda: push_cadence.registry_sweep_repos([]), clock=lambda: 0.0
     )
 
     assert ran is True
@@ -112,6 +107,25 @@ def test_idle_tick_with_empty_served_set_pushes_registry_repo(tmp_path, monkeypa
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["pushed"] == [str(repo)]
+
+
+def test_clean_repos_spend_no_ceiling_so_the_dirty_tail_is_reached(tmp_path, monkeypatch):
+    clean = [_repo_ahead(tmp_path, f"clean{i}") for i in range(3)]
+    for root in clean:
+        push_cadence.sweep_repos([root], clock=lambda: 0.0)
+    dirty = _repo_ahead(tmp_path, "dirty")
+    ticks = iter([0.0, 0.0, 0.5, 1.0, 1.5, 2.0])
+    clock = lambda: next(ticks, 100.0)  # noqa: E731
+
+    push_cadence.sweep_repos(
+        [*clean, dirty], total_ceiling_secs=6.0, per_repo_budget_secs=5.0, clock=clock
+    )
+
+    assert _remote_head(dirty) == _local_head(dirty)
+    row = _rows()[-1]
+    assert row["pushed"] == [str(dirty)]
+    assert row["skipped"] == [str(root) for root in clean]
+    assert row["not_reached"] == []
 
 
 def test_registry_union_orders_served_first_and_dedups(tmp_path, monkeypatch):
