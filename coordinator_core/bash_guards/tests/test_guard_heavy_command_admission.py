@@ -618,3 +618,12 @@ class TestVitestWorkerCap:
         host.config[KEY_VITEST_MAX_WORKERS] = "4"
         out = guard.check(_payload("vitest run a.test.ts", agent_id="a1", agent_type="general-purpose", cwd=tmp_path))
         assert "identity" in _reason(out)
+
+
+def test_an_unlisted_subagent_never_pays_for_the_workflow_run_lookup(host, monkeypatch):
+    def lookup(sid):
+        raise AssertionError("workflow-run lookup reached for an unlisted caller")
+
+    monkeypatch.setattr(guard, "_live_workflow_runs", lookup)
+    out = guard.check(_payload("tsc --noEmit", agent_id="a1", agent_type="general-purpose"))
+    assert "not on the heavy-command allow-list" in _reason(out)

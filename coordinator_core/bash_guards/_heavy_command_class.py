@@ -46,6 +46,7 @@ _WATCH_RUNNERS = frozenset({"jest", "mocha", "vitest", "ava"})
 _RECURSIVE_FLAGS = frozenset({"-r", "--recursive", "--workspaces", "-ws"})
 _EXEC_LAUNCHERS = frozenset({"npx", "pnpx", "bunx"})
 _PM_EXEC_WORDS = frozenset({"exec", "dlx", "x"})
+_LAUNCHER_VALUE_FLAGS = frozenset({"-p", "--package", "--prefix", "-c", "--call", "--filter", "-f"})
 _VITEST_RUN_WORDS = frozenset({"run"})
 _VITEST_WATCH_WORDS = frozenset({"watch", "dev"})
 _VITEST_CONFIGS = tuple(
@@ -66,6 +67,36 @@ def _pm_script(args: Sequence[str]) -> Optional[str]:
     if pos and pos[0].lower() in _PM_RUN_WORDS:
         pos = pos[1:]
     return pos[0].lower() if pos else None
+
+
+def _unwrap_launcher(argv: Sequence[str]) -> List[str]:
+    """argv from the launched binary on, for `npx [flags] bin`, `pnpm exec|dlx bin` and the like.
+
+    TRAP: a flag before the binary (`npx --no-install tsc`, `npx -p typescript tsc`) otherwise
+    hides the binary and the command classifies light.
+    """
+    rest = _skip_flags(list(argv))
+    while rest:
+        base = _suite._base(rest[0]).lower()
+        if base in _EXEC_LAUNCHERS:
+            tail = rest[1:]
+        elif base in _PM_BASES and len(rest) > 1 and rest[1].lower() in _PM_EXEC_WORDS:
+            tail = rest[2:]
+        else:
+            return rest
+        tail = _skip_flags(tail)
+        if not tail:
+            return rest
+        rest = tail
+    return rest
+
+
+def _skip_flags(args: List[str]) -> List[str]:
+    """args from the first non-flag on. The suite tokenizer strips `npx` but leaves its flags."""
+    j = 0
+    while j < len(args) and args[j].startswith("-"):
+        j += 2 if args[j].lower() in _LAUNCHER_VALUE_FLAGS and "=" not in args[j] else 1
+    return args[j:] if j < len(args) else list(args)
 
 
 def _vitest_args(argv: Sequence[str]) -> Optional[List[str]]:
@@ -220,6 +251,7 @@ def _scan(
         if inner is not None:
             _scan(inner, testpaths, cwd, depth + 1, found, worker_cap)
             continue
+        argv = _unwrap_launcher(argv)
         vitest = _vitest_args(argv)
         if vitest is not None:
             heavy = _vitest_class(vitest, cwd, worker_cap)

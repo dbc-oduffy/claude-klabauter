@@ -165,3 +165,19 @@ def test_repo_vitest_config_pin_decides(config, expected, tmp_path):
     sub = tmp_path / "pkg"
     sub.mkdir()
     assert classify("vitest run a.test.ts", None, str(sub), 4).heavy_class is expected
+
+
+@pytest.mark.parametrize(
+    "cmd,expected",
+    [
+        ("npx --no-install tsc --version", H.TYPECHECK),
+        ("npx -y -p typescript tsc --noEmit", H.TYPECHECK),
+        ("pnpm exec tsc -p .", H.TYPECHECK),
+        ("pnpm dlx tsc", H.TYPECHECK),
+        ("npx --yes vitest", H.TEST_TIER),
+        ("npx prettier --check .", None),
+        ("pnpm exec eslint .", None),
+    ],
+)
+def test_a_launcher_flag_never_hides_the_binary(cmd, expected):
+    assert classify(cmd, CWD, ".", 4).heavy_class is expected

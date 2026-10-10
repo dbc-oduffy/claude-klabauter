@@ -264,11 +264,13 @@ def _flag_runaway_workers(config, payload, command, cls, anchor, census) -> None
 def _identity_leg(payload: Dict[str, Any], heavy_name: str) -> Optional[Dict[str, Any]]:
     from coordinator_core.bash_guards._heavy_identity import identity_verdict, load_allowlist
 
-    has_agent = bool(payload.get("agent_id"))
+    allowlist = load_allowlist()
+    # Only a listed subagent reaches the workflow check: the run lookup lists the temp dir.
+    listed = bool(payload.get("agent_id")) and payload.get("agent_type") in allowlist
     verdict = identity_verdict(
         payload,
-        allowlist=load_allowlist(),
-        workflow_runs=_live_workflow_runs(payload.get("session_id")) if has_agent else (),
+        allowlist=allowlist,
+        workflow_runs=_live_workflow_runs(payload.get("session_id")) if listed else (),
     )
     if verdict.allowed:
         return None
