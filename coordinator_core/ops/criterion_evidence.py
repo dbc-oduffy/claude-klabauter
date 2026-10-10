@@ -57,7 +57,8 @@ def _criterion_evidence_record(params: dict, repo_root: Optional[Path] = None) -
         command (str) -- the exact command the EM ran.
         output_path (str) -- file holding the command's raw output (absolute, or relative to
             the worktree root).
-        exit_code (int, optional) -- the command's exit status.
+        exit_code (int) -- the command's exit status; required, since a tail alone does not say
+            whether the command passed.
 
     Returns:
         {"recorded": True, "sidecar": str, "clause": str, "output_sha256": str}
@@ -71,8 +72,8 @@ def _criterion_evidence_record(params: dict, repo_root: Optional[Path] = None) -
         if value is None:
             return _fail(f"{name!r} (non-empty str) is required")
     exit_code = p.get("exit_code")
-    if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
-        return _fail("'exit_code' must be an int")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return _fail("'exit_code' (int) is required")
     if repo_root is None:
         return _fail("repo_root is required (no founding root available)")
 

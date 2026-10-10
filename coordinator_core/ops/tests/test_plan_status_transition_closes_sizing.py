@@ -82,3 +82,18 @@ def test_a_repeat_stamp_on_a_closed_sizing_changes_nothing(tmp_path):
 
     assert sizing.read_text(encoding="utf-8") == closed
     assert _git(repo, "rev-parse", "HEAD").stdout == head
+
+
+@pytest.mark.parametrize("pointer", ["../outside.yaml", "/etc/hosts", "state/sizings/absent.yaml"])
+def test_a_sizing_pointer_outside_the_repo_or_absent_never_cascades(tmp_path, pointer, capsys):
+    from coordinator_core.ops import plan_status_transition as pst
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (tmp_path / "outside.yaml").write_text("status: routed\n", encoding="utf-8")
+    plan = repo / _PLAN
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(f"---\ntitle: T\nstatus: implemented\nsizing_object: {pointer}\n---\n\nB.\n", encoding="utf-8")
+
+    assert pst._cited_sizing_open(str(plan)) is False
+    assert "no re-cascade" in capsys.readouterr().err

@@ -583,7 +583,7 @@ def compose_ask_script(
         "js:_sizingRel",
         f": scaffold it with `{_DOC_NEW} --type plan --sizing-object <that sizing path> --title "
         "\"<title>\" --out docs/plans/<sizing-stem>.md` (that launcher, never `python3` on the "
-        "script; never hand-write frontmatter) and set `scope_mode: spec-dispatch`, derive its "
+        "script; never author the frontmatter block by hand), then change its existing `scope_mode:` line to `spec-dispatch`, derive its "
         "spine from the sizing, then FILL the "
         "scaffold: no PLACEHOLDER, `path/to/file` or `<REPLACE:` marker may remain anywhere in the "
         "plan -- stage refuses a plan that still carries one. Return its repo-relative path as plan_rel."

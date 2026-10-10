@@ -55,6 +55,8 @@ def load_em_brief(
 
     if brief_file:
         path, source = _rel(repo_root, brief_file, "--brief-file")
+        if not path.is_file():
+            raise EmBriefRefused(f"--brief-file {brief_file}: no such file")
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:

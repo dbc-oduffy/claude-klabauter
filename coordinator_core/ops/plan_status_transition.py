@@ -540,12 +540,21 @@ def _cited_sizing_open(plan_path: str) -> bool:
     rel = (read_fm_field_unquoted(split.fm_text, "sizing_object") or "").strip() if split else ""
     if not rel or rel == "null":
         return False
-    worktree, _ = _resolve_repo_root_for(Path(plan_path))
-    if worktree is None:
+    worktree, git_common_dir = _resolve_repo_root_for(Path(plan_path))
+    if worktree is None or git_common_dir is None:
+        return False
+    # Sizings live in the main worktree, which is where the cascade itself looks.
+    roots = [Path(git_common_dir).parent, Path(worktree)]
+    target = next(
+        (hit for root in roots if (hit := contained_path(root / rel, roots)) and hit.is_file()), None
+    )
+    if target is None:
+        print(f"{_PROG}: {plan_path} sizing_object {rel} not found under the repo — no re-cascade", file=sys.stderr)
         return False
     try:
-        doc = yaml.safe_load((Path(worktree) / rel).read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        doc = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        print(f"{_PROG}: {plan_path} sizing_object {rel} unreadable ({exc.__class__.__name__}) — no re-cascade", file=sys.stderr)
         return False
     return isinstance(doc, dict) and doc.get("status") in _OPEN_SIZING_STATUSES
 

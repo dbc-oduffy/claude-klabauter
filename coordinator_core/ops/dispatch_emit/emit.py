@@ -3078,9 +3078,9 @@ def _surface_pathspec(surface: Optional[Sequence[str]]) -> str:
 
 
 _OUT_OF_SCOPE_CLAUSE = (
-    "A failure, error or unhandled exception raised by a file outside that surface and outside the "
-    "scoped targets belongs to a peer: list it under summary as out-of-scope, never count it in "
-    "tests_failed or let it set status fail, and do not re-run it in the baseline export."
+    "A failure, error or unhandled exception raised by a file that is neither in the edited set "
+    "nor one of the targets you ran belongs to a peer: list it under summary as out-of-scope, never "
+    "count it in tests_failed or let it set status fail, and do not re-run it in the baseline export."
 )
 
 
@@ -3094,9 +3094,24 @@ def _baseline_context_clause(run_base_sha: str, surface: Optional[Sequence[str]]
     block = json.dumps({"run_base_sha": run_base_sha, "diff_files": [], "failing_ids": []})
     return (
         "Attribute every failure per coordinator/docs/wiki/reviewer-pipeline/test-runner-baseline-attribution.md; "
-        f"fill diff_files from `git diff --name-only {run_base_sha}{_surface_pathspec(surface)}`"
-        " (the plan's own surface only; peer commits in the range are not this plan's diff).\n"
+        f"fill diff_files from {_edited_set_listing(run_base_sha, surface)}.\n"
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
+    )
+
+
+def _edited_set_listing(base: str, surface: Optional[Sequence[str]]) -> str:
+    """The git listings whose union is this run's edited set, as prompt text.
+
+    Committed changes are read over ``base..HEAD`` limited to the plan's declared surface, since
+    that range on a shared branch also holds peers' commits; with no declared surface the
+    committed listing is omitted rather than widened. Review-applied edits are still uncommitted
+    when the test phase runs, so the worktree listings stay unscoped.
+    """
+    spec = _surface_pathspec(surface)
+    committed = f"`git diff --name-only {base} HEAD{spec}`, " if spec else ""
+    return (
+        f"{committed}`git diff --name-only HEAD` and `git ls-files --others --exclude-standard`"
+        " (their union)"
     )
 
 
@@ -3106,21 +3121,11 @@ def _review_edits_clause(base: str, surface: Optional[Sequence[str]] = None) -> 
     Review stages run before this phase and apply their own fixes, so the rows'
     declared writes are not the whole edited set; a file a reviewer touched
     (a constant it judged unused, an import it dropped) is checked here too.
-    Both listings are limited to the plan's declared surface: unscoped, the
-    ``base..HEAD`` range on a shared branch names peers' files, and a peer's
-    failing test then fails this plan's run.
     """
-    spec = _surface_pathspec(surface)
-    scoped = (
-        f" Both listings are limited to the plan's own surface; a file outside it is a peer's"
-        f" and is never added to the run. {_OUT_OF_SCOPE_CLAUSE}"
-        if spec
-        else ""
-    )
     return (
         "Review stages ran before this phase and may have edited files beyond the "
-        f"rows' writes. Run `git diff --name-only {base}{spec}` and `git ls-files --others "
-        f"--exclude-standard{spec}` from the repo root; that union is the edited set.{scoped} "
+        f"rows' writes. From the repo root run {_edited_set_listing(base, surface)}: that is the "
+        f"edited set; a peer's commit in the range is never part of it. {_OUT_OF_SCOPE_CLAUSE} "
         "For every edited source file not already covered above, add its test target "
         "to the run, and for every edited `.ts`/`.tsx` file whose governing tsconfig "
         "directory has no typecheck command above, run `tsc --noEmit -p <that dir>` "

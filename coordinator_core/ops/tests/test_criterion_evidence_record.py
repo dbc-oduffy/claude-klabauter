@@ -37,7 +37,7 @@ def _setup(tmp_path):
 
 def _params(plan, out, **extra):
     return {"plan_path": str(plan), "clause": "e2e checks pass", "command": "npx playwright test",
-            "output_path": str(out), **extra}
+            "output_path": str(out), "exit_code": 0, **extra}
 
 
 def test_registration_surfaces():
@@ -69,6 +69,7 @@ def test_refusals_write_no_sidecar(tmp_path):
         _params(plan, tmp_path / "missing.txt"),
         _params(plan, empty),
         _params(plan, out, exit_code="0"),
+        _params(plan, out, exit_code=None),
         _params(repo / "docs" / "plans" / "nope.md", out),
     ):
         assert "error" in record(bad, repo_root=repo / ".git")
