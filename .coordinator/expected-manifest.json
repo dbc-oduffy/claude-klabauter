@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "9a4e3627ee7c869e9ef885ce4c0f65b1184a23b2",
-    "coordinator_core/_engine_stamp": "c0bfd5e6c1a00119865a4e1779ab42103c2f8f9b",
+    "coordinator_core/_engine_published_at": "8b47f03382f3680483d6c2783b8761b7da5d93e1",
+    "coordinator_core/_engine_stamp": "dff409beea60b6665c29c21d60f4ac4401bfa8ad",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4005,7 +4005,7 @@
     "coordinator_core/ops/deferral_detect_partial_strangle.py": "db78601e8c5b4c1c63f0c231bb9bf390b35a7965",
     "coordinator_core/ops/delegation_check.py": "d8c41abab637bc08b5c7b48f395eabc93d9bac94",
     "coordinator_core/ops/deliverable_carry.py": "ce5e5124f7cc170a331336e8d226195aa04c780e",
-    "coordinator_core/ops/deliverable_cascade.py": "145ca684d9d4debeac121f28a871c3aafc6545ec",
+    "coordinator_core/ops/deliverable_cascade.py": "bcb5fdf63f2025fc6e4edebea0e2a22b5e66ecd7",
     "coordinator_core/ops/deliverable_equivalence.py": "a41b807a3e54ccd33395638f23b4cbe968c36f9a",
     "coordinator_core/ops/deliverable_fork_detect.py": "6127b4faa6a4c44d32d5fd8b7a8b9983927f1f20",
     "coordinator_core/ops/deliverable_ledger_write.py": "d6ce816403349910e9e6c4e3d535ffcfa305693f",
@@ -5293,7 +5293,7 @@
     "coordinator_core/ops/tests/test_deliverable_cascade_claim_state.py": "6f1dbcb4a5b75a394f87cced0e2ff19a65cf9f70",
     "coordinator_core/ops/tests/test_deliverable_cascade_kinds.py": "6bffe3a3c2779ce3e5e7bb2debfdc0790b5a4f1d",
     "coordinator_core/ops/tests/test_deliverable_cascade_leg_a_liveness.py": "76b5c486a08d9f84e3b94056829a33253e9ad06c",
-    "coordinator_core/ops/tests/test_deliverable_cascade_plan_flip_and_fk.py": "4ca69f2799a4a11886f18ddf3a85fed320e19ee3",
+    "coordinator_core/ops/tests/test_deliverable_cascade_plan_flip_and_fk.py": "ebfa7394248c2fd9f556e98227e370e9a3c26cb9",
     "coordinator_core/ops/tests/test_deliverable_cascade_reads_corpus_once.py": "781d8c57d7f87f590bfb6d95781daf989012137d",
     "coordinator_core/ops/tests/test_deliverable_fork_detect.py": "9ae59fb7e4476d63d23997a38dd4d500b4e32ddc",
     "coordinator_core/ops/tests/test_deliverable_id_readers_canonicalize.py": "e8a581fb3a14f3cad7ac13cf32c897b0b0a42f6b",
@@ -7203,5 +7203,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "3ebe6b42ba4b8df69037a50e4fee1784aae494f1"
+  "source_head": "06b0e179bffcc7ce56ef59941b246232a2595bcb"
 }

@@ -90,3 +90,22 @@ def test_shape_b_sizing_of_another_plan_is_not_joined(tmp_path):
 
     assert result["candidates_matched"] == 0
     assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["status"] == "routed"
+
+
+def test_a_plan_archived_before_its_cascade_writes_the_docs_plans_fk(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    archived = "archive/specs/2026-10/2026-10-05-flip-plan.md"
+    (repo / archived).parent.mkdir(parents=True, exist_ok=True)
+    (repo / archived).write_text("---\nstatus: implemented\n---\n\nbody\n", encoding="utf-8")
+    sizing = _seed_sizing(repo, "s.yaml", deliverable_id="dlv-archived-first", plan=_PLAN)
+
+    result = _run(
+        {"deliverable_id": "dlv-archived-first", "source_kind": "plan", "source_path": archived,
+         "target_kind": "sizing"},
+        repo,
+    )
+
+    assert len(result["advanced"]) == 1, result
+    doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
+    assert doc["status"] == "shipped" and doc["plan"] == _PLAN

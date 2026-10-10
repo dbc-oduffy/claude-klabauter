@@ -1018,10 +1018,13 @@ def _advance_one_sizing(
         # yield to it. See _mutate_sizing_reverse_edge's own docstring for
         # the mirror statement of this same policy.
         if plan_path:
+            # The FK names the plan's docs/plans origin: a plan archived before its cascade runs
+            # fires with its archive path, which the sizing schema's `plan` pattern refuses.
+            plan_fk_value = _plan_origin(plan_path)
             if read_fm_field(fm_text, "plan") is not None:
-                fm_text = replace_fm_field(fm_text, "plan", plan_path)
+                fm_text = replace_fm_field(fm_text, "plan", plan_fk_value)
             else:
-                fm_text = insert_fm_field(fm_text, "plan", plan_path, "status")
+                fm_text = insert_fm_field(fm_text, "plan", plan_fk_value, "status")
 
         # A register-bearing sizing ships only through the register rollup; a
         # refusal still keeps the plan FK and names the blocking row (DR-263).
