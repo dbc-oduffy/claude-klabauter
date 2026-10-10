@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -18,8 +21,43 @@ from coordinator_core.session.liveness import claim_holder_live
 _PLAN_CLAIMS_SUBDIR = "plan-claims"
 
 
+OVERRIDE_ENV = "COORDINATOR_ALLOW_PLAN_OVERLAP"
+
+
 class CrossPlanWriteOverlap(ValueError):
     pass
+
+
+def _log_override(
+    repo_root: Path,
+    session_id: Optional[str],
+    this_slug: str,
+    peer_slug: str,
+    overlap: list,
+    reason: str,
+) -> None:
+    """Append the admitted overlap to the session's overrides.log. A failed
+    write is reported on stderr and never fails the emit."""
+    try:
+        from coordinator_core.bash_guards._override_log_path import _override_log_path
+
+        path = _override_log_path(str(repo_root), session_id or None)
+        if path is None:
+            return
+        line = " | ".join(
+            (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                session_id or "no-session",
+                OVERRIDE_ENV,
+                f"{this_slug} vs {peer_slug}",
+                ",".join(overlap),
+                reason.replace("\n", " "),
+            )
+        )
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:
+        print(f"dispatch.emit: failed to write {OVERRIDE_ENV} audit log: {exc}", file=sys.stderr)
 
 
 def _write_paths_from_rows(rows) -> set:
@@ -96,8 +134,12 @@ def check_cross_plan_write_overlap(
         other_writes = _declared_write_paths(repo_root / other_rel)
         overlap = sorted(str(p) for p in (this_writes & other_writes))
         if overlap:
+            reason = os.environ.get(OVERRIDE_ENV, "").strip()
+            if reason:
+                _log_override(repo_root, session_id, this_slug, claim_dir.name, overlap, reason)
+                continue
             raise CrossPlanWriteOverlap(
                 f"writes: overlap with live plan '{other_rel}': "
                 f"{', '.join(overlap)}. Narrow one plan's writes:, or "
-                "emit after it finishes."
+                f"emit after it finishes, or set {OVERRIDE_ENV}=<reason>."
             )

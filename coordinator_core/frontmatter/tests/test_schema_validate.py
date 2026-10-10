@@ -7898,6 +7898,35 @@ def test_prose_carve_out_is_scoped_by_position():
     assert not _is_prose_annotation_path(("properties", "description", "pattern"))
 
 
+class TestAnyOfConstDiscriminatorPicksBranchErrors:
+    _SCHEMA = {
+        'type': 'object',
+        'properties': {'accepted': {'anyOf': [
+            {
+                'type': 'object',
+                'required': ['source', 'pm_quote'],
+                'properties': {'source': {'const': 'pm'}, 'pm_quote': {'type': 'string'}},
+            },
+            {
+                'type': 'object',
+                'required': ['source', 'ruling_ref'],
+                'properties': {'source': {'const': 'apm'}, 'ruling_ref': {'type': 'string'}},
+            },
+        ]}},
+    }
+
+    def test_apm_arm_missing_ruling_ref_reports_ruling_ref(self):
+        result = validate_frontmatter_obj({'accepted': {'source': 'apm'}}, self._SCHEMA)
+        assert result['ok'] is False
+        text = ' '.join(e['hint'] for e in result['errors'])
+        assert 'ruling_ref' in text and 'pm_quote' not in text
+
+    def test_undiscriminated_instance_keeps_first_branch_error_and_still_rejects(self):
+        result = validate_frontmatter_obj({'accepted': {'source': 'other'}}, self._SCHEMA)
+        assert result['ok'] is False
+        assert 'pm_quote' in ' '.join(e['hint'] for e in result['errors'])
+
+
 class TestCheckSchemaDriftBatch:
     """`check_schema_drift_batch` — the gating tamper-check over N schemas.
 

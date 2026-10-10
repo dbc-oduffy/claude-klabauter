@@ -616,6 +616,20 @@ def _validate_json_schema_node(
                     errs for sub, errs in zip(any_of, branch_errors)
                     if 'type' not in sub or _json_type_ok(value, sub['type'])
                 ]
+                if isinstance(value, dict):
+                    # Message-text-only: an object carrying a `const`
+                    # discriminator (e.g. `source`) that exactly one branch
+                    # claims reports that branch's errors, not the first's.
+                    claimed = [
+                        errs for sub, errs in zip(any_of, branch_errors)
+                        if any(
+                            isinstance(p, dict) and 'const' in p
+                            and k in value and value[k] == p['const']
+                            for k, p in (sub.get('properties') or {}).items()
+                        )
+                    ]
+                    if len(claimed) == 1:
+                        type_matched_errors = claimed
                 if type_matched_errors:
                     closest = type_matched_errors[0][0]
                     errors.append({

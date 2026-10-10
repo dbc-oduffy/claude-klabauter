@@ -19,9 +19,12 @@ def _no_ambient_box_terms(monkeypatch):
     from coordinator_core import machine_resolver
     from coordinator_core.ops.dispatch_emit.cli import BOX_TERMS_KEY
 
+    from coordinator_core.bash_guards._heavy_admission_contract import KEY_VITEST_MAX_WORKERS
+
     real = machine_resolver.registry_get
+    masked = {BOX_TERMS_KEY, KEY_VITEST_MAX_WORKERS}
     monkeypatch.setattr(
-        machine_resolver, "registry_get", lambda key: None if key == BOX_TERMS_KEY else real(key)
+        machine_resolver, "registry_get", lambda key: None if key in masked else real(key)
     )
 
 

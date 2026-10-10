@@ -227,7 +227,9 @@ def test_seam_captures_a_non_firing_guard_as_none_envelope():
     assert capture.envelope is None
 
 
-def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circuit():
+def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circuit(
+    tmp_path, monkeypatch
+):
     """The no-short-circuit proof this chunk exists for: `git commit
     --no-verify -m "msg"` fires BOTH `no-verify` (CONFINEMENT_DENY, deny)
     and `git-commit-safe-commit-advise` (ADVISORY_REWRITE, allow+advisory)
@@ -235,6 +237,10 @@ def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circ
     `evaluate_payload_json`'s first-non-None-wins loop would only ever
     surface `no-verify` for this input, since it is registered first; this
     seam must surface both."""
+    # The advisory's index probes run in the guard process's cwd when the
+    # payload carries none; pin it to a non-repo dir so the cell never reads
+    # the checkout's real (possibly peer-staged) index.
+    monkeypatch.chdir(tmp_path)
     cmd = 'git commit --no-verify -m "msg"'
     sid = "guard-message-capture-no-short-circuit"
     captures = capture_all_guards(
@@ -261,12 +267,11 @@ def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circ
 
 
 def test_seam_pins_host_is_windows_explicitly_per_cell():
-    # Seam-confirmed multiprobe shape (every segment a recognized single-
-    # process-rewritable form) -- same fixture literal as
-    # `test_guard_multiprobe_banner.py`'s own `_BANNER_CMD_CONFIRMED`, whose
-    # docstring there records this exact command as the deny/advise-split
-    # fixture: DENY on the Windows leg, allow+advisory on the non-Windows
-    # leg for the identical command.
+    # Seam-confirmed multiprobe shape -- same fixture literal as
+    # `test_guard_multiprobe_banner.py`'s `_BANNER_CMD_CONFIRMED`. The guard's
+    # Windows deny leg is retired (DR-280): both legs advise. The pin is that
+    # the explicit `host_is_windows` kwarg reaches the chain per cell
+    # (band unchanged, no leg denies, both emit the advisory).
     cmd = 'echo "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'
     sid_win = "guard-message-capture-host-windows"
     sid_mac = "guard-message-capture-host-mac"
@@ -290,5 +295,5 @@ def test_seam_pins_host_is_windows_explicitly_per_cell():
     assert mac_capture.band == dispatch.GuardBand.PLATFORM_CONDITIONED_DENY
     win_decision = (win_capture.envelope or {}).get("hookSpecificOutput", {}).get("permissionDecision")
     mac_decision = (mac_capture.envelope or {}).get("hookSpecificOutput", {}).get("permissionDecision")
-    assert win_decision == "deny"
-    assert win_decision != mac_decision
+    assert win_decision == "allow"
+    assert mac_decision == "allow"

@@ -553,3 +553,16 @@ def test_terminal_commit_script_path_falls_back_to_target_root_outside_the_plan_
     out.write_text("x", encoding="utf-8")
 
     assert _terminal_commit_script_path(out, None, str(plan), str(elsewhere)) == "run.mjs"
+
+
+def test_zero_waves_error_names_the_rows_read_spine_dropped(tmp_path):
+    plan = tmp_path / "all-deferred-plan.md"
+    plan.write_text(
+        "---\ntitle: x\nstatus: draft\n---\n\n# x\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n- id: ONLY\n  title: parked\n  surface: s\n"
+        "  deferred: true\n  writes: [a.py]\n```\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(NoWavesError) as excinfo:
+        _dispatch_emit({"plan_path": str(plan), "output_path": str(tmp_path / "e.mjs")})
+    assert "ONLY (deferred" in str(excinfo.value)

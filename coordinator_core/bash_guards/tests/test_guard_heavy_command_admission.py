@@ -748,6 +748,46 @@ class TestExecutorCarveOut:
         assert guard.check(_payload(cmd, **self.EXEC)) is None
 
 
+class TestVerifierCarveOut:
+    """Group EM ruling 2026-10-10: an execute run's test phase and judge verify inside the run."""
+
+    @pytest.fixture(autouse=True)
+    def _in_a_workflow(self, host, monkeypatch):
+        host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "2"})
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: {"wf_test"})
+
+    @pytest.mark.parametrize("agent_type", ["coordinator:test-runner", "coordinator:exit-criterion-judge"])
+    @pytest.mark.parametrize("cmd", [
+        "pnpm exec vitest run --project ddct packages/ddct/test/names --maxWorkers=2",
+        "pnpm exec tsc --noEmit -p .",
+        "npx jest --maxWorkers=2",
+    ])
+    def test_a_bounded_test_or_typecheck_run_is_admitted_inside_a_workflow(self, host, agent_type, cmd):
+        assert guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type=agent_type)) is None
+
+    @pytest.mark.parametrize("cmd", [
+        "pnpm exec vitest run packages/ddct/test/names",
+        "pnpm exec vitest run packages/ddct/test/names --maxWorkers=4",
+        "pnpm vitest --maxWorkers=2",
+        "npx jest",
+        "tsc --noEmit --watch",
+        "pnpm build",
+        "pnpm exec tsc --noEmit; pnpm build",
+    ])
+    def test_an_uncapped_watch_or_build_run_stays_denied(self, host, cmd):
+        out = guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:exit-criterion-judge"))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_another_workflow_subagent_gains_nothing(self, host):
+        out = guard.check(_payload("pnpm exec tsc --noEmit -p .", agent_id="deadbeef0123", agent_type="general-purpose"))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_the_session_cap_still_bounds_a_verifier(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_second_typecheck", lambda anchor, primitives: [4242])
+        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        assert out is not None and "already runs a typecheck" in _reason(out)
+
+
 class TestOrphanAttribution:
     """Windows: a Git Bash command's tree is orphaned from launch; its lease claims it by launch mark."""
 

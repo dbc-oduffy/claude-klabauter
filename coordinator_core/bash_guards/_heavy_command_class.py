@@ -64,6 +64,8 @@ _VITEST_VALUE_FLAGS = frozenset({
 _TEST_FILE_RE = re.compile(r"\.[cm]?[jt]sx?$", re.IGNORECASE)
 _TSC_BUILD_FLAGS = frozenset({"-b", "--build"})
 _NOEMIT = "noemit"
+_UNBOUNDED = "unbounded"
+_VERIFY_CLASSES = frozenset({HeavyClass.TEST_TIER, HeavyClass.TYPECHECK})
 _MAX_WORKERS_CONFIG_RE = re.compile(r"\bmaxWorkers\s*:\s*(\d+)?")
 
 
@@ -189,6 +191,16 @@ def _vitest_class(args: Sequence[str], cwd: Optional[str], worker_cap: Optional[
     TRAP: a vitest filter is a substring match, so a bare word (`vitest run audit`) can select the
     whole suite; only a token naming a script file counts as scoped.
     """
+    if not _vitest_bounded(args, cwd, worker_cap):
+        return HeavyClass.TEST_TIER
+    filters = _vitest_filters(args)
+    if not filters or not all(_TEST_FILE_RE.search(f) for f in filters):
+        return HeavyClass.TEST_TIER
+    return None
+
+
+def _vitest_bounded(args: Sequence[str], cwd: Optional[str], worker_cap: Optional[int]) -> bool:
+    """True when the vitest run exits on its own and its workers are capped at or under worker_cap."""
     low = [a.lower() for a in args]
     pos = [a.lower() for a in _positionals(args)]
     runs_once = (pos and pos[0] in _VITEST_RUN_WORDS) or "--run" in low
@@ -198,16 +210,20 @@ def _vitest_class(args: Sequence[str], cwd: Optional[str], worker_cap: Optional[
         or not runs_once
     )
     if watching or worker_cap is None:
-        return HeavyClass.TEST_TIER
-    filters = _vitest_filters(args)
-    if not filters or not all(_TEST_FILE_RE.search(f) for f in filters):
-        return HeavyClass.TEST_TIER
+        return False
     workers = _flag_int(args, _MAX_WORKERS_FLAG)
     if workers is None:
         workers = _repo_worker_pin(cwd)
-    if workers is None or workers > worker_cap:
-        return HeavyClass.TEST_TIER
-    return None
+    return workers is not None and workers <= worker_cap
+
+
+def _jest_unbounded(argv: Sequence[str], worker_cap: Optional[int]) -> bool:
+    """True when argv runs jest without --maxWorkers at or under worker_cap."""
+    for j, tok in enumerate(argv):
+        if _suite._base(tok).lower() == "jest":
+            workers = _flag_int(argv[j + 1:], _MAX_WORKERS_FLAG)
+            return worker_cap is None or workers is None or workers > worker_cap
+    return False
 
 
 def _watch_or_fanout_class(argv: Sequence[str]) -> Optional[HeavyClass]:
@@ -305,15 +321,23 @@ def _scan(
         if vitest is not None:
             heavy = _vitest_class(vitest, cwd, worker_cap)
             found.append(heavy if heavy is not None else "scoped")
+            if not _vitest_bounded(vitest, cwd, worker_cap):
+                found.append(_UNBOUNDED)
             continue
         heavy = _argv_class(argv)
         if heavy is not None:
             found.append(heavy)
             if heavy is HeavyClass.TYPECHECK and _is_noemit_tsc(argv):
                 found.append(_NOEMIT)
+            if _watch_or_fanout_class(argv) is not None or any(
+                a.lower() in _WATCH_FLAGS for a in argv[1:]
+            ) or _jest_unbounded(argv, worker_cap):
+                found.append(_UNBOUNDED)
             continue
         if _suite._classify_tokens(argv, testpaths, cwd) is not None:
             found.append(HeavyClass.TEST_TIER)
+            if _jest_unbounded(argv, worker_cap):
+                found.append(_UNBOUNDED)
         elif _suite._runner_recognized(argv):
             found.append("scoped")
 
@@ -354,7 +378,8 @@ def classify(
     noemit = bool(heavies) and all(f is HeavyClass.TYPECHECK for f in heavies) and (
         found.count(_NOEMIT) == len(heavies)
     )
+    bounded = bool(heavies) and _UNBOUNDED not in found and all(f in _VERIFY_CLASSES for f in heavies)
     for cls in _PRECEDENCE:
         if cls in found:
-            return Classification(cls, False, background, noemit)
+            return Classification(cls, False, background, noemit, bounded)
     return Classification(None, "scoped" in found, background)

@@ -233,3 +233,84 @@ def test_warning_names_every_row_using_reads_key(tmp_path, caplog):
     assert "C1" in message
     assert "C2" in message
     assert "C3" not in message
+
+
+_SHAPE = """\
+- id: S5
+  title: producer
+  surface: s
+  disposition: coded
+  writes: [src/slots.ts]
+- id: S7
+  title: consumer one
+  surface: s
+  writes: [src/a.ts]
+  consumes: [src/slots.ts]
+- id: S9
+  title: consumer two
+  surface: s
+  writes: [src/b.ts]
+  consumes: [src/slots.ts]
+- id: S16
+  title: later writer
+  surface: s
+  deferred: true
+  writes: [src/slots.ts]
+"""
+
+
+def test_later_withheld_writer_and_coded_producer_do_not_withhold_consumers(tmp_path):
+    exclusions: list = []
+    rows = read_spine(_write_plan(tmp_path, _SHAPE), exclusions=exclusions)
+    assert [r.id for r in rows] == ["S7", "S9"]
+    assert {e["id"]: e["reason"] for e in exclusions} == {"S5": "disposition", "S16": "deferred"}
+
+
+def test_earlier_withheld_writer_still_withholds_consumer(tmp_path):
+    body = """\
+- id: W
+  title: early writer
+  surface: s
+  deferred: true
+  writes: [src/p.ts]
+- id: R
+  title: reader
+  surface: s
+  writes: [src/r.ts]
+  consumes: [src/p.ts]
+"""
+    exclusions: list = []
+    assert read_spine(_write_plan(tmp_path, body), exclusions=exclusions) == []
+    assert {e["id"]: e["reason"] for e in exclusions}["R"] == "withheld_by_consumed_path"
+
+
+def test_writer_declared_after_consumer_does_not_withhold_even_when_listed_first(tmp_path):
+    body = """\
+- id: W
+  title: writer that depends on the reader
+  surface: s
+  deferred: true
+  writes: [src/p.ts]
+  depends_on:
+    - {chunk: R, gate_kind: build}
+- id: R
+  title: reader
+  surface: s
+  writes: [src/r.ts]
+  consumes: [src/p.ts]
+"""
+    assert [r.id for r in read_spine(_write_plan(tmp_path, body))] == ["R"]
+
+
+def test_describe_exclusions_names_each_dropped_row_and_reason(tmp_path):
+    from coordinator_core.ops.dispatch_emit.spine_read import describe_exclusions
+
+    body = """\
+- id: A
+  title: deferred
+  surface: s
+  deferred: true
+  writes: [x.py]
+"""
+    text = describe_exclusions(_write_plan(tmp_path, body))
+    assert "A (deferred: deferred: true)" in text

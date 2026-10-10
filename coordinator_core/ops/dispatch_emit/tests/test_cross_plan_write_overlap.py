@@ -165,6 +165,64 @@ def test_repo_root_none_is_a_no_op(tmp_path):
     check_cross_plan_write_overlap(plan_path, rows, None)
 
 
+def _overlapping_setup(tmp_path, monkeypatch):
+    _init_git_dir(tmp_path)
+    plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/shared.md"])
+    _write_plan(tmp_path, "plan-b", ["docs/reference/shared.md"])
+    _write_claim(tmp_path, "plan-b")
+    monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: True)
+    return plan_path, read_spine(plan_path)
+
+
+def test_override_reason_admits_and_logs_both_slugs_paths_and_reason(tmp_path, monkeypatch):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    sess = tmp_path / ".git" / "coordinator-sessions" / "me-sid"
+    sess.mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_ALLOW_PLAN_OVERLAP", "agreed hold with peer EM")
+
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="me-sid")
+
+    line = (sess / "overrides.log").read_text(encoding="utf-8")
+    assert "plan-a vs plan-b" in line
+    assert "docs/reference/shared.md" in line
+    assert "agreed hold with peer EM" in line
+    assert "COORDINATOR_ALLOW_PLAN_OVERLAP" in line
+
+
+def test_override_without_a_session_dir_logs_to_the_no_session_bucket(tmp_path, monkeypatch):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    monkeypatch.setenv("COORDINATOR_ALLOW_PLAN_OVERLAP", "why")
+
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="ghost-sid")
+
+    log = tmp_path / ".git" / "coordinator-sessions" / "no-session" / "overrides.log"
+    assert "plan-b" in log.read_text(encoding="utf-8")
+    assert not (tmp_path / ".git" / "coordinator-sessions" / "ghost-sid").exists()
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_override_reason_still_refuses(tmp_path, monkeypatch, value):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    monkeypatch.setenv("COORDINATOR_ALLOW_PLAN_OVERLAP", value)
+
+    with pytest.raises(CrossPlanWriteOverlap):
+        check_cross_plan_write_overlap(plan_path, rows, tmp_path)
+    assert not (tmp_path / ".git" / "coordinator-sessions" / "no-session").exists()
+
+
+def test_override_with_no_overlap_logs_nothing(tmp_path, monkeypatch):
+    _init_git_dir(tmp_path)
+    plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/a.md"])
+    _write_plan(tmp_path, "plan-b", ["docs/reference/b.md"])
+    _write_claim(tmp_path, "plan-b")
+    monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: True)
+    monkeypatch.setenv("COORDINATOR_ALLOW_PLAN_OVERLAP", "why")
+
+    check_cross_plan_write_overlap(plan_path, read_spine(plan_path), tmp_path)
+
+    assert not (tmp_path / ".git" / "coordinator-sessions" / "no-session").exists()
+
+
 def test_own_session_claim_is_not_a_peer(tmp_path, monkeypatch):
     _init_git_dir(tmp_path)
     plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/shared.md"])

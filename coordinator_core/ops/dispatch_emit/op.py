@@ -260,6 +260,7 @@ from coordinator_core.ops.dispatch_emit.emission_receipt import (
 from coordinator_core.ops.dispatch_emit.emit import (
     check_agent_types_resolve,
     NoReviewStageError,  # noqa: F401 -- re-exported for callers
+    NoWavesError,
     ScriptOverCapError,
     emit_script,
     resolve_agent_type_host,
@@ -1609,6 +1610,13 @@ def _dispatch_emit(
             # Part emits re-enter on this tranche record, not a fresh one (`_emit_inventory_parts`).
             if tranche_inventory:
                 over.tranche_inventory = inventory_path
+            raise
+        except NoWavesError as empty:
+            from coordinator_core.ops.dispatch_emit.spine_read import describe_exclusions
+
+            dropped = describe_exclusions(plan_path)
+            if dropped:
+                raise NoWavesError(f"{empty}; read_spine excluded: {dropped}") from empty
             raise
         if held_out:
             receipt_extras = {

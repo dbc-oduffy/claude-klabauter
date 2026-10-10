@@ -309,6 +309,10 @@ def _flag_runaway_workers(config, payload, command, cls, anchor, census) -> None
 # --------------------------------------------------------------------------- legs
 
 _EXECUTOR_TYPE = "coordinator:executor"
+# Group EM ruling 2026-10-10: an execute run's own test phase and terminal judge verify inside
+# the workflow; they get test-tier and typecheck only, never builds, UE, watch modes or an
+# uncapped vitest/jest. Being inside a workflow run admits nothing by itself.
+_VERIFIER_TYPES = frozenset({"coordinator:test-runner", "coordinator:exit-criterion-judge"})
 
 
 def _identity_leg(payload: Dict[str, Any], heavy_name: str, cls) -> Optional[Dict[str, Any]]:
@@ -326,6 +330,8 @@ def _identity_leg(payload: Dict[str, Any], heavy_name: str, cls) -> Optional[Dic
     # Group EM ruling 2026-10-10: an executor verifies its own chunk with `tsc --noEmit`; the
     # session-cap leg's one-typecheck rule still bounds it.
     if payload.get("agent_type") == _EXECUTOR_TYPE and payload.get("agent_id") and cls.noemit_tsc:
+        return None
+    if payload.get("agent_type") in _VERIFIER_TYPES and payload.get("agent_id") and cls.bounded_verify:
         return None
     return _deny_text(
         LEG_IDENTITY,
@@ -560,7 +566,7 @@ def check(
     config = None
     # Any heavy command naming vitest re-classifies with the cap: a capped scoped vitest segment
     # beside a `tsc --noEmit` must not hold the executor carve-out shut.
-    if cls.heavy_class is not None and "vitest" in command.lower():
+    if cls.heavy_class is not None and ("vitest" in command.lower() or "jest" in command.lower()):
         config = _read_config()
         cls = classify(command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS))
         if cls.heavy_class is None and not cls.background:

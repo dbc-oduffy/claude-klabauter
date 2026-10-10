@@ -2223,6 +2223,12 @@ _STOP_RULE_TOKEN = "STOP-RULE-FIRED"
 _WITHDRAWN_TOKEN = "ROW-WITHDRAWN"
 _VOID_TOKEN = "ROW-VOID"
 
+#: Ends a BLOCKED reply whose cause is this row's own footprint / `writes:`
+#: mis-spec. Row-local: the row stays incomplete, the run goes on to review
+#: and tests over the rows that landed. Wins over `_STOP_RULE_TOKEN` when
+#: both lines appear.
+_ROW_LOCAL_BLOCK_TOKEN = "ROW-LOCAL-BLOCK"
+
 #: `_STOP_RULE_TOKEN` declared on a line of its own, matched against both a
 #: real newline and the backslash-n a JSON-stringified object reply carries.
 #: Line-anchored for `_preflight_halt_gate`'s reason: the prompt itself names
@@ -2230,6 +2236,32 @@ _VOID_TOKEN = "ROW-VOID"
 _STOP_RULE_JS_RE = (
     f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*\\S/"
 )
+_ROW_LOCAL_BLOCK_JS_RE = (
+    f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_ROW_LOCAL_BLOCK_TOKEN}[*_]{{0,2}}:\\s*\\S/"
+)
+
+_VITEST_CAP_CLAUSE = (
+    "Vitest worker cap: every vitest invocation you run passes "
+    "`--maxWorkers={cap}` -- this box caps vitest at {cap} workers."
+)
+
+
+def _vitest_cap_clause() -> str:
+    """The test-runner instruction carrying the box's vitest worker cap, or
+    empty when the machine-local key is unset (emitted bytes unchanged)."""
+    from coordinator_core import machine_resolver
+    from coordinator_core.bash_guards._heavy_admission_contract import KEY_VITEST_MAX_WORKERS
+    from coordinator_core.bash_guards.guard_heavy_command_admission import _positive_int
+
+    cap = _positive_int({KEY_VITEST_MAX_WORKERS: machine_resolver.registry_get(KEY_VITEST_MAX_WORKERS)},
+                        KEY_VITEST_MAX_WORKERS)
+    return _VITEST_CAP_CLAUSE.format(cap=cap) if cap else ""
+
+
+def _test_runner_clause() -> str:
+    """The skip-report rule plus, when the box sets one, the vitest cap."""
+    cap = _vitest_cap_clause()
+    return f"{_SKIP_REPORT_CLAUSE} {cap}" if cap else _SKIP_REPORT_CLAUSE
 
 
 # Clones, venvs, wheels and exports an executor builds outside the repo
@@ -2272,7 +2304,11 @@ def _stop_rule_clause() -> str:
         "conditional row whose condition never armed (\"fires only if X "
         f"failed\", X succeeded) ends with `{_VOID_TOKEN}: <the condition, "
         "quoted, and why it did not hold>`. Both are DONE with nothing "
-        "changed, and the run continues past them."
+        "changed, and the run continues past them. A BLOCKED caused by this "
+        "row's own footprint or `writes:` scope being mis-specified is not a "
+        "fired stop rule either: report BLOCKED and end with "
+        f"`{_ROW_LOCAL_BLOCK_TOKEN}: <the path or scope that is wrong>`; only "
+        "this row stays open and the run goes on without it."
     )
 
 
@@ -2954,7 +2990,7 @@ def _test_agent_call_expr(
         f"{run_clause}"
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base)} " if review_edits_base else "")
-        + f"{_SKIP_REPORT_CLAUSE} "
+        + f"{_test_runner_clause()} "
         + (f"{_baseline_context_clause(review_edits_base)} " if _is_full_sha(review_edits_base) else "")
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
@@ -3478,7 +3514,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _unansweredBriefs.push(id);\n"
         "      incomplete = true;\n"
         "    }\n"
-        f"    if ({_STOP_RULE_JS_RE}.test(_text)) {{\n"
+        f"    if ({_STOP_RULE_JS_RE}.test(_text) && !{_ROW_LOCAL_BLOCK_JS_RE}.test(_text)) {{\n"
         "      _stoppedBy.push(id);\n"
         "      if (plan) {\n"
         "        _haltedPlans.add(plan);\n"
@@ -3491,7 +3527,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _verifications.push(agent(\n"
         "        `Run and report on the scoped test target(s) for ${id}: ` + "
         "verifyScope.join(', ') + '. ' + "
-        f"{_js_string_literal(_SKIP_REPORT_CLAUSE)},\n"
+        f"{_js_string_literal(_test_runner_clause())},\n"
         "        { "
         f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
         f"agentType: {verify_agent_type}, {_model_opt(_TEST_AGENT_TYPE)}, "

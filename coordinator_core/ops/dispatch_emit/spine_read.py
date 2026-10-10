@@ -1245,7 +1245,7 @@ def read_spine(
     # `consumes:` rather than `depends_on`. A consumer dispatched beside its
     # withheld producer reads a file that does not exist yet.
     consumed_via: dict[str, str] = {}
-    consumers_of = _consume_edges(rows)
+    consumers_of = _consume_edges(rows, frozenset(satisfied_ids))
     frontier = list(blocked_ids)
     while frontier:
         current = frontier.pop()
@@ -1325,17 +1325,41 @@ def read_spine(
     return dispatchable_rows
 
 
-def _consume_edges(rows: list) -> dict:
+def _consume_edges(rows: list, satisfied: frozenset = frozenset()) -> dict:
     """Writer row id -> [(consumer row id, path)] for every `consumes:` read of
     a path another row writes. Paths every writer only `appends:` to derive no
-    edge (the `wave_map` derived-edge rule), so a hub-file reader is not held."""
+    edge (the `wave_map` derived-edge rule), so a hub-file reader is not held.
+
+    Only a writer ordered BEFORE the consumer holds it: a writer the consumer
+    transitively precedes by `depends_on`, or (absent a declared order) one
+    later in row order, derives no edge. A `satisfied` (coded) writer ordered
+    before the consumer satisfies that consumption outright."""
     from coordinator_core.ops.dispatch_emit.wave_map import (
         _append_only_paths,
+        _declared_closure,
         _is_ancestor,
         _normalize_path,
     )
 
     exempt = _append_only_paths(rows)
+    position = {row.id: i for i, row in enumerate(rows)}
+    declared_preds = {
+        row.id: {
+            e["chunk"]
+            for e in row.depends_on
+            if isinstance(e, dict) and e.get("chunk") in position
+        }
+        for row in rows
+    }
+    closure = _declared_closure(declared_preds)
+
+    def ordered_before(writer_id: str, consumer_id: str) -> bool:
+        if writer_id in closure[consumer_id]:
+            return True
+        if consumer_id in closure[writer_id]:
+            return False
+        return position[writer_id] < position[consumer_id]
+
     writers: list = []
     for row in rows:
         if row.writes is UNDECLARED or not isinstance(row.writes, list):
@@ -1355,12 +1379,29 @@ def _consume_edges(rows: list) -> dict:
             path = _normalize_path(raw_path)
             if path in exempt:
                 continue
-            for wid, exact, prefixes in writers:
-                if wid != row.id and (
-                    path in exact or any(path == pre or _is_ancestor(pre, path) for pre in prefixes)
-                ):
-                    out.setdefault(wid, []).append((row.id, raw_path))
+            holders = [
+                wid
+                for wid, exact, prefixes in writers
+                if wid != row.id
+                and (path in exact or any(path == pre or _is_ancestor(pre, path) for pre in prefixes))
+                and ordered_before(wid, row.id)
+            ]
+            if any(wid in satisfied for wid in holders):
+                continue
+            for wid in holders:
+                out.setdefault(wid, []).append((row.id, raw_path))
     return out
+
+
+def describe_exclusions(plan_path) -> str:
+    """One line naming every row `read_spine` drops from `plan_path`, with its
+    reason; empty when it drops none or the spine is unreadable."""
+    dropped: list = []
+    try:
+        read_spine(plan_path, exclusions=dropped, schema_preflight=False)
+    except (SpineReadError, OSError):
+        return ""
+    return "; ".join(f"{e['id']} ({e['reason']}: {e['detail']})" for e in dropped)
 
 
 def executable_body(title: str, body: str) -> bool:

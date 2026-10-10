@@ -75,12 +75,15 @@ class HeavyClass(str, enum.Enum):
 class Classification:
     """heavy_class is None for a command that is not heavy; scoped marks the RAM-leg-exempt
     explicit-test-target carve-out; background mirrors tool_input.run_in_background; noemit_tsc
-    marks a command whose every heavy segment is a one-shot `tsc --noEmit` (the executor carve-out)."""
+    marks a command whose every heavy segment is a one-shot `tsc --noEmit` (the executor carve-out);
+    bounded_verify marks one whose heavy segments are all test-tier or typecheck runs that exit on
+    their own, with vitest/jest workers capped at or under the box cap (the verifier carve-out)."""
 
     heavy_class: Optional[HeavyClass]
     scoped: bool
     background: bool
     noemit_tsc: bool = False
+    bounded_verify: bool = False
 
 
 @dataclass(frozen=True)
