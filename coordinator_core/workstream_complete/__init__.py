@@ -785,6 +785,92 @@ def _detector_c_attribution_is_uncorroborated(detection: dict[str, Any]) -> bool
     return detection.get("exact_match_count") == 0
 
 
+#: A Detector C adoption with no engagement record is trusted only when the
+#: handoff's claim is at most this many days older than this session's start.
+_DETECTOR_C_STALE_CLAIM_DAYS = 3
+
+
+def _handoff_engagement_gap(
+    repo_root: Path, sid: str, handoff: str
+) -> Optional[str]:
+    """Reason a Detector C attribution to `handoff` lacks engagement
+    corroboration, or None when it is corroborated or cannot be judged.
+
+    Corroborated when (1) this session's own touch-record (live file and
+    rotated siblings) names the handoff path -- a Read or Write the session
+    made on it -- or (2) the handoff's `claimed_at` (else `created`) is within
+    `_DETECTOR_C_STALE_CLAIM_DAYS` of this session's `started_at`. A scope path
+    hit on a widely shared file proves neither: it matches whichever session
+    next commits there.
+
+    Spawn-free: file reads only. Any unreadable input (no session dir, no
+    `started_at`, unparsable timestamp) returns None -- "could not tell"
+    keeps today's adoption rather than refusing on missing evidence. A Bash
+    `cat` of the handoff is not in the touch-record; the age window is the
+    backstop for that case.
+    """
+    if not sid or not handoff:
+        return None
+    rel = handoff.replace("\\", "/")
+    try:
+        from coordinator_core.session import core as _core
+        from coordinator_core.session import touch_record as _tr
+
+        sdir = _core.session_dir(sid, str(repo_root))
+        if not sdir:
+            return None
+        # TRAP: only a touch at or before the session's first write counts. Reading the handoff
+        # to check this very attribution would otherwise corroborate it.
+        handoff_touches: list = []
+        first_write: Optional[float] = None
+        for member in _tr.discover_family(_tr.sink_path(sdir)):
+            try:
+                raw = member.read_bytes()
+            except OSError:
+                continue
+            for line in raw.splitlines():
+                try:
+                    entry = json.loads(line)
+                    ts = float(entry.get("ts"))
+                except (ValueError, TypeError):
+                    continue
+                if entry.get("path") == rel:
+                    handoff_touches.append(ts)
+                elif entry.get("verb") == "T" and entry.get("kind") == "w":
+                    first_write = ts if first_write is None else min(first_write, ts)
+        if handoff_touches and (first_write is None or min(handoff_touches) <= first_write):
+            return None
+        started = _tr.session_started_at_epoch(sdir)
+        text = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
+        fm = parse_frontmatter(text).get("frontmatter") or {}
+        stamp = fm.get("claimed_at") or fm.get("created")
+    except (OSError, ValueError, TypeError):
+        return None
+    if not started or not stamp:
+        return None
+    if isinstance(stamp, datetime):
+        claimed = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+        claimed_epoch = claimed.timestamp()
+    elif hasattr(stamp, "isoformat") and not isinstance(stamp, str):
+        claimed_epoch = datetime.fromisoformat(stamp.isoformat()).replace(
+            tzinfo=timezone.utc
+        ).timestamp()
+    else:
+        try:
+            claimed_epoch = _core.iso_to_epoch(str(stamp))
+        except (ValueError, TypeError):
+            return None
+    if not claimed_epoch:
+        return None
+    age_days = (started - claimed_epoch) / 86400.0
+    if age_days <= _DETECTOR_C_STALE_CLAIM_DAYS:
+        return None
+    return (
+        f"this session never touched it and its claim predates the session start "
+        f"by {age_days:.1f} days (limit {_DETECTOR_C_STALE_CLAIM_DAYS})"
+    )
+
+
 def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     """Steps 0 of `/workstream-complete`: resolve this session's id and
     chain-terminal-vs-single-session disposition via the ported detector
@@ -844,6 +930,23 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
         disposition = SINGLE_SESSION
         consumed_handoff = ""
         consumed_handoff_paths = ()
+    elif (
+        consumed_handoff
+        and detection.get("deciding_leg") == "detector-c"
+        and detection.get("detector_c_status") == "crash-recovery"
+    ):
+        gap = _handoff_engagement_gap(repo_root, sid, consumed_handoff)
+        if gap:
+            diagnostics = list(diagnostics) + [
+                "REFUSED: Detector C (crash-recovery) attributed this session to "
+                f"{consumed_handoff} on a scope path hit alone, but {gap}. Falling "
+                "back to single-session; nothing is stamped, ledger-appended, or "
+                "filed against that handoff or its plan. Re-run after reading or "
+                "claiming the handoff if this session genuinely consumed it."
+            ]
+            disposition = SINGLE_SESSION
+            consumed_handoff = ""
+            consumed_handoff_paths = ()
     return SessionShapeGate(
         sid=sid,
         disposition=disposition,

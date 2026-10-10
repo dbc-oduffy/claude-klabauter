@@ -6257,6 +6257,100 @@ def test_gate_falls_back_to_single_session_and_drops_the_stranger_handoff(monkey
     assert any("REFUSED" in d and stranger in d for d in gate.diagnostics)
 
 
+_ENGAGE_SID = "testsid123"
+_ENGAGE_HANDOFF = "state/handoffs/2026-09-22_232212_roadmap-ehms-01.md"
+
+
+def _engagement_fixture(
+    tmp_path, monkeypatch, *, claimed_at, touched, started="2026-10-09T22:44:16Z", first_write_ts=None
+):
+    sdir = tmp_path / ".git" / "coordinator-sessions" / _ENGAGE_SID
+    sdir.mkdir(parents=True)
+    (sdir / "started_at").write_text(started, encoding="utf-8")
+    lines = []
+    if first_write_ts is not None:
+        lines.append({"v": 1, "verb": "T", "ts": first_write_ts, "sid": _ENGAGE_SID, "path": "src/a.py", "kind": "w"})
+    if touched is not None:
+        lines.append({"v": 1, "verb": "T", "ts": 100.0, "sid": _ENGAGE_SID, "path": touched, "kind": "r"})
+    if lines:
+        (sdir / "touch-record.jsonl").write_text(
+            "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8"
+        )
+    handoff = tmp_path / _ENGAGE_HANDOFF
+    handoff.parent.mkdir(parents=True)
+    handoff.write_text(f"---\ntitle: x\nclaimed_at: '{claimed_at}'\n---\nbody\n", encoding="utf-8")
+
+    class _Resolution(tuple):
+        detection = _detector_c(1, scope_size=1)
+
+    class _Mod:
+        @staticmethod
+        def resolve_session_id(root):
+            return _ENGAGE_SID
+
+        @staticmethod
+        def resolve_disposition(root, sid):
+            return _Resolution((wsc.PREDECESSOR_CONSUMED, _ENGAGE_HANDOFF, [], [_ENGAGE_HANDOFF]))
+
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", lambda: _Mod)
+    return wsc.compute_session_shape_gate(tmp_path)
+
+
+def test_gate_refuses_a_stale_handoff_the_session_never_touched(monkeypatch, tmp_path):
+    """One exact hit on a shared file adopted an 18-day-old dead claimer's
+    baton: no touch-record entry, claim 9 days before session start."""
+    gate = _engagement_fixture(
+        tmp_path, monkeypatch, claimed_at="2026-09-30T15:04:43Z",
+        touched="coordinator_core/frontmatter/schema_validate.py",
+    )
+    assert gate.disposition == wsc.SINGLE_SESSION
+    assert gate.consumed_handoff == ""
+    assert gate.consumed_handoff_paths == ()
+    assert gate.detection["exact_match_count"] == 1
+    assert any("REFUSED" in d and _ENGAGE_HANDOFF in d for d in gate.diagnostics)
+
+
+def test_gate_keeps_a_stale_handoff_the_session_read(monkeypatch, tmp_path):
+    gate = _engagement_fixture(
+        tmp_path, monkeypatch, claimed_at="2026-09-30T15:04:43Z", touched=_ENGAGE_HANDOFF,
+    )
+    assert gate.disposition == wsc.PREDECESSOR_CONSUMED
+    assert gate.consumed_handoff == _ENGAGE_HANDOFF
+    assert not any("REFUSED" in d for d in gate.diagnostics)
+
+
+def test_gate_refuses_a_stale_handoff_first_read_after_the_session_began_writing(monkeypatch, tmp_path):
+    """Reading the handoff to check this attribution must not corroborate it."""
+    gate = _engagement_fixture(
+        tmp_path, monkeypatch, claimed_at="2026-09-30T15:04:43Z", touched=_ENGAGE_HANDOFF, first_write_ts=50.0,
+    )
+    assert gate.disposition == wsc.SINGLE_SESSION
+    assert any("REFUSED" in d and _ENGAGE_HANDOFF in d for d in gate.diagnostics)
+
+
+def test_gate_keeps_a_stale_handoff_read_before_the_first_write(monkeypatch, tmp_path):
+    gate = _engagement_fixture(
+        tmp_path, monkeypatch, claimed_at="2026-09-30T15:04:43Z", touched=_ENGAGE_HANDOFF, first_write_ts=150.0,
+    )
+    assert gate.disposition == wsc.PREDECESSOR_CONSUMED
+
+
+def test_gate_keeps_a_recently_claimed_handoff_without_a_touch(monkeypatch, tmp_path):
+    gate = _engagement_fixture(
+        tmp_path, monkeypatch, claimed_at="2026-10-08T12:00:00Z", touched=None,
+    )
+    assert gate.disposition == wsc.PREDECESSOR_CONSUMED
+    assert not any("REFUSED" in d for d in gate.diagnostics)
+
+
+def test_gate_keeps_adoption_when_session_start_is_unknown(monkeypatch, tmp_path):
+    """Could-not-tell keeps today's behaviour rather than refusing blind."""
+    gate = _engagement_fixture(
+        tmp_path, monkeypatch, claimed_at="2026-09-01T00:00:00Z", touched=None, started="",
+    )
+    assert gate.disposition == wsc.PREDECESSOR_CONSUMED
+
+
 def test_gate_keeps_a_corroborated_predecessor(monkeypatch, tmp_path):
     class _Resolution(tuple):
         detection = _detector_c(2)

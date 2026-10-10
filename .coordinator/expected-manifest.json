@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "eaf55994149e39250e41979c2e73041ef7bfb949",
-    "coordinator_core/_engine_stamp": "f0c1a3fb13ed47e3e59e4b02bdc719d6e35147dc",
+    "coordinator_core/_engine_published_at": "9bf0f16d31aaae79caa61641cabf5c53486e73f2",
+    "coordinator_core/_engine_stamp": "3879a884809a681a36dca2a85632fbbaa57a7bb6",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6832,7 +6832,7 @@
     "coordinator_core/workflow_watch/tests/test_stall_usage_limit.py": "70fbe8102b96310adbe73abddb927cbcb1b0e810",
     "coordinator_core/workflow_watch/tests/test_stamp.py": "c21cf9b9035a8a3e31a7174dea0113f436d1ca0c",
     "coordinator_core/workflow_watch/tests/test_terminal_detection.py": "d4ecc2d06e12e796f41591bff3d2b652f087948b",
-    "coordinator_core/workstream_complete/__init__.py": "e1b4516761548c44d8ad3e210e2c3770c7931bb1",
+    "coordinator_core/workstream_complete/__init__.py": "e84061a329ef28c192de1d806227df9c2c83237e",
     "coordinator_core/workstream_complete/apply.py": "843060c531494c087a1721a9edc3e2424819f51e",
     "coordinator_core/workstream_complete/completion_verdict.py": "243c7574b3d7de86b0564302a4680b015cdbd0cf",
     "coordinator_core/workstream_complete/directives_commit_tail.py": "e9ce002640ec417acc644fb095499d01897ad55f",
@@ -6869,7 +6869,7 @@
     "coordinator_core/workstream_complete/test_session_identity.py": "34c78fd572e9e02fab8388b5162786bc44078d36",
     "coordinator_core/workstream_complete/test_spec_dispatch_plan_reconcile.py": "730c4d9453e84704cbc4ff23264b70d7769787e5",
     "coordinator_core/workstream_complete/test_terminal_sweep_directive_ordering.py": "981dfb430a1ec58a89eaef9427010ab349e019ca",
-    "coordinator_core/workstream_complete/test_workstream_complete.py": "6670edb430c24b1cf41ba32c1963fbf3b60b2279",
+    "coordinator_core/workstream_complete/test_workstream_complete.py": "7c76bd64480ad708c491559ba914c08e74d977f9",
     "coordinator_core/workstream_complete/test_workstream_complete_contract.py": "5a294d6c2e99485d40adbb9442dd05220a2bcb2a",
     "coordinator_core/workstream_complete/tests/test_acknowledge_scale_dispatch_authorization_clause.py": "9d34e169bb1a37ab4828bdace1cd6944016e36f6",
     "coordinator_core/workstream_complete/tests/test_archival_collision_regression.py": "51d7ec28e024e428b1eb9c3373ad63ed50b7df66",
@@ -7204,5 +7204,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "d2da61490c65d5535c079c5713266d653aaca83e"
+  "source_head": "1e314baaf0660e98ffdda60731fb9c80968e3107"
 }
