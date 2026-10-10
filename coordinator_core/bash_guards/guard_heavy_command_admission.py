@@ -486,12 +486,13 @@ def _cap_leg(
             census,
             launch,
         )
-    if heavy and len(census.heavy) >= heavy_cap:
-        pids = ", ".join(str(r.pid) for r in census.heavy)
+    commands = census_mod.heavy_roots(census.heavy, rows) if heavy else ()
+    if heavy and len(commands) >= heavy_cap:
+        pids = ", ".join(str(r.pid) for r in commands)
         return (
             _deny_text(
                 LEG_SESSION_CAP,
-                "session holds %d heavy commands (cap %d): pids %s" % (len(census.heavy), heavy_cap, pids),
+                "session holds %d heavy commands (cap %d): pids %s" % (len(commands), heavy_cap, pids),
                 "Wait for one to finish",
             ),
             anchor,

@@ -137,6 +137,30 @@ def session_census(
     return SessionCensus(anchor=anchor, heavy=tuple(heavy), shells=tuple(shells))
 
 
+def heavy_roots(heavy: Sequence[ProcRow], rows: Sequence[ProcRow]) -> List[ProcRow]:
+    """The heavy rows with no heavy ancestor: one per command, so `pnpm -> tsx -> node` is one.
+
+    Ancestry is walked through rows by ppid; a hop to an older-than-child parent (pid reuse) or a
+    missing parent ends the walk.
+    """
+    heavy_pids = {r.pid for r in heavy}
+    by_pid = {r.pid: r for r in rows}
+    roots: List[ProcRow] = []
+    for row in heavy:
+        node, nested = row, False
+        for _ in range(_MAX_HOPS):
+            parent = by_pid.get(node.ppid)
+            if parent is None or parent.pid == node.pid or parent.ctime > node.ctime:
+                break
+            if parent.pid in heavy_pids:
+                nested = True
+                break
+            node = parent
+        if not nested:
+            roots.append(row)
+    return roots
+
+
 def _children(rows: Sequence[ProcRow]) -> Dict[int, List[ProcRow]]:
     out: Dict[int, List[ProcRow]] = {}
     for r in rows:

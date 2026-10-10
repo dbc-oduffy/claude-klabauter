@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards._heavy_admission_contract import ProcRow
-from coordinator_core.bash_guards._session_census import resolve_anchor, session_census
+from coordinator_core.bash_guards._session_census import heavy_roots, resolve_anchor, session_census
 
 
 class _Prims:
@@ -137,3 +137,20 @@ def test_claimed_heavy_counts_one_command_per_tree():
     rows = [R(12, 999, 50, "bash.exe"), R(14, 12, 52, "node.exe"), R(16, 14, 54, "node.exe")]
     assert [r.pid for r in claimed_heavy(rows, {(12, 50)})] == [14]
     assert claimed_heavy(rows, set()) == []
+
+
+def test_one_command_chain_counts_once():
+    # pnpm -> tsx cli (node) -> node: one command, three heavy images.
+    rows = [
+        R(1, 0, 1, "claude"), R(2, 1, 2, "bash"),
+        R(3, 2, 3, "pnpm"), R(4, 3, 4, "node"), R(5, 4, 5, "node"),
+    ]
+    assert [r.pid for r in heavy_roots(rows[2:], rows)] == [3]
+
+
+def test_two_commands_count_twice():
+    rows = [
+        R(1, 0, 1, "claude"), R(2, 1, 2, "bash"), R(6, 1, 6, "bash"),
+        R(3, 2, 3, "pnpm"), R(4, 3, 4, "node"), R(7, 6, 7, "vitest"),
+    ]
+    assert sorted(r.pid for r in heavy_roots([rows[3], rows[4], rows[5]], rows)) == [3, 7]
