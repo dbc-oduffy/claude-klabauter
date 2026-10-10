@@ -526,3 +526,26 @@ def test_an_empty_statement_amendment_is_refused(tmp_path, blank):
     assert result["exit_code"] == 1
     assert "statement is empty" in result["error"]
     assert sizing.read_text(encoding="utf-8") == before
+
+
+_APM_NO_REF = (
+    "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
+    "  accepted:\n    source: apm\n    apm_ruling: Ruled fine.\n    on: '2026-01-01'\n    mode: ceo\n"
+)
+
+
+def test_the_same_apm_ruling_with_its_ruling_ref_repairs_a_legacy_acceptance(tmp_path):
+    repo, sizing = _setup(tmp_path, _APM_NO_REF)
+    result = _run(_apm(mode="ceo"), repo)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    accepted = _doc(sizing)["exit_criterion"]["accepted"]
+    assert accepted["ruling_ref"] == "run-1" and accepted["apm_ruling"] == "Ruled fine."
+    assert accepted["on"] == "2026-01-01" and accepted["source"] == "apm"
+    assert _run(_apm(mode="ceo"), repo)["applied"] is False
+
+
+def test_a_different_ruling_never_repairs_a_legacy_acceptance_silently(tmp_path):
+    repo, sizing = _setup(tmp_path, _APM_NO_REF)
+    result = _run(_apm(apm_ruling="Ruled otherwise.", mode="ceo"), repo)
+    assert result["exit_code"] == 1 and "already carries" in result["error"], result
+

@@ -308,7 +308,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             }
         new_words = apm_ruling or pm_quote
 
-        if isinstance(existing_accepted, dict) and not (
+        # A legacy APM acceptance written without ruling_ref fails the schema's APM branch; the
+        # same ruling re-given with its ruling_ref repairs it in place, keeping the original date.
+        ref_repair = (
+            bool(apm_ruling)
+            and existing_source == SOURCE_APM
+            and isinstance(existing_accepted, dict)
+            and not existing_accepted.get("ruling_ref")
+            and acceptance_words(existing_accepted) == new_words
+            and new_statement == existing_statement
+        )
+        if ref_repair:
+            # YAML 1.1 reads an unquoted `on:` key as boolean True.
+            prior_on = existing_accepted.get("on", existing_accepted.get(True))
+            if prior_on:
+                new_accepted = {**new_accepted, "on": str(prior_on)}
+
+        if isinstance(existing_accepted, dict) and not ref_repair and not (
             existing_source == SOURCE_APM and not apm_ruling
         ):
             identical = (
