@@ -19,6 +19,9 @@ REAPER_OP = "hooks.taskstop_reaper"
 # Must exceed the life of any background task (a `tsc --watch` lives until session exit).
 RECORD_TTL_S = 7 * 24 * 3600
 
+# FILETIME ticks (100ns) between 1601-01-01 and the Unix epoch; LaunchRecord.mark is FILETIME.
+FILETIME_UNIX_EPOCH = 116444736000000000
+
 # Relative to settings_home().
 STORE_RELPATH = "taskstop-reaper/launches"
 LOG_RELPATH = "taskstop-reaper/reaper.jsonl"
@@ -72,6 +75,7 @@ __all__ = [
     "RECORDER_OP",
     "REAPER_OP",
     "RECORD_TTL_S",
+    "FILETIME_UNIX_EPOCH",
     "STORE_RELPATH",
     "LOG_RELPATH",
     "LaunchRecord",

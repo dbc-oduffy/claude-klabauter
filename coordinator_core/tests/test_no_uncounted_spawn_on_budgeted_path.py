@@ -1353,6 +1353,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/flag_em_poll_in_flight.py",
         ("_handler",),
     ),
+    "hooks.taskstop_launch_recorder": (
+        "coordinator_core/hooks/taskstop_launch_recorder.py",
+        ("_handler",),
+    ),
+    "hooks.taskstop_reaper": (
+        "coordinator_core/hooks/taskstop_reaper.py",
+        ("_handler",),
+    ),
     "hooks.group_em_autofire": (
         "coordinator_core/hooks/group_em_autofire.py",
         ("_handler",),

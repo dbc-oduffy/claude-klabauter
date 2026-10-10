@@ -1,6 +1,7 @@
 """An over-cap inventory's part scripts are named by the same run id the part's spine carries."""
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import cli as cli_module
@@ -26,5 +27,5 @@ def test_part_script_name_carries_exactly_the_spine_part_id(tmp_path, monkeypatc
     for part in seen:
         index = part["inventory_part"][0]
         part_id = im.part_run_id("run7-t3", index)
-        name = part["output_path"].rsplit("/", 1)[-1]
+        name = Path(part["output_path"]).name
         assert name == f"{part_id}.workflow.mjs"

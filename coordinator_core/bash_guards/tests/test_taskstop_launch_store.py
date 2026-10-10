@@ -21,7 +21,7 @@ def _home(tmp_path, monkeypatch):
 
 
 def _mark(age_s: float) -> int:
-    return int((time.time() - age_s) * 1e7) + store._FILETIME_UNIX_EPOCH
+    return int((time.time() - age_s) * 1e7) + store.FILETIME_UNIX_EPOCH
 
 
 def _rec(tid="abc123", age_s=0.0):

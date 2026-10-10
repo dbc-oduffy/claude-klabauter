@@ -1207,8 +1207,12 @@ def read_spine(
                     {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
                 )
 
-        if disposition in NON_DISPATCHABLE_DISPOSITIONS or em_performed:
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or memo_delivered:
             satisfied_ids.add(raw.get("id"))
+        elif em_performed:
+            # Not dispatched, and not done: an open EM row (a premise probe, a
+            # memo not yet sent) holds its dependents until it is resolved.
+            blocked_ids.add(raw.get("id"))
         elif deferred is True:
             deferred_ids.add(raw.get("id"))
             blocked_ids.add(raw.get("id"))

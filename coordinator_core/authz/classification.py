@@ -211,6 +211,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # only (always allows), but the write disqualifies COMPUTE_ONLY under the five-question
     # test the same way hooks.postuse_advisory_dispatch's own durable state does.
     "hooks.flag_em_poll_in_flight": OpClass.MUTATING,
+    # hooks.taskstop_launch_recorder — MUTATING: appends launch records under settings_home().
+    "hooks.taskstop_launch_recorder": OpClass.MUTATING,
+    # hooks.taskstop_reaper — MUTATING: kills orphaned launch trees and writes the reaper log
+    # under settings_home().
+    "hooks.taskstop_reaper": OpClass.MUTATING,
     # hooks.postuse_advisory_dispatch — MUTATING (reclassified; was COMPUTE_ONLY).
     #
     # B-F1 had re-plumbed this op's throttle/bark-once/dedup guards from /tmp

@@ -17,6 +17,7 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.atomic_append import append_line
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.bash_guards._taskstop_contract import (
+    FILETIME_UNIX_EPOCH,
     LOG_RELPATH,
     RECORD_TTL_S,
     STORE_RELPATH,
@@ -26,9 +27,6 @@ from coordinator_core.bash_guards._taskstop_contract import (
 
 # task_id becomes a filename: no separator, dot or drive colon may pass.
 _TASK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
-
-# FILETIME ticks (100ns) between 1601-01-01 and the Unix epoch.
-_FILETIME_UNIX_EPOCH = 116444736000000000
 
 
 def _store_dir() -> Path:
@@ -48,7 +46,7 @@ def _record_path(task_id: str) -> Path:
 
 
 def _age_s(mark: int, now_s: float) -> float:
-    return now_s - (mark - _FILETIME_UNIX_EPOCH) / 1e7
+    return now_s - (mark - FILETIME_UNIX_EPOCH) / 1e7
 
 
 def _load(path: Path) -> Optional[LaunchRecord]:

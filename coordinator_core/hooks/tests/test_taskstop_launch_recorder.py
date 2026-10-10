@@ -36,7 +36,7 @@ def test_background_launch_writes_record():
     assert rec._handler({"payload": _payload()}) == {}
     r = store.read_record("bg1abc")
     assert (r.session_id, r.tool_use_id, r.command) == ("sess1", "tu1", "sleep 3001")
-    assert abs((r.mark - rec._FILETIME_UNIX_EPOCH) / 1e7 - time.time()) < 60
+    assert abs((r.mark - rec.FILETIME_UNIX_EPOCH) / 1e7 - time.time()) < 60
 
 
 def test_bare_params_without_payload_wrapper():
@@ -72,6 +72,7 @@ def test_non_windows_is_a_noop(monkeypatch):
 def test_never_raises_on_garbage():
     for params in (None, 5, [], {"payload": 3}, {"payload": {"tool_name": "Bash", "tool_input": 1}}):
         assert rec._handler(params) == {}
+    assert store.all_records() == []
 
 
 def test_store_failure_is_swallowed(monkeypatch):

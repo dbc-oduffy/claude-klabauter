@@ -93,6 +93,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.cater_subagent_start":             "coordinator_core.hooks",
     "hooks.nudge_autonomous_askuserquestion": "coordinator_core.hooks",
     "hooks.flag_em_poll_in_flight":           "coordinator_core.hooks",
+    "hooks.taskstop_launch_recorder":         "coordinator_core.hooks",
+    "hooks.taskstop_reaper":                  "coordinator_core.hooks",
     "hooks.sessionend_archive_session":       "coordinator_core.hooks",
     "hooks.watchdog_undischarged_next_move":  "coordinator_core.hooks",
     "hooks.plan_persistence_check":           "coordinator_core.hooks",

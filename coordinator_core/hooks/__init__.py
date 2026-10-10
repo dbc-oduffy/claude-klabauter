@@ -173,6 +173,8 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.cater_subagent_start",
     "coordinator_core.hooks.nudge_autonomous_askuserquestion",
     "coordinator_core.hooks.flag_em_poll_in_flight",
+    "coordinator_core.hooks.taskstop_launch_recorder",
+    "coordinator_core.hooks.taskstop_reaper",
     "coordinator_core.hooks.sessionend_archive_session",
     "coordinator_core.hooks.watchdog_undischarged_next_move",
     "coordinator_core.hooks.plan_persistence_check",

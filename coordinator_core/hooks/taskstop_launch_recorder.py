@@ -12,16 +12,17 @@ import sys
 import time
 
 from coordinator_core.bash_guards import _taskstop_launch_store as store
-from coordinator_core.bash_guards._taskstop_contract import RECORDER_OP, LaunchRecord
+from coordinator_core.bash_guards._taskstop_contract import (
+    FILETIME_UNIX_EPOCH,
+    RECORDER_OP,
+    LaunchRecord,
+)
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
-# FILETIME ticks (100ns) between 1601-01-01 and the Unix epoch.
-_FILETIME_UNIX_EPOCH = 116444736000000000
-
 
 def _filetime_now() -> int:
-    return int(time.time() * 1e7) + _FILETIME_UNIX_EPOCH
+    return int(time.time() * 1e7) + FILETIME_UNIX_EPOCH
 
 
 def _str(value: object) -> str:

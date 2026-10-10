@@ -170,6 +170,14 @@ class OrphanTree:
     heavy: Sequence[ProcRow]
 
 
+def _is_orphan_root(row: ProcRow, by_pid: Mapping[int, ProcRow]) -> bool:
+    """A non-claude row whose parent has exited, or whose ppid now names a younger (reused) pid."""
+    if _is_claude(row.name):
+        return False
+    parent = by_pid.get(row.ppid)
+    return parent is None or parent.ctime > row.ctime
+
+
 def orphan_trees(rows: Sequence[ProcRow], since_ctime: int) -> List[OrphanTree]:
     """Orphan trees whose root was created at or after since_ctime and that hold a heavy image.
 
@@ -180,10 +188,7 @@ def orphan_trees(rows: Sequence[ProcRow], since_ctime: int) -> List[OrphanTree]:
     children = _children(rows)
     out: List[OrphanTree] = []
     for r in rows:
-        if r.ctime < since_ctime or _is_claude(r.name):
-            continue
-        parent = by_pid.get(r.ppid)
-        if parent is not None and parent.ctime <= r.ctime:
+        if r.ctime < since_ctime or not _is_orphan_root(r, by_pid):
             continue
         tree = _subtree(r, children)
         heavy = tuple(p for p in tree if _stem(p.name) in HEAVY_IMAGES)

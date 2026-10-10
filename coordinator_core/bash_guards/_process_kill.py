@@ -31,14 +31,14 @@ def _is_windows() -> bool:
 
 def _kernel():
     """Shared kernel32 plus the TerminateProcess prototype."""
+    k = _hp._win()
     if "term" not in _cache:
         from ctypes import wintypes
 
-        k = _hp._win()
         k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
         k.TerminateProcess.restype = wintypes.BOOL
         _cache["term"] = True
-    return _hp._win()
+    return k
 
 
 def _ntquery():

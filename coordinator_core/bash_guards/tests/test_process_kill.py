@@ -14,8 +14,6 @@ import pytest
 from coordinator_core.bash_guards import _process_kill as pk
 from coordinator_core.bash_guards import _taskstop_contract as contract
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
 _win_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows ctypes primitives")
 
 
@@ -39,6 +37,7 @@ class _Kernel:
 def _stub(monkeypatch, kernel, handle=1234, err=0, ctime=77):
     monkeypatch.setattr(pk, "_is_windows", lambda: True)
     monkeypatch.setattr(pk, "_kernel", lambda: kernel)
+    monkeypatch.setattr(pk._hp, "_win", lambda: kernel)
     monkeypatch.setattr(pk._hp, "_win_open", lambda pid, access: (handle, err))
     monkeypatch.setattr(pk._hp, "_win_ctime_of", lambda h: ctime)
 
@@ -106,6 +105,8 @@ def test_import_closure_has_no_subprocess():
     }
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 @_win_only
 def test_live_child_command_line_then_kill():
     child = subprocess.Popen(

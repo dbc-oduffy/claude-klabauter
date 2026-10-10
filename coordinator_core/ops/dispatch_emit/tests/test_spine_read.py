@@ -354,6 +354,28 @@ def test_em_performed_open_row_is_excluded_with_reason(tmp_path):
     ]
 
 
+def test_open_em_row_holds_its_dependents_until_resolved(tmp_path):
+    """An EM premise probe left open once let its dependents run before it:
+    the rows it could void were built first."""
+    body = """\
+- id: C1
+  title: EM probes the premise
+  surface: some/surface
+  performer: em
+- id: C2
+  title: build on the premise
+  surface: some/surface
+  depends_on:
+    - chunk: C1
+      gate_kind: epistemic-premise
+"""
+    plan_path = _write_plan(tmp_path, body)
+    assert {row.id for row in read_spine(plan_path)} == set()
+
+    resolved = body.replace("  performer: em\n", "  performer: em\n  disposition: coded\n")
+    assert {row.id for row in read_spine(_write_plan(tmp_path, resolved))} == {"C2"}
+
+
 def test_live_row_depends_on_filtered_row_does_not_raise_and_edge_is_stripped(tmp_path):
     body = """\
 - id: C1
