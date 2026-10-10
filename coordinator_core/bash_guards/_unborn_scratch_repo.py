@@ -1,5 +1,8 @@
-"""coordinator_core.bash_guards._unborn_scratch_repo -- the destructive-rm guard's
-no-history proof for a throwaway repo under an enclosing repo's ``scratch/``."""
+"""coordinator_core.bash_guards._unborn_scratch_repo -- the destructive-rm guard's one exemption
+for removing a whole repo: a history-less repo under an enclosing repo's scratch/.
+
+Spawn-free and stdlib-only: dispatch_checks imports it eagerly at negligible cost.
+"""
 
 from __future__ import annotations
 

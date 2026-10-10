@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.bash_guards._heavy_admission_contract import (

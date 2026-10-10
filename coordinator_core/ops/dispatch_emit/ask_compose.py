@@ -294,6 +294,7 @@ def _row_runner_js() -> str:
             "  const _unansweredBriefs = [];",
             "  const _stoppedBy = [];",
             "  const _notStarted = [];",
+            f"  const {_emit.PLAN_HELD_VAR} = {{}};",
             "  let _halted = null;",
             "  const _verifications = [];",
             "  const _rowPlan = {};",

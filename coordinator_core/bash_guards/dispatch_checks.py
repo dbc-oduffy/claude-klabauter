@@ -150,7 +150,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from coordinator_core import machine_path_leak
-from coordinator_core.bash_guards import commit_tripwires
+from coordinator_core.bash_guards import _unborn_scratch_repo, commit_tripwires
 from coordinator_core.git.correction_note import SENTINEL as _NOTE_SENTINEL
 from coordinator_core.bash_guards._dialect import (
     Dialect,
@@ -167,12 +167,9 @@ from coordinator_core.bash_guards.block_subagent_commit import (
 )
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _PS_REMOVE_VERBS,
-    _normalize_executable_basename,
-    _normalize_windows_argv0_head_path_with_spaces,
     _ps_normalize_verb_token,
     _ps_resolve_head_verb,
 )
-from coordinator_core.bash_guards._unborn_scratch_repo import is_unborn_scratch_repo
 
 if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
@@ -182,6 +179,10 @@ if TYPE_CHECKING:
 # <git_root>/.git/coordinator-sessions/<session_id>/ or a session_dir --
 # untracked guard bookkeeping, never a tracked repo artifact.
 GENERATES = []
+from coordinator_core.bash_guards.block_subagent_destructive_action import (
+    _normalize_executable_basename,
+    _normalize_windows_argv0_head_path_with_spaces,
+)
 from coordinator_core.bash_guards._command_tokenizer import (
     _extract_command_substitutions as _bt_extract_command_substitutions,
     _skip_wrapper_own_argv,
@@ -4269,7 +4270,7 @@ def check_destructive_rm(
                         )
                         tgt_is_bare = rc_bare == 0 and out_bare.strip() == "true"
                 if tgt_is_bare or (tgt_top and _is_same_dir(tgt_top, tgt_abs)):
-                    if rm_override or is_unborn_scratch_repo(tgt_abs):
+                    if rm_override or _unborn_scratch_repo.is_unborn_scratch_repo(tgt_abs):
                         continue
                     store_desc = tgt_top if tgt_top else tgt_abs
                     # A LINKED `git worktree add` worktree's actual .git

@@ -261,3 +261,15 @@ def test_a_preamble_the_arm_cannot_deliver_is_refused_not_recorded(monkeypatch, 
 
     with pytest.raises(AskComposeRefused, match="--preamble"):
         _compose(preamble="BOX TERMS", **kw)
+
+
+@pytest.mark.parametrize("over", [{}, {"prompt": None, "sizing_rel": "state/sizings/x.yaml"}])
+def test_every_digest_var_read_is_declared(over):
+    import re
+
+    from coordinator_core.ops.dispatch_emit.wake_digest import PLAN_HELD_VAR, RUNTIME_VARS
+
+    script = _compose(**over)
+    for name in (*RUNTIME_VARS, PLAN_HELD_VAR):
+        if re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", script):
+            assert re.search(rf"\b(const|let) {re.escape(name)}\b", script), name

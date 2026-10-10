@@ -730,6 +730,10 @@ def read_packed_ref(gitdir: Path, ref: str) -> Optional[str]:
     return None
 
 
+def read_ref_loose_or_packed(common_dir: Path, ref_rel: str) -> Optional[str]:
+    return _read_ref_raw(common_dir / ref_rel) or read_packed_ref(common_dir, ref_rel)
+
+
 def _ref_exists_loose_or_packed(common_dir: Path, ref_rel: str) -> bool:
     return (common_dir / ref_rel).is_file() or read_packed_ref(common_dir, ref_rel) is not None
 
@@ -772,6 +776,50 @@ def _head_symref_target(head_gitdir: Path) -> Optional[str]:
     if not raw.startswith("ref:"):
         return None
     return raw[4:].strip() or None
+
+
+def cas_head_symref(
+    head_gitdir: Path,
+    expected_target: str,
+    new_target: str,
+    *,
+    reflog_committer: Optional[str] = None,
+    reflog_message: Optional[str] = None,
+    sha: Optional[str] = None,
+) -> bool:
+    """Repoint `<head_gitdir>/HEAD` from `ref: expected_target` to `ref: new_target`.
+
+    Same O_EXCL lock-file + replace idiom as `cas_ref`; any lost race (lock held,
+    HEAD no longer naming `expected_target`) returns False with HEAD untouched.
+    `head_gitdir` is the per-worktree gitdir. A HEAD reflog line (old == new ==
+    `sha`) is appended only when `sha` and both reflog fields are given.
+    """
+    head_path = head_gitdir / "HEAD"
+    lock_path = head_gitdir / "HEAD.lock"
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        return False
+    try:
+        os.close(fd)
+        if _head_symref_target(head_gitdir) != expected_target:
+            return False
+        lock_path.write_bytes(f"ref: {new_target}\n".encode("utf-8"))
+        if not _replace_with_retry(
+            lock_path,
+            head_path,
+            still_valid=lambda: _head_symref_target(head_gitdir) == expected_target,
+        ):
+            return False
+        if sha and reflog_committer is not None and reflog_message is not None:
+            append_reflog(head_gitdir, "HEAD", sha, sha, reflog_committer, reflog_message)
+        return True
+    finally:
+        if lock_path.exists():
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
 
 def cas_ref(

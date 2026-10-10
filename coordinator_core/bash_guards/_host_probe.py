@@ -230,6 +230,37 @@ def _linux_stat(pid: int) -> Optional[tuple]:
         return None
 
 
+# --------------------------------------------------------------------------- versioned claude
+# TRAP: the native Claude Code install runs the binary at .../claude/versions/<semver>, so the
+# kernel's process name is the bare version ("2.1.296"), never "claude". Only a version-shaped
+# name pays the executable-path read.
+
+def _looks_like_version(name: str) -> bool:
+    return "." in name and name.replace(".", "").isdigit()
+
+
+def _named_for_anchor(pid: int, name: str, exe_path: Callable[[int], Optional[str]]) -> str:
+    """name, or "claude" when a version-shaped name runs from a claude/versions/ directory."""
+    if not _looks_like_version(name):
+        return name
+    path = _safe(exe_path, pid)
+    if not path:
+        return name
+    parent = Path(path).parent
+    return "claude" if parent.name == "versions" and parent.parent.name == "claude" else name
+
+
+def _linux_exe_path(pid: int) -> Optional[str]:
+    return os.readlink(f"/proc/{int(pid)}/exe")
+
+
+def _darwin_exe_path(pid: int) -> Optional[str]:
+    lp = ctypes.CDLL(None, use_errno=True)
+    buf = ctypes.create_string_buffer(4096)
+    n = lp.proc_pidpath(int(pid), buf, ctypes.sizeof(buf))
+    return buf.value.decode("utf-8", "replace") if n > 0 else None
+
+
 def _linux_alive(pid: int, ctime: int) -> bool:
     st = _linux_stat(pid)
     return st is not None and st[2] == ctime
@@ -245,7 +276,7 @@ def _linux_snapshot() -> Optional[List]:
         if e.isdigit():
             st = _linux_stat(int(e))
             if st is not None:
-                rows.append(ProcRow(int(e), st[1], st[2], st[0]))
+                rows.append(ProcRow(int(e), st[1], st[2], _named_for_anchor(int(e), st[0], _linux_exe_path)))
     return rows or None
 
 
@@ -320,7 +351,7 @@ def _darwin_snapshot() -> Optional[List]:
     for p in pids:
         info = _darwin_bsdinfo(p)
         if info is not None:
-            rows.append(ProcRow(p, info[1], info[2], info[0]))
+            rows.append(ProcRow(p, info[1], info[2], _named_for_anchor(p, info[0], _darwin_exe_path)))
     return rows or None
 
 

@@ -48,3 +48,28 @@ def test_duplicate_change_lines_for_one_path_name_it_once(round_module):
     dropped = [("MODIFY", "lib/a.py"), ("DELETE", "lib/a.py")]
 
     assert round_module._not_carried_prose(dropped).count("lib/a.py") == 1
+
+
+def test_identical_to_head_rewrites_are_not_reported_as_dropped(round_module):
+    dropped = [("MODIFY", "bin/shim.py"), ("MODIFY", "lib/same.py"), ("MODIFY", "lib/lost.py")]
+    unchanged = ["bin/shim.py", "lib/same.py"]
+
+    body = round_module._not_carried_prose(dropped, unchanged)
+
+    assert "lib/lost.py" in body
+    assert "bin/shim.py" not in body
+    assert "2 reported change(s) unchanged" in body
+
+
+def test_subject_counts_only_real_drops(round_module):
+    real_changes = [("MODIFY", "a.py"), ("MODIFY", "b.py"), ("MODIFY", "c.py")]
+
+    all_unchanged = round_module._build_commit_subject(
+        "row", real_changes, ["a.py"], unchanged_paths=["b.py", "c.py"], source_sha="0" * 12
+    )
+    one_lost = round_module._build_commit_subject(
+        "row", real_changes, ["a.py"], unchanged_paths=["b.py"], source_sha="0" * 12
+    )
+
+    assert "not carried" not in all_unchanged
+    assert "1 reported change(s) not carried" in one_lost

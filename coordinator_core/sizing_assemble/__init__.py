@@ -650,9 +650,10 @@ TOUCHPOINTS_BY_MODE: dict[str, tuple[dict[str, str], ...]] = {
     ),
 }
 
-#: The sizing-stage touchpoint ids the engine skips when `sizing_acceptance_skipped`
-#: holds; the later touchpoints (`execute_go`, `wrap_up`, `accept_result`) are kept.
-_SIZING_STAGE_TOUCHPOINT_IDS = frozenset({"accept_sizing", "accept_exit_criterion"})
+#: The touchpoint ids the engine skips when `sizing_acceptance_skipped` holds, in every
+#: mode (PM ruling 2026-10-10: below XL a sizing routes straight to execution, no ask);
+#: the closing touchpoints (`wrap_up`, `accept_result`) are kept.
+_SIZING_STAGE_TOUCHPOINT_IDS = frozenset({"accept_sizing", "accept_exit_criterion", "execute_go"})
 
 def _assert_touchpoint_table_total() -> None:
     """Every member of `_INTERACTION_MODES_EXPECTED` has a `TOUCHPOINTS_BY_MODE`
@@ -914,7 +915,7 @@ def route(
             an advisory variant without ever suppressing the advisory
             itself. In `ceo` mode, `post_size_prompt_pending` is
             suppressed (ceo's single touchpoint is the exit criterion); in
-            every mode but `hands-on` it is also dropped wherever
+            every mode it is also dropped wherever
             `sizing_acceptance_skipped(route, tshirt)` holds.
         interaction_mode_source: "flag" | "fleet" | "default" — set by
             `main()`; `route()` never resolves this itself and only echoes
@@ -1009,12 +1010,9 @@ def route(
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
 
     if sizing_acceptance_skipped(resolved_route, resized_tshirt):
-        # The engine carries this straight to execution: the appetite ask goes too, in every
-        # mode but hands-on (the PM choosing to be in the loop per turn). Appetite stays
-        # PM-stated-only; nothing here infers it.
-        dropped = {"exit_criterion_pending"}
-        if interaction_mode != "hands-on":
-            dropped.add("post_size_prompt_pending")
+        # The engine carries this straight to execution in every mode, hands-on included
+        # (PM ruling 2026-10-10). Appetite stays PM-stated-only; nothing here infers it.
+        dropped = {"exit_criterion_pending", "post_size_prompt_pending"}
         detents = [d for d in detents if d not in dropped]
 
     if resolved_route == "pm-decision":
@@ -1501,6 +1499,7 @@ def write_back(
                     existing["click_paths"] = click_paths
             mode = doc.get("interaction_mode") or interaction_mode
             route_now, tshirt_now = decision["route"], decision["resolved_estimate"]["tshirt"]
+            # hands-on joins once the vendored schema's engine-size-rule mode enum admits it.
             skipped = bool(statement) and mode in ("pm", "ceo") and sizing_acceptance_skipped(
                 route_now, tshirt_now
             )

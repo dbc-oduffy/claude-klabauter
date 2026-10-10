@@ -43,7 +43,7 @@ class TestTouchpointsAtM:
         assert _touchpoint_ids("pm", "M", "plan") == ["accept_result"]
 
     def test_hands_on_at_m(self):
-        assert _touchpoint_ids("hands-on", "M", "plan") == ["execute_go", "wrap_up"]
+        assert _touchpoint_ids("hands-on", "M", "plan") == ["wrap_up"]
 
     def test_ceo_at_m(self):
         assert _touchpoint_ids("ceo", "M", "plan") == []
@@ -58,7 +58,7 @@ class TestTouchpointsAtS:
         assert _touchpoint_ids("pm", "S") == ["accept_result"]
 
     def test_hands_on_at_s_drops_sizing_stage(self):
-        assert _touchpoint_ids("hands-on", "S") == ["execute_go", "wrap_up"]
+        assert _touchpoint_ids("hands-on", "S") == ["wrap_up"]
 
     def test_ceo_at_s_is_empty(self):
         assert _touchpoint_ids("ceo", "S") == []
@@ -141,10 +141,18 @@ class TestPostSizePromptSuppressedInCeoOnly:
         decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode="ceo")
         assert "post_size_prompt_pending" not in decision["detents"]
 
-    @pytest.mark.parametrize("tshirt", ["M", "L", "XL", "XXL"])
-    def test_hands_on_keeps_post_size_prompt_pending_at_every_size(self, tshirt):
+    @pytest.mark.parametrize("tshirt", ["XL", "XXL"])
+    def test_hands_on_keeps_post_size_prompt_pending_at_xl_plus(self, tshirt):
         decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode="hands-on")
         assert "post_size_prompt_pending" in decision["detents"]
+
+    @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L"])
+    def test_hands_on_below_xl_asks_nothing(self, tshirt):
+        # PM ruling 2026-10-10: below XL a sizing routes straight to execution in every mode.
+        decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode="hands-on")
+        assert "post_size_prompt_pending" not in decision["detents"]
+        assert "exit_criterion_pending" not in decision["detents"]
+        assert "execute_go" not in [t["id"] for t in decision["touchpoints"]]
 
     @pytest.mark.parametrize("tshirt", ["XL", "XXL"])
     def test_pm_keeps_post_size_prompt_pending_at_xl_plus(self, tshirt):

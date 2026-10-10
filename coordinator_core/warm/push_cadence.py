@@ -35,6 +35,15 @@ safe only because a server's own final sweep (the exit-path leg wired via
 including superseded-generation retirement, so the predecessor's
 unpushed-at-handoff state is swept before the predecessor actually exits.
 
+THE FOREIGN-DELIVERY SET is the second repo set: `(root, branch)` pairs
+registered by `note_foreign_delivery` (a `memo.send` delivery landed on a
+receiver's day branch). `sweep_repos` pushes each named branch after the served
+set, within the same deadline, through `_push_foreign` -- never HEAD's branch,
+never `main` (`branch_gate`). A pair stays until its remote-tracking ref equals
+the local sha. Named residual: a `memo.send` served cold registers in a process
+with no idle tick, so its push waits for a later send from a warm server -- the
+same accepted-exposure class as the linked-worktree note below.
+
 SWEEP COST BUDGET. Serial over every served repo -- N x push, not one push.
 Each repo's own push is bounded by `push_with_retry`'s ladder deadline, which
 is that repo's resolved ceiling (`push_ceiling.resolve_push_ceiling`, default
@@ -115,10 +124,18 @@ from typing import Callable, Iterable, Optional, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch, head_sha
-from coordinator_core.hooks.auto_push import log_failure
-from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
+from coordinator_core.git.git_objects import cas_ref
+from coordinator_core.git.git_objects import read_ref_loose_or_packed as _ref_sha
+from coordinator_core.hooks.auto_push import branch_gate, log_failure
+from coordinator_core.ops.ceremony.git_native import push_refspec
+from coordinator_core.ops.ceremony.push import (
+    CADENCE_PUSH_RETRY_BUDGET_SECS,
+    _REMOTE_NAME_RE,
+    _read_git_config_text,
+)
 from coordinator_core.ops.ceremony.push_ceiling import (
     PUSH_CEILING_MAX_SECS,
+    _scan as _config_scan,
     resolve_push_ceiling,
 )
 from coordinator_core.ops.push_outstanding import push_outstanding
@@ -137,6 +154,8 @@ __all__ = [
     "ServedReposFn",
     "on_idle_tick",
     "sweep_repos",
+    "note_foreign_delivery",
+    "foreign_deliveries",
     "reset_cadence_for_test",
 ]
 
@@ -203,6 +222,14 @@ _last_sweep_monotonic: Optional[float] = None
 #: there. Keyed by repo, not index, so the served set growing between sweeps
 #: cannot shift the resume point. Guarded by `_cadence_lock`.
 _resume_repo: Optional[Path] = None
+#: `(root, branch)` pairs `note_foreign_delivery` registered, insertion-ordered,
+#: each mapped to its consecutive rejected-push count. Guarded by `_cadence_lock`.
+_foreign_deliveries: "dict[tuple[Path, str], int]" = {}
+
+#: Consecutive rejected pushes after which a pair is dropped. A rejection that
+#: will not self-heal (non-fast-forward, auth) must not cost a push every tick
+#: forever; every rejection is still logged for the push-failure detector.
+FOREIGN_PUSH_MAX_REJECTS = 3
 
 _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
 #: Headroom over the longest per-repo ladder deadline any repo can resolve to
@@ -219,6 +246,7 @@ def reset_cadence_for_test() -> None:
     with _cadence_lock:
         _last_sweep_monotonic = None
         _resume_repo = None
+        _foreign_deliveries.clear()
 
 
 def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
@@ -472,6 +500,106 @@ def _sweep_one(repo_root: Union[str, Path]) -> None:
         _release_sweep_lock(root)
 
 
+def note_foreign_delivery(repo_root: Union[str, Path], branch: str) -> None:
+    """Register `(repo_root, branch)` for the named-branch push arm. Idempotent;
+    a pair leaves the registry only once its remote-tracking ref equals the
+    local sha (or the pair is unpushable).
+    """
+    with _cadence_lock:
+        _foreign_deliveries[(Path(repo_root), branch)] = 0
+
+
+def foreign_deliveries() -> list:
+    with _cadence_lock:
+        return list(_foreign_deliveries)
+
+
+def _forget_foreign(pair: tuple) -> None:
+    with _cadence_lock:
+        _foreign_deliveries.pop(pair, None)
+
+
+def _note_foreign_reject(pair: tuple) -> None:
+    with _cadence_lock:
+        if pair not in _foreign_deliveries:
+            return
+        _foreign_deliveries[pair] += 1
+        if _foreign_deliveries[pair] >= FOREIGN_PUSH_MAX_REJECTS:
+            _foreign_deliveries.pop(pair, None)
+
+
+def _foreign_remote(root: Path, branch: str) -> Optional[str]:
+    """`branch.<b>.remote`, else the sole configured remote, else `origin`; None if none."""
+    text = _read_git_config_text(root)
+    configured = _config_scan(text, "branch", branch, "remote")
+    if configured:
+        return configured
+    remotes = _REMOTE_NAME_RE.findall(text)
+    if len(remotes) == 1:
+        return remotes[0]
+    return "origin" if "origin" in remotes else None
+
+
+def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
+    """Push one registered named branch; never raises, never touches HEAD's branch."""
+    root, branch = pair
+    allowed, _reason = branch_gate(branch)
+    if not allowed:
+        _forget_foreign(pair)
+        return
+    common_dir = resolve_git_common_dir(root)
+    local = _ref_sha(common_dir, f"refs/heads/{branch}")
+    if local is None:
+        _forget_foreign(pair)
+        return
+    remote = _foreign_remote(root, branch)
+    if remote is None:
+        _forget_foreign(pair)
+        return
+    tracking = f"refs/remotes/{remote}/{branch}"
+    seen = _ref_sha(common_dir, tracking)
+    if seen == local:
+        _forget_foreign(pair)
+        return
+    if not _acquire_sweep_lock(root):
+        return
+    try:
+        result = push_refspec(
+            root, remote, f"refs/heads/{branch}", f"refs/heads/{branch}",
+            timeout=ceiling_secs,
+        )
+        if not result.ok:
+            try:
+                log_failure(
+                    str(root), branch, "cadence-sweep", "sweep-failed", 1,
+                    (result.stderr or "").strip()[:500], "", unconfirmed=False,
+                )
+            except Exception:  # noqa: BLE001 -- feeding the detector must never raise
+                pass
+            _note_foreign_reject(pair)
+            return
+        _forget_foreign(pair)
+        if _ref_sha(common_dir, tracking) != local:
+            cas_ref(common_dir, tracking, _ref_sha(common_dir, tracking), local)
+    except Exception:  # noqa: BLE001 -- a sweep push must never raise
+        return
+    finally:
+        _release_sweep_lock(root)
+
+
+def _sweep_foreign(*, deadline: float, clock: Callable[[], float]) -> None:
+    if machine_profile() != "author":
+        return
+    for pair in foreign_deliveries():
+        try:
+            ceiling = resolve_push_ceiling(pair[0], default_secs=CADENCE_PUSH_RETRY_BUDGET_SECS)
+            if clock() + ceiling > deadline:
+                return
+            _push_foreign(pair, ceiling_secs=ceiling)
+        except Exception:  # noqa: BLE001 -- sweep_repos promises never to raise
+            continue
+
+
 def sweep_repos(
     repos: Iterable[Union[str, Path]],
     *,
@@ -553,6 +681,7 @@ def sweep_repos(
             break
     with _cadence_lock:
         _resume_repo = cut
+    _sweep_foreign(deadline=deadline, clock=clock)
 
 
 def on_idle_tick(

@@ -825,7 +825,10 @@ def _parse_tree_entries(payload: bytes) -> Optional[Dict[str, Tuple[int, str]]]:
 
 
 def read_tree_spine(
-    repo: Union[str, Path], paths: Sequence[str]
+    repo: Union[str, Path],
+    paths: Sequence[str],
+    *,
+    root_tree_sha: Optional[str] = None,
 ) -> Optional[Dict[str, Dict[str, Tuple[int, str]]]]:
     """For `paths` (repo-relative), returns the tree objects along each
     path's directory spine: `{dir: {name: (mode, sha)}}`, root keyed as
@@ -843,8 +846,11 @@ def read_tree_spine(
     unreadable/corrupt tree object encountered along a spine (including the
     root); never returns a partial spine silently missing a directory it
     could not read.
+
+    `root_tree_sha` (default None = HEAD's tree) walks the spine from that
+    tree instead, for a ref HEAD does not name.
     """
-    root_sha = head_tree_sha(repo)
+    root_sha = root_tree_sha if root_tree_sha is not None else head_tree_sha(repo)
     if root_sha is None:
         return None
     common_dir = resolve_git_common_dir(repo)

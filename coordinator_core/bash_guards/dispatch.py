@@ -2844,7 +2844,7 @@ def _build_guard_chain(
         # tier, UE, reindex) is admitted by caller identity, box free-RAM floor and
         # per-session cap, all from measured state. Directly after the DR-088 suite guard so
         # its identity, grant and mutex legs diagnose suite runs first. Hard-deny and
-        # spawn-free; strict by machine_profile.GUARD_DEFAULT_LEVEL.
+        # spawn-free; report-only (level off) until machine_profile.GUARD_DEFAULT_LEVEL flips it.
         GuardEntry(
             "guard-heavy-command-admission",
             lambda: _check_heavy_command_admission(payload),

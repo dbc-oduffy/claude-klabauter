@@ -99,6 +99,7 @@ from coordinator_core.git.git_index import scoped_status as _git_index_scoped_st
 from coordinator_core.git.git_objects import (
     _ref_exists_loose_or_packed,
     cas_ref,
+    read_ref_loose_or_packed,
     write_object,
 )
 from coordinator_core.git import rollback_check
@@ -109,6 +110,7 @@ from coordinator_core.git.git_state import (
     head_sha as _git_state_head_sha,
     head_tree_sha as _git_state_head_tree_sha,
     index_read_cache_scope,
+    read_commit as _git_state_read_commit,
     read_index,
     read_index_stat_identity,
     read_tree_spine,
@@ -4769,6 +4771,7 @@ def _commit_via_head_spine(
     create_missing_dirs: bool = False,
     refuse_noop: bool = False,
     caller: str,
+    target_ref: Optional[str] = None,
 ) -> Optional[GitResult]:
     """The shared "rewrite HEAD's tree spine -> build the commit object ->
     land it via a locked ref CAS" landing helper (C4 body: "one helper, two
@@ -4776,6 +4779,12 @@ def _commit_via_head_spine(
     already carry every trailer this commit needs (`interpret-trailers`,
     the caller's own spawn, has already run against it); this helper only
     reads its final bytes for the commit object's message body.
+
+    `target_ref` (default `None` -- HEAD's branch, unchanged) -- a
+    `refs/heads/...` relpath HEAD need not name. `old_head` is then that
+    ref's tip: the parent, the tree the spine is read from, and the CAS
+    comparand, taken against the COMMON dir. HEAD is never read and no HEAD
+    reflog line is written unless HEAD itself names the ref.
 
     `refuse_noop` (default `False` -- `commit_authored_content` is
     byte-identical without it, unchanged) -- when `True`, a computed
@@ -4858,11 +4867,19 @@ def _commit_via_head_spine(
             stderr=f"{caller}: {canonical_refusal}",
         )
 
-    root_tree_sha = _git_state_head_tree_sha(root)
+    if target_ref is not None:
+        parent_info = _git_state_read_commit(root, old_head)
+        root_tree_sha = parent_info.tree if parent_info is not None else None
+    else:
+        root_tree_sha = _git_state_head_tree_sha(root)
     if root_tree_sha is None:
         return None
 
-    spine = read_tree_spine(root, list(assembled.keys()))
+    spine = read_tree_spine(
+        root,
+        list(assembled.keys()),
+        root_tree_sha=root_tree_sha if target_ref is not None else None,
+    )
     if spine is None:
         return None
 
@@ -4871,7 +4888,10 @@ def _commit_via_head_spine(
         if synthesized is None:
             return None
 
-    ref_target = _resolve_cas_ref_target(root)
+    if target_ref is not None:
+        ref_target = (resolve_git_common_dir(root), target_ref)
+    else:
+        ref_target = _resolve_cas_ref_target(root)
     if ref_target is None:
         return None
     ref_gitdir, ref_relpath = ref_target
@@ -5365,6 +5385,7 @@ def commit_authored_new_file(
     attributed_session_id: Optional[str] = None,
     record_ledger: bool = False,
     refresh_shared_index: bool = True,
+    onto_ref: Optional[str] = None,
 ) -> GitResult:
     """Commit EXACTLY `content` at `path`, where `path` is ABSENT from HEAD
     -- the creation sibling of `commit_authored_content`, which refuses an
@@ -5481,6 +5502,13 @@ def commit_authored_new_file(
     Post-commit auto-push is NEVER replayed here -- unconditional, with no
     flag to re-enable it, for the reason stated at the top.
 
+    `onto_ref` (default `None` -- HEAD's branch) -- a `refs/heads/...`
+    relpath that HEAD does not name. The commit parents onto that ref's tip,
+    "absent" is judged against that tip's tree, and the CAS acts on that ref
+    in the common dir; HEAD, its ref, the index and the worktree are not
+    touched. `refresh_shared_index` is forced off: the index belongs to
+    HEAD's branch, and refreshing it would stage a path HEAD lacks.
+
     Returns a `GitResult`; on success `stdout` carries the new commit SHA,
     matching both sibling producers' contract.
     """
@@ -5558,26 +5586,75 @@ def commit_authored_new_file(
             ),
         )
 
-    old_head = _git_state_head_sha(root)
-    if old_head is None:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=(
-                "commit_authored_new_file: HEAD has no resolvable commit "
-                "(unborn branch or a symref with no loose ref and no "
-                "packed-refs entry) -- this entrypoint requires an existing "
-                "HEAD commit to parent the new commit onto"
-            ),
+    if onto_ref is not None:
+        head_target = _resolve_cas_ref_target(root)
+        if (
+            not onto_ref.startswith("refs/heads/")
+            or ".." in onto_ref.split("/")
+            or (head_target is not None and head_target[1] == onto_ref)
+        ):
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    f"commit_authored_new_file: onto_ref {onto_ref!r} must be a "
+                    "refs/heads/... ref that HEAD does not name"
+                ),
+            )
+        refresh_shared_index = False
+        common = resolve_git_common_dir(root)
+        old_head = read_ref_loose_or_packed(common, onto_ref)
+        if old_head is None:
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    f"commit_authored_new_file: onto_ref {onto_ref!r} has no loose "
+                    "ref and no packed-refs entry -- there is no tip to parent onto"
+                ),
+            )
+        onto_info = _git_state_read_commit(root, old_head)
+        onto_spine = (
+            read_tree_spine(root, [normalized], root_tree_sha=onto_info.tree)
+            if onto_info is not None
+            else None
         )
+        if onto_spine is None:
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    f"commit_authored_new_file: onto_ref {onto_ref!r} tip {old_head} "
+                    "has an unreadable tree spine -- refusing rather than falling "
+                    "back to the spawning ladder"
+                ),
+            )
+        parent_dir, _, leaf = normalized.rpartition("/")
+        existing_entry = onto_spine.get(parent_dir, {}).get(leaf)
+        existing_where = f"{onto_ref} ({old_head})"
+    else:
+        old_head = _git_state_head_sha(root)
+        if old_head is None:
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    "commit_authored_new_file: HEAD has no resolvable commit "
+                    "(unborn branch or a symref with no loose ref and no "
+                    "packed-refs entry) -- this entrypoint requires an existing "
+                    "HEAD commit to parent the new commit onto"
+                ),
+            )
+        existing_entry = _head_entry_for(root, normalized)
+        existing_where = f"HEAD ({old_head})"
 
-    if _head_entry_for(root, normalized) is not None:
+    if existing_entry is not None:
         return GitResult(
             returncode=-1,
             stdout="",
             stderr=(
-                f"commit_authored_new_file: {normalized!r} already exists in HEAD "
-                f"({old_head}) -- this entrypoint CREATES a path absent from HEAD; "
+                f"commit_authored_new_file: {normalized!r} already exists in {existing_where} "
+                f"-- this entrypoint CREATES a path absent from there; "
                 "an in-place mutation of an existing file goes through "
                 "commit_authored_content"
             ),
@@ -5615,6 +5692,7 @@ def commit_authored_new_file(
         root, {normalized: (mode_int, new_sha)}, old_head, msg_file,
         create_missing_dirs=True,
         caller="commit_authored_new_file",
+        target_ref=onto_ref,
     )
     if landed is None:
         return GitResult(
