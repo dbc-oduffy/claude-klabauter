@@ -213,6 +213,9 @@ def _vitest_bounded(args: Sequence[str], cwd: Optional[str], worker_cap: Optiona
         return False
     workers = _flag_int(args, _MAX_WORKERS_FLAG)
     if workers is None:
+        # A flag that is present but not an integer (`50%`) overrides the config pin: unbounded.
+        if any(a.lower().split("=", 1)[0] == _MAX_WORKERS_FLAG for a in args):
+            return False
         workers = _repo_worker_pin(cwd)
     return workers is not None and workers <= worker_cap
 

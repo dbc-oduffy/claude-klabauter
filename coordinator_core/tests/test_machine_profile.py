@@ -84,13 +84,15 @@ def test_floor_guards_has_the_fourteen_names():
     assert "block-approval-sentinel-creation" in mp.FLOOR_GUARDS
     assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
     assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS
-
-
-def test_heavy_command_admission_blocks_at_every_level(reg):
-    assert mp.GUARD_DEFAULT_LEVEL["guard-heavy-command-admission"] == "strict"
     assert "guard-heavy-command-admission" in mp.FLOOR_GUARDS
-    assert mp.apply_guard_level("guard-heavy-command-admission", _deny()) is not None
-    assert mp.apply_guard_level("guard-heavy-command-admission", _deny(), subagent=True) is not None
+
+
+def test_heavy_command_admission_defaults_strict_and_ignores_a_warn_box(reg):
+    assert mp.GUARD_DEFAULT_LEVEL["guard-heavy-command-admission"] == "strict"
+    _write(reg, '"coordinator.guard_level" = "warn"\n')
+    deny = _deny()
+    assert mp.apply_guard_level("guard-heavy-command-admission", deny) is deny
+    assert mp.apply_guard_level("guard-heavy-command-admission", deny, subagent=True) is deny
 
 
 def test_heavy_ue_launch_guard_is_a_subagent_floor():

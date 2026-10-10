@@ -131,25 +131,6 @@ def check_repo_pointers(required_keys: "list[str]", registry_get: "Callable[[str
     return items
 
 
-def check_heavy_admission(registry_get: "Callable[[str], Optional[str]]") -> CheckItem:
-    """Every heavy_admission.* key the admission guard reads is a positive integer; an absent one
-    denies every heavy launch once the guard enforces, and reads as healthy until then."""
-    from coordinator_core.bash_guards._heavy_admission_seed import derive_defaults
-
-    bad = []
-    for key in sorted(derive_defaults(16 * 1024)):
-        value = registry_get(key)
-        try:
-            ok = int(str(value)) > 0
-        except (TypeError, ValueError):
-            ok = False
-        if not ok:
-            bad.append(key)
-    if bad:
-        return CheckItem("heavy_admission", False, f"{len(bad)} key(s) unseeded, e.g. {bad[0]} -- re-run scripts/setup.py")
-    return CheckItem("heavy_admission", True, "every heavy_admission.* key seeded")
-
-
 def check_statusline(claude_dir: Path) -> CheckItem:
     settings, err = _settings_json(claude_dir)
     if err:
@@ -176,6 +157,5 @@ def run_checks(
         check_door(settings_home_path),
         check_guards(claude_klabauter_root, claude_dir),
         *check_repo_pointers(required_repo_keys, registry_get),
-        check_heavy_admission(registry_get),
         check_statusline(claude_dir),
     ]

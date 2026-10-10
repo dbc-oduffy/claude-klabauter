@@ -61,21 +61,6 @@ def test_guards_flag_unresolvable_hook_command(tmp_path):
     assert not setup_check.check_guards(tmp_path / "empty", claude).ok
 
 
-def test_heavy_admission_flags_an_unseeded_key():
-    seeded = {
-        "heavy_admission.free_ram_floor_mb": "2457",
-        "heavy_admission.lease_reserve_mb": "2048",
-        "heavy_admission.session_background_cap": "4",
-        "heavy_admission.session_heavy_cap": "2",
-        "heavy_admission.vitest_max_workers": "4",
-        "heavy_admission.worker_rss_ceiling_mb": "4096",
-    }
-    assert setup_check.check_heavy_admission(seeded.get).ok
-    partial = dict(seeded, **{"heavy_admission.session_heavy_cap": "0"})
-    item = setup_check.check_heavy_admission(partial.get)
-    assert not item.ok and "heavy_admission.session_heavy_cap" in item.detail
-
-
 def test_door_fails_when_not_installed(tmp_path):
     assert not setup_check.check_door(tmp_path).ok
 
