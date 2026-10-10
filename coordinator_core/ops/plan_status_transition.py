@@ -522,6 +522,45 @@ def _parse_args(argv: List[str]) -> _Opts:
 _CASCADE_TARGET_KINDS = ("handoff", "sizing")
 
 
+_OPEN_SIZING_STATUSES = ("sized", "routed")
+
+
+def _cited_sizing_open(plan_path: str) -> bool:
+    """True when the plan's `sizing_object:` names a sizing still sized/routed.
+
+    One frontmatter read and one YAML read: the repeat no-op stays free (AC6i), and only a
+    plan whose cited sizing never closed pays for the cascade.
+    """
+    from coordinator_core.archive_stamp import _resolve_repo_root_for
+
+    try:
+        split = split_frontmatter(Path(plan_path).read_text(encoding="utf-8"))
+    except OSError:
+        return False
+    rel = (read_fm_field_unquoted(split.fm_text, "sizing_object") or "").strip() if split else ""
+    if not rel or rel == "null":
+        return False
+    worktree, _ = _resolve_repo_root_for(Path(plan_path))
+    if worktree is None:
+        return False
+    try:
+        doc = yaml.safe_load((Path(worktree) / rel).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    return isinstance(doc, dict) and doc.get("status") in _OPEN_SIZING_STATUSES
+
+
+def _cascade_if_implemented(plan_path: str, state: dict) -> int:
+    """Cascade a plan found already `implemented` whose cited sizing never closed.
+
+    A plan stamped by a hand or bulk edit never passed through the flip branch, so its
+    sizing and baton stay open. Every other repeat stamp stays a genuine no-op (AC6i).
+    """
+    if state.get("prior_status") != "implemented" or not _cited_sizing_open(plan_path):
+        return 0
+    return _run_cascade(plan_path, state.get("deliverable_id"))
+
+
 def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = "") -> int:
     """Fire the shared terminal-state cascade (deliverable.cascade_terminal, C6) once
     per target kind in `_CASCADE_TARGET_KINDS`, after a successful NON-no-op flip to
@@ -1892,9 +1931,9 @@ def _stamp_implemented(opts: _Opts) -> int:
                 f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" was already flipped "
                 "on disk by a prior run but never committed — committed the stranded write now"
             )
-            return 0
+            return _cascade_if_implemented(opts.plan, _state)
         print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is terminal/deferred — no-op")
-        return 0
+        return _cascade_if_implemented(opts.plan, _state)
 
     stamp_sha = ""
     # Commit ownership (see module docstring "Commit ownership" section): a real

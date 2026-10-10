@@ -92,3 +92,14 @@ def test_pipeline_brief_refusal_unchanged_off_ask(repo, capsys):
 def test_context_still_refused_off_ask_and_research(repo, capsys):
     rc, _, err = _emit(repo, capsys, "--context", "c.md", "--plan", "p.md")
     assert rc == cli.EXIT_USAGE and "--context requires --from-sizing or --research" in err
+
+
+def test_a_missing_brief_file_refuses_before_the_admission_hold(repo, monkeypatch, capsys):
+    from coordinator_core.ops.dispatch_emit import admission
+
+    def _no_wait(*a, **k):
+        raise AssertionError("admission reached before the argv refusal")
+
+    monkeypatch.setattr(admission, "await_admission", _no_wait)
+    assert cli.main(["--ask", "probe", "--brief-file", "absent.md"]) == cli.EXIT_DATA_ERROR
+    assert "--brief-file absent.md" in capsys.readouterr().err

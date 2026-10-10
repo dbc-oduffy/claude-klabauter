@@ -29,7 +29,8 @@ class EmBrief:
 
 def _rel(repo_root: Path, raw: str, flag: str) -> tuple[Path, str]:
     root = repo_root.resolve()
-    p = Path(raw)
+    # A Windows-typed backslash path names the same file on every host.
+    p = Path(raw.replace("\\", "/"))
     resolved = (p if p.is_absolute() else root / p).resolve()
     try:
         rel = resolved.relative_to(root).as_posix()
@@ -73,6 +74,15 @@ def load_em_brief(
             raise EmBriefRefused(f"--context {raw}: no such file")
         ctx_rel.append(rel)
     return EmBrief(text=text, source=source, context=tuple(ctx_rel))
+
+
+def check_em_brief_paths(repo_root: Path, *, brief_file: str | None, context: Sequence[str] = ()) -> None:
+    """Refuse a --brief-file or --context path that is outside the repo or absent: stats only, no read."""
+    named = [("--brief-file", brief_file)] if brief_file else []
+    for flag, raw in named + [("--context", c) for c in context if c]:
+        path, _ = _rel(repo_root, raw, flag)
+        if not path.is_file():
+            raise EmBriefRefused(f"{flag} {raw}: no such file")
 
 
 def _clause(b: EmBrief) -> str:

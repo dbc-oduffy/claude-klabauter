@@ -71,3 +71,10 @@ def test_receipt_fields(tmp_path):
 def test_resume_plan_emitted_only_when_set():
     assert "resume_plan" not in GateVerdict(arm="s", halt=None).to_json()
     assert GateVerdict(arm="s", halt=None, resume_plan="docs/plans/p.md").to_json()["resume_plan"] == "docs/plans/p.md"
+
+
+def test_backslash_context_path_resolves_to_the_same_file(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ctx.md").write_text("c", encoding="utf-8")
+    b = load_em_brief(tmp_path, brief="t", brief_file=None, context=["docs\\ctx.md"])
+    assert b.context == ("docs/ctx.md",)

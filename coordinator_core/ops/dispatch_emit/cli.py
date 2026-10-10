@@ -1015,6 +1015,16 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if args.brief and args.brief_file:
         print("emit-dispatch-workflow: ERROR — --brief and --brief-file are mutually exclusive", file=sys.stderr)
         return EXIT_USAGE
+    if ask_route_early and (args.brief_file or args.context):
+        # Argv decides this refusal, so it lands before the load-admission hold below.
+        from coordinator_core.ops.dispatch_emit.ask_brief import EmBriefRefused, check_em_brief_paths
+
+        early_root = Path(args.repo_root).resolve() if args.repo_root else _default_repo_root_from_cwd()
+        try:
+            check_em_brief_paths(early_root or Path.cwd(), brief_file=args.brief_file, context=args.context or ())
+        except EmBriefRefused as exc:
+            print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+            return EXIT_DATA_ERROR
     if args.local_only and not is_research_route:
         print("emit-dispatch-workflow: ERROR — --local-only requires --from-sizing or --research", file=sys.stderr)
         return EXIT_USAGE

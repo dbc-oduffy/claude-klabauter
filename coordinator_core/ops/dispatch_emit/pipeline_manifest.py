@@ -782,4 +782,5 @@ def _fill_for_containment(text: str, inputs: PipelineInputs, by_id: dict[str, St
                 parts.pop()
         elif seg not in ("", "."):
             parts.append(seg)
-    return "/".join(parts)
+    # An absolute scratch_dir (local-only mode) keeps its root, or no output ever contains.
+    return ("/" if filled.startswith("/") else "") + "/".join(parts)
