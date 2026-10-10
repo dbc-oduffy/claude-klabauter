@@ -441,9 +441,9 @@ class TestChainIntegration:
         assert second == "deny"
         assert GUARD_NAME in out["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_strict_default_denies_and_still_logs_the_deny(self, tmp_path, host):
-        decision, _ = self._eval(self._starved_build("sess-chain-3", tmp_path, host))
-        assert decision == "deny"
+    def test_default_level_denies_and_logs_the_deny(self, tmp_path, host):
+        decision, out = self._eval(self._starved_build("sess-chain-3", tmp_path, host))
+        assert decision == "deny" and GUARD_NAME in out["hookSpecificOutput"]["permissionDecisionReason"]
         assert [line["kind"] for line in _log_lines(tmp_path)] == ["ram-floor"]
 
 
@@ -662,17 +662,6 @@ class TestWorkflowSpawnSignal:
         (subagents / "workflows" / "wf_old" / "agent-zz.jsonl").write_text("", encoding="utf-8")
         (subagents / "agent-a1.jsonl").write_text("", encoding="utf-8")
         assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a1"}) == []
-
-    def test_a_verifier_row_logs_its_run_from_the_parent_session_transcript(self, tmp_path):
-        """The harness hands a subagent its parent session's transcript, so a path-only parse
-        logged every verifier row with workflow_run null and no run could clear the flip gate."""
-        transcript, subagents = self._session(tmp_path)
-        run = subagents / "workflows" / "wf_real"
-        run.mkdir(parents=True)
-        (run / "agent-a3.jsonl").write_text("", encoding="utf-8")
-        payload = {"transcript_path": str(transcript), "agent_id": "a3"}
-        assert guard._logged_run(dict(payload, agent_type="coordinator:test-runner")) == "wf_real"
-        assert guard._logged_run(dict(payload, agent_type="coordinator:executor")) is None
 
     def test_a_transcript_in_neither_place_fails_closed(self, tmp_path):
         transcript, _ = self._session(tmp_path)

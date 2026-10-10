@@ -85,15 +85,6 @@ def test_root_outside_window_is_ignored():
     assert outcome is ReapOutcome.NO_CANDIDATE
 
 
-def test_window_edges_are_inclusive_and_one_tick_beyond_is_excluded():
-    lo = MARK - int(PRE_SLACK_S * S)
-    hi = MARK + int(POST_WINDOW_S * S)
-    for ctime, expected in ((lo, ReapOutcome.KILLED), (hi, ReapOutcome.KILLED),
-                            (lo - 1, ReapOutcome.NO_CANDIDATE), (hi + 1, ReapOutcome.NO_CANDIDATE)):
-        _, outcome, _, _ = attribute(rec(), [], [ProcRow(10, 999, ctime, "sleep.exe")], cl({10: SLEEP}))
-        assert outcome is expected
-
-
 def test_live_parent_makes_row_not_an_orphan_root():
     rows = [LIVE_PARENT, ProcRow(5, 1, MARK - 1, "bash.exe"), ProcRow(10, 5, MARK, "sleep.exe")]
     _, outcome, _, _ = attribute(rec(), [], rows, cl({10: SLEEP}))

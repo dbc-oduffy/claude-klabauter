@@ -81,7 +81,10 @@ def test_per_guard_strict_hardens_one_guard_alone(monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_RUNAWAY-FIND", "strict")
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_CHECK-TEST-SUITE-INVOCATION", "warn")
     assert _decision(_run(_FIND)) == "deny"
-    assert _decision(_run(_PYTEST, session="sess-policy-2")) != "deny"
+    out = _run(_PYTEST, session="sess-policy-2")
+    # guard-heavy-command-admission is a floor guard and may still deny; the suite guard must not.
+    reason = ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason") or ""
+    assert "check-test-suite-invocation" not in reason
 
 
 def test_suite_guard_defaults_strict_under_a_global_warn(monkeypatch):

@@ -150,7 +150,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from coordinator_core import machine_path_leak
-from coordinator_core.bash_guards import commit_tripwires
+from coordinator_core.bash_guards import _unborn_scratch_repo, commit_tripwires
 from coordinator_core.git.correction_note import SENTINEL as _NOTE_SENTINEL
 from coordinator_core.bash_guards._dialect import (
     Dialect,
@@ -3303,38 +3303,6 @@ def _expand_home_var(tok: str) -> Optional[str]:
     return expanded
 
 
-def _is_unborn_scratch_repo(root: str) -> bool:
-    """True when root is a non-bare repo inside a `scratch/` directory of an enclosing repo and
-    its store holds no refs, packed refs, stash or reflog: deleting it loses only scratch files.
-
-    TRAP: an empty refs/ tree is the only no-history proof; a repo with any ref, even unpushed,
-    stays denied. Spawn-free.
-    """
-    gitdir = os.path.join(root, ".git")
-    if not os.path.isdir(gitdir):
-        return False
-    parts = os.path.normpath(os.path.abspath(root)).split(os.sep)
-    in_scratch = any(
-        parts[i] == "scratch" and os.path.exists(os.sep.join(parts[:i] + [".git"]))
-        for i in range(1, len(parts) - 1)
-    )
-    if not in_scratch:
-        return False
-    try:
-        for _dirpath, _dirs, files in os.walk(os.path.join(gitdir, "refs")):
-            if files:
-                return False
-        packed = os.path.join(gitdir, "packed-refs")
-        if os.path.isfile(packed) and any(
-            line.strip() and not line.startswith("#")
-            for line in open(packed, encoding="utf-8", errors="replace")
-        ):
-            return False
-    except OSError:
-        return False
-    return not os.path.exists(os.path.join(gitdir, "logs"))
-
-
 def _is_same_dir(a: str, b: str) -> bool:
     """True when a and b name the SAME directory on disk.
 
@@ -4302,7 +4270,7 @@ def check_destructive_rm(
                         )
                         tgt_is_bare = rc_bare == 0 and out_bare.strip() == "true"
                 if tgt_is_bare or (tgt_top and _is_same_dir(tgt_top, tgt_abs)):
-                    if rm_override or _is_unborn_scratch_repo(tgt_abs):
+                    if rm_override or _unborn_scratch_repo.is_unborn_scratch_repo(tgt_abs):
                         continue
                     store_desc = tgt_top if tgt_top else tgt_abs
                     # A LINKED `git worktree add` worktree's actual .git
