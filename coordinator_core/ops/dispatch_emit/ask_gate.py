@@ -1,6 +1,7 @@
 """dispatch.ask_gate handler: one sizing in, an arm to run or a halt (room, touchpoint, refusal) out.
 
-Reads the sizing; at M+ with no halt it mints the baton record in-process (a write).
+Reads the sizing; at M+ with no halt it mints the baton record in-process (a write). An unfired
+plan already on disk rides the verdict as `resume_plan`.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     effective_route,
     load_sizing,
     resolve_arm,
+    resumable_plan,
 )
 
 _ACCEPT_TOUCHPOINTS = frozenset({"accept_sizing", "accept_exit_criterion"})
@@ -134,11 +136,18 @@ def gate(
             "mode": mode,
             "ruling": "2026-10-08",
         }
+    resume = None
+    if arm != ARM_ROADMAP:
+        try:
+            resume = resumable_plan(sizing, sizing_rel, repo_root, arm)
+        except SizingFireRefused as exc:
+            refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
 
     if arm != ARM_M_PLUS:
-        return GateVerdict(arm=arm, halt=None, acceptance=acceptance)  # roadmap mints no baton: roadmap-blitz stubs are the batons
+        # roadmap mints no baton: roadmap-blitz stubs are the batons
+        return GateVerdict(arm=arm, halt=None, acceptance=acceptance, resume_plan=resume)
 
     doc_new = _load_doc_new()
     try:
@@ -152,6 +161,7 @@ def gate(
         halt=None,
         baton={"id": baton["id"], "path": baton["path"], "route": route},
         acceptance=acceptance,
+        resume_plan=resume,
     )
 
 

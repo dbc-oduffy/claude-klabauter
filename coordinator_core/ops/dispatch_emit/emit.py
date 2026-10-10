@@ -2968,6 +2968,7 @@ def _test_agent_call_expr(
     plan_path: Optional[str] = None,
     typecheck: Optional[TypecheckLeg] = None,
     review_edits_base: Optional[str] = None,
+    prompt_head: Optional[str] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -2979,14 +2980,15 @@ def _test_agent_call_expr(
     leg into the same prompt; an empty ``scope`` with a leg runs only the leg.
     ``review_edits_base`` (a sha, or ``"HEAD"``) widens both to the files review
     stages edited: the emitter cannot know them, so the prompt has the runner
-    derive them from the tree diff against that base.
+    derive them from the tree diff against that base. ``prompt_head`` (a
+    marker-bearing string) is prepended ahead of the precedence clause.
     """
     scope = collapse_test_scope(scope, repo_root)
     run_clause = (
         f"Run the scoped test targets: [{', '.join(scope)}]. " if scope else "No scoped test targets. "
     )
     prompt = (
-        f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
+        f"{prompt_head or ''}{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         f"{run_clause}"
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base)} " if review_edits_base else "")

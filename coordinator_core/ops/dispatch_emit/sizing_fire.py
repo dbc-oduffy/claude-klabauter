@@ -1,4 +1,4 @@
-"""Pure contract for the `--ask` gate: sizing load, arm selection, fire refusals, stage-1 plan path.
+"""Pure contract for the `--ask` gate: sizing load, arm selection, fire refusals, stage-1 plan path, resumable plan.
 
 `ask_gate` and `ask_compose` build against these names. Nothing here
 writes, spawns, or reroutes: a sizing whose route disagrees with its arm is refused by field.
@@ -104,6 +104,34 @@ def s_plan_path(sizing_rel: str) -> str:
     return f"docs/plans/{PurePosixPath(str(sizing_rel).replace(chr(92), '/')).stem}.md"
 
 
+def resumable_plan(sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str | None = None) -> str | None:
+    """Repo-relative path of an existing, unfired plan for this sizing, else None.
+
+    The plan is the sizing's `plan:` edge, else at arm S `s_plan_path`. A plan with any `coded` row
+    has fired: that raises SizingFireRefused naming `--plan`. A plan with no readable spine is not
+    resumable (None). One file read, no spawn.
+    """
+    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
+
+    edge = sizing.get("plan")
+    plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_path(sizing_rel) if arm == ARM_S else None)
+    if plan_rel is None:
+        return None
+    root = Path(repo_root)
+    plan = contained_path(root / plan_rel, [root / "docs" / "plans"])
+    if plan is None or not plan.is_file():
+        return None
+    try:
+        coded = coded_row_ids(plan)
+    except SpineReadError:
+        return None
+    if coded:
+        raise SizingFireRefused(
+            [f"{plan_rel} already has coded rows — run `emit-dispatch-workflow --plan {plan_rel}`, not --ask"]
+        )
+    return plan_rel
+
+
 def _acceptance_skipped(sizing: Mapping) -> bool:
     """The engine size rule, on the recorded route (never `effective_route`) and size."""
     est = sizing.get("estimate")
@@ -156,7 +184,12 @@ def collect_fire_refusals(
         out.append("XS needs `writes` (the ask's file footprint): a sizing carries no footprint")
     if arm == ARM_S and repo_root is not None:
         plan_rel = s_plan_path(sizing_rel)
-        if (Path(repo_root) / plan_rel).exists():
+        try:
+            resumable = resumable_plan(sizing, sizing_rel, Path(repo_root), arm)
+        except SizingFireRefused as exc:
+            out.extend(exc.fields)
+            resumable = plan_rel
+        if resumable is None and (Path(repo_root) / plan_rel).exists():
             out.append(
                 f"{plan_rel} already exists — stage 1 would overwrite it; "
                 f"run `emit-dispatch-workflow --plan {plan_rel}` instead"

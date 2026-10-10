@@ -6,10 +6,13 @@ Signatures implemented in their own modules:
                   sizing_rel: str | None = None, writes: Sequence[str] = ()) -> StageManifest
   ask_compose.compose_ask_script(*, repo_root: str, prompt: str | None, sizing_rel: str | None,
                   run_id: str, session_id: str | None, baton: dict | None = None,
-                  accept_pending: bool = False) -> str
+                  accept_pending: bool = False, em_brief: EmBrief | None = None) -> str
                   (`baton` = {"path", "deliverable_id"}; the accept phase composes when
                   `accept_pending` or on a raw ask)
-  ask_plan_blitz.wrap_stage(plan_blitz_text: str) -> tuple[str, list[str]]
+  ask_plan_blitz.wrap_stage(plan_blitz_text: str, *, agent_prefix_var: str | None = None)
+                  -> tuple[str, list[str]]
+  sizing_fire.resumable_plan(sizing, sizing_rel: str, repo_root) -> str | None
+  ask_brief.load_em_brief(repo_root, *, brief, brief_file, context=()) -> EmBrief | None
 """
 
 from __future__ import annotations
@@ -36,11 +39,15 @@ class GateVerdict:
     # Set only when the engine's size rule discharged a null `exit_criterion.accepted`: the
     # sizing object cannot carry this, so the verdict is the record that nobody was asked.
     acceptance: dict | None = None
+    # Plan path of an accepted, unfired sizing: the script stages it instead of authoring one.
+    resume_plan: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
         if self.acceptance is not None:
             out["acceptance"] = self.acceptance
+        if self.resume_plan is not None:
+            out["resume_plan"] = self.resume_plan
         return out
 
 

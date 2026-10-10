@@ -722,6 +722,9 @@ _PARAM_FIELDS = (
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
     Field("context", "str_list"),
+    Field("ask_brief", "str"),
+    Field("ask_brief_file", "str"),
+    Field("ask_context", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
@@ -1268,9 +1271,29 @@ def _dispatch_emit(
         ask_ctx = {"root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id}
         if ask_baton is not None:
             ask_ctx["baton"] = ask_baton
+        from coordinator_core.ops.dispatch_emit import ask_brief as _ask_brief
+
+        try:
+            em_brief = _ask_brief.load_em_brief(
+                ask_root,
+                brief=params.get("ask_brief"),
+                brief_file=params.get("ask_brief_file"),
+                context=params.get("ask_context") or (),
+            )
+        except _ask_brief.EmBriefRefused as exc:
+            from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+
+            raise SizingFireRefused([str(exc)]) from exc
+        if em_brief is not None:
+            ask_ctx["em_brief"] = em_brief
+            receipt_extras = {"em_brief": _ask_brief.receipt_fields(em_brief)}
         if sizing_path:
             ask_ctx.update(ask_sizing)
-            receipt_extras = {"batons": ask_sizing["batons"], "uncommitted": ask_sizing["uncommitted"]}
+            receipt_extras = {
+                **(receipt_extras or {}),
+                "batons": ask_sizing["batons"],
+                "uncommitted": ask_sizing["uncommitted"],
+            }
         else:
             # A raw ask's arm is unknown until the in-run size phase, so its script always
             # carries the planBlitz branch and needs the launch args the sizing route resolves.
@@ -1563,6 +1586,7 @@ def _dispatch_emit(
             baton=ask_ctx.get("baton"),
             accept_pending=bool(ask_ctx.get("accept_pending")),
             preamble=preamble,
+            em_brief=ask_ctx.get("em_brief"),
         )
         receipt_plan_path = None
     else:

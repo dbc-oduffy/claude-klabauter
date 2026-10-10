@@ -15,6 +15,7 @@ from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
@@ -74,7 +75,7 @@ def _lit(text: str) -> str:
 
 def _cat(*parts: str) -> str:
     """JS string-concatenation expression; a part is a quoted literal or a raw `js:` expression."""
-    return " + ".join(p[3:] if p.startswith("js:") else _lit(p) for p in parts)
+    return " + ".join(p[3:] if p.startswith("js:") else _emit._resolve_markers_plus(p) for p in parts)
 
 
 def _agent(
@@ -111,6 +112,7 @@ _GATE_SCHEMA = _obj(
         "baton": {"type": ["object", "null"]},
         "tshirt": _STR,
         "route": _STR,
+        "resume_plan": {"type": ["string", "null"]},
     },
 )
 _ACCEPT_SCHEMA = _obj(
@@ -154,9 +156,12 @@ _MANIFEST_SCHEMA = _obj(
 
 
 _SCOPE_SLOT = "SCOPE_SLOT_X"
+_ROW_VERIFY_PROMPT_OPEN = "`Run and report on the scoped test target(s) for ${id}: `"
 
 
-def _scoped_test_call(agent_type_host: Optional[str], review_edits_base: str = "HEAD") -> str:
+def _scoped_test_call(
+    agent_type_host: Optional[str], review_edits_base: str = "HEAD", prompt_head: Optional[str] = None
+) -> str:
     """The plan route's terminal test agent call, scoped at run time to the manifest's declared paths.
 
     The plan is authored inside the run, so the scope cannot resolve at compose time; the
@@ -164,7 +169,7 @@ def _scoped_test_call(agent_type_host: Optional[str], review_edits_base: str = "
     is unknown until the plan exists.
     """
     call = _emit._test_agent_call_expr(
-        [_SCOPE_SLOT], agent_type_host=agent_type_host, review_edits_base=review_edits_base
+        [_SCOPE_SLOT], agent_type_host=agent_type_host, review_edits_base=review_edits_base, prompt_head=prompt_head
     )
     return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
 
@@ -326,6 +331,7 @@ def compose_ask_script(
     baton: Optional[dict] = None,
     accept_pending: bool = False,
     preamble: Optional[str] = None,
+    em_brief: Optional[EmBrief] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -339,7 +345,11 @@ def compose_ask_script(
     accept phase (an APM ruling recorded in-run, then a re-gate) composes when `accept_pending`
     or on a raw ask; it never writes a `pm_quote`. `preamble` heads every row executor's prompt,
     as on the plan route; it is refused when the script carries an M+ or roadmap branch, whose
-    executors this script never prompts.
+    executors this script never prompts. `em_brief` is declared once as `_EM_BRIEF` and prefixes
+    every agent prompt the script composes, plan-blitz's included (through `wrap_stage`'s
+    `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`); the roadmap
+    arm refuses it. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
+    authoring.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
@@ -363,11 +373,16 @@ def compose_ask_script(
             from coordinator_core.ops.dispatch_emit import ask_plan_blitz
 
             wrap_stage = ask_plan_blitz.wrap_stage
-        blitz_fn, blitz_phases = wrap_stage(plan_blitz_text if plan_blitz_text is not None else _read_plan_blitz())
+        blitz_text = plan_blitz_text if plan_blitz_text is not None else _read_plan_blitz()
+        blitz_fn, blitz_phases = (
+            wrap_stage(blitz_text, agent_prefix_var=EM_BRIEF_VAR) if em_brief else wrap_stage(blitz_text)
+        )
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
 
     if known_arm == ARM_ROADMAP:
+        if em_brief:
+            raise AskComposeRefused("the roadmap arm takes no EM brief; drop --brief/--brief-file/--context")
         from coordinator_core.ops.dispatch_emit.ask_roadmap import compose_roadmap_script
 
         return compose_roadmap_script(
@@ -384,7 +399,8 @@ def compose_ask_script(
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
     manifest_rel = f"{run_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
-    head = _emit._BRIEF_PRECEDENCE_CLAUSE
+    brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
+    head = brief_prefix + _emit._BRIEF_PRECEDENCE_CLAUSE
     session_tail = _emit._dispatching_session_id_paragraph(session_id)
     agent_type = _emit._EXECUTOR_AGENT_TYPE
 
@@ -424,9 +440,17 @@ def compose_ask_script(
     b.append("  let _planRel = null;")
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
+    if em_brief:
+        b.append(f"  {brief_decl_js(em_brief)}")
+        b.append("  const _askAgent = agent;")
     if blitz_fn:
         b.append(blitz_fn)
-    b.append(_row_runner_js())
+    runner_js = _row_runner_js()
+    if em_brief:
+        if runner_js.count(_ROW_VERIFY_PROMPT_OPEN) != 1:
+            raise AskComposeRefused("row runner's verify prompt no longer has the shape the EM brief prefixes")
+        runner_js = runner_js.replace(_ROW_VERIFY_PROMPT_OPEN, f"{EM_BRIEF_VAR} + {_ROW_VERIFY_PROMPT_OPEN}")
+    b.append(runner_js)
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = null;")
@@ -472,7 +496,7 @@ def compose_ask_script(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_GATE} '",
         gate_payload,
-        "'` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
+        "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan. Also read the sizing at ",
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
     )
@@ -564,10 +588,12 @@ def compose_ask_script(
         ),
     )
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_S)}) {{")
+    b.append("    if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
     b.append("    phase('plan');")
     b.append(
         f"    _planRel = (await {_agent(plan_author, label='plan', phase='plan', agent_type=agent_type, schema=_PLAN_SCHEMA)}).plan_rel;"
     )
+    b.append("    }")
     b.append("  }")
     if blitz_fn:
         b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{")
@@ -579,7 +605,7 @@ def compose_ask_script(
             "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
             f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
             "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
-            "planPath: null, executionOpen: true }] });"
+            "planPath: _gate.resume_plan ?? null, executionOpen: true }] });"
         )
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
@@ -615,7 +641,7 @@ def compose_ask_script(
     b.append("  for (const w of _waves) {")
     b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
     row_prompt = _cat(
-        f"{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
+        f"{brief_prefix}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.{session_tail}",
@@ -636,12 +662,13 @@ def compose_ask_script(
     )
     b.append("  phase('review');")
     b.append("  if (!_halted) {\n" + review_text + "\n  }")
+    test_call = _scoped_test_call(agent_type_host, run_base_sha or "HEAD", brief_prefix or None)
     test_guard = f"_gate.arm !== {_lit(ARM_XS)} && (_manifest.review_declared_paths ?? []).length"
     if judge_expr is None:
         b.append(f"  if (!_halted && {test_guard}) {{")
         b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
         b.append("    try {")
-        b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host, run_base_sha or 'HEAD')};")
+        b.append(f"    {_emit._TEST_RESULT_VAR} = await {test_call};")
         b.append("    } catch (e) { _haltOnUsageLimit(e); }")
         b.append("  }")
     else:
@@ -650,7 +677,7 @@ def compose_ask_script(
         b.append("    try {")
         b.append(
             f"    [{_emit._TEST_RESULT_VAR}, {_emit._FALSIFIER_RESULT_VAR}] = await parallel([\n"
-            f"      () => ({test_guard}) ? {_scoped_test_call(agent_type_host, run_base_sha or 'HEAD')} : null,\n"
+            f"      () => ({test_guard}) ? {test_call} : null,\n"
             f"      () => {_emit._never_stranding_criterion(judge_expr, judge=True)},\n"
             "    ]);"
         )

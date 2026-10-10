@@ -454,7 +454,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--brief", default=None, metavar="PATH",
-        help="pipeline route: path to the brief file (repo-relative or absolute; must exist)",
+        help="pipeline route: path to the brief file (repo-relative or absolute; must exist); "
+        "ask route: inline EM brief text prefixed to every composed prompt",
+    )
+    parser.add_argument(
+        "--brief-file", default=None, metavar="PATH",
+        help="ask route: file holding the EM brief (exclusive of --brief)",
     )
     parser.add_argument(
         "--subjects",
@@ -502,7 +507,8 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="FILE",
-        help="research route: a non-corpus file every member reads first, named in the brief (repeatable)",
+        help="research route: a non-corpus file every member reads first, named in the brief; "
+        "ask route: a file every stage reads first (repeatable)",
     )
     parser.add_argument(
         "--resume-missing",
@@ -999,8 +1005,15 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_USAGE
-    if args.context and not is_research_route:
+    ask_route_early = (args.ask is not None or bool(args.sizing)) and not is_research_route
+    if args.context and not is_research_route and not ask_route_early:
         print("emit-dispatch-workflow: ERROR — --context requires --from-sizing or --research", file=sys.stderr)
+        return EXIT_USAGE
+    if args.brief_file and not ask_route_early:
+        print("emit-dispatch-workflow: ERROR — --brief-file requires --ask or --sizing", file=sys.stderr)
+        return EXIT_USAGE
+    if args.brief and args.brief_file:
+        print("emit-dispatch-workflow: ERROR — --brief and --brief-file are mutually exclusive", file=sys.stderr)
         return EXIT_USAGE
     if args.local_only and not is_research_route:
         print("emit-dispatch-workflow: ERROR — --local-only requires --from-sizing or --research", file=sys.stderr)
@@ -1008,7 +1021,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     pipeline_only = [
         flag
         for flag, value in (
-            ("--brief", args.brief),
+            ("--brief", args.brief if not ask_route_early else None),
             ("--subjects", args.subjects),
             ("--scratch-dir", args.scratch_dir if not is_research_route else None),
             ("--resume-missing", args.resume_missing),
@@ -1305,6 +1318,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["baton"] = args.baton
         if args.deliverable_id:
             params["deliverable_id"] = args.deliverable_id
+        if args.brief:
+            params["ask_brief"] = args.brief
+        if args.brief_file:
+            params["ask_brief_file"] = args.brief_file
+        if args.context:
+            params["ask_context"] = [*args.context]
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_research_route:
