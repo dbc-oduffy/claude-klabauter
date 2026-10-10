@@ -2040,8 +2040,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "190afc7fc8234412e3fe503e4e61b7ebb932c65e",
-    "coordinator_core/_engine_stamp": "8709abedc525c82608361e7107cdc306324f8742",
+    "coordinator_core/_engine_published_at": "76fb2867179f01107d1b713f92845ef4d21cca94",
+    "coordinator_core/_engine_stamp": "55515a1762c1a4c27f5ab8638ce51d231904fbe8",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2943,7 +2943,7 @@
     "coordinator_core/environment_story/stories.py": "a4ed168338c29b9077bdef06a20df073ffe51298",
     "coordinator_core/environment_story/story.py": "d95415e4cdeb874100b96bf8a162340a4ae841a7",
     "coordinator_core/execute_plan_assemble/__init__.py": "a1b6f3cbc07ded2a10a17b23f453d6308de403b9",
-    "coordinator_core/execute_plan_assemble/apply.py": "7445536138932564023fdb4b87e04371f3ebe90a",
+    "coordinator_core/execute_plan_assemble/apply.py": "8b807a2149b6aeaa970237b847eb2d7604fe848a",
     "coordinator_core/execute_plan_assemble/close_out_and_stamp.py": "de477178770f9b90921a903bb2bd6114e2bd8622",
     "coordinator_core/execute_plan_assemble/falsifier_shape.py": "6236532af21dac2f5097fbf7720983edf1ef3e4f",
     "coordinator_core/execute_plan_assemble/pre_execution.py": "5f19d0c24a3401e3de29ea51c0c1046e06eed354",
@@ -6478,6 +6478,7 @@
     "coordinator_core/tests/test_no_bare_timestamp_render.py": "9c3e4be08029bb275bdabe8d2bdd217e2a83994f",
     "coordinator_core/tests/test_no_bash_dependency.py": "bcbccd0f89ae72e1336b932636468ab6b0d05777",
     "coordinator_core/tests/test_no_committed_conflict_markers.py": "8507422926e5a005bf14135158e60d06cb2099d2",
+    "coordinator_core/tests/test_no_console_kwargs_are_splatted.py": "7bd4dbd4510d2ff15664668ab1275758a1a52dbf",
     "coordinator_core/tests/test_no_control_bytes_in_python_sources.py": "ac75ff6c4d59b493145f4d5d574a27af73b73bd6",
     "coordinator_core/tests/test_no_cwd_unguarded_coordinator_core_subprocess_spawn.py": "5a7e176e436501837d5e02487f0610dde0a01670",
     "coordinator_core/tests/test_no_dangling_first_party_import.py": "ce29069a0f1e98e2110635f09d43d7e68fd9bd8d",
@@ -7224,5 +7225,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "fc84ec3bc8e03bb150bea4c800cb2671e7e906d1"
+  "source_head": "5b1b4930422652eb9aec5449ed2a4c66f03a2013"
 }

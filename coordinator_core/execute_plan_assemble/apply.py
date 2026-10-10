@@ -106,7 +106,7 @@ def _run_bin_py(script_name: str, args: list[str], repo_root: Path) -> subproces
         cwd=repo_root,
         capture_output=True,
         text=True,
-        creationflags=_NO_CONSOLE,
+        **_NO_CONSOLE,
     )
 
 
@@ -197,7 +197,7 @@ def _dispatch_emit_dispatch_workflow(args: list[str], repo_root: Path) -> dict[s
         "--out",
         str(out_path),
     ]
-    proc = subprocess.run(argv, cwd=repo_root, capture_output=True, text=True, creationflags=_NO_CONSOLE)
+    proc = subprocess.run(argv, cwd=repo_root, capture_output=True, text=True, **_NO_CONSOLE)
     if proc.returncode != 0:
         raise RuntimeError(
             f"emit-dispatch-workflow --plan {plan_path}: failed (rc={proc.returncode}): "
