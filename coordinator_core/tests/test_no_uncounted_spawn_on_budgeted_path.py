@@ -965,6 +965,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_tasks_mutate.py",
         ("_handler",),
     ),
+    "criterion_evidence.record": (
+        "coordinator_core/ops/criterion_evidence.py",
+        ("_criterion_evidence_record",),
+    ),
     "plan.tasks.spine_drift_check": (
         "coordinator_core/ops/plan_tasks_spine_drift_check.py",
         ("_handler",),

@@ -573,6 +573,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.author_fork":                   "common_dir",
     "plan.persist_capture":                  "common_dir",
     "plan.tasks.mutate":                     "common_dir",
+    "criterion_evidence.record":             "common_dir",
     "plan.tasks.grouping_digest":             "common_dir",
     "plan.signoff":                           "common_dir",
     "signoff.digest":                         "common_dir",

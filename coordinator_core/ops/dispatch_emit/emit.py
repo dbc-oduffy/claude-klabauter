@@ -2989,6 +2989,7 @@ def _test_agent_call_expr(
     review_edits_base: Optional[str] = None,
     prompt_head: Optional[str] = None,
     owed_gates: Optional[dict] = None,
+    surface: Optional[Sequence[str]] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -3004,6 +3005,10 @@ def _test_agent_call_expr(
     marker-bearing string) is prepended ahead of the precedence clause.
     ``owed_gates`` ({row id: [build-gate commands]}) adds a runtime clause naming the
     commands of the rows present in ``_gateOwed`` when the prompt is built.
+    ``surface`` is the plan's own declared write paths: every diff the runner
+    derives is pathspec-limited to it, because the ``review_edits_base..HEAD``
+    range on a shared branch also holds peers' commits, whose test files must
+    never enter this plan's scope or verdict.
     """
     scope = collapse_test_scope(scope, repo_root)
     run_clause = (
@@ -3013,10 +3018,10 @@ def _test_agent_call_expr(
         f"{prompt_head or ''}{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         f"{run_clause}"
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
-        + (f"{_review_edits_clause(review_edits_base)} " if review_edits_base else "")
+        + (f"{_review_edits_clause(review_edits_base, surface)} " if review_edits_base else "")
         + f"{_test_runner_clause()} "
         + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
-        + (f"{_baseline_context_clause(review_edits_base)} " if _is_full_sha(review_edits_base) else "")
+        + (f"{_baseline_context_clause(review_edits_base, surface)} " if _is_full_sha(review_edits_base) else "")
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
     if plan_path:
@@ -3066,7 +3071,20 @@ def _is_full_sha(ref: Optional[str]) -> bool:
     return bool(ref) and _FULL_SHA_RE.fullmatch(ref) is not None
 
 
-def _baseline_context_clause(run_base_sha: str) -> str:
+def _surface_pathspec(surface: Optional[Sequence[str]]) -> str:
+    """`` -- <paths>`` limiting a prompt-embedded git diff to the plan's own surface, or ``''``."""
+    paths = _dedupe_preserve_order([p for p in (surface or ()) if p])
+    return " -- " + " ".join(_shell_pathspec(p) for p in paths) if paths else ""
+
+
+_OUT_OF_SCOPE_CLAUSE = (
+    "A failure, error or unhandled exception raised by a file outside that surface and outside the "
+    "scoped targets belongs to a peer: list it under summary as out-of-scope, never count it in "
+    "tests_failed or let it set status fail, and do not re-run it in the baseline export."
+)
+
+
+def _baseline_context_clause(run_base_sha: str, surface: Optional[Sequence[str]] = None) -> str:
     """The `BASELINE_CONTEXT` block that turns on the runner's baseline attribution.
 
     DoE's test-runner re-runs its own failures in an export of `run_base_sha` and buckets them
@@ -3076,22 +3094,33 @@ def _baseline_context_clause(run_base_sha: str) -> str:
     block = json.dumps({"run_base_sha": run_base_sha, "diff_files": [], "failing_ids": []})
     return (
         "Attribute every failure per coordinator/docs/wiki/reviewer-pipeline/test-runner-baseline-attribution.md; "
-        f"fill diff_files from `git diff --name-only {run_base_sha}`.\n"
+        f"fill diff_files from `git diff --name-only {run_base_sha}{_surface_pathspec(surface)}`"
+        " (the plan's own surface only; peer commits in the range are not this plan's diff).\n"
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
     )
 
 
-def _review_edits_clause(base: str) -> str:
+def _review_edits_clause(base: str, surface: Optional[Sequence[str]] = None) -> str:
     """The prompt sentences that widen the terminal phase to review-applied edits.
 
     Review stages run before this phase and apply their own fixes, so the rows'
     declared writes are not the whole edited set; a file a reviewer touched
     (a constant it judged unused, an import it dropped) is checked here too.
+    Both listings are limited to the plan's declared surface: unscoped, the
+    ``base..HEAD`` range on a shared branch names peers' files, and a peer's
+    failing test then fails this plan's run.
     """
+    spec = _surface_pathspec(surface)
+    scoped = (
+        f" Both listings are limited to the plan's own surface; a file outside it is a peer's"
+        f" and is never added to the run. {_OUT_OF_SCOPE_CLAUSE}"
+        if spec
+        else ""
+    )
     return (
         "Review stages ran before this phase and may have edited files beyond the "
-        f"rows' writes. Run `git diff --name-only {base}` and `git ls-files --others "
-        "--exclude-standard` from the repo root; that union is the edited set. "
+        f"rows' writes. Run `git diff --name-only {base}{spec}` and `git ls-files --others "
+        f"--exclude-standard{spec}` from the repo root; that union is the edited set.{scoped} "
         "For every edited source file not already covered above, add its test target "
         "to the run, and for every edited `.ts`/`.tsx` file whose governing tsconfig "
         "directory has no typecheck command above, run `tsc --noEmit -p <that dir>` "
@@ -4988,12 +5017,12 @@ def compose_script(
         guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
     judge_evidence_path: Optional[str] = None
     if plan_path:
-        from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, read_row_evidence
+        from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, has_recorded_evidence
 
         _plan_file = Path(plan_path)
         if not _plan_file.is_absolute() and repo_root is not None:
             _plan_file = Path(repo_root) / _plan_file
-        if read_row_evidence(_plan_file):
+        if has_recorded_evidence(_plan_file):
             judge_evidence_path = str(Path(plan_path).with_name(evidence_sidecar_path(_plan_file).name)).replace("\\", "/")
     judge_register = None
     if plan_path:
@@ -5022,6 +5051,7 @@ def compose_script(
         plan_id_literal=_js_string_literal(plan_id or ""),
     )
 
+    _plan_surface = [p for row in flat_rows for p in _declared_paths(row)]
     test_var: Optional[str] = None
     falsifier_var: Optional[str] = None
     test_absent_status = "not_run"
@@ -5079,7 +5109,7 @@ def compose_script(
                     f"  if (Object.keys({GATE_OWED_VAR}).length) {{\n"
                     f"    phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                     f"    {_TEST_RESULT_VAR} = await "
-                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates)};\n"
+                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates, surface=_plan_surface)};\n"
                     "  }"
                 )
                 test_var = _TEST_RESULT_VAR
@@ -5096,7 +5126,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates)},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates, surface=_plan_surface)},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -5107,7 +5137,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates, surface=_plan_surface)};"
             )
             test_var = _TEST_RESULT_VAR
 

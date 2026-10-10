@@ -1215,6 +1215,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The mutated plan file is read by shell consumers, other ops, and rag.
     # Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     "plan.tasks.mutate": OpClass.MUTATING,
+    # criterion_evidence.record -- MUTATING: appends to <plan-stem>.evidence.yaml.
+    "criterion_evidence.record": OpClass.MUTATING,
     # plan.tasks.grouping_digest — COMPUTE_ONLY, the read-only sibling of plan.tasks.mutate
     # immediately above. It computes the digest a PENDING resolve write is about to produce;
     # producing that write is plan.tasks.mutate's job, and the split is the whole point of

@@ -304,6 +304,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.lineage_ancestry":               "coordinator_core.ops.handoff_lineage_ancestry",
     "plan.narrow_criterion":                  "coordinator_core.ops.plan_narrow_criterion",
     "plan.tasks.mutate":                      "coordinator_core.ops.plan_tasks_mutate",
+    "criterion_evidence.record":              "coordinator_core.ops.criterion_evidence",
     "plan.tasks.grouping_digest":             "coordinator_core.ops.plan_tasks_grouping_digest",
     "plan.signoff":                           "coordinator_core.ops.plan_signoff",
     "signoff.digest":                         "coordinator_core.ops.signoff_digest",

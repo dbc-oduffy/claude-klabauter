@@ -622,7 +622,13 @@ _JUDGE_PREAMBLE = (
     "`register_rows`: one {id, claim, status, wired, surface, observed_ref} per row you weighed, "
     "`claim` this-plan for a row this plan claims; `status` met only when the work is done, "
     "`wired` true only when a user-reachable entry point on the row's surface invokes it, and "
-    "`observed_ref` naming that entry point."
+    "`observed_ref` naming that entry point. "
+    "A clause you cannot observe because this run's guard denies the leg (a Playwright/e2e "
+    "suite, say) is not met on assertion: report it indeterminate and name the door "
+    "`coordinator-invoke criterion_evidence.record '{\"plan_path\":..., \"clause\":..., "
+    "\"command\":..., \"output_path\":...}'`, which the EM uses to record the command it ran "
+    "and its raw output. When the sidecar holds `criterion_evidence` entries, weigh each as "
+    "observed evidence (command plus output), never as the EM's say-so; the verdict stays yours."
 )
 
 
@@ -822,7 +828,7 @@ def compose_criterion_judge(
         f"weigh one only for a leg you are denied, and mark it provenance em-recorded)"
         f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
-        + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence; weigh it, cite it)" if evidence_path else "")
+        + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence and `criterion_evidence` clause entries; weigh them, cite them)" if evidence_path else "")
     ).strip()
     call = _agent_call_literal(
         judge_type,

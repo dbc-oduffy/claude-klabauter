@@ -217,12 +217,12 @@ def _row_evidence_path(plan_path: str, repo_root: Optional[Path]) -> Optional[st
 
     A claim backed by recorded evidence lives there, outside the plan body and outside any
     diff, so a verifier not pointed at it reports the claim unbacked."""
-    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, read_row_evidence
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, has_recorded_evidence
 
     plan_file = Path(plan_path)
     if not plan_file.is_absolute() and repo_root is not None:
         plan_file = Path(repo_root) / plan_file
-    if not read_row_evidence(plan_file):
+    if not has_recorded_evidence(plan_file):
         return None
     return str(Path(plan_path).with_name(evidence_sidecar_path(plan_file).name)).replace("\\", "/")
 

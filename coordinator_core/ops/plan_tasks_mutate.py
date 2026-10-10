@@ -936,6 +936,28 @@ def read_row_evidence(plan_file: Path, row_id: Optional[str] = None):
     return entries if isinstance(entries, list) else []
 
 
+def read_criterion_evidence(plan_file: Path) -> list:
+    """Clause-keyed entries recorded by ``criterion_evidence.record``, oldest first.
+
+    Lives beside ``rows`` in the same sidecar, so ``read_row_evidence`` never sees it.
+    A missing or unparsable sidecar reads as empty; this reader never raises.
+    """
+    try:
+        loaded = yaml.safe_load(evidence_sidecar_path(plan_file).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return []
+    entries = loaded.get("criterion_evidence") if isinstance(loaded, dict) else None
+    return entries if isinstance(entries, list) else []
+
+
+def has_recorded_evidence(plan_file: Path) -> bool:
+    """True when the sidecar holds row evidence or criterion-clause evidence.
+
+    The judge and verifier are pointed at the sidecar only when this is true.
+    """
+    return bool(read_row_evidence(plan_file)) or bool(read_criterion_evidence(plan_file))
+
+
 def _evidence_append(
     plan_path: str, row_id: str, text: str, worktree: Path, repo_root: Path
 ) -> dict:
