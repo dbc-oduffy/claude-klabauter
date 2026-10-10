@@ -2392,7 +2392,9 @@ class _ServerContext:
             in_flight_count=self.drain_outstanding,
             ctx_shutdown=self._ctx_shutdown,
         )
-        push_cadence.on_idle_tick(served_repos=self.served_repos)
+        push_cadence.on_idle_tick(
+            served_repos=lambda: push_cadence.registry_sweep_repos(self.served_repos())
+        )
         telemetry.record_worker_pool_depth(
             depth=self.worker_pool_depth(), pid=os.getpid(), engine_root=self.engine_root
         )
@@ -2408,7 +2410,8 @@ class _ServerContext:
         why an unbounded exit sweep is worse than an unbounded idle-tick one.
         """
         push_cadence.sweep_repos(
-            self.served_repos(), total_ceiling_secs=push_cadence.EXIT_SWEEP_CEILING_SECS
+            push_cadence.registry_sweep_repos(self.served_repos()),
+            total_ceiling_secs=push_cadence.EXIT_SWEEP_CEILING_SECS,
         )
 
     def _idle_watchdog_loop(self) -> None:

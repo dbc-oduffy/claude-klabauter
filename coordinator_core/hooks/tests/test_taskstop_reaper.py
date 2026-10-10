@@ -90,7 +90,7 @@ def test_kill_set_excludes_unrelated_processes(monkeypatch):
     assert 500 not in [p for p, _ in k.killed]
 
 
-def test_refused_verified_kill_logs_incomplete(monkeypatch, tmp_path):
+def test_ctime_mismatch_at_kill_time_logs_incomplete(monkeypatch, tmp_path):
     _rec()
     k = StubKill(fail={101})
     _install(monkeypatch, k, _tree())

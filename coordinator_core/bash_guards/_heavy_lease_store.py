@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.bash_guards._heavy_admission_contract import (
@@ -176,8 +176,7 @@ def claim_orphans(
     now: Optional[Callable[[], float]] = None,
 ) -> int:
     """Attribute each open lease to the orphan tree created soonest after its launch mark, within
-    window ctime units, whose command (its earliest heavy process) is an image of its class,
-    and not already held; return the count.
+    window ctime units, holding an image of its class, and not already held; return the count.
 
     Leases claim in launch order, one tree each, box-wide: an orphan has no session, so the
     launch mark is the only link. TRAP: two leases launched inside the same instant can swap
@@ -201,7 +200,7 @@ def claim_orphans(
             t for t in trees
             if (t.root.pid, t.root.ctime) not in held
             and rec.launch_ctime <= t.root.ctime <= rec.launch_ctime + window
-            and t.lead in family
+            and family & t.stems
         ]
         if not fits:
             continue

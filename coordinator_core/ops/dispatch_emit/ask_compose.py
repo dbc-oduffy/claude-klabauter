@@ -296,7 +296,18 @@ def _row_runner_js() -> str:
     """Declarations `_emit._run_row_helper_js` reads, with no plan-scoped halting (one run, one plan)."""
     return "\n".join(
         [
-            _emit._row_state_decls_js({}, ()),
+            "  const _incompleteChunks = [];",
+            f"  const {_emit.GATE_OWED_VAR} = {{}};",
+            "  const _blockedChunks = [];",
+            "  const _unansweredBriefs = [];",
+            "  const _stoppedBy = [];",
+            "  const _notStarted = [];",
+            f"  const {_emit.PLAN_HELD_VAR} = {{}};",
+            "  let _halted = null;",
+            "  const _verifications = [];",
+            "  const _rowPlan = {};",
+            "  const _haltedPlans = new Set();",
+            "  const _haltedPlanReasons = new Map();",
             f"  const _ROW_VERIFY_SCHEMA = {_emit.stage_schema_literal('row_verification_result')};",
             _emit._run_row_helper_js(None),
         ]

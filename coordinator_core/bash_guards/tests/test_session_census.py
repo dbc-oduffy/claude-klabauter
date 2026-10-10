@@ -113,7 +113,7 @@ def test_orphan_trees_finds_a_fork_stub_orphan_holding_a_heavy_image():
             R(20, 998, 60, "bash.exe"), R(21, 20, 61, "grep.exe")]
     trees = orphan_trees(rows, since_ctime=40)
     assert [t.root.pid for t in trees] == [12]
-    assert trees[0].lead == "node"
+    assert {"node", "bash", "cmd"} <= trees[0].stems
     assert sorted(r.pid for r in trees[0].heavy) == [14, 16]
 
 

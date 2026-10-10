@@ -242,6 +242,7 @@ def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
 
     class _Outcome:
         failed = []
+        acted = []
         unconfirmed = []
 
     def _fake_push_outstanding(root, **kwargs):
@@ -336,6 +337,7 @@ def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, m
 
         class _Outcome:
             failed = []
+            acted = []
             unconfirmed = []
 
         return _Outcome()
@@ -487,6 +489,7 @@ def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatc
 
     class _OkOutcome:
         failed = []
+        acted = []
         unconfirmed = []
         attempts = None
 
@@ -535,6 +538,7 @@ def test_sweep_still_pushes_branch_with_new_commits_and_no_upstream(tmp_path, mo
     class _Ok:
         failed = False
         unconfirmed = False
+        acted = []
 
     calls = []
     monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: calls.append(root) or _Ok())

@@ -42,10 +42,9 @@ _TEST_RE = re.compile(
     r"|(^|/)fixtures?/|(^|/)node_modules/)"
 )
 _TS_EXPORT = re.compile(
-    r"^export\s+(?:async\s+)?(?:function\*?|const|let)\s+([A-Za-z_$][\w$]*)", re.M
+    r"^export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)", re.M
 )
-# A class is a type, not an entry point: its consumers reach it through the function that builds it.
-_PY_DEF = re.compile(r"^(?:async\s+)?def\s+([A-Za-z]\w*)", re.M)
+_PY_DEF = re.compile(r"^(?:async\s+)?(?:def|class)\s+([A-Za-z]\w*)", re.M)
 _RS_PUB = re.compile(r"^pub\s+(?:async\s+)?fn\s+(\w+)", re.M)
 _ROUTE_VERBS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _ROUTE_FILE = re.compile(r"(^|/)app/(.*/)?route\.(ts|js)$")
@@ -346,15 +345,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     added = _diff_added(root, base, params.get("head_sha"), worktree)
     if added is None:
         return _empty(f"git diff failed against base_sha {base}")
-    # An untracked declared write is invisible to `git diff`; a tracked one absent from the diff
-    # added nothing in this range, so its pre-existing symbols are not this run's entry points.
-    tracked = None
     for w in writes:
-        if w in added or not (root / w).is_file():
-            continue
-        if tracked is None:
-            tracked = set(read_index(root))
-        if w not in tracked:
+        p = root / w
+        if w not in added and p.is_file():
             added[w] = _read(root, w).splitlines()
 
     found: list[tuple[str, str, str]] = []

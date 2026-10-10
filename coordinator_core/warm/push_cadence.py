@@ -138,8 +138,10 @@ from coordinator_core.ops.ceremony.push_ceiling import (
     _scan as _config_scan,
     resolve_push_ceiling,
 )
+from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
 from coordinator_core.ops.push_outstanding import push_outstanding
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
+from coordinator_core.warm import telemetry
 
 try:
     from coordinator_core.machine_profile import machine_profile
@@ -154,6 +156,7 @@ __all__ = [
     "ServedReposFn",
     "on_idle_tick",
     "sweep_repos",
+    "registry_sweep_repos",
     "note_foreign_delivery",
     "foreign_deliveries",
     "reset_cadence_for_test",
@@ -461,8 +464,10 @@ def _no_upstream_and_no_new_commits(root: Path, branch: str, sha: str) -> bool:
     return False
 
 
-def _sweep_one(repo_root: Union[str, Path]) -> None:
-    """Push exactly one repo -- declining outright if another sweeper
+def _sweep_one(repo_root: Union[str, Path]) -> str:
+    """Returns "pushed", "skipped" or "failed" for the sweep telemetry row.
+
+    Push exactly one repo -- declining outright if another sweeper
     already holds this repo's lock. The per-repo bound is enforced by
     `push_with_retry`'s own ladder deadline inside `push_outstanding` itself,
     keyed to the repo's resolved ceiling -- see the module docstring's
@@ -476,13 +481,13 @@ def _sweep_one(repo_root: Union[str, Path]) -> None:
     """
     root = Path(repo_root)
     if machine_profile() != "author":
-        return
+        return "skipped"
     branch = head_branch(root)
     sha = head_sha(root) if branch is not None else None
     if branch is not None and sha is not None and _no_upstream_and_no_new_commits(root, branch, sha):
-        return
+        return "skipped"
     if not _acquire_sweep_lock(root):
-        return
+        return "skipped"
     try:
         try:
             outcome = push_outstanding(
@@ -493,9 +498,11 @@ def _sweep_one(repo_root: Union[str, Path]) -> None:
                 use_streamed_push=True,
             )
         except Exception:  # noqa: BLE001 -- a sweep push must never raise
-            return
+            return "failed"
         if outcome.failed or outcome.unconfirmed:
             _feed_failure_detector(root, outcome)
+            return "failed"
+        return "pushed" if "push" in outcome.acted else "skipped"
     finally:
         _release_sweep_lock(root)
 
@@ -682,6 +689,10 @@ def sweep_repos(
         offset = ordered.index(resume)
         ordered = ordered[offset:] + ordered[:offset]
     cut: Optional[Path] = None
+    pushed: list = []
+    skipped: list = []
+    failed: list = []
+    reached = len(ordered)
     for index, root in enumerate(ordered):
         ceiling = (
             per_repo_budget_secs
@@ -691,18 +702,43 @@ def sweep_repos(
         extended = ceiling > CADENCE_PUSH_RETRY_BUDGET_SECS
         if extended and not (allow_extended_first and index == 0):
             cut = root
+            reached = index
             break
         repo_deadline = start + ceiling + extended_margin if extended else deadline
         if clock() + ceiling > repo_deadline:
             cut = root
+            reached = index
             break
-        _sweep_one(root)
+        result = _sweep_one(root)
+        {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
         if extended:
             cut = ordered[index + 1] if index + 1 < len(ordered) else None
+            reached = index + 1
             break
+    skipped.extend(ordered[reached:])
     with _cadence_lock:
         _resume_repo = cut
     _sweep_foreign(deadline=deadline, clock=clock)
+    telemetry.record_sweep(pushed, skipped, failed)
+
+
+def registry_sweep_repos(served: Iterable[Union[str, Path]]) -> list:
+    """Served repos first, then the machine registry's repos: existing
+    directories only, deduplicated by resolved path. An unreadable registry
+    leaves the served set alone."""
+    seen: "dict[Path, Path]" = {}
+    try:
+        registry = list(read_registry_repos().values())
+    except RegistryReadError:
+        registry = []
+    for raw in (*served, *registry):
+        path = Path(raw)
+        try:
+            if path.is_dir():
+                seen.setdefault(path.resolve(), path)
+        except OSError:
+            continue
+    return list(seen.values())
 
 
 def on_idle_tick(

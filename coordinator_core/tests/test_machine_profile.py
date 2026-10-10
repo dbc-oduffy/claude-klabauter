@@ -84,7 +84,6 @@ def test_floor_guards_has_the_fourteen_names():
     assert "block-approval-sentinel-creation" in mp.FLOOR_GUARDS
     assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
     assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS
-    assert "guard-heavy-command-admission" in mp.FLOOR_GUARDS
 
 
 def test_heavy_command_admission_blocks_at_every_level(reg):

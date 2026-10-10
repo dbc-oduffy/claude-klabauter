@@ -27,22 +27,8 @@ CmdLine = Callable[[int, int], Optional[str]]
 Attribution = Tuple[Optional[List[ProcRow]], ReapOutcome, Tuple[str, ...], int]
 
 
-_STAGE_TOKEN = re.compile(r"\"[^\"]*\"|'[^']*'|[;&|()]+|[^\s;&|()]+")
-
-
 def _tokens(text: str) -> List[str]:
     return [t.strip("\"'") for t in _TOKEN.findall(text)]
-
-
-def _stages(command: str) -> List[List[str]]:
-    """Token lists of each stage of a compound command, split on unquoted ; & | ( )."""
-    stages: List[List[str]] = [[]]
-    for t in _STAGE_TOKEN.findall(command):
-        if t[0] in ";&|()":
-            stages.append([])
-        else:
-            stages[-1].append(t.strip("\"'"))
-    return [s for s in stages if s]
 
 
 def _argv(cmdline: str) -> List[str]:
@@ -100,7 +86,7 @@ def attribute(
     lo, hi = _window(rec.mark)
     by_pid = {r.pid: r for r in rows}
     children = _children(rows)
-    want = _stages(rec.command)
+    want = _tokens(rec.command)
     claimed: List[List[ProcRow]] = []
     unexcludable = 0
     for r in rows:
@@ -113,7 +99,7 @@ def attribute(
             text = cmdline(p.pid, p.ctime)
             if text is None:
                 unreadable = True
-            elif any(_contiguous(_argv(text), w) for w in want):
+            elif _contiguous(_argv(text), want):
                 corroborated = True
         if corroborated:
             claimed.append(tree)

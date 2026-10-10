@@ -91,6 +91,7 @@ NEGATIVE-SPEC:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -130,6 +131,9 @@ __all__ = [
     "WORKER_POOL_DEPTH_FILENAME",
     "worker_pool_depth_path",
     "record_worker_pool_depth",
+    "PUSH_SWEEP_FILENAME",
+    "push_sweep_path",
+    "record_sweep",
     "worker_pool_depth_samples",
     "DEGRADE_FILENAME",
     "KIND_COLD_RUN",
@@ -438,6 +442,42 @@ def record_worker_pool_depth(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write.held_lock(path, holder_label="warm.telemetry.worker_pool_depth"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+PUSH_SWEEP_FILENAME = "push-sweep.jsonl"
+
+
+def push_sweep_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/push-sweep.jsonl` -- one row per push-cadence sweep."""
+    return svc_dir(engine_root) / PUSH_SWEEP_FILENAME
+
+
+def record_sweep(
+    pushed: list,
+    skipped: list,
+    failed: list,
+    *,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row naming the repos a sweep pushed, skipped and failed.
+
+    Best-effort: never raises, matching every other recorder here.
+    """
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "pid": os.getpid(),
+        "pushed": [str(p) for p in pushed],
+        "skipped": [str(p) for p in skipped],
+        "failed": [str(p) for p in failed],
+    }
+    path = push_sweep_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.push_sweep"):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:

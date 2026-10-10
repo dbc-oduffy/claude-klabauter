@@ -191,19 +191,11 @@ def _subtree(root: ProcRow, children: Mapping[int, List[ProcRow]]) -> List[ProcR
 @dataclass(frozen=True)
 class OrphanTree:
     """A live process tree whose root's parent has exited: what a Git Bash fork stub or a
-    detached launch leaves behind."""
+    detached launch leaves behind. stems is every image stem in the tree."""
 
     root: ProcRow
+    stems: frozenset
     heavy: Sequence[ProcRow]
-
-    @property
-    def lead(self) -> str:
-        """Image stem of the tree's earliest heavy process: the command the tree runs.
-
-        TRAP: match a lease's class on this, never on any image in the tree -- a python run
-        that later spawns node is not a typecheck.
-        """
-        return _stem(min(self.heavy, key=lambda p: p.ctime).name)
 
 
 def _is_orphan_root(row: ProcRow, by_pid: Mapping[int, ProcRow]) -> bool:
@@ -229,7 +221,7 @@ def orphan_trees(rows: Sequence[ProcRow], since_ctime: int) -> List[OrphanTree]:
         tree = _subtree(r, children)
         heavy = tuple(p for p in tree if _stem(p.name) in HEAVY_IMAGES)
         if heavy:
-            out.append(OrphanTree(r, heavy))
+            out.append(OrphanTree(r, frozenset(_stem(p.name) for p in tree), heavy))
     return out
 
 
