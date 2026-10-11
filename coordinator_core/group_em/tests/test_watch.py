@@ -2277,3 +2277,54 @@ def test_cli_defaults_to_box_scope_and_repo_flag_narrows(tmp_path):
         with mock.patch.object(watch, "tick_once", return_value=0) as tick:
             watch._cli(["--repo-root", str(repo), "--once", *argv])
         assert tick.call_args.kwargs["box_wide"] is expected
+
+
+# ---------------------------------------------------------------------------
+# waiting_on: a turn ended on a Group-EM/PM gate leads WAITING, never PARKED
+# ---------------------------------------------------------------------------
+
+
+def _transcript_ending_on(tmp_path, text):
+    path = tmp_path / "peer.jsonl"
+    record = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _line_for(transcript_path):
+    now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+    with mock.patch.object(
+        watch.read_pass, "_transcript_path_for", return_value=transcript_path
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=None
+    ), mock.patch.object(
+        watch, "_transcript_idle_seconds", return_value=None
+    ), mock.patch.object(
+        watch.obligations, "for_peer", return_value=[]
+    ):
+        return watch._parked_line(
+            REPO_ROOT, "peer-1", {"reason": "turn-ended"}, REPO_ROOT, now
+        )
+
+
+def test_a_turn_ended_waiting_on_the_group_em_for_a_slot_leads_waiting(tmp_path):
+    line = _line_for(_transcript_ending_on(
+        tmp_path, "Plan is ready. Waiting on coordinator-content-repo-65 for a slot before I fire it."
+    ))
+    assert line.startswith("WAITING session=peer-1 ")
+    assert 'waiting_on="Waiting on coordinator-content-repo-65 for a slot' in line
+    assert "obligations=none" in line
+
+
+def test_a_turn_ended_on_a_completed_close_stays_parked(tmp_path):
+    line = _line_for(_transcript_ending_on(
+        tmp_path, "Landed 1bea01094; quick-wrap done, nothing left open."
+    ))
+    assert line.startswith("PARKED session=peer-1 ")
+    assert 'waiting_on="none"' in line
+
+
+def test_a_missing_transcript_is_parked_with_waiting_on_unknown(tmp_path):
+    line = _line_for(str(tmp_path / "absent.jsonl"))
+    assert line.startswith("PARKED session=peer-1 ")
+    assert 'waiting_on="unknown"' in line

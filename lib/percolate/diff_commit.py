@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
@@ -250,6 +251,7 @@ def land_diff(
                     message,
                     deleted_paths=dels,
                     modes={rel: w.mode for rel, w in todo.items()},
+                    blob_fallback=partial(_gcommit.hash_worktree_blobs_via_spawn, cwd=root),
                 ).sha
             except BaseException:
                 restoring = False

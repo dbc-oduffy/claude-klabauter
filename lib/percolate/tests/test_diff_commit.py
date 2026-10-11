@@ -75,6 +75,17 @@ def test_deletion_prunes_empty_dirs(tmp_path):
     assert not (root / "bin").exists() and _status(root) == ""
 
 
+def test_an_eol_crlf_attributed_path_lands_through_the_blob_fallback(tmp_path):
+    root = _dest(tmp_path, n=3)
+    (root / ".gitattributes").write_bytes(b"*.cmd text eol=crlf\n")
+    _git(root, "add", ".gitattributes")
+    _git(root, "commit", "-q", "-m", "attrs")
+    out = land_diff(root, [DestWrite("bin/run.cmd", b"@echo off\r\n", 0o100644)], [], "crlf", commit=True)
+    assert out.commit_sha and out.written == ("bin/run.cmd",)
+    assert _status(root) == ""
+    assert _git(root, "cat-file", "-p", "HEAD:bin/run.cmd") == "@echo off\n"
+
+
 def test_dirty_path_refuses_without_writing(tmp_path):
     root = _dest(tmp_path, 5)
     (root / "d1" / "f1.txt").write_bytes(b"local edit\n")

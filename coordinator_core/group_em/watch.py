@@ -198,12 +198,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional, TextIO
 
+from coordinator_core.group_em import idle_report
 from coordinator_core.group_em import obligations
 from coordinator_core import memo_corpus
 from coordinator_core.group_em import read_pass
@@ -467,6 +469,32 @@ def _transcript_idle_seconds(
     return now.timestamp() - activity_epoch
 
 
+#: What a named wait is ON, read in the few words after the `_NAMED_REASON`
+#: match. Any hit makes the line WAITING: the peer ended its turn on a gate only
+#: the Group EM or the PM opens, which is never a ledger obligation, so
+#: `obligations=none` on that line is not "nothing owed".
+_GATE_HOLDER = re.compile(r"(?i:group[- ]?em|\bcoordinator-content-repo-\d+|\bslot\b|\bgo\b|\bruling\b)|\bPM\b")
+_WAIT_WINDOW_CHARS = 80
+
+
+def _waiting_on(session_id: str, cwd: str) -> tuple[str, bool]:
+    """`(waiting_on, names_a_gate)` from the peer's last assistant turn.
+
+    `unknown` when the transcript cannot be read, `none` when its last turn
+    names no wait. One bounded tail read, paid only on a PARKED transition.
+    """
+    raw, readable = idle_report._tail_text(read_pass._transcript_path_for(session_id, cwd))
+    if not readable:
+        return "unknown", False
+    said = idle_report._assistant_text(raw)
+    match = idle_report._NAMED_REASON.search(said[-1]) if said else None
+    if match is None:
+        return "none", False
+    phrase = said[-1][match.start():match.end() + _WAIT_WINDOW_CHARS]
+    phrase = phrase.replace('"', "'").strip()
+    return phrase, bool(_GATE_HOLDER.search(phrase, match.end() - match.start()))
+
+
 def _fmt_seconds(value: Optional[float]) -> str:
     if value is None:
         return "unknown"
@@ -526,9 +554,11 @@ def _parked_line(
     )
     obligations_summary = _obligation_summary(repo_root, session_id)
     reason = verdict.get("reason")
+    waiting_on, gated = _waiting_on(session_id, cwd or repo_root)
     who = f"{name} [{session_id}]" if name else str(session_id)
     return (
-        f"PARKED session={who} reason={reason} "
+        f"{'WAITING' if gated else 'PARKED'} session={who} reason={reason} "
+        f"waiting_on=\"{waiting_on}\" "
         f"at={watch_heartbeat.iso_instant(now.timestamp())} "
         f"stamped_age={_fmt_seconds(stamped_age)} "
         f"transcript_idle={_fmt_seconds(transcript_idle)} "

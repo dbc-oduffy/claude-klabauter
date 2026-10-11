@@ -176,6 +176,23 @@ def test_divergence_by_a_peer_publish_the_source_lacks_is_refused(origin_and_clo
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
+def test_subsumption_is_judged_against_the_pinned_source_ref_not_head(origin_and_clone, tmp_path):
+    origin, clone = origin_and_clone
+    src, peer = _source_with(tmp_path, merged=False)
+    _git(src, "checkout", "-b", "pin")
+    _git(src, "merge", "--no-edit", "peer")
+    pin = _git(src, "rev-parse", "HEAD")
+    _git(src, "checkout", "main")
+    _diverge_by_peer_publish(origin, clone, "percolate publish [source-head {0}]".format(peer[:12]))
+
+    out, err = _capture()
+    assert not refresh_dest_from_origin(clone, out=out, err=err, source_root=src).ok
+    result = refresh_dest_from_origin(clone, out=out, err=err, source_root=src, source_ref=pin)
+
+    assert result.ok
+    assert _git(clone, "rev-list", "--count", "HEAD..origin/candidate") == "0"
+
+
 def test_divergence_by_an_unstamped_commit_is_refused(origin_and_clone, tmp_path):
     origin, clone = origin_and_clone
     src, _ = _source_with(tmp_path, merged=True)

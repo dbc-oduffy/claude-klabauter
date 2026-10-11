@@ -82,7 +82,16 @@ _HANDOFF_PATTERNS = [
     re.compile(r"\bwait(?:s|ing)?\s+on\s+you\b", re.IGNORECASE),
     re.compile(r"\bblocks?\s+on\s+you\b", re.IGNORECASE),
     re.compile(r"\byour\s+call\b", re.IGNORECASE),
-    re.compile(r"\bneeds?\s+your\s+(?:decision|input|sign-off)\b", re.IGNORECASE),
+    re.compile(
+        r"\bneeds?\s+your\s+(?:look|go|yes|approval|review|eyes|decision|input|sign-off)\b",
+        re.IGNORECASE,
+    ),
+    # A softener ("genuinely", "still", "only") ahead of these never excuses
+    # them: it is the tell of a hand-up dressed as a courtesy.
+    re.compile(r"\bneeds?\s+you\b", re.IGNORECASE),
+    re.compile(r"\b(?:two|three|\d+)\s+things?\s+need\s+you\b", re.IGNORECASE),
+    re.compile(r"\bfor\s+you\s+to\s+(?:decide|approve|look)\b", re.IGNORECASE),
+    re.compile(r"\byes[- ](?:or|/)[- ]no\s+for\s+you\b", re.IGNORECASE),
     re.compile(r"\bover\s+to\s+you\b", re.IGNORECASE),
     re.compile(r"\bnow\s+wait\s+on\s+you\b", re.IGNORECASE),
 ]
