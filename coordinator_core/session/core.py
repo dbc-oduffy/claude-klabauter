@@ -827,6 +827,32 @@ def stable_pid_alive(pid, stored_lstart: str = "", stored_start_epoch: str = "")
     return abs(now_epoch_val - legacy_epoch) <= _STABLE_PID_EPOCH_TOLERANCE_SECS
 
 
+def pid_present(pid: int, cmd_match: Optional[str] = None) -> bool:
+    """True iff ``pid`` is a live process and, when ``cmd_match`` is given, its
+    cmdline (space-joined) satisfies ``re.search(cmd_match, ...)``.
+
+    For a peer-reported non-session PID (build, dev server). Never a session
+    liveness answer. A zombie or vanished PID is False; an unreadable cmdline
+    under ``cmd_match`` is False (the match cannot be confirmed). Raises
+    ``re.error`` on an invalid ``cmd_match`` and ``MissingPsutilError`` when
+    psutil is absent.
+    """
+    ps = _psutil()
+    if ps is None:
+        raise MissingPsutilError("psutil is required for pid_present")
+    pattern = re.compile(cmd_match) if cmd_match is not None else None
+    try:
+        proc = ps.Process(pid)
+        if pattern is None:
+            return proc.status() != ps.STATUS_ZOMBIE
+        cmdline = proc.cmdline()
+        return bool(cmdline) and pattern.search(" ".join(cmdline)) is not None
+    except (ps.NoSuchProcess, ps.ZombieProcess):
+        return False
+    except ps.AccessDenied:
+        return pattern is None
+
+
 # ---------------------------------------------------------------------------
 # Timestamp conversion helpers
 # ---------------------------------------------------------------------------

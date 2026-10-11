@@ -65,9 +65,10 @@ has been run (`machine_profile.feature_enabled("doctrine_edit_gate")`).
 
 Approval mechanism
 -------------------
-Repo-root sentinel file `.coordinator-doctrine-edit-approved` (name
+Sentinel file `.coordinator-doctrine-edit-approved` under the repo's git dir (name
 deliberately NOT printed in the deny message — see Deny message below):
   - absent -> DENY
+  - a file at the repo root instead -> DENY (a root file never approves)
   - present, mtime older than APPROVAL_WINDOW_SECONDS (30 minutes) -> DENY
     (treated as expired)
   - present, mtime within the window -> ALLOW (silent, no output). One
@@ -439,10 +440,12 @@ def _foreign_repo_root_surface(target: str) -> "str | None":
     return _norm(target_root)
 
 
-def _git_index_path(repo_root: str) -> "str | None":
+def _git_dir(repo_root: str) -> "str | None":
+    """The repo's git dir from one `.git` stat plus at most one one-line read, no spawn.
+    A `gitdir:` pointer is joined to the root when relative; None when unresolvable."""
     dot_git = os.path.join(repo_root, ".git")
     if os.path.isdir(dot_git):
-        return os.path.join(dot_git, "index")
+        return dot_git
     try:
         with open(dot_git, encoding="utf-8") as fh:
             line = fh.readline().strip()
@@ -451,52 +454,35 @@ def _git_index_path(repo_root: str) -> "str | None":
     if not line.startswith("gitdir:"):
         return None
     gitdir = line[len("gitdir:"):].strip()
-    return os.path.join(gitdir if os.path.isabs(gitdir) else os.path.join(repo_root, gitdir), "index")
-
-
-def _sentinel_tracked(repo_root: str) -> bool:
-    """True when the repo-root sentinel is in the git index. A tracked sentinel gets a fresh
-    mtime on every checkout, so it would arm every clone for the approval window. Read off
-    the index bytes rather than a git spawn; an unreadable index reads as untracked."""
-    index = _git_index_path(repo_root)
-    if not index:
-        return False
-    needle = _SENTINEL_NAME.encode() + b"\0"
-    try:
-        with open(index, "rb") as fh:
-            data = fh.read()
-    except OSError:
-        return False
-    at = data.find(needle)
-    while at != -1:
-        # A root-level entry's path is the bare name; a nested one ends in "/<name>".
-        if at == 0 or data[at - 1:at] != b"/":
-            return True
-        at = data.find(needle, at + 1)
-    return False
+    if not gitdir:
+        return None
+    if os.path.isabs(gitdir) or re.match(r"^[A-Za-z]:[\\/]", gitdir):
+        return gitdir
+    return os.path.join(repo_root, gitdir)
 
 
 def _sentinel_state(repo_root: "str | None") -> str:
-    """Returns "allow", "deny-absent", "deny-expired", or "deny-tracked".
+    """Returns "allow", "deny-absent", "deny-expired", or "deny-root".
 
-    No repo root resolvable -> "deny-absent" (fail closed on the guard's
-    own resolution failure, per this guard's deliberate fail-closed
-    posture -- see module docstring).
+    The approval lives under the git dir, which no commit can carry into a clone.
+    A file at `<root>/<sentinel>` is "deny-root", checked before the git-dir read.
 
-    A DIRECTORY at the sentinel path is treated identically to an ABSENT
-    sentinel (2026-07-30 forge-closure fix, ported from the DoE-side
-    source). `os.path.getmtime` succeeds on a directory exactly as it does
-    on a regular file, so `mkdir <sentinel>` used to read as a real,
-    honoured approval -- this guard's read side never actually checked
-    that the path was a *file*. `os.path.isfile()` follows symlinks (a
-    symlink to a regular file the PM created still approves,
-    deliberately) but returns False for a directory, fifo, socket, or
-    device, all of which now fall into the same "deny-absent" bucket a
-    missing sentinel does.
+    No repo root or git dir resolvable -> "deny-absent" (fail closed, per this
+    guard's deliberate fail-closed posture -- see module docstring).
+
+    A DIRECTORY at the sentinel path is treated as ABSENT: `os.path.getmtime`
+    succeeds on a directory, so `mkdir <sentinel>` would otherwise read as an
+    approval. `os.path.isfile()` follows symlinks to a regular file (still
+    approves) and is False for a directory, fifo, socket or device.
     """
     if not repo_root:
         return "deny-absent"
-    sentinel_path = os.path.join(repo_root, _SENTINEL_NAME)
+    git_dir = _git_dir(repo_root)
+    if not git_dir:
+        return "deny-absent"
+    if os.path.lexists(os.path.join(repo_root, _SENTINEL_NAME)):
+        return "deny-root"
+    sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
     try:
         if not os.path.isfile(sentinel_path):
             return "deny-absent"
@@ -507,8 +493,6 @@ def _sentinel_state(repo_root: "str | None") -> str:
     # A future mtime (clock skew, touch -d) would otherwise never expire.
     if age < 0 or age > _APPROVAL_WINDOW_SECONDS:
         return "deny-expired"
-    if _sentinel_tracked(repo_root):
-        return "deny-tracked"
     return "allow"
 
 
@@ -633,6 +617,7 @@ def _deny_reason(
     target: str,
     is_local_config: bool = False,
     payload: Optional[Dict[str, Any]] = None,
+    root_sentinel: bool = False,
 ) -> str:
     """Audience-gated render — see module docstring "Deny message".
 
@@ -674,6 +659,11 @@ def _deny_reason(
                 f" See {resolve_override_keys_doc_display()} for how "
                 "approval works."
             )
+            if root_sentinel:
+                base += (
+                    " A root-level approval file is not an approval; "
+                    "approvals live under the git dir."
+                )
     return base
 
 
@@ -782,7 +772,7 @@ def _sentinel_write_deny_reason() -> str:
 
 
 def pm_approval_fresh(cwd: "str | None" = None) -> bool:
-    """True when the PM's approval sentinel exists at the repo root and is
+    """True when the PM's approval sentinel exists under the git dir and is
     unexpired; the session repo is resolved from `cwd` when given."""
     try:
         root = resolve_repo_root(cwd=cwd) if cwd else _git_root()
@@ -1019,12 +1009,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 target_raw,
                 is_local_config=is_local_config,
                 payload=payload,
-            )
-            + (
-                f" The {_SENTINEL_NAME} here is tracked in git, so it is not an approval: "
-                f"`git rm --cached {_SENTINEL_NAME}` and add it to .gitignore."
-                if state == "deny-tracked"
-                else ""
+                root_sentinel=state == "deny-root",
             ),
         }
     }

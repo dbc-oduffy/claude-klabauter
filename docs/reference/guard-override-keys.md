@@ -314,7 +314,16 @@ Distinct from both, and not interchangeable with either:
 `.coordinator-doctrine-edit-approved` gates only while
 `machine-local set coordinator.feature.doctrine_edit_gate on` is in effect (off by
 default on every profile); when on, it is read at the **hook process's own cwd repo
-root** — `guard_doctrine_surface_edits._sentinel_state()` is fed by `_git_root()`,
+root** — the approval file lives **under that repo's git dir**
+(`<git-dir>/.coordinator-doctrine-edit-approved`), never at the repo root, so no commit
+can carry an approval into a clone. A root-level file is refused, whatever its age or
+tracked state; a root file left over from before this change now refuses until removed.
+The PM creates it out of band:
+
+- bash: `touch "$(git rev-parse --git-dir)/.coordinator-doctrine-edit-approved"`
+- PowerShell: `New-Item -ItemType File -Force "$(git rev-parse --git-dir)/.coordinator-doctrine-edit-approved"`
+
+`guard_doctrine_surface_edits._sentinel_state()` is fed by `_git_root()`,
 which calls `resolve_repo_root()` with no argument, and that resolver's own docstring
 resolves against the process's current cwd. It is not sited "at a target repo's root";
 it is same-repo-only relative to wherever the hook process is running, and the

@@ -43,7 +43,8 @@ def test_old_shape_record_emits_no_tests_stage(tmp_path, monkeypatch):
     assert rd.latest_tests_supersession(repo, "state/superseding-reviews/2026-10/rec.md") is None
 
 
-def test_tests_error_then_reverified_pass_mints(tmp_path):
+@pytest.mark.parametrize("status", ["pass", "pass-with-skips"])
+def test_tests_error_then_reverified_pass_mints(tmp_path, status):
     repo = _repo(tmp_path)
     head = _git(repo, "rev-parse", "HEAD")
     record = _record(repo, head, delivery=_PASS, tests=_ERR)
@@ -56,7 +57,7 @@ def test_tests_error_then_reverified_pass_mints(tmp_path):
         head_sha=head,
         verdict="PASS",
         unbacked=[],
-        tests={"status": "pass", "run": 3, "failed": 0, "sidecar": None},
+        tests={"status": status, "run": 3, "failed": 0, "sidecar": None},
     )
     stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
     assert stamp["terminal_commit_sha"] == head
@@ -79,3 +80,15 @@ def test_not_run_tests_and_criterion_are_legs_to_run_and_all_pass_still_refuses(
     assert rd._criterion_unsettled({"criterion": {"status": "not_run"}})
     ok = {"tests": {"status": "pass"}, "criterion": {"status": "met"}}
     assert not rd._unsettled(ok)
+
+
+def test_a_pass_with_skips_records_pass_and_keeps_the_skip(tmp_path):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    record = _record(repo, head, delivery=_PASS, tests=_ERR)
+    rel = rd.record_delivery_verdict(
+        repo_root=repo, supersedes=record.relative_to(repo).as_posix(), plan_id=None, head_sha=head,
+        verdict="PASS", unbacked=[], tests={"status": "pass-with-skips", "run": 3, "failed": 0, "sidecar": None},
+    )
+    tests = rd._frontmatter(repo / rel)["tests"]
+    assert tests["status"] == "pass" and tests["skipped"] is True

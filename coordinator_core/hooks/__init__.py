@@ -210,6 +210,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.block_dispatch_suite_invocation",
     "coordinator_core.hooks.strip_worktree_isolation",
     "coordinator_core.hooks.block_worktree_tool",
+    "coordinator_core.hooks.block_group_em_agent_cap_grant",
     "coordinator_core.hooks.sessionstart_dispatch",
     "coordinator_core.hooks.sessionstart_async_dispatch",
     "coordinator_core.hooks.assert_em_role",

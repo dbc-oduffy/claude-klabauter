@@ -14,7 +14,6 @@ import time
 from coordinator_core.bash_guards import _taskstop_launch_store as store
 from coordinator_core.bash_guards._taskstop_contract import (
     FILETIME_UNIX_EPOCH,
-    RECORDER_OP,
     LaunchRecord,
 )
 from coordinator_core.hooks._envelope import no_advisory, payload_of
@@ -29,14 +28,14 @@ def _str(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-@register_op(RECORDER_OP)
+@register_op("hooks.taskstop_launch_recorder")
 def _handler(params: dict, repo_root=None) -> dict:
     """Record a background Bash launch; always returns no_advisory()."""
+    payload = payload_of(params)
     mark = _filetime_now()
     try:
         if sys.platform != "win32":
             return no_advisory()
-        payload = payload_of(params)
         if payload.get("tool_name") != "Bash":
             return no_advisory()
         tool_input = payload.get("tool_input")

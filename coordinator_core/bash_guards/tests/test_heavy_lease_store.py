@@ -75,10 +75,34 @@ def test_holders_names_pid_and_class(tmp_path):
 def test_attribute_narrows_only_matching_session(tmp_path):
     store.write_lease(_rec(), tmp_path)
     store.write_lease(_rec(holder=(20, 200), session=(20, 200)), tmp_path)
-    assert store.attribute(10, 100, 33, 330, tmp_path) == 1
+    assert store.attribute(10, 100, [_tree(33, 330, heavy=("pnpm", "node"))], tmp_path) == 1
     got = {(r.holder_pid, r.session_pid) for r in store.live_leases(tmp_path)}
     assert got == {(33, 10), (20, 20)}
-    assert store.attribute(10, 100, 44, 440, tmp_path) == 0
+    assert store.attribute(10, 100, [_tree(44, 440, heavy=("pnpm", "node"))], tmp_path) == 0
+
+
+class TestAttribute:
+    def test_a_typecheck_lease_never_binds_a_python_tree(self, tmp_path):
+        path = write_lease(_open(launch=100), tmp_path)
+        sourcer = _tree(70, 150, heavy=("python3",))
+        assert store.attribute(1, 10, [sourcer], tmp_path) == 0
+        assert json.loads(path.read_text(encoding="utf-8"))["holder_pid"] == 1
+
+    def test_a_lease_binds_its_own_tree_not_the_newest(self, tmp_path):
+        path = write_lease(_open(launch=100), tmp_path)
+        tsc = _tree(40, 110, heavy=("node", "tsc"))
+        later = _tree(50, 140, heavy=("node",))
+        assert store.attribute(1, 10, [later, tsc], tmp_path) == 1
+        assert json.loads(path.read_text(encoding="utf-8"))["holder_pid"] == 40
+
+    def test_a_tree_created_before_the_launch_is_not_bound(self, tmp_path):
+        write_lease(_open(launch=100), tmp_path)
+        assert store.attribute(1, 10, [_tree(40, 90, heavy=("node",))], tmp_path) == 0
+
+    def test_a_held_tree_is_not_bound_twice(self, tmp_path):
+        write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", time.time(), 100), tmp_path)
+        write_lease(_open(launch=105), tmp_path)
+        assert store.attribute(1, 10, [_tree(40, 110, heavy=("node",))], tmp_path) == 0
 
 
 def test_two_writers_racing(tmp_path):
@@ -100,11 +124,13 @@ def test_default_dir_under_settings_home(tmp_path, monkeypatch):
     assert len(store.live_leases()) == 1
 
 
-def _tree(pid, ctime, stems=("bash", "node")):
+def _tree(pid, ctime, heavy=("node",)):
+    """An orphan tree under a bash root whose heavy processes start in the order given."""
     from coordinator_core.bash_guards._session_census import OrphanTree
 
     root = ProcRow(pid, 999, ctime, "bash.exe")
-    return OrphanTree(root, frozenset(stems), (ProcRow(pid + 1, pid, ctime + 1, "node.exe"),))
+    rows = tuple(ProcRow(pid + 1 + i, pid, ctime + 1 + i, f"{stem}.exe") for i, stem in enumerate(heavy))
+    return OrphanTree(root, rows)
 
 
 def _open(launch, cls="typecheck", session=(1, 10), at=None):
@@ -124,7 +150,12 @@ class TestClaimOrphans:
 
     def test_a_tree_without_an_image_of_the_class_is_not_claimed(self, tmp_path):
         write_lease(_open(launch=100, cls="typecheck"), tmp_path)
-        assert claim_orphans([_tree(40, 110, stems=("bash", "python"))], window=60, directory=tmp_path) == 0
+        assert claim_orphans([_tree(40, 110, heavy=("python",))], window=60, directory=tmp_path) == 0
+
+    def test_a_tree_whose_command_is_another_class_is_not_claimed_for_a_later_image(self, tmp_path):
+        # Live 2026-10-10: a typecheck lease whose tsc had exited claimed a peer's UE python run.
+        write_lease(_open(launch=100, cls="typecheck"), tmp_path)
+        assert claim_orphans([_tree(40, 110, heavy=("python", "node"))], window=60, directory=tmp_path) == 0
 
     def test_two_leases_take_two_trees_in_launch_order(self, tmp_path):
         a = write_lease(_open(launch=100, session=(1, 10)), tmp_path)

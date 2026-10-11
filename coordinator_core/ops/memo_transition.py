@@ -868,10 +868,15 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
     if decision and actioned_note:
         return _err(f"{verb}: decision and actioned_note are mutually exclusive")
     if not decision and not actioned_note:
-        return _err(
+        reply = _err(
             f"{verb} requires either decision (accepted|partial|declined) "
             "[decision_note] [realized_by] or actioned_note"
         )
+        reply["cli_error"] = (
+            f"{verb} requires --decision <accepted|partial|declined> "
+            "[--decision-note <text>] [--realized-by <ref>] or --actioned-note <text>"
+        )
+        return reply
 
     if decision:
         valid_decisions = ("accepted", "partial", "declined")

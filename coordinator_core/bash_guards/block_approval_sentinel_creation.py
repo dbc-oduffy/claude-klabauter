@@ -528,7 +528,9 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         `wc`, `file`, `grep`, plus `echo` (writes only to stdout, never a
         named file -- see `_SAFE_ARGV0`).
       - Read-only `git` subcommands: `status`, `diff`, `log`, `show`,
-        `ls-files`, `rev-parse`, `describe`, `check-ignore`, `check-attr`.
+        `ls-files`, `rev-parse`, `describe`, `check-ignore`, `check-attr`,
+        `grep` (closed flag set). Leading `-C <dir>`, `--no-pager`, `-P` are
+        skipped; `--out*` tokens make the segment unsafe.
         Any other `git` subcommand (`checkout`, `restore`, `stash` (`pop`
         included), or anything else) falls through to the mention-based deny
         like any other command, since those subcommands DO write. The set is
@@ -666,7 +668,9 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     #: command that verifies the sentinel is ignored, i.e. that the
     #: checkout-materialises-a-fresh-sentinel hole is closed -- was denied as
     #: a write. That is the guard refusing the very check that confirms its
-    #: own boundary holds. `check-attr` is admitted alongside it as the
+    #: own boundary holds. Since approvals live under the git dir, the root
+    #: file no longer approves, so this check is hygiene, not a boundary.
+    #: `check-attr` is admitted alongside it as the
     #: identical query shape rather than waiting for its own false positive.
     #:
     #: `rm` writes, but it can only remove: `git rm --cached <sentinel>` untracks a
@@ -687,16 +691,58 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             # tracked sentinel is no approval (the doctrine-edit gate refuses it), so
             # committing the `git rm` that disarms one was a deny with nothing to guard.
             "commit",
+            # `grep` is a pure search when its flags are the closed set in
+            # `_GIT_GREP_SAFE_FLAGS`; `-O<cmd>`/`--open-files-in-pager` run a program.
+            "grep",
         }
     )
+
+    _GIT_GREP_SAFE_FLAGS = frozenset(
+        {"-l", "-n", "-i", "-w", "-F", "-E", "-I", "-c", "-q", "--cached", "--no-index"}
+    )
+
+    def _git_sub_index(self, seg_tokens: "list[str]", start: int) -> "Optional[int]":
+        """Index of the git subcommand after leading `-C <dir>`, `--no-pager`, `-P`;
+        any other leading dash token (`-c`, `--exec-path`, ...) or a missing subcommand is None."""
+        i = start
+        while i < len(seg_tokens):
+            tok = seg_tokens[i]
+            if tok == "-C":
+                i += 2
+            elif tok in ("--no-pager", "-P"):
+                i += 1
+            elif tok.startswith("-"):
+                return None
+            else:
+                return i
+        return None
+
+    def _git_grep_is_safe(self, args: "list[str]") -> bool:
+        i = 0
+        while i < len(args):
+            tok = args[i]
+            if tok == "--":
+                return True
+            if tok == "-e":
+                i += 2
+                continue
+            if tok.startswith("-") and tok not in self._GIT_GREP_SAFE_FLAGS:
+                return False
+            i += 1
+        return True
 
     def _segment_is_safe(self, seg_tokens: "list[str]", argv0_idx: int) -> bool:
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if base in self._SAFE_ARGV0:
             return True
-        if base == "git" and argv0_idx + 1 < len(seg_tokens):
-            sub = seg_tokens[argv0_idx + 1]
-            if sub in self._SAFE_GIT_SUBCOMMANDS:
+        if base == "git":
+            sub_idx = self._git_sub_index(seg_tokens, argv0_idx + 1)
+            if sub_idx is not None and seg_tokens[sub_idx] in self._SAFE_GIT_SUBCOMMANDS:
+                rest = seg_tokens[sub_idx + 1 :]
+                if any(t.startswith("--out") for t in rest):
+                    return False
+                if seg_tokens[sub_idx] == "grep":
+                    return self._git_grep_is_safe(rest)
                 return True
         if base == "mv":
             return self._mv_only_moves_sentinel_away(seg_tokens[argv0_idx + 1 :])

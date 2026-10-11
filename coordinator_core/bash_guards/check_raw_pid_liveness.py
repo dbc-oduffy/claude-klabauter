@@ -56,6 +56,12 @@ Negative-spec:
     unlike the subagent-confinement cohort in this package, the raw-pid
     anti-pattern is wrong for EVERY caller, EM included; this guard is
     NOT identity-gated by design.
+  - Does NOT deny the idiom text inside a quoted argument of a command that
+    does not execute it (``sizing-assemble --intent "... ps -p 1 ..."``).
+    A quoted span run as shell or interpreter text (``bash -c``, ``sh -c``,
+    ``eval``, ``python -c``, ``timeout``/``sudo``/``env``/``nohup``/``xargs``/
+    ``ssh`` wrappers) or holding ``$(``/a backtick is still scanned, and
+    unbalanced quotes leave the command unmasked.
   - Does NOT attempt cross-segment correlation (an assignment ``pid=$!`` in
     one segment and a bare ``ps -p $pid`` in the next COULD legitimately be
     an intentional-but-still-wrong raw-pid liveness check the "same
@@ -110,8 +116,72 @@ _OS_KILL_RE = re.compile(r"\bos\.kill\(\s*([^,()]+?)\s*,\s*0\s*\)")
 
 _PID_VAR_HINT_RE = re.compile(r"\$\$|\$\{?\w+\}?|(?i:pid)|\b\d+\b")
 
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 
-def _segment_has_raw_pid_liveness_idiom(segment: str) -> Optional[str]:
+#: Commands whose quoted argument is itself shell or interpreter text, so it is
+#: executed rather than merely carried as data.
+_EXECUTING_COMMAND_RE = re.compile(
+    r"^(?:bash|sh|zsh|dash|eval|python[\d.]*|py|timeout|sudo|env|nohup|xargs|ssh)$"
+)
+
+
+def _command_word(prefix: str) -> str:
+    """First word of a segment prefix after leading ``VAR=val`` assignments."""
+    for token in prefix.split():
+        if not _ASSIGNMENT_RE.match(token):
+            return token.rsplit("/", 1)[-1]
+    return ""
+
+
+def _mask_quoted_arguments(cmd: str) -> str:
+    """Length-preserving copy of ``cmd`` with the interior of each quoted span
+    that is plain data (not run by a shell/interpreter/wrapper, no ``$(`` or
+    backtick) replaced by ``x``. Unbalanced quotes return ``cmd`` unmasked."""
+    out: list = []
+    seg_start = 0
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if ch == "\\":
+            out.append(cmd[i : i + 2])
+            i += 2
+            continue
+        if ch in "'\"":
+            j = i + 1
+            while j < n and cmd[j] != ch:
+                j += 2 if (ch == '"' and cmd[j] == "\\") else 1
+            if j >= n:
+                return cmd
+            interior = cmd[i + 1 : j]
+            word = _command_word("".join(out)[seg_start:])
+            if (
+                word
+                and not _EXECUTING_COMMAND_RE.match(word)
+                and "$(" not in interior
+                and "`" not in interior
+            ):
+                interior = "x" * len(interior)
+            out.append(cmd[i] + interior + cmd[j])
+            i = j + 1
+            continue
+        m = _SEGMENT_SPLIT_RE.match(cmd, i)
+        if m:
+            out.append(m.group())
+            i = m.end()
+            seg_start = sum(len(piece) for piece in out)
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _segment_has_raw_pid_liveness_idiom(
+    segment: str, raw_segment: Optional[str] = None
+) -> Optional[str]:
+    """Idiom regexes run on ``segment`` (masked); the pid-shape hint runs on
+    ``raw_segment`` so a quoted ``"$PID"`` still reads as pid-shaped."""
+    hint_text = segment if raw_segment is None else raw_segment
     for regex, label in (
         (_PS_P_RE, "ps -p"),
         (_KILL_0_RE, "kill -0"),
@@ -120,7 +190,7 @@ def _segment_has_raw_pid_liveness_idiom(segment: str) -> Optional[str]:
         m = regex.search(segment)
         if not m:
             continue
-        if _PID_VAR_HINT_RE.search(segment):
+        if _PID_VAR_HINT_RE.search(hint_text):
             return label
     return None
 
@@ -173,10 +243,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":
         return None
 
-    for segment in _SEGMENT_SPLIT_RE.split(cmd):
+    masked = _mask_quoted_arguments(cmd)
+    start = 0
+    bounds = [(m.start(), m.end()) for m in _SEGMENT_SPLIT_RE.finditer(masked)]
+    bounds.append((len(masked), len(masked)))
+    for seg_end, next_start in bounds:
+        segment, raw_segment = masked[start:seg_end], cmd[start:seg_end]
+        start = next_start
         if not segment.strip():
             continue
-        idiom = _segment_has_raw_pid_liveness_idiom(segment)
+        idiom = _segment_has_raw_pid_liveness_idiom(segment, raw_segment)
         if idiom is not None:
             return deny("PreToolUse", _deny_reason(idiom, payload=payload))
 

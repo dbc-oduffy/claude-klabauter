@@ -138,8 +138,9 @@ def test_invalid_class_value_is_not_a_transition():
 # module read by this scan, and no guard module's own source changed as
 # part of C1, this snapshot is valid as a pre/post comparison baseline.
 #
-# ONE ROW POSTDATES THE CAPTURE and its provenance is therefore different:
-# `block_foreign_family_sidecar_write` was added 2026-09-01 (614ca6cda7), after
+# TWO ROWS POSTDATE THE CAPTURE (`block_foreign_family_sidecar_write` and
+# `block_hand_set_test_verdict`, 465e15a8d) and their provenance is therefore
+# different. For the first, `block_foreign_family_sidecar_write` was added 2026-09-01 (614ca6cda7), after
 # the extraction, so no pre-extraction value for it exists or could. Its triple
 # was read from TODAY's `_cheap_guard_metadata`, which means it proves nothing
 # about the C1 extraction — it cannot, for a module that did not exist then.
@@ -168,6 +169,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_goals_log_hand_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 65],
 "block_hand_authored_handoff_creation": ["hard-deny", ["Write", "Edit", "MultiEdit"], 61],
 "block_hand_authored_sidecar_creation": ["hard-deny", ["Write"], 60],
+"block_hand_set_test_verdict": ["hard-deny", ["Write", "Edit", "MultiEdit"], 32],
 "block_home_dir_memo_delivery": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 125],
 "block_illegal_filename": ["hard-deny", ["Write", "Edit", "NotebookEdit"], 20],
 "block_memo_status_hand_edit": ["hard-deny", ["Write", "Edit", "MultiEdit"], 56],

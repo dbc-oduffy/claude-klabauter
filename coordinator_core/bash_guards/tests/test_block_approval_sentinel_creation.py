@@ -1179,11 +1179,18 @@ class TestReadOnlyPythonProbeMentioningSentinel:
 
     def _run(self, tmp_path, body):
         (tmp_path / "probe.py").write_text(body, encoding="utf-8")
+        (tmp_path / "sub").mkdir()
         return guard.check(_payload("python3 sub/../probe.py", cwd=str(tmp_path)))
 
     def test_inspect_only_probe_allows(self, tmp_path):
         body = "import os\nprint(os.path.exists(%r))\n" % SENTINEL
         assert self._run(tmp_path, body) is None
+
+    def test_missing_dir_dotdot_path_still_denies(self, tmp_path):
+        body = "import os\nprint(os.path.exists(%r))\n" % SENTINEL
+        (tmp_path / "probe.py").write_text(body, encoding="utf-8")
+        out = guard.check(_payload("python3 nosuch/../probe.py", cwd=str(tmp_path)))
+        assert "script content unexamined" in _reason(out)
 
     @pytest.mark.parametrize(
         "body",
@@ -1201,3 +1208,39 @@ class TestReadOnlyPythonProbeMentioningSentinel:
     def test_bash_script_mentioning_sentinel_still_denies(self, tmp_path):
         (tmp_path / "probe.sh").write_text("test -f %s\n" % SENTINEL, encoding="utf-8")
         _reason(guard.check(_payload("bash probe.sh", cwd=str(tmp_path))))
+
+
+class TestGitReadOnlyProbes:
+    """Read-only `git -C <dir>` log/ls-files and `git grep` pass; write-capable shapes stay denied."""
+
+    @pytest.mark.parametrize("cmd", [
+        "git -C /r log --all --format='%h %ad %s' --date=short -- {S}",
+        "git -C /r ls-files -- {S}",
+        "git grep -l coordinator-doctrine-edit-approved -- ':!*.py'",
+        "git grep -n -i -e {S} -- docs",
+        "git --no-pager -C /r -C sub log -- {S}",
+        "git -P log -- {S}",
+    ])
+    def test_read_only_probe_allows(self, cmd):
+        assert guard.check(_payload(cmd.replace("{S}", SENTINEL))) is None
+
+    @pytest.mark.parametrize("cmd", [
+        "git -c core.pager='touch {S}' log",
+        "git -C /r checkout -- {S}",
+        "git grep -Otouch {S}",
+        "git grep -lOtouch x {S}",
+        "git grep --open-files x {S}",
+        "git log --output=.git/{S}",
+        "git log --out=.git/{S}",
+        "git -C x -C y log && touch {S}",
+        "git -C {S}",
+        "git -C x {S}",
+        "echo x > \"$(git rev-parse --git-dir)/{S}\"",
+        "cd .git && touch {S}",
+        "touch .git/{S}",
+        "touch \"$(git rev-parse --git-dir)/{S}\"",
+        "cd /r && touch {S}",
+    ])
+    def test_write_shape_denies(self, cmd):
+        command = cmd.replace("{S}", SENTINEL)
+        _reason(guard.check(_payload(command, agent_id="a1", agent_type="coordinator:executor")))

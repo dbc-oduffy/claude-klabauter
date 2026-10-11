@@ -46,15 +46,20 @@ _SENTINEL_NAME = guard._SENTINEL_NAME
 
 @pytest.fixture
 def scratch_repo(tmp_path):
-    """A scratch root, isolated from any real checkout. `_sentinel_state`
-    only ever consults `os.path.join(repo_root, _SENTINEL_NAME)`, so no real
+    """A scratch root, isolated from any real checkout, with a bare `.git/`
+    directory: `_sentinel_state` reads `<root>/.git/_SENTINEL_NAME`, so no real
     git repo is spawned here -- every test in this file that needs
     `_git_root()` in the loop (below) monkeypatches it directly rather than
     relying on this fixture being a real repo.
     """
     repo = tmp_path / "repo"
-    repo.mkdir()
+    (repo / ".git").mkdir(parents=True)
     return repo
+
+
+def _gs(root):
+    """The approval path: under the git dir."""
+    return root / ".git" / _SENTINEL_NAME
 
 
 def _fresh(path) -> None:
@@ -79,7 +84,7 @@ def test_directory_at_sentinel_path_never_approves(scratch_repo):
     "simplify" the `os.path.isfile()` check in `_sentinel_state` back out
     to a bare `getmtime`/`exists` check; that reopens this exact forge.
     """
-    sentinel_dir = scratch_repo / _SENTINEL_NAME
+    sentinel_dir = _gs(scratch_repo)
     sentinel_dir.mkdir()
     assert guard._sentinel_state(str(scratch_repo)) == "deny-absent"
 
@@ -90,19 +95,19 @@ def test_directory_at_sentinel_path_never_approves(scratch_repo):
 
 
 def test_fresh_regular_file_allows(scratch_repo):
-    _fresh(scratch_repo / _SENTINEL_NAME)
+    _fresh(_gs(scratch_repo))
     assert guard._sentinel_state(str(scratch_repo)) == "allow"
 
 
 def test_regular_file_older_than_window_denies_expired(scratch_repo):
-    sentinel = scratch_repo / _SENTINEL_NAME
+    sentinel = _gs(scratch_repo)
     _fresh(sentinel)
     _age(sentinel, 31 * 60)
     assert guard._sentinel_state(str(scratch_repo)) == "deny-expired"
 
 
 def test_future_dated_sentinel_denies_expired(scratch_repo):
-    sentinel = scratch_repo / _SENTINEL_NAME
+    sentinel = _gs(scratch_repo)
     _fresh(sentinel)
     _age(sentinel, -3600)
     assert guard._sentinel_state(str(scratch_repo)) == "deny-expired"
@@ -112,31 +117,126 @@ def test_absent_sentinel_denies(scratch_repo):
     assert guard._sentinel_state(str(scratch_repo)) == "deny-absent"
 
 
-def _index_with(repo, *paths: str) -> None:
-    (repo / ".git").mkdir(parents=True, exist_ok=True)
-    entries = b"".join(b"\0" * 60 + len(p).to_bytes(2, "big") + p.encode() + b"\0" for p in paths)
-    (repo / ".git" / "index").write_bytes(b"DIRC\0\0\0\2" + entries)
-
-
-def test_fresh_but_tracked_sentinel_denies_tracked(scratch_repo):
-    """A committed sentinel gets a fresh mtime on every checkout; it must never approve."""
+def test_root_sentinel_only_denies_root(scratch_repo):
+    """A root file never approves, fresh or not, tracked or not."""
     _fresh(scratch_repo / _SENTINEL_NAME)
-    _index_with(scratch_repo, "README.md", _SENTINEL_NAME)
-    assert guard._sentinel_state(str(scratch_repo)) == "deny-tracked"
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-root"
 
 
-def test_nested_tracked_copy_does_not_count(scratch_repo):
+def test_root_and_git_dir_sentinels_both_fresh_denies_root(scratch_repo):
     _fresh(scratch_repo / _SENTINEL_NAME)
-    _index_with(scratch_repo, f"sub/{_SENTINEL_NAME}")
+    _fresh(_gs(scratch_repo))
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-root"
+
+
+def test_expired_root_sentinel_still_denies_root(scratch_repo):
+    root_file = scratch_repo / _SENTINEL_NAME
+    _fresh(root_file)
+    _age(root_file, 31 * 60)
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-root"
+
+
+def test_gitdir_file_relative_pointer_resolves(tmp_path):
+    root = tmp_path / "wt"
+    root.mkdir()
+    real = tmp_path / "real-gitdir"
+    real.mkdir()
+    (root / ".git").write_text("gitdir: ../real-gitdir\n", encoding="utf-8")
+    assert guard._git_dir(str(root)) == os.path.join(str(root), "../real-gitdir")
+    _fresh(real / _SENTINEL_NAME)
+    assert guard._sentinel_state(str(root)) == "allow"
+
+
+def test_gitdir_file_absolute_pointer_resolves(tmp_path):
+    root = tmp_path / "wt"
+    root.mkdir()
+    real = tmp_path / "real-gitdir"
+    real.mkdir()
+    (root / ".git").write_text(f"gitdir: {real}\n", encoding="utf-8")
+    assert guard._git_dir(str(root)) == str(real)
+    _fresh(real / _SENTINEL_NAME)
+    assert guard._sentinel_state(str(root)) == "allow"
+
+
+def test_gitdir_file_without_gitdir_line_denies_absent(tmp_path):
+    root = tmp_path / "wt"
+    root.mkdir()
+    (root / ".git").write_text("not a pointer\n", encoding="utf-8")
+    assert guard._git_dir(str(root)) is None
+    assert guard._sentinel_state(str(root)) == "deny-absent"
+
+
+def test_root_without_dot_git_denies_absent(tmp_path):
+    root = tmp_path / "bare"
+    root.mkdir()
+    _fresh(root / _SENTINEL_NAME)
+    assert guard._git_dir(str(root)) is None
+    assert guard._sentinel_state(str(root)) == "deny-absent"
+
+
+def test_sentinel_state_spawns_nothing(scratch_repo, monkeypatch):
+    import subprocess as sp
+
+    calls = []
+    for name in ("run", "Popen", "call", "check_output", "check_call"):
+        monkeypatch.setattr(sp, name, lambda *a, **k: calls.append(a))
+    for name in ("system", "spawnl", "spawnv", "spawnlp", "spawnvp", "posix_spawn"):
+        if hasattr(os, name):
+            monkeypatch.setattr(os, name, lambda *a, **k: calls.append(a))
+    _fresh(_gs(scratch_repo))
     assert guard._sentinel_state(str(scratch_repo)) == "allow"
+    assert guard._sentinel_state(str(scratch_repo / "nope")) == "deny-absent"
+    assert calls == []
 
 
-def test_worktree_gitdir_file_index_is_read(scratch_repo, tmp_path):
+def test_root_sentinel_deny_text_states_the_git_dir_fact_to_em_only(scratch_repo, monkeypatch):
+    monkeypatch.setattr(guard, "_git_root", lambda: str(scratch_repo))
+    monkeypatch.setattr(guard, "read_content_root", lambda: "")
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     _fresh(scratch_repo / _SENTINEL_NAME)
-    real = tmp_path / "real"
-    _index_with(real, _SENTINEL_NAME)
-    (scratch_repo / ".git").write_text(f"gitdir: {real / '.git'}\n", encoding="utf-8")
-    assert guard._sentinel_state(str(scratch_repo)) == "deny-tracked"
+    payload = {
+        "tool_name": "Edit",
+        "session_id": "t",
+        "tool_input": {"file_path": str(scratch_repo / "CLAUDE.md")},
+    }
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda p, r: True)
+    reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "approvals live under the git dir" in reason
+    assert _SENTINEL_NAME not in reason
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda p, r: False)
+    reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "git dir" not in reason
+    assert _SENTINEL_NAME not in reason
+
+
+def test_write_tool_to_git_dir_sentinel_is_still_denied(scratch_repo, monkeypatch):
+    monkeypatch.setattr(guard, "_git_root", lambda: str(scratch_repo))
+    out = guard.check(
+        {
+            "tool_name": "Write",
+            "session_id": "t",
+            "tool_input": {"file_path": str(_gs(scratch_repo)), "content": ""},
+        }
+    )
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_git_dir_sentinel_approves_a_doctrine_edit_and_root_one_does_not(
+    scratch_repo, monkeypatch
+):
+    monkeypatch.setattr(guard, "_git_root", lambda: str(scratch_repo))
+    monkeypatch.setattr(guard, "read_content_root", lambda: "")
+    payload = {
+        "tool_name": "Edit",
+        "session_id": "t",
+        "tool_input": {"file_path": str(scratch_repo / "CLAUDE.md")},
+    }
+    _fresh(scratch_repo / _SENTINEL_NAME)
+    assert guard.check(payload) is not None
+    (scratch_repo / _SENTINEL_NAME).unlink()
+    _fresh(_gs(scratch_repo))
+    assert guard.check(payload) is None
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +258,7 @@ def test_symlink_to_regular_file_within_window_allows(scratch_repo):
     to a regular file elsewhere, and `os.path.isfile()` follows symlinks."""
     real_file = scratch_repo / "real-approval.txt"
     _fresh(real_file)
-    alias = scratch_repo / _SENTINEL_NAME
+    alias = _gs(scratch_repo)
     _symlink_or_skip(alias, real_file)
     assert guard._sentinel_state(str(scratch_repo)) == "allow"
 
@@ -166,7 +266,7 @@ def test_symlink_to_regular_file_within_window_allows(scratch_repo):
 def test_symlink_to_directory_denies_absent(scratch_repo):
     real_dir = scratch_repo / "real-dir"
     real_dir.mkdir()
-    alias = scratch_repo / _SENTINEL_NAME
+    alias = _gs(scratch_repo)
     _symlink_or_skip(alias, real_dir)
     assert guard._sentinel_state(str(scratch_repo)) == "deny-absent"
 
@@ -179,7 +279,7 @@ def test_symlink_to_directory_denies_absent(scratch_repo):
 def test_fifo_at_sentinel_path_denies_absent(scratch_repo):
     if not hasattr(os, "mkfifo"):
         pytest.skip("os.mkfifo unavailable on this platform")
-    fifo_path = scratch_repo / _SENTINEL_NAME
+    fifo_path = _gs(scratch_repo)
     try:
         os.mkfifo(str(fifo_path))
     except OSError as exc:
@@ -220,6 +320,7 @@ def test_no_repo_root_denies_absent():
 
 
 def test_sentinel_is_gitignored_in_this_repo():
+    """Hygiene only: a root file no longer approves (it is refused)."""
     repo_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
@@ -236,6 +337,7 @@ def test_sentinel_is_gitignored_in_this_repo():
 
 
 def test_sentinel_is_not_tracked_in_this_repo():
+    """Hygiene only: a root file no longer approves (it is refused)."""
     repo_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
@@ -515,8 +617,9 @@ def two_roots(tmp_path, monkeypatch):
     doe = tmp_path / "coordinator-content-repo"
     (doe / "coordinator" / "snippets").mkdir(parents=True)
     (doe / "global-doctrine").mkdir(parents=True)
+    (doe / ".git").mkdir()
     session_repo = tmp_path / "project-peer"
-    session_repo.mkdir()
+    (session_repo / ".git").mkdir(parents=True)
 
     guard._content_root_memo.clear()
     monkeypatch.setattr(guard, "read_content_root", lambda: str(doe))
@@ -547,13 +650,13 @@ def test_doe_only_surface_approval_is_read_at_the_content_root(two_roots, relati
     doe, session_repo = two_roots
     target = doe.joinpath(*relative)
 
-    _fresh(session_repo / _SENTINEL_NAME)
+    _fresh(_gs(session_repo))
     assert _verdict(target) == "deny", (
         "an approval created in the editing session's repo authorized an edit "
         "to another repo's doctrine surface"
     )
 
-    _fresh(doe / _SENTINEL_NAME)
+    _fresh(_gs(doe))
     assert _verdict(target) == "allow"
 
 
@@ -639,10 +742,10 @@ def test_foreign_third_repo_approval_is_read_at_its_own_root(foreign_third_repo)
     session_repo, third_repo = foreign_third_repo
     target = third_repo / "CLAUDE.md"
 
-    _fresh(session_repo / _SENTINEL_NAME)
+    _fresh(_gs(session_repo))
     assert _verdict(target) == "deny"
 
-    _fresh(third_repo / _SENTINEL_NAME)
+    _fresh(_gs(third_repo))
     assert _verdict(target) == "allow"
 
 

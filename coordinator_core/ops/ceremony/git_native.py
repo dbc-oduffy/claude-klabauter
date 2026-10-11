@@ -88,6 +88,11 @@ from coordinator_core.git.divergence import (
     diverging_paths,
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.git.path_canon import (  # noqa: F401 - re-exported for callers of this module
+    _has_windows_drive,
+    canonical_repo_relative_path_refusal,
+    first_non_canonical_path_refusal,
+)
 from coordinator_core.ops.ceremony.commit_admission import governed_surface_refusal
 from coordinator_core.ops.ceremony.commit_path_legality import illegal_path_refusal
 from coordinator_core.git.commit_signing import (
@@ -571,73 +576,6 @@ def _git(
 #: `coordinator_core.ops.fleet._common.EMPTY_TREE_SHA`; the two seams are
 #: independent commit paths and neither imports the other.
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-
-def _has_windows_drive(normalized: str) -> bool:
-    """True iff `normalized` (already `/`-normalized) carries a Windows
-    drive letter (`"C:/foo"`, `"C:foo"`) -- platform-independent by
-    construction. `ntpath.splitdrive` is used explicitly rather than
-    `os.path.splitdrive`/`Path(...).is_absolute()`: `os.path` resolves to
-    `posixpath` on a non-Windows host, whose `splitdrive` is a no-op, and a
-    `PosixPath("C:/foo").is_absolute()` is False -- either would let a
-    drive-letter path slip the parse-time containment guard on Linux while
-    catching it on Windows, exactly the platform-dependent gap this check
-    exists to close. `ntpath` itself is a pure-Python module present on
-    every platform, so this reads the same drive-letter shape everywhere."""
-    return ntpath.splitdrive(normalized)[0] != ""
-
-
-def canonical_repo_relative_path_refusal(path: str) -> Optional[str]:
-    """`None` iff `path` is a canonical repo-relative tree-entry path; else a refusal naming the path
-    and, when safe, its canonical form. REFUSAL, never silent normalisation: git rejects a
-    non-canonical entry only at `update-index`/`read-tree`, after the caller saw rc=0.
-
-    Refuses: absolute, Windows drive, and (per `/` component) empty, `.`, `..`, or `.git` (casefolded).
-    """
-    normalized = path.replace("\\", "/")
-    reasons = []
-    if not normalized:
-        reasons.append("empty path")
-    if normalized.startswith("/"):
-        reasons.append("absolute path")
-    if _has_windows_drive(normalized):
-        reasons.append("Windows drive letter")
-    if normalized:
-        parts = normalized.split("/")
-        if any(p == "" for p in parts):
-            reasons.append("empty path component (a doubled or trailing '/')")
-        if any(p == "." for p in parts):
-            reasons.append("'.' path component")
-        if any(p == ".." for p in parts):
-            reasons.append("'..' path component")
-        if any(p.casefold() == ".git" for p in parts):
-            reasons.append("'.git' path component")
-    if not reasons:
-        return None
-
-    candidate = posixpath.normpath(normalized) if normalized else normalized
-    canonical_ok = (
-        normalized
-        and candidate not in ("", ".", "..")
-        and not candidate.startswith("../")
-        and not candidate.startswith("/")
-        and not _has_windows_drive(candidate)
-        and not any(p.casefold() == ".git" for p in candidate.split("/"))
-    )
-    hint = f"; canonical form: {candidate!r}" if canonical_ok else ""
-    return (
-        f"refusing non-canonical path {path!r} ({', '.join(reasons)}){hint} -- "
-        "pass a canonical repo-relative path"
-    )
-
-
-def first_non_canonical_path_refusal(paths) -> Optional[str]:
-    """First `canonical_repo_relative_path_refusal` hit across `paths`, else `None`."""
-    for candidate_path in paths:
-        refusal = canonical_repo_relative_path_refusal(candidate_path)
-        if refusal is not None:
-            return refusal
-    return None
 
 
 def _empty_private_index_refusal(
@@ -4858,7 +4796,7 @@ def _commit_via_head_spine(
             stdout="",
             stderr=f"{caller}: refused -- this commit lands a path Windows cannot check out:\n{legality_refusal}",
         )
-    # Canonical-path gate before any tree write; every commit route lands through this helper.
+    # Canonical-path gate before any tree write; git/commit.py::commit_paths applies the same gate.
     canonical_refusal = first_non_canonical_path_refusal(assembled.keys())
     if canonical_refusal is not None:
         return GitResult(

@@ -1383,6 +1383,9 @@ def write_back(
     scout_evidence: Optional[list[str]] = None,
     deliverable_id: Optional[str] = None,
     research: Optional[dict[str, Any]] = None,
+    verbatim_turns: Optional[tuple[int, int]] = None,
+    intent_verbatim: bool = False,
+    name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1394,9 +1397,15 @@ def write_back(
     `accepted` is null or the engine's own record; interaction_mode only while absent. Where
     the size rule skips the acceptance ask (pm/ceo only) and a statement exists, `accepted` is
     the engine-size-rule record; a re-size out of the rule clears it. Raises
-    `SizingAssembleError` on any refusal, with nothing written.
+    `SizingAssembleError` on any refusal, with nothing written. `verbatim_turns=(A, B)` embeds
+    exactly turns A..B (unbudgeted) instead of the recent window, and refuses a missing index or
+    an already-embedded `pm_verbatims`. The result's `pm_verbatims` reports what was embedded.
+    `intent_verbatim=True` overwrites `intent` with the decision's intent byte-for-byte (never stripped) and sets
+    `intent_source: pm-verbatim`. `name` (silently capped at 60 chars) becomes the real `name:` line,
+    replacing the commented template line, unless the record already carries a `name`.
     """
     import json
+    import re
 
     import yaml
 
@@ -1429,7 +1438,22 @@ def write_back(
         raise SizingAssembleError("--premise-provenance given without --premise-evidence")
     from coordinator_core.ops.baton_pm_turns import recent_window
 
-    pm_verbatims = recent_window(cwd=str(root))
+    if verbatim_turns is None:
+        pm_verbatims = recent_window(cwd=str(root))
+    else:
+        from coordinator_core.ops.baton_pm_turns import read_turns
+
+        lo, hi = verbatim_turns
+        chosen = read_turns(start=lo, end=hi, cwd=str(root))["turns"]
+        have = {t["turn"] for t in chosen}
+        missing = [n for n in range(lo, hi + 1) if n not in have]
+        if missing:
+            raise SizingAssembleError(f"--verbatim-turns {lo}-{hi}: no recorded turn {missing}")
+        pm_verbatims = [
+            {"turn": t["turn"], "ts": t.get("ts"), "text": t["prompt"]}
+            for t in sorted(chosen, key=lambda t: t["turn"], reverse=True)
+        ]
+    embedded: list[dict[str, Any]] = []
 
     def mutate(old: str) -> str:
         try:
@@ -1439,6 +1463,13 @@ def write_back(
         if not isinstance(doc, dict):
             raise MutateAbort("sizing-object is not a YAML mapping")
         text = old
+        if name and name.strip() and not doc.get("name"):
+            raw_name = json.dumps(name.strip()[:60], ensure_ascii=False)
+            text, swapped = re.subn(
+                r"^# name:.*$", lambda _m: f"name: {raw_name}", text, count=1, flags=re.MULTILINE
+            )
+            if not swapped:
+                text = _set_scalar(text, "name", raw_name)
         # Sizing an existing baton joins its deliverable; a different id already on the record is never overwritten.
         if deliverable_id:
             current = doc.get("deliverable_id")
@@ -1528,11 +1559,20 @@ def write_back(
             text = _set_scalar(text, "interaction_mode", interaction_mode)
         # First write only: once present, the EM curates it by hand and a
         # re-run must not restore what they cut.
+        if verbatim_turns is not None and "pm_verbatims" in doc:
+            raise MutateAbort(
+                "sizing already carries pm_verbatims; hand-edit the pm_verbatims block "
+                "instead of re-embedding"
+            )
         if "pm_verbatims" not in doc and pm_verbatims:
+            embedded[:] = pm_verbatims
             text = write_fm_nested_field(text, "pm_verbatims", _render_block(pm_verbatims))
         intent_now = doc.get("intent")
         computed_intent = (decision.get("intent") or "").strip()
-        if (
+        if intent_verbatim:
+            text = _set_scalar(text, "intent", json.dumps(decision.get("intent") or "", ensure_ascii=False))
+            text = _set_scalar(text, "intent_source", "pm-verbatim")
+        elif (
             computed_intent
             and isinstance(intent_now, str)
             and intent_now.startswith("PLACEHOLDER")
@@ -1559,7 +1599,15 @@ def write_back(
         raise SizingAssembleError(str(exc.args[0]) if exc.args else "mutation aborted") from exc
     except LockTimeout as exc:
         raise SizingAssembleError(f"timed out waiting for file lock on {target}: {exc}") from exc
-    return {"path": str(target), "status": "written"}
+    turns = [e["turn"] for e in embedded]
+    return {
+        "path": str(target),
+        "status": "written",
+        "pm_verbatims": {
+            "embedded": len(embedded),
+            "turns": [min(turns), max(turns)] if turns else None,
+        },
+    }
 
 
 def build_research_block(
@@ -1702,6 +1750,15 @@ EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
 
+def _parse_turn_range(raw: str) -> Optional[tuple[int, int]]:
+    """`A-B` with ints 0 <= A <= B, else None."""
+    lo, sep, hi = raw.partition("-")
+    if not sep or not lo.isascii() or not hi.isascii() or not lo.isdigit() or not hi.isdigit():
+        return None
+    a, b = int(lo), int(hi)
+    return (a, b) if a <= b else None
+
+
 def _usage(prog: str, stream=None) -> int:
     stream = __import__("sys").stderr if stream is None else stream
     print(
@@ -1714,7 +1771,7 @@ def _usage(prog: str, stream=None) -> int:
         "[--boundary-in-notch yes|no] "
         "[--scout-evidence-kind mention-count|change-set|site-count] "
         "[--scout-evidence <str> ...] "
-        "[--intent <str>] [--intent-source pm-verbatim|em-elaborated] "
+        "[--intent <str> | --intent-turn N] [--intent-source pm-verbatim|em-elaborated] "
         "[--name <short label>] "
         "[--precedent shipped-before|novel] "
         "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
@@ -1727,7 +1784,7 @@ def _usage(prog: str, stream=None) -> int:
         "[--research-target <source>=<ref> ...] "
         "[--research-question <text> ...] "
         "[--research-destination repo|local-only] "
-        "[--write <state/sizings/x.yaml>] "
+        "[--write <state/sizings/x.yaml> [--verbatim-turns A-B]] "
         "| --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block) "
         "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
         "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml> "
@@ -1825,6 +1882,8 @@ def main(argv: list[str]) -> int:
     research_targets: list[str] = []
     research_questions: list[str] = []
     research_destination = None
+    verbatim_turns_raw = None
+    intent_turn_raw = None
 
     i = 0
     while i < len(argv):
@@ -1862,6 +1921,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--write" and i + 1 < len(argv):
             write_path = argv[i + 1]
             i += 2
+        elif tok == "--verbatim-turns" and i + 1 < len(argv):
+            verbatim_turns_raw = argv[i + 1]
+            i += 2
         elif tok == "--amend-research" and i + 1 < len(argv):
             amend_research_path = argv[i + 1]
             i += 2
@@ -1876,6 +1938,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--intent" and i + 1 < len(argv):
             intent = argv[i + 1]
+            i += 2
+        elif tok == "--intent-turn" and i + 1 < len(argv):
+            intent_turn_raw = argv[i + 1]
             i += 2
         elif tok == "--intent-source" and i + 1 < len(argv):
             intent_source = argv[i + 1]
@@ -1942,6 +2007,45 @@ def main(argv: list[str]) -> int:
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
+
+    verbatim_turns = None
+    if verbatim_turns_raw is not None:
+        verbatim_turns = _parse_turn_range(verbatim_turns_raw)
+        if verbatim_turns is None or write_path is None:
+            print(
+                f"{prog}: --verbatim-turns needs A-B (ints, 0 <= A <= B) and --write",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+
+    intent_verbatim = False
+    if intent_turn_raw is not None:
+        if (
+            not intent_turn_raw.isascii()
+            or not intent_turn_raw.isdigit()
+            or intent is not None
+            or intent_source not in (None, "pm-verbatim")
+        ):
+            print(
+                f"{prog}: --intent-turn needs an int N >= 0, and excludes --intent and "
+                "--intent-source em-elaborated",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops.baton_pm_turns import read_turns
+
+        n = int(intent_turn_raw)
+        picked = read_turns(turn=n, cwd=str(_cli_repo_root(write_path)))
+        if not picked["ok"]:
+            print(
+                f"{prog}: --intent-turn {n}: no such recorded turn "
+                f"(log holds {picked['count']}): {picked['reason']}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        intent = picked["turns"][0]["prompt"]
+        intent_source = "pm-verbatim"
+        intent_verbatim = True
 
     if register_path is not None:
         if xl_exit_pick is not None or pm_resolution_key is not None:
@@ -2104,10 +2208,19 @@ def main(argv: list[str]) -> int:
                 scout_evidence=scout_evidence,
                 deliverable_id=deliverable_id,
                 research=research_block,
+                verbatim_turns=verbatim_turns,
+                intent_verbatim=intent_verbatim,
+                name=name,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
+        report = decision["write"]["pm_verbatims"]
+        if report["embedded"]:
+            lo, hi = report["turns"]
+            print(f"embedded {report['embedded']} pm_verbatims (turns {lo}-{hi})", file=sys.stderr)
+        else:
+            print("embedded 0 pm_verbatims", file=sys.stderr)
         _open_routed_obligation(write_path)
 
     print(json.dumps(decision, indent=2, sort_keys=True))

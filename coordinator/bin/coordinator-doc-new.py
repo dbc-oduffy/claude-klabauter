@@ -5773,7 +5773,7 @@ def _scaffold_sizing(
             if premise_evidence
             else "  evidence: PLACEHOLDER — cite the file:line, test, or command output you actually looked at; answered in place, never spun into its own record"
         ),
-        f"deliverable_id: {_yaml_quote(deliverable_id) if deliverable_id else 'null'}  # durable spine join key — re-scaffold with --deliverable-id <id> to join an existing baton's, never hand-edit",
+        f"deliverable_id: {_yaml_quote(deliverable_id) if deliverable_id else 'null'}  # durable spine join key — a --deliverable-id join works on a new record or one whose deliverable_id is empty or equal, never a re-key; never hand-edit it",
     ]
     if exit_criterion:
         lines += [

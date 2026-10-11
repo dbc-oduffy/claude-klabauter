@@ -25,7 +25,7 @@ def _make_repo(root) -> None:
 
 
 def _approve(repo_root) -> None:
-    sentinel = repo_root / _SENTINEL_NAME
+    sentinel = repo_root / ".git" / _SENTINEL_NAME
     sentinel.write_text("", encoding="utf-8")
 
 

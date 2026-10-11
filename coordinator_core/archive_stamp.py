@@ -2383,6 +2383,10 @@ cs_consume_handoff = cs_claim_handoff
 # memo.transition verb wrappers — unit3
 # ---------------------------------------------------------------------------
 
+def _refusal_text(result: dict) -> str:
+    return result.get("cli_error") or result.get("error", "unknown error")
+
+
 def _call_memo_transition(memo_path: str, params: dict) -> dict:
     from coordinator_core.ops.memo_transition import _handler as _memo_handler
 
@@ -2687,7 +2691,7 @@ def cs_action_memo(memo_path: str, *disposition_args: str, return_result: bool =
     _print_surface_advisory_line("cs_action_memo", result, memo_git_root)
     rc = int(result.get("exit_code", 1))
     if rc != 0:
-        print(f"cs_action_memo: {result.get('error', 'unknown error')}", file=sys.stderr)
+        print(f"cs_action_memo: {_refusal_text(result)}", file=sys.stderr)
         return result if return_result else rc
 
     # C4 write-moment: best-effort, non-fatal actioned_memos record.
@@ -2747,7 +2751,7 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
     _print_surface_advisory_line("cs_resolve_memo", result, worktree)
     rc = int(result.get("exit_code", 1))
     if rc != 0:
-        print(f"cs_resolve_memo: {result.get('error', 'unknown error')}", file=sys.stderr)
+        print(f"cs_resolve_memo: {_refusal_text(result)}", file=sys.stderr)
     return result if return_result else rc
 
 
@@ -2782,7 +2786,7 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
         )
         _print_surface_advisory_line("cs_resolve_memos", result, worktree)
         if int(result.get("exit_code", 1)) != 0:
-            print(f"cs_resolve_memos: {memo_path}: {result.get('error', 'unknown error')}", file=sys.stderr)
+            print(f"cs_resolve_memos: {memo_path}: {_refusal_text(result)}", file=sys.stderr)
             failed += 1
             continue
         if result.get("applied"):

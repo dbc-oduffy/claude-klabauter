@@ -26,7 +26,10 @@ INVARIANTS:
     torn by a crash is newline-terminated before the next append, keeps its
     index, and is skipped on read.
   - Prompts are stored verbatim: not stripped, not capped, not deduplicated
-    ("yes" twice is two turns).
+    ("yes" twice is two turns). The one exception is a prompt opening with a
+    ``_HARNESS_NOTICE_PREFIXES`` entry: refused whole, consuming no index.
+  - ``referent`` is optional and written once, on the turn's own line; a
+    malformed one is dropped, never costing the prompt.
 
 NEGATIVE SPEC:
   - Does NOT create the session directory (same rule as ``store.merge_baton``:
@@ -48,6 +51,42 @@ from coordinator_core.session_baton import store
 
 PM_TURNS_FILENAME = "pm_turns.jsonl"
 
+#: Characters of the answered EM message's tail a turn's referent keeps.
+REFERENT_EXCERPT_CHARS = 2000
+_REFERENT_KEYS = ("excerpt", "transcript_uuid")
+
+
+def _clean_referent(raw: Any) -> "tuple[Optional[dict], Optional[str]]":
+    """``(referent, None)`` when valid, else ``(None, reason)``. Keys are a
+    non-empty subset of excerpt/transcript_uuid, each a non-empty str; an
+    over-long excerpt keeps its tail and sets ``excerpt_truncated``."""
+    if not isinstance(raw, dict):
+        return None, "referent must be an object"
+    unknown = sorted(str(k) for k in raw if k not in _REFERENT_KEYS)
+    if unknown:
+        return None, f"referent has unknown keys: {', '.join(unknown)}"
+    if not raw:
+        return None, "referent needs excerpt or transcript_uuid"
+    for key, value in raw.items():
+        if not isinstance(value, str) or not value:
+            return None, f"referent.{key} must be a non-empty string"
+    cleaned = dict(raw)
+    excerpt = cleaned.get("excerpt")
+    if excerpt is not None and len(excerpt) > REFERENT_EXCERPT_CHARS:
+        cleaned["excerpt"] = excerpt[-REFERENT_EXCERPT_CHARS:]
+        cleaned["excerpt_truncated"] = True
+    return cleaned, None
+
+
+#: Closed list of harness-injected notice openers; a prompt starting with one
+#: is not a human turn and is never recorded.
+_HARNESS_NOTICE_PREFIXES = (
+    "[Cross-session idle notice]",
+    "[Cross-session delivery notice]",
+    "<task-notification>",
+    "[SYSTEM NOTIFICATION - NOT USER INPUT]",
+)
+
 #: Same bound as the baton store's own lock: this runs on every prompt.
 _LOCK_TIMEOUT_SECS = 2.0
 
@@ -58,12 +97,19 @@ def log_path(sid: str, cwd: Optional[str] = None) -> Optional[Path]:
 
 
 def append_turn(prompt: str, session_id: Optional[str] = None,
-                cwd: Optional[str] = None) -> dict:
+                cwd: Optional[str] = None,
+                referent: Optional[dict] = None) -> dict:
     empty = {"ok": False, "turn": None, "log_path": None,
              "session_id": session_id, "reason": None}
 
     if not isinstance(prompt, str) or not prompt.strip():
         return dict(empty, reason="prompt must be a non-empty string")
+
+    if prompt.lstrip().startswith(_HARNESS_NOTICE_PREFIXES):
+        return dict(empty, reason="harness notice; not recorded")
+
+    cleaned, referent_reason = (None, None) if referent is None \
+        else _clean_referent(referent)
 
     sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
     if not sid:
@@ -82,16 +128,23 @@ def append_turn(prompt: str, session_id: Optional[str] = None,
             # Terminate a crash-torn last line so it keeps its own index.
             prefix = "\n" if existing and not existing.endswith(b"\n") else ""
             turn = existing.count(b"\n") + (1 if prefix else 0)
-            line = json.dumps({"turn": turn, "ts": core.now_iso(), "prompt": prompt},
-                              ensure_ascii=False)
+            record = {"turn": turn, "ts": core.now_iso(), "prompt": prompt}
+            if cleaned is not None:
+                record["referent"] = cleaned
+            line = json.dumps(record, ensure_ascii=False)
             with open(path, "ab") as fh:
                 fh.write(f"{prefix}{line}\n".encode("utf-8"))
     except (LockTimeout, OSError, RuntimeError) as exc:
         return dict(empty, session_id=sid, log_path=str(path),
                     reason=f"append failed: {exc}")
 
-    return {"ok": True, "turn": turn, "log_path": str(path),
-            "session_id": sid, "reason": None}
+    result = {"ok": True, "turn": turn, "log_path": str(path),
+              "session_id": sid, "reason": None}
+    if referent is not None:
+        result["referent_recorded"] = cleaned is not None
+        if referent_reason:
+            result["reason"] = referent_reason
+    return result
 
 
 def _load(path: Path) -> List[Dict[str, Any]]:
@@ -202,12 +255,16 @@ def _pm_turn_append(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC ``baton.pm_turn_append`` handler.
 
     Params: ``prompt`` (str, required, stored verbatim), ``session_id`` (str,
-    optional). Returns ``ok``, ``turn``, ``log_path``, ``session_id``, ``reason``.
+    optional), ``referent`` (object, optional: ``excerpt`` and/or
+    ``transcript_uuid`` of the EM message answered). Returns ``ok``, ``turn``,
+    ``log_path``, ``session_id``, ``reason``; plus ``referent_recorded`` when a
+    referent was passed (a malformed one still appends the prompt).
     """
     return append_turn(
         params.get("prompt", ""),
         session_id=params.get("session_id"),
         cwd=str(repo_root) if repo_root else None,
+        referent=params.get("referent"),
     )
 
 

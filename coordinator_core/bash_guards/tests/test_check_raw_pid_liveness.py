@@ -148,3 +148,44 @@ class TestPowerShellDialectRecordsSilent:
             result = guard.check(payload)
         assert result is None
         assert _verdict.was_silent("check_raw_pid_liveness", silences)
+
+
+_REPRO = (
+    'coordinator sizing-assemble --slug s --intent "the guard denied this\n'
+    "text: ps -p 123; kill -0 $X | y\n"
+    'and more prose" --out o'
+)
+
+
+class TestQuotedArgumentMask:
+    def test_idiom_inside_non_executed_quoted_arg_is_allowed(self):
+        assert guard.check(_payload(_REPRO)) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ps -p 123",
+            "kill -0 $PID",
+            'ps -p "$PID"',
+            'bash -c "kill -0 $PID"',
+            'timeout 5 sh -c "ps -p 9"',
+            'echo "$(kill -0 $pid)"',
+            'ssh h "kill -0 $p"',
+            'FOO=1 bash -c "ps -p 3"',
+            'echo "unbalanced ps -p 123',
+        ],
+    )
+    def test_executed_or_bare_idiom_still_denies(self, command):
+        assert "session-liveness-cli session-live SID" in _reason(
+            guard.check(_payload(command))
+        )
+
+    def test_mask_is_length_preserving(self):
+        assert len(guard._mask_quoted_arguments(_REPRO)) == len(_REPRO)
+
+
+class TestEnvelopeOffers:
+    def test_keeps_the_two_session_offers(self):
+        reason = _reason(guard.check(_payload("kill -0 $PID")))
+        assert "`session-liveness-cli session-live SID`" in reason
+        assert "`session-liveness-cli claim-holder-live CLAIM_DIR`" in reason

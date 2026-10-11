@@ -417,6 +417,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.block_dispatch_suite_invocation": OpClass.MUTATING,
     "hooks.strip_worktree_isolation": OpClass.MUTATING,
     "hooks.block_worktree_tool": OpClass.MUTATING,
+    "hooks.block_group_em_agent_cap_grant": OpClass.MUTATING,
     "hooks.sessionstart_dispatch": OpClass.MUTATING,
     "hooks.sessionstart_async_dispatch": OpClass.MUTATING,
     "hooks.assert_em_role": OpClass.MUTATING,

@@ -83,12 +83,12 @@ def test_forged_sentinel_write_is_refused_with_no_config(author_box, monkeypatch
 def test_genuine_pm_sentinel_still_passes(author_box, monkeypatch, tmp_path):
     _set_gate(monkeypatch, None)
     repo = tmp_path / "repo"
-    repo.mkdir()
+    (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(guard_doctrine_surface_edits, "_git_root", lambda: str(repo))
     monkeypatch.setattr(guard_doctrine_surface_edits, "read_content_root", lambda: "")
     payload = {"tool_name": "Edit", "tool_input": {"file_path": str(repo / "CLAUDE.md")}}
     assert _is_deny(guard_doctrine_surface_edits.check(payload))
-    (repo / SENTINEL).write_text("", encoding="utf-8")  # the PM's out-of-band act
+    (repo / ".git" / SENTINEL).write_text("", encoding="utf-8")  # the PM's out-of-band act
     assert guard_doctrine_surface_edits.check(payload) is None
 
 

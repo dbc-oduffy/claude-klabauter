@@ -130,6 +130,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.block_dispatch_suite_invocation":  "coordinator_core.hooks",
     "hooks.strip_worktree_isolation":         "coordinator_core.hooks",
     "hooks.block_worktree_tool":              "coordinator_core.hooks",
+    "hooks.block_group_em_agent_cap_grant":   "coordinator_core.hooks",
     "hooks.sessionstart_dispatch":            "coordinator_core.hooks",
     "hooks.sessionstart_async_dispatch":      "coordinator_core.hooks",
     "hooks.assert_em_role":                   "coordinator_core.hooks",

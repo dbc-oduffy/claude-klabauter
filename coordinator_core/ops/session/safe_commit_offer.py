@@ -308,6 +308,7 @@ from typing import (
 
 from functools import partial
 
+from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 from coordinator_core.git.commit import (
     CommitRefused,
     FilterUnsupported,
@@ -1177,7 +1178,9 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
         else:
             safe_paths.append(path)
 
-    safe_paths.sort()
+    # A path under `.git/` (a session's own scratch, e.g. review-targets.txt) can land in the
+    # touch-list but never in a tree: commit_paths refuses it and a remote's fsck rejects the push.
+    safe_paths = sorted(p for p in safe_paths if canonical_repo_relative_path_refusal(p) is None)
 
     offer: SafeCommitOffer = {
         "session_id": session_id,

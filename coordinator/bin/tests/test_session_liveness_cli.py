@@ -252,3 +252,74 @@ def test_no_output_case_is_gone_every_arm_prints(stub_import_module, capsys):
         stub_import_module(_StubLiveness(session_live=_live, session_verdict=_verdict))
         _cli.main(["session-live", "some-sid"])
         assert capsys.readouterr().out.strip() != ""
+
+
+# --- pid-present ---------------------------------------------------------
+
+import os
+import subprocess
+import sys
+
+import psutil
+
+
+@pytest.fixture()
+def real_core(monkeypatch):
+    import coordinator_core.session.core as core
+
+    monkeypatch.setattr(_cli, "_import_core", lambda: core)
+    return core
+
+
+def test_pid_present_self_exits_0(real_core):
+    assert _cli.main(["pid-present", str(os.getpid())]) == 0
+
+
+def test_pid_present_reaped_child_exits_1(real_core):
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    if psutil.pid_exists(child.pid):
+        pytest.skip("PID reused")
+    assert _cli.main(["pid-present", str(child.pid)]) == 1
+
+
+def test_pid_present_cmd_match_mismatch_exits_1_and_match_exits_0(real_core):
+    pid = str(os.getpid())
+    assert _cli.main(["pid-present", pid, "--cmd-match", "^definitely-not-this-zzq$"]) == 1
+    assert _cli.main(["pid-present", pid, "--cmd-match", "."]) == 0
+
+
+def test_pid_present_usage_errors_exit_2(real_core):
+    assert _cli.main(["pid-present", "abc"]) == 2
+    assert _cli.main(["pid-present", "0"]) == 2
+    assert _cli.main(["pid-present", "-5"]) == 2
+    assert _cli.main(["pid-present"]) == 2
+    assert _cli.main(["pid-present", str(os.getpid()), "--cmd-match"]) == 2
+
+
+def test_pid_present_bad_regex_exits_2(real_core):
+    assert _cli.main(["pid-present", str(os.getpid()), "--cmd-match", "("]) == 2
+
+
+def test_pid_present_does_not_shell_out(real_core, monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("shell-out")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(os, "system", _boom)
+    assert _cli.main(["pid-present", str(os.getpid())]) == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="resource module is POSIX-only")
+def test_pid_present_process_time_under_500ms():
+    import resource
+
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    proc = subprocess.run(
+        [sys.executable, str(_BIN_DIR / "session-liveness-cli.py"), "pid-present", str(os.getpid())],
+        capture_output=True,
+    )
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    assert proc.returncode == 0, proc.stderr
+    cpu = (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+    assert cpu < 0.5

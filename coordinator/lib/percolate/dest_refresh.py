@@ -267,6 +267,29 @@ def _subsumed_by_source(
     return stamps
 
 
+def _stamps_missing_from_source(
+    repo_root: Path, upstream: str, source_root: Optional[Path]
+) -> List[str]:
+    """Upstream-only `[source-head]` stamps `source_root`'s HEAD does not contain.
+
+    TRAP: a fast-forward over a peer's publish is not safe on its own. The round
+    then writes this source's whole surface over the peer's bytes, so a source
+    that lacks the peer's commits reverts them under a clean fast-forward.
+    """
+    if source_root is None:
+        return []
+    log = _git(repo_root, ["log", "--format=%s", "HEAD.." + upstream])
+    if log.returncode != 0:
+        return []
+    missing: List[str] = []
+    for match in _SOURCE_HEAD_STAMP.finditer(log.stdout):
+        stamp = match.group(1)
+        probe = _git(Path(source_root), ["merge-base", "--is-ancestor", stamp, "HEAD"])
+        if probe.returncode != 0 and stamp not in missing:
+            missing.append(stamp)
+    return missing
+
+
 def refresh_dest_from_origin(
     repo_root: Path, *, out: TextIO, err: TextIO, source_root: Optional[Path] = None
 ) -> RefreshResult:
@@ -352,6 +375,24 @@ def refresh_dest_from_origin(
                 "side.\n"
                 "  Fix: git -C {0} merge {2}   (or rebase, then re-run)".format(
                     repo_root, branch, upstream, ahead, behind
+                )
+            ),
+            branch=branch,
+            upstream=upstream,
+            ahead=ahead,
+            behind=behind,
+        )
+
+    missing = _stamps_missing_from_source(repo_root, upstream, source_root) if behind else []
+    if missing:
+        return RefreshResult(
+            repo_root,
+            ok=False,
+            reason=(
+                "{0} carries a peer publish of source {1} that {2} HEAD does not contain; "
+                "publishing now reverts it.\n"
+                "  Fix: fetch and merge the branch holding {1} into {2}, then re-run".format(
+                    upstream, ", ".join(missing), source_root
                 )
             ),
             branch=branch,

@@ -3249,6 +3249,18 @@ def _cmd_discard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_citation_warning(acted_item: dict) -> None:
+    """Warn for bare paths found in neither repo; `citations_ambiguous`
+    (both repos) is a recorded field, never printed."""
+    unresolved = acted_item.get("citations_unresolved")
+    if unresolved:
+        print(
+            "cross-repo-memo send: bare paths left unqualified (in neither "
+            "repo): " + ", ".join(unresolved) + " — qualify as "
+            "<repo>:<path> and re-send."
+        )
+
+
 def _cmd_send(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo send <topic>
 
@@ -3355,13 +3367,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
     sent_receipt = acted_item.get("sent_receipt")
     if sent_receipt:
         print(f"Sender-side receipt: {sent_receipt}")
-    unresolved = acted_item.get("citations_unresolved")
-    if unresolved:
-        print(
-            "cross-repo-memo send: bare paths left unqualified (ambiguous or "
-            "in neither repo): " + ", ".join(unresolved) + " — qualify as "
-            "<repo>:<path> and re-send."
-        )
+    _print_citation_warning(acted_item)
     if acted_item.get("sender_unattributed"):
         # Not a failure: the memo IS delivered. But it carries no sender, so
         # the receiver cannot reply to it by message and the only route back

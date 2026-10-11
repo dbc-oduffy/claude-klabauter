@@ -423,6 +423,11 @@ def record_delivery_verdict(
         fm["criterion"] = {"status": status, "observation": criterion.get("observation"), "sidecar": None}
     if tests is not None:
         status = tests.get("status")
+        # The re-verify workflow emits `pass-with-skips`; every reader takes the record's status as
+        # the terminal verdict, so it lands as `pass` and the skip as its own field.
+        skipped = status == "pass-with-skips"
+        if skipped:
+            status = "pass"
         if status not in _TESTS_STATUSES:
             raise ReverifyRefused(f"reverify-delivery: tests status {status!r} is not one of {_TESTS_STATUSES}")
         fm["tests"] = {
@@ -431,6 +436,8 @@ def record_delivery_verdict(
             "failed": tests.get("failed"),
             "sidecar": tests.get("sidecar"),
         }
+        if skipped:
+            fm["tests"]["skipped"] = True
     if foreign_claims is not None:
         fm["foreign_claims"] = list(foreign_claims)
     target = repo_root / rel
@@ -452,7 +459,7 @@ def settle_tests_sidecar(
     (`test_verdict`, `target_plan`, `agent_type`). When the writer refuses (already verdicted,
     contradictory counts, foreign owner), fall back to `bind_sidecar`: binding alone, `status`
     untouched. Returns whether the sidecar was rewritten."""
-    if not tests or tests.get("status") not in _TESTS_STATUSES or not tests.get("sidecar"):
+    if not tests or tests.get("status") not in (*_TESTS_STATUSES, "pass-with-skips") or not tests.get("sidecar"):
         return False
     result = {
         "status": tests["status"],

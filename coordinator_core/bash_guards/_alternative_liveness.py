@@ -1587,11 +1587,15 @@ class Verdict:
 
 _PLACEHOLDER_RE = re.compile(r"<[^<>]+>")
 _BAREWORD_PLACEHOLDER_RE = re.compile(r"\b(MSG|PATTERN|SID|CLAIM_DIR)\b")
+#: A numeric-argument placeholder gets a numeric dummy: a non-integer PID is a
+#: usage error (exit 2, UNVERIFIABLE), while any real integer exits 0 or 1.
+_NUMERIC_PLACEHOLDER_RE = re.compile(r"\bPID\b")
 
 
 def _dummy_substitute(token: str) -> str:
     token = _PLACEHOLDER_RE.sub("altlive-placeholder", token)
     token = _BAREWORD_PLACEHOLDER_RE.sub("altlive-placeholder", token)
+    token = _NUMERIC_PLACEHOLDER_RE.sub("1", token)
     return token
 
 

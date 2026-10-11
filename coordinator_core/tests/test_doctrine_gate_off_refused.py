@@ -43,7 +43,7 @@ def _deny(result):
 
 
 def _approve(repo):
-    (repo / SENTINEL).write_text("", encoding="utf-8")
+    (repo / ".git" / SENTINEL).write_text("", encoding="utf-8")
 
 
 OFF_COMMANDS = [
@@ -75,8 +75,9 @@ def test_set_off_allowed_with_fresh_sentinel(box, cmd):
 
 def test_expired_sentinel_does_not_permit(box):
     _approve(box[1])
-    old = os.path.getmtime(box[1] / SENTINEL) - 31 * 60
-    os.utime(box[1] / SENTINEL, (old, old))
+    approval = box[1] / ".git" / SENTINEL
+    old = os.path.getmtime(approval) - 31 * 60
+    os.utime(approval, (old, old))
     assert _deny(bash_guard.check(_bash(f"machine-local set {KEY} off", box[1])))
 
 

@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.bash_guards._heavy_admission_contract import (
@@ -130,27 +130,52 @@ def holders(directory: Optional[Path] = None) -> List[str]:
 def attribute(
     session_pid: int,
     session_ctime: int,
-    holder_pid: int,
-    holder_ctime: int,
+    trees: Sequence,
     directory: Optional[Path] = None,
 ) -> int:
-    """Narrow the session's unattributed leases to the heavy descendant the census found; return the count narrowed."""
+    """Narrow each of the session's unattributed leases to the command tree it launched; return
+    the count narrowed.
+
+    A lease takes only a tree whose command (its lead image) is of its class, created at or after its launch mark,
+    and not already held; the soonest such tree, or the newest when the lease has no mark. Leases
+    claim in launch order, one tree each.
+
+    TRAP: binding a lease to whatever heavy process is newest pinned a typecheck lease on an
+    unrelated long-running python script, and the one-typecheck rule then named that script.
+    """
+    entries = _entries(directory or leases_dir())
+    held = {(r.holder_pid, r.holder_ctime) for _, r in entries if r is not None and not _is_unattributed(r)}
+    open_ = sorted(
+        (
+            (path, r) for path, r in entries
+            if r is not None and _is_unattributed(r)
+            and (r.session_pid, r.session_ctime) == (session_pid, session_ctime)
+        ),
+        key=lambda pr: pr[1].launch_ctime,
+    )
     narrowed = 0
-    for path, rec in _entries(directory or leases_dir()):
-        if rec is None or not _is_unattributed(rec):
+    for path, rec in open_:
+        family = CLASS_IMAGES.get(rec.heavy_class, frozenset())
+        fits = [
+            t for t in trees
+            if (t.root.pid, t.root.ctime) not in held
+            and t.root.ctime >= rec.launch_ctime
+            and t.lead in family
+        ]
+        if not fits:
             continue
-        if (rec.session_pid, rec.session_ctime) != (session_pid, session_ctime):
-            continue
-        new = LeaseRecord(
-            holder_pid=holder_pid,
-            holder_ctime=holder_ctime,
+        pick = min if rec.launch_ctime > 0 else max
+        tree = pick(fits, key=lambda t: t.root.ctime)
+        held.add((tree.root.pid, tree.root.ctime))
+        _write_atomic(path, LeaseRecord(
+            holder_pid=tree.root.pid,
+            holder_ctime=tree.root.ctime,
             session_pid=rec.session_pid,
             session_ctime=rec.session_ctime,
             heavy_class=rec.heavy_class,
             admitted_at=rec.admitted_at,
             launch_ctime=rec.launch_ctime,
-        )
-        _write_atomic(path, new)
+        ))
         narrowed += 1
     return narrowed
 
@@ -176,7 +201,8 @@ def claim_orphans(
     now: Optional[Callable[[], float]] = None,
 ) -> int:
     """Attribute each open lease to the orphan tree created soonest after its launch mark, within
-    window ctime units, holding an image of its class, and not already held; return the count.
+    window ctime units, whose command (its earliest heavy process) is an image of its class,
+    and not already held; return the count.
 
     Leases claim in launch order, one tree each, box-wide: an orphan has no session, so the
     launch mark is the only link. TRAP: two leases launched inside the same instant can swap
@@ -200,7 +226,7 @@ def claim_orphans(
             t for t in trees
             if (t.root.pid, t.root.ctime) not in held
             and rec.launch_ctime <= t.root.ctime <= rec.launch_ctime + window
-            and family & t.stems
+            and t.lead in family
         ]
         if not fits:
             continue

@@ -3601,6 +3601,7 @@ from coordinator_core.win_portability import no_console_creationflags, no_consol
 from coordinator_core.hooks import allow_emitted_workflow_fire as _hook_allow_emitted_workflow_fire
 from coordinator_core.hooks import assert_em_role as _hook_assert_em_role
 from coordinator_core.hooks import block_dispatch_suite_invocation as _hook_block_dispatch_suite_invocation
+from coordinator_core.hooks import block_group_em_agent_cap_grant as _hook_block_group_em_agent_cap_grant
 from coordinator_core.hooks import block_ungranted_opus_subagent as _hook_block_ungranted_opus_subagent
 from coordinator_core.hooks import block_workflow_foreign_emission as _hook_block_workflow_foreign_emission
 from coordinator_core.hooks import block_workflow_unmodeled_agent as _hook_block_workflow_unmodeled_agent
@@ -4287,6 +4288,26 @@ def _fire_block_dispatch_suite_invocation_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
         _run_maybe_async(_hook_block_dispatch_suite_invocation._handler(payload))
     )
+
+
+def _fire_group_em_cap_grant(message: str) -> Optional[Dict[str, Any]]:
+    # Standing is a live nomination record on the box; the corpus pins the sender as the holder.
+    real = _hook_block_group_em_agent_cap_grant._holds_standing
+    _hook_block_group_em_agent_cap_grant._holds_standing = lambda *_a: True
+    try:
+        payload = {"tool_name": "SendMessage", "session_id": "sess-gem", "cwd": str(_neutral_scratch_parent()),
+                   "tool_input": {"message": message}}
+        return _to_envelope_or_none(_run_maybe_async(_hook_block_group_em_agent_cap_grant._handler(payload)))
+    finally:
+        _hook_block_group_em_agent_cap_grant._holds_standing = real
+
+
+def _fire_block_group_em_agent_cap_grant() -> Optional[Dict[str, Any]]:
+    return _fire_group_em_cap_grant("GO: max 3 executors concurrent, own files only")
+
+
+def _fire_block_group_em_agent_cap_grant_control() -> Optional[Dict[str, Any]]:
+    return _fire_group_em_cap_grant("GO: vitest --maxWorkers=2, one tsc")
 
 
 def _fire_block_ungranted_opus_subagent() -> Optional[Dict[str, Any]]:
@@ -5782,6 +5803,13 @@ HOOK_ROWS: List[HookRow] = [
         "control-non-suite",
         False,
         _fire_block_dispatch_suite_invocation_control,
+    ),
+    HookRow("block_group_em_agent_cap_grant", "fire-agent-width-cap", True, _fire_block_group_em_agent_cap_grant),
+    HookRow(
+        "block_group_em_agent_cap_grant",
+        "control-command-class-cap",
+        False,
+        _fire_block_group_em_agent_cap_grant_control,
     ),
     HookRow("block_ungranted_opus_subagent", "fire-ungranted-opus", True, _fire_block_ungranted_opus_subagent),
     HookRow(

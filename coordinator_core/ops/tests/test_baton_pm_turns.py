@@ -110,3 +110,62 @@ def test_torn_multibyte_tail_is_skipped_not_raised(tmp_path, monkeypatch):
         fh.write(b'{"turn": 1, "ts": "x", "prompt": "caf\xc3')
     assert [e["turn"] for e in PT.recent_window(session_id="sid-mb")] == [0]
     assert PT.append_turn("two", session_id="sid-mb")["turn"] == 2
+
+
+def test_referent_round_trips(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-rf")
+    ref = {"excerpt": " which one?\n", "transcript_uuid": "u-1"}
+    out = PT.append_turn("the second", session_id="sid-rf", referent=ref)
+    assert out["ok"] is True and out["referent_recorded"] is True
+    got = PT.read_turns(session_id="sid-rf", turn=out["turn"])["turns"][0]
+    assert got["referent"] == ref
+
+
+def test_referent_excerpt_keeps_tail_and_flags_truncation(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-rt")
+    excerpt = "a" * 500 + "b" * 2000
+    out = PT.append_turn("p", session_id="sid-rt", referent={"excerpt": excerpt})
+    got = PT.read_turns(session_id="sid-rt", turn=out["turn"])["turns"][0]["referent"]
+    assert got["excerpt"] == "b" * 2000 and got["excerpt_truncated"] is True
+
+
+def test_malformed_referent_still_appends_prompt(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-bad")
+    bad = ["str", {"other": "x"}, {"excerpt": ""}, {"excerpt": 3}, {},
+           {"excerpt": "ok", "extra": "x"}]
+    for n, ref in enumerate(bad):
+        out = PT.append_turn(f"p{n}", session_id="sid-bad", referent=ref)
+        assert out["ok"] is True and out["turn"] == n
+        assert out["referent_recorded"] is False and out["reason"]
+    turns = PT.read_turns(session_id="sid-bad", all_turns=True)["turns"]
+    assert len(turns) == len(bad)
+    assert all("referent" not in t for t in turns)
+
+
+def test_absent_referent_shape_is_unchanged(tmp_path, monkeypatch):
+    sdir = _session(tmp_path, monkeypatch, "sid-ab")
+    out = PT.append_turn("hello", session_id="sid-ab", referent=None)
+    assert set(out) == {"ok", "turn", "log_path", "session_id", "reason"}
+    line = json.loads((sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()[0])
+    assert set(line) == {"turn", "ts", "prompt"}
+
+
+def test_harness_notices_are_refused_without_consuming_an_index(tmp_path, monkeypatch):
+    sdir = _session(tmp_path, monkeypatch, "sid-notice")
+    for i, seed in enumerate(PT._HARNESS_NOTICE_PREFIXES):
+        assert PT.append_turn("real", session_id="sid-notice")["turn"] == i
+        refused = PT.append_turn("  " + seed + " body", session_id="sid-notice")
+        assert refused == {"ok": False, "turn": None, "log_path": None,
+                           "session_id": "sid-notice",
+                           "reason": "harness notice; not recorded"}
+    lines = (sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()
+    assert len(lines) == len(PT._HARNESS_NOTICE_PREFIXES)
+    assert PT.append_turn("next", session_id="sid-notice")["turn"] == len(lines)
+
+
+def test_prompt_containing_a_notice_prefix_mid_text_is_recorded(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-mid")
+    text = "see <task-notification> and [Cross-session idle notice] here"
+    assert PT.append_turn(text, session_id="sid-mid")["turn"] == 0
+    assert PT.read_turns(session_id="sid-mid")["text"] == text
+    assert PT.read_turns(session_id="sid-mid")["count"] == 1

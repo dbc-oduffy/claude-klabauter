@@ -166,7 +166,7 @@ def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
     script = compose_script(waves, name="wf", description="b", **REVIEW_KW)
     assert "const _blockedChunks = [];" in script
     assert (
-        f"if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n      _incompleteChunks.push(id);"
+        f"if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n        _incompleteChunks.push(id);"
         in script
     )
 
@@ -645,7 +645,7 @@ def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started():
     script = compose_script(waves, name="wf", description="deviation kinds", **REVIEW_KW)
     line = next(l for l in script.splitlines() if l.lstrip().startswith("deviations:"))
     assert "kind: 'not_started'" not in line
-    assert "[...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted])]" in line
+    assert "[...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted, ...Object.keys(_gateOwed)])]" in line
     assert "(_notStarted.includes(id) ? 'not_started' : " in line
     assert "'no_answer'" in line and "'stop_rule'" in line and "'partial'" in line
     assert "(_blockedChunks.includes(id) ? 'blocked' : 'partial')" in line

@@ -81,18 +81,14 @@ def _read_config() -> Mapping[str, Any]:
 _UNRESOLVED_RUN = "unresolved"
 
 
-def _run_in_transcript_path(payload: Mapping[str, Any]) -> Optional[str]:
-    """The workflow run id named in the subagent's own transcript path, or None. Path parse only,
-    no filesystem access, so the log can carry it on every record."""
-    transcript = payload.get("transcript_path")
-    if not payload.get("agent_id") or not isinstance(transcript, str):
+def _logged_run(payload: Mapping[str, Any]) -> Optional[str]:
+    """The workflow run a logged verifier call belongs to, or None. A subagent's payload names its
+    parent session's transcript, so the run is found the way the identity leg finds it, not by
+    parsing the path alone. Only verifier rows are resolved: they are what the flip gate counts,
+    and an unlisted caller never pays for the lookup."""
+    if not payload.get("agent_id") or payload.get("agent_type") not in _VERIFIER_TYPES:
         return None
-    parts = transcript.replace("\\", "/").split("/")
-    if "subagents" not in parts:
-        return None
-    kind, *rest = parts[parts.index("subagents") + 1:] or [None]
-    run, *agent = rest or [None]
-    return run if kind == "workflows" and agent else None
+    return next(iter(_workflow_runs_of(payload)), None)
 
 
 def _workflow_runs_of(payload: Mapping[str, Any]) -> List[str]:
@@ -292,7 +288,7 @@ def _record(
         "session_id": payload.get("session_id"),
         "agent_id": payload.get("agent_id"),
         "agent_type": payload.get("agent_type"),
-        "workflow_run": _run_in_transcript_path(payload),
+        "workflow_run": _logged_run(payload),
         "cwd": payload.get("cwd"),
         "caller_pid": _caller_pid(payload),
         "pid_source": _pid_and_source(payload)[1],
@@ -496,6 +492,7 @@ def _cap_leg(
             None,
             0,
         )
+    _attribute_open(census, rows, anchor)
     running = _second_typecheck(anchor, primitives) if typecheck else []
     if running:
         return (
@@ -564,12 +561,20 @@ def _fold_claimed(census, rows, anchor, chain):
     return replace(census, heavy=tuple(census.heavy) + tuple(extra)) if extra else census
 
 
-def _write_lease(heavy_name: str, anchor, census, primitives, launch_ctime: int = 0) -> None:
+def _attribute_open(census, rows, anchor) -> None:
+    """Bind the session's open leases to the command trees they launched, before any count reads
+    them, so a running typecheck is seen by the one-typecheck rule."""
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+    from coordinator_core.bash_guards import _session_census as census_mod
+
+    if census.heavy:
+        roots = census_mod.heavy_roots(census.heavy, rows, anchor.pid)
+        leases.attribute(anchor.pid, anchor.ctime, census_mod.command_trees(roots, rows))
+
+
+def _write_lease(heavy_name: str, anchor, launch_ctime: int = 0) -> None:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
-    if census is not None and census.heavy:
-        newest = max(census.heavy, key=lambda r: r.ctime)
-        leases.attribute(anchor.pid, anchor.ctime, newest.pid, newest.ctime)
     leases.write_lease(
         LeaseRecord(
             holder_pid=anchor.pid,
@@ -664,5 +669,5 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
     if heavy:
         _flag_runaway_workers(config, payload, command, cls, anchor, census)
     if heavy and anchor is not None:
-        _write_lease(heavy_name, anchor, census, primitives, launch)
+        _write_lease(heavy_name, anchor, launch)
     return None

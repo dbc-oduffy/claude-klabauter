@@ -1285,25 +1285,27 @@ def _citation_owners(
     paths: list, sender_root: Path, receiver_root: Path,
     sender_name: str,
 ) -> tuple:
-    """Classify each bare path: `({path: qualifier}, [unresolved])`. A path
+    """Classify each bare path: `({path: qualifier}, [unresolved], [ambiguous])`. A path
     absent from the sender's tree still belongs to the sender when a
     non-top-level ancestor directory exists there, or when the receiver
     holds it (an absence report is the common cause); the receiver is never
-    credited by existence alone. Held by both trees, or by neither with no
-    sender ancestor -> unresolved (left bare). In-process stats only.
+    credited by existence alone. Held by both trees -> ambiguous, and by
+    neither with no sender ancestor -> unresolved; both stay bare. In-process
+    stats only.
     """
     owners: dict = {}
     unresolved: list = []
+    ambiguous: list = []
     for p in paths:
         in_sender = (sender_root / p).exists()
         in_receiver = (receiver_root / p).exists()
         if in_sender and in_receiver:
-            unresolved.append(p)
+            ambiguous.append(p)
         elif in_sender or in_receiver or _sender_has_ancestor(sender_root, p):
             owners[p] = sender_name
         else:
             unresolved.append(p)
-    return owners, unresolved
+    return owners, unresolved, ambiguous
 
 
 def _sender_has_ancestor(sender_root: Path, rel: str) -> bool:
@@ -2005,6 +2007,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # receiver resolves to the sender's own worktree (D4) — a self-send
     # never crosses a tree boundary.
     citations_unresolved: list = []
+    citations_ambiguous: list = []
     if not dry_run and not self_send:
         sender_name = sender_worktree.name.lower()
         qualifiers = _repo_qualifier_names(all_repos) | {sender_name}
@@ -2019,7 +2022,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             sender_name = str(from_id or sender_worktree.name).strip()
             if sender_name.endswith("-em"):
                 sender_name = sender_name[: -len("-em")]
-            owners, citations_unresolved = _citation_owners(
+            owners, citations_unresolved, citations_ambiguous = _citation_owners(
                 unqualified, sender_worktree, receiver_repo_path,
                 sender_name,
             )
@@ -2492,6 +2495,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     }
     if citations_unresolved:
         acted_item["citations_unresolved"] = citations_unresolved
+    if citations_ambiguous:
+        acted_item["citations_ambiguous"] = citations_ambiguous
     if cc_delivered:
         acted_item["cc_delivered"] = cc_delivered
     if anchor_warning is not None:

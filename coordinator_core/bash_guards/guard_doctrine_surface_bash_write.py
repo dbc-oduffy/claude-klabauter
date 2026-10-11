@@ -407,11 +407,19 @@ def _has_live_command_substitution(text: str) -> bool:
     return bool(quote) and bool(_CMD_SUBST_RE.search(text))
 
 
+_READONLY_SUBST_RE = re.compile(
+    r"\$\(\s*(?:cat|head|tail|wc|date|basename|dirname)\b[^()`$<>|;&\n]*\)"
+)
+
+
 def _has_indirection_marker(text: str, *, quote_aware: bool = True) -> bool:
     """``quote_aware=False`` for a command carrying any heredoc: the segment
     splitter cuts bodies into per-line segments, so an unquoted body's
     expanding ``$(`` can sit inside quotes the segment alone cannot see
     through."""
+    # A substitution that only reads a file executes nothing the segment's own
+    # write markers do not already judge.
+    text = _READONLY_SUBST_RE.sub(" ", text)
     substitution = (
         _has_live_command_substitution(text)
         if quote_aware
@@ -769,7 +777,8 @@ def _has_stdin_program_var_write(cmd: str, identifiers_lower: Tuple[str, ...]) -
                 r"open\s*\(\s*%s\s*,\s*['\"][wax]"
                 r"|%s\s*,\s*['\"][wax]"
                 r"|%s\s*\)\s*\.\s*write"
-                r"|>\s*\$?\{?%s\}?\b" % ((re.escape(name),) * 4)
+                r"|>\s*\$?\{?%s\}?\b"
+                r"|\bPath\s*\(\s*%s\s*\)\s*\.\s*open\s*\(\s*['\"][wax]" % ((re.escape(name),) * 5)
             )
             if deref.search(body):
                 return True
@@ -891,6 +900,44 @@ def _has_stdin_program_argv_write(cmd: str, identifiers_lower: Tuple[str, ...]) 
 _PY_STRING_LITERAL_RE = re.compile(r"('''|\"\"\")[\s\S]*?\1|'[^'\n]*'|\"[^\"\n]*\"")
 
 
+_BODY_OPEN_RE = re.compile(r"\bopen\s*\(\s*(?P<path>(['\"])[^'\"\n]*\2)?\s*(?P<rest>[^)]*)\)")
+_BODY_PATH_SINK_RE = re.compile(
+    r"\bPath\s*\(\s*(['\"])(?P<path>[^'\"\n]*)\1\s*\)\s*\.\s*write_(?:text|bytes)\s*\("
+)
+_BODY_UNRESOLVED_SINK_RE = re.compile(r"\.\s*(?:open|dump|dumps|touch|mkdir)\s*\(|\bos\s*\.\s*(?:open|fdopen)\s*\(")
+_BODY_ANY_WRITE_RE =re.compile(r"\.\s*write(?:_text|_bytes|lines)?\s*\(|\bprint\s*\([^)]*\bfile\s*=")
+
+
+def _body_sinks_are_ungoverned(body: str, identifiers_lower: Tuple[str, ...]) -> bool:
+    """True iff every write construct in a stdin-program body is a literal-path
+    ``open(<lit>, w|a|x)`` or ``Path(<lit>).write_text/_bytes`` naming an
+    ungoverned path, or the body has no write construct at all. Any write
+    whose sink is not a literal (variable path, ``.write`` on an unbound
+    stream, shutil/os move) returns False."""
+    if _PY_MOVE_SINK_RE.search(body) or _BODY_UNRESOLVED_SINK_RE.search(body):
+        return False
+    resolved_writes = 0
+    for match in _BODY_OPEN_RE.finditer(body):
+        rest = match.group("rest")
+        if not _WRITE_MODE_RE.search(rest):
+            continue
+        if match.group("path") is None:
+            return False
+        if _mentions_governed_identifier(match.group("path"), identifiers_lower):
+            return False
+        resolved_writes += 1
+    path_sinks = 0
+    for match in _BODY_PATH_SINK_RE.finditer(body):
+        if _mentions_governed_identifier(match.group("path"), identifiers_lower):
+            return False
+        path_sinks += 1
+    if len(re.findall(r"\.\s*write_(?:text|bytes)\s*\(", body)) > path_sinks:
+        return False
+    if resolved_writes or path_sinks:
+        return True
+    return not _BODY_ANY_WRITE_RE.search(body)
+
+
 def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) -> str:
     """``cmd`` with every string literal in a QUOTED-delimiter stdin-program
     heredoc body that mentions a governed identifier AND carries whitespace
@@ -917,11 +964,16 @@ def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) 
             return "''"
         return text
 
+    def _blank_all(match: "re.Match[str]") -> str:
+        text = match.group(0)
+        return "''" if _mentions_governed_identifier(text, identifiers_lower) else text
+
     quoted = set(_quoted_heredoc_bodies(cmd))
     for body in _stdin_program_heredoc_bodies(cmd):
         if body not in quoted or _has_os_exec_marker(body):
             continue
-        blanked = _PY_STRING_LITERAL_RE.sub(_blank, body)
+        blanker = _blank_all if _body_sinks_are_ungoverned(body, identifiers_lower) else _blank
+        blanked = _PY_STRING_LITERAL_RE.sub(blanker, body)
         if blanked != body:
             cmd = cmd.replace(body, blanked, 1)
     return cmd

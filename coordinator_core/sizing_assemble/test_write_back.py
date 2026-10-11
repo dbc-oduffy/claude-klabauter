@@ -370,3 +370,45 @@ def test_pm_verbatims_round_trip_yaml_hostile_prompts_from_the_real_log(
     rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
     sizing_assemble.write_back(repo, rel, _decision("M"))
     assert [e["text"] for e in _load(path)["pm_verbatims"]] == prompts[::-1]
+
+
+_NEW = "state/sizings/2026-10-11-named.yaml"
+
+
+def test_name_lands_as_a_real_line_on_a_fresh_write(repo: Path) -> None:
+    sizing_assemble.write_back(repo, _NEW, _decision("S"), name="A short label")
+    text = (repo / _NEW).read_text(encoding="utf-8")
+    assert _load(repo / _NEW)["name"] == "A short label"
+    assert "# name:" not in text
+
+
+def test_absent_name_keeps_the_commented_template_line(repo: Path) -> None:
+    sizing_assemble.write_back(repo, _NEW, _decision("S"))
+    text = (repo / _NEW).read_text(encoding="utf-8")
+    assert "# name:" in text
+    assert "name" not in _load(repo / _NEW)
+
+
+def test_name_is_truncated_to_sixty_chars(repo: Path) -> None:
+    sizing_assemble.write_back(repo, _NEW, _decision("S"), name="x" * 80)
+    assert _load(repo / _NEW)["name"] == "x" * 60
+
+
+def test_name_on_an_existing_record_replaces_template_or_inserts_and_keeps_real(repo: Path) -> None:
+    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    path = _sizing(repo, "# name: PLACEHOLDER  # OPTIONAL\n" + _DRAFT)
+    sizing_assemble.write_back(repo, rel, _decision("M"), name="First")
+    assert _load(path)["name"] == "First"
+    assert "# name:" not in path.read_text(encoding="utf-8")
+    sizing_assemble.write_back(repo, rel, _decision("M"), name="Second")
+    assert _load(path)["name"] == "First"
+    path = _sizing(repo)
+    sizing_assemble.write_back(repo, rel, _decision("M"), name="Inserted")
+    assert _load(path)["name"] == "Inserted"
+
+
+def test_fresh_scaffold_carries_the_join_wording_not_the_rescaffold_promise(repo: Path) -> None:
+    sizing_assemble.write_back(repo, _NEW, _decision("S"))
+    text = (repo / _NEW).read_text(encoding="utf-8")
+    assert "re-scaffold with --deliverable-id" not in text
+    assert "a --deliverable-id join works on a new record" in text

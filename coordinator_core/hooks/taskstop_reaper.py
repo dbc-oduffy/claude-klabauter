@@ -14,7 +14,7 @@ from coordinator_core.bash_guards import _host_probe as _hp
 from coordinator_core.bash_guards import _process_kill
 from coordinator_core.bash_guards import _taskstop_launch_store as store
 from coordinator_core.bash_guards._taskstop_attribution import attribute
-from coordinator_core.bash_guards._taskstop_contract import REAPER_OP, ReapOutcome, ReapRow
+from coordinator_core.bash_guards._taskstop_contract import ReapOutcome, ReapRow
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
@@ -82,12 +82,12 @@ def _reap(payload: dict) -> None:
     store.delete_record(task_id)
 
 
-@register_op(REAPER_OP)
+@register_op("hooks.taskstop_reaper")
 def _handler(params: dict, repo_root=None) -> dict:
     """Reap the orphan tree of a TaskStop's background launch; always returns no_advisory()."""
+    payload = payload_of(params)
     try:
         if sys.platform == "win32":
-            payload = payload_of(params)
             if payload.get("tool_name") == "TaskStop":
                 _reap(payload)
     except Exception:

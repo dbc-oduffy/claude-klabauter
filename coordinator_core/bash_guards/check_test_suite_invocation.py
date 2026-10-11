@@ -710,6 +710,16 @@ _NICE_BARE_NUMERIC_RE = re.compile(r"^-\d+$")
 
 _RUN_SUBCOMMAND_WRAPPERS = frozenset({"poetry", "uv", "pdm", "hatch", "rye", "pipenv"})
 
+#: ``<pm> <sub> <bin> ...`` runs ``<bin>`` itself, exactly as ``npx <bin>``
+#: does (``npx`` is in ``_WRAPPER_WORDS``). Left un-peeled, the later ``test``
+#: argument of ``pnpm exec playwright test <spec>`` satisfied the configured
+#: ``pnpm test`` segment by argument containment and was denied as that suite.
+_PM_EXEC_SUBCOMMANDS = {
+    "pnpm": frozenset({"exec", "dlx"}),
+    "yarn": frozenset({"exec", "dlx"}),
+    "npm": frozenset({"exec"}),
+}
+
 #: pytest flags that consume a SEPARATE following token as their value. Needed
 #: so a flag's value is never mistaken for a positional scope argument -- the
 #: exact evasion the ``-m 'not cadence and not pending_fix'`` shape of this
@@ -969,6 +979,13 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
             if i < n and tokens[i] == "--":
                 i += 1
             continue
+        if base in _PM_EXEC_SUBCOMMANDS:
+            if i + 2 < n and tokens[i + 1] in _PM_EXEC_SUBCOMMANDS[base]:
+                i += 2
+                if tokens[i] == "--" and i + 1 < n:
+                    i += 1
+                continue
+            break
         if base in _RUN_SUBCOMMAND_WRAPPERS:
             i += 1
             if i < n and tokens[i] == "run":

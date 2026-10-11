@@ -2884,3 +2884,47 @@ def test_rootdir_dot_alone_is_still_unscoped(repo, free_mutex, monkeypatch):
     command = "python -m pytest --rootdir ."
     assert guard.classify_command(command, cwd=str(repo)) != []
     assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None
+
+
+@pytest.fixture
+def pnpm_fast_cmd(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(
+        guard, "_configured_test_cmds",
+        lambda root: [guard.ConfiguredCmd("fast_test_cmd", "pnpm test", 0)],
+    )
+    return repo
+
+
+@pytest.mark.parametrize("launcher", ["pnpm exec", "pnpm dlx", "yarn exec", "npm exec --", "npm exec"])
+def test_pm_exec_scoped_spec_is_not_the_configured_pnpm_test_suite(pnpm_fast_cmd, launcher):
+    cmd = "%s playwright test e2e/x.spec.ts" % launcher
+    assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
+    assert guard.check(_payload(cmd, pnpm_fast_cmd)) is None
+
+
+def test_pm_exec_classifies_exactly_as_npx_and_bare(pnpm_fast_cmd):
+    for cmd in (
+        "playwright test -c playwright.auth.config.ts",
+        "vitest run",
+        "vitest run src/a.test.ts",
+    ):
+        verdicts = {
+            launcher: guard.check(_payload("%s%s" % (launcher, cmd), pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
+            for launcher in ("", "npx ", "pnpm exec ")
+        }
+        assert len(set(verdicts.values())) == 1, (cmd, verdicts)
+
+
+def test_pm_exec_whole_suite_runner_still_denied(pnpm_fast_cmd):
+    out = guard.check(_payload("pnpm exec vitest run", pnpm_fast_cmd, agent_id=_AGENT_ID))
+    assert out is not None
+
+
+def test_pnpm_test_package_script_keeps_its_verdict(pnpm_fast_cmd):
+    for cmd in ("pnpm test", "pnpm run test -- x.test.ts"):
+        assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
+
+
+def test_pm_exec_without_a_runner_is_not_peeled():
+    assert guard._strip_command_prefix(["pnpm", "exec"]) == ["pnpm", "exec"]
+    assert guard._strip_command_prefix(["pnpm", "test"]) == ["pnpm", "test"]

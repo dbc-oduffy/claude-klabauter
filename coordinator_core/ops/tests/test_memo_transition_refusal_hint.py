@@ -97,7 +97,13 @@ def test_unexpected_status_refusal_names_the_recovery_verbs(tmp_path):
 def test_missing_params_all_named_in_one_error():
     r = asyncio.run(_handler({"verb": "claim"}))
     assert r["exit_code"] == 1
-    for name in ("memo", "session_id", "at"):
+    for name in ("memo", "session_id"):
+        assert name in r["error"]
+    # claim stamps its own `at`; only close requires one.
+    assert "at" not in r["error"].split("(verbs:")[0].split(":", 1)[1]
+    r = asyncio.run(_handler({"verb": "close"}))
+    assert r["exit_code"] == 1
+    for name in ("memo", "at"):
         assert name in r["error"]
     r = asyncio.run(_handler({}))
     assert "verb" in r["error"] and "memo" in r["error"]

@@ -15,6 +15,8 @@ Negative-spec:
     does not model is `undecidable`, because a false `unreachable` fails a run.
   - An untracked referrer is scanned only when the plan declares it or it sits beside a changed file.
   - Click paths are traced on the Next.js app router only; any other stack is `undecidable`.
+  - A middleware/proxy rewrite or redirect is not modelled: with one present, a step the trace
+    cannot resolve is `undecidable`, never `broken`.
 """
 
 from __future__ import annotations
@@ -42,16 +44,17 @@ _TEST_RE = re.compile(
     r"|(^|/)fixtures?/|(^|/)node_modules/)"
 )
 _TS_EXPORT = re.compile(
-    r"^export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)", re.M
+    r"^export\s+(?:async\s+)?(?:function\*?|const|let)\s+([A-Za-z_$][\w$]*)", re.M
 )
-_PY_DEF = re.compile(r"^(?:async\s+)?(?:def|class)\s+([A-Za-z]\w*)", re.M)
+# A class is a type, not an entry point: its consumers reach it through the function that builds it.
+_PY_DEF = re.compile(r"^(?:async\s+)?def\s+([A-Za-z]\w*)", re.M)
 _RS_PUB = re.compile(r"^pub\s+(?:async\s+)?fn\s+(\w+)", re.M)
 _ROUTE_VERBS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _ROUTE_FILE = re.compile(r"(^|/)app/(.*/)?route\.(ts|js)$")
 _PAGE_FILE = re.compile(r"(^|/)app/(.*/)?page\.(tsx|jsx)$")
 _CONVENTION_FILE = re.compile(
     r"(^|/)(app/(.*/)?(layout|loading|error|global-error|not-found|template|default|sitemap|robots"
-    r"|manifest|opengraph-image|icon)\.\w+|(src/)?(middleware|instrumentation)\.\w+)$"
+    r"|manifest|opengraph-image|icon)\.\w+|(src/)?(middleware|proxy|instrumentation)\.\w+)$"
 )
 _BARREL = re.compile(rb"export\s*\*\s*(?:as\s+\w+\s+)?from\s*['\"]([^'\"]+)['\"]")
 _MANIFESTS = (
@@ -64,6 +67,10 @@ _WORD = re.compile(rb"[\w$]")
 _LINK_RE = re.compile(r"""<Link[^>]*?href=\{?['"`]([^'"`]+)['"`]\}?[^>]*>([^<]*)<""")
 _PUSH_RE = re.compile(r"""(?:router\.push|redirect)\(\s*['"`]([^'"`]+)['"`]""")
 _IMPORT_RE = re.compile(r"""from\s+['"](\.{1,2}/[^'"]+)['"]""")
+# A request-interception rewrite or redirect can serve any page at any URL, so a step the nav trace
+# cannot resolve is undecidable once one exists. Next.js 16 renamed `middleware` to `proxy`.
+_INTERCEPT_FILES = tuple(f"{d}{n}.{e}" for d in ("", "src/") for n in ("middleware", "proxy") for e in ("ts", "js"))
+_INTERCEPT_RE = re.compile(r"NextResponse\.(?:rewrite|redirect)\(")
 
 
 def _read(root: Path, rel: str) -> str:
@@ -269,6 +276,8 @@ def _trace_click_path(root: Path, role: str, steps: list[str]) -> dict:
             if found:
                 break
         if not found:
+            if any(_INTERCEPT_RE.search(_read(root, f)) for f in _INTERCEPT_FILES):
+                return {"role": role, "verdict": "undecidable", "broken_at": None}
             where = "nav" if i == 1 else steps[i - 1]
             return {"role": role, "verdict": "broken", "broken_at": f"{where}: no {step} entry"[:300]}
         front = nxt
@@ -345,9 +354,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     added = _diff_added(root, base, params.get("head_sha"), worktree)
     if added is None:
         return _empty(f"git diff failed against base_sha {base}")
+    # An untracked declared write is invisible to `git diff`; a tracked one absent from the diff
+    # added nothing in this range, so its pre-existing symbols are not this run's entry points.
+    tracked = None
     for w in writes:
-        p = root / w
-        if w not in added and p.is_file():
+        if w in added or not (root / w).is_file():
+            continue
+        if tracked is None:
+            tracked = set(read_index(root))
+        if w not in tracked:
             added[w] = _read(root, w).splitlines()
 
     found: list[tuple[str, str, str]] = []

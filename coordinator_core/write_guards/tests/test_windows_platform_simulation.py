@@ -301,6 +301,19 @@ def test_doctrine_guard_denies_windows_shaped_home_claude_md(_windows_os_path, m
     assert ".coordinator-doctrine-edit-approved" not in out["permissionDecisionReason"]
 
 
+# abs-path-ok: Windows drive-letter pointer fixtures are the subject under test
+@pytest.mark.parametrize("pointer", ["C:/real/repo/.git/worktrees/wt", "C:\\real\\repo\\.git"])
+def test_git_dir_keeps_a_drive_letter_pointer_as_is(tmp_path, pointer):
+    (tmp_path / ".git").write_text(f"gitdir: {pointer}\n", encoding="utf-8")
+    assert guard_doctrine_surface_edits._git_dir(str(tmp_path)) == pointer
+
+
+def test_git_dir_joins_a_relative_pointer_to_the_root(tmp_path):
+    (tmp_path / ".git").write_text("gitdir: ../real\n", encoding="utf-8")
+    resolved = guard_doctrine_surface_edits._git_dir(str(tmp_path))
+    assert resolved.endswith("real") and resolved != "../real"
+
+
 def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, monkeypatch):
     windows_home_claude_md = guard_doctrine_surface_edits._norm(
         "C:\\Users\\me\\.claude\\CLAUDE.md"

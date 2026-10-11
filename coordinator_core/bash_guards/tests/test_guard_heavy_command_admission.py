@@ -669,6 +669,28 @@ class TestRunawayWorkerAdvisory:
 
 
 class TestOneTypecheckPerSession:
+    def test_a_running_python_script_is_never_named_as_the_typecheck(self, host, tmp_path, monkeypatch):
+        sourcer = ProcRow(pid=310, ppid=TOOL.pid, ctime=25, name="python3")
+        host.rows = [CLAUDE, TOOL, CALLER, sourcer]
+        alive = {(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime), (sourcer.pid, sourcer.ctime)}
+        monkeypatch.setattr(guard, "_primitives", lambda: _Prims(host.rows, alive_set=alive))
+        assert guard.check(_payload("tsc --noEmit")) is None
+        assert guard.check(_payload("tsc --noEmit")) is None
+        assert guard.check(_payload("tsc --noEmit")) is None
+        holders = {json.loads(p.read_text(encoding="utf-8"))["holder_pid"] for p in _lease_files(tmp_path)}
+        assert sourcer.pid not in holders
+
+    def test_a_running_typecheck_is_seen_before_any_later_admission_binds_it(self, host, tmp_path, monkeypatch):
+        host.rows = [CLAUDE, TOOL, CALLER]
+        alive = {(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime)}
+        monkeypatch.setattr(guard, "_primitives", lambda: _Prims(host.rows, alive_set=alive))
+        assert guard.check(_payload("tsc --noEmit")) is None
+        tsc = ProcRow(pid=300, ppid=TOOL.pid, ctime=CALLER.ctime + 1, name="node.exe")
+        host.rows = [CLAUDE, TOOL, CALLER, tsc]
+        alive.add((tsc.pid, tsc.ctime))
+        text = _reason(guard.check(_payload("tsc --noEmit")))
+        assert "already runs a typecheck" in text and "300" in text
+
     def test_a_second_typecheck_while_one_runs_is_denied(self, host, tmp_path, monkeypatch):
         tsc = ProcRow(pid=300, ppid=TOOL.pid, ctime=30, name="node.exe")
         host.rows = [CLAUDE, TOOL, CALLER, tsc]
@@ -746,6 +768,17 @@ class TestWorkflowSpawnSignal:
         (subagents / "workflows" / "wf_old" / "agent-zz.jsonl").write_text("", encoding="utf-8")
         (subagents / "agent-a1.jsonl").write_text("", encoding="utf-8")
         assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a1"}) == []
+
+    def test_a_verifier_row_logs_its_run_from_the_parent_session_transcript(self, tmp_path):
+        """The harness hands a subagent its parent session's transcript, so a path-only parse
+        logged every verifier row with workflow_run null and no run could clear the flip gate."""
+        transcript, subagents = self._session(tmp_path)
+        run = subagents / "workflows" / "wf_real"
+        run.mkdir(parents=True)
+        (run / "agent-a3.jsonl").write_text("", encoding="utf-8")
+        payload = {"transcript_path": str(transcript), "agent_id": "a3"}
+        assert guard._logged_run(dict(payload, agent_type="coordinator:test-runner")) == "wf_real"
+        assert guard._logged_run(dict(payload, agent_type="coordinator:executor")) is None
 
     def test_a_transcript_in_neither_place_fails_closed(self, tmp_path):
         transcript, _ = self._session(tmp_path)

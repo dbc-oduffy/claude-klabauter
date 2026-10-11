@@ -79,6 +79,7 @@ from typing import Callable, Dict, Mapping, NamedTuple, Optional, Sequence, Tupl
 from coordinator_core import dispatch_abandon
 from coordinator_core.git import index_write
 from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
+from coordinator_core.git.path_canon import first_non_canonical_path_refusal
 from coordinator_core.git import checkin_attrs
 from coordinator_core.git.content_hash import (
     _autocrlf_checkin_normalize,
@@ -1060,6 +1061,9 @@ def commit_paths(
             "empty pathspec -- refused, never defaulted: an empty pathspec "
             "commits the whole index rather than nothing"
         )
+    canonical_refusal = first_non_canonical_path_refusal(path_list)
+    if canonical_refusal is not None:
+        raise CommitRefused(canonical_refusal)
     for p in path_list:
         if (root / p).is_dir():
             raise CommitRefused(

@@ -239,7 +239,8 @@ class TestCitationOwnerDecisionTable:
             sender_repo, receiver_repo, "owner-both", "See docs/b.md here.\n",
         )
         assert "See docs/b.md here." in delivered
-        assert acted["citations_unresolved"] == ["docs/b.md"]
+        assert acted["citations_ambiguous"] == ["docs/b.md"]
+        assert "citations_unresolved" not in acted
 
     def test_neither_left_bare_and_reported(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
@@ -248,6 +249,27 @@ class TestCitationOwnerDecisionTable:
         )
         assert "See docs/n.md here." in delivered
         assert acted["citations_unresolved"] == ["docs/n.md"]
+
+    def test_one_tree_path_in_neither_list(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        _touch(sender_repo, "docs/one.md")
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-one", "See docs/one.md here.\n",
+        )
+        assert "claude-klabauter-engine:docs/one.md" in delivered
+        assert "citations_unresolved" not in acted
+        assert "citations_ambiguous" not in acted
+
+    def test_neither_tree_with_sender_ancestor_is_qualified(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        (sender_repo / "state" / "queue-grind" / "bug").mkdir(parents=True)
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-neither-anc",
+            "See state/queue-grind/bug/runs/z.json here.\n",
+        )
+        assert "claude-klabauter-engine:state/queue-grind/bug/runs/z.json" in delivered
+        assert "citations_unresolved" not in acted
+        assert "citations_ambiguous" not in acted
 
     def test_send_names_sender_receipt_path(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
