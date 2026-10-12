@@ -1,7 +1,6 @@
-"""`_run_churn` never reaches `_invoke_op` without an `excluded_dirs` set.
+"""`_run_churn` never invokes an op: refresh mode reports the producer-not-in-claude-klabauter skip.
 
-A missing set is a discriminated skip (`missing-excludedDirs`) carrying no
-producer claim; a supplied set passes through to the op unchanged.
+The skip holds whatever `since`, `system_dirs` or `excluded_dirs` the config carries.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from pathlib import Path
 import pytest
 
 GATE_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "survey-consume-gate.py"
+SKIP = {"skipped": True, "reason": "producer-not-in-claude-klabauter"}
 
 
 @pytest.fixture
@@ -40,41 +40,29 @@ def _config(**overrides):
 
 def _fail_if_invoked(gate, monkeypatch):
     def _boom(*args, **kwargs):
-        pytest.fail("_invoke_op reached without excluded_dirs")
+        pytest.fail("_invoke_op reached from _run_churn")
 
     monkeypatch.setattr(gate, "_invoke_op", _boom)
 
 
-@pytest.mark.parametrize("missing", [{}, {"excluded_dirs": None}, {"excluded_dirs": []}])
-def test_missing_excluded_dirs_is_a_discriminated_skip(gate, monkeypatch, missing):
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"excluded_dirs": None},
+        {"excluded_dirs": ["state", "cross-repo"]},
+        {"since": None},
+        {"system_dirs": None},
+    ],
+)
+def test_refresh_mode_is_the_producer_skip_and_invokes_no_op(gate, monkeypatch, overrides):
     _fail_if_invoked(gate, monkeypatch)
 
-    out = gate._run_churn(_config(**missing))
-
-    assert out == {"skipped": True, "reason": "missing-excludedDirs"}
+    assert gate._run_churn(_config(**overrides)) == SKIP
 
 
-def test_missing_since_outranks_missing_excluded_dirs(gate, monkeypatch):
+@pytest.mark.parametrize("mode", ["first-run", "targeted", None])
+def test_outside_refresh_returns_none(gate, monkeypatch, mode):
     _fail_if_invoked(gate, monkeypatch)
 
-    out = gate._run_churn(_config(since=None))
-
-    assert out == {"skipped": True, "reason": "missing-since-or-systemDirs"}
-
-
-def test_supplied_excluded_dirs_passes_through_to_the_op(gate, monkeypatch):
-    seen = {}
-    payload = {"emergent": [], "excluded_by_prefilter": [], "deleted_at_head": []}
-
-    def _capture(root, op, params):
-        seen["op"] = op
-        seen["params"] = params
-        return 0, payload, None
-
-    monkeypatch.setattr(gate, "_invoke_op", _capture)
-
-    out = gate._run_churn(_config(excluded_dirs=["state", "cross-repo"]))
-
-    assert out is payload
-    assert seen["op"] == "cartography.churn"
-    assert seen["params"]["excluded_dirs"] == ["state", "cross-repo"]
+    assert gate._run_churn(_config(mode=mode)) is None

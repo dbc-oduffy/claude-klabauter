@@ -44,7 +44,23 @@ def _load_stitch_module():
 
 _stitch = _load_stitch_module()
 
-_SIDECAR_BODY = "## Strategic Review (Sonnet daily observer)\n\nObserver findings here.\n"
+_SIDECAR_BODY = "## Strategic Review\n\nObserver findings here.\n"
+
+
+def test_weekly_pair_stitches_and_scan_maps_sidecar_to_week_summary(tmp_path):
+    week = tmp_path / "WEEK-SUMMARY.md"
+    sidecar = tmp_path / "WEEK-SUMMARY.observer.md"
+    week.write_text("# Week Summary\n\nProse.\n", encoding="utf-8")
+    sidecar.write_text(_SIDECAR_BODY, encoding="utf-8")
+
+    assert _stitch.scan(str(tmp_path)) == 1
+
+    assert _stitch.stitch(str(week), str(sidecar)) == 0
+    assert not sidecar.exists()
+    final = week.read_text(encoding="utf-8")
+    assert _stitch._heading_count(final) == 1
+    assert "Observer findings here." in final
+    assert _stitch.scan(str(tmp_path)) == 0
 
 
 def test_heading_and_placeholder_takes_idempotent_path_and_strips_residue(tmp_path):
@@ -54,7 +70,7 @@ def test_heading_and_placeholder_takes_idempotent_path_and_strips_residue(tmp_pa
     daily.write_text(
         "# Daily Summary\n\n"
         "_Strategic Review section will be appended by the reviewer agent._\n\n"
-        "## Strategic Review (Sonnet daily observer)\n\n"
+        "## Strategic Review\n\n"
         "Observer findings here.\n",
         encoding="utf-8",
     )
@@ -98,7 +114,7 @@ def test_placeholders_own_heading_falls_through_to_append(tmp_path):
     # normal append path, not the idempotent path.
     daily.write_text(
         "# Daily Summary\n\n"
-        "## Strategic Review (Sonnet daily observer)\n\n"
+        "## Strategic Review\n\n"
         "_Strategic Review section will be appended by the reviewer agent._\n",
         encoding="utf-8",
     )

@@ -60,6 +60,7 @@ pytestmark = [
 # relative to coordinator/bin/, invoked as `python3 <file> --help`.
 _SWEPT_HELP_ENTRYPOINTS = (
     "coordinator-subsession.py",
+    "test-verdict.py",
     "plan-status-transition.py",
     "reverify-delivery.py",
     "backlog-grind-assemble.py",
@@ -94,6 +95,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "quick-wrap-assemble.py",
     "roadmap-planning-assemble.py",
     "sprint-planning-assemble.py",
+    "workday-start-run.py",
 )
 
 

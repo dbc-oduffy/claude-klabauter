@@ -270,7 +270,8 @@ def test_queue_prune_sweep_yaml_leg_invokes_wrapper_when_family_present(tmp_path
         _gates_mod.subprocess = orig_subprocess
 
     assert rc == 0
-    invoked = [c for c in calls if str(fake_cli) in c]
+    # The resolver may pick the wrapper's platform launcher (.cmd) over the .py.
+    invoked = [c for c in calls if any(Path(str(a)).stem == fake_cli.stem for a in c[:2])]
     assert invoked, f"prune-closed-bugs.py was never dispatched; calls={calls!r}"
     assert "--repo-root" in invoked[0] and str(tmp_path) in invoked[0]
 

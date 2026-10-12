@@ -76,6 +76,18 @@ def test_gitless_walk_excludes_extension_glob_pattern(tmp_path):
     assert "keep.py" in paths
 
 
+def test_gitless_walk_excludes_globbed_directory_pattern(tmp_path):
+    module = _load_repo_module()
+    root = tmp_path
+    (root / ".gitignore").write_text(".fleet-env.gen-*/\n", encoding="utf-8")
+    gen = root / ".fleet-env.gen-123-abc" / "Lib"
+    gen.mkdir(parents=True)
+    (gen / "site.py").write_text("pass\n", encoding="utf-8")
+    (root / "keep.py").write_text("pass\n", encoding="utf-8")
+    paths = module.repo_files(root)
+    assert paths == [".gitignore", "keep.py"]
+
+
 def test_gitless_walk_still_enumerates_a_non_ignored_leak_path(tmp_path):
     module = _load_repo_module()
     root = _make_gitless_tree(tmp_path)

@@ -798,6 +798,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "regen-cockpit-schema.py": frozenset({"env_first"}),
     "seed-marketplace-enabledplugins.py": frozenset({"self_location"}),
     "spawn-census": frozenset({"self_location"}),
+    "spawn-trace-capture.py": frozenset({"self_location"}),
     "standup.py": frozenset({"env_first"}),
     "sweep-terminal-handoffs.py": frozenset({"env_first"}),
     "sweep-terminal-sizings.py": frozenset({"env_first"}),

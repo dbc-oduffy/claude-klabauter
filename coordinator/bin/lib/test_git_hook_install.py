@@ -1343,3 +1343,18 @@ def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path, monkeyp
     err = capsys.readouterr().err
     assert "found 1 stale hook(s)" in err
     assert "repaired or flagged" not in err
+
+
+def test_registry_repo_roots_skips_slugs_urls_and_non_strings(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ghi,
+        "_merged_flat_registry",
+        lambda: {
+            "repos.example_stats_repo": str(tmp_path / "fifa"),
+            "repos.example_stats_repo.publish_repo": "owner/repo",
+            "repos.remote": "https://example.com/x/y",
+            "repos.flag": True,
+        },
+    )
+
+    assert [key for key, _ in ghi._registry_repo_roots("")] == ["repos.example_stats_repo"]

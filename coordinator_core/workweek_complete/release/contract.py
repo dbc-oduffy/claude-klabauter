@@ -84,8 +84,7 @@ MISS_REASONS: Dict[str, Tuple[str, ...]] = {
         "gate-tests-other-commit",
         "ledger-not-clean",
         "not-stamped",
-        "head-moved",
-        "tree-modified",
+        "candidate-not-on-branch",
         "main-conflict",
         "project-checks-not-composed",
     ),
@@ -95,6 +94,30 @@ MISS_REASONS: Dict[str, Tuple[str, ...]] = {
         "notes-changed",
     ),
 }
+
+# Gate ids in the order the gate run starts them and the merge-evidence rule reads them.
+GATE_IDS: Tuple[str, ...] = ("d6", "d0", "validate-fast-and-packageability")
+
+GATE_STATUSES: Tuple[str, ...] = ("ran", "not-present", "not-started")
+
+
+@dataclass(frozen=True)
+class GateRecord:
+    """One gate's outcome against the commit `tested_sha`; refuses an unknown gate or status."""
+
+    gate: str
+    status: str
+    exit_code: Optional[int]
+    tested_sha: str
+
+    def __post_init__(self) -> None:
+        if self.gate not in GATE_IDS:
+            raise ValueError(f"unknown gate {self.gate!r}")
+        if self.status not in GATE_STATUSES:
+            raise ValueError(f"unknown gate status {self.status!r}")
+        if not self.tested_sha:
+            raise ValueError("tested_sha is empty")
+
 
 # Argv tokens no release act may carry. Beyond the tokens: no refspec starts with `+`
 # and none names `main` as its destination.
@@ -151,9 +174,9 @@ class ReleaseState:
 
 @dataclass(frozen=True)
 class StampResult:
-    """Outcome of stamping the version surfaces and notes; `changed` is False on a re-run."""
+    """Outcome of stamping the version surfaces and notes; `changed` is empty on a re-run."""
 
-    changed: bool
+    changed: Tuple[str, ...] = ()
     notes_path: str = ""
 
 

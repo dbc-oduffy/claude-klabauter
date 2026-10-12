@@ -58,7 +58,10 @@ def run_capture(command: list[str], keep_log: bool = False) -> dict:
     if not command:
         raise ValueError("no command given (usage: ... -- <command> [args...])")
 
-    _no_console_kw()
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
+
+    require_colocated_engine_on_path(__file__)
     from coordinator_core.temp_layout import managed_tempdir
 
     log_fd, log_path = tempfile.mkstemp(

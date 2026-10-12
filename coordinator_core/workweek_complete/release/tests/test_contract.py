@@ -4,7 +4,10 @@ import pytest
 
 from coordinator_core.workweek_complete.release.contract import (
     FORBIDDEN_ARGV_TOKENS,
+    GATE_IDS,
     MISS_REASONS,
+    GateRecord,
+    StampResult,
     RELEASE_MODES,
     RELEASE_STATES,
     RULE_IDS,
@@ -36,6 +39,36 @@ def test_miss_accepts_listed_reason_only():
         RuleResult("version-bump", False, "uncovered-commits")
     with pytest.raises(ValueError):
         RuleResult("version-bump", False, "")
+
+
+def test_gate_ids_unique_tuple():
+    assert isinstance(GATE_IDS, tuple) and len(set(GATE_IDS)) == len(GATE_IDS)
+    assert GATE_IDS == ("d6", "d0", "validate-fast-and-packageability")
+
+
+@pytest.mark.parametrize("reason", ["head-moved", "tree-modified"])
+def test_merge_evidence_refuses_retired_reasons(reason):
+    with pytest.raises(ValueError):
+        RuleResult("merge-evidence", False, reason)
+
+
+def test_merge_evidence_accepts_candidate_not_on_branch():
+    assert not RuleResult("merge-evidence", False, "candidate-not-on-branch").passed
+
+
+def test_gate_record_accepts_valid_and_refuses_bad_fields():
+    rec = GateRecord("d6", "ran", 0, "abc123")
+    assert rec.tested_sha == "abc123"
+    with pytest.raises(ValueError):
+        GateRecord("nope", "ran", 0, "abc")
+    with pytest.raises(ValueError):
+        GateRecord("d6", "nope", 0, "abc")
+    with pytest.raises(ValueError):
+        GateRecord("d6", "ran", 0, "")
+
+
+def test_stamp_result_changed_is_tuple_default_empty():
+    assert StampResult().changed == ()
 
 
 def test_unknown_rule_and_state_refused():
