@@ -479,6 +479,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/distill_disposal_manifest.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_disposal_manifest'),
     'coordinator_core/ops/distill_scope.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_scope_manifest'),
     'coordinator_core/ops/distill_stamp_disposal.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_stamped_manifest'),
+    'coordinator_core/ops/distill_write_curated_clusters.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _write_atomic'),
     'coordinator_core/ops/docindex_emit.py': ('to-fix', "raw-write site(s): _docindex_emit; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/doctor.py': ('claims-explicitly', 'claim token in _fix_bare_hook_commands'),
     'coordinator_core/ops/dod_floor_ratchet.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_floor'),

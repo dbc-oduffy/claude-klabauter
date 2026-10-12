@@ -197,6 +197,8 @@ def _parse_gitignore_fallback_patterns(root: pathlib.Path) -> tuple[set[str], li
             # here (fail toward MORE scanning, never less).
             continue
         if line.endswith("/"):
+            # A globbed directory entry (`.fleet-env.gen-*/`) is kept as a
+            # pattern; `_walk_files` matches directory names with fnmatch.
             dir_names.add(line[:-1])
         else:
             basename_patterns.append(line)
@@ -217,7 +219,9 @@ def _walk_files(root: pathlib.Path) -> list[str]:
             if entry.is_symlink():
                 continue
             if entry.is_dir():
-                if entry.name in SKIP_DIR_NAMES or entry.name in ignored_dir_names:
+                if entry.name in SKIP_DIR_NAMES or any(
+                    fnmatch.fnmatch(entry.name, pat) for pat in ignored_dir_names
+                ):
                     continue
                 stack.append(entry)
                 continue

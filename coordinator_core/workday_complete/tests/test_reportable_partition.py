@@ -15,7 +15,6 @@ _DIRTY_TREE = {"ambiguous": True, "evidence": "synthetic: ambiguous paths remain
 
 _KNOWN_ACTION_CLASS_IDS = {
     "jp_step4b_analyst_dispatch",
-    "jp_step4c_observer_dispatch",
     "jp_step4_5_clustering_dispatch",
     "jp_step4e_health_ledger_new_rows",
 }
@@ -27,7 +26,7 @@ def _build_all(open_day_goals: dict, dirty_tree_verdict: dict):
     return partition_reportable(judgment_points, directives)
 
 
-def test_predicate_keeps_the_four_action_class_ids_asked():
+def test_predicate_keeps_the_three_action_class_ids_asked():
     asked, reported = _build_all(_NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE)
     assert reported == []
     asked_ids = {p["id"] for p in asked}

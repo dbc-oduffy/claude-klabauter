@@ -33,12 +33,15 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.frontmatter import primitives as _frontmatter_primitives
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
 from coordinator_core.memo_corpus import memo_corpus_root
+from coordinator_core.updatedocs import _common, _stamp_cache
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
+from coordinator_core.updatedocs._stamp_cache import MISS, StampCache
 
 DEFAULT_AGE_DAYS = 90
 
@@ -66,28 +69,40 @@ def compute_memo_prune_candidates(
     retained: list[str] = []
     indeterminate: list[str] = []
 
-    for file_path in archive_dir.glob("*.md"):
-        rel = file_path.relative_to(repo_root).as_posix()
+    try:
+        listing = _stamp_cache.list_md(archive_dir)
+    except OSError:
+        listing = []
+    rel_prefix = archive_dir.relative_to(repo_root).as_posix() + "/"
+    cache = StampCache(
+        repo_root, "memo-status",
+        (__file__, _common.__file__, _stamp_cache.__file__, _frontmatter_primitives.__file__),
+    )
 
-        try:
-            mtime = file_path.stat().st_mtime
-        except OSError:
-            # Present at glob time, gone or unreadable by the stat. "We could
+    for name, stamp in listing:
+        file_path = archive_dir / name
+        rel = rel_prefix + name
+
+        if stamp is None:
+            # Present at listing time, gone or unreadable by the stat. "We could
             # not look" is INDETERMINATE, never a silent drop: the three lists
-            # must account for every file the glob returned, or a caller
-            # reconciling totals finds a gap.
+            # must account for every file listed, or a caller reconciling totals
+            # finds a gap.
             indeterminate.append(rel)
             continue
 
+        mtime = stamp[1] / 1e9
         age_days_actual = (now - mtime) / 86400
 
-        text = read_head(file_path)
-        if not text:
-            indeterminate.append(rel)
-            continue
-
-        split = split_frontmatter(text)
-        status = read_fm_field_unquoted(split.fm_text, "status") if split else None
+        status = cache.get(rel, stamp)
+        if status is MISS:
+            text = read_head(file_path)
+            if not text:
+                indeterminate.append(rel)
+                continue
+            split = split_frontmatter(text)
+            status = read_fm_field_unquoted(split.fm_text, "status") if split else None
+            cache.put(rel, stamp, status)
 
         if status is None:
             indeterminate.append(rel)
@@ -101,6 +116,8 @@ def compute_memo_prune_candidates(
         else:
             retained.append(rel)
 
+    cache.retain(rel_prefix, {rel_prefix + name for name, _ in listing})
+    cache.flush()
     return MemoPruneResult(
         prunable=sorted(prunable),
         retained=sorted(retained),

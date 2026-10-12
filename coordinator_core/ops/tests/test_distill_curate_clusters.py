@@ -428,3 +428,22 @@ def test_degraded_path_retains_shape_with_new_fields() -> None:
     assert result["threshold_applied"] == 0
     assert result["threshold_auto"] is False
     assert result["nugget_drop_share"] == 0.0
+
+
+def test_contradiction_clusters_group_canonical_slugs_by_leading_token() -> None:
+    result = curate_clusters(
+        {"git-safety": 3, "git-hooks": 2, "review-trail-scope": 4, "review-trail-ids": 1, "solo-thing": 5}
+    )
+    assert result["contradictionClusters"] == [
+        {"clusterTag": "git", "topicKeys": ["git-hooks", "git-safety"]},
+        {"clusterTag": "review", "topicKeys": ["review-trail-ids", "review-trail-scope"]},
+    ]
+
+
+def test_contradiction_clusters_capped_at_five_largest_and_degraded_empty() -> None:
+    counts = {f"fam{i}-a": 2 for i in range(7)} | {f"fam{i}-b": 2 for i in range(7)}
+    counts["fam6-c"] = 2
+    clusters = curate_clusters(counts)["contradictionClusters"]
+    assert len(clusters) == 5
+    assert clusters[0]["clusterTag"] == "fam6"
+    assert curate_clusters({})["contradictionClusters"] == []

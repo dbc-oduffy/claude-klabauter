@@ -259,7 +259,7 @@ def _sweep_workstream_complete(acc: dict[str, set[str]], tmp_path: Path) -> None
                 "change_kind": "wiki-append",
             }
         ],
-        "memo_dispositions": [{"path": "state/memo-outbox/x.md", "decision": "actioned"}],
+        "memo_dispositions": [{"path": "state/memo-outbox/x.md", "decision": "declined"}],
         "review": {
             "sha_range": "a..b",
             "reviewer": "code-reviewer",
@@ -369,6 +369,14 @@ def _sweep_consolidate_assemble(acc: dict[str, set[str]], tmp_path: Path) -> Non
                 f"refs/heads/{n}\t{n}\tme@x\n" for n in ("current", "main", "stale")
             )
             return SimpleNamespace(returncode=0, stdout=rows, stderr="")
+        if args[0] == "log" and args[1].startswith("--format=%H"):
+            # `unique_commits_by_ref`: one parentless commit per ref, tip sha `tip-<ref>`.
+            refs = [a for a in args[2:] if not a.startswith("^")]
+            rows = "".join(f"tip-{r}\x1f\x1fabc123 a commit\n" for r in refs)
+            return SimpleNamespace(returncode=0, stdout=rows, stderr="")
+        if args[0] == "rev-parse" and args[1].endswith("^{commit}"):
+            tips = "".join(f"tip-{a[: -len('^{commit}')]}\n" for a in args[1:])
+            return SimpleNamespace(returncode=0, stdout=tips, stderr="")
         if args[0] == "log" and args[1] == "-1":
             return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
         if args[0] == "log" and args[1] == "--oneline":
@@ -504,15 +512,15 @@ EXPECTED_REPORTABLE_IDS: frozenset[str] = frozenset(
 #: with no directive and no gate -- premise-finding sidecar's channel 3).
 EXPECTED_ACTION_CLASS_IDS: frozenset[str] = frozenset(
     {
-        # workday_complete/brief.py (4, matches plan's "workday-complete 4")
+        # workday_complete/brief.py (3)
         "jp_step4b_analyst_dispatch",
-        "jp_step4c_observer_dispatch",
         "jp_step4_5_clustering_dispatch",
         "jp_step4e_health_ledger_new_rows",
-        # workweek_complete/brief.py (both of its 2). extend-span widens what
+        # workweek_complete/brief.py (its 3). extend-span widens what
         # Rule-5 treats as already reviewed and no directive applies it, so it
         # is a `pm-scoped-tradeoff` the EM acts on, not one it merely records.
         "jp_step4_triage_dispatch",
+        "jp_step7b_observer_dispatch",
         "jp_step7_rule5_already_reviewed_span",
         # workstream_complete (C2 redo): each answer here obligates the EM to
         # DO something concrete (a disk write, a commit/stash, a dispatch

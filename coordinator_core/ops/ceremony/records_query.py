@@ -66,6 +66,7 @@ from coordinator_core.ops.records_query import (
     _collect_research_claim_records,
     _legacy_prose_signal,
     _load_record,
+    flush_record_cache,
     _matches_where,
     _parse_older_than,
     _parse_since,
@@ -142,6 +143,7 @@ def query_records(
                 rec = _load_record(fpath, worktree_root, record_type)
                 if rec is not None:
                     results.append(rec)
+            flush_record_cache(worktree_root)
     except _RecordsCollectError as exc:
         print(
             f"skip: query_records: _collect_files({record_type!r}) failed: {exc}",
@@ -149,20 +151,29 @@ def query_records(
         )
         return []
 
-    if since_cutoff:
-        results = [
-            r for r in results
-            if r["frontmatter"].get("created")
-            and str(r["frontmatter"]["created"]) >= since_cutoff
-        ]
-
-    if clauses:
-        results = [r for r in results if _matches_where(r["frontmatter"], clauses)]
+    results = filter_records(results, where, since)
 
     if limit > 0:
         results = results[:limit]
 
     return results
+
+
+def filter_records(records: list[dict], where: Optional[str], since: Optional[str]) -> list[dict]:
+    """The ``since`` then ``where`` filtering ``query_records`` applies to an
+    enumerated record list, for callers that enumerate a type once and filter it
+    several times. Same ``SystemExit`` contract on an unparseable argument."""
+    clauses = _parse_where(where) if where else []
+    since_cutoff = _parse_since(since)
+    if since_cutoff:
+        records = [
+            r for r in records
+            if r["frontmatter"].get("created")
+            and str(r["frontmatter"]["created"]) >= since_cutoff
+        ]
+    if clauses:
+        records = [r for r in records if _matches_where(r["frontmatter"], clauses)]
+    return records
 
 
 def legacy_prose_signal(record_type: str, worktree_root: Path) -> Optional[dict]:

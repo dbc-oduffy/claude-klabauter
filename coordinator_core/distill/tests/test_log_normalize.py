@@ -985,3 +985,53 @@ def test_normalize_arrow_dialects_all_rows_run_tailed_refuses_to_write(tmp_path)
 
     assert log_path.read_text(encoding="utf-8") == original
     assert not log_path.with_name(log_path.name + ".arrow-dialect-backup").exists()
+
+
+# ---------------------------------------------------------------------------
+# 3-column legacy table under '## Run: <id>' headers
+# ---------------------------------------------------------------------------
+
+THREE_COL_FIXTURE = """\
+# Distillation Log
+
+## Run: 2026-09-01-10h00
+
+| Artifact | Disposition | Target |
+|----------|-------------|--------|
+| archive/specs/2026-08-01-alpha.md | DISTILLED | docs/guides/alpha.md |
+| archive/specs/2026-08-02-beta.md | DELETED | n/a |
+
+## Run: 2026-09-02-11h30
+
+| Artifact | Disposition | Target |
+|----------|-------------|--------|
+| archive/specs/2026-08-03-gamma.md | RENAMED | docs/guides/gamma.md |
+"""
+
+
+def test_normalize_log_accepts_three_column_table_under_run_headers(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(THREE_COL_FIXTURE, encoding="utf-8")
+    result = normalize_log(log_path)
+    assert result.rows_migrated == 2
+    assert result.rows_skipped == 1
+    assert "unrecognized action" in result.skipped[0].reason
+    rows = parse_distillation_log(log_path.read_text(encoding="utf-8"))
+    by_path = {r.path: r for r in rows}
+    alpha = by_path["archive/specs/2026-08-01-alpha.md"]
+    assert (alpha.run_id, alpha.disposition, alpha.fate) == (
+        "2026-09-01-10h00", "DISTILLED", "docs/guides/alpha.md",
+    )
+    beta = by_path["archive/specs/2026-08-02-beta.md"]
+    assert (beta.run_id, beta.disposition) == ("2026-09-01-10h00", "EPHEMERAL")
+
+
+def test_three_column_row_before_any_run_header_is_skipped_not_dropped(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(
+        "| Artifact | Disposition | Target |\n|---|---|---|\n| a.md | DISTILLED | b.md |\n",
+        encoding="utf-8",
+    )
+    result = normalize_log(log_path)
+    assert result.rows_migrated == 0
+    assert result.rows_skipped == 1

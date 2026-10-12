@@ -138,6 +138,116 @@ def test_reconcile_conflict_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
     assert not merge_head.exists()
 
 
+def _diverge(tmp_path: Path, origin: Path, clone: Path, filename: str, upstream: str) -> None:
+    _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
+    (clone / "local-only.txt").write_text("local\n")
+    _git(clone, "add", "local-only.txt")
+    _git(clone, "commit", "-q", "-m", "local-only work")
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    _git(other, "checkout", "-q", "-B", "main", "origin/main")
+    (other / filename).write_text(upstream)
+    _git(other, "add", filename)
+    _git(other, "commit", "-q", "-m", "upstream advance")
+    _git(other, "push", "-q", "origin", "main")
+
+
+def test_clean_index_prints_no_spool_line(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
+    monkeypatch.chdir(clone)
+    assert main([]) == 0
+    assert "SPOOL-COMMITTED" not in capsys.readouterr().out
+
+
+def test_staged_spool_is_committed_then_merge_proceeds(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
+    spool = clone / "state" / "block-discharge"
+    spool.mkdir(parents=True)
+    (spool / "s1.jsonl").write_text("{}\n")
+    (spool / "s2.jsonl").write_text("{}\n")
+    _git(clone, "add", "state/block-discharge")
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.splitlines()[0] == "SPOOL-COMMITTED 2"
+    assert "RECONCILED-MERGE" in out
+    assert _git(clone, "status", "--porcelain=v1").stdout.strip() == ""
+    subjects = _git(clone, "log", "--format=%s", "-3", "--no-merges").stdout
+    assert "block-discharge: commit staged spool so reconcile can merge" in subjects
+
+
+def test_spool_appended_after_staging_commits_worktree_bytes(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
+    spool = clone / "state" / "block-discharge"
+    spool.mkdir(parents=True)
+    (spool / "s1.jsonl").write_text("{}\n")
+    _git(clone, "add", "state/block-discharge")
+    with (spool / "s1.jsonl").open("a") as handle:
+        handle.write('{"later": 1}\n')
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    assert rc == 0
+    assert "SPOOL-COMMITTED 1" in capsys.readouterr().out
+    assert _git(clone, "status", "--porcelain=v1").stdout.strip() == ""
+    assert '{"later": 1}' in _git(clone, "show", "HEAD^1:state/block-discharge/s1.jsonl").stdout
+
+
+def test_staged_non_spool_path_is_named_and_nothing_committed(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
+    spool = clone / "state" / "block-discharge"
+    spool.mkdir(parents=True)
+    (spool / "s1.jsonl").write_text("{}\n")
+    (clone / "peer.txt").write_text("peer\n")
+    _git(clone, "add", "state/block-discharge", "peer.txt")
+    head_before = _git(clone, "rev-parse", "HEAD").stdout
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-MERGE-NOT-STARTED" in captured.out
+    assert "SPOOL-COMMITTED" not in captured.out
+    listed = captured.err.split("STAGED-PATHS\n", 1)[1].splitlines()
+    assert sorted(listed[:2]) == ["peer.txt", "state/block-discharge/s1.jsonl"]
+    assert _git(clone, "rev-parse", "HEAD").stdout == head_before
+
+
+def test_staged_deletion_is_seen_as_a_staged_path(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
+    _git(clone, "rm", "-q", "README.md")
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "STAGED-PATHS\nREADME.md" in captured.err
+
+
+def test_conflict_paths_are_listed_on_stderr(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "README.md", "upstream edit\n")
+    (clone / "README.md").write_text("local edit\n")
+    _git(clone, "add", "README.md")
+    _git(clone, "commit", "-q", "-m", "local conflicting edit")
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-CONFLICT" in captured.out
+    assert captured.err.split("CONFLICT-PATHS\n", 1)[1].splitlines()[0] == "README.md"
+
+
 def test_reconcile_merge_commit_refused_by_hook_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
     """A merge that would apply cleanly but whose commit is refused by a
     planted `pre-merge-commit` hook -- reaches the commit step (unlike

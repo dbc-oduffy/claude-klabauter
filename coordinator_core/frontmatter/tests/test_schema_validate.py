@@ -8061,3 +8061,30 @@ class TestCheckSchemaDriftBatch:
         (vendored / 'a.schema.json').write_text('{}\n', encoding='utf-8')
         with pytest.raises(SchemaDriftError, match='diverges'):
             check_schema_drift(vendored / 'a.schema.json', fake_doe)
+
+
+class TestTreeWalkResultCache:
+    def _walk(self, root, capsys):
+        from coordinator_core.frontmatter.schema_validate import main as lint_main
+
+        lint_main(['--root', str(root), '--json'])
+        return json.loads(capsys.readouterr().out)
+
+    def test_cached_verdict_is_replayed_and_invalidated_by_an_edit(self, tmp_path, capsys):
+        (tmp_path / '.git').mkdir()
+        plan = tmp_path / 'docs' / 'plans' / '2026-10-12-x.md'
+        plan.parent.mkdir(parents=True)
+        plan.write_text('---\nstatus: bogus\n---\nbody\n', encoding='utf-8')
+
+        first = self._walk(tmp_path, capsys)
+        cache = tmp_path / '.git' / 'claude-klabauter-lint-frontmatter-cache.json'
+        assert cache.is_file()
+        assert [v['file'] for v in first['violations']] == ['docs/plans/2026-10-12-x.md']
+        assert self._walk(tmp_path, capsys) == first
+
+        plan.write_text('---\nstatus: bogus\n---\nbody that changes the size\n', encoding='utf-8')
+        os.utime(plan, ns=(1, 1))
+        assert self._walk(tmp_path, capsys)['violations'][0]['file'] == 'docs/plans/2026-10-12-x.md'
+
+        plan.write_text('no frontmatter at all\n', encoding='utf-8')
+        assert self._walk(tmp_path, capsys)['violations'] != first['violations']

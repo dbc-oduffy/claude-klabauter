@@ -346,6 +346,22 @@ class TestWriteBumpMarkerTarget:
         os.makedirs(marker_dir, exist_ok=True)
         assert _denied(f"rm -rf {marker_dir}")
 
+    def test_engine_cache_file_allowed(self, repo_outside_any_repo):
+        cache = os.path.join(repo_outside_any_repo, ".git", "claude-klabauter-records-query-cache.json")
+        with open(cache, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+        assert not _denied(f"rm -f {cache}")
+
+    def test_engine_cache_name_nested_or_dir_still_denied(self, repo_outside_any_repo):
+        nested = os.path.join(repo_outside_any_repo, ".git", "refs", "claude-klabauter-x.json")
+        os.makedirs(os.path.dirname(nested), exist_ok=True)
+        with open(nested, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+        assert _denied(f"rm -f {nested}")
+        cache_dir = os.path.join(repo_outside_any_repo, ".git", "claude-klabauter-dir.json")
+        os.makedirs(cache_dir, exist_ok=True)
+        assert _denied(f"rm -rf {cache_dir}")
+
     def test_non_marker_store_target_keeps_original_irreversibility_message(
         self, repo_outside_any_repo
     ):

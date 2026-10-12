@@ -78,7 +78,12 @@ class TestAC8ClosingGuard:
             CONSUMES_MANIFEST as workweek_manifest,
         )
 
+        from coordinator_core.workday_start.manifest import (
+            CONSUMES_MANIFEST as workday_start_manifest,
+        )
+
         manifests_by_assembler = {
+            "workday_start": workday_start_manifest,
             "workday_complete": workday_manifest,
             "workstream_complete": workstream_manifest,
             "workweek_complete": workweek_manifest,
@@ -173,7 +178,46 @@ _COMPLETION_FAMILY_ASSEMBLERS = frozenset(
 # run-stamp step), never registered ops, so it is exempt from the registry/classification
 # and op-migrated-verbs checks; `test_learn_lessons_pipeline_entry_equals_its_declared_verbs`
 # pins it against its own module instead.
-_BAREWORD_ASSEMBLERS = _COMPLETION_FAMILY_ASSEMBLERS | {"learn_lessons_pipeline"}
+_RUN_SPEC_ASSEMBLERS = frozenset({"workday_complete_run", "workweek_start_run"})
+_BAREWORD_APPLY_ASSEMBLERS = _COMPLETION_FAMILY_ASSEMBLERS | {"learn_lessons_pipeline"}
+# `workday_start` is a manifest-keyed row with no `apply` module: the runner admits each
+# bareword through `assert_dispatchable`, so it is checked against its manifest above and
+# against `coordinator/bin/` below, not against an `_CLI_DISPATCH` table.
+_MANIFEST_ONLY_ASSEMBLERS = frozenset({"workday_start"})
+_BAREWORD_ASSEMBLERS = (
+    _BAREWORD_APPLY_ASSEMBLERS | _RUN_SPEC_ASSEMBLERS | _MANIFEST_ONLY_ASSEMBLERS
+)
+
+
+class TestRunSpecRows:
+    """Run-spec rows are known keys, a superset (workday) of the brief manifest, and every
+    bareword resolves to a file under coordinator/bin/."""
+
+    def test_rows_are_known_keys(self) -> None:
+        for name in _RUN_SPEC_ASSEMBLERS:
+            assert isinstance(ASSEMBLER_DISPATCHABLE[name], frozenset)
+
+    def test_workday_complete_run_extends_workday_complete(self) -> None:
+        assert ASSEMBLER_DISPATCHABLE["workday_complete"] < ASSEMBLER_DISPATCHABLE[
+            "workday_complete_run"
+        ]
+
+    def test_workday_start_row_equals_its_manifest(self) -> None:
+        from coordinator_core.workday_start.manifest import CONSUMES_MANIFEST
+
+        assert ASSEMBLER_DISPATCHABLE["workday_start"] == CONSUMES_MANIFEST
+
+    def test_every_bareword_has_a_bin_file(self) -> None:
+        from pathlib import Path
+
+        bin_dir = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
+        missing = sorted(
+            (row, m)
+            for row in _RUN_SPEC_ASSEMBLERS | _MANIFEST_ONLY_ASSEMBLERS
+            for m in ASSEMBLER_DISPATCHABLE[row]
+            if not any((bin_dir / f"{m}{ext}").exists() for ext in (".py", ".cmd", ".ps1"))
+        )
+        assert missing == []
 
 
 class TestAC7RegistryAndClassificationBacking:
@@ -247,7 +291,7 @@ class TestAC7RegistryAndClassificationBacking:
         )
 
 
-@pytest.mark.parametrize("assembler_name", sorted(_BAREWORD_ASSEMBLERS))
+@pytest.mark.parametrize("assembler_name", sorted(_BAREWORD_APPLY_ASSEMBLERS))
 def test_every_bareword_assembler_member_resolves_by_its_own_unit(assembler_name) -> None:
     """Per MEMBER, not per assembler: a bareword resolves through the
     package's `_CLI_DISPATCH`, an op verb through its `_OP_DISPATCH` adapter or

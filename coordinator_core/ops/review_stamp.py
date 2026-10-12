@@ -561,6 +561,9 @@ def mint(
             raise MintRefusal(f"review-stamp: superseding record {record_path} carries no commit_range.head")
         resolved = (str(head), record_path, record)
 
+    # A caller that just landed the terminal commit owns terminal_sha: a re-verify of an
+    # earlier run record at an older head must not pull the stamp back behind it.
+    landed_here = resolved is not None and superseding_record is None
     if resolved is not None:
         terminal_sha, integration_path, integration_data = resolved
     else:
@@ -613,7 +616,8 @@ def mint(
         reverified = latest_delivery_supersession(repo_root, run_rel)
         if reverified is not None:
             delivery_data = reverified
-            terminal_sha = str(reverified.get("head_sha") or terminal_sha)
+            if not landed_here:
+                terminal_sha = str(reverified.get("head_sha") or terminal_sha)
             reverified_criterion = latest_criterion_supersession(repo_root, run_rel)
             if reverified_criterion is not None:
                 integration_data = {**integration_data, "criterion": reverified_criterion}

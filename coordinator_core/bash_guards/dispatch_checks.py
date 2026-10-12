@@ -4189,6 +4189,19 @@ def check_destructive_rm(
             ):
                 continue
 
+            # The engine's own `claude-klabauter-*.json` caches sit directly under the
+            # gitdir, keyed on (size, mtime_ns) and rebuilt on a miss -- not
+            # objects, refs, or logs. A file only, directly under `.git`, so a
+            # nested path or a directory of that name still meets the deny.
+            if (
+                is_git_store_target
+                and os.path.basename(os.path.dirname(tgt_abs)) == ".git"
+                and os.path.basename(tgt_abs).startswith("claude-klabauter-")
+                and os.path.basename(tgt_abs).endswith(".json")
+                and os.path.isfile(tgt_abs)
+            ):
+                continue
+
             # A target whose basename is
             # literally `.git` is caught HERE and denied with the generic
             # git-store message below, before it ever reaches the bare-repo

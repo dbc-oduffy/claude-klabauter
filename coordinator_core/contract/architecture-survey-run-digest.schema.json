@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/architecture-survey-run-digest.schema.json",
+  "x-schema-name": "architecture-survey-run-digest",
+  "x-schema-version": "1.0.0",
+  "x-bump-class": "initial",
+  "title": "Architecture survey run digest, structure and agent results",
+  "description": "The three documents the architecture survey runner exchanges with its workflow template. `digest` is what `launch` writes. `structure` is the run's structure.json, read from example-retrieval-repo on source `rag`. `agent_results` is what the template's last phase hands `finish`. Source `rag` has no agent decision but `clarity`; source `cartography` agents return `scope`, `refresh-set` and `clarity`, and `scope` is required there only.",
+  "type": "object",
+  "required": ["digest", "structure", "agent_results"],
+  "allOf": [
+    {
+      "if": {"properties": {"digest": {"properties": {"source": {"const": "cartography"}}, "required": ["source"]}}, "required": ["digest"]},
+      "then": {"properties": {"agent_results": {"required": ["scope"]}}}
+    },
+    {
+      "if": {"properties": {"digest": {"properties": {"source": {"const": "rag"}}, "required": ["source"]}}, "required": ["digest"]},
+      "then": {"properties": {"digest": {"properties": {"structure_path": {"type": "string"}}}}}
+    }
+  ],
+  "properties": {
+    "digest": {"$ref": "#/$defs/digest"},
+    "structure": {"$ref": "#/$defs/structure"},
+    "agent_results": {"$ref": "#/$defs/agent_results"}
+  },
+  "$defs": {
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "chosen", "rule", "evidence"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": ["mode", "structure-source", "index-currency", "scope", "refresh-set", "citation-paths", "citation-atlas", "clarity", "attestation", "completeness", "ledger-stamp", "commit"]
+        },
+        "chosen": {"type": "string"},
+        "rule": {"type": "string"},
+        "evidence": {"type": "string"}
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "repo_root", "state", "mode", "system", "scratch_dir", "finish_argv", "decisions", "existing_atlas", "source", "predicate", "structure_path", "refresh_set", "consume_gate"],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "pattern": "^[0-9]{8}T[0-9]{6}Z",
+          "description": "Begins with the run's UTC timestamp so run directories sort by time."
+        },
+        "repo_root": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "enum": ["ran", "in-flight", "failed"]},
+        "mode": {"type": "string", "enum": ["bootstrap", "refresh", "targeted"]},
+        "system": {"type": ["string", "null"], "description": "Null unless mode is targeted."},
+        "scratch_dir": {"type": "string"},
+        "finish_argv": {"type": "array", "items": {"type": "string"}},
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/decision"}},
+        "existing_atlas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["systems"],
+          "properties": {
+            "systems": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "page", "last_mapped"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "page": {"type": "string"},
+                  "last_mapped": {"type": ["string", "null"]}
+                }
+              }
+            }
+          }
+        },
+        "source": {"type": "string", "enum": ["rag", "cartography"]},
+        "predicate": {"type": "object", "description": "The consume gate's rag_predicate object, verbatim."},
+        "structure_path": {"type": ["string", "null"], "description": "The run's structure.json; null on source cartography."},
+        "refresh_set": {
+          "type": "array",
+          "description": "The prose agents' whole work list.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["system", "page", "reason", "slice_path"],
+            "properties": {
+              "system": {"type": "string"},
+              "page": {"type": "string"},
+              "reason": {"type": "string"},
+              "slice_path": {"type": "string"}
+            }
+          }
+        },
+        "consume_gate": {"type": ["object", "null"], "description": "The gate's stdout object on source cartography, else null."}
+      }
+    },
+    "structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "index", "needs", "systems"],
+      "properties": {
+        "run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z"},
+        "index": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["commit", "commits_behind", "state", "dropped_paths", "unindexed"],
+          "properties": {
+            "commit": {"type": "string"},
+            "commits_behind": {"type": "integer", "minimum": 0},
+            "state": {"type": "string", "enum": ["current", "behind"]},
+            "dropped_paths": {"type": "integer", "minimum": 0},
+            "unindexed": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "needs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["system-map", "edges", "file-index", "dead-paths", "last-touch"],
+          "properties": {
+            "system-map": {"$ref": "#/$defs/need"},
+            "edges": {"$ref": "#/$defs/need"},
+            "file-index": {"$ref": "#/$defs/need"},
+            "dead-paths": {"$ref": "#/$defs/need"},
+            "last-touch": {"$ref": "#/$defs/need"}
+          }
+        },
+        "systems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "file_count", "line_count", "fingerprint"],
+            "properties": {
+              "name": {"type": "string"},
+              "file_count": {"type": "integer", "minimum": 0},
+              "line_count": {"type": "integer", "minimum": 0},
+              "fingerprint": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "need": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["covered", "door", "calls", "reason", "payload"],
+      "properties": {
+        "covered": {"type": "boolean"},
+        "door": {"type": ["string", "null"]},
+        "calls": {"type": "integer", "minimum": 0},
+        "reason": {"type": ["string", "null"]},
+        "payload": {"description": "What the door returned, in rag's own shape; null when not covered."}
+      }
+    },
+    "agent_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pages_written", "decisions", "clarity", "dead_paths_repaired", "manifest"],
+      "properties": {
+        "pages_written": {"type": "array", "items": {"type": "string"}},
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/decision"}},
+        "clarity": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["page", "verdict", "findings"],
+            "properties": {
+              "page": {"type": "string"},
+              "verdict": {"type": "string"},
+              "findings": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "dead_paths_repaired": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["page", "path", "action"],
+            "properties": {
+              "page": {"type": "string"},
+              "path": {"type": "string"},
+              "action": {"type": "string"}
+            }
+          }
+        },
+        "scope": {"type": "object", "description": "Required on source cartography only."},
+        "manifest": {"type": "object", "description": "The workflow's returned manifest."},
+        "agents": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "tokens"],
+          "properties": {
+            "count": {"type": "integer", "minimum": 0},
+            "tokens": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}

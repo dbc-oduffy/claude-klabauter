@@ -109,14 +109,25 @@ REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
     COMPLETION_SCAFFOLD: (),
     ROADMAP_CALLOUT: ("python coordinator/bin/refresh-roadmap-callout.py <roadmap_id>",),
     EOL_SWEEP: (),
-    # By runnable path, never the bareword: the forwarder pair is not resolvable
-    # until the next install-chain run stamps it, so a report rendered before
-    # that would hand the operator a "command not found".
+    # The settings-home launcher form runs in any consumer repo; a
+    # `coordinator/bin/...` path exists only in a source checkout.
     GIT_MAINTENANCE: (
-        "python coordinator/bin/coordinator-git-maintenance.py weekly",
-        "python coordinator/bin/coordinator-git-maintenance.py daily",
+        'coordinator-invoke git.maintenance \'{"tier":"weekly","repo":"<repo root>"}\'',
+        'coordinator-invoke git.maintenance \'{"tier":"daily","repo":"<repo root>"}\'',
     ),
 }
+
+REPO_ROOT_PLACEHOLDER = "<repo root>"
+
+
+def remedy_commands(housekeeping_class: str, repo_root: Optional[str] = None) -> Tuple[str, ...]:
+    """`REMEDY_COMMANDS` for the class, with `<repo root>` filled (JSON-escaped, since it sits
+    inside a JSON string) when `repo_root` is given."""
+    commands = REMEDY_COMMANDS.get(housekeeping_class, ())
+    if repo_root is None:
+        return commands
+    escaped = json.dumps(str(repo_root))[1:-1]
+    return tuple(cmd.replace(REPO_ROOT_PLACEHOLDER, escaped) for cmd in commands)
 
 # Conservative uniform default — each shed class's actual expected cadence differs (daily
 # boot_sweep vs. on-demand roadmap callout), but most classes have no call site landed yet

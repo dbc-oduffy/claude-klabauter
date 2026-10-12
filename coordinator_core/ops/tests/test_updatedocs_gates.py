@@ -358,33 +358,20 @@ def test_queue_prune_sweep_yaml_leg_clean_exit_is_not_blocking(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_queue_prune_sweep_batches_default_cli_into_one_spawn(tmp_path, monkeypatch):
+def test_queue_prune_sweep_default_route_prunes_every_queue_in_process(tmp_path, monkeypatch):
     (tmp_path / "state").mkdir()
     (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
     (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    real_cli = Path(__file__).resolve().parents[1] / "prune_resolved_queue_entries.py"
-    (bin_dir / "prune-resolved-queue-entries.py").write_text(
-        real_cli.read_text(encoding="utf-8"), encoding="utf-8"
-    )
 
-    calls: list[list[str]] = []
-    orig_run = udg._run
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError(f"default route must not spawn: {args}")
 
-    def _spy_run(cli_path, args, **kwargs):
-        calls.append(args)
-        return orig_run(cli_path, args, **kwargs)
+    monkeypatch.setattr(udg, "_run", _no_spawn)
 
-    monkeypatch.setattr(udg, "_run", _spy_run)
-
-    # No overrides["prune_cli"] — this exercises the DEFAULT-callee branch,
-    # which is the one that must collapse to a single spawn.
     result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
 
-    assert len(calls) == 1
-    assert len(calls[0]) == 2
     assert result.verdict in (udg.GateVerdict.CLEAN, udg.GateVerdict.FINDING)
+    assert result.severity != udg.Severity.BLOCKING
 
 
 def test_queue_prune_sweep_override_cli_keeps_one_spawn_per_queue(tmp_path):
@@ -406,27 +393,20 @@ def test_queue_prune_sweep_override_cli_keeps_one_spawn_per_queue(tmp_path):
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_queue_prune_sweep_default_cli_reports_which_queue_failed(tmp_path):
+def test_queue_prune_sweep_default_route_reports_which_queue_failed(tmp_path):
     (tmp_path / "state").mkdir()
     (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
-    (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_cli = bin_dir / "prune-resolved-queue-entries.py"
-    fake_cli.write_text(
-        "import sys\n"
-        "for p in sys.argv[1:]:\n"
-        "    if p.endswith('bug-backlog.md'):\n"
-        "        sys.stderr.write(f'ERROR: file not found: {p}\\n')\n"
-        "sys.exit(1)\n",
-        encoding="utf-8",
-    )
+    (tmp_path / "state" / "not-a-queue.md").write_text("## Open\n- b\n")
 
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
+    result = udg._gate_queue_prune_sweep(
+        tmp_path,
+        tmp_path,
+        {"queues": ["state/improvement-queue.md", "state/not-a-queue.md"]},
+    )
 
     assert result.verdict == udg.GateVerdict.FINDING
     assert result.severity == udg.Severity.BLOCKING
-    assert any("bug-backlog.md" in line for line in result.detail["lines"])
+    assert any("not-a-queue.md" in line for line in result.detail["lines"])
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +796,96 @@ def test_reap_sidecars_gate_runs_against_the_forwarder_instead_of_reporting_cli_
         return subprocess.CompletedProcess([str(cli_path), *args], 0, "reaped 0 sidecars", "")
 
     monkeypatch.setattr(udg, "_run", _fake_run)
-    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path / "settings", {})
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path / "settings", {"cli": str(forwarder)})
 
     assert spawned["cli"] == forwarder
     assert result.verdict is not udg.GateVerdict.UNAVAILABLE
+
+
+# ---------------------------------------------------------------------------
+# In-process default routes: the reap sweep and check-rag-state spawn nothing;
+# an explicit CLI override still spawns that path.
+# ---------------------------------------------------------------------------
+
+
+def _no_spawn(*args, **kwargs):
+    raise AssertionError(f"default route must not spawn: {args}")
+
+
+def test_reap_gate_default_route_runs_in_process_and_reads_the_reap_count(tmp_path, monkeypatch):
+    import os
+    import time
+
+    monkeypatch.setattr(udg, "_run", _no_spawn)
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "dead-session"
+    share.mkdir(parents=True)
+    old = share / "old.md"
+    old.write_text("---\nstatus: complete\n---\n", encoding="utf-8")
+    ancient = time.time() - 40 * 86400
+    os.utime(old, (ancient, ancient))
+    monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
+
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {})
+
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.detail == {"reaped": 1}
+    assert not old.exists()
+
+
+def test_reap_gate_default_route_keeps_a_blocked_sidecar_and_reports_clean(tmp_path, monkeypatch):
+    import os
+    import time
+
+    monkeypatch.setattr(udg, "_run", _no_spawn)
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "dead-session"
+    share.mkdir(parents=True)
+    kept = share / "blocked.md"
+    kept.write_text("---\nstatus: blocked\n---\n", encoding="utf-8")
+    ancient = time.time() - 40 * 86400
+    os.utime(kept, (ancient, ancient))
+    monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
+
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {})
+
+    assert result.verdict == udg.GateVerdict.CLEAN
+    assert kept.exists()
+
+
+def test_reap_gate_cli_override_still_spawns_that_path(tmp_path):
+    cli = tmp_path / "fake-reap.py"
+    _write_fake_cli(cli, 0, stdout="reaped 3 sidecars\n")
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {"cli": str(cli)})
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.detail == {"reaped": 3}
+
+
+def test_reap_gate_default_route_crash_is_a_blocking_finding_not_clean(tmp_path, monkeypatch):
+    (tmp_path / ".coordinator-local" / "subagent-share" / "s").mkdir(parents=True)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("liveness exploded")
+
+    monkeypatch.setattr("coordinator_core.sidecar_reap.classify_sidecars", _boom)
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {})
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.severity == udg.Severity.BLOCKING
+    assert "liveness exploded" in result.detail["stderr"]
+
+
+def test_repomap_gate_default_route_reads_check_rag_state_in_process(tmp_path, monkeypatch):
+    from coordinator_core.ops import check_rag_state
+
+    monkeypatch.setattr(udg, "_run", _no_spawn)
+    monkeypatch.setattr(check_rag_state, "main", lambda argv: (print("fresh"), 0)[1])
+    result = udg._gate_repomap(tmp_path, tmp_path, {})
+    assert result.verdict == udg.GateVerdict.CLEAN
+    assert "RAG present + fresh" in result.summary
+
+
+def test_repomap_gate_default_route_nonzero_check_rag_state_reads_unknown(tmp_path, monkeypatch):
+    from coordinator_core.ops import check_rag_state
+
+    monkeypatch.setattr(check_rag_state, "main", lambda argv: (print("fresh"), 1)[1])
+    result = udg._gate_repomap(tmp_path, tmp_path, {"generate_repomap_cli": str(tmp_path / "absent.py")})
+    assert result.verdict == udg.GateVerdict.UNAVAILABLE
+    assert "generate-repomap.py unresolvable" in result.summary

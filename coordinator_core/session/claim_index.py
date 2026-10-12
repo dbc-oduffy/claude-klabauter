@@ -467,15 +467,7 @@ def _agent_owner_sid(agent_dir_path: str) -> tuple:
     claims". An agent dir with no resolvable owner contributes no claims
     to the index (its ``touched.txt``, if any, is simply skipped by
     ``rebuild()``)."""
-    backptr = os.path.join(agent_dir_path, "em-session-id.txt")
-    try:
-        with open(backptr, "r", encoding="utf-8") as fh:
-            first_line = fh.readline()
-    except FileNotFoundError:
-        return "", True
-    except OSError:
-        return "", False
-    return first_line.strip(), True
+    return touch_record.agent_owner_sid(agent_dir_path)
 
 
 def _enumerate_claim_sinks(base: str) -> tuple:

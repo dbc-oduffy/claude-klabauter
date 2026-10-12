@@ -61,6 +61,9 @@ Reply fields:
       "threshold_applied": int,   # the keep_threshold actually used
       "threshold_auto": bool,     # True iff it was derived, not supplied
       "nugget_drop_share": float, # dropped nugget count / total nugget count, rounded to 4dp
+      "contradictionClusters": [  # distill-harvest Phase 2.5 input; at most 5, largest first
+        {"clusterTag": str, "topicKeys": [str, ...]}, ...
+      ],  # one per leading-token family holding 2+ kept/normalized/merged canonical slugs
       "degraded": bool,
     }
 
@@ -241,6 +244,7 @@ def _degraded_reply() -> dict:
         "threshold_applied": 0,
         "threshold_auto": False,
         "nugget_drop_share": 0.0,
+        "contradictionClusters": [],
         "degraded": True,
     }
 
@@ -403,6 +407,25 @@ def _resolve_keep_threshold(tag_counts: dict, keep_threshold) -> tuple:
     return _DEFAULT_KEEP_THRESHOLD, True
 
 
+_MAX_CONTRADICTION_CLUSTERS = 5
+
+
+def contradiction_clusters(verdicts: list) -> list:
+    """Leading-token families over the canonical slugs of every non-dropped verdict;
+    only families with 2+ slugs, the 5 largest (ties by clusterTag)."""
+    families: dict[str, set[str]] = {}
+    for v in verdicts:
+        slug = v["canonical_slug"]
+        if v["verdict"] != "drop" and slug:
+            families.setdefault(_leading_token(slug), set()).add(slug)
+    multi = [(tag, sorted(keys)) for tag, keys in families.items() if len(keys) >= 2]
+    multi.sort(key=lambda item: (-len(item[1]), item[0]))
+    return [
+        {"clusterTag": tag, "topicKeys": keys}
+        for tag, keys in multi[:_MAX_CONTRADICTION_CLUSTERS]
+    ]
+
+
 def curate_clusters(
     tag_counts: dict,
     *,
@@ -438,6 +461,7 @@ def curate_clusters(
         "threshold_applied": threshold,
         "threshold_auto": threshold_auto,
         "nugget_drop_share": nugget_drop_share,
+        "contradictionClusters": contradiction_clusters(verdicts),
         "degraded": False,
     }
 

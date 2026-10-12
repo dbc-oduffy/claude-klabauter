@@ -12,21 +12,16 @@ box is still silently running against until someone notices and removes
 it. This is a passive REPORT, mirroring `budget_breach_signal`'s posture -- it never deletes anything.
 
 Cost shape (must stay cheap -- session-start orientation regen, not a
-hot path): ONE bounded `os.walk` from `repo_root`, pruning `.git`,
-`node_modules`, and any `vendor/` path segment before descending into
-them (never AFTER, so the pruned subtrees are never even listed) --
-exactly the same prune-before-descend shape `lifecycle.py`'s own
-`os.walk(pkg_dir, ...)` uses. No subprocess, no per-file stat beyond
-what `os.walk` itself already does, no recursive `Path.rglob` (which
-cannot prune mid-walk the way `os.walk`'s `dirnames[:] = ...` in-place
-rewrite can).
+hot path): a FIXED set of conventional venv locations is stat'ed -- the repo
+root's own `pyvenv.cfg`, `<root>/<name>/pyvenv.cfg`, and
+`<root>/<child>/<name>/pyvenv.cfg` for `name` in `.venv`, `venv`, `env`,
+`.env`. The repo root is listed once to name its children; no child is ever
+listed, so a deep or unlisted directory is never read. No tree walk, no
+subprocess. A venv under another name, or two or more levels down, is not
+reported -- the venvs the retired provisioners created and
+`python -m venv .venv` sit in the covered set.
 
-`vendor/` exclusion is a PATH-SEGMENT test (`"vendor" in path.parts`),
-not a substring test on the joined path string -- so a repo genuinely
-named e.g. `vendorized-tools/pyvenv.cfg` at the repo root (no `vendor`
-SEGMENT) still reports, while `anything/vendor/sub/pyvenv.cfg` at any
-depth does not, matching the brief's "excluding anything under a
-`vendor/` path segment" wording exactly.
+`.git`, `node_modules` and `vendor` children are skipped.
 
 Fail-open throughout: an unreadable directory, a permission error, or
 any exception at all resolves to `""` (section omitted) -- the same
@@ -42,24 +37,30 @@ from typing import List
 
 GENERATES = []
 
-_PRUNE_DIRNAMES = frozenset({".git", "node_modules"})
+_VENV_NAMES = (".venv", "venv", "env", ".env")
+
+_SKIP_CHILDREN = frozenset({".git", "node_modules", "vendor"})
 
 _MAX_NAMED = 5
 
 
 def _scan(repo_root: Path) -> List[str]:
     hits: List[str] = []
-    for dirpath, dirnames, filenames in os.walk(repo_root, onerror=lambda _exc: None):
-        dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRNAMES and d != "vendor"]
-        if "pyvenv.cfg" in filenames:
-            cfg_path = Path(dirpath) / "pyvenv.cfg"
-            try:
-                rel = cfg_path.relative_to(repo_root)
-            except ValueError:
-                rel = cfg_path
-            hits.append(rel.as_posix())
-    hits.sort()
-    return hits
+    if (repo_root / "pyvenv.cfg").is_file():
+        hits.append("pyvenv.cfg")
+    children: List[str] = []
+    with os.scandir(repo_root) as it:
+        for entry in it:
+            if entry.is_dir(follow_symlinks=False) and entry.name not in _SKIP_CHILDREN:
+                children.append(entry.name)
+    for name in _VENV_NAMES:
+        if (repo_root / name / "pyvenv.cfg").is_file():
+            hits.append(f"{name}/pyvenv.cfg")
+    for child in children:
+        for name in _VENV_NAMES:
+            if (repo_root / child / name / "pyvenv.cfg").is_file():
+                hits.append(f"{child}/{name}/pyvenv.cfg")
+    return sorted(hits)
 
 
 def emit_stray_venvs(repo_root: Path) -> str:

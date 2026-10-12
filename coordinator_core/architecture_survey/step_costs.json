@@ -1,0 +1,137 @@
+{
+  "measured_at_ref": "3843db8c193491777e14f6a283db9c50584788b9",
+  "steps": {
+    "source": {
+      "process_ms_min": 59.4,
+      "process_ms_median": 71.9,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "note": "survey-consume-gate with predicate_only true; k=5 batches. Cold only: the clone carries no engine build stamp, so no warm host exists (DR-315 s2)."
+    },
+    "extraction": {
+      "process_ms_min": 1484.4,
+      "process_ms_median": 1531.2,
+      "spawns": 6,
+      "samples": 5,
+      "cost_class": "over-bar",
+      "basis": "measured",
+      "measured_on": {"target_root": ".","files": 33022},
+      "note": "The gate in full with _rag_predicate forced absent and --allow-unstamped-dispatch injected, over this repo's tree (one bucket, coordinator_core; coverage denominator 20115). Without the injected flag the gate declines at the stamp refusal. Cold only."
+    },
+    "check-doctrine-citations": {
+      "process_ms_min": 234.4,
+      "process_ms_median": 312.5,
+      "spawns": 5,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "note": "--corpus docs/architecture; exits 1 on findings, which is its contract. No warm entrypoint carries it."
+    },
+    "atlas-citation-check": {
+      "process_ms_min": 484.4,
+      "process_ms_median": 593.8,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "over-bar",
+      "basis": "measured",
+      "note": "Cold; 261 findings, exit 1. The warm door atlas-citation-check.exe returned AttributeError: 'NoneType' object has no attribute '__dict__' on every call, so no warm figure exists."
+    },
+    "check-survey-attestation": {
+      "process_ms_min": 137.5,
+      "process_ms_median": 150.0,
+      "spawns": 4,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "note": "--repo-root .; k=5 batches, cold. The door executable ran cold (6 procs, 125.0 min / 187.5 median at k=1)."
+    },
+    "index-currency.rev-list": {
+      "process_ms_min": 65.6,
+      "process_ms_median": 78.1,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "note": "git rev-list --count 2aa2bbd6a7..HEAD, 1752 commits behind at measurement; k=5 batches. Floor: git --version 28.1 min / 34.4 median."
+    },
+    "index-currency.ls-files": {
+      "process_ms_min": 50.0,
+      "process_ms_median": 59.4,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "note": "git ls-files over 33022 tracked paths; k=5 batches."
+    },
+    "cartography.tree": {
+      "process_ms_min": 703.1,
+      "process_ms_median": 750.0,
+      "spawns": 4,
+      "samples": 5,
+      "cost_class": "over-bar",
+      "basis": "measured",
+      "measured_on": {"target_root": "coordinator_core", "files": 5452},
+      "note": "python -m coordinator_core.invoke cartography.tree --allow-unstamped-dispatch; cold."
+    },
+    "cartography.file_index": {
+      "process_ms_min": 234.4,
+      "process_ms_median": 250.0,
+      "spawns": 4,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "measured_on": {"target_root": "coordinator_core", "files": 5452},
+      "note": "Cold."
+    },
+    "cartography.chunk_table": {
+      "process_ms_min": 406.2,
+      "process_ms_median": 421.9,
+      "spawns": 4,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "measured_on": {"target_root": "coordinator_core", "files": 5452},
+      "note": "emit true, one system, chunk_size 10, oversized_threshold 801. Median is 78 percent of the bar at a 5452-file tree and grows with the tree."
+    },
+    "cartography.symbols": {
+      "process_ms_min": 15906.2,
+      "process_ms_median": 16703.1,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "over-bar",
+      "basis": "measured",
+      "measured_on": {"target_root": "coordinator_core", "files": 5108},
+      "note": "files = every tracked .py under coordinator_core, via --params-file, emit false. Cold."
+    },
+    "cartography.edges": {
+      "process_ms_min": 13203.1,
+      "process_ms_median": 18125.0,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "over-bar",
+      "basis": "measured",
+      "measured_on": {"target_root": "coordinator_core", "files": 5108},
+      "note": "Same file set as symbols. At least one run hit the IPC op timeout (coordinator_core.ipc: op 'cartography.edges' timed out after 30.0s, exit 1), so the result is incomplete."
+    },
+    "gate-full.rag-present": {
+      "process_ms_min": 59.4,
+      "process_ms_median": 71.9,
+      "spawns": 2,
+      "samples": 5,
+      "cost_class": "engine",
+      "basis": "measured",
+      "note": "The gate in full, no predicate_only, real predicate (rag present for this repo): no op runs, so equal to source."
+    },
+    "structure": {
+      "process_ms_min": null,
+      "process_ms_median": null,
+      "spawns": null,
+      "samples": 0,
+      "cost_class": "unmeasured",
+      "basis": "code-read",
+      "note": "inproc step; door costs are row S1's."
+    }
+  }
+}

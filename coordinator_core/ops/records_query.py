@@ -1261,13 +1261,12 @@ def _walk_glob_segments(base: Path, segments: list[str]) -> list[Path]:
         # Zero-or-more directory levels — see docstring above.
         results: list[Path] = list(_walk_glob_segments(base, tail))
         try:
-            entries = sorted(os.listdir(str(base)))
+            entries = _sorted_entries(base)
         except OSError:
             return results
         for entry in entries:
-            nxt = base / entry
-            if nxt.is_dir():
-                results.extend(_walk_glob_segments(nxt, segments))
+            if _entry_is_dir(entry):
+                results.extend(_walk_glob_segments(base / entry.name, segments))
         return results
 
     if not any(ch in head for ch in ('*', '?')):
@@ -1281,20 +1280,21 @@ def _walk_glob_segments(base: Path, segments: list[str]) -> list[Path]:
 
     # Wildcard segment — enumerate directory entries in scandir-alphasort order.
     try:
-        entries = sorted(os.listdir(str(base)))
+        entries = _sorted_entries(base)
     except OSError:
         return []
 
     head_re = _segment_to_regex(head)
     results: list[Path] = []
     for entry in entries:
-        if not head_re.match(entry):
+        if not head_re.match(entry.name):
             continue
-        nxt = base / entry
+        nxt = base / entry.name
         if is_last:
-            if nxt.is_file():
+            if _entry_is_file(entry):
+                _LISTING[nxt] = entry
                 results.append(nxt)
-        elif nxt.is_dir():
+        elif _entry_is_dir(entry):
             results.extend(_walk_glob_segments(nxt, tail))
     return results
 
@@ -1464,7 +1464,7 @@ def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
     if not base_dir.is_dir():
         return []
     try:
-        names = sorted(os.listdir(str(base_dir)))  # scandir sorts alphabetically
+        entries = _sorted_entries(base_dir)  # scandir sorts alphabetically
     except OSError as exc:
         # --- Tier 2 (behaviour change -- PM sign-off required) ---
         # A directory that exists but can't be listed (permission error,
@@ -1479,10 +1479,12 @@ def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
         )
         raise _RecordsCollectError(f'cannot list directory {base_dir}: {exc}') from exc
         # --- end Tier 2 ---
-    candidates = [
-        base_dir / name for name in names
-        if filename_re.match(name) and (base_dir / name).is_file()
-    ]
+    candidates = []
+    for entry in entries:
+        if filename_re.match(entry.name) and _entry_is_file(entry):
+            path = base_dir / entry.name
+            _LISTING[path] = entry
+            candidates.append(path)
     return _apply_sibling_exclusion(candidates, record_type, base_dir)
 
 
@@ -1657,7 +1659,124 @@ def _apply_plan_filename_filter(files: list[Path]) -> list[Path]:
     return kept
 
 
-def _load_record(
+# ---------------------------------------------------------------------------
+# Directory listing with stats, and the persisted per-record cache.
+# ---------------------------------------------------------------------------
+
+# Path -> the DirEntry that listed it. `_load_record` pops its entry so the
+# listing's (size, mtime_ns) -- free on Windows -- replaces a stat per record.
+# One-shot: an entry must never outlive the load that follows its listing.
+_LISTING: dict = {}
+
+
+def _sorted_entries(base: Path) -> list:
+    """``os.scandir`` entries of ``base`` in the order ``sorted(os.listdir)`` gave;
+    raises ``OSError`` like ``os.listdir``."""
+    with os.scandir(str(base)) as it:
+        return sorted(it, key=lambda e: e.name)
+
+
+def _entry_is_dir(entry) -> bool:
+    try:
+        return entry.is_dir()
+    except OSError:
+        return False
+
+
+def _entry_is_file(entry) -> bool:
+    try:
+        return entry.is_file()
+    except OSError:
+        return False
+
+
+_RECORD_CACHE_PREFIX = 'claude-klabauter-records-query-cache-'
+_RECORD_CACHE_VERSION = 1
+
+
+def _record_code_stamp() -> list:
+    """Identity of the code that turns a file into a record: a change to the parser,
+    schema, lifecycle vocabulary, path rendering or this module invalidates every entry."""
+    from coordinator_core import lifecycle_constants, wire_paths
+    from coordinator_core.frontmatter import schema_validate
+
+    stamp: list = [_RECORD_CACHE_VERSION, list(sys.version_info[:2])]
+    for mod in (sys.modules[__name__], schema_validate, lifecycle_constants, wire_paths):
+        try:
+            st = os.stat(mod.__file__)
+            stamp.append([st.st_size, st.st_mtime_ns])
+        except (OSError, TypeError, AttributeError):
+            stamp.append(None)
+    return stamp
+
+
+class _RecordCache:
+    """Per-worktree, per-record-type cache under ``.git``: ``<archived>|<path>`` ->
+    ``[size, mtime_ns, emitted path, frontmatter | None]``. One file per type so a
+    query loads only its own records. A corrupt, foreign or code-stale file reads as
+    empty; a worktree without a ``.git`` directory has none."""
+
+    def __init__(self, root: Path, record_type: str) -> None:
+        self.entries: dict = {}
+        self.dirty = False
+        self.path: Optional[str] = None
+        git_dir = os.path.join(str(root), '.git')
+        if not os.path.isdir(git_dir):
+            return
+        self.path = os.path.join(git_dir, f'{_RECORD_CACHE_PREFIX}{record_type}.json')
+        try:
+            with open(self.path, encoding='utf-8') as f:
+                data = json.load(f)
+            if data['code'] == _record_code_stamp() and isinstance(data['entries'], dict):
+                self.entries = data['entries']
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    def flush(self) -> None:
+        if not self.dirty or self.path is None:
+            return
+        self.dirty = False
+        tmp = f'{self.path}.{os.getpid()}.tmp'
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({'code': _record_code_stamp(), 'entries': self.entries},
+                          f, separators=(',', ':'))
+            os.replace(tmp, self.path)
+        except (OSError, ValueError, TypeError):
+            pass
+
+
+_RECORD_CACHES: dict = {}
+
+
+def _record_cache(root: Path, record_type: str) -> _RecordCache:
+    key = (str(root), record_type)
+    cache = _RECORD_CACHES.get(key)
+    if cache is None:
+        cache = _RECORD_CACHES[key] = _RecordCache(root, record_type)
+    return cache
+
+
+def flush_record_cache(root: Path) -> None:
+    """Persist new cache entries for ``root``; a no-op when nothing was added."""
+    for (cached_root, _), cache in _RECORD_CACHES.items():
+        if cached_root == str(root):
+            cache.flush()
+
+
+def _json_pure(v) -> bool:
+    """True when ``v`` survives a JSON round trip with identical types."""
+    t = type(v)
+    if t is dict:
+        return all(type(k) is str and _json_pure(x) for k, x in v.items())
+    if t is list:
+        return all(_json_pure(x) for x in v)
+    if t is float:
+        return v == v and v not in (float('inf'), float('-inf'))
+    return t in (str, int, bool, type(None))
+
+
+def _load_record_uncached(
     fpath: Path, worktree_root: Path, record_type: str,
     *, archived: bool = False, include_body: bool = False,
 ) -> Optional[dict]:
@@ -1794,6 +1913,39 @@ def _load_record(
     return {'path': rel_path, 'frontmatter': fm}
 
 
+def _load_record(
+    fpath: Path, worktree_root: Path, record_type: str,
+    *, archived: bool = False, include_body: bool = False,
+) -> Optional[dict]:
+    """``_load_record_uncached`` through the per-worktree record cache: a file whose
+    (size, mtime_ns) is unchanged is neither opened nor parsed. Bodies are not cached."""
+    entry = _LISTING.pop(fpath, None)
+    if include_body or record_type == 'roadmap':
+        # roadmap loads warn per record on an unmapped status; a cache hit would hide it.
+        return _load_record_uncached(
+            fpath, worktree_root, record_type, archived=archived, include_body=include_body)
+    try:
+        st = entry.stat() if entry is not None else os.stat(str(fpath))
+        stamp = [st.st_size, st.st_mtime_ns]
+    except OSError:
+        return _load_record_uncached(fpath, worktree_root, record_type, archived=archived)
+    cache = _record_cache(worktree_root, record_type)
+    key = f'{int(archived)}|{fpath}'
+    hit = cache.entries.get(key)
+    if hit is not None and hit[:2] == stamp:
+        fm = hit[3]
+        return None if fm is None else {'path': hit[2], 'frontmatter': _clone(fm)}
+    rec = _load_record_uncached(fpath, worktree_root, record_type, archived=archived)
+    if cache.path is not None:
+        if rec is not None and _json_pure(rec['frontmatter']):
+            cache.entries[key] = [*stamp, rec['path'], _clone(rec['frontmatter'])]
+            cache.dirty = True
+        elif rec is None and record_type not in _YAML_WHOLE_FILE_TYPES:
+            cache.entries[key] = [*stamp, None, None]
+            cache.dirty = True
+    return rec
+
+
 def _is_unattached(fm: dict) -> bool:
     """True iff ``fm['initiative']`` is null/absent — the ``--unattached`` predicate.
 
@@ -1906,6 +2058,7 @@ def _collect_type_records(
         )
         if rec is not None:
             results.append(rec)
+    flush_record_cache(worktree_root)
     return results
 
 

@@ -1268,6 +1268,44 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
     return family
 
 
+#: sink path -> (live-file signature, folded claims, folded held kinds). A record is
+#: append-only and rotation renames the live file away, so an unchanged (size, mtime_ns) of the
+#: live file means an unchanged family. Only clean reads of a present live file are kept.
+_FOLD_CACHE: dict[str, tuple] = {}
+_FOLD_CACHE_MAX = 8192
+
+#: agent dir -> owning session id. The back-pointer is written once, atomically, when absent.
+_AGENT_OWNER_CACHE: dict[str, str] = {}
+
+
+def _live_signature(sink_path: "Path | str") -> Optional[tuple[int, int]]:
+    try:
+        st = os.stat(sink_path)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
+def agent_owner_sid(agent_dir_path: str) -> tuple[str, bool]:
+    """First line of ``<agent_dir_path>/em-session-id.txt`` and whether the read was conclusive:
+    ``("", True)`` for an absent back-pointer, ``("", False)`` for an unreadable one."""
+    cached = _AGENT_OWNER_CACHE.get(agent_dir_path)
+    if cached:
+        return cached, True
+    try:
+        with open(os.path.join(agent_dir_path, "em-session-id.txt"), "r", encoding="utf-8") as fh:
+            sid = fh.readline().strip()
+    except FileNotFoundError:
+        return "", True
+    except OSError:
+        return "", False
+    if sid:
+        if len(_AGENT_OWNER_CACHE) >= _FOLD_CACHE_MAX:
+            _AGENT_OWNER_CACHE.clear()
+        _AGENT_OWNER_CACHE[agent_dir_path] = sid
+    return sid, True
+
+
 def _read_stream_claims(sink_path: "Path | str") -> tuple[dict[str, TouchEvent], bool, tuple[str, ...]]:
     """Last-verb-wins claim map of one sink's family; the first three
     elements of ``read_stream_claims_and_held_kind`` minus the kind map."""
@@ -1285,13 +1323,25 @@ def read_stream_claims_and_held_kind(
     member or a malformed complete line each set the returned degrade flag
     (and are counted -- see ``_note_degrade``) rather than aborting the
     read; whatever else in the family DID decode is still returned."""
+    cache_key = str(sink_path)
+    cached = _FOLD_CACHE.get(cache_key)
+    if cached is not None and cached[0] == _live_signature(sink_path):
+        return dict(cached[1]), dict(cached[2]), False, ()
     events: list[TouchEvent] = []
     degraded = False
     reasons: list[str] = []
+    # Signature of the live file as read; a read an append overtook is served but not kept.
+    signature: Optional[tuple[int, int]] = None
+    live = Path(sink_path)
 
     for member in discover_family(sink_path):
         try:
             raw = member.read_bytes()
+            # Append-only: a size equal to the bytes read means nothing landed in between.
+            if member == live:
+                st = os.stat(member)
+                if st.st_size == len(raw):
+                    signature = (st.st_size, st.st_mtime_ns)
         except FileNotFoundError:
             # A peer's rotation raced our directory listing -- not data
             # loss, same posture as a trailing unterminated line.
@@ -1301,7 +1351,6 @@ def read_stream_claims_and_held_kind(
             reasons.append(f"unreadable:{member.name}")
             _note_degrade("unreadable_file", f"{member}: {exc}")
             continue
-
         for line in iter_complete_lines(raw):
             try:
                 events.append(decode_line(line))
@@ -1310,10 +1359,13 @@ def read_stream_claims_and_held_kind(
                 reasons.append(f"malformed:{member.name}")
                 _note_degrade("malformed_line", f"{member}: {exc}")
 
-    if not events:
-        return {}, {}, degraded, tuple(reasons)
-    claims = {e.path: e for e in _last_verb_wins(events)}
-    return claims, _held_kind(events), degraded, tuple(reasons)
+    claims = {e.path: e for e in _last_verb_wins(events)} if events else {}
+    held = _held_kind(events) if events else {}
+    if signature is not None and not degraded:
+        if len(_FOLD_CACHE) >= _FOLD_CACHE_MAX:
+            _FOLD_CACHE.clear()
+        _FOLD_CACHE[cache_key] = (signature, dict(claims), dict(held))
+    return claims, held, degraded, tuple(reasons)
 
 
 def _merge_across_streams(per_stream_claims: list[dict[str, TouchEvent]]) -> dict[str, TouchEvent]:

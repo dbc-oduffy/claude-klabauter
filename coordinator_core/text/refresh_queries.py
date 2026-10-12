@@ -144,18 +144,20 @@ programmatically.md defect 2):
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
+import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, TypedDict
+from typing import Dict, List, Optional, Tuple, TypedDict
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session import claims
 from coordinator_core.text.sentinel_blocks import replace_block
 from coordinator_core.text.query_record_display import format_records
-from coordinator_core.ops.ceremony.records_query import query_records
+from coordinator_core.ops.ceremony.records_query import filter_records, query_records
 from coordinator_core.ops.records_query import _sort_records
 
 MUTATES = ["**/*.md"]
@@ -186,15 +188,14 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 def _leaves_this_repo(entry: "os.DirEntry[str]") -> bool:
     """True for a directory whose contents are not this repo's own: a reparse point
     (a Windows junction is not a symlink, so `is_dir(follow_symlinks=False)` descends it)
-    or a nested checkout. Refresh WRITES query blocks, so descending either rewrites
-    another tree's files with this repo's records."""
+    or a symlink. Refresh WRITES query blocks, so descending either rewrites
+    another tree's files with this repo's records. A nested checkout (a ``.git`` child) is
+    recognised by `walk_md` from the child's own listing."""
     try:
         attrs = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
     except OSError:
         return True
-    if attrs & _FILE_ATTRIBUTE_REPARSE_POINT or entry.is_symlink():
-        return True
-    return os.path.lexists(os.path.join(entry.path, ".git"))
+    return bool(attrs & _FILE_ATTRIBUTE_REPARSE_POINT or entry.is_symlink())
 
 
 class ArgParseError(Exception):
@@ -301,7 +302,16 @@ def parse_query_spec(begin_marker: str) -> QuerySpec:
     return opts
 
 
-def walk_md(dir_: str, results: Optional[List[str]] = None) -> List[str]:
+def walk_md(
+    dir_: str,
+    results: Optional[List[str]] = None,
+    stamps: Optional[Dict[str, Tuple[int, int]]] = None,
+    _nested: bool = False,
+) -> List[str]:
+    """``stamps``, when given, receives ``path -> (size, mtime_ns)`` for each file
+    found, taken from the directory listing rather than a stat per file. A directory
+    holding a ``.git`` entry is a nested checkout and contributes nothing (``_nested``
+    is set for every directory below the walk root)."""
     if results is None:
         results = []
     try:
@@ -309,17 +319,21 @@ def walk_md(dir_: str, results: Optional[List[str]] = None) -> List[str]:
     except OSError:
         return results
 
+    if _nested and any(e.name == ".git" for e in entries):
+        return results
+
     for e in entries:
         try:
-            is_dir = e.is_dir(follow_symlinks=False)
-            is_file = e.is_file(follow_symlinks=False)
+            if e.is_dir(follow_symlinks=False):
+                if e.name not in EXCLUDED_DIRS and not _leaves_this_repo(e):
+                    walk_md(e.path, results, stamps, True)
+            elif e.name.endswith(".md") and e.is_file(follow_symlinks=False):
+                results.append(e.path)
+                if stamps is not None:
+                    st = e.stat(follow_symlinks=False)
+                    stamps[e.path] = (st.st_size, st.st_mtime_ns)
         except OSError:
             continue
-        if is_dir:
-            if e.name not in EXCLUDED_DIRS and not _leaves_this_repo(e):
-                walk_md(e.path, results)
-        elif is_file and e.name.endswith(".md"):
-            results.append(e.path)
     return results
 
 
@@ -346,6 +360,23 @@ def line_of_offset(content: str, offset: int) -> int:
     return content.count("\n", 0, offset)
 
 
+# Per-run memo of each record type's unfiltered enumeration, set by `main` for the
+# duration of one walk: every roadmap callout re-enumerated the whole handoff
+# corpus. None outside `main`, where a caller editing files between calls must
+# see the disk.
+_RUN_ENUMERATION: Optional[Dict[Tuple[str, str], list]] = None
+
+
+def _query_type(record_type: str, root: str, where: Optional[str], since: Optional[str]) -> list:
+    memo = _RUN_ENUMERATION
+    if memo is None:
+        return query_records(record_type, Path(root), where=where, since=since, limit=0)
+    key = (root, record_type)
+    if key not in memo:
+        memo[key] = query_records(record_type, Path(root), limit=0)
+    return copy.deepcopy(filter_records(memo[key], where, since))
+
+
 def _run_query_records_native(
     query_opts: QuerySpec, root: str, from_dir: Optional[str] = None
 ) -> str:
@@ -359,11 +390,9 @@ def _run_query_records_native(
     captured_stderr = io.StringIO()
     try:
         with contextlib.redirect_stderr(captured_stderr):
-            records = query_records(record_type, Path(root), where=where, since=since, limit=0)
+            records = _query_type(record_type, root, where, since)
             if record_type == "handoff" and where and _ROADMAP_ID_WHERE_RE.search(where):
-                archived = query_records(
-                    "handoff-archived", Path(root), where=where, since=since, limit=0
-                )
+                archived = _query_type("handoff-archived", root, where, since)
                 records = records + archived
     except ValueError as exc:
         sys.stderr.write(captured_stderr.getvalue())
@@ -400,7 +429,9 @@ def _run_query_records_native(
 # ---------------------------------------------------------------------------
 
 
-def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResult:
+def process_file(
+    file_path: str, root: str, check_mode: bool, marker_free: Optional[set] = None
+) -> ProcessFileResult:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -408,6 +439,8 @@ def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResu
         return {"changed": False, "changedCount": 0, "errorCount": 0}
 
     if BEGIN_PREFIX not in content:
+        if marker_free is not None:
+            marker_free.add(file_path)
         return {"changed": False, "changedCount": 0, "errorCount": 0}
 
     working = content
@@ -518,7 +551,44 @@ def resolve_files_opt(files_opt: str, root: str) -> List[str]:
     return resolved
 
 
+def _rel(path: str, root: str) -> str:
+    # walk_md paths are root-prefixed; relpath's per-call normalisation dominates 17k files.
+    if path.startswith(root) and path[len(root):len(root) + 1] in ("/", "\\"):
+        return path[len(root) + 1:]
+    return os.path.relpath(path, root)
+
+
+_MARKER_FREE_CACHE = "claude-klabauter-refresh-queries-marker-free.json"
+
+
+def _load_marker_free(root: str) -> Tuple[Optional[str], Dict[str, list]]:
+    """Files last seen without a callout, keyed by root-relative path with the
+    (size, mtime_ns) they had then. Lives under ``.git``; None path when there is no
+    ``.git`` directory."""
+    git_dir = os.path.join(root, ".git")
+    if not os.path.isdir(git_dir):
+        return None, {}
+    path = os.path.join(git_dir, _MARKER_FREE_CACHE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            files = json.load(f)["files"]
+        return path, files if isinstance(files, dict) else {}
+    except (OSError, ValueError, KeyError):
+        return path, {}
+
+
+def _save_marker_free(path: str, files: Dict[str, list]) -> None:
+    try:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"files": files}, f, separators=(",", ":"))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def main(argv: List[str]) -> int:
+    global _RUN_ENUMERATION
     try:
         opts = parse_args(argv)
     except ArgParseError as exc:
@@ -527,14 +597,29 @@ def main(argv: List[str]) -> int:
 
     root = detect_root(opts["root"])
 
-    files = resolve_files_opt(opts["files"], root) if opts["files"] is not None else walk_md(root)
+    stamps: Optional[Dict[str, Tuple[int, int]]] = None
+    cache_path: Optional[str] = None
+    known_free: Dict[str, list] = {}
+    if opts["files"] is not None:
+        files = resolve_files_opt(opts["files"], root)
+    else:
+        stamps = {}
+        files = walk_md(root, stamps=stamps)
+        cache_path, known_free = _load_marker_free(root)
 
     total_changed = 0
     total_errors = 0
+    marker_free: set = set()
+    _RUN_ENUMERATION = {}
 
     try:
         for f in files:
-            result = process_file(f, root, opts["check"])
+            if stamps is not None and f in stamps:
+                prior = known_free.get(_rel(f, root))
+                if prior is not None and tuple(prior) == stamps[f]:
+                    marker_free.add(f)
+                    continue
+            result = process_file(f, root, opts["check"], marker_free if stamps is not None else None)
             if result["changed"]:
                 rel = os.path.relpath(f, root)
                 label = "[would change]" if opts["check"] else "[updated]"
@@ -544,6 +629,13 @@ def main(argv: List[str]) -> int:
     except QueryRecordsTransportError as exc:
         sys.stderr.write(f"refresh-queries: transport failure: {exc}\n")
         return 3
+    finally:
+        _RUN_ENUMERATION = None
+
+    if cache_path is not None and stamps is not None:
+        now_free = {_rel(f, root): list(stamps[f]) for f in marker_free if f in stamps}
+        if now_free != known_free:
+            _save_marker_free(cache_path, now_free)
 
     if total_changed == 0 and total_errors == 0:
         print("All query callouts are up to date.")

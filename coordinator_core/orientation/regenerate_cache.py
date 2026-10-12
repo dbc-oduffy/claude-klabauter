@@ -223,6 +223,7 @@ from coordinator_core.ops.ceremony.housekeeping_liveness import (
     ARCHIVE_SWEEPS,
     REMEDY_COMMANDS,
     check_stale_detailed,
+    remedy_commands,
 )
 from coordinator_core.resolve_validation_cmd import (
     _extract_frontmatter as _cs_extract_frontmatter,
@@ -249,6 +250,7 @@ GENERATES = [
             "coordinator_core/orientation/budget_breach_signal.py",
             "coordinator_core/orientation/expired_grant_signal.py",
             "coordinator_core/orientation/route_unreachable_signal.py",
+            "coordinator_core/orientation/stray_venv_signal.py",
             "coordinator_core/orientation/warm_health_signal.py",
         ],
     },
@@ -1072,10 +1074,10 @@ _ARCHIVE_SWEEP_SCRIPT_NAMES = tuple(
 )
 
 
-def _remedy_sub_bullets(class_key: str) -> List[str]:
+def _remedy_sub_bullets(class_key: str, repo_root: Optional[str] = None) -> List[str]:
     """Return indented sub-bullet lines for `class_key`'s on-demand remedy commands, or []
     when that class has no on-demand CLI on record (see REMEDY_COMMANDS negative-spec)."""
-    return [f"  - `{cmd}`" for cmd in REMEDY_COMMANDS.get(class_key, ())]
+    return [f"  - `{cmd}`" for cmd in remedy_commands(class_key, repo_root)]
 
 
 def _parse_failure_line(line: str) -> Optional[dict]:
@@ -1211,7 +1213,7 @@ def _emit_housekeeping(repo_root: Path) -> List[str]:
 
     for class_key, msg in check_stale_detailed(str(repo_root)):
         lines.append(f"- ⚠ stale housekeeping: {msg}")
-        lines.extend(_remedy_sub_bullets(class_key))
+        lines.extend(_remedy_sub_bullets(class_key, str(repo_root)))
 
     return lines
 

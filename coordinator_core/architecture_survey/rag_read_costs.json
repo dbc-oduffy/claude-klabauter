@@ -1,0 +1,169 @@
+{
+  "measured_at_ref": "789ef53a3b01a7a8d3a6efe1512d68247309e650",
+  "rag_ref": "a893eaa321e4df9f8f1af3deacde5bc7fc4c919c",
+  "transport": {
+    "reachable": true,
+    "address_rule": "http://${EXAMPLE_RETRIEVAL_REPO_HTTP_HOST:-127.0.0.1}:${EXAMPLE_RETRIEVAL_REPO_HTTP_PORT:-8767}/mcp (example_retrieval_repo_mcp/http_config.py); env vars unset on this box, default answered",
+    "project_binding": {
+      "rule": "cwd",
+      "identity_door": "project_list_sources",
+      "identity_field": "data.resolution.git_root",
+      "outside_registered_repo": "no refusal at the transport: project_list_sources answered ok with resolution.git_root = another repo (example-retrieval-repo's checkout) and not_indexed_reason = boot_fallback_ambiguous; project_doc_links answered verdict source_unspecified (data empty, hint lists addressable repos). The caller must therefore compare identity_field to its own repo root before trusting any other answer."
+    },
+    "auth": "none on loopback: no header or token sent beyond Content-Type: application/json and Accept: application/json, text/event-stream",
+    "framing": "POST /mcp, JSON-RPC 2.0 tools/call, stateless (no session id); reply is text/event-stream with one 'data: {json}' line whose result.content[0].text is the tool envelope as a JSON string",
+    "daemon_down": "connection refused (URLError, WinError 10061), observed against an unbound loopback port; the live shared daemon was not stopped",
+    "daemon_warming": "not measured: producing it needs a restart of the shared daemon (GET /health reported status=ready, boot_complete=true throughout); the plan's 503 reading is unconfirmed"
+  },
+  "doors": {
+    "project_list_sources": {
+      "samples": 5,
+      "caller_process_ms_min": 93.75,
+      "caller_process_ms_median": 125.0,
+      "timing_ms_min": 178,
+      "timing_ms_median": 267,
+      "timing_ms_max": 344,
+      "daemon_process_ms_per_call": 125.2,
+      "daemon_process_ms_per_call_raw": 301.6,
+      "response_bytes_median": 19056,
+      "timeout_ms": 688,
+      "cost_class": "within"
+    },
+    "project_architecture_graph": {
+      "samples": 5,
+      "caller_process_ms_min": 125.0,
+      "caller_process_ms_median": 140.625,
+      "timing_ms_min": 4102,
+      "timing_ms_median": 4266,
+      "timing_ms_max": 14208,
+      "daemon_process_ms_per_call": 2105.9,
+      "daemon_process_ms_per_call_raw": 2290.6,
+      "response_bytes_median": 79819,
+      "timeout_ms": 28416,
+      "cost_class": "over-bar"
+    },
+    "project_doc_links": {
+      "samples": 5,
+      "caller_process_ms_min": 93.75,
+      "caller_process_ms_median": 125.0,
+      "timing_ms_min": 154,
+      "timing_ms_median": 174,
+      "timing_ms_max": 540,
+      "daemon_process_ms_per_call": 133.6,
+      "daemon_process_ms_per_call_raw": 332.8,
+      "response_bytes_median": 12731,
+      "timeout_ms": 1080,
+      "cost_class": "within"
+    },
+    "example_retrieval_repo_show_index": {
+      "samples": 5,
+      "caller_process_ms_min": 109.375,
+      "caller_process_ms_median": 125.0,
+      "timing_ms_min": 1186,
+      "timing_ms_median": 1425,
+      "timing_ms_max": 1829,
+      "daemon_process_ms_per_call": 1849.4,
+      "daemon_process_ms_per_call_raw": 2790.6,
+      "response_bytes_median": 3233,
+      "timeout_ms": 3658,
+      "cost_class": "over-bar"
+    },
+    "project_staleness_check": {
+      "samples": 5,
+      "caller_process_ms_min": 93.75,
+      "caller_process_ms_median": 109.375,
+      "timing_ms_min": 5003,
+      "timing_ms_median": 5005,
+      "timing_ms_max": 5017,
+      "daemon_process_ms_per_call": 4480.4,
+      "daemon_process_ms_per_call_raw": 5946.9,
+      "response_bytes_median": 3050,
+      "timeout_ms": 10034,
+      "cost_class": "over-bar"
+    }
+  },
+  "needs": {
+    "system-map": {
+      "covered": true,
+      "door": "project_architecture_graph",
+      "calls_per_run": 1,
+      "fields": ["data.systems[].name", "data.unmapped.file_count", "data.unmapped.share", "data.coupling_bands"],
+      "reason": "names only: data.systems[] entries carry {name} and no file_count or line_count in the answer for this repo; the system names are rag's top-level-directory set (11), not the atlas's"
+    },
+    "edges": {
+      "covered": true,
+      "door": "project_architecture_graph",
+      "calls_per_run": 1,
+      "fields": ["data.edges[].from_system", "data.edges[].to_system", "data.edges[].weight", "data.fan_in", "data.boundary_citations[].source_file", "data.limits"],
+      "reason": "static module-level imports only (data.limits.excludes); same single call as system-map"
+    },
+    "file-index": {
+      "covered": false,
+      "door": null,
+      "calls_per_run": 0,
+      "fields": [],
+      "reason": "no door returns per-file rows with a system: the graph returns counts and a boundary-citation file list, project_code_outline is per file, project_records_query reads declared structured-records sources only"
+    },
+    "dead-paths": {
+      "covered": true,
+      "door": "project_doc_links",
+      "calls_per_run": 27,
+      "fields": ["data.outbound[].target", "data.outbound[].link_kind", "data.outbound[].resolution", "data.freshness"],
+      "reason": "one call per atlas page (23 system pages and 4 top-level pages); resolution is target_missing | unresolved | ambiguous | resolved, so a dead path is target_missing or unresolved; the answer names no last-touching commit"
+    },
+    "last-touch": {
+      "covered": false,
+      "door": null,
+      "calls_per_run": 0,
+      "fields": [],
+      "reason": "no door returns the last commit that touched a path"
+    }
+  },
+  "system_set": {
+    "result": "disagrees",
+    "rag_only": [".coordinator-local", ".github", "bin", "conftest", "coordinator", "coordinator_core", "docs", "drive_root_write_guard", "scripts", "state", "tasks"],
+    "atlas_only": ["assemblers", "benchmarks", "cartography", "ceremony-ops", "contract-schemas", "distill", "docgen", "emit-engine", "engine-runtime", "fleet-drift-detection", "fleet-ops", "guards", "hooks", "install-node", "install-substrate", "invocation-substrate", "operator-cli", "ops-flat", "percolate", "publish-scrub", "session-ops", "support-libraries", "worklife-ops"],
+    "unmapped_share": 0.7765095867706332,
+    "accepts_caller_mapping": false
+  },
+  "index_currency": {
+    "stated": true,
+    "door": "example_retrieval_repo_show_index",
+    "field": "data.refs.l2.branches[].git_sha",
+    "per_layer": {
+      "l2_structural": {
+        "door": "example_retrieval_repo_show_index",
+        "field": "data.refs.l2.branches[].git_sha",
+        "samples": 5,
+        "returned_field": 5,
+        "value_seen": "2aa2bbd6a743ffffd09c70d9a6a95fb776a8e2c7",
+        "branch_key_seen": "work/machine-a/2026-10-04+dirty",
+        "branch_key_matches_live_branch": false,
+        "note": "stamps are keyed by branch name with a +dirty suffix; the live branch is work/machine-a/2026-10-04to12, so no stamp is keyed to it. Stamp date 2026-10-06T05:04:46+01:00 agrees with the structural index age the graph envelope reports (provenance.index_age_seconds.project_structural_index = 552039 at the first call)."
+      },
+      "project_staleness_check": {
+        "field": "data.layer_refs.l2.stamped_sha",
+        "samples": 5,
+        "returned_field": 0,
+        "reason": "l2.computed false, degraded_reason internal_budget_exceeded on every sample (about 5.0s)"
+      },
+      "project_architecture_graph": {
+        "field": "provenance.index_age_seconds.project_structural_index",
+        "returned_field": 5,
+        "reason": "an age in seconds, no commit; provenance.serving_commit (9b59cce63) is the daemon's code commit and is not recorded as the index commit"
+      },
+      "l3_text": {
+        "door": "example_retrieval_repo_show_index",
+        "field": "data.refs.l3.refresh.text.sha",
+        "value_seen": "adc2e42f86e90982e79b63be3e56047ecc564486",
+        "commits_behind_head": 4818,
+        "note": "embedding layer, not the structure's commit; l3.refresh.code has no stamp"
+      }
+    }
+  },
+  "cli_floor": {
+    "process_ms": 356.25
+  },
+  "verdict": "viable",
+  "uncovered": ["file-index", "last-touch"]
+}

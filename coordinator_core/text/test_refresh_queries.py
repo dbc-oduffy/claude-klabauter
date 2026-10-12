@@ -392,6 +392,25 @@ def test_main_full_walk_write_mode_matches_oracle(tmp_path, capsys):
     assert "should-be-ignored" not in out.err
 
 
+def test_marker_free_cache_skips_unchanged_files_but_sees_an_added_callout(tmp_path, capsys):
+    (tmp_path / ".git").mkdir()
+    doc = _write(tmp_path / "doc.md", "# Doc\n\nno callout here\n")
+
+    assert main(["--root", str(tmp_path), "--check"]) == 0
+    cache = tmp_path / ".git" / "claude-klabauter-refresh-queries-marker-free.json"
+    assert "doc.md" in cache.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    doc.write_text(
+        "# Doc\n\n<!-- BEGIN query: handoff where=roadmap_id=nonexistent-marker-xyz -->\n"
+        "placeholder old content\n<!-- END query -->\n",
+        encoding="utf-8",
+    )
+    assert main(["--root", str(tmp_path), "--check"]) == 1
+    assert "[would change] doc.md (1 callout(s))" in capsys.readouterr().out
+    assert "doc.md" not in cache.read_text(encoding="utf-8")
+
+
 def test_main_check_mode_reports_and_exits_1_without_writing(tmp_path, capsys):
     doc = _write(
         tmp_path / "doc1.md",

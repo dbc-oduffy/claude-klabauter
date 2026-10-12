@@ -68,6 +68,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -266,6 +268,31 @@ def _latest_v_tag(bundle_root: str) -> Optional[str]:
         return None
     lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
     return lines[0] if lines else None
+
+
+def locate_surfaces(repo_root: str) -> Optional[dict]:
+    """Paths of the three version surfaces under ``repo_root``.
+
+    Returns ``{"plugin_json", "marketplace_json", "changelog"}``; ``changelog``
+    is ``None`` when absent. Returns ``None`` when the repo holds no
+    coordinator-claude bundle (the module's not-applicable case).
+
+    Consumer: ``workweek_complete/release/declared.py``.
+    """
+    repo_root = str(repo_root).replace("\\", "/")
+    bundle_root = _discover_bundle_for_repo_root(repo_root)
+    if bundle_root is None:
+        return None
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            changelog: Optional[str] = _resolve_changelog(bundle_root)
+    except _GateFailure:
+        changelog = None
+    return {
+        "plugin_json": _resolve_plugin_json(bundle_root),
+        "marketplace_json": f"{bundle_root}/.claude-plugin/marketplace.json",
+        "changelog": changelog,
+    }
 
 
 def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int:

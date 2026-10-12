@@ -93,6 +93,8 @@ structured-verdicts.md
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import re
 import shutil
@@ -386,6 +388,24 @@ def _run(
         return None
 
 
+def _run_in_process(fn: Callable[[], int]) -> subprocess.CompletedProcess:
+    """Run an engine entrypoint that prints to the process streams and shape its
+    result like `_run`'s, so a gate's verdict code is the same for either route.
+
+    A raise reads as exit 1 with the exception on stderr, exactly what a crashed
+    child process would have reported. Redirection is process-wide: only for
+    entrypoints that write to `sys.stdout`/`sys.stderr` and take no stream argument.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = fn()
+        except Exception as exc:  # noqa: BLE001 — a crashed gate callee is a failed gate, not a crashed op
+            code = 1
+            err.write(f"{type(exc).__name__}: {exc}\n")
+    return subprocess.CompletedProcess([], code, out.getvalue(), err.getvalue())
+
+
 def _settings_home(override: Optional[str]) -> Path:
     if override:
         return Path(override)
@@ -437,8 +457,12 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
     bin_dir = settings_home / "bin"
     rag_state = overrides.get("rag_state")
     if not rag_state:
-        check_rag_state_cli = Path(overrides["check_rag_state_cli"]) if overrides.get("check_rag_state_cli") else _resolve_cli(bin_dir, "check-rag-state.py")
-        proc = _run(check_rag_state_cli, [])
+        if overrides.get("check_rag_state_cli"):
+            proc = _run(Path(overrides["check_rag_state_cli"]), [])
+        else:
+            from coordinator_core.ops import check_rag_state
+
+            proc = _run_in_process(lambda: check_rag_state.main([]))
         rag_state = proc.stdout.strip() if proc and proc.returncode == 0 else "unknown"
         if not rag_state:
             rag_state = "unknown"
@@ -726,7 +750,7 @@ _YAML_QUEUE_FAMILIES = (
 def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
     bin_dir = settings_home / "bin"
     override_cli = overrides.get("prune_cli")
-    prune_cli = Path(override_cli) if override_cli else _resolve_cli(bin_dir, "prune-resolved-queue-entries.py")
+    prune_cli = Path(override_cli) if override_cli else None
     queues = overrides.get("queues") or list(_DEFAULT_QUEUES)
 
     overall_fail = False
@@ -754,16 +778,16 @@ def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dic
                     overall_fail = True
                     lines.append(f"prune FAILED for {queue}")
         else:
-            # Our own CLI's single-subject arity was self-imposed
-            # (prune_resolved_queue_entries.main took exactly one
-            # positional); it now prunes N queue-files independently in one
-            # process, still emitting a per-file stderr line on failure —
-            # so the whole default-callee sweep collapses to one spawn.
-            proc = _run(prune_cli, [str(repo_root / q) for q in existing_queues])
-            if proc is None:
-                overall_fail = True
-                lines.append("prune FAILED for all queues (CLI could not be spawned)")
-            elif proc.returncode != 0:
+            # The default callee prunes N queue files independently in one call
+            # and reports each failure on stderr, so the sweep is one in-process
+            # call; only an explicit prune_cli override spawns.
+            from coordinator_core.cli_entry import run_op_main
+
+            paths = [str(repo_root / q) for q in existing_queues]
+            proc = _run_in_process(
+                lambda: run_op_main("coordinator_core.ops.prune_resolved_queue_entries", paths, cwd=str(repo_root))
+            )
+            if proc.returncode != 0:
                 overall_fail = True
                 stderr_lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
                 lines.extend(stderr_lines or ["prune FAILED (nonzero exit, no stderr detail)"])
@@ -829,16 +853,30 @@ def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dic
 # Gate 11j: Reap stale subagent-share sidecars
 # ---------------------------------------------------------------------------
 
-_REAPED_RE = re.compile(r"reaped\s+(\d+)", re.IGNORECASE)
+# The reap's own count line reads "N stale subagent-share sidecar(s) reaped"; the
+# leading "reaped N" form is the older shape and is still accepted.
+_REAPED_RE = re.compile(r"reaped\s+(\d+)|(\d+)\s+stale subagent-share sidecar\(s\) reaped", re.IGNORECASE)
 
 
 def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "reap-stale-subagent-sidecars")
-    if not cli.exists():
-        return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
-    proc = _run(cli, ["--repo-root", str(repo_root)])
-    if proc is None:
-        return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, "CLI could not be spawned")
+    if overrides.get("cli"):
+        cli = Path(overrides["cli"])
+        if not cli.exists():
+            return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
+        proc = _run(cli, ["--repo-root", str(repo_root)])
+        if proc is None:
+            return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, "CLI could not be spawned")
+    else:
+        from coordinator_core.session.liveness import session_live
+        from coordinator_core.sidecar_reap import reap_stale_sidecars
+
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            code = reap_stale_sidecars(str(repo_root), session_live, out=out, err=err)
+        except Exception as exc:  # noqa: BLE001 — a crashed reap is a failed gate, not a crashed op
+            code = 1
+            err.write(f"{type(exc).__name__}: {exc}\n")
+        proc = subprocess.CompletedProcess([], code, out.getvalue(), err.getvalue())
     if proc.returncode != 0:
         return GateResult(
             "11j-reap-stale-sidecars",
@@ -848,7 +886,7 @@ def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: d
             detail={"stderr": proc.stderr[-_DETAIL_TAIL_CHARS:]},
         )
     reaped_match = _REAPED_RE.search(proc.stdout or "")
-    reaped = int(reaped_match.group(1)) if reaped_match else 0
+    reaped = int(reaped_match.group(1) or reaped_match.group(2)) if reaped_match else 0
     if reaped:
         return GateResult(
             "11j-reap-stale-sidecars",

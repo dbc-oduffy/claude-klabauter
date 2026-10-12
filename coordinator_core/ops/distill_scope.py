@@ -367,7 +367,7 @@ def compute_scope(
     """Compute the full scope-manifest for one distill.scope run.
 
     All directory params are worktree_root-relative. wiki_dirs defaults to
-    ["docs/wiki"] plus "coordinator/docs/wiki" when the latter exists on disk
+    ["docs/wiki"] plus "coordinator/docs/wiki" and "docs/guides" when those exist on disk
     (repo-shape-adaptive; a single-tree repo gets just ["docs/wiki"]).
 
     ``cohort_specs`` (CohortSpec rows, DATA-DRIVEN per the 2026-08-06 PM
@@ -498,7 +498,30 @@ def _default_wiki_dirs(worktree_root: Path) -> list[str]:
     dirs = ["docs/wiki"]
     if (worktree_root / "coordinator" / "docs" / "wiki").is_dir():
         dirs.append("coordinator/docs/wiki")
+    if (worktree_root / "docs" / "guides").is_dir():
+        dirs.append("docs/guides")
     return dirs
+
+
+_CANDIDATE_WIKI_DIRS: tuple[str, ...] = ("docs/wiki", "coordinator/docs/wiki", "docs/guides")
+
+
+def empty_wiki_warning(worktree_root: Path, manifest: dict[str, Any]) -> str | None:
+    """A loud warning when no wiki slugs were indexed although a candidate wiki/guides
+    dir holds .md files; None otherwise. Zero slugs makes synth mint duplicates."""
+    if manifest["wiki_slugs"]:
+        return None
+    populated = [
+        d for d in _CANDIDATE_WIKI_DIRS
+        if (worktree_root / d).is_dir() and any((worktree_root / d).rglob("*.md"))
+    ]
+    if not populated:
+        return None
+    return (
+        f"WARNING: wiki_slugs_count is 0 but {populated} contain .md files; searched "
+        f"wiki_dirs={manifest['wiki_dirs']}. Pass wiki_dirs explicitly or synth will "
+        "mint duplicate guides."
+    )
 
 
 def write_scope_manifest(worktree_root: Path, manifest: dict[str, Any]) -> Path:
@@ -673,7 +696,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         worktree_root, run_id, "workflow-input.json", workflow_input(result.manifest, worktree_root)
     )
 
-    return {
+    result_dict = {
         "run_id": run_id,
         "input_json_path": rel_id(written_path, worktree_root),
         # Pass THIS as distill-harvest.workflow.js's args.inputFile, not input_json_path.
@@ -681,3 +704,8 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         "counts": result.counts,
         "summary": render_summary(result.manifest, result.counts),
     }
+    warning = empty_wiki_warning(worktree_root, result.manifest)
+    if warning is not None:
+        result_dict["warning"] = warning
+        result_dict["summary"] += "\n  " + warning
+    return result_dict

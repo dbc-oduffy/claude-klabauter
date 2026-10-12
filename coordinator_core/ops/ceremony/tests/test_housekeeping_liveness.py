@@ -182,6 +182,25 @@ def test_roadmap_callout_remedy_names_the_shipped_cli() -> None:
     assert "coordinator/bin/refresh-roadmap-callout.py" in cmd
 
 
+def test_git_maintenance_remedy_is_the_launcher_form_not_a_source_checkout_path() -> None:
+    for cmd in hl.REMEDY_COMMANDS[hl.GIT_MAINTENANCE]:
+        assert cmd.startswith("coordinator-invoke git.maintenance ")
+        assert "coordinator/bin" not in cmd
+
+
+def test_remedy_commands_fills_the_repo_root_as_valid_json() -> None:
+    root = "repo\\with\\backslashes"
+    weekly, daily = hl.remedy_commands(hl.GIT_MAINTENANCE, root)
+    for cmd, tier in ((weekly, "weekly"), (daily, "daily")):
+        payload = cmd.split(" git.maintenance ", 1)[1].strip("'")
+        assert json.loads(payload) == {"tier": tier, "repo": root}
+
+
+def test_remedy_commands_without_a_root_returns_the_templates() -> None:
+    assert hl.remedy_commands(hl.GIT_MAINTENANCE) == hl.REMEDY_COMMANDS[hl.GIT_MAINTENANCE]
+    assert hl.remedy_commands(hl.EOL_SWEEP, "/r") == ()
+
+
 def test_remedy_commands_covers_every_known_class() -> None:
     assert set(hl.REMEDY_COMMANDS.keys()) == set(hl.KNOWN_CLASSES)
 

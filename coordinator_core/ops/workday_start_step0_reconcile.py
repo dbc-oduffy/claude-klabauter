@@ -51,19 +51,39 @@ Behavior-preservation notes (read alongside the bash source):
   - On a conflicted `--no-ff` merge, `git merge --abort` is run and its
     own exit code is unconditionally swallowed (bash oracle:
     `git merge --abort >&2 || true`) — this port does the same.
+  - Before the merge attempts, ONE `git diff --cached --name-only -z` reads
+    the staged path set (the single added spawn). Empty: nothing changes.
+    Every path under `state/block-discharge/`: committed by one `git add`
+    plus one `git commit`, each carrying every path as an explicit
+    pathspec, then `SPOOL-COMMITTED <n>` is printed and the merge proceeds.
+    Any other staged path: nothing is committed, the outcome is
+    `RECONCILE-MERGE-NOT-STARTED` (exit 3) and the staged paths follow a
+    `STAGED-PATHS` stderr line, one per line. A `RECONCILE-CONFLICT` lists
+    its conflicted paths after a `CONFLICT-PATHS` stderr line.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
+from coordinator_core.contract.apply_base import _mirror_session_env_for_subprocess
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_state import IndexParseError, read_index
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
+
+
+_BLOCK_DISCHARGE_SPOOL_ROOT = "state/block-discharge/"
+_SPOOL_COMMIT_MESSAGE = "block-discharge: commit staged spool so reconcile can merge"
+_CONFLICT_LINE = re.compile(
+    r"^CONFLICT \([^)]*\): (?:Merge conflict in (?P<merge>.+)"
+    r"|(?P<other>.+?) (?:deleted|modified|added|renamed|left)\b.*)$"
+)
 
 
 def _run(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -101,6 +121,43 @@ def _index_readable(repo_root: Path) -> bool:
     except IndexParseError:
         return False
     return True
+
+
+def _staged_paths() -> tuple[int, list[str], str]:
+    """(returncode, staged paths, stderr) from one `git diff --cached
+    --name-only -z`; sees staged deletions, which an index-driven read cannot."""
+    proc = _run(["diff", "--cached", "--name-only", "-z"])
+    paths = [p for p in proc.stdout.split("\0") if p]
+    return proc.returncode, paths, proc.stderr
+
+
+def _print_staged_paths(staged: list[str]) -> None:
+    print("STAGED-PATHS", file=sys.stderr)
+    for path in staged:
+        print(path, file=sys.stderr)
+
+
+def _commit_spool(paths: list[str]) -> subprocess.CompletedProcess | None:
+    """Commit exactly `paths` (one add, one commit, explicit pathspecs).
+    Returns the failing process, or None on success."""
+    with _mirror_session_env_for_subprocess():
+        add = run_with_lock_retry(lambda: _run(["add", "--", *paths]))
+    if add.returncode != 0:
+        return add
+    with _mirror_session_env_for_subprocess():
+        commit = run_with_lock_retry(
+            lambda: _run(["commit", "-m", _SPOOL_COMMIT_MESSAGE, "--", *paths])
+        )
+    return commit if commit.returncode != 0 else None
+
+
+def _conflict_paths(merge_output: str) -> list[str]:
+    found: list[str] = []
+    for line in merge_output.splitlines():
+        match = _CONFLICT_LINE.match(line.strip())
+        if match:
+            found.append((match.group("merge") or match.group("other")).strip())
+    return found
 
 
 def _classify_failed_merge(merge_in_progress: bool, index_readable: bool) -> str:
@@ -150,6 +207,37 @@ def main(argv: list[str]) -> int:
     if is_ancestor.returncode == 0:
         print(f"ALREADY-CURRENT branch={current}")
         return 0
+
+    staged_rc, staged, staged_err = _staged_paths()
+    if staged_rc != 0:
+        sys.stderr.write(staged_err)
+        return staged_rc
+    spool_committed = 0
+    if staged:
+        if not all(p.startswith(_BLOCK_DISCHARGE_SPOOL_ROOT) for p in staged):
+            print(f"RECONCILE-MERGE-NOT-STARTED branch={current}")
+            print(
+                "Reconcile with origin/main's merge never started (staged "
+                "paths outside the block-discharge spool) — this is not the "
+                "A/B/C Branch Reconciliation Decision.",
+                file=sys.stderr,
+            )
+            _print_staged_paths(staged)
+            return 3
+        failed = _commit_spool(staged)
+        if failed is not None:
+            _echo_to_stderr(failed)
+            print(f"RECONCILE-MERGE-NOT-STARTED branch={current}")
+            print(
+                "Reconcile with origin/main's merge never started (the "
+                "staged spool could not be committed) — this is not the "
+                "A/B/C Branch Reconciliation Decision.",
+                file=sys.stderr,
+            )
+            _print_staged_paths(staged)
+            return 3
+        spool_committed = len(staged)
+        print(f"SPOOL-COMMITTED {spool_committed}")
 
     ff_env = dict(os.environ)
     ff_env["COORDINATOR_OVERRIDE_BRANCH"] = "1"
@@ -207,6 +295,9 @@ def main(argv: list[str]) -> int:
             "every failed merge, not only a genuine conflict.",
             file=sys.stderr,
         )
+        print("CONFLICT-PATHS", file=sys.stderr)
+        for path in _conflict_paths(no_ff_merge.stdout + "\n" + no_ff_merge.stderr):
+            print(path, file=sys.stderr)
     elif outcome == "RECONCILE-MERGE-COMMIT-REFUSED":
         print(
             "Reconcile with origin/main applied but the merge commit was "

@@ -434,6 +434,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "distill.curation_status":                "coordinator_core.ops.distill_curation_status",
     "distill.assemble_disposal_manifest":     "coordinator_core.ops.distill_disposal_manifest",
     "distill.stamp_disposal":                 "coordinator_core.ops.distill_stamp_disposal",
+    "distill.write_curated_clusters":         "coordinator_core.ops.distill_write_curated_clusters",
     "distill.apply_disposal":                 "coordinator_core.ops.distill_apply_disposal",
     "crossrepo.closure_status":               "coordinator_core.ops.crossrepo_closure_status",
     "ceremony.update_docs_scan":              "coordinator_core.ops.ceremony.update_docs_scan",

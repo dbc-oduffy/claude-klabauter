@@ -23,8 +23,11 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.frontmatter import primitives as _frontmatter_primitives
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.updatedocs import _common, _stamp_cache
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
+from coordinator_core.updatedocs._stamp_cache import MISS, StampCache
 
 _LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
@@ -148,14 +151,21 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
     readme_text = readme_path.read_text(encoding="utf-8", errors="replace")
     bodies = _section_bodies(readme_text)
 
+    cache = StampCache(
+        repo_root, "readme-titles",
+        (__file__, _common.__file__, _stamp_cache.__file__, _frontmatter_primitives.__file__),
+    )
+    live_keys: set[str] = set()
     sections: list[SectionDrift] = []
     for section_name, subdir in SECTION_CORPORA.items():
         corpus_dir = (docs_dir / subdir) if subdir else docs_dir
+        stamps: dict[str, tuple[int, int] | None] = {}
         if corpus_dir.is_dir():
-            on_disk_paths = sorted(corpus_dir.glob("*.md"))
-        else:
-            on_disk_paths = []
-        on_disk_names = {p.name for p in on_disk_paths}
+            try:
+                stamps = dict(_stamp_cache.list_md(corpus_dir))
+            except OSError:
+                pass
+        on_disk_names = set(stamps)
 
         body = bodies.get(section_name, "")
         linked_names = _linked_names_for_section(docs_dir, corpus_dir.resolve(), body)
@@ -163,8 +173,17 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
         missing = sorted(on_disk_names - linked_names)
         dead = sorted(linked_names - on_disk_names)
 
-        by_name = {p.name: p for p in on_disk_paths}
-        missing_titles = {name: _extract_title(by_name[name]) for name in missing}
+        missing_titles = {}
+        for name in missing:
+            key = f"{subdir}/{name}"
+            live_keys.add(key)
+            stamp = stamps[name]
+            title = cache.get(key, stamp) if stamp is not None else MISS
+            if title is MISS:
+                title = _extract_title(corpus_dir / name)
+                if stamp is not None:
+                    cache.put(key, stamp, title)
+            missing_titles[name] = title
 
         sections.append(
             SectionDrift(
@@ -177,4 +196,6 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
             )
         )
 
+    cache.retain("", live_keys)
+    cache.flush()
     return ReadmeIndexDrift(sections=sections)

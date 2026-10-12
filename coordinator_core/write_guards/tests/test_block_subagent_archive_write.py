@@ -208,6 +208,21 @@ class TestWeekChangelogsCarveOut:
         payload = _payload(tmp_path, "archive/week-changelogs/2026-07-20/WEEK-SUMMARY.partial.md")
         assert guard.check(payload) is None
 
+    def test_week_summary_observer_sidecar_allows(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(guard, "_read_backpointer_subagent_type", _stub_subagent_type_raises())
+
+        payload = _payload(tmp_path, "archive/week-changelogs/2026-07-20/WEEK-SUMMARY.observer.md")
+        assert guard.check(payload) is None
+
+    def test_daily_observer_sidecar_denies(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(guard, "_read_backpointer_subagent_type", _stub_subagent_type(""))
+        monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
+
+        payload = _payload(tmp_path, "archive/daily-summaries/2026-08-03-machine-a.observer.md")
+        assert guard.check(payload) is not None
+
     def test_mixed_case_suffix_allows(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(guard, "_read_backpointer_subagent_type", _stub_subagent_type_raises())

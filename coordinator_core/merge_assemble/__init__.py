@@ -180,7 +180,7 @@ def next_free_patch_tag(tag: str, taken: set[str]) -> Optional[str]:
     return candidate
 
 
-def _origin_tag_names(repo_root: Path) -> set[str]:
+def origin_tag_names(repo_root: Path) -> set[str]:
     """One batched `git ls-remote --tags origin` — the only way to see tags a
     peer pushed that this clone has not fetched; no per-tag spawns. Empty set
     when origin is unreachable (the proposal then rests on local tags)."""
@@ -219,7 +219,7 @@ def compute_version_bump_proposal(repo_root: Path, *, tag_prefix: str = "v") -> 
     current = lines[0]
     if _parse_version_tag(current, tag_prefix) is None:
         return {"current": current, "proposed": None, "bump": "patch"}
-    taken = set(lines) | _origin_tag_names(repo_root)
+    taken = set(lines) | origin_tag_names(repo_root)
     declared = _declared_package_version(repo_root)
     result: dict[str, Any] = {"current": current, "bump": "patch"}
     if declared is not None:

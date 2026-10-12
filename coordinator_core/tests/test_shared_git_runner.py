@@ -830,8 +830,8 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/probe-prereq.py",
         "coordinator/bin/publish-allowlist-generate.py",
         "coordinator/bin/publish.py",
+        "coordinator/bin/queue-closure-sweep.py",
         "coordinator/bin/reap-integrated-review-findings.py",
-        "coordinator/bin/reap-stale-subagent-sidecars.py",
         "coordinator/bin/record-platform-outcome.py",
         "coordinator/bin/red-set-report.py",
         "coordinator/bin/refresh-plugin-live-install.py",
@@ -850,6 +850,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/workweek-complete-drift-guards.py",
         "coordinator/bin/workweek-start-goal-and-priorities.py",
         "coordinator/bin/wsc-session-disposition.py",
+        "coordinator/lib/collab_detect.py",
         "coordinator/lib/coordinator-is-meta-repo.py",
         "coordinator/lib/percolate/publish_sync.py",
         "coordinator/lib/release_currency.py",
@@ -879,7 +880,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/git/repo_root.py",
         "coordinator_core/git_scope.py",
         "coordinator_core/hooks/auto_push.py",
-        "coordinator_core/hooks/context_pressure_precompact.py",
         "coordinator_core/hooks/example_retrieval_repo_detect.py",
         "coordinator_core/install/clone_sibling_repo.py",
         "coordinator_core/install/first_run.py",
@@ -996,6 +996,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
     {
         ("coordinator/bin/break_glass.py", "check_claude_sync(timeout)"),
         ("coordinator/bin/check-install-divergence.py", "_GIT_TIMEOUT_SECS"),
+        ("coordinator/bin/coordinator-safe-commit.py", "_BLANKET_ADD_TIMEOUT_S"),
         ("coordinator/bin/coordinator-prepare-commit-msg.py", "_resolve_staged_paths(timeout)"),
         ("coordinator/bin/lib/workday_ceremony_lib.py", "git(timeout)"),
         ("coordinator/bin/parallel-review-gate-decision.py", "_GIT_TIMEOUT_SECS"),
@@ -1071,7 +1072,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
 _PINNED_RUNNER_CEILING = 185
-_PINNED_DIAL_CEILING = 67
+_PINNED_DIAL_CEILING = 68
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1108,7 +1109,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/consolidate_assemble/apply.py", "_clean_cherry_pick_conflict", "cherry-pick"),
         ("coordinator_core/consolidate_assemble/apply.py", "_delete_branch", "branch"),
         ("coordinator_core/consolidate_assemble/apply.py", "_delete_branch", "push"),
-        ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_cherry_pick_and_delete", "cherry-pick"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_cherry_pick_unique", "cherry-pick"),
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_prune", "worktree"),
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_remove", "worktree"),
         ("coordinator_core/consolidate_assemble/apply.py", "_union_resolve_ledgers", "add"),
@@ -1128,6 +1129,8 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/ops/workday_surface_stale_stash_entries.py", "_run_stash_list", "stash"),
         ("coordinator_core/percolate/round.py", "step_commit", "add"),
         ("coordinator_core/percolate/round.py", "step_commit", "commit"),
+        ("coordinator_core/sidecar_reap.py", "reap_stale_sidecars", "commit"),
+        ("coordinator_core/sidecar_reap.py", "reap_stale_sidecars", "rm"),
     }
 )
 
@@ -1135,7 +1138,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 39
+_PINNED_VERB_CEILING = 41
 
 
 def _runner_message(sites: list) -> str:

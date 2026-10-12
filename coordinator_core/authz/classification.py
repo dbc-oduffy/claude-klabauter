@@ -3533,6 +3533,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # holds no module state; repo scope is "none" for the same reason. Never
     # consults a model — determinism is the op's whole purpose.
     "distill.curate_clusters": OpClass.COMPUTE_ONLY,
+    # distill.write_curated_clusters — MUTATING: writes one whole-JSON file (the curated
+    # {tag: entry} map) at a caller-named path confined to state/scratch/, via
+    # mkstemp + os.replace; no delete, no git, no rag-store write.
+    "distill.write_curated_clusters": OpClass.MUTATING,
     # distill.workflow_input — COMPUTE_ONLY: pure producer/consumer field
     # translation plus self-validation of its own output. No path is opened.
     "distill.workflow_input": OpClass.COMPUTE_ONLY,

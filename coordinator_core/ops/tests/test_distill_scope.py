@@ -57,6 +57,7 @@ from coordinator_core.ops.distill_scope import (
     _handler,
     compute_scope,
     dr146_normalize,
+    empty_wiki_warning,
     render_summary,
     slugify_stem,
     wiki_slugs_as_dict,
@@ -250,6 +251,30 @@ def test_compute_scope_wiki_inventory_adds_coordinator_dir_when_present(fixture_
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["wiki_dirs"] == ["docs/wiki", "coordinator/docs/wiki"]
     assert "other-guide" in wiki_slugs_as_dict(result.manifest)
+
+
+def test_compute_scope_default_wiki_dirs_include_guides_when_present(fixture_repo):
+    _write(fixture_repo / "docs" / "guides" / "league-rules.md", "# League\n")
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    assert result.manifest["wiki_dirs"] == ["docs/wiki", "docs/guides"]
+    assert "league-rules" in wiki_slugs_as_dict(result.manifest)
+
+
+def test_empty_wiki_warning_names_dirs_when_slugs_zero_but_guides_exist(fixture_repo):
+    _write(fixture_repo / "docs" / "guides" / "league-rules.md", "# League\n")
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", wiki_dirs=["docs/empty"])
+    assert result.manifest["wiki_slugs"] == []
+    warning = empty_wiki_warning(fixture_repo, result.manifest)
+    assert warning is not None
+    assert "docs/guides" in warning and "docs/empty" in warning
+
+
+def test_empty_wiki_warning_silent_when_slugs_present_or_no_candidate_files(fixture_repo, tmp_path):
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    assert empty_wiki_warning(fixture_repo, result.manifest) is None
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert empty_wiki_warning(bare, {"wiki_slugs": [], "wiki_dirs": []}) is None
 
 
 def test_compute_scope_batching_respects_batch_size(fixture_repo):

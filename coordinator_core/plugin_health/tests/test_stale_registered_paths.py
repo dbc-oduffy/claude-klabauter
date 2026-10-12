@@ -117,3 +117,43 @@ def test_registered_repo_mcp_json_and_shared_registry_are_attributed(tmp_path):
     findings = find_stale(home, ml, platform="linux")
     by_key = {f.key: Path(f.source).name for f in findings}
     assert by_key == {"mcpServers.srv.command": ".mcp.json", "x.path": "registry.toml"}
+
+
+def _fake_run(monkeypatch, *, rc=0, out="", raises=None):
+    import subprocess
+
+    def run(cmd, **kw):
+        assert cmd[1:] == ["check"] and kw["timeout"] == S._PROBE_SPAWN_BUDGET_SECS
+        if raises:
+            raise raises
+        return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+
+    monkeypatch.setattr(S.subprocess, "run", run)
+
+
+def test_shadowed_keys_become_one_amber_note_per_stdout_line(tmp_path, monkeypatch):
+    home, ml = _build(tmp_path, stale=False)
+    _fake_run(monkeypatch, rc=1, out="shadowed: key 'a'\n  remedy: remove 'a'\n")
+    notes = S.probe_p24(home, ml, "ml")
+    assert [(n.id, n.severity) for n in notes] == [("P-24", "amber")] * 2
+    assert notes[0].message == "shadowed: key 'a'"
+
+
+def test_clean_check_adds_no_note(tmp_path, monkeypatch):
+    home, ml = _build(tmp_path, stale=False)
+    _fake_run(monkeypatch, rc=0, out="machine-local check: ok\n")
+    assert S.probe_p24(home, ml, "ml") == []
+
+
+def test_unsupported_verb_or_spawn_failure_is_inconclusive_never_red(tmp_path, monkeypatch):
+    import subprocess
+
+    home, ml = _build(tmp_path, stale=False)
+    for kw in (
+        {"rc": 2},
+        {"raises": OSError("nope")},
+        {"raises": subprocess.TimeoutExpired("ml", 1)},
+    ):
+        _fake_run(monkeypatch, **kw)
+        notes = S.probe_p24(home, ml, "ml")
+        assert notes and all(n.severity != "red" for n in notes)

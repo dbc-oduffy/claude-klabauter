@@ -6,7 +6,7 @@ Purpose: computes `coordinator/commands/workday-complete.md`'s mechanical
 step inventory (Step 1/1.5/2.6/2.65/3/3.5-PhaseA0/4a/6/7.5/8/9/10/10.5/10.6) into the
 canonical 8-key decision-object envelope, and surfaces every judgment-shaped
 step (Step 2.5 exit-2 ambiguous-dirty-tree ask, Step 3.5 Phase A/B backfill-cap
-PM ask, Step 4b/4c/4.5 Sonnet-dispatch decisions, Step 4e health-ledger new-row
+PM ask, Step 4b/4.5 Sonnet-dispatch decisions, Step 4e health-ledger new-row
 confirmation) as an overridable `judgment_points[]` offer rather than deciding
 it for the caller.
 
@@ -84,15 +84,10 @@ Negative-spec:
       (AC15c). Both are noted in `narration` instead — a deliberate scope
       line, not an oversight (see this chunk's executor report).
     - `coordinator-queue-append` IS a genuine C1 consumes-manifest member but
-      is likewise never a `directives[].cli` value — it is invoked by the
-      Step 4c strategic-observer Sonnet worker this module's
-      `jp_step4c_observer_dispatch` judgment point recommends dispatching
-      (`docs/commands/workday-complete.md` § Step 4c), not by the assembler
-      itself. A dispatched-worker's own CLI use is outside what a `directives[]`
-      entry can express (a directive is an apply-half instruction, not a
-      sub-dispatch's tool belt) — this is the manifest's third documented
-      exception, found by the AC10 conformance test (2026-07-25) alongside
-      the Step2/Step5 pair above.
+      is never a `directives[].cli` value: the strategic observer that invokes
+      it dispatches from `/workweek-complete` (Step 7b), not from this brief.
+      A dispatched worker's own CLI use is outside what a `directives[]` entry
+      can express.
 """
 
 from __future__ import annotations
@@ -644,8 +639,7 @@ def _build_judgment_points(
       `build_untrusted_gate_judgment_point`.
     - `jp_step3_5_backfill_cap` — tier-2, recommendation required (the
       backfill-cap PM ask: auto-fan the full wave, or a bounded subset).
-    - `jp_step4b_analyst_dispatch` / `jp_step4c_observer_dispatch` /
-      `jp_step4_5_clustering_dispatch` — tier-2, recommendation required
+    - `jp_step4b_analyst_dispatch` / `jp_step4_5_clustering_dispatch` — tier-2, recommendation required
       (Sonnet-dispatch decisions).
     - `jp_step4e_health_ledger_new_rows` — tier-2, recommendation required
       (confirm which touched systems get a new unaudited `?` row; never
@@ -659,16 +653,15 @@ def _build_judgment_points(
     calendar date — never a literal `<today>` placeholder left uninterpolated.
 
     2026-08-08 evidence-wording correction (falsifier search: neither this
-    module, the Step 4b/4c dispatched-worker bodies (`docs/commands/
+    module, the Step 4b dispatched-worker body (`docs/commands/
     workday-complete.md` Step 4, coordinator-content-repo), nor any other producer in this
     repo computes a "zero new commits AND no agent-driven changes" boolean —
     a grep across `coordinator_core/` returns only this module's own string
     literal and a review-trail diff, and the skill prose at that doc's Step 4
     section is text a dispatched Sonnet worker READS AND JUDGES, not a
     computed predicate threaded back to this assembler) — `jp_step4b_
-    analyst_dispatch`'s and `jp_step4c_observer_dispatch`'s `evidence` no
-    longer assert that condition as an observed fact; both now say plainly
-    that no producer computes it and that the Step 4 skip is a disposition
+    analyst_dispatch`'s `evidence` no longer asserts that condition as an
+    observed fact; it now says plainly that no producer computes it and that the Step 4 skip is a disposition
     the EM/dispatched worker judges, not a fact this module observed. This
     module still computes exactly two facts (`_compute_open_day_goals`,
     `_compute_dirty_tree_verdict`) — the Step 4 skip condition is
@@ -689,7 +682,7 @@ def _build_judgment_points(
     `jp_step3_5_backfill_cap`) are `round_trip="terminal"` with
     `revalidate_at_dispatch=True` — the underlying git/scan state can change
     between brief-time and apply-time and must be re-read, not trusted stale.
-    The three Sonnet-dispatch points are `round_trip="round_trip"` with
+    The two Sonnet-dispatch points are `round_trip="round_trip"` with
     `revalidate_at_dispatch=False` — a dispatch decision, once made, is not
     re-litigated against fresh disk state before firing.
     """
@@ -768,31 +761,6 @@ def _build_judgment_points(
             evidence=(
                 "no producer computes this condition; Step 4 skip is a "
                 "disposition, not an observed fact"
-            ),
-            reason="dispatch-decision",
-            revalidate_at_dispatch=False,
-            round_trip="round_trip",
-            reportable=False,
-        ),
-        build_judgment_point(
-            {
-                "disposition": "dispatch",
-                "rationale": (
-                    "The strategic observer leaves a paper trail for weekly "
-                    "the Staff Engineer review; dispatch in parallel with 4b whenever 4b "
-                    "itself dispatches."
-                ),
-            },
-            id="jp_step4c_observer_dispatch",
-            question="Dispatch the Step 4c strategic-observer worker in parallel with 4b?",
-            dispositions=[
-                build_disposition("dispatch"),
-                build_disposition("skip_no_new_work"),
-            ],
-            evidence=(
-                "no producer computes a zero-new-commits/no-agent-driven-"
-                "changes condition either; Step 4c's skip is a disposition "
-                "paired with 4b's, not an observed fact"
             ),
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
@@ -989,9 +957,9 @@ def brief(
         "Step 2 (RAG staleness nudge) and Step 5 (plugin validation suite) "
         "have no consumes-manifest CLI and are NOT represented as "
         "directives[] entries; coordinator-queue-append IS a manifest "
-        "member but is invoked by the Step 4c strategic-observer dispatch, "
-        "not the assembler, so it is also never a directives[] entry — "
-        "see this module's negative-spec."
+        "member but is invoked by the weekly strategic observer, not the "
+        "assembler, so it is also never a directives[] entry — see this "
+        "module's negative-spec."
     )
     suspended_notice = _suspended_directive_notice(directives)
     if suspended_notice:

@@ -382,6 +382,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "distill.curation_status":                "common_dir",
     "distill.assemble_disposal_manifest":     "common_dir",
     "distill.stamp_disposal":                  "common_dir",
+    "distill.write_curated_clusters":         "common_dir",
     "distill.apply_disposal":                  "common_dir",
     "crossrepo.closure_status":               "common_dir",
     # ceremony.update_docs_scan (C17) — keyed on git_common_dir: handler resolves the

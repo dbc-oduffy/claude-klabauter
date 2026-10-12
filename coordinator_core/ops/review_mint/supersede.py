@@ -274,6 +274,15 @@ def _record_superseding_review_handler(params: dict, repo_root: Optional[Path] =
     return {"status": "recorded", **result}
 
 
+def _json_arg(raw: "str | None") -> Any:
+    """A CLI JSON argument: inline JSON when it opens with `{`, else a file path read first; None when unset."""
+    if not raw:
+        return None
+    if not raw.lstrip().startswith("{"):
+        raw = Path(raw).read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(prog="record-superseding-review")
     parser.add_argument("--plan", required=True)
@@ -282,7 +291,9 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--head", required=True)
     parser.add_argument("--wave-sidecar", action="append", default=[])
     parser.add_argument("--prep-sidecar", default=None)
-    parser.add_argument("--stage-returns-json", default=None)
+    parser.add_argument(
+        "--stage-returns-json", default=None, help="the stage returns JSON (inline or a file path)"
+    )
     parser.add_argument(
         "--from-share", action="store_true",
         help="assemble prep, reviewer, delivery, tests and judge returns from this session's "
@@ -305,20 +316,15 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 2
     try:
-        stage_returns = json.loads(args.stage_returns_json) if args.stage_returns_json else None
-    except json.JSONDecodeError as exc:
-        print(f"record-superseding-review: --stage-returns-json is not JSON: {exc}", file=sys.stderr)
+        stage_returns = _json_arg(args.stage_returns_json)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"record-superseding-review: --stage-returns-json unreadable: {exc}", file=sys.stderr)
         return 2
-    judge_result = None
-    if args.judge_result:
-        raw = args.judge_result
-        try:
-            if not raw.lstrip().startswith("{"):
-                raw = Path(raw).read_text(encoding="utf-8")
-            judge_result = json.loads(raw)
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"record-superseding-review: --judge-result unreadable: {exc}", file=sys.stderr)
-            return 2
+    try:
+        judge_result = _json_arg(args.judge_result)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"record-superseding-review: --judge-result unreadable: {exc}", file=sys.stderr)
+        return 2
 
     repo_root = Path(args.repo_root) if args.repo_root else Path.cwd()
     try:

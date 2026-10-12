@@ -214,6 +214,20 @@ def _compute_register_stall() -> Any:
         return requirement_register.StallReport()
 
 
+def _compute_version_recommendation() -> Optional[dict[str, str]]:
+    repo_root = _resolve_repo_root_for_doc_staleness()
+    if repo_root is None:
+        return None
+    try:
+        from coordinator_core.workweek_complete.release.version_rule import (  # noqa: PLC0415
+            recommend_level,
+        )
+
+        return recommend_level(Path(repo_root))
+    except Exception:  # noqa: BLE001 - never fail the ceremony
+        return None
+
+
 def _stale_doc_entries(report: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [entry for entry in report if entry.get("stale") and entry.get("path")]
 
@@ -563,13 +577,14 @@ def _build_judgment_points(
     stale_docs: Optional[list[dict[str, Any]]] = None,
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
     register_stall: Any = None,
+    version_recommendation: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """Tier-2 (judgment, recommendation required) and Tier-3 (your-call, no
     recommendation) judgment-point entries.
 
     Tier-2 (recommendation required): `jp_step4_triage_dispatch` (triage
     dispatch + prior-art scan), `jp_step7_rule5_already_reviewed_span`,
-    `jp_step7_5_staff_eng_fire_discretion`, `jp_step8_5_loe_high_water`,
+    `jp_step7b_observer_dispatch`, `jp_step7_5_staff_eng_fire_discretion`, `jp_step8_5_loe_high_water`,
     `jp_step9_editorial_bucketing`, `jp_step10_semver_judgment`.
 
     Tier-3 (your-call, no recommendation — `recommendation=None`, `reason`
@@ -722,6 +737,30 @@ def _build_judgment_points(
             reportable=False,
         ),
         build_judgment_point(
+            {
+                "disposition": "dispatch",
+                "rationale": (
+                    "The weekly strategic observer leaves the paper trail "
+                    "Step 8 reads; it has no commit-count floor, so skip "
+                    "only when WEEK-SUMMARY.md already carries its review."
+                ),
+            },
+            id="jp_step7b_observer_dispatch",
+            question="Dispatch the Step 7b weekly strategic-observer worker?",
+            dispositions=[
+                build_disposition("dispatch"),
+                build_disposition("skip_already_stitched"),
+            ],
+            evidence=(
+                "no producer computes whether WEEK-SUMMARY.md carries a "
+                "Strategic Review; skip is a disposition, not an observed fact"
+            ),
+            reason="dispatch-decision",
+            revalidate_at_dispatch=False,
+            round_trip="round_trip",
+            reportable=False,
+        ),
+        build_judgment_point(
             None,
             id="jp_step7_5_staff_eng_fire_discretion",
             question="Fire the Step 7.5 the Staff Engineer review this week, or defer it?",
@@ -761,7 +800,7 @@ def _build_judgment_points(
             round_trip="terminal",
         ),
         build_judgment_point(
-            None,
+            version_recommendation,
             id="jp_step10_semver_judgment",
             question="Step 10 version bump — patch/minor/major?",
             dispositions=[
@@ -773,6 +812,7 @@ def _build_judgment_points(
             reason="pm-scoped-tradeoff",
             revalidate_at_dispatch=True,
             round_trip="terminal",
+            reportable=False,
         ),
         build_judgment_point(
             None,
@@ -851,7 +891,10 @@ def brief(
     doc_verify_findings_by_doc = _verify_findings_by_doc(_compute_doc_verify_findings())
     directives = _build_directives(stale_docs, doc_verify_findings_by_doc)
     all_judgment_points = _build_judgment_points(
-        stale_docs, doc_verify_findings_by_doc, _compute_register_stall()
+        stale_docs,
+        doc_verify_findings_by_doc,
+        _compute_register_stall(),
+        _compute_version_recommendation(),
     )
 
     recommendation_carrying = [

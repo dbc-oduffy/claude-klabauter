@@ -1439,15 +1439,47 @@ def probe_p22(claude_klabauter_root: Path) -> List[ProbeNote]:
     return []
 
 
-def probe_p24(home: Path, ml_dir: Path) -> List[ProbeNote]:
+def _shadowed_key_notes(ml_cmd: Optional[str]) -> List[ProbeNote]:
+    """One amber note per line `machine-local check` prints for a key a concern file
+    shadows. A missing CLI, an older CLI without `check`, a spawn failure or a
+    timeout is inconclusive, never red."""
+    if not ml_cmd:
+        return []
+    try:
+        from coordinator_core.win_portability import no_console_creationflags
+
+        proc = subprocess.run(
+            [ml_cmd, "check"], capture_output=True, text=True,
+            timeout=_PROBE_SPAWN_BUDGET_SECS, **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _inconclusive(
+            "P-24", f"could not run {ml_cmd} check — {_exec_detail(exc)}"
+        )
+    if proc.returncode == 0:
+        return []
+    if proc.returncode != 1:
+        return _inconclusive(
+            "P-24", f"{ml_cmd} check exited {proc.returncode} — verb unsupported"
+        )
+    return [
+        ProbeNote("P-24", "amber", line.strip())
+        for line in (proc.stdout or "").splitlines()
+        if line.strip()
+    ]
+
+
+def probe_p24(home: Path, ml_dir: Path, ml_cmd: Optional[str] = None) -> List[ProbeNote]:
     """Report registered absolute paths (LaunchAgents, `~/.claude.json`, registered
-    repos' `.mcp.json`, the registry) that no longer exist. Read-only."""
+    repos' `.mcp.json`, the registry) that no longer exist, plus registry keys a
+    concern file shadows. Read-only."""
     from coordinator_core.plugin_health.stale_registered_paths import find_stale
 
-    return [
+    notes = [
         ProbeNote("P-24", "amber", f"stale registered path: {finding.render()}")
         for finding in find_stale(home, ml_dir)
     ]
+    return notes + _shadowed_key_notes(ml_cmd)
 
 
 def probe_p20() -> List[ProbeNote]:
@@ -1919,7 +1951,7 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
         ),
     )
 
-    _run_probe("P-24", lambda: probe_p24(home_dir(), ml_dir))
+    _run_probe("P-24", lambda: probe_p24(home_dir(), ml_dir, ml_cmd))
 
     for _unwired in _UNWIRED_PROBE_IDS:
         if _unwired in active:

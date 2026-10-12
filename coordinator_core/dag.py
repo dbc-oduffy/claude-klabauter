@@ -71,6 +71,7 @@ Negative-spec (mirrors JS):
 """
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -957,6 +958,83 @@ def build_git_history_cache(repo_root: str, timeout_s: float = 15.0) -> Optional
     except Exception as e:
         sys.stderr.write(f'dag: build_git_history_cache failed: {e}\n')
         return None
+
+
+def _git_out(repo_root: str, argv: List[str], timeout_s: float) -> Optional[str]:
+    try:
+        proc = subprocess.run(
+            ['git', *argv],
+            cwd=repo_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s,
+            text=True,
+            creationflags=_CREATIONFLAGS,
+        )
+    except Exception:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def build_persisted_git_history_cache(repo_root: str, timeout_s: float = 15.0) -> Optional[GitHistoryCache]:
+    """`build_git_history_cache`, kept across runs in `.git/claude-klabauter-history-paths.json`.
+
+    Keyed on the set of ref tips: an unchanged repo reads the file; a moved tip
+    adds only the commits not reachable from the old tips. The old tips must all
+    still be reachable from a current ref (`rev-list <old> --not --all` empty) or
+    the cache is discarded and rebuilt whole, so a rewritten history never leaves
+    a path that no reachable commit touches reading as tracked. Falls back to the
+    uncached build when `.git` is not a directory.
+    """
+    git_dir = os.path.join(repo_root, '.git') if repo_root else ''
+    if not git_dir or not os.path.isdir(git_dir):
+        return build_git_history_cache(repo_root, timeout_s)
+    cache_file = os.path.join(git_dir, 'claude-klabauter-history-paths.json')
+    tips_out = _git_out(repo_root, ['rev-parse', 'HEAD', '--all'], timeout_s)
+    if tips_out is None:
+        return build_git_history_cache(repo_root, timeout_s)
+    tips = sorted(set(tips_out.split()))
+    old: Optional[dict] = None
+    try:
+        with open(cache_file, encoding='utf-8') as f:
+            old = json.load(f)
+        if not isinstance(old.get('tips'), list) or not isinstance(old.get('paths'), list):
+            old = None
+    except (OSError, ValueError):
+        old = None
+
+    if old is not None and old['tips'] == tips:
+        return GitHistoryCache(set(old['paths']), bool(old.get('complete')))
+
+    paths: Optional[Set[str]] = None
+    complete = False
+    if old is not None and old['tips']:
+        orphan = _git_out(repo_root, ['rev-list', '--max-count=1', *old['tips'], '--not', '--all'], timeout_s)
+        if orphan is not None and not orphan.strip():
+            added = _git_out(
+                repo_root,
+                ['log', '--all', '--name-only', '--no-renames', '--pretty=format:', '--not', *old['tips']],
+                timeout_s,
+            )
+            if added is not None:
+                paths = set(old['paths'])
+                paths.update(ln.strip() for ln in added.splitlines() if ln.strip())
+                complete = bool(old.get('complete'))
+    if paths is None:
+        full = build_git_history_cache(repo_root, timeout_s)
+        if full is None:
+            return None
+        paths, complete = set(full), full.complete
+
+    try:
+        tmp = f'{cache_file}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'tips': tips, 'complete': complete, 'paths': sorted(paths)}, f, separators=(',', ':'))
+        os.replace(tmp, cache_file)
+    except OSError:
+        pass
+    return GitHistoryCache(paths, complete)
 
 
 def _memoized_ever_tracked(

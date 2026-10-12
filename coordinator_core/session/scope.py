@@ -3249,13 +3249,7 @@ def release_own_path_claims(
         except OSError:
             continue
         agent_dir = Path(entry.path)
-        try:
-            with open(
-                os.path.join(entry.path, "em-session-id.txt"), "r", encoding="utf-8"
-            ) as fh:
-                em_sid = fh.readline().strip()
-        except OSError:
-            continue
+        em_sid, _conclusive = touch_record.agent_owner_sid(entry.path)
         if em_sid != sid:
             continue  # not this session's own fan-out — never release it
         # The agent plane's release now goes through the SAME record writer the

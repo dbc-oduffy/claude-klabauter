@@ -229,11 +229,9 @@ def list_held_plan_claims(
     from coordinator_core.ops.fleet._common import plan_claim_dir
 
     plan_claims_dir = plan_claim_dir(common_dir, Path("placeholder")).parent
-    if not plan_claims_dir.is_dir():
-        return []
-    try:
-        entries = sorted(plan_claims_dir.iterdir())
-    except OSError:
+    from coordinator_core.session.claims import claim_holders
+    own = [plan_claims_dir / name for name, held_sid in claim_holders(plan_claims_dir) if held_sid == sid]
+    if not own:
         return []
 
     # Resolved ONCE, above the loop. `core.git_root` shells out to
@@ -245,15 +243,7 @@ def list_held_plan_claims(
     repo_root = core.git_root(cwd_str)
 
     held: list[tuple[str, Optional[str]]] = []
-    for entry in entries:
-        if not entry.is_dir():
-            continue
-        try:
-            held_sid = (entry / "session_id").read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if held_sid != sid:
-            continue
+    for entry in own:
         claimed_at: Optional[str] = None
         try:
             claimed_at = (entry / "claimed_at").read_text(encoding="utf-8").strip() or None

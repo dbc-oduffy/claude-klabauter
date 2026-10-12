@@ -19,6 +19,9 @@ branch, so any `work/<this-machine>/<YYYY-MM-DD[toDD]>[-N]` ref is a day
 branch. `git push <remote> HEAD` resolves HEAD from `.git/HEAD` (no spawn);
 an unresolvable HEAD or ref name allows.
 
+A push of the checked-out `work/*` branch is allowed whatever its date span, and
+`git branch scratch/<name>` (a local-only ref) is allowed; pushing it is not.
+
 A push of a registered `publish.mirrors.<key>` repo's declared `track_ref`
 branch (the command publish.py prints) is allowed.
 
@@ -69,6 +72,8 @@ _BRANCH_CREATE_COMPATIBLE_FLAGS = frozenset({"-f", "--force", "-t", "--track", "
 _PUSH_OPT_WITH_ARG = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
 _HEADS_PREFIX = "refs/heads/"
+# `git branch scratch/...` makes a local safety ref; a push of it is still judged.
+_LOCAL_ONLY_PREFIX = "scratch/"
 # publish.py's commit-only round leaves the mirror's work on this branch.
 _PUBLISH_BRANCH = "candidate"
 
@@ -423,6 +428,10 @@ def _offending_ref(
         elif ref.startswith("refs/"):
             continue
         if ref == "main":
+            continue
+        if sub == "branch" and ref.startswith(_LOCAL_ONLY_PREFIX):
+            continue
+        if sub == "push" and ref.startswith("work/") and ref == _head_branch(git_root):
             continue
         if sub == "push" and _is_local_tag(git_root, ref):
             continue

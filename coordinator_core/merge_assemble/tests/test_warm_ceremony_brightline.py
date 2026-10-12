@@ -702,7 +702,7 @@ _ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(
     '''
 )
 
-_PATH_SERVED_RE = re.compile(r"(merge_assemble\.\w+): path=(cold|warm|engine-spawn)")
+_PATH_SERVED_RE = re.compile(r"(merge_assemble\.\w+): path=(cold|warm|engine-spawn|in-process)")
 
 
 def _paths_served(stderr_text: str) -> dict:
@@ -847,7 +847,7 @@ class TestLikeForLikeWarmVsColdComparison:
             # miss (e.g. this tree carries no engine build stamp, so no server
             # is hosted for it) is two cold engine interpreter spawns.
             current_served = "engine-spawn"
-        assert current_served in ("warm", "cold", "engine-spawn"), (
+        assert current_served in ("warm", "cold", "engine-spawn", "in-process"), (
             f"current leg reported neither warm nor cold: {precheck.stderr}"
         )
 
@@ -889,4 +889,4 @@ class TestLikeForLikeWarmVsColdComparison:
             # op warm on this box -- report the residual (above), do not
             # synthesize or assert a warm-vs-cold comparison that never
             # happened.
-            assert current_served in ("cold", "engine-spawn")
+            assert current_served in ("cold", "engine-spawn", "in-process")

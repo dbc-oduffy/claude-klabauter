@@ -105,7 +105,8 @@ Allow conditions (pass through):
       YYYY-MM-DD[-<suffix>].md (suffix case-mixed on disk, e.g.
       ``2026-07-03-Machine-b-backfill.md`` -- unlike allow-condition (3),
       this is NOT lowercase-restricted) or a week rollup
-      WEEK-SUMMARY.md / WEEK-SUMMARY.partial.md -> allow (week-changelogs
+      WEEK-SUMMARY.md / WEEK-SUMMARY.partial.md / WEEK-SUMMARY.observer.md
+      (weekly strategic-observer sidecar) -> allow (week-changelogs
       carve-out; sanctioned subagent write path). Widened 2026-08-06 to
       close a carve-out gap and a deny-message misroute reported in
       ``cross-repo/inbox/2026-08-06-example-cockpit-repo-em-archive-write-guard-week-changelogs-gap.md``:
@@ -181,22 +182,12 @@ _REVIEW_INTEGRATOR_TYPE = "coordinator:review-integrator"
 
 _ARCHIVE_RE = re.compile(r"(^|/)archive/")
 
-#: Reference hook — daily-summaries dated-file carve-out.
-#: The optional ``.observer`` segment (2026-08-07 widening) admits the
-#: strategic-observer sidecar that /workday-complete Step 7 dispatches a
-#: SUBAGENT to write. Without it the ceremony and this guard were jointly
-#: unsatisfiable: the observer's only specified output path is under
-#: ``archive/``, so the guard hard-denied every well-behaved observer, and the
-#: strategic-observer trail sat empty from 2026-07-23 onward across at least
-#: two repos -- silently, because /workweek-complete Step 9's arch-pass
-#: skip-condition reads an empty trail as "no architectural risk".
-#: Deliberately narrow: a single literal segment on an already-carved-out
-#: dated path, not a general subagent exemption. The guard's wrap-up
-#: self-log backstop purpose is unchanged -- a ceremony-specified sidecar is
-#: not the over-eager-self-log class it exists to stop.
+#: Reference hook — daily-summaries dated-file carve-out. The strategic
+#: observer is weekly and writes under week-changelogs, so no ``.observer``
+#: sidecar is admitted here.
 _DAILY_SUMMARY_RE = re.compile(
     r"(^|/)archive/daily-summaries/[0-9]{4}-[0-9]{2}-[0-9]{2}"
-    r"(-[a-z0-9][a-z0-9-]*)?(\.observer)?\.md$"
+    r"(-[a-z0-9][a-z0-9-]*)?\.md$"
 )
 
 _COMPLETED_RE = re.compile(
@@ -209,10 +200,12 @@ _COMPLETED_RE = re.compile(
 #: on-disk ``2026-07-03-Machine-b-backfill.md`` shape) or a week rollup.
 #: Deliberately does NOT match ``HEADER.priorities.<hash>.md`` -- that
 #: artifact arrives by ``mv``, which this guard's tool-name gate never sees.
+#: ``WEEK-SUMMARY.observer.md`` is the weekly strategic observer's sidecar
+#: (/workweek-complete Step 7b), stitched into ``WEEK-SUMMARY.md``.
 _WEEK_CHANGELOG_RE = re.compile(
     r"(^|/)archive/week-changelogs/[0-9]{4}-[0-9]{2}-[0-9]{2}/"
     r"([0-9]{4}-[0-9]{2}-[0-9]{2}(-[A-Za-z0-9][A-Za-z0-9-]*)?"
-    r"|WEEK-SUMMARY(\.partial)?)\.md$"
+    r"|WEEK-SUMMARY(\.partial|\.observer)?)\.md$"
 )
 
 _CONTROL_WHITESPACE_RE = re.compile(r"[\t\r\n\f\v]")
@@ -327,7 +320,7 @@ def _deny_reason(
             "Use instead: `archive/week-changelogs/YYYY-MM-DD/` (the week-start "
             "date), containing either a dated daily block "
             "`YYYY-MM-DD[-<suffix>].md` or a week rollup `WEEK-SUMMARY.md` "
-            "(or `WEEK-SUMMARY.partial.md`).\n\n"
+            "(or `WEEK-SUMMARY.partial.md` / `WEEK-SUMMARY.observer.md`).\n\n"
         )
     elif _DAILY_SUMMARY_SHAPED_RE.search(normalized_file_path):
         use_instead = (

@@ -1,0 +1,21 @@
+{
+  "measured_at_ref": "3843db8c193491777e14f6a283db9c50584788b9",
+  "steps": {
+    "w_step0_header_bootstrap": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
+    "w_step1_brief_week": {"process_ms_min": 531.25, "process_ms_median": 609.375, "spawns": 3, "samples": 5, "cost_class": "over-bar", "basis": "measured"},
+    "w_step1_expired_plan_gates": {"process_ms_min": 234.375, "process_ms_median": 250.0, "spawns": 2, "samples": 5, "cost_class": "engine", "basis": "measured"},
+    "w_step1_anchor_freshness": {"process_ms_min": 78.125, "process_ms_median": 109.375, "spawns": 4, "samples": 5, "cost_class": "engine", "basis": "measured"},
+    "w_step1_scratch_hygiene": {"process_ms_min": 78.125, "process_ms_median": 335.9375, "spawns": 2, "samples": 68, "cost_class": "engine", "basis": "telemetry"},
+    "w_step2_exec_summary": {"process_ms_min": 125.0, "process_ms_median": 140.625, "spawns": 4, "samples": 5, "cost_class": "engine", "basis": "measured"},
+    "w_step6_competitor_nudge": {"process_ms_min": 62.5, "process_ms_median": 93.75, "spawns": 2, "samples": 5, "cost_class": "engine", "basis": "measured"},
+    "w_step6_record_decline": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
+    "w_step7_scaffold_goal": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
+    "w_step7_goal_coverage_scan": {"process_ms_min": 6890.625, "process_ms_median": 7046.875, "spawns": 96, "samples": 5, "cost_class": "over-bar", "basis": "measured"},
+    "w_step8_emit_goal_event": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
+    "w_step8_commit_priorities": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "remote", "basis": "code-read"},
+    "w_step8_commit_archive_reset": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "remote", "basis": "code-read"},
+    "w_step9_ceremony_hook": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
+    "w_step9_5_git_maintenance_weekly": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
+    "w_step10_chain_workday_start": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "launch", "basis": "code-read"}
+  }
+}

@@ -15,6 +15,7 @@ _EXPECTED_REPORTED_IDS: set[str] = set()
 
 _EXPECTED_ACTION_CLASS_IDS = {
     "jp_step4_triage_dispatch",
+    "jp_step7b_observer_dispatch",
     "jp_step7_rule5_already_reviewed_span",
 }
 
@@ -65,6 +66,7 @@ def test_action_class_point_carries_explicit_reportable_false():
     _, points = _built_directives_and_points()
     by_id = {p["id"]: p for p in points}
     assert by_id["jp_step4_triage_dispatch"]["reportable"] is False
+    assert by_id["jp_step7b_observer_dispatch"]["reportable"] is False
 
 
 def test_reported_points_absent_from_judgment_points(operator_env):
@@ -119,6 +121,17 @@ def test_tier3_no_recommendation_points_stay_asked(operator_env):
         "jp_step10_5_gh_release_publish",
     ):
         assert tier3_id in ids
+
+
+def test_semver_point_with_recommendation_stays_in_judgment_points():
+    recommendation = {"disposition": "minor", "rationale": "1 roadmap entry"}
+    directives = _build_directives()
+    points = _build_judgment_points(version_recommendation=recommendation)
+    semver = next(p for p in points if p["id"] == "jp_step10_semver_judgment")
+    assert semver["recommendation"]["disposition"] == "minor"
+    carrying = [p for p in points if p.get("recommendation") is not None]
+    _, reported = partition_reportable(carrying, directives)
+    assert "jp_step10_semver_judgment" not in {p["id"] for p in reported}
 
 
 def test_reported_narration_helper_empty_on_no_reported_points():

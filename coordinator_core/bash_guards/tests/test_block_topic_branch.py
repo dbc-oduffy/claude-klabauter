@@ -408,3 +408,15 @@ def test_dash_c_resolves_hold_repo(repo, tmp_path_factory):
 def test_delete_of_held_branch_refused_even_with_allow(repo, cmd):
     _branch_hold(repo, SHA_A)
     assert _denied(_check(repo, cmd))
+
+
+def test_push_checked_out_work_branch_allowed_despite_span(repo):
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/work/otherbox/2026-01-01\n", encoding="utf-8")
+    assert _check(repo, "git push origin work/otherbox/2026-01-01") is None
+    assert _denied(_check(repo, "git push origin work/otherbox/2026-01-02"))
+
+
+def test_branch_scratch_allowed_but_its_push_denied(repo):
+    assert _check(repo, "git branch scratch/safety-1") is None
+    assert _denied(_check(repo, "git push origin scratch/safety-1"))
+    assert _denied(_check(repo, "git branch fix/foo"))

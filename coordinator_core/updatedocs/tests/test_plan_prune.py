@@ -172,24 +172,43 @@ def test_absent_plans_dir_raises_rather_than_returning_a_clean_empty_result(tmp_
     assert excinfo.value.missing_path == tmp_path / "docs" / "plans"
 
 
-def test_plan_vanishing_between_glob_and_stat_is_indeterminate_not_dropped(tmp_path, monkeypatch):
+def test_plan_vanishing_between_listing_and_stat_is_indeterminate_not_dropped(tmp_path, monkeypatch):
     plans = tmp_path / "docs" / "plans"
     plans.mkdir(parents=True)
     (plans / "vanisher.md").write_text("---\nstatus: implemented\n---\n", encoding="utf-8")
 
-    import pathlib
+    from coordinator_core.updatedocs import _stamp_cache
 
-    real_stat = pathlib.Path.stat
+    real_list = _stamp_cache.list_md
 
-    def _boom(self, *a, **kw):
-        if self.name == "vanisher.md":
-            raise OSError("simulated vanish between glob and stat")
-        return real_stat(self, *a, **kw)
+    def _vanished(directory):
+        return [(n, None if n == "vanisher.md" else st) for n, st in real_list(directory)]
 
-    monkeypatch.setattr(pathlib.Path, "stat", _boom)
+    monkeypatch.setattr(_stamp_cache, "list_md", _vanished)
 
     result = compute_plan_prune_candidates(tmp_path)
 
     assert "docs/plans/vanisher.md" in result.indeterminate
     assert result.prunable == []
     assert result.retained == []
+
+
+def test_cached_verdict_follows_an_edit_and_a_corrupt_cache_reads_as_empty(tmp_path):
+    (tmp_path / ".git").mkdir()
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    plan = plans / "2026-01-01-p.md"
+    plan.write_text("---\nstatus: implemented\n---\n", encoding="utf-8")
+    old = 1_600_000_000
+    os.utime(plan, (old, old))
+
+    first = compute_plan_prune_candidates(tmp_path)
+    assert first.prunable == ["docs/plans/2026-01-01-p.md"]
+    assert compute_plan_prune_candidates(tmp_path) == first
+
+    plan.write_text("---\nstatus: active\n---\n", encoding="utf-8")
+    os.utime(plan, (old, old))
+    assert compute_plan_prune_candidates(tmp_path).retained == ["docs/plans/2026-01-01-p.md"]
+
+    (tmp_path / ".git" / "claude-klabauter-updatedocs-plan-prune.json").write_text("{not json", encoding="utf-8")
+    assert compute_plan_prune_candidates(tmp_path).retained == ["docs/plans/2026-01-01-p.md"]

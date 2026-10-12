@@ -26,7 +26,7 @@ def test_classify_failed_merge_all_four_combinations(merge_in_progress, index_re
     assert mod._classify_failed_merge(merge_in_progress, index_readable) == expected
 
 
-def _install_failing_merge_run(monkeypatch, recorder: list[str] | None = None):
+def _install_failing_merge_run(monkeypatch, recorder: list[str] | None = None, staged_stdout: str = ""):
 
     def fake_run(args, env=None):
         if recorder is not None:
@@ -37,6 +37,8 @@ def _install_failing_merge_run(monkeypatch, recorder: list[str] | None = None):
             return _proc(0, stdout="work/testmachine/2026-01-01\n")
         if args[:2] == ["merge-base", "--is-ancestor"]:
             return _proc(1)
+        if args[:2] == ["diff", "--cached"]:
+            return _proc(0, stdout=staged_stdout)
         if args[:2] == ["merge", "--ff-only"]:
             return _proc(1)
         if args[:2] == ["merge", "--no-ff"]:
@@ -94,7 +96,43 @@ def test_discrimination_adds_no_spawn(monkeypatch):
     abort_calls = [entry for entry in recorder if entry == "run:merge"]
     assert len(abort_calls) == 3
     total_run_calls = len(recorder)
-    assert total_run_calls == 6
+    assert total_run_calls == 7
+
+
+def test_staged_read_is_one_zero_flag_spawn_before_the_merges(monkeypatch):
+    seen: list[list[str]] = []
+    _install_failing_merge_run(monkeypatch)
+    inner = mod._run
+
+    def spy(args, env=None):
+        seen.append(args)
+        return inner(args, env=env)
+
+    monkeypatch.setattr(mod, "_run", spy)
+    _stub_probes(monkeypatch, merge_in_progress=True, index_readable=False)
+    mod.main([])
+    staged = [i for i, a in enumerate(seen) if a[:2] == ["diff", "--cached"]]
+    merges = [i for i, a in enumerate(seen) if a[0] == "merge"]
+    assert len(staged) == 1
+    assert seen[staged[0]] == ["diff", "--cached", "--name-only", "-z"]
+    assert staged[0] < merges[0]
+
+
+def test_non_spool_staged_path_commits_nothing_and_names_it(monkeypatch, capsys):
+    recorder: list[str] = []
+    _install_failing_merge_run(
+        monkeypatch, recorder, staged_stdout="state/block-discharge/a.jsonl\0src/x.py\0"
+    )
+    rc = mod.main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-MERGE-NOT-STARTED branch=" in captured.out
+    assert "SPOOL-COMMITTED" not in captured.out
+    assert captured.err.split("STAGED-PATHS\n", 1)[1].splitlines()[:2] == [
+        "state/block-discharge/a.jsonl",
+        "src/x.py",
+    ]
+    assert "run:merge" not in recorder
 
 
 # ---------------------------------------------------------------------------

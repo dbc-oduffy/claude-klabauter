@@ -294,7 +294,7 @@ def test_c1_g_corrupt_marketplace_json_fails_loud_not_na(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "unparseable marketplace manifest" in captured.err
-    assert str(d / ".claude-plugin" / "marketplace.json") in captured.err
+    assert f"{d}/.claude-plugin/marketplace.json" in captured.err
     assert "N/A" not in captured.out
 
 
@@ -332,3 +332,32 @@ def test_c1_bad_root_still_reproduces_oracle_double_message_and_repo_root_ignore
     assert rc == 1
     assert "no .claude-plugin/marketplace.json under --root" in captured.err
     assert "no CHANGELOG.md found" in captured.err
+
+
+def test_locate_surfaces_flat_bundle(tmp_path):
+    from coordinator_core.ops.check_version_consistency import locate_surfaces
+
+    d = tmp_path / "loc1"
+    _make_bundle(d, "2.9.0", "2.9.0", "2.9.0", layout="flat")
+    got = locate_surfaces(str(d))
+    assert got is not None
+    base = str(d).replace("\\", "/")
+    assert got["plugin_json"] == f"{base}/coordinator/.claude-plugin/plugin.json"
+    assert got["marketplace_json"] == f"{base}/.claude-plugin/marketplace.json"
+    assert got["changelog"] == f"{base}/CHANGELOG.md"
+
+
+def test_locate_surfaces_absent_changelog_is_none(tmp_path, capsys):
+    from coordinator_core.ops.check_version_consistency import locate_surfaces
+
+    d = tmp_path / "loc2"
+    _make_bundle(d, "2.9.0", "2.9.0", "2.9.0", mode="no-changelog")
+    got = locate_surfaces(str(d))
+    assert got is not None and got["changelog"] is None
+    assert capsys.readouterr().err == ""
+
+
+def test_locate_surfaces_no_bundle_is_none(tmp_path):
+    from coordinator_core.ops.check_version_consistency import locate_surfaces
+
+    assert locate_surfaces(str(tmp_path)) is None

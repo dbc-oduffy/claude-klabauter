@@ -44,6 +44,11 @@ No legacy data row may be left unaccounted for on either side of the ledger. Thi
 asserted at the end of `normalize_log` — a discrepancy raises `RuntimeError` rather than
 returning a `NormalizeResult` whose counts silently don't reconcile.
 
+3-column legacy shape: a `| Artifact | Disposition | Target |` table under
+`## Run: <id>` headers. run_id comes from the preceding header; the Disposition cell is an
+`ACTION_DISPOSITION_MAP` token or an already-canonical disposition; Target becomes the fate.
+A 3-column row before any `## Run:` header is malformed.
+
 Run-id grouping choice (DR-047 HOW-is-non-binding — claude-klabauter's call, documented here):
     ONE RUN PER UNIQUE `date` VALUE, not a single synthetic run spanning the whole file.
     The legacy log's `date` column already partitions rows into meaningful batches (each
@@ -155,7 +160,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from coordinator_core.distill._common import _ROW_RE, parse_distillation_log
+from coordinator_core.distill._common import _ROW_RE, DISPOSITIONS, parse_distillation_log
 from coordinator_core.distill.log_append import render_row
 
 __all__ = [
@@ -217,8 +222,13 @@ _LEGACY_ROW_RE = re.compile(
     r"\s*(?P<last_sha>[^|]*?)\s*\|\s*(?P<belongs_to_spec>[^|]*?)\s*\|\s*(?P<reason>[^|]*?)\s*\|\s*$"
 )
 _LEGACY_HEADER_OR_SEPARATOR_RE = re.compile(
-    r"^\|\s*-{2,}.*\|\s*$|^\|\s*date\s*\|\s*action\s*\|", re.IGNORECASE
+    r"^\|\s*-{2,}.*\|\s*$|^\|\s*date\s*\|\s*action\s*\||^\|\s*artifact\s*\|\s*disposition\s*\|",
+    re.IGNORECASE,
 )
+_LEGACY_3COL_ROW_RE = re.compile(
+    r"^\|\s*(?P<path>[^|]*?)\s*\|\s*(?P<disposition>[^|]*?)\s*\|\s*(?P<target>[^|]*?)\s*\|\s*$"
+)
+_LEGACY_RUN_HEADER_RE = re.compile(r"^##\s+Run:\s*(?P<run_id>\S+)")
 
 
 @dataclass(frozen=True)
@@ -326,9 +336,14 @@ def _parse_legacy_rows(text: str) -> tuple[list[tuple[int, dict]], list[SkippedR
     not counted as skipped)."""
     parsed: list[tuple[int, dict]] = []
     malformed: list[SkippedRow] = []
+    current_run_id = ""
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
+            continue
+        run_header = _LEGACY_RUN_HEADER_RE.match(line)
+        if run_header:
+            current_run_id = run_header.group("run_id")
             continue
         if not line.startswith("|"):
             continue
@@ -336,6 +351,24 @@ def _parse_legacy_rows(text: str) -> tuple[list[tuple[int, dict]], list[SkippedR
             continue
         match = _LEGACY_ROW_RE.match(line)
         if not match:
+            three_col = _LEGACY_3COL_ROW_RE.match(line)
+            if three_col and current_run_id:
+                cells = three_col.groupdict()
+                parsed.append(
+                    (
+                        line_no,
+                        {
+                            "date": current_run_id,
+                            "action": cells["disposition"],
+                            "path": cells["path"],
+                            "last_sha": "",
+                            "belongs_to_spec": "",
+                            "reason": cells["target"],
+                            "three_col": True,
+                        },
+                    )
+                )
+                continue
             malformed.append(
                 SkippedRow(line=line_no, reason=f"malformed legacy row: {line!r}")
             )
@@ -459,6 +492,8 @@ def normalize_log(log_path: Path) -> NormalizeResult:
             continue
 
         disposition = ACTION_DISPOSITION_MAP.get(action)
+        if disposition is None and fields.get("three_col") and action in DISPOSITIONS:
+            disposition = action
         if disposition is None:
             skipped.append(
                 SkippedRow(

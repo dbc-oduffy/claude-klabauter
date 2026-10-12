@@ -41,8 +41,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.frontmatter import primitives as _frontmatter_primitives
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.updatedocs import _common, _stamp_cache
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
+from coordinator_core.updatedocs._stamp_cache import MISS, StampCache
 
 TERMINAL_PLAN_STATUSES = frozenset({"implemented", "deferred", "abandoned", "superseded"})
 
@@ -58,8 +61,7 @@ class PlanPruneResult:
     indeterminate: list[str] = field(default_factory=list)
 
 
-def _plan_status_and_id(p: Path) -> tuple[str | None, str | None]:
-    text = read_head(p)
+def _plan_status_and_id(text: str) -> tuple[str | None, str | None]:
     split = split_frontmatter(text)
     if split is None:
         return None, None
@@ -70,22 +72,38 @@ def _plan_status_and_id(p: Path) -> tuple[str | None, str | None]:
     return (status or None), (plan_id or None)
 
 
-def _collect_reference_values(repo_root: Path) -> list[str]:
+def _reference_values_of(text: str) -> list[str]:
+    split = split_frontmatter(text)
+    if split is None:
+        return []
+    values: list[str] = []
+    for fname in REFERENCE_FIELDS:
+        v = read_fm_field(split.fm_text, fname)
+        if v:
+            values.append(v.strip("\"'"))
+    return values
+
+
+def _collect_reference_values(repo_root: Path, cache: StampCache) -> list[str]:
     """Return every value found under REFERENCE_FIELDS in the live corpus."""
     values: list[str] = []
+    live: set[str] = set()
     for dirname in ("state/handoffs", "tasks"):
         base = repo_root / dirname
         if not base.exists():
             continue
-        for md_path in base.rglob("*.md"):
-            text = read_head(md_path)
-            split = split_frontmatter(text)
-            if split is None:
-                continue
-            for fname in REFERENCE_FIELDS:
-                v = read_fm_field(split.fm_text, fname)
-                if v:
-                    values.append(v.strip('"\''))
+        for path, stamp in _stamp_cache.walk_md(base):
+            key = "r:" + path
+            live.add(key)
+            found = cache.get(key, stamp)
+            if found is MISS:
+                text = read_head(Path(path))
+                found = _reference_values_of(text)
+                # An empty head of a non-empty file is a failed read, not a verdict.
+                if text or stamp[0] == 0:
+                    cache.put(key, stamp, found)
+            values.extend(found)
+    cache.retain("r:", live)
     return values
 
 
@@ -103,40 +121,56 @@ def compute_plan_prune_candidates(
     if not plans_dir.is_dir():
         raise UpdatedocsTargetMissing(plans_dir)
 
-    reference_values = _collect_reference_values(root)
+    cache = StampCache(
+        root, "plan-prune",
+        (__file__, _common.__file__, _stamp_cache.__file__, _frontmatter_primitives.__file__),
+    )
+    reference_values = _collect_reference_values(root, cache)
     now = time.time()
 
-    for plan_path in sorted(plans_dir.glob("*.md")):
-        rel = plan_path.relative_to(root).as_posix()
-        try:
-            mtime = plan_path.stat().st_mtime
-        except OSError:
-            # Present at glob time, gone or unreadable by the stat. INDETERMINATE,
+    try:
+        listing = sorted(_stamp_cache.list_md(plans_dir))
+    except OSError:
+        listing = []
+    rel_prefix = plans_dir.relative_to(root).as_posix() + "/"
+    for name, stamp in listing:
+        plan_path = plans_dir / name
+        rel = rel_prefix + name
+        if stamp is None:
+            # Present at listing time, gone or unreadable by the stat. INDETERMINATE,
             # never a silent `continue`: the three lists must account for every
             # file the glob returned, or a caller reconciling totals finds a gap
             # with nothing explaining it. "We looked and it was not there to tell"
             # belongs with "we looked and could not tell", not with neither.
             indeterminate.append(rel)
             continue
-        age = (now - mtime) / 86400.0
-        status, plan_id = _plan_status_and_id(plan_path)
+        age = (now - stamp[1] / 1e9) / 86400.0
+        found = cache.get("p:" + rel, stamp)
+        if found is MISS:
+            text = read_head(plan_path)
+            found = list(_plan_status_and_id(text))
+            if text or stamp[0] == 0:
+                cache.put("p:" + rel, stamp, found)
+        status, plan_id = found
 
         if status is None:
             indeterminate.append(rel)
             continue
 
         basename = plan_path.name
-        referenced = any(
-            (plan_id and v == plan_id) or v.endswith(basename) or v == rel
-            for v in reference_values
-        )
         is_terminal = status in TERMINAL_PLAN_STATUSES
 
-        if age >= age_days and is_terminal and not referenced:
+        # The reference scan only decides a plan that is already old and terminal.
+        if age >= age_days and is_terminal and not any(
+            (plan_id and v == plan_id) or v.endswith(basename) or v == rel
+            for v in reference_values
+        ):
             prunable.append(rel)
         else:
             retained.append(rel)
 
+    cache.retain("p:", {"p:" + rel_prefix + name for name, _ in listing})
+    cache.flush()
     return PlanPruneResult(
         prunable=sorted(prunable),
         retained=sorted(retained),

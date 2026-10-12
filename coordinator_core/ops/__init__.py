@@ -587,6 +587,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "distill.assemble_disposal_manifest"',
     ),
     ("coordinator_core.ops.distill_stamp_disposal", 'registers "distill.stamp_disposal"'),
+    ("coordinator_core.ops.distill_write_curated_clusters", 'registers "distill.write_curated_clusters"'),
     ("coordinator_core.ops.distill_apply_disposal", 'registers "distill.apply_disposal"'),
     ("coordinator_core.ops.crossrepo_closure_status", 'registers "crossrepo.closure_status"'),
     ("coordinator_core.ops.ceremony.update_docs_scan", 'registers "ceremony.update_docs_scan"'),

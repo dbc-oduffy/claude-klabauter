@@ -905,6 +905,56 @@ def _is_cloud_only_probe(command: str) -> bool:
     return token is not None and token.replace("\\", "/").endswith("/cloud_path_probe.py")
 
 
+_SETTINGS_ONLY_ACK_KEY = "hooks.settings_only_acknowledged"
+
+
+def _acknowledged_script_basenames() -> Set[str]:
+    """Script basenames the operator acknowledged as deliberately settings-only, from the
+    machine-local registry key `hooks.settings_only_acknowledged` (a TOML list or a
+    comma/newline-separated string). Empty when unset or unreadable."""
+    from coordinator_core.machine_resolver import registry_get
+
+    try:
+        raw = registry_get(_SETTINGS_ONLY_ACK_KEY)
+    except Exception:
+        return set()
+    if not raw:
+        return set()
+    return {p.strip().lower() for p in re.split(r"[,\n]", raw) if p.strip()}
+
+
+def _directory_source_plugin_roots(settings_data: dict, config_dir: Path) -> List[str]:
+    """Normalized install paths of plugins installed from a directory-source
+    marketplace (`extraKnownMarketplaces.<name>.source.path`), the delivery shape whose
+    plugin-side hooks.json does not fire. Empty when either record is unreadable."""
+    dir_marketplaces = _marketplace_dirs(settings_data)
+    if not dir_marketplaces:
+        return []
+    records = read_installed_plugin_records(config_dir) or {}
+    roots: List[str] = []
+    for key, installs in records.items():
+        marketplace = key.rsplit("@", 1)[-1] if "@" in key else ""
+        if marketplace not in dir_marketplaces or not isinstance(installs, list):
+            continue
+        for record in installs:
+            install_path = record.get("installPath") if isinstance(record, dict) else None
+            if isinstance(install_path, str) and install_path:
+                roots.append(os.path.normcase(os.path.normpath(install_path)))
+    return roots
+
+
+def _is_acknowledged_settings_only(
+    script: str, acknowledged: Set[str], plugin_roots: List[str]
+) -> bool:
+    """True when a settings-only `script` is a deliberate registration: its basename is
+    allowlisted, or it lives under a directory-source plugin install."""
+    normalized = script.replace("\\", "/")
+    if normalized.rsplit("/", 1)[-1].lower() in acknowledged:
+        return True
+    candidate = os.path.normcase(os.path.normpath(script))
+    return any(candidate == root or candidate.startswith(root + os.sep) for root in plugin_roots)
+
+
 def _tail_key(token: str) -> Optional[str]:
     """Root-independent join key for a script-shaped hook command token --
     its last two path segments (e.g. `scripts/foo.py`, lower-cased),
@@ -1021,11 +1071,11 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
         if settings_data is not None:
             hooks_block = settings_data.get("hooks")
             if isinstance(hooks_block, dict) and hooks_block:
-                settings_commands = [
-                    c for c in _iter_hook_commands(hooks_block)
-                    if not _is_cloud_only_probe(c)
-                ]
-                settings_present = bool(settings_commands)
+                all_commands = list(_iter_hook_commands(hooks_block))
+                settings_commands = [c for c in all_commands if not _is_cloud_only_probe(c)]
+                # A block holding only the cloud-only probe is not a second delivery
+                # surface; a block declaring no command at all still is.
+                settings_present = bool(settings_commands) or not all_commands
     settings_resolvable = settings_present and _script_commands_resolve(
         settings_commands, content_root
     )
@@ -1138,6 +1188,18 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
                 continue
             settings_only_set.update(paths or {key})
         settings_only = sorted(settings_only_set)
+        if settings_only:
+            acknowledged = _acknowledged_script_basenames()
+            plugin_roots = (
+                _directory_source_plugin_roots(settings_data, config_dir)
+                if settings_data is not None
+                else []
+            )
+            settings_only = [
+                s
+                for s in settings_only
+                if not _is_acknowledged_settings_only(s, acknowledged, plugin_roots)
+            ]
 
     return HookDeliveryReport(
         plugin_present=plugin_present,

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/workday-start-run-digest.schema.json",
+  "x-schema-name": "workday-start-run-digest",
+  "x-schema-version": "1.0.0",
+  "x-bump-class": "initial",
+  "title": "Ceremony run digest and agent results (named for workday-start, the first adopter)",
+  "description": "The two documents a ceremony runner exchanges with its workflow template. `digest` is what `launch` writes: the run identity, the state, and agent_work.groups[] (the only work a model does). `agent_results` is what the template's last phase hands `finish`. The group list is data and no group id is enumerated, so one template serves any ceremony. Workday-start's four groups: `inbox` (ruling_agent coordinator:apm; one entry per assembler dispatch, brief and memos[] verbatim, stage/id/depends_on/report_path/bucket/label in the entry's inputs, supersession_candidates[] in the group's inputs; below the trigger that is one entry), `backfill` (one entry per gap, argv set, inputs.kind day or week), `alignment` (one entry whose inputs are the ledger paths of the whats-next and query-completions outputs), `judgment` (agent coordinator:apm; one entry per judgment point no rule decided, inputs the point record with handback dispositions removed).",
+  "type": "object",
+  "required": ["digest", "agent_results"],
+  "properties": {
+    "digest": {"$ref": "#/$defs/digest"},
+    "agent_results": {"$ref": "#/$defs/agent_results"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ceremony", "run_id", "repo_root", "state", "briefing_path", "finish_argv", "agent_work"],
+      "properties": {
+        "ceremony": {"type": "string", "minLength": 1},
+        "run_id": {
+          "type": "string",
+          "pattern": "^[0-9]{8}T[0-9]{6}Z",
+          "description": "Begins with the run's UTC timestamp so run directories sort by time."
+        },
+        "repo_root": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "enum": ["ran", "already-ran", "in-flight", "failed"]},
+        "briefing_path": {"type": ["string", "null"], "description": "Null until finish."},
+        "finish_argv": {"type": "array", "items": {"type": "string"}},
+        "agent_work": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["groups"],
+          "properties": {
+            "groups": {"type": "array", "items": {"$ref": "#/$defs/group"}}
+          }
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "phase", "agent", "ruling_agent", "inputs", "entries"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "phase": {"type": "integer", "minimum": 0, "description": "Integer execution order."},
+        "agent": {"type": ["string", "null"], "description": "Subagent type, or null."},
+        "ruling_agent": {
+          "type": ["string", "null"],
+          "description": "Subagent type that answers an entry whose result comes back needs-ruling."
+        },
+        "inputs": {"type": "object"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/entry"}}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "brief", "argv", "inputs"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "brief": {"type": ["string", "null"]},
+        "argv": {"type": ["array", "null"], "items": {"type": "string"}},
+        "inputs": {"type": "object"}
+      }
+    },
+    "agent_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groups"],
+      "properties": {
+        "groups": {
+          "type": "object",
+          "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/result"}}
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "outcome"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string", "minLength": 1},
+        "commit": {"type": ["string", "null"]},
+        "decision": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/decision"}]},
+        "question": {"type": ["string", "null"], "description": "Set only on a needs-ruling result."},
+        "options": {
+          "type": ["array", "null"],
+          "items": {"type": "string"},
+          "description": "Set only on a needs-ruling result."
+        },
+        "memos": {
+          "type": ["array", "null"],
+          "items": {"type": "string"},
+          "description": "Set only on an inbox result: the memo paths the agent closed out."
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "rationale"],
+      "properties": {
+        "disposition": {
+          "type": "string",
+          "minLength": 1,
+          "not": {"enum": ["surface_to_pm", "pm_reviews_manually"]},
+          "description": "A declared disposition. A value naming a person as the actor is never valid."
+        },
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

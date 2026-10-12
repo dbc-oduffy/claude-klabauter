@@ -7048,6 +7048,7 @@ def parse_yaml(text: str, *, dup_keys: list[str] | None = None) -> Any:
 _GLOB_ESCAPE_CHARS = set('.+^${}()|\\')
 
 
+@functools.lru_cache(maxsize=None)
 def _glob_to_regex(pattern: str) -> re.Pattern:
     """Convert a glob pattern to a compiled regex. Port of schema.js globToRegex.
 
@@ -8359,27 +8360,27 @@ def _lint_collect_files_for_glob(repo_root: str, glob: str) -> list[tuple[str, s
         return []
     recursive = '**' in glob
     results: list[tuple[str, str]] = []
+    glob_re = _glob_to_regex(glob)
 
-    def walk(dir_path: str) -> None:
+    def walk(dir_path: str, rel_prefix: str) -> None:
         try:
             entries = sorted(os.scandir(dir_path), key=lambda e: e.name)
         except OSError:
             return
         for entry in entries:
-            full_path = entry.path
-            repo_rel = os.path.relpath(full_path, repo_root).replace('\\', '/')
+            repo_rel = rel_prefix + entry.name
             if entry.is_dir(follow_symlinks=False):
                 if recursive:
-                    walk(full_path)
+                    walk(entry.path, repo_rel + '/')
             elif entry.is_file(follow_symlinks=False):
-                if match_glob(glob, repo_rel):
-                    results.append((full_path, repo_rel))
+                if glob_re.match(repo_rel):
+                    results.append((entry.path, repo_rel))
 
-    walk(base_dir)
+    walk(base_dir, '/'.join(fixed_parts) + '/' if fixed_parts else '')
     return results
 
 
-def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
+def _build_handoff_id_index(repo_root: str, memo: '_LintResultCache | None' = None) -> dict[str, str]:
     """Build a handoff_id -> logical repo-relative path index.
 
     Byte-faithful port of buildHandoffIdIndex (coordinator-content-repo
@@ -8423,6 +8424,7 @@ def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
     """
     index: dict[str, str] = {}
     origin: dict[str, str] = {}  # handoff_id -> 'live' | 'archived'
+    live_memo_keys = memo.live_keys if memo else set()
 
     def claim(hid: str, key: str, is_archive_entry: bool) -> None:
         existing_key = index.get(hid)
@@ -8476,13 +8478,28 @@ def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
                 continue
             if not entry.is_file(follow_symlinks=False) or not entry.name.endswith('.md'):
                 continue
+            hid_key = f'hid\0{full_path}'
             try:
-                content = Path(full_path).read_text(encoding='utf-8')
+                st = os.stat(full_path)
+                stamp = (st.st_size, st.st_mtime_ns)
             except OSError:
                 continue
-            parsed = parse_frontmatter(content)
-            frontmatter = parsed['frontmatter']
-            hid = frontmatter.get('handoff_id') if frontmatter else None
+            hit = memo.get(hid_key, stamp) if memo else None
+            if hit is not None:
+                hid = hit[2]
+            else:
+                try:
+                    content = Path(full_path).read_text(encoding='utf-8')
+                except OSError:
+                    continue
+                parsed = parse_frontmatter(content)
+                frontmatter = parsed['frontmatter']
+                hid = frontmatter.get('handoff_id') if frontmatter else None
+                if memo:
+                    memo.put(hid_key, stamp, hid if isinstance(hid, str) else None)
+                    live_memo_keys.add(hid_key)
+            if hit is not None and memo:
+                live_memo_keys.add(hid_key)
             if not hid or not isinstance(hid, str):
                 continue
             key = f'state/handoffs/{entry.name}' if is_archive_entry else (
@@ -8903,35 +8920,130 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
     return 1
 
 
+_LINT_CACHE_NAME = 'claude-klabauter-lint-frontmatter-cache.json'
+
+
+def _lint_cache_fingerprint() -> str:
+    """Identity of everything a non-handoff verdict is computed from besides the
+    file itself: this module and the modules it validates through, the vendored
+    schemas, and the roadmap-graph override env var."""
+    here = Path(__file__).resolve().parent
+    deps = [Path(__file__).resolve()]
+    deps += [here / 'baton_class.py', here / 'body_blocks.py', here / 'schema_shape.py']
+    deps.append(here.parent / 'ops' / 'fleet' / 'memo_kinds.py')
+    try:
+        deps += sorted(_SCHEMAS_DIR.iterdir())
+    except OSError:
+        pass
+    h = hashlib.sha1(os.environ.get(_ROADMAP_GRAPH_OVERRIDE_ENV_VAR, '0').encode())
+    for d in deps:
+        try:
+            st = d.stat()
+        except OSError:
+            continue
+        h.update(f'{d.name}\0{st.st_size}\0{st.st_mtime_ns}\0'.encode())
+    return h.hexdigest()
+
+
+class _LintResultCache:
+    """Per-file verdicts kept in `.git/` keyed on (size, mtime_ns), so an unchanged
+    file is neither read nor parsed. Handoff-class files are never stored: their
+    verdict depends on other files and git history. Inert when `.git` is not a
+    directory."""
+
+    def __init__(self, repo_root: str) -> None:
+        git_dir = os.path.join(repo_root, '.git')
+        self._path = os.path.join(git_dir, _LINT_CACHE_NAME) if os.path.isdir(git_dir) else None
+        self._fp = _lint_cache_fingerprint() if self._path else ''
+        self._files: dict[str, list] = {}
+        self._dirty = False
+        self.live_keys: set[str] = set()
+        if self._path:
+            try:
+                with open(self._path, encoding='utf-8') as f:
+                    data = json.load(f)
+                if data.get('fp') == self._fp:
+                    self._files = data['files']
+            except (OSError, ValueError, KeyError, AttributeError):
+                self._files = {}
+
+    def get(self, key: str, stamp: tuple[int, int]) -> list | None:
+        if not self._path:
+            return None
+        entry = self._files.get(key)
+        if entry and entry[0] == stamp[0] and entry[1] == stamp[1]:
+            return entry
+        return None
+
+    def put(self, key: str, stamp: tuple[int, int], outcome: Any) -> None:
+        if self._path:
+            self._files[key] = [stamp[0], stamp[1], outcome]
+            self._dirty = True
+
+    def save(self) -> None:
+        live_keys = self.live_keys
+        if not self._path or not (self._dirty or len(self._files) != len(live_keys)):
+            return
+        kept = {k: v for k, v in self._files.items() if k in live_keys}
+        try:
+            tmp = f'{self._path}.{os.getpid()}.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({'fp': self._fp, 'files': kept}, f, separators=(',', ':'))
+            os.replace(tmp, self._path)
+        except (OSError, TypeError, ValueError):
+            pass
+
+
+class _LazyHandoffIdIndex(dict):
+    """`_build_handoff_id_index` deferred to the first `get`, so a walk whose
+    handoffs carry no ID-field ref never parses the handoff corpus for it."""
+
+    def __init__(self, repo_root: str, memo: '_LintResultCache') -> None:
+        super().__init__()
+        self._repo_root: str | None = repo_root
+        self._memo = memo
+
+    def get(self, key, default=None):
+        if self._repo_root is not None:
+            root, self._repo_root = self._repo_root, None
+            self.update(_build_handoff_id_index(root, self._memo))
+        return super().get(key, default)
+
+
+class _LazyHistorySet(set):
+    """Membership set whose history build runs on the first lookup, so a tree with
+    no dangling handoff ref never pays for it. `complete` is only True once a build
+    has produced a whole-history snapshot; a failed build leaves the set empty and
+    `complete` False, which sends every lookup to the per-call git check."""
+
+    def __init__(self, build) -> None:
+        super().__init__()
+        self._build = build
+        self.complete = False
+
+    def __contains__(self, item) -> bool:
+        if self._build is not None:
+            build, self._build = self._build, None
+            cache = build()
+            if cache is not None:
+                self.update(cache)
+                self.complete = cache.complete
+        return super().__contains__(item)
+
+
 def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
     """Port of lint-frontmatter.js main()'s whole-tree walk branch (--schema/
     --list-schemas/--lint-existing modes excluded — see _lint_parse_args)."""
-    from coordinator_core.dag import as_history_membership_set, build_git_history_cache
+    from coordinator_core.dag import build_persisted_git_history_cache
 
     schemas = load_schemas(_SCHEMAS_DIR)
-    # Stripped via `dag.as_history_membership_set`: this cache is built ONCE
-    # here and reused for the REST of this whole-tree walk (potentially the
-    # entire repo's handoff corpus), so a target pruned/committed mid-walk
-    # must still resolve correctly for a later file in the same walk; trusting
-    # `.complete` across that reuse window would fast-reject such a miss
-    # instead of falling through to the real per-call git check. A HIT is
-    # unaffected either way — only a MISS changes, and only in the
-    # falls-through direction. See `dag.as_history_membership_set`'s docstring
-    # for the full rationale.
-    #
-    # Perf note: stripping `.complete` means a miss on a whole-tree lint now
-    # pays a real per-call `git log --all -- <path>` subprocess spawn (tier-3
-    # fallback inside `check_lineage_reachability`/`resolve_target`) instead
-    # of an O(1) fast-reject, for every dangling ref this lint encounters
-    # across the ENTIRE corpus in one run — this is the widest-blast-radius
-    # of the three call sites this fix touches, since a whole-tree lint is
-    # exactly the many-files/one-cache shape that made the fast-reject wrong
-    # in the first place. Correctness must win over speed here (a dangling
-    # ref silently misclassified as "never tracked" is exactly the bug this
-    # fix closes), but a corpus with many dangling/pruned refs could see this
-    # lint run meaningfully slower than before.
-    git_history_cache = as_history_membership_set(build_git_history_cache(repo_root))
-    handoff_id_index = _build_handoff_id_index(repo_root)  # built once — see _build_handoff_id_index docstring
+    # Built at the first miss and persisted under .git, so the snapshot's trusted
+    # `.complete` only spans the remainder of this walk (sub-second), not a run
+    # that started before the miss; per-call `git log --all -- <path>` for every
+    # dangling ref cost seconds each on a 40k-commit history.
+    git_history_cache = _LazyHistorySet(lambda: build_persisted_git_history_cache(repo_root))
+    result_cache = _LintResultCache(repo_root)
+    handoff_id_index = _LazyHandoffIdIndex(repo_root, result_cache)  # built once, on first lookup — see _build_handoff_id_index docstring
 
     violations: list[dict] = []
     ref_warnings: list[dict] = []
@@ -8973,6 +9085,21 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
             if repo_rel in seen_files:
                 continue
 
+            cache_key = f'{name}\0{repo_rel}'
+            result_cache.live_keys.add(cache_key)
+            try:
+                st = os.stat(full_path)
+                stamp = (st.st_size, st.st_mtime_ns)
+            except OSError:
+                stamp = None
+            hit = result_cache.get(cache_key, stamp) if stamp else None
+            if hit is not None:
+                seen_files.add(repo_rel)
+                outcome = hit[2]
+                if outcome is not None:
+                    violations.append({'file': repo_rel, 'schema': outcome[0], 'errors': outcome[1]})
+                continue
+
             try:
                 content = Path(full_path).read_text(encoding='utf-8')
             except OSError as exc:
@@ -8994,6 +9121,8 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
             )
             seen_files.add(repo_rel)
             if declares_unregistered_kind:
+                if stamp:
+                    result_cache.put(cache_key, stamp, None)
                 continue
 
             # docs/plans/INDEX.md and docs/plans/README.md route to no
@@ -9005,6 +9134,8 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
             # the exclusion for exactly the whole-tree lint this fix is
             # for. Skip explicitly rather than falling through.
             if _is_plan_dir_index_routing_excluded(repo_rel.replace('\\', '/'), frontmatter):
+                if stamp:
+                    result_cache.put(cache_key, stamp, None)
                 continue
 
             resolved = match_schema(repo_rel, frontmatter, schemas)
@@ -9036,6 +9167,10 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
 
             if combined_errors:
                 violations.append({'file': repo_rel, 'schema': effective_name, 'errors': combined_errors})
+            if stamp and effective_name != 'handoff':
+                result_cache.put(cache_key, stamp, [effective_name, combined_errors] if combined_errors else None)
+
+    result_cache.save()
 
     if as_json:
         print(json.dumps({'ok': len(violations) == 0, 'violations': violations, 'refWarnings': ref_warnings}, indent=2))

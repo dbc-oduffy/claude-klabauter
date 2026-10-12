@@ -63,3 +63,36 @@ def test_cache_is_bounded():
     for i in range(rq._PARSE_CACHE_MAXSIZE + 10):
         rq._parse_yaml_cached(f'k: {i}\n')
     assert rq._parse_yaml_cached.cache_info().currsize == rq._PARSE_CACHE_MAXSIZE
+
+
+def test_persisted_record_cache_serves_unchanged_files_and_follows_edits(tmp_path):
+    import os
+
+    from coordinator_core.ops import records_query as rq
+    from coordinator_core.ops.ceremony.records_query import query_records
+
+    (tmp_path / ".git").mkdir()
+    handoffs = tmp_path / "state" / "handoffs"
+    handoffs.mkdir(parents=True)
+    rec = handoffs / "2026-01-01-a.md"
+    rec.write_text("---\nstatus: active\ncreated: 2026-01-01\n---\nbody\n", encoding="utf-8")
+    rq._RECORD_CACHES.clear()
+
+    first = query_records("handoff", tmp_path)
+    assert (tmp_path / ".git" / "claude-klabauter-records-query-cache-handoff.json").is_file()
+
+    rq._RECORD_CACHES.clear()
+    real = rq._load_record_uncached
+    rq._load_record_uncached = lambda *a, **k: (_ for _ in ()).throw(AssertionError("reparsed"))
+    try:
+        assert query_records("handoff", tmp_path) == first
+    finally:
+        rq._load_record_uncached = real
+
+    rec.write_text("---\nstatus: shipped\ncreated: 2026-01-01\n---\nbody!\n", encoding="utf-8")
+    rq._RECORD_CACHES.clear()
+    assert query_records("handoff", tmp_path)[0]["frontmatter"]["status"] == "shipped"
+
+    (tmp_path / ".git" / "claude-klabauter-records-query-cache-handoff.json").write_text("x{", encoding="utf-8")
+    rq._RECORD_CACHES.clear()
+    assert query_records("handoff", tmp_path)[0]["frontmatter"]["status"] == "shipped"

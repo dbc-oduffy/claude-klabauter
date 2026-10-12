@@ -17,15 +17,12 @@ findings. Exit 1 on any finding, else 0.
 from __future__ import annotations
 
 import ast
-import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable, List, NamedTuple, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.win_portability import no_console_creationflags
-
-_NO_WINDOW = no_console_creationflags()
+from coordinator_core.git.run import run_git
 
 _SCOPE_DIRS = ("coordinator_core/", "coordinator/", "scripts/", "setup/")
 
@@ -189,13 +186,9 @@ def _in_scope(rel: str) -> bool:
 
 
 def _tracked_py_files(root: Path) -> List[str]:
-    proc = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "*.py"],
-        capture_output=True,
-        text=True,
-        check=True,
-        **_NO_WINDOW,
-    )
+    proc = run_git(["-C", str(root), "ls-files", "*.py"])
+    if not proc.ok:
+        raise RuntimeError(f"git ls-files exited {proc.returncode}: {proc.stderr.strip()}")
     return [ln for ln in proc.stdout.splitlines() if ln and _in_scope(ln)]
 
 

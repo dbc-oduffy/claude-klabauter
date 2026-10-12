@@ -3727,20 +3727,47 @@ def list_claims_by_session_checked(
         ]
     base_path = Path(base)
     for class_ in _CLAIM_SUBDIRS:
-        class_dir = base_path / class_
-        if not class_dir.is_dir():
-            continue
-        for claim_dir in sorted(class_dir.iterdir()):
-            if not claim_dir.is_dir():
-                continue
-            sid_f = claim_dir / "session_id"
-            try:
-                held_sid = sid_f.read_text(encoding="utf-8").strip()
-            except OSError:
-                continue  # unreadable/absent session_id — not a match
+        for claim_name, held_sid in claim_holders(base_path / class_):
             if held_sid == sid:
-                matches.append((class_, claim_dir.name))
+                matches.append((class_, claim_name))
     return matches, []
+
+
+#: session_id file path -> ((size, mtime_ns), recorded session id).
+_CLAIM_HOLDER_CACHE: dict = {}
+_CLAIM_HOLDER_CACHE_MAX = 8192
+
+
+def claim_holders(class_dir: "Path | str") -> List[Tuple[str, str]]:
+    """``(claim dir name, recorded session id)`` for every claim under *class_dir*, name-sorted.
+    A claim with an absent or unreadable ``session_id`` is omitted. Each file costs one stat;
+    it is re-read only when its (size, mtime_ns) has moved."""
+    try:
+        names = sorted(entry.name for entry in os.scandir(class_dir))
+    except OSError:
+        return []
+    holders: List[Tuple[str, str]] = []
+    for name in names:
+        sid_path = os.path.join(class_dir, name, "session_id")
+        try:
+            st = os.stat(sid_path)
+        except OSError:
+            continue
+        signature = (st.st_size, st.st_mtime_ns)
+        cached = _CLAIM_HOLDER_CACHE.get(sid_path)
+        if cached is not None and cached[0] == signature:
+            holders.append((name, cached[1]))
+            continue
+        try:
+            with open(sid_path, "r", encoding="utf-8") as fh:
+                held_sid = fh.read().strip()
+        except OSError:
+            continue
+        if len(_CLAIM_HOLDER_CACHE) >= _CLAIM_HOLDER_CACHE_MAX:
+            _CLAIM_HOLDER_CACHE.clear()
+        _CLAIM_HOLDER_CACHE[sid_path] = (signature, held_sid)
+        holders.append((name, held_sid))
+    return holders
 
 
 def _read_holder(claim_dir: Path) -> str:
