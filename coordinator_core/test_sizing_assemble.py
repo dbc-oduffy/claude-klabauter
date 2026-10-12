@@ -1094,7 +1094,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # goal-setting sizing landed as, written by sizing.mark_routed); 1.28.0 adds optional
     # `exit_criterion.click_paths`; 1.29.0 optional `research`; 1.30.0 optional
     # `pm_verbatims`. All additive; nothing joined `required`.
-    assert schema["x-schema-version"] == "1.36.0"
+    # Moved 1.36.0 -> 1.37.0 (2026-10-12): DoE c01e16d913 `unrelated_turns` + `visual` surface. Additive.
+    assert schema["x-schema-version"] == "1.37.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

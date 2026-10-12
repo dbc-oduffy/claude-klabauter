@@ -72,3 +72,62 @@ def test_register_twice_is_idempotent_and_supersede_is_accepted(repo):
     assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
     assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
     assert sa.main(["--register", "reg.yaml", "--supersede", "--write", _REL]) == 0
+
+
+_TURN9 = (
+    "I'd like the shape that comes back from the hairless build to be used for the scalp, "
+    "not the old mesh; and keep the   groom\nparameters exposed."
+)
+_PHRASE = "use the _shape_ that comes back from the hairless build"
+_TURN9_TEXT = f"first, {_PHRASE} for the scalp.\nthen keep the groom   parameters exposed."
+_WITH_TURNS = _SIZING + (
+    "pm_verbatims:\n"
+    "  - turn: 2\n    text: \"I need to take a nap, back soon\"\n"
+    f"  - turn: 9\n    text: {yaml.safe_dump(_TURN9_TEXT).strip()}\n"
+)
+
+
+def _reg(rows_text: str, extra: str = "") -> str:
+    return f"sources:\n  - doc: docs/x.md\n    ref: abc\nrows:\n{rows_text}{extra}"
+
+
+_PARAPHRASE = (
+    "  - id: a\n    source_text: shape from the hairless build feeds the scalp\n"
+    "    surface: cli\n    status: open\n"
+)
+
+
+@pytest.fixture
+def turns_repo(repo):
+    (repo / _REL).write_text(_WITH_TURNS, encoding="utf-8")
+    return repo
+
+
+@pytest.mark.parametrize("extra", [[], ["--supersede"]])
+def test_paraphrased_register_over_uncovered_turns_is_refused(turns_repo, capsys, extra):
+    (turns_repo / "reg.yaml").write_text(_reg(_PARAPHRASE), encoding="utf-8")
+    before = (turns_repo / _REL).read_bytes()
+    code = sa.main(["--register", "reg.yaml", *extra, "--write", _REL])
+    assert code == sa.EXIT_BUSINESS_FAIL
+    out = capsys.readouterr().out
+    assert "turn 9" in out and "turn 2" in out
+    assert (turns_repo / _REL).read_bytes() == before
+
+
+def test_verbatim_row_plus_unrelated_turn_records(turns_repo):
+    rows = (
+        f"  - id: a\n    source_text: \"{_PHRASE}\"\n    surface: cli\n    status: open\n"
+    )
+    extra = "unrelated_turns:\n  - turn: 2\n    reason: conversational, no instruction\n"
+    (turns_repo / "reg.yaml").write_text(_reg(rows, extra), encoding="utf-8")
+    assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
+
+
+def test_unrelated_turn_not_embedded_is_refused(turns_repo, capsys):
+    rows = f"  - id: a\n    source_text: \"{_PHRASE}\"\n    surface: cli\n    status: open\n"
+    extra = (
+        "unrelated_turns:\n  - turn: 2\n    reason: chat\n  - turn: 5\n    reason: chat\n"
+    )
+    (turns_repo / "reg.yaml").write_text(_reg(rows, extra), encoding="utf-8")
+    assert sa.main(["--register", "reg.yaml", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL
+    assert "turn 5" in capsys.readouterr().out

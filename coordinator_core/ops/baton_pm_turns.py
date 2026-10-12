@@ -213,32 +213,43 @@ def read_turns(session_id: Optional[str] = None, cwd: Optional[str] = None, *,
     return dict(base, ok=True, text=_render(selected), turns=selected)
 
 
-#: Total characters of PM text a sizing embeds. Sized for "the last few
-#: messages": a launch ask plus two or three follow-ups, not a transcript.
+#: Per-turn character cap for a sizing embed; there is no whole-window budget.
 SIZING_WINDOW_CHARS = 6000
 
 
 def recent_window(session_id: Optional[str] = None, cwd: Optional[str] = None,
-                  budget: int = SIZING_WINDOW_CHARS) -> List[Dict[str, Any]]:
-    """The newest turns, newest first, as ``{turn, ts, text}``, stopping before
-    the first whole turn that would overrun ``budget``. A newest turn that alone
-    exceeds it is the one entry, cut to ``budget`` and marked ``truncated``."""
+                  after_turn: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Every turn newer than ``after_turn``, newest first, as ``{turn, ts, text}``.
+    ``after_turn`` unset reads the session's ``sized_through_turn`` mark (none:
+    all turns). A single turn over ``SIZING_WINDOW_CHARS`` is head-cut and
+    marked ``truncated``."""
     sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
     path = log_path(sid, cwd) if sid else None
     if path is None or not path.is_file():
         return []
+    if after_turn is None:
+        mark = store.read_baton(sid, cwd).get("sized_through_turn")
+        after_turn = mark if isinstance(mark, int) and not isinstance(mark, bool) else None
     window: List[Dict[str, Any]] = []
-    used = 0
     for entry in reversed(_load(path)):
+        if after_turn is not None and entry["turn"] <= after_turn:
+            continue
         text = entry["prompt"]
-        if used + len(text) > budget:
-            if not window:
-                window.append({"turn": entry["turn"], "ts": entry.get("ts"),
-                               "text": text[:budget], "truncated": True})
-            break
-        window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": text})
-        used += len(text)
+        item = {"turn": entry["turn"], "ts": entry.get("ts"), "text": text}
+        if len(text) > SIZING_WINDOW_CHARS:
+            item["text"] = text[:SIZING_WINDOW_CHARS]
+            item["truncated"] = True
+        window.append(item)
     return window
+
+
+def mark_sized_through(turn: int, session_id: Optional[str] = None,
+                       cwd: Optional[str] = None) -> bool:
+    """Raise the session's ``sized_through_turn`` to ``turn``; never lowers it."""
+    sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
+    if not sid:
+        return False
+    return store.merge_baton(sid, cwd, sized_through_turn=turn) is not None
 
 
 def _int_param(params: dict, key: str) -> Optional[int]:

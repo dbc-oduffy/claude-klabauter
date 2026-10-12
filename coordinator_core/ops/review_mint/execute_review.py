@@ -663,6 +663,9 @@ def _tier1_clause(evidence: Optional[JudgeEvidence]) -> str:
         out.append(f"ruling by the {source.upper()} on row {row_id}:\n{quote}")
     for label, quote in evidence.pm_words:
         out.append(f"PM words ({label}):\n{quote}")
+    if evidence.uncovered_turns:
+        out.append("PM turns no register row covers:")
+        out.extend(f"turn {turn}: {head}" for turn, head in evidence.uncovered_turns)
     return "\n".join(out)
 
 

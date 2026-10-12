@@ -79,21 +79,34 @@ def test_rejects_empty_prompt_and_bad_selector(tmp_path, monkeypatch):
     assert out["ok"] is False and "integer" in out["reason"]
 
 
-def test_recent_window_newest_first_whole_turns_within_budget(tmp_path, monkeypatch):
+def test_recent_window_after_turn_bounds_newest_first_with_no_total_budget(tmp_path, monkeypatch):
     _session(tmp_path, monkeypatch, "sid-win")
-    for p in ("a" * 50, "b" * 30, "c" * 30):
-        PT.append_turn(p, session_id="sid-win")
-    win = PT.recent_window(session_id="sid-win", budget=70)
-    assert [e["turn"] for e in win] == [2, 1]
+    for n in range(6):
+        PT.append_turn(f"{n}" * 5000, session_id="sid-win")
+    win = PT.recent_window(session_id="sid-win", after_turn=2)
+    assert [e["turn"] for e in win] == [5, 4, 3]
     assert "truncated" not in win[0]
+    assert [e["turn"] for e in PT.recent_window(session_id="sid-win")] == [5, 4, 3, 2, 1, 0]
 
 
-def test_recent_window_cuts_an_oversized_newest_turn(tmp_path, monkeypatch):
+def test_recent_window_cuts_an_oversized_single_turn(tmp_path, monkeypatch):
     _session(tmp_path, monkeypatch, "sid-big")
     PT.append_turn("small", session_id="sid-big")
-    PT.append_turn("z" * 100, session_id="sid-big")
-    win = PT.recent_window(session_id="sid-big", budget=40)
-    assert win == [{"turn": 1, "ts": win[0]["ts"], "text": "z" * 40, "truncated": True}]
+    PT.append_turn("z" * (PT.SIZING_WINDOW_CHARS + 100), session_id="sid-big")
+    win = PT.recent_window(session_id="sid-big")
+    assert [e["turn"] for e in win] == [1, 0]
+    assert win[0]["text"] == "z" * PT.SIZING_WINDOW_CHARS and win[0]["truncated"] is True
+    assert "truncated" not in win[1]
+
+
+def test_recent_window_defaults_to_the_session_mark_and_mark_never_lowers(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-mark")
+    for n in range(4):
+        PT.append_turn(f"t{n}", session_id="sid-mark")
+    assert PT.mark_sized_through(2, session_id="sid-mark") is True
+    assert PT.mark_sized_through(1, session_id="sid-mark") is True
+    assert store.read_baton("sid-mark")["sized_through_turn"] == 2
+    assert [e["turn"] for e in PT.recent_window(session_id="sid-mark")] == [3]
 
 
 def test_unicode_line_separators_stay_inside_one_turn(tmp_path, monkeypatch):

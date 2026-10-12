@@ -264,6 +264,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -1377,6 +1378,89 @@ def _scaffold_missing(
     declare_write(target)
 
 
+_CLAUSE_RE = re.compile(
+    r"^[ \t]*(?:\d+[.)]|\(\d+\)|\([A-Za-z]\)|[-*•▪●◦‣])[ \t]+(\S.*?)[ \t]*$"
+)
+_AGENT_MESSAGE_RE = re.compile(r"<agent-message\b.*?</agent-message>", re.DOTALL)
+_FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
+
+
+def pm_clause_list(texts: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """The enumerated clauses of the PM texts, in the order given.
+
+    `texts` is `[(key, text)]`, `key` the id stem of the text (`T16`, `I`, `V0`). A text
+    contributes only when it holds two or more enumerated lines (`N.`, `N)`, `(N)`, `(a)`,
+    `-`, `*`, a bullet glyph); `<agent-message>` blocks, fenced code and `>`-quoted lines are
+    not PM words and are skipped. Each clause is `{id, anchor, ref, text}`: `id` is
+    `<key>.<k>` (`k` 1-based within its text), `text` the line with its enumerator stripped.
+    Pure; stdlib `re` only."""
+    clauses: list[dict[str, Any]] = []
+    for key, text in texts:
+        text = _AGENT_MESSAGE_RE.sub("", text or "")
+        found: list[str] = []
+        fenced = False
+        for line in text.replace("\r\n", "\n").split("\n"):
+            if _FENCE_RE.match(line):
+                fenced = not fenced
+                continue
+            if fenced or line.lstrip().startswith(">"):
+                continue
+            m = _CLAUSE_RE.match(line)
+            if m:
+                found.append(m.group(1))
+        if len(found) < 2:
+            continue
+        anchor_stem = "intent" if key == "I" else (
+            f"pm_verbatims turn {key[1:]}" if key.startswith("T") else f"pm_verbatims entry {key[1:]}"
+        )
+        for k, clause in enumerate(found, 1):
+            clauses.append(
+                {"id": f"{key}.{k}", "anchor": f"{anchor_stem}, clause {k}", "ref": anchor_stem,
+                 "text": clause}
+            )
+    return clauses
+
+
+def _pm_texts(doc: dict[str, Any]) -> list[tuple[str, str]]:
+    """The PM words of a sizing record: every `pm_verbatims[].text` in turn order, then `intent`
+    when `intent_source` is `pm-verbatim`."""
+    verbatims = [v for v in (doc.get("pm_verbatims") or []) if isinstance(v, dict)]
+    keyed = []
+    for i, v in enumerate(verbatims):
+        turn = v.get("turn")
+        keyed.append(
+            (turn if isinstance(turn, int) else i, f"T{turn}" if isinstance(turn, int) else f"V{i}",
+             str(v.get("text") or ""))
+        )
+    texts = [(key, text) for _, key, text in sorted(keyed, key=lambda e: e[0])]
+    if doc.get("intent_source") == "pm-verbatim" and doc.get("intent"):
+        texts.append(("I", str(doc["intent"])))
+    return texts
+
+
+def _mint_clause_register(
+    text: str, clauses: list[dict[str, Any]], sizing_rel: str, now: Any
+) -> str:
+    """`text` with a `requirement_register` of one open `internal` row per clause, written
+    through `requirement_register.write_register_text`."""
+    from coordinator_core.ops import requirement_register as rr
+
+    rows = [
+        {
+            rr.ROW_ID: c["id"],
+            rr.ROW_TEXT: c["text"],
+            rr.ROW_ANCHOR: c["anchor"],
+            rr.ROW_SURFACE: "internal",
+            rr.ROW_STATUS: rr.STATUS_OPEN,
+            rr.ROW_CLAIMED_BY: [],
+        }
+        for c in clauses
+    ]
+    refs = list(dict.fromkeys(c["ref"] for c in clauses))
+    sources = [{"doc": sizing_rel, "ref": ref} for ref in refs]
+    return rr.write_register_text(text, {rr.SOURCES_KEY: sources, rr.ROWS_KEY: rows}, now)
+
+
 def write_back(
     root: Path,
     sizing: str,
@@ -1421,8 +1505,11 @@ def write_back(
         format_validation_errors,
         validate_frontmatter,
     )
+    from datetime import datetime, timezone
+
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
     from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.ops.requirement_register import REGISTER_KEY
 
     schema = (
         Path(__file__).resolve().parent.parent
@@ -1461,6 +1548,12 @@ def write_back(
             for t in sorted(chosen, key=lambda t: t["turn"], reverse=True)
         ]
     embedded: list[dict[str, Any]] = []
+    minted: list[str] = []
+    coverage: list[Any] = []
+    try:
+        sizing_rel = target.relative_to(root).as_posix()
+    except ValueError:
+        sizing_rel = f"state/sizings/{target.name}"
 
     def mutate(old: str) -> str:
         try:
@@ -1593,11 +1686,27 @@ def write_back(
             new_doc = yaml.safe_load(text) or {}
         except Exception as exc:  # noqa: BLE001
             raise MutateAbort(f"post-mutation YAML parse error: {exc}") from exc
+        if (embedded or intent_verbatim) and isinstance(new_doc, dict):
+            clauses = pm_clause_list(_pm_texts(new_doc))
+            ruled = new_doc.get("pm_resolution")
+            ruled = isinstance(ruled, dict) and REGISTER_KEY in ruled
+            if clauses and REGISTER_KEY not in new_doc and not ruled:
+                text = _mint_clause_register(text, clauses, sizing_rel, datetime.now(timezone.utc))
+                try:
+                    new_doc = yaml.safe_load(text) or {}
+                except Exception as exc:  # noqa: BLE001
+                    raise MutateAbort(f"post-mint YAML parse error: {exc}") from exc
+                if REGISTER_KEY in new_doc:
+                    minted[:] = [c["id"] for c in clauses]
         errors = validate_frontmatter(new_doc, schema)
         if errors:
             raise MutateAbort(
                 f"post-mutation schema validation failed: {format_validation_errors(errors)}"
             )
+        if embedded and isinstance(new_doc, dict):
+            from coordinator_core.ops import requirement_register as _rr
+
+            coverage[:] = [len(_rr.embedded_turns(new_doc)), _rr.coverage_gaps(new_doc)]
         return text
 
     try:
@@ -1606,7 +1715,30 @@ def write_back(
         raise SizingAssembleError(str(exc.args[0]) if exc.args else "mutation aborted") from exc
     except LockTimeout as exc:
         raise SizingAssembleError(f"timed out waiting for file lock on {target}: {exc}") from exc
-    turns = [e["turn"] for e in embedded]
+    import sys
+
+    if minted:
+        print(
+            f"minted {len(minted)} requirement_register rows ({', '.join(minted)}) on {sizing_rel}; "
+            f"edit: sizing-assemble --register <yaml> --supersede --write {sizing_rel}",
+            file=sys.stderr,
+        )
+    register_coverage = None
+    if coverage:
+        total, gaps = coverage
+        register_coverage = {"turns_total": total, "turns_uncovered": gaps}
+        if gaps:
+            print(
+                f"{sizing_rel}: PM turn(s) {', '.join(map(str, gaps))} not covered by any "
+                "requirement_register row; record: sizing-assemble --register <yaml> "
+                f"--write {sizing_rel}",
+                file=sys.stderr,
+            )
+    turns = [e["turn"] for e in embedded if isinstance(e.get("turn"), int)]
+    if turns:
+        from coordinator_core.ops.baton_pm_turns import mark_sized_through
+
+        mark_sized_through(max(turns), cwd=str(root))
     return {
         "path": str(target),
         "status": "written",
@@ -1614,6 +1746,7 @@ def write_back(
             "embedded": len(embedded),
             "turns": [min(turns), max(turns)] if turns else None,
         },
+        **({"register_coverage": register_coverage} if register_coverage else {}),
     }
 
 

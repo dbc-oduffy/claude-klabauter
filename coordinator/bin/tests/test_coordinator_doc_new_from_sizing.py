@@ -118,7 +118,7 @@ def test_second_call_returns_same_baton_and_writes_nothing(repo):
     assert len(list((repo / "state" / "handoffs").glob("*.md"))) == 1
 
 
-@pytest.mark.parametrize("tshirt", ["XS", "S"])
+@pytest.mark.parametrize("tshirt", ["XS"])  # S mints a spec-dispatch baton (3a51713bb7)
 def test_small_sizing_is_refused_naming_tshirt(repo, tshirt):
     _put(repo, _sizing_text(tshirt=tshirt))
     with pytest.raises(_cli.SizingMintRefused) as exc:
@@ -350,3 +350,49 @@ def test_stray_edge_to_another_sizings_baton_is_replaced(repo):
     assert result["created"] is True and result["path"] != other["path"]
     assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["baton"] == result["path"]
     assert _frontmatter(repo / other["path"])["sizing_object"] == _SIBLING_REL
+
+
+_PLAN_KW = dict(
+    title="Carry plan", branch="main", author="tester",
+    plan_id="pln-carry-abc123", deliverable_id=_DLV, sizing_object=_SIZING_REL,
+)
+
+
+def _carry_sizing_text(with_register: bool = True) -> str:
+    text = _sizing_text() + (
+        "pm_verbatims:\n"
+        '  - {turn: 2, text: "newest ask\\nsecond line"}\n'
+        '  - {turn: 0, text: "launch ask"}\n'
+    )
+    if with_register:
+        text += (
+            "requirement_register:\n"
+            "  rows:\n"
+            "    - {id: R1, source_text: x, status: open}\n"
+            "    - {id: R2, source_text: y, status: open}\n"
+        )
+    return text
+
+
+def test_plan_carries_pm_brief_and_register_claims(repo):
+    _put(repo, _carry_sizing_text())
+    out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+    fm = yaml.safe_load(out.split("---")[1])
+    assert fm["pm_brief"] == {"source": "pm-verbatim", "ref": _SIZING_REL}
+    assert fm["register_claims"] == {"sizing": _SIZING_REL, "rows": ["R1", "R2"]}
+    assert "## PM brief\n\n> newest ask\n> second line\n>\n> launch ask\n\n## Problem" in out
+
+
+def test_plan_without_register_carries_brief_only(repo):
+    _put(repo, _carry_sizing_text(with_register=False))
+    out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+    fm = yaml.safe_load(out.split("---")[1])
+    assert fm["pm_brief"]["source"] == "pm-verbatim" and "register_claims" not in fm
+
+
+def test_plan_without_pm_verbatims_is_byte_identical_to_uncarried(repo):
+    _put(repo, _sizing_text() + "requirement_register:\n  rows:\n    - {id: R1, source_text: x, status: open}\n")
+    carried = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+    baseline = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=None)
+    assert carried == baseline
+    assert "pm_brief" not in carried and "## PM brief" not in carried and "register_claims" not in carried

@@ -27,6 +27,7 @@ from coordinator_core.contract.decision_object.judgment import (
 REGISTER_KEY = "requirement_register"
 SOURCES_KEY = "sources"
 ROWS_KEY = "rows"
+UNRELATED_TURNS_KEY = "unrelated_turns"
 ROLLUP_KEY = "rollup"
 COVERAGE_KEY = "coverage"
 
@@ -46,7 +47,7 @@ ROLLUP_UNCLAIMED = "unclaimed"
 ROLLUP_UNWIRED = "unwired"
 ROLLUP_COMPUTED_AT = "computed_at"
 
-SURFACES = ("ui", "api", "cli", "internal")
+SURFACES = ("ui", "api", "cli", "internal", "visual")
 STATUS_OPEN = "open"
 STATUS_PARTIAL = "partial"
 STATUS_MET = "met"
@@ -91,9 +92,10 @@ class JudgeEvidence:
     rows: list[dict[str, Any]] = field(default_factory=list)
     pm_words: list[tuple[str, str]] = field(default_factory=list)
     rulings: list[tuple[str, str, str]] = field(default_factory=list)
+    uncovered_turns: list[tuple[int, str]] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.rows or self.pm_words or self.rulings)
+        return bool(self.rows or self.pm_words or self.rulings or self.uncovered_turns)
 
 
 @dataclass(frozen=True)
@@ -188,12 +190,48 @@ def claimants(row: Mapping[str, Any]) -> list[str]:
     return [_plan_key(p) for p in claimed if p] if isinstance(claimed, list) else []
 
 
-def claimed_rows(register: Register, plan_path: str) -> list[dict[str, Any]]:
-    """Rows whose `claimed_by` lists `plan_path` (a repo-relative docs/plans path)."""
+def claimed_rows(
+    register: Register, plan_path: str, extra_ids: Sequence[Any] = ()
+) -> list[dict[str, Any]]:
+    """Rows whose `claimed_by` lists `plan_path` (a repo-relative docs/plans path), plus the rows
+    whose id is in `extra_ids` (the plan's own `register_claims.rows`)."""
     key = _plan_key(plan_path)
     if not key:
         return []
-    return [r for r in register.rows if key in claimants(r)]
+    extra = {str(i) for i in extra_ids}
+    return [r for r in register.rows if key in claimants(r) or str(r.get(ROW_ID)) in extra]
+
+
+def plan_claims(plan_fm_text: str) -> tuple[Optional[str], frozenset[str]]:
+    """`(register_sizing_rel, row_ids)` from a plan's `register_claims`; `(None, frozenset())`
+    when the plan carries none or its frontmatter does not parse."""
+    try:
+        fm = _load(plan_fm_text)
+    except Exception:  # noqa: BLE001 - tolerant reader
+        return None, frozenset()
+    claims = fm.get("register_claims") if isinstance(fm, Mapping) else None
+    if not isinstance(claims, Mapping):
+        return None, frozenset()
+    sizing = claims.get("sizing")
+    rows = claims.get(ROWS_KEY)
+    ids = frozenset(str(i) for i in rows) if isinstance(rows, list) else frozenset()
+    return (_plan_key(sizing) if isinstance(sizing, str) and sizing else None), ids
+
+
+def blocking_unclaimed(register: Register, claimed_ids: Sequence[Any]) -> Optional[str]:
+    """Id of the first row outside `claimed_ids` that still owes work: not met and wired, not
+    deferred or waived with a ruling, and listed in no plan's `claimed_by`. None when none does."""
+    claimed = {str(i) for i in claimed_ids}
+    for row in register.rows:
+        if str(row.get(ROW_ID)) in claimed or claimants(row):
+            continue
+        status = row.get(ROW_STATUS)
+        if status == STATUS_MET and row.get(ROW_WIRED) is True:
+            continue
+        if status in (STATUS_DEFERRED, STATUS_WAIVED) and not _unruled(row):
+            continue
+        return str(row.get(ROW_ID))
+    return None
 
 
 def rollup(rows: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
@@ -274,18 +312,20 @@ def apply_verdicts(
     plan_path: str,
     sha: str,
     now: datetime,
+    claim_ids: Sequence[Any] = (),
 ) -> str:
     """The sizing text after a terminal commit: judged rows claimed by `plan_path` get wired,
     status (met when judged met and wired, else partial when either holds), a `<plan>@<sha>`
     entry in met_by (only when met and wired) and last_progress_at; the rollup is recomputed.
     Only the register block is replaced, keeping `sources`. `deferred`/`waived` rows are never
-    touched. A sizing with no register is returned unchanged."""
+    touched. `claim_ids` adds the plan's `register_claims.rows` to the rows it claims. A sizing
+    with no register is returned unchanged."""
     register = read_register(sizing_text)
     if register is None:
         return sizing_text
     verdicts = {str(j.get("id")): j for j in judge_rows if isinstance(j, Mapping)}
     stamp = _iso_utc(now)
-    for row in claimed_rows(register, plan_path):
+    for row in claimed_rows(register, plan_path, claim_ids):
         verdict = verdicts.get(str(row.get(ROW_ID)))
         if verdict is None or row.get(ROW_STATUS) in (STATUS_DEFERRED, STATUS_WAIVED):
             continue
@@ -352,6 +392,89 @@ def unknown_row_ids(register: Register, ids: Sequence[Any]) -> list[str]:
     return out
 
 
+def _norm(text: Any) -> str:
+    return " ".join(str(text).split())
+
+
+def embedded_turns(doc: Mapping[str, Any]) -> dict[int, str]:
+    """Numbered `pm_verbatims` as {turn: normalised text}; turnless verbatims are skipped."""
+    out: dict[int, str] = {}
+    verbatims = doc.get("pm_verbatims")
+    if not isinstance(verbatims, list):
+        return out
+    for v in verbatims:
+        if not isinstance(v, Mapping):
+            continue
+        turn = v.get("turn")
+        if isinstance(turn, int) and not isinstance(turn, bool):
+            out[turn] = _norm(v.get("text") or "")
+    return out
+
+
+def _register_block(doc: Mapping[str, Any]) -> Mapping[str, Any]:
+    block = doc.get(REGISTER_KEY)
+    return block if isinstance(block, Mapping) else {}
+
+
+def coverage_gaps(doc: Mapping[str, Any]) -> list[int]:
+    """Embedded PM turns no register row covers, ascending.
+
+    A turn is covered when a row's whitespace-normalised `source_text` is a substring of the
+    turn's normalised text, or the turn is named in `unrelated_turns`. Coverage runs from turns
+    to rows only: a row matching no turn is legal.
+    """
+    turns = embedded_turns(doc)
+    if not turns:
+        return []
+    block = _register_block(doc)
+    rows = block.get(ROWS_KEY)
+    needles = [
+        n
+        for r in (rows if isinstance(rows, list) else [])
+        if isinstance(r, Mapping) and (n := _norm(r.get(ROW_TEXT) or ""))
+    ]
+    unrelated = block.get(UNRELATED_TURNS_KEY)
+    waived = {
+        e["turn"]
+        for e in (unrelated if isinstance(unrelated, list) else [])
+        if isinstance(e, Mapping) and isinstance(e.get("turn"), int)
+    }
+    return [
+        t for t in sorted(turns) if t not in waived and not any(n in turns[t] for n in needles)
+    ]
+
+
+def uncovered_turns(sizing_text: str) -> list[tuple[int, str]]:
+    """`(turn, first 80 characters)` for each embedded PM turn of the sizing text that no register
+    row covers. Never raises; empty when the sizing embeds no turns or is unreadable."""
+    if "pm_verbatims" not in sizing_text:
+        return []
+    try:
+        doc = _load(sizing_text)
+    except Exception:  # noqa: BLE001 - tolerant reader
+        return []
+    if not isinstance(doc, Mapping):
+        return []
+    turns = embedded_turns(doc)
+    return [(t, turns[t][:80]) for t in coverage_gaps(doc)]
+
+
+def unrelated_turn_errors(doc: Mapping[str, Any], register: Mapping[str, Any]) -> list[str]:
+    """Defects in `register`'s `unrelated_turns` against the turns `doc` embeds."""
+    entries = register.get(UNRELATED_TURNS_KEY)
+    if not isinstance(entries, list):
+        return []
+    embedded = embedded_turns(doc)
+    errors: list[str] = []
+    for e in entries:
+        turn = e.get("turn") if isinstance(e, Mapping) else None
+        if not isinstance(turn, int) or turn not in embedded:
+            errors.append(f"unrelated_turns names turn {turn}, which is not embedded")
+        elif not str(e.get("reason") or "").strip():
+            errors.append(f"unrelated_turns turn {turn} has an empty reason")
+    return errors
+
+
 def duplicate_row_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     """Ids appearing more than once among `rows`, in first-seen order."""
     seen: set[str] = set()
@@ -411,6 +534,7 @@ def judge_evidence(plan_text: str, repo_root: Path, plan_path: str) -> JudgeEvid
     rel = _fm_scalar(fm, "sizing_object")
     if not rel:
         return JudgeEvidence()
+    claims_rel, claim_ids = plan_claims(fm[4:])
     path = _sizing_path(Path(repo_root), rel)
     try:
         text = path.read_text(encoding="utf-8") if path else ""
@@ -434,9 +558,16 @@ def judge_evidence(plan_text: str, repo_root: Path, plan_path: str) -> JudgeEvid
         pm_words.append(("intent", str(data["intent"])))
     rows: list[dict[str, Any]] = []
     rulings: list[tuple[str, str, str]] = []
-    register = read_register(text)
+    register_text = text
+    if claims_rel and claims_rel != _plan_key(rel):
+        root = _sizing_path(Path(repo_root), claims_rel)
+        try:
+            register_text = root.read_text(encoding="utf-8") if root else ""
+        except OSError:
+            register_text = ""
+    register = read_register(register_text)
     if register is not None:
-        for row in claimed_rows(register, plan_path):
+        for row in claimed_rows(register, plan_path, claim_ids):
             rows.append({
                 ROW_ID: row.get(ROW_ID), ROW_TEXT: row.get(ROW_TEXT),
                 ROW_ANCHOR: row.get(ROW_ANCHOR), ROW_SURFACE: row.get(ROW_SURFACE),
@@ -447,7 +578,9 @@ def judge_evidence(plan_text: str, repo_root: Path, plan_path: str) -> JudgeEvid
                     (str(ruling.get(RULING_SOURCE) or "unknown"), str(row.get(ROW_ID)),
                      str(ruling[RULING_QUOTE]))
                 )
-    return JudgeEvidence(rows=rows, pm_words=pm_words, rulings=rulings)
+    return JudgeEvidence(
+        rows=rows, pm_words=pm_words, rulings=rulings, uncovered_turns=uncovered_turns(register_text)
+    )
 
 
 def plan_judge_evidence(

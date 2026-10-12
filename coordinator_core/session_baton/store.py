@@ -159,6 +159,9 @@ def default_record(session_id: str) -> Dict[str, Any]:
         # and a schema over that would only constrain it. Additive and
         # `.get()`-safe -- a reader predating this key is unaffected.
         "carry_forward": [],
+        # Highest PM turn a sizing has embedded; the next sizing's window
+        # starts after it. Max-wins: merge_baton only ever raises it.
+        "sized_through_turn": None,
     }
 
 
@@ -321,6 +324,7 @@ def merge_baton(
     promoted_to: Any = _UNSET,
     closed_at: Any = _UNSET,
     closed_into: Any = _UNSET,
+    sized_through_turn: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Read-modify-write merge of ``sid``'s baton record. Idempotent and
     safe to call repeatedly for the same session (a mint op's second call
@@ -354,6 +358,9 @@ def merge_baton(
     (order-preserving), so two callers merging overlapping lists never lose
     or duplicate an entry. Passing ``None`` (the default) leaves the
     existing list untouched.
+
+    ``sized_through_turn`` is MAX-WINS: a non-``None`` value only replaces a
+    missing/non-int prior or a strictly lower one; ``None`` leaves it alone.
 
     Returns the merged record on success, or ``None`` when ``sid`` is empty,
     the session hub is unresolvable, or the session directory does not yet
@@ -405,6 +412,10 @@ def merge_baton(
         if closed_into is not _UNSET:
             if closed_into is None or record.get("closed_into") is None:
                 record["closed_into"] = closed_into
+        if sized_through_turn is not None:
+            prior = record.get("sized_through_turn")
+            if not isinstance(prior, int) or sized_through_turn > prior:
+                record["sized_through_turn"] = sized_through_turn
         if adopted_artifacts:
             existing = list(record.get("adopted_artifacts") or [])
             for entry in adopted_artifacts:

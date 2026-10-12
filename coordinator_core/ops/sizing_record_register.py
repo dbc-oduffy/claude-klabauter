@@ -1,8 +1,10 @@
 """
 coordinator_core.ops.sizing_record_register — JSON-RPC "sizing.record_register".
 
-Purpose: the single writer for a sizing-object's `requirement_register` block, taken from a
+Purpose: the writer for a sizing-object's `requirement_register` block taken from a
 caller-supplied `{sources, rows[, rollup]}` mapping (`sizing-assemble --register <yaml>`).
+`sizing_assemble.write_back` also writes a register, minted from the PM's enumerated clauses,
+through the same `requirement_register.write_register_text`.
 
 What it writes: the register block only; `sources` and `rows` are kept as given and the
 rollup is recomputed, so an input rollup is never trusted. Every byte outside the block is kept.
@@ -51,6 +53,20 @@ def _err(msg: str) -> dict:
 
 def _identity(sources, rows) -> dict:
     return {"sources": sources, "rows": rows}
+
+
+def _coverage_refusal(doc: dict, gaps: list, problems: list) -> str:
+    embedded = rr.embedded_turns(doc)
+    lines = [f"  turn {t}: {embedded[t][:80]!r}" for t in gaps]
+    out = "register leaves PM turn(s) uncovered:\n" + "\n".join(lines) if gaps else ""
+    if problems:
+        out += ("\n" if out else "") + "; ".join(problems)
+    if gaps:
+        out += (
+            "\nfix: add a row whose source_text is a verbatim substring of the turn, "
+            "or an unrelated_turns entry {turn, reason}"
+        )
+    return out
 
 
 @register_op("sizing.record_register")
@@ -120,6 +136,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     state: dict = {"applied": False, "rollup": None}
 
     def mutate(old_text: str) -> str:
+        try:
+            current = yaml.safe_load(old_text) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(f"record_register: YAML parse error: {exc}") from exc
+        if isinstance(current, dict):
+            would_be = {**current, rr.REGISTER_KEY: register}
+            problems = rr.unrelated_turn_errors(current, register)
+            gaps = rr.coverage_gaps(would_be)
+            if gaps or problems:
+                raise MutateAbort(_coverage_refusal(current, gaps, problems))
         existing = rr.read_register(old_text)
         wanted = _identity(register.get("sources"), rows)
         if existing is not None:

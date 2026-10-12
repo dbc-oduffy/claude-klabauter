@@ -7,12 +7,14 @@ spawn. The log resolves under the cwd's git-common-dir, so the op is handed repo
   pm-turns quote N [--session-id SID]     the stored prompt of turn N
   pm-turns referent N [--session-id SID]  the EM message turn N answered: its excerpt, else
                                           its transcript_uuid
+  pm-turns window [--session-id SID]      the PM-turn window `sizing-assemble --write` would
+                                          embed, as a JSON list (`[]` when none)
 
 Output is UTF-8 on stdout with no trailing newline added, so `$(pm-turns quote 3)` and a pipe
 see exactly the stored text.
 
 Exit status:
-  0  written
+  0  written (`window` always, `[]` when no turns)
   1  no such turn, or `referent` on a turn that recorded none (reason on stderr)
   2  usage
   3  engine unresolvable or not importable
@@ -21,6 +23,7 @@ Exit status:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -37,9 +40,9 @@ def _load_op():
     root = _resolve_engine_root()
     if root not in sys.path:
         sys.path.insert(0, root)
-    from coordinator_core.ops.baton_pm_turns import _pm_turns
+    from coordinator_core.ops import baton_pm_turns
 
-    return _pm_turns
+    return baton_pm_turns
 
 
 def _emit(text: str) -> None:
@@ -54,17 +57,25 @@ def main(argv: list[str]) -> int:
         p = sub.add_parser(verb)
         p.add_argument("n", type=int, metavar="N")
         p.add_argument("--session-id", dest="session_id")
+    pw = sub.add_parser("window")
+    pw.add_argument("--session-id", dest="session_id")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
 
     try:
-        op = _load_op()
+        mod = _load_op()
     except (RuntimeError, ImportError) as exc:
         print(f"pm-turns: engine unavailable: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT
 
+    if args.verb == "window":
+        window = mod.recent_window(session_id=args.session_id, cwd=str(Path.cwd()))
+        _emit(json.dumps(window, ensure_ascii=False))
+        return EXIT_OK
+
+    op = mod._pm_turns
     params: dict = {"turn": args.n}
     if args.session_id:
         params["session_id"] = args.session_id

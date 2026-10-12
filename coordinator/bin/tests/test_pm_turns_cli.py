@@ -97,3 +97,19 @@ def test_process_time_under_200ms(repo):
     assert proc.returncode == 0 and proc.stdout == b"x"
     spent = (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
     assert spent < 0.2, spent
+
+
+def test_window_prints_json_turns_newest_first(repo):
+    _append(repo, "first")
+    _append(repo, "second")
+    proc = _run(repo, "window", "--session-id", SID)
+    assert proc.returncode == 0, proc.stderr
+    window = json.loads(proc.stdout.decode("utf-8"))
+    assert [w["turn"] for w in window] == [1, 0]
+    assert window[0]["text"] == "second"
+
+
+def test_window_with_no_log_prints_empty_list(repo):
+    proc = _run(repo, "window", "--session-id", "no-such-session")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout.decode("utf-8")) == []

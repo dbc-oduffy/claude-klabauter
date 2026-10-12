@@ -1809,6 +1809,53 @@ def _resolve_cited_sizing_exit_criterion(
         return None
 
 
+def _resolve_cited_sizing_pm_carry(
+    sizing_object_relpath: str, repo_root: str,
+) -> tuple[list[str], list[str]]:
+    """A cited sizing's `pm_verbatims` texts (stored order) and requirement-register row ids.
+
+    Both empty on an absent field or any read failure, so a sizing without
+    `pm_verbatims` scaffolds exactly as before. Row ids come from
+    `requirement_register.read_register`; pure read, never raises.
+    """
+    try:
+        import yaml  # noqa: PLC0415
+
+        _ensure_engine_on_path()
+        from coordinator_core.ops.requirement_register import (  # noqa: PLC0415
+            ROW_ID,
+            read_register,
+        )
+
+        _text = open(
+            os.path.join(repo_root, sizing_object_relpath), encoding="utf-8"
+        ).read()
+        _data = yaml.safe_load(_text)
+        _verbatims = _data.get("pm_verbatims") if isinstance(_data, dict) else None
+        _texts = [
+            v["text"]
+            for v in (_verbatims if isinstance(_verbatims, list) else [])
+            if isinstance(v, dict) and isinstance(v.get("text"), str) and v["text"].strip()
+        ]
+        if not _texts:
+            return [], []
+        _register = read_register(_text)
+        _ids = [str(r[ROW_ID]) for r in _register.rows] if _register else []
+        return _texts, _ids
+    except Exception:  # noqa: BLE001 -- unreadable sizing degrades to no carry, never blocks scaffolding
+        return [], []
+
+
+def _pm_brief_blockquote(texts: list[str]) -> list[str]:
+    """Each verbatim as a blockquote, turns separated by a bare `>` line."""
+    out: list[str] = []
+    for i, t in enumerate(texts):
+        if i:
+            out.append(">")
+        out += [f"> {ln}" if ln.strip() else ">" for ln in t.replace("\r\n", "\n").strip().split("\n")]
+    return out
+
+
 def _sizing_object_line(sizing_object: str) -> str:
     """Render the `sizing_object:` frontmatter line for a supplied value.
 
@@ -4041,6 +4088,12 @@ def _scaffold_plan(
         _cited_exit_criterion = _resolve_cited_sizing_exit_criterion(
             sizing_object, sizing_repo_root
         )
+    _pm_texts: list[str] = []
+    _register_ids: list[str] = []
+    if sizing_object and sizing_object != "null" and sizing_repo_root:
+        _pm_texts, _register_ids = _resolve_cited_sizing_pm_carry(
+            sizing_object, sizing_repo_root
+        )
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
@@ -4060,6 +4113,14 @@ def _scaffold_plan(
         # every other --sizing-object-accepting arm — see
         # `_sizing_object_line`'s docstring for the unquoted-null rationale.
         lines.append(_sizing_object_line(sizing_object))
+    if _pm_texts:
+        lines.append(f"pm_brief: {{source: pm-verbatim, ref: {_yaml_quote(sizing_object)}}}")
+        if _register_ids:
+            lines += [
+                "register_claims:",
+                f"  sizing: {_yaml_quote(sizing_object)}",
+                "  rows: [" + ", ".join(_yaml_quote(i) for i in _register_ids) + "]",
+            ]
     lines += [
         "# Optional keys — uncomment and fill as needed (promoted de-facto keys, D1):",
         "# scope_mode: additive-only         # planning posture",
@@ -4292,6 +4353,10 @@ def _scaffold_plan(
         "",
         f"# {title}",
         "",
+    ]
+    if _pm_texts:
+        lines += ["## PM brief", ""] + _pm_brief_blockquote(_pm_texts) + [""]
+    lines += [
         "## Problem",
         "",
         "<!-- State the problem this plan solves. -->",
@@ -6452,7 +6517,16 @@ def _safe_output_roots() -> list:
             except OSError:
                 pass
     try:
-        roots.append(os.path.realpath(tempfile.gettempdir()))
+        temp = os.path.realpath(tempfile.gettempdir())
+        roots.append(temp)
+        # Under a test run TEMP is `<os temp>/coordinator/<repo>/run-temp/<id>`, while pytest's
+        # tmp_path is a sibling under `<os temp>/coordinator/<repo>/pytest/`; allow the shared
+        # `coordinator/<repo>` root so both pass.
+        run_temp = os.path.dirname(temp)
+        if os.path.basename(run_temp) == "run-temp":
+            repo_temp = os.path.dirname(run_temp)
+            if os.path.basename(os.path.dirname(repo_temp)) == "coordinator":
+                roots.append(repo_temp)
     except OSError:
         pass
     tmpdir = os.environ.get("TMPDIR", "")

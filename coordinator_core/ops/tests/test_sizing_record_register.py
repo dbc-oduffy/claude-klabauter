@@ -178,3 +178,15 @@ def test_no_process_spawned(repo, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", boom)
     assert _run(repo, _register(_row("a")))["exit_code"] == 0
+
+
+def test_visual_surface_row_records_and_unknown_surface_is_refused(repo):
+    p = _seed(repo)
+    r = _run(repo, _register(_row("v", surface="visual")))
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    doc = _doc(p)
+    assert doc["requirement_register"]["rows"][0]["surface"] == "visual"
+    assert validate_frontmatter(doc, mod._SIZING_SCHEMA_PATH) == []
+    before = p.read_bytes()
+    bad = _run(repo, _register(_row("w", surface="hologram")), supersede=True)
+    assert bad["exit_code"] != 0 and p.read_bytes() == before

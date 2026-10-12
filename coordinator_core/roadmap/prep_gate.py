@@ -40,8 +40,12 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
   REGISTER       A plan carrying ``register_claims`` names a sizing that carries
                  a ``requirement_register``, every claimed row id exists in it,
-                 and every deferred/waived row in it carries a ``ruling``. No
-                 ``register_claims`` is a pass; a malformed claim is SCHEMA's.
+                 and every deferred/waived row in it carries a ``ruling``. A plan
+                 whose ``sizing_object`` is register-bearing must carry
+                 ``register_claims``, and when it names that same sizing its
+                 ``rows`` must cover every register row. No ``register_claims``
+                 on a non-register-bearing plan is a pass; a malformed claim is
+                 SCHEMA's.
 
 Domain vocabulary: the bar, a report class, a verdict (PREPPED / NOT-PREPPED),
 a withheld row, a declared-empty.
@@ -1928,14 +1932,39 @@ _REGISTER_SIZING_RE = re.compile(r"^state/sizings/.+\.yaml$")
 
 _REGISTER_FIX = (
     "  fix: write the register with `sizing-assemble --register <yaml> --write <sizing>`, "
-    "correct `register_claims.rows`, or record the missing ruling; mise-prep-upgrade "
+    "claim every row in `register_claims.rows`, or record the missing ruling; mise-prep-upgrade "
     "derives none of these"
 )
 
 
+def _read_sizing_register(repo_root: Path, sizing: str) -> Optional[bytes]:
+    try:
+        root = repo_root.resolve()
+        candidate = (root / sizing).resolve()
+        candidate.relative_to(root)
+        return candidate.read_bytes()
+    except (OSError, ValueError):
+        return None
+
+
 def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
-    """REGISTER: `register_claims` resolves against the named sizing's register."""
+    """REGISTER: `register_claims` resolves against, and covers, the sizing's register."""
+    from coordinator_core.ops import requirement_register as rr
+
+    cited = fm.get("sizing_object")
+    cited = cited if isinstance(cited, str) and _REGISTER_SIZING_RE.match(cited) else None
     if "register_claims" not in fm:
+        if cited is None or repo_root is None:
+            return _pass("not applicable: no register_claims")
+        cited_data = _read_sizing_register(repo_root, cited)
+        if cited_data is not None and rr.has_register_key(cited_data):
+            cited_register = rr.read_register(cited_data.decode("utf-8", errors="replace"))
+            if cited_register is not None:
+                return _defect(
+                    "register-claims-missing",
+                    f"sizing_object {cited} carries a requirement_register, "
+                    "but the plan has no register_claims",
+                )
         return _pass("not applicable: no register_claims")
     if repo_root is None:
         return _pass("not checked: no repo root")
@@ -1949,14 +1978,8 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
         or not rows
     ):
         return _pass("not checked: register_claims malformed — SCHEMA reports it")
-    from coordinator_core.ops import requirement_register as rr
-
-    try:
-        root = repo_root.resolve()
-        candidate = (root / sizing).resolve()
-        candidate.relative_to(root)
-        data = candidate.read_bytes()
-    except (OSError, ValueError):
+    data = _read_sizing_register(repo_root, sizing)
+    if data is None:
         return _defect(
             "register-sizing-missing",
             f"register_claims names {sizing}, which is absent, unreadable or outside the repo",
@@ -1976,6 +1999,14 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
         if unruled:
             parts.append(f"deferred/waived row(s) with no ruling: {', '.join(unruled)}")
         return _defect("register-row-unknown" if unknown else "register-row-unruled", "; ".join(parts))
+    if sizing == cited:
+        claimed = {str(r) for r in rows}
+        missing = [str(r[rr.ROW_ID]) for r in register.rows if str(r[rr.ROW_ID]) not in claimed]
+        if missing:
+            return _defect(
+                "register-rows-unclaimed",
+                f"register_claims.rows omit {len(missing)} row(s) of {sizing}: {', '.join(missing)}",
+            )
     return _pass(f"{len(rows)} claimed row(s) resolve in {sizing}")
 
 

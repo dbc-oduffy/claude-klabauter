@@ -224,10 +224,36 @@ def _cited_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional[str
     cited = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
     if not cited:
         return None
+    return _sizing_file_rel(worktree_root, cited)
+
+
+def _sizing_file_rel(worktree_root: Path, cited: str) -> Optional[str]:
     guarded = contained_path(worktree_root / cited, [Path(home_dir(str(worktree_root), "sizings"))])
     if guarded is None or not guarded.is_file():
         return None
     return guarded.relative_to(worktree_root.resolve()).as_posix()
+
+
+def _register_target(
+    worktree_root: Path, plan_path: Optional[str]
+) -> tuple[Optional[str], frozenset, bool]:
+    """``(register_sizing_rel, claimed_row_ids, is_own)``: the register sizing is the plan's
+    ``register_claims.sizing`` when it names an existing sizing, else the cited ``sizing_object``;
+    ``is_own`` is True when that is the plan's own ``sizing_object``."""
+    text = _read_rel(worktree_root, plan_path) if plan_path else None
+    if text is None:
+        return None, frozenset(), True
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops import requirement_register as rr
+
+    split = split_frontmatter(text)
+    cited = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    own = _sizing_file_rel(worktree_root, cited) if cited else None
+    claims_rel, ids = rr.plan_claims(split.fm_text) if split else (None, frozenset())
+    target = _sizing_file_rel(worktree_root, claims_rel) if claims_rel else None
+    if target is None:
+        return own, ids, True
+    return target, ids, target == own
 
 
 def _register_gate(worktree_root: Path, plan_path: Optional[str], inline_review: dict) -> Optional[str]:
@@ -240,18 +266,17 @@ def _register_gate(worktree_root: Path, plan_path: Optional[str], inline_review:
     criterion = inline_review.get("criterion")
     if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
         return None
-    sizing_rel = _cited_sizing(worktree_root, plan_path)
+    sizing_rel, claim_ids, is_own = _register_target(worktree_root, plan_path)
     if sizing_rel is None:
         return None
     from coordinator_core.ops import requirement_register as rr
 
     sizing_text = _read_rel(worktree_root, sizing_rel)
     register = rr.read_register(sizing_text) if sizing_text is not None else None
-    if register is None:
+    gaps = rr.uncovered_turns(sizing_text) if is_own and sizing_text is not None else []
+    if register is None and not gaps:
         return None
-    claimed = rr.claimed_rows(register, plan_path)
-    if not claimed:
-        return None
+    claimed = rr.claimed_rows(register, plan_path, claim_ids) if register is not None else []
     judged = {
         str(r.get(rr.ROW_ID)): r
         for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
@@ -277,6 +302,21 @@ def _register_gate(worktree_root: Path, plan_path: Optional[str], inline_review:
         criterion["reason"] = reason
         criterion["observation"] = reason
         return reason
+    if gaps:
+        turn, head = gaps[0]
+        reason = f"PM turn {turn} is covered by no register row or unrelated_turns entry: {head}"
+        criterion["status"] = "not_met"
+        criterion["reason"] = reason
+        criterion["observation"] = reason
+        return reason
+    if is_own and register is not None:
+        orphan = rr.blocking_unclaimed(register, [r.get(rr.ROW_ID) for r in claimed])
+        if orphan is not None:
+            reason = f"register row {orphan}: owed and claimed by no plan"
+            criterion["status"] = "not_met"
+            criterion["reason"] = reason
+            criterion["observation"] = reason
+            return reason
     return None
 
 
@@ -299,7 +339,7 @@ def _register_writeback(
         r for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
         if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
     ]
-    sizing_rel = _cited_sizing(worktree_root, plan_path) if judged else None
+    sizing_rel, claim_ids, _ = _register_target(worktree_root, plan_path) if judged else (None, frozenset(), True)
     if sizing_rel is None:
         return {}
     from datetime import datetime, timezone
@@ -315,7 +355,7 @@ def _register_writeback(
     def mutate(old: str) -> str:
         if rr.read_register(old) is None:
             raise MutateAbort("")
-        new = rr.apply_verdicts(old, judged, plan_path, sha, now)
+        new = rr.apply_verdicts(old, judged, plan_path, sha, now, claim_ids)
         if new == old:
             raise MutateAbort("")
         try:

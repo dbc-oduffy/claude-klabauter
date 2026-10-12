@@ -184,6 +184,27 @@ def test_merge_baton_dedup_extends_list_fields(tmp_path):
     ]
 
 
+def test_merge_baton_sized_through_turn_only_ever_rises(tmp_path):
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-sized")
+    assert store.read_baton("sid-sized", cwd=str(repo))["sized_through_turn"] is None
+    assert store.merge_baton("sid-sized", cwd=str(repo), sized_through_turn=4)["sized_through_turn"] == 4
+    assert store.merge_baton("sid-sized", cwd=str(repo), sized_through_turn=2)["sized_through_turn"] == 4
+    assert store.merge_baton("sid-sized", cwd=str(repo), title="t")["sized_through_turn"] == 4
+    assert store.merge_baton("sid-sized", cwd=str(repo), sized_through_turn=7)["sized_through_turn"] == 7
+
+
+def test_merge_baton_sized_through_turn_replaces_non_int_prior(tmp_path):
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-sized-bad")
+    path = store.baton_path("sid-sized-bad", str(repo))
+    record = store.default_record("sid-sized-bad")
+    record["sized_through_turn"] = "corrupt"
+    store.write_baton("sid-sized-bad", record, cwd=str(repo))
+    assert path is not None
+    assert store.merge_baton("sid-sized-bad", cwd=str(repo), sized_through_turn=3)["sized_through_turn"] == 3
+
+
 def test_merge_baton_promoted_to_explicit_none_is_settable(tmp_path):
     repo = _make_repo(tmp_path)
     _ensure_session_dir(repo, "sid-promo")

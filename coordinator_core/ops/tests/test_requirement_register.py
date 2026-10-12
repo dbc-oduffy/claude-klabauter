@@ -121,6 +121,52 @@ def test_apply_verdicts_appends_met_by_and_skips_ruled_rows():
     assert reg["b"]["status"] == "deferred" and reg["b"]["wired"] is False
 
 
+def test_plan_claims_reads_sizing_and_rows():
+    fm = "plan_id: x\nregister_claims:\n  sizing: state/sizings/s.yaml\n  rows: [a, 'T1.2']\n"
+    assert rr.plan_claims(fm) == ("state/sizings/s.yaml", frozenset({"a", "T1.2"}))
+    assert rr.plan_claims("plan_id: x\n") == (None, frozenset())
+    assert rr.plan_claims(": : bad [") == (None, frozenset())
+
+
+def test_claimed_rows_extra_ids_union():
+    reg = rr.Register(rows=[_row("a", claimed_by=[P1]), _row("b"), _row("c")])
+    assert [r["id"] for r in rr.claimed_rows(reg, P1, ["b"])] == ["a", "b"]
+
+
+def test_blocking_unclaimed_skips_claimed_met_ruled_and_other_plans():
+    reg = rr.Register(rows=[
+        _row("mine"), _row("done", "met", wired=True),
+        _row("def", "deferred", ruling=RULING), _row("other", claimed_by=[P2]),
+        _row("unwired", "met", wired=False), _row("bare", "waived"),
+    ])
+    assert rr.blocking_unclaimed(reg, ["mine"]) == "unwired"
+    assert rr.blocking_unclaimed(
+        rr.Register(rows=[r for r in reg.rows if r["id"] not in ("unwired", "bare")]), ["mine"]
+    ) is None
+    assert rr.blocking_unclaimed(rr.Register(rows=[_row("bare", "waived")]), []) == "bare"
+
+
+def test_apply_verdicts_claim_ids_moves_row_claimed_only_by_plan():
+    rows = [_row("a")]
+    new = rr.apply_verdicts(
+        _sizing(rows), [{"id": "a", "status": "met", "wired": True}], P1, "sha", NOW, ["a"])
+    row = rr.read_register(new).rows[0]
+    assert row["status"] == "met" and row["met_by"] == [f"{P1}@sha"]
+    same = rr.apply_verdicts(_sizing(rows), [{"id": "a", "status": "met", "wired": True}], P1, "sha", NOW)
+    assert rr.read_register(same).rows[0]["status"] == "open"
+
+
+def test_judge_evidence_includes_register_claims_rows_from_claims_sizing(tmp_path):
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "state" / "sizings" / "root.yaml").write_text(
+        _sizing([_row("a"), _row("b")]), encoding="utf-8")
+    (tmp_path / "state" / "sizings" / "seed.yaml").write_text("schema: sizing-object\n", encoding="utf-8")
+    plan = ('---\nsizing_object: "state/sizings/seed.yaml"\nregister_claims:\n'
+            '  sizing: state/sizings/root.yaml\n  rows: [b]\n---\nbody\n')
+    ev = rr.judge_evidence(plan, tmp_path, P1)
+    assert [r["id"] for r in ev.rows] == ["b"]
+
+
 def test_apply_verdicts_no_register_is_identity():
     assert rr.apply_verdicts("status: routed\n", [], "p", "s", datetime.now()) == "status: routed\n"
 
@@ -290,3 +336,56 @@ def test_requirement_register_module_scope_does_not_import_ipc():
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert proc.returncode == 0
+
+
+def test_surfaces_append_visual_last_and_judge_schema_admits_it():
+    import json
+    from coordinator_core.ops.review_mint.execute_review import _widen_judge_schema
+
+    assert rr.SURFACES == ("ui", "api", "cli", "internal", "visual")
+    judge = json.loads(_widen_judge_schema(json.dumps({"type": "object", "properties": {}})))
+    enum = judge["properties"]["register_rows"]["items"]["properties"]["surface"]["enum"]
+    assert enum == list(rr.SURFACES) and "visual" in enum
+
+
+def _cov(verbatims, rows=None, unrelated=None):
+    doc = {"pm_verbatims": verbatims}
+    if rows is not None or unrelated is not None:
+        doc["requirement_register"] = {"rows": rows or []}
+        if unrelated is not None:
+            doc["requirement_register"][rr.UNRELATED_TURNS_KEY] = unrelated
+    return doc
+
+
+def test_coverage_gaps_substring_after_whitespace_normalisation():
+    doc = _cov(
+        [{"turn": 3, "text": "use the  _shape_\nthat comes back  from the build"}, {"turn": 5, "text": "hello"}],
+        rows=[_row("a", source_text=" use the _shape_ that comes back ")],
+    )
+    assert rr.coverage_gaps(doc) == [5]
+
+
+def test_coverage_gaps_unrelated_turn_covers():
+    doc = _cov([{"turn": 2, "text": "ok thanks"}], rows=[], unrelated=[{"turn": 2, "reason": "chat"}])
+    assert rr.coverage_gaps(doc) == []
+
+
+def test_coverage_gaps_no_register_leaves_every_turn_uncovered():
+    assert rr.coverage_gaps(_cov([{"turn": 4, "text": "x"}, {"turn": 1, "text": "y"}])) == [1, 4]
+
+
+def test_coverage_gaps_no_pm_verbatims_is_empty():
+    assert rr.coverage_gaps({"requirement_register": {"rows": [_row("a")]}}) == []
+
+
+def test_coverage_gaps_row_in_no_turn_is_legal_and_turnless_skipped():
+    doc = _cov([{"text": "no turn number"}, {"turn": 0, "text": "alpha"}], rows=[_row("a", source_text="alpha"), _row("z", source_text="nowhere")])
+    assert rr.coverage_gaps(doc) == []
+
+
+def test_unrelated_turn_errors_refuses_unembedded_turn_and_empty_reason():
+    doc = _cov([{"turn": 1, "text": "a"}, {"turn": 2, "text": "b"}])
+    reg = {rr.UNRELATED_TURNS_KEY: [{"turn": 9, "reason": "r"}, {"turn": 1, "reason": "  "}, {"turn": 2, "reason": "ok"}]}
+    errs = rr.unrelated_turn_errors(doc, reg)
+    assert len(errs) == 2 and "turn 9" in errs[0] and "turn 1" in errs[1]
+    assert rr.unrelated_turn_errors(doc, {"rows": []}) == []

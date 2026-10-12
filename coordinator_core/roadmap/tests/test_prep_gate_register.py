@@ -37,7 +37,7 @@ def _register_text(*rows: tuple[str, str, bool]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _plan(root: Path, claims: str) -> Path:
+def _plan(root: Path, claims: str, sizing_object: str = "") -> Path:
     plans = root / "docs" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
     fm = [
@@ -50,6 +50,8 @@ def _plan(root: Path, claims: str) -> Path:
         "  statement: the register resolves",
         f"  derived_from: {_SIZING_REL}",
     ]
+    if sizing_object:
+        fm.append(f"sizing_object: {sizing_object}")
     if claims:
         fm.append(claims)
     body = ["", "# Fixture", "", "## Tasks", "", "```yaml plan-tasks", _SPINE.strip(), "```", ""]
@@ -140,6 +142,49 @@ def test_op_reply_carries_register_class(tmp_path):
     (tmp_path / "coordinator_core").mkdir(exist_ok=True)
     reply = op._handler({"plan": plan.relative_to(tmp_path).as_posix()}, tmp_path / ".git")
     assert reply["classes"]["REGISTER"]["kind"] == "register-sizing-missing"
+
+
+def _reg(root: Path, plan_claims: str, sizing_text: str, sizing_object: str = _SIZING_REL) -> dict:
+    _sizing(root, sizing_text)
+    return _gate(root, _plan(root, plan_claims, sizing_object))["classes"]["REGISTER"]
+
+
+def test_register_bearing_sizing_object_without_claims_refused(tmp_path):
+    reg = _reg(tmp_path, "", _register_text(("R1", "open", False)))
+    assert reg["status"] == "DEFECT" and reg["kind"] == "register-claims-missing"
+
+
+def test_rows_omitting_a_register_row_refused_naming_it(tmp_path):
+    text = _register_text(("R1", "open", False), ("R2", "open", False))
+    reg = _reg(tmp_path, _claims("[R1]"), text)
+    assert reg["kind"] == "register-rows-unclaimed" and "R2" in reg["detail"]
+    assert "R1" not in reg["detail"].split(":")[-1]
+
+
+def test_rows_covering_every_register_row_pass(tmp_path):
+    text = _register_text(("R1", "open", False), ("R2", "open", False))
+    assert _reg(tmp_path, _claims("[R1, R2]"), text)["status"] == "PASS"
+
+
+def test_non_register_bearing_sizing_object_without_claims_passes(tmp_path):
+    reg = _reg(tmp_path, "", "title: fixture-sizing\n")
+    assert reg["status"] == "PASS" and "not applicable" in reg["detail"]
+
+
+def test_unreadable_sizing_object_without_claims_passes(tmp_path):
+    report = _gate(tmp_path, _plan(tmp_path, "", _SIZING_REL))
+    assert report["classes"]["REGISTER"]["status"] == "PASS"
+
+
+def test_seed_plan_subset_claims_on_other_root_still_pass(tmp_path):
+    root = "state/sizings/2026-10-09-root.yaml"
+    path = tmp_path / root
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_register_text(("R1", "open", False), ("R2", "open", False)), encoding="utf-8")
+    seed = "state/sizings/2026-10-09-seed.yaml"
+    (tmp_path / seed).write_text("title: seed\n", encoding="utf-8")
+    plan = _plan(tmp_path, _claims("[R1]", sizing=root), seed)
+    assert _gate(tmp_path, plan)["classes"]["REGISTER"]["status"] == "PASS"
 
 
 def test_register_in_class_order_and_authoring_lines():

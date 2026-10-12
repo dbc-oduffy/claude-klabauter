@@ -100,6 +100,19 @@ def test_writeback_met_rows_get_status_wired_met_by_progress_and_rollup(repo):
     assert reg["sources"] == _SOURCES
 
 
+def test_writeback_moves_row_claimed_only_through_register_claims(repo):
+    (repo / _PLAN).write_text(
+        f"---\nsizing_object: {_SIZING}\nregister_claims:\n  sizing: {_SIZING}\n  rows: [r3]\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    out = terminal_commit._register_writeback(repo, _PLAN, _review([_judged("r3")]), "abc1234")
+
+    assert out == {"register_sizing": _SIZING}
+    r3 = _register(repo)["rows"][2]
+    assert (r3["status"], r3["wired"], r3["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
+
+
 def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(repo):
     terminal_commit._register_writeback(
         repo, _PLAN, _review([_judged("r1", "partial", False)], status="not_met"), "abc1234"
