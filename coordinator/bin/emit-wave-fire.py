@@ -724,24 +724,19 @@ def _write_fire_receipt(script_path: Path, plan_path: str | None = None, plans: 
     repo's wrapper"). `hooks.block_workflow_foreign_emission` reads receipts
     by shape alone, never by which emitter wrote them.
 
-    This script already bootstraps the engine and imports from
-    `coordinator_core` elsewhere in this module (`_bind`, `_slot_order_fn`),
-    so calling the op's writer in-process costs nothing extra; `params={}`
-    makes it fall back to `resolve_session_id`'s own env-var ladder, same as
-    a bare-CLI caller with no bound per-request session identity gets.
-
-    Best-effort, mirroring the op's own contract: a receipt that fails to
-    write narrates on stderr and never fails the emit — the script is the
-    deliverable, the receipt is evidence about it.
+    The writer body lives in `coordinator_core.ops.workflow_fire.receipt`
+    (shared with the workday-start runner); this wrapper only bootstraps the
+    engine onto the path first. Best-effort: a receipt that fails to write
+    narrates on stderr and never fails the emit.
     """
     try:
         import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import require_colocated_engine_on_path
 
         require_colocated_engine_on_path(__file__)
-        from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
+        from coordinator_core.ops.workflow_fire.receipt import write_fire_receipt
 
-        _write_emission_receipt(script_path, plan_path, {}, extras={"plans": plans} if plans else None)
+        write_fire_receipt(script_path, plan_path, plans)
     except Exception as exc:  # noqa: BLE001 -- best-effort; must never fail the emit
         print(f"  WARNING: could not write emission receipt for {script_path.name}: {exc}", file=sys.stderr)
 
@@ -1024,7 +1019,8 @@ def _refuse_from_sizing(msg: str) -> int:
     return EXIT_REFUSED
 
 
-_MINT_TSHIRTS = frozenset({"M", "L", "XL", "XXL"})
+_MINT_TSHIRTS = frozenset({"S", "M", "L", "XL", "XXL"})
+_FIRE_ROUTES = frozenset({"plan", "spec-dispatch"})
 
 
 def _effective_route(sizing: dict) -> object:
@@ -1056,13 +1052,16 @@ def _collect_sizing_refusals(sizing: dict) -> list[str]:
     if not sizing.get("interaction_mode"):
         out.append("`interaction_mode` is absent")
     route = _effective_route(sizing)
-    if route != "plan":
-        out.append(f"`route` is {route!r}, not 'plan' — --from-sizing only fires the single-plan Workflow")
+    if route not in _FIRE_ROUTES:
+        out.append(
+            f"`route` is {route!r}, not 'plan' or 'spec-dispatch' — --from-sizing only fires "
+            "the single-plan Workflow"
+        )
     tshirt = (sizing.get("estimate") or {}).get("tshirt") if isinstance(sizing.get("estimate"), dict) else None
     if tshirt not in _MINT_TSHIRTS:
         out.append(
-            f"`estimate.tshirt` is {tshirt!r} — only an M+ sizing mints a baton to plan; "
-            "an XS or S routes to dispatch or spec-dispatch, never this Workflow"
+            f"`estimate.tshirt` is {tshirt!r} — only an S+ sizing mints a baton to plan; "
+            "an XS routes to dispatch, never this Workflow"
         )
     else:
         intent = sizing.get("intent")

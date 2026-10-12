@@ -96,6 +96,15 @@ def test_on_exit_rules_are_known_and_deny_list_is_closed():
     assert c.EXIT_GATE_FAILED == 5 and c.EXIT_IN_FLIGHT == 3
 
 
+def test_neutral_names_are_the_shared_objects():
+    from coordinator_core.ceremony_common.run import contract as shared
+
+    for name in ("StepSpec", "StepResult", "Decision", "DEADLINE_S", "build_digest", "validate_digest",
+                 "HANDBACK_DISPOSITIONS", "DECISIONS_FILE", "SCHEMA_PATH"):
+        assert getattr(c, name) is getattr(shared, name), name
+    assert c.SCHEMA_PATH.is_file()
+
+
 def test_ledger_row_and_decision_rows():
     row = c.StepResult(id="s", status="ran").to_row()
     assert tuple(row) == c.LEDGER_ROW_KEYS

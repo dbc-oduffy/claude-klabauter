@@ -4723,7 +4723,7 @@ def _revert_sizing_reverse_edge(
 # Baton mint from a sizing — `--type spinoff --from-sizing`
 # ---------------------------------------------------------------------------
 
-_FROM_SIZING_TSHIRTS = frozenset({"M", "L", "XL", "XXL"})
+_FROM_SIZING_TSHIRTS = frozenset({"S", "M", "L", "XL", "XXL"})
 _SUMMARY_LIMIT = 140
 
 
@@ -5028,7 +5028,7 @@ def _sizing_remit_and_steps(
 def mint_baton_from_sizing(
     sizing_rel: str, repo_root: str, *, baton: str | None = None, deliverable_id: str | None = None,
 ) -> dict:
-    """Mint the baton for an M+ sizing, or return the one its `baton:` edge already names.
+    """Mint the baton for an S+ sizing, or return the one its `baton:` edge already names.
 
     Returns ``{"id", "path", "title", "created"}`` (an existing baton adds ``prefilled``); ``path`` is repo-relative POSIX.
     Raises ``SizingMintRefused`` naming every failing field (`estimate.tshirt`,
@@ -5062,7 +5062,7 @@ def mint_baton_from_sizing(
     tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
     if tshirt not in _FROM_SIZING_TSHIRTS:
         fields.append("estimate.tshirt")
-        reasons.append(f"estimate.tshirt is {tshirt!r}; a baton is minted for M, L, XL or XXL only")
+        reasons.append(f"estimate.tshirt is {tshirt!r}; a baton is minted for S, M, L, XL or XXL only")
     intent = meta.get("intent")
     intent = intent.strip() if isinstance(intent, str) else ""
     if not intent:

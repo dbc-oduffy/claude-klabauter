@@ -107,6 +107,44 @@ def translate_to_workflow_input(
     }
 
 
+#: Most slug entries per `wikislugs-NNNN.json` shard — sized so one shard is a single
+#: small read an LLM loader relays whole (the 261 KB single map was not).
+SLUG_SHARD_SIZE = 100
+
+
+def shard_workflow_input(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Split a consumer payload into the on-disk sharded form: a small manifest plus
+    `{filename: body}` for one `batch-NNNN.json` per batch and `wikislugs-NNNN.json` shards
+    of at most SLUG_SHARD_SIZE entries. The manifest's counts are the integrity totals the
+    Workflow re-sums from the shards (`input-count-mismatch`, `wiki-slugs-dropped`)."""
+    files: dict[str, dict[str, Any]] = {}
+    batch_files: list[str] = []
+    for idx, batch in enumerate(payload["batches"], start=1):
+        name = f"batch-{idx:04d}.json"
+        files[name] = {**batch, "file_count": len(batch["files"])}
+        batch_files.append(name)
+
+    slugs = list(payload["wikiSlugs"].items())
+    shard_files: list[str] = []
+    for shard, start in enumerate(range(0, len(slugs), SLUG_SHARD_SIZE), start=1):
+        chunk = dict(slugs[start : start + SLUG_SHARD_SIZE])
+        name = f"wikislugs-{shard:04d}.json"
+        files[name] = {"shard": shard, "slug_count": len(chunk), "entries": chunk}
+        shard_files.append(name)
+
+    manifest = {
+        "runId": payload["runId"],
+        "repoRoot": payload["repoRoot"],
+        "wikiDirs": payload["wikiDirs"],
+        "batch_count": payload["batch_count"],
+        "total_file_count": payload["total_file_count"],
+        "wikiSlugCount": payload["wikiSlugCount"],
+        "batchFiles": batch_files,
+        "slugShardFiles": shard_files,
+    }
+    return manifest, files
+
+
 def validate_workflow_input(payload: dict[str, Any]) -> list[str]:
     """Structural validator for the CONSUMER shape — the drift-detection half
     of the contract test. Returns a (possibly empty) error list; never

@@ -692,9 +692,13 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
 
     result = compute_scope(worktree_root, **kwargs)
     written_path = write_scope_manifest(worktree_root, result.manifest)
-    workflow_path = _write_run_file(
-        worktree_root, run_id, "workflow-input.json", workflow_input(result.manifest, worktree_root)
-    )
+    from coordinator_core.ops.distill_workflow_input import shard_workflow_input
+
+    # Shards first, manifest last: a manifest on disk names only shards already written.
+    shard_manifest, shards = shard_workflow_input(workflow_input(result.manifest, worktree_root))
+    for shard_name, shard_body in shards.items():
+        _write_run_file(worktree_root, run_id, shard_name, shard_body)
+    workflow_path = _write_run_file(worktree_root, run_id, "workflow-input.json", shard_manifest)
 
     result_dict = {
         "run_id": run_id,

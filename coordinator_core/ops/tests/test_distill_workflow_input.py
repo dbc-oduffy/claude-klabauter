@@ -131,3 +131,21 @@ def test_dispatch_message_smoke():
     assert "result" in d, f"dispatch_message must succeed; got error: {d.get('error')}"
     assert d["result"]["runId"] == "2026-08-06-15h20"
     assert d["result"]["batch_count"] == 2
+
+
+def test_shard_splits_batches_and_slugs_with_matching_counts():
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_SIZE, shard_workflow_input
+
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
+    payload["wikiSlugs"] = {f"s{i}": f"docs/wiki/s{i}.md" for i in range(SLUG_SHARD_SIZE * 2 + 1)}
+    payload["wikiSlugCount"] = len(payload["wikiSlugs"])
+    manifest, files = shard_workflow_input(payload)
+
+    assert "batches" not in manifest and "wikiSlugs" not in manifest
+    assert len(manifest["batchFiles"]) == manifest["batch_count"]
+    assert sum(files[n]["file_count"] for n in manifest["batchFiles"]) == manifest["total_file_count"]
+    assert all(files[n]["file_count"] == len(files[n]["files"]) for n in manifest["batchFiles"])
+    assert manifest["slugShardFiles"] == ["wikislugs-0001.json", "wikislugs-0002.json", "wikislugs-0003.json"]
+    assert [files[n]["slug_count"] for n in manifest["slugShardFiles"]] == [100, 100, 1]
+    assert sum(files[n]["slug_count"] for n in manifest["slugShardFiles"]) == manifest["wikiSlugCount"]
+    assert manifest["batchFiles"][0] == "batch-0001.json"

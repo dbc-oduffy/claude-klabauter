@@ -28,6 +28,7 @@
         "state": {"type": "string", "enum": ["ran", "already-ran", "in-flight", "failed"]},
         "briefing_path": {"type": ["string", "null"], "description": "Null until finish."},
         "finish_argv": {"type": "array", "items": {"type": "string"}},
+        "chained": {"type": "object", "description": "Optional: the chained launch's own digest."},
         "agent_work": {
           "type": "object",
           "additionalProperties": false,
@@ -109,7 +110,8 @@
           "not": {"enum": ["surface_to_pm", "pm_reviews_manually"]},
           "description": "A declared disposition. A value naming a person as the actor is never valid."
         },
-        "rationale": {"type": "string", "minLength": 1}
+        "rationale": {"type": "string", "minLength": 1},
+        "payload": {"type": ["object", "null"], "description": "Optional structured data the decision hands to the finish steps it opens."}
       }
     }
   }

@@ -96,7 +96,11 @@ def _check_gates(
         if rec is None or rec.status == "not-started":
             ev["gate"] = gate
             return _fail("gate-tests-missing", ev)
-        if rec.tested_sha != candidate:
+        # An unbound gate (d0 runs the installed plugin, not the candidate) still blocks on red
+        # but is never counted as evidence about the candidate's bytes.
+        if not getattr(rec, "bound_to_candidate", True):
+            ev.setdefault("unbound_gates", []).append(gate)  # type: ignore[union-attr]
+        elif rec.tested_sha != candidate:
             ev["gate"], ev["tested_sha"] = gate, rec.tested_sha
             return _fail("gate-tests-other-commit", ev)
         if rec.status == "not-present":

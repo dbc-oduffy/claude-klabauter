@@ -152,6 +152,17 @@ def test_not_present_passes_for_d0_only(env):
     assert env.run(gate_records=env.gates(d6=d6)).reason == "gate-tests-missing"
 
 
+def test_unbound_gate_blocks_on_red_but_is_never_candidate_evidence(env):
+    from coordinator_core.workweek_complete.release.gates import GateEvidence
+
+    green = GateEvidence("d0", "ran", 0, env.candidate, bound_to_candidate=False)
+    r = env.run(gate_records=env.gates(d0=green))
+    assert r.passed
+    assert r.evidence["unbound_gates"] == ["d0"]
+    red = GateEvidence("d0", "ran", 1, env.candidate, bound_to_candidate=False)
+    assert env.run(gate_records=env.gates(d0=red)).reason == "gate-tests-failed"
+
+
 @pytest.mark.parametrize("status", ["failed", "halted-by-gate", "not-composed", "cadence-skipped"])
 def test_ledger_not_clean(env, status):
     r = env.run(ledger_rows=[{"id": "step-a", "status": status}])

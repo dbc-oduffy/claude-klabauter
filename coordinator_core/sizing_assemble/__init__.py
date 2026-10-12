@@ -1849,6 +1849,56 @@ def _open_routed_obligation(write_path: str) -> None:
         return
 
 
+def _load_emit_wave_fire():
+    """`coordinator/bin/emit-wave-fire.py`, loaded by path (its name is not importable)."""
+    import importlib.util
+    import sys
+
+    emitter = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "emit-wave-fire.py"
+    spec = importlib.util.spec_from_file_location("_emit_wave_fire", emitter)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {emitter}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _hand_to_plan_workflow(write_path: str, decision: dict[str, Any]) -> int:
+    """An accepted `route: plan` sizing at L or below fires its plan Workflow without an EM
+    step: run `emit-wave-fire --from-sizing` in-process and print only what it prints (the
+    one `Workflow` line). A refusal prints the decision JSON as before, the refusal on stderr,
+    and exits business-fail, so the sizing is never left routed with nothing fired silently."""
+    import contextlib
+    import io
+    import json
+    import sys
+    from datetime import datetime, timezone
+
+    repo_root = _cli_repo_root(write_path).resolve()
+    target = Path(write_path) if Path(write_path).is_absolute() else repo_root / write_path
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    try:
+        module = _load_emit_wave_fire()
+    except (ImportError, OSError) as exc:
+        print(f"sizing-assemble: cannot load emit-wave-fire: {exc}", file=sys.stderr)
+        print(json.dumps(decision, indent=2, sort_keys=True))
+        return EXIT_BUSINESS_FAIL
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        rc = module.main([
+            "--from-sizing", target.resolve().relative_to(repo_root).as_posix(),
+            "--repo-root", str(repo_root),
+            "--trail-dir", str(repo_root / "state" / "plan-blitz" / run_id),
+        ])
+    if rc != 0:
+        print(captured.getvalue(), file=sys.stderr, end="")
+        print(json.dumps(decision, indent=2, sort_keys=True))
+        return EXIT_BUSINESS_FAIL
+    print(captured.getvalue(), end="")
+    return EXIT_OK
+
+
 def main(argv: list[str]) -> int:
     import json
     import sys
@@ -2229,6 +2279,13 @@ def main(argv: list[str]) -> int:
         else:
             print("embedded 0 pm_verbatims", file=sys.stderr)
         _open_routed_obligation(write_path)
+        if (
+            research_block is None
+            and decision.get("route") in ("plan", "spec-dispatch")
+            and decision["resolved_estimate"]["tshirt"] != "XS"
+            and sizing_acceptance_skipped(decision["route"], decision["resolved_estimate"]["tshirt"])
+        ):
+            return _hand_to_plan_workflow(write_path, decision)
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK

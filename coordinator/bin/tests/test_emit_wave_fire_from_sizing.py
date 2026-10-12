@@ -101,8 +101,8 @@ def test_bare_sizing_names_every_failing_field_once(tmp_path, capsys):
         assert field in err
 
 
-def test_s_shape_with_missing_interaction_mode_names_tshirt_and_mode(tmp_path, capsys):
-    _setup(tmp_path, _sizing("S", route="shape", interaction_mode=None), baton=None)
+def test_xs_shape_with_missing_interaction_mode_names_tshirt_and_mode(tmp_path, capsys):
+    _setup(tmp_path, _sizing("XS", route="shape", interaction_mode=None), baton=None)
     assert _fire(tmp_path) == ewf.EXIT_REFUSED
     err = capsys.readouterr().err
     assert "estimate.tshirt" in err and "interaction_mode" in err
@@ -195,16 +195,33 @@ def test_hold_write_failure_never_fails_the_emit(tmp_path, monkeypatch, capsys):
     assert "lock exploded" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("tshirt", ["XS", "S", None])
-def test_a_sub_m_sizing_is_refused_and_never_mints(tmp_path, monkeypatch, capsys, tshirt):
+@pytest.mark.parametrize("tshirt", ["XS", None])
+def test_a_sub_s_sizing_is_refused_and_never_mints(tmp_path, monkeypatch, capsys, tshirt):
     def no_mint():
         raise AssertionError("a sub-M sizing must not mint")
 
     monkeypatch.setattr(ewf, "_load_mint", no_mint)
     _setup(tmp_path, _sizing(tshirt), baton=BATON)
     assert _fire(tmp_path) == ewf.EXIT_REFUSED
-    assert "only an M+ sizing mints a baton" in capsys.readouterr().err
+    assert "only an S+ sizing mints a baton" in capsys.readouterr().err
     assert not (tmp_path / "trail" / "fire-0-1.mjs").exists()
+
+
+@pytest.mark.parametrize("route", ["plan", "spec-dispatch"])
+def test_an_s_sizing_binds_the_minted_baton(tmp_path, monkeypatch, route):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("S", route=route))
+    assert _fire(tmp_path) == ewf.EXIT_OK
+    b = _bound(tmp_path)
+    assert (b["id"], b["tshirt"], b["route"]) == ("hnd-1", "S", route)
+
+
+@pytest.mark.parametrize("route", ["dispatch", "shape", "pm-decision"])
+def test_a_route_that_does_not_plan_is_still_refused(tmp_path, monkeypatch, capsys, route):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("S", route=route))
+    assert _fire(tmp_path) == ewf.EXIT_REFUSED
+    assert "'plan' or 'spec-dispatch'" in capsys.readouterr().err
 
 
 def test_real_mint_binds_and_holds(tmp_path, monkeypatch):

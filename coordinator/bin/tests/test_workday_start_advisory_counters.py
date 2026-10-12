@@ -192,7 +192,7 @@ def test_push_failures_engine_error_degrades_to_error_field(tmp_path, monkeypatc
 
 def test_local_ahead_ineligible_branch_skips_git_network_calls(tmp_path):
     _init_git_repo(tmp_path)
-    subprocess.run(["git", "checkout", "--quiet", "-b", "main"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "checkout", "--quiet", "-B", "main"], cwd=str(tmp_path), check=True)
 
     result = _mod.cmd_local_ahead(tmp_path, do_fetch=True)
 
