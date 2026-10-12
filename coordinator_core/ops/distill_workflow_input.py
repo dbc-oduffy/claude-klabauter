@@ -63,6 +63,8 @@ CONSUMER_TOP_LEVEL_FIELDS: tuple[str, ...] = (
     "wikiSlugs",
     "batch_count",
     "total_file_count",
+    "wikiDirs",
+    "wikiSlugCount",
 )
 
 #: Required per-batch fields of the CONSUMER input shape.
@@ -90,13 +92,18 @@ def translate_to_workflow_input(
             }
         )
 
+    wiki_slugs = wiki_slugs_as_dict(manifest)
     return {
         "runId": manifest["run_id"],
         "repoRoot": repo_root,
         "batches": batches_out,
-        "wikiSlugs": wiki_slugs_as_dict(manifest),
+        "wikiDirs": list(manifest["wiki_dirs"]),
+        "wikiSlugs": wiki_slugs,
         "batch_count": len(batches_out),
         "total_file_count": sum(len(b["files"]) for b in batches_out),
+        # The Workflow asserts its loaded slug count against this (halt wiki-slugs-dropped):
+        # an LLM loader that drops the map would otherwise mint duplicate guides.
+        "wikiSlugCount": len(wiki_slugs),
     }
 
 
@@ -126,6 +133,14 @@ def validate_workflow_input(payload: dict[str, Any]) -> list[str]:
         errors.append("batch_count must be an int")
     if not isinstance(payload["total_file_count"], int):
         errors.append("total_file_count must be an int")
+
+    if not isinstance(payload["wikiDirs"], list) or not payload["wikiDirs"]:
+        errors.append("wikiDirs must be a non-empty list")
+    if isinstance(payload["wikiSlugs"], dict) and payload["wikiSlugCount"] != len(payload["wikiSlugs"]):
+        errors.append(
+            f"wikiSlugCount={payload['wikiSlugCount']} disagrees with "
+            f"len(wikiSlugs)={len(payload['wikiSlugs'])} — integrity mismatch"
+        )
 
     batches = payload["batches"]
     if not isinstance(batches, list):

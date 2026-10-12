@@ -440,7 +440,9 @@ def check_machine_path_leak(rel_path: str, cwd: Optional[str] = None) -> Optiona
 # anti-scope per the plan. A real op-key that happens to be quoted this way,
 # alone on its own line, in staged docstring/comment prose is still a possible
 # false-candidate; this narrows but does not eliminate that risk.
-_REGISTER_OP_KEY_RE = re.compile(r'^@register_op\("([^"]+)"\)')
+# Op-key grammar, not any quoted string: a docstring's `@register_op("...")` placeholder
+# otherwise reads as an unregistered op and refuses every commit touching that module.
+_REGISTER_OP_KEY_RE = re.compile(r'^@register_op\("([A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]+)*)"\)')
 
 
 def _same_tree(path_a: str, path_b: str) -> bool:

@@ -1064,6 +1064,10 @@ def commit_paths(
     canonical_refusal = first_non_canonical_path_refusal(path_list)
     if canonical_refusal is not None:
         raise CommitRefused(canonical_refusal)
+    for p in (*delete_list, *untrack_list):
+        # A tracked .git/... entry makes GitHub's fsck (hasDotgit) reject every later push.
+        if any(part.casefold() == ".git" for part in p.replace("\\", "/").split("/")):
+            raise CommitRefused(f"{p} has a '.git' path component -- never committable")
     for p in path_list:
         if (root / p).is_dir():
             raise CommitRefused(

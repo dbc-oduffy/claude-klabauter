@@ -231,8 +231,10 @@ def _write_pathspec_file(paths: list) -> str:
     whole population, not one per chunk. Caller owns cleanup
     (``finally: os.remove(path)``).
     """
+    from coordinator_core.temp_layout import managed_tempdir
+
     pathspec_path = os.path.join(
-        tempfile.gettempdir(), f"reap-stale-sidecars-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
+        managed_tempdir(), f"reap-stale-sidecars-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
     )
     with open(pathspec_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(paths) + "\n")
@@ -342,6 +344,7 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--age-floor-days", type=int, default=_DEFAULT_AGE_FLOOR_DAYS)
+    parser.add_argument("--repo-root", default=None)
     try:
         args = parser.parse_args(argv)
     except SystemExit:
@@ -354,7 +357,7 @@ def main(argv: Optional[list] = None) -> int:
     dry_run = args.dry_run
     age_floor_days = args.age_floor_days
 
-    repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    repo_root, verdict = resolve_checked_repo_root(explicit_root=args.repo_root)
     if not repo_root:
         print("reap-stale-subagent-sidecars.py: not inside a git repo", file=sys.stderr)
         return 2

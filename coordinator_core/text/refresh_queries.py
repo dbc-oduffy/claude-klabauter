@@ -178,7 +178,23 @@ END_MARKER = "<!-- END query -->"
 # callers untouched).
 _ROADMAP_ID_WHERE_RE = re.compile(r"(?:^|[\s(])roadmap_id=")
 
-EXCLUDED_DIRS = frozenset({"node_modules", ".git", "archive"})
+EXCLUDED_DIRS = frozenset({"node_modules", ".git", "archive", "scratch", "scratch-hold"})
+
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _leaves_this_repo(entry: "os.DirEntry[str]") -> bool:
+    """True for a directory whose contents are not this repo's own: a reparse point
+    (a Windows junction is not a symlink, so `is_dir(follow_symlinks=False)` descends it)
+    or a nested checkout. Refresh WRITES query blocks, so descending either rewrites
+    another tree's files with this repo's records."""
+    try:
+        attrs = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
+    except OSError:
+        return True
+    if attrs & _FILE_ATTRIBUTE_REPARSE_POINT or entry.is_symlink():
+        return True
+    return os.path.lexists(os.path.join(entry.path, ".git"))
 
 
 class ArgParseError(Exception):
@@ -300,7 +316,7 @@ def walk_md(dir_: str, results: Optional[List[str]] = None) -> List[str]:
         except OSError:
             continue
         if is_dir:
-            if e.name not in EXCLUDED_DIRS:
+            if e.name not in EXCLUDED_DIRS and not _leaves_this_repo(e):
                 walk_md(e.path, results)
         elif is_file and e.name.endswith(".md"):
             results.append(e.path)

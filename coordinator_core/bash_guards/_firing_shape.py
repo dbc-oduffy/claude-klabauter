@@ -107,12 +107,14 @@ import os
 import re
 import shutil
 import tempfile
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards import _alternative_liveness as altlive
 from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards import guard_inprocess_search as _gis
+from coordinator_core.temp_layout import managed_tempdir
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +278,10 @@ def _trigger_multiprobe_banner_still_violates() -> bool:
 
 
 def _trigger_inprocess_search_still_violates() -> bool:
-    tmp = tempfile.mkdtemp(prefix="firing-shape-inprocess-search-")
+    tmp = tempfile.mkdtemp(
+        prefix="firing-shape-inprocess-search-",
+        dir=managed_tempdir(Path(__file__).resolve().parents[2]),
+    )
     try:
         os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
         sid_var = _gis._SESSION_ID_ENV_VAR

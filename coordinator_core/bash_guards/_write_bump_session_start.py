@@ -37,23 +37,22 @@ module exists to have.
 
 Storage location: TWO records are written, per
 `docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md` chunk C1 (the "write-both,
-read-settings-home-first" call in that plan's Problem section):
+read-settings-home-first" call in that plan's Problem section; the hub now lives under the engine data root):
 
   1. The existing per-session state hub this fleet already keeps
      (:func:`coordinator_core.session.core.sessions_dir` — `<git-common-dir>/coordinator-sessions/`,
      resolved via `git rev-parse --git-common-dir`, worktree-safe). A plain single-value text file
      (`write_bump_launch_cwd`), matching the existing `started_at` / `head_at_start` convention in
      `coordinator_core.session.core.init()`. This hub is REPO-RELATIVE — it moves when `cwd`
-     crosses a repo boundary, which is exactly the defect the settings-home hub below fixes.
-  2. A settings-home hub, `$(coordinator-settings-home)/claude-klabauter/write-bump-anchor/
+     crosses a repo boundary, which is exactly the defect the data-root hub below fixes.
+  2. A data-root hub, `<engine_data_root>/write-bump-anchor/
      <session_id>/write_bump_launch_cwd`, resolved via
-     :func:`coordinator_core.trusted_root_guard._settings_home_dir_from_env` — cwd-independent by
+     :func:`coordinator_core._data_root.engine_data_root` — cwd-independent by
      construction (no git involved), so it survives a `cd` across a repo boundary, a linked
-     worktree, a bare checkout, or a `cd` outside any git repo. This is claude-klabauter's first out-of-repo
-     durable-data-plane write governed by `docs/reference/boundary-and-data-planes.md`
-     § Durable-data plane's forward-binding rule — the path is under
-     `$(coordinator-settings-home)/claude-klabauter/`, never the settings-home root or an ad-hoc
-     `~/` path. Lifecycle: this record is session ephemera, not durable data, and does NOT survive
+     worktree, a bare checkout, or a `cd` outside any git repo. The path is governed by
+     `docs/reference/boundary-and-data-planes.md` § Durable-data plane: under the machine-local
+     engine data root, never the settings home or an ad-hoc `~/` path. Lifecycle: this record
+     is session ephemera, not durable data, and does NOT survive
      by uninstall's blanket-with-provenance default — it is deleted on session end by
      :func:`delete_settings_home_session_record`, called from
      `coordinator_core.session.scope.archive()` (the live seam DoE's real `SessionEnd` hook
@@ -61,7 +60,7 @@ read-settings-home-first" call in that plan's Problem section):
      collision hazard with `_write_bump_marker.py`'s prefix-match bug (C6's fix, a different
      record entirely).
 
-Both writes are best-effort and independent: a settings-home write failure never affects this
+Both writes are best-effort and independent: a data-root write failure never affects this
 module's return-value semantics (see :func:`write_session_start_record`'s own docstring) and
 never masks or is masked by the in-repo write's own success/failure.
 
@@ -80,12 +79,12 @@ Negative-spec:
       session, exactly like the marker in `_write_bump_marker.py` § Marker liveness; a crashed
       session's stale record is later hygiene (if any), never a load-bearing correctness gate.
     - Do NOT raise on any write/read failure. See "FAIL OPEN" above.
-    - Do NOT delete the settings-home record by prefix match. `delete_settings_home_session_record`
-      matches `session_id` EXACTLY — the settings-home hub is keyed one-record-per-`session_id`
+    - Do NOT delete the data-root record by prefix match. `delete_settings_home_session_record`
+      matches `session_id` EXACTLY — the data-root hub is keyed one-record-per-`session_id`
       under its own directory, so there is no prefix-collision hazard to guard against in the
       first place (unlike `_write_bump_marker.py`'s `sweep_stale_markers`, C6's surface).
-    - Do NOT let a settings-home write/read/delete failure change this module's return-value
-      semantics for the in-repo record. The settings-home hub is additive; see each function's
+    - Do NOT let a data-root write/read/delete failure change this module's return-value
+      semantics for the in-repo record. The data-root hub is additive; see each function's
       own docstring for exactly what its return value reflects.
 
 Install-surface note (2026-08-03, C0 dispatch; wiring landed 2026-08-03, C8 dispatch): the plan's
@@ -115,18 +114,15 @@ from typing import Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.session.core import init as _session_init, sessions_dir
-from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
+from coordinator_core._data_root import engine_data_root
 
-#: `$(coordinator-settings-home)/claude-klabauter/write-bump-anchor/` — the durable-data-plane
-#: prefix this module's settings-home anchor hub lives under, per
-#: `docs/reference/boundary-and-data-planes.md` § Durable-data plane's forward-binding rule.
-#: NOT the settings-home root -- see the module docstring's "Storage location" § item 2.
-_SETTINGS_HOME_ANCHOR_SUBDIR = ("claude-klabauter", "write-bump-anchor")
+#: Directory name of the anchor hub under `engine_data_root()`.
+_ANCHOR_SUBDIR = "write-bump-anchor"
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census).
 # write_session_start_record writes write_bump_launch_cwd under
 # sessions_dir()/<session_id>/ (.git/coordinator-sessions/, untracked) and
-# under the settings-home write-bump-anchor hub -- neither is a tracked
+# under the data-root write-bump-anchor hub -- neither is a tracked
 # repo artifact.
 GENERATES = []
 
@@ -142,18 +138,18 @@ GENERATES = []
 CLAUDE_PROJECT_DIR_LIVE_IN_HOOK_ENV = False
 
 #: Single-value record file name, written once per session under
-#: `<git-common-dir>/coordinator-sessions/<session_id>/` AND under the settings-home hub's
+#: `<git-common-dir>/coordinator-sessions/<session_id>/` AND under the data-root hub's
 #: `<session_id>/` directory -- same filename, same single-scalar content, two locations.
 _RECORD_FILENAME = "write_bump_launch_cwd"
 
 
 def _is_safe_settings_home_session_id(session_id: str) -> bool:
-    """`True` iff `session_id` resolves to a direct child of the settings-home anchor hub.
+    """`True` iff `session_id` resolves to a direct child of the data-root anchor hub.
 
     This is the first `session_id`-keyed write to land
-    outside the repo tree, under a settings-home directory this fleet also uses for other
+    outside the repo tree, under a data-root directory this fleet also uses for other
     consumers' durable data, so a `session_id` containing a path separator or a `.`/`..`
-    segment could escape `write-bump-anchor/<session_id>/` into sibling settings-home
+    segment could escape `write-bump-anchor/<session_id>/` into sibling data-root
     content. Deliberately NOT a full `_SESSION_ID_FORMAT_RE`-shaped format check (that regex
     lives in `subagent_sandbox.engine` and is out of scope here) -- this only rejects the
     traversal shape, so short test session ids like `abc` remain valid.
@@ -167,22 +163,22 @@ def _is_safe_settings_home_session_id(session_id: str) -> bool:
 
 
 def _settings_home_anchor_dir(env: Optional[dict] = None) -> str:
-    """`$(coordinator-settings-home)/claude-klabauter/write-bump-anchor`, resolved via the
+    """`<engine_data_root>/write-bump-anchor`, resolved via the
     injected `env` mapping (defaulting to `os.environ` when `env` is `None` -- the same
     optional-`env` contract every function in this module honours, per this chunk's
     cross-repo-writer constraint: DoE's `session-start-write-bump-anchor.py` calls
     `write_session_start_record` with no `env`, so a required parameter would break that
     call site).
 
-    Returns `""` (fail open) when the settings home itself cannot be resolved -- callers
-    treat an empty string exactly like "no settings-home hub available" and skip the
-    settings-home leg of whatever they're doing, never raising.
+    Returns `""` (fail open) when the data root itself cannot be resolved -- callers
+    treat an empty string exactly like "no data-root hub available" and skip the
+    data-root leg of whatever they're doing, never raising.
     """
     resolved_env = os.environ if env is None else env
-    home = _settings_home_dir_from_env(resolved_env)
-    if not home:
+    try:
+        return os.path.join(str(engine_data_root(resolved_env)), _ANCHOR_SUBDIR)
+    except OSError:
         return ""
-    return os.path.join(home, *_SETTINGS_HOME_ANCHOR_SUBDIR)
 
 
 def _ensure_initialised_session_dir(
@@ -218,7 +214,7 @@ def _ensure_initialised_session_dir(
 
     FAIL OPEN, like every other branch in this module: an `init` that raises, or
     that leaves no `meta.json`, returns `None` and the caller skips the in-repo
-    write entirely. That degrades this record to its settings-home twin, which
+    write entirely. That degrades this record to its data-root twin, which
     `read_session_start_record` consults FIRST anyway — a strictly better failure
     than minting the directory shape whose absence of a record is the defect.
 
@@ -272,7 +268,7 @@ def write_session_start_record(
     Writes BOTH records (see module docstring "Storage location"):
       1. The in-repo `sessions_dir(launch_cwd)/<session_id>/write_bump_launch_cwd` record —
          unchanged from this module's original behaviour.
-      2. The settings-home `<session_id>/write_bump_launch_cwd` record, resolved via
+      2. The data-root `<session_id>/write_bump_launch_cwd` record, resolved via
          `_settings_home_anchor_dir(env)` — cwd-independent, keyed only on `session_id`.
          A machine-wide `session_id` collision (astronomically unlikely) does not have an
          unconditional safety guarantee: it either has no effect (the two sessions' recorded
@@ -282,13 +278,13 @@ def write_session_start_record(
          cwd) than to suppress a needed bump (which requires the overwritten value to
          coincidentally equal this session's live cwd too) — but neither absolute claim holds.
 
-    A `session_id` that would escape the settings-home hub (a path separator, or `.`/`..`)
-    is rejected by `_is_safe_settings_home_session_id` for the settings-home leg only —
-    fail-open, matching every other guard in this module: the settings-home write is
+    A `session_id` that would escape the data-root hub (a path separator, or `.`/`..`)
+    is rejected by `_is_safe_settings_home_session_id` for the data-root leg only —
+    fail-open, matching every other guard in this module: the data-root write is
     silently skipped, never raised, and the in-repo write and this function's return value
     are unaffected.
 
-    `env` is optional, defaulting to `None` (meaning: resolve the settings home from
+    `env` is optional, defaulting to `None` (meaning: resolve the data root from
     `os.environ`) — see `_settings_home_anchor_dir`'s own docstring for why this MUST stay
     optional: DoE's `coordinator/hooks/scripts/session-start-write-bump-anchor.py` calls this
     function with no `env` argument, and a required parameter would break that cross-repo
@@ -297,8 +293,8 @@ def write_session_start_record(
     RETURN-VALUE SEMANTICS ARE UNCHANGED from this module's original behaviour: the return
     value reflects ONLY the in-repo write's own success (`True` iff it wrote; `False` on any
     resolution/write failure — no git root, permission error, read-only filesystem, ...). The
-    settings-home write in step 2 is a fully independent, best-effort, fail-open side effect:
-    its failure (an unresolvable or unwritable settings home) is swallowed unconditionally and
+    data-root write in step 2 is a fully independent, best-effort, fail-open side effect:
+    its failure (an unresolvable or unwritable data root) is swallowed unconditionally and
     never turns a successful in-repo write into a `False` return, exactly as its own failure
     never turns an ALREADY-failed in-repo write into a `True` one. Never raises, from either
     write. Idempotent — a later call with the same `session_id` overwrites the same file(s)
@@ -338,8 +334,8 @@ def write_session_start_record(
 
 
 def _read_settings_home_record(session_id: str, env: Optional[dict]) -> Optional[str]:
-    """Read the settings-home hub's record for `session_id`, or `None` if absent/unreadable.
-    Fail-open helper backing `read_session_start_record`'s settings-home-first read order --
+    """Read the data-root hub's record for `session_id`, or `None` if absent/unreadable.
+    Fail-open helper backing `read_session_start_record`'s data-root-first read order --
     see that function's own docstring. A traversal-shaped `session_id` (rejected by
     `_is_safe_settings_home_session_id`) is treated exactly like an absent record."""
     try:
@@ -362,13 +358,13 @@ def read_session_start_record(
 ) -> Optional[str]:
     """Read back the launch cwd recorded for `session_id`, or None if absent/unreadable.
 
-    Read order (settings-home-first — the headline fix this chunk's plan makes):
-      1. The settings-home hub (`_settings_home_anchor_dir(env)`), cwd-INDEPENDENT by
+    Read order (data-root-first — the headline fix this chunk's plan makes):
+      1. The data-root hub (`_settings_home_anchor_dir(env)`), cwd-INDEPENDENT by
          construction. Tried first because it is the only one of the two records that
          survives `cwd` drifting across a repo boundary — see item 2 below for why the other
          record cannot be relied on for that case.
       2. The in-repo `sessions_dir(cwd)/<session_id>/write_bump_launch_cwd` record, tried only
-         when the settings-home read comes back empty (absent settings home, absent record, or
+         when the data-root read comes back empty (absent data root, absent record, or
          any read failure).
 
     `cwd` is where to resolve the IN-REPO session hub FROM (typically the live payload cwd at
@@ -380,19 +376,19 @@ def read_session_start_record(
     session's record was never written, and this function's in-repo leg alone would return
     `None`. That drift is exactly the defect
     `docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md` fixes — which is why
-    the settings-home hub above, not this in-repo record, is now the PRIMARY read for the
-    cross-repo case; this in-repo record remains a same-repo (or settings-home-unavailable)
+    the data-root hub above, not this in-repo record, is now the PRIMARY read for the
+    cross-repo case; this in-repo record remains a same-repo (or data-root-unavailable)
     fallback, still correct for the case it was always correct for.
 
-    `env` is optional, defaulting to `None` (meaning: resolve the settings home from
+    `env` is optional, defaulting to `None` (meaning: resolve the data root from
     `os.environ`) — same optional-`env` contract as `write_session_start_record` and
-    `_settings_home_anchor_dir`, so a caller resolving other settings-home-anchored facts
+    `_settings_home_anchor_dir`, so a caller resolving other data-root-anchored facts
     (e.g. `_write_bump_applicability`'s `~/.claude` fleet-recovery hatch) from an injected
     `env` mapping can thread the SAME mapping in here, rather than one leg of a single verdict
     resolving from injected `env` and the other from live `os.environ`.
 
     FAIL OPEN: returns None on any resolution/read failure at either tier (no git root, no
-    settings home, missing record, permission error, undecodable content, an
+    data root, missing record, permission error, undecodable content, an
     unexpectedly-empty file). Never raises.
     """
     if not session_id:
@@ -416,13 +412,13 @@ def read_session_start_record(
 
 
 def delete_settings_home_session_record(session_id: str, env: Optional[dict] = None) -> bool:
-    """Delete the settings-home anchor record for `session_id`, by EXACT match only.
+    """Delete the data-root anchor record for `session_id`, by EXACT match only.
 
     Called by `coordinator_core.session.scope.archive()` at session end (see module docstring
-    "Storage location" item 2, and AC12 of the write-bump-anchor plan) — the settings-home
+    "Storage location" item 2, and AC12 of the write-bump-anchor plan) — the data-root
     anchor is session ephemera, not durable data, so it must not survive its own session by
     riding uninstall's blanket-with-provenance default. This is a plain exact-`session_id`
-    delete: the settings-home hub is keyed one-record-per-`session_id` under its own directory,
+    delete: the data-root hub is keyed one-record-per-`session_id` under its own directory,
     so there is no prefix-collision hazard here at all, unlike `_write_bump_marker.py`'s
     `sweep_stale_markers` (C6's surface, a different record, fixed separately).
 
@@ -443,7 +439,7 @@ def delete_settings_home_session_record(session_id: str, env: Optional[dict] = N
             return True
         hub = _settings_home_anchor_dir(env)
         if not hub:
-            return True  # no settings-home hub resolvable -- nothing to clean up, not a failure
+            return True  # no data-root hub resolvable -- nothing to clean up, not a failure
         sdir = Path(hub) / session_id
         if not sdir.exists():
             return True  # idempotent -- already gone or never written

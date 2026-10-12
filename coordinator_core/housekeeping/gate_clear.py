@@ -60,10 +60,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from coordinator_core.frontmatter.primitives import (
+    _is_nested_block_key,
     git_blob_sha1,
     read_fm_field,
     rebuild,
     remove_fm_field,
+    remove_fm_nested_field,
     replace_fm_field,
     split_frontmatter,
 )
@@ -155,10 +157,11 @@ def evaluate_gate_clear(
 
 
 def dead_blocker_reason(verdict: GateVerdict) -> Optional[str]:
-    """Why a held gate can never clear, or None when waiting is legitimate.
+    """Why a held gate is stuck, or None when waiting is legitimate.
 
     Pure. "no-blocked-by": the record names no blocker. "unresolved": a
-    blocker id matches no record. "ambiguous": a blocker id matches more than
+    blocker id matches no record; that is UNKNOWN, not dead (a stub, roadmap
+    or deliverable id, or a peer name), and the gate stays shut. "ambiguous": a blocker id matches more than
     one distinct record. A clearing verdict or a live non-terminal blocker
     returns None."""
     if verdict.blocker_id is None:
@@ -222,7 +225,11 @@ def compute_cleared_frontmatter(old_text: str) -> str:
         )
 
     fm = replace_fm_field(fm, "deployment_state", _READY_TO_FIRE)
-    if read_fm_field(fm, "blocked_by") is not None:
+    # `blocked_by` is inline (`[a]`, `a`) on some records and a block
+    # sequence on others; `remove_fm_field` refuses the block form.
+    if _is_nested_block_key(fm, "blocked_by"):
+        fm = remove_fm_nested_field(fm, "blocked_by")
+    elif read_fm_field(fm, "blocked_by") is not None:
         fm = remove_fm_field(fm, "blocked_by")
 
     return rebuild(split, fm)

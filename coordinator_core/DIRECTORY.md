@@ -31,6 +31,7 @@ Last refreshed: 2026-08-06 (spot-check only — see coverage note above).
 | `archival.py` | Reverse-membership guard for the handoff archival pipeline |
 | `locked_write.py` | Cross-process file-level RMW lock helper (`locked_rmw`; fcntl on POSIX, msvcrt on Windows) |
 | `doctor_envelope.py` | Shared probe-verdict envelope schema + reducer (BROKEN/DEGRADED/INFO/PASS) |
+| `_data_root.py` | `engine_data_root`: machine-local engine cache dir (env override, registry key `paths.engine_data_root`, per-OS default; in-process, mtime-memoized) |
 | `_settings_home.py` | Bootstrap-safe `coordinator-settings-home` precedence resolver (zero external calls) |
 | `engine_version.py` | Engine self-version surface — resolves the running commit for receipt-stamping/drift-probe consumers |
 | `git_scope.py` | Foreign-repo git probing — strips the repo-scoping env `git -C` does not override, confines the resolved git dir, and returns a yes/no/**unknown** tri-state |

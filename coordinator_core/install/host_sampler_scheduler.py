@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.install.substrate import _refuse_machine_mutation
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.win_portability import no_console_creationflags
 
 TASK_NAME = "CoordinatorHostSampler"
@@ -293,7 +294,9 @@ def register_host_sampler_task(
 
     xml_path = None
     try:
-        fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="host-sampler-task-")
+        fd, xml_path = tempfile.mkstemp(
+            suffix=".xml", prefix="host-sampler-task-", dir=managed_tempdir(repo_root)
+        )
         os.close(fd)
         Path(xml_path).write_text(task_xml, encoding="utf-16", newline="\n")
 

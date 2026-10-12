@@ -858,6 +858,19 @@ def contradictory_read_paths(reads, reads_at_head) -> list:
         return []
 
 
+#: Exclusion reasons whose row is still owed, by the EM or an operator, outside the run.
+EM_OWNED_REASONS = frozenset({"memo-send", "em-performed", "operator"})
+
+
+def em_owned_rows(exclusions: Optional[list]) -> list[str]:
+    """`<id> (<detail>)` for each excluded row the EM or an operator still owes."""
+    return [
+        f"{e.get('id')} ({e.get('detail')})"
+        for e in exclusions or []
+        if e.get("reason") in EM_OWNED_REASONS
+    ]
+
+
 def read_spine(
     plan_path,
     exclusions: Optional[list] = None,

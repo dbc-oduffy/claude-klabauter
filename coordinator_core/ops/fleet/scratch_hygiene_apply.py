@@ -42,6 +42,9 @@ def remove_tree_no_follow(path: Path) -> None:
     if _is_link(path):
         _unlink_link(path)
         return
+    if not os.path.isdir(path):
+        _unlink_file(path)
+        return
     stack: list[tuple[Path, bool]] = [(path, False)]
     while stack:
         current, visited = stack.pop()

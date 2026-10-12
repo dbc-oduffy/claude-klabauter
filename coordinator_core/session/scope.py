@@ -5311,17 +5311,16 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
     (not in a git repo → bash ``return 1``; ``mv`` failure → bash ``return
     1``). Raises ``ValueError`` if ``sid`` is empty (bash ``${1:?}``).
 
-    Also clears the write-confinement bump's settings-home anchor record for
+    Also clears the write-confinement bump's data-root anchor record for
     ``sid`` (docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md
     AC12) — this is the live seam DoE's real ``SessionEnd`` hook actually calls
     (via ``coordinator/bin/archive-session-scope.py archive-session``), so the
-    settings-home
-    anchor's session-ephemera cleanup is anchored here rather than in
+    data-root anchor's session-ephemera cleanup is anchored here rather than in
     ``sweep_stale_markers``, which has no production caller. Exact-``sid``
     match, no prefix matching — a different record from ``_write_bump_marker.py``'s
     marker (C6's surface), with no shared collision hazard and no coordination
     needed between the two. Best-effort and independent of this function's own
-    return value: the settings-home cleanup is fail-open by construction (see
+    return value: the data-root cleanup is fail-open by construction (see
     ``delete_settings_home_session_record``'s own docstring), so it can never
     turn a successful in-repo archive into a failure, nor vice versa.
 

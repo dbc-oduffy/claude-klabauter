@@ -44,6 +44,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1919,10 +1920,15 @@ class TestSpawnSeamSettingsHomePropagation(unittest.TestCase):
         self.addCleanup(self._env_patch.stop)
         os.environ.pop("COORDINATOR_SETTINGS_HOME", None)
 
+    def _mkdtemp(self) -> str:
+        path = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, path, ignore_errors=True)
+        return path
+
     def test_child_env_propagates_resolved_settings_home(self) -> None:
         """child_env() must fill COORDINATOR_SETTINGS_HOME from the resolved
         settings-home root when the parent's own os.environ lacks it."""
-        claude_home = tempfile.mkdtemp()
+        claude_home = self._mkdtemp()
         os.environ["CLAUDE_HOME"] = claude_home
         expected = str(Path(claude_home) / ".coordinator-claude-settings")
 
@@ -1942,7 +1948,7 @@ class TestSpawnSeamSettingsHomePropagation(unittest.TestCase):
     def test_build_subprocess_env_propagates_resolved_settings_home(self) -> None:
         """_build_subprocess_env() -- the coordinator_core.invoke spawn seam --
         must fill COORDINATOR_SETTINGS_HOME the same way child_env() does."""
-        claude_home = tempfile.mkdtemp()
+        claude_home = self._mkdtemp()
         os.environ["CLAUDE_HOME"] = claude_home
         expected = str(Path(claude_home) / ".coordinator-claude-settings")
 
@@ -1958,8 +1964,8 @@ class TestSpawnSeamSettingsHomePropagation(unittest.TestCase):
         """(c) precedence, pinned at the seam level: an operator-scoped
         COORDINATOR_SETTINGS_HOME already in os.environ survives untouched,
         even though CLAUDE_HOME would resolve to a different root."""
-        os.environ["CLAUDE_HOME"] = tempfile.mkdtemp()
-        operator_scoped = str(Path(tempfile.mkdtemp()) / "operator-scoped")
+        os.environ["CLAUDE_HOME"] = self._mkdtemp()
+        operator_scoped = str(Path(self._mkdtemp()) / "operator-scoped")
         os.environ["COORDINATOR_SETTINGS_HOME"] = operator_scoped
 
         result = _mod.child_env()
@@ -1973,7 +1979,7 @@ class TestSpawnSeamSettingsHomePropagation(unittest.TestCase):
         the one assertion that would actually catch the propagation call
         sites being removed from cc_invoke.py -- a plain `dict(os.environ)`
         copy would carry no such key across to the child."""
-        claude_home = tempfile.mkdtemp()
+        claude_home = self._mkdtemp()
         expected = str(Path(claude_home) / ".coordinator-claude-settings")
         env = os.environ.copy()
         env.pop("COORDINATOR_SETTINGS_HOME", None)

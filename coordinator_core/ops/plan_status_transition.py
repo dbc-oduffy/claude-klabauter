@@ -313,6 +313,7 @@ from coordinator_core.frontmatter.primitives import (
     write_fm_nested_field,
 )
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.wire_paths import rel_id
 
@@ -999,7 +1000,8 @@ def _commit_plan_flip(
     blind env-var read, same as every other caller of it.
     """
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        mode="w", suffix=".txt", delete=False, encoding="utf-8",
+        dir=managed_tempdir(worktree_root),
     ) as fh:
         fh.write(message)
         msg_path = fh.name
@@ -3290,7 +3292,9 @@ def _stamp_rung(
     if not _state["flipped"]:
         print(
             f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is already at or past "
-            f"\"{target_status}\" — no-op"
+            f"\"{target_status}\" — no-op",
+            # stderr: stdout is a single machine-read path for apply-plan token substitution.
+            file=sys.stderr,
         )
         return 0
 

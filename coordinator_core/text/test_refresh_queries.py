@@ -37,6 +37,7 @@ Port source: coordinator/bin/refresh-queries.js (coordinator-content-repo)
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,26 @@ def test_walk_md_excludes_node_modules_git_archive_recurses_others(tmp_path):
 
     found = {os.path.relpath(p, tmp_path) for p in walk_md(str(tmp_path))}
     assert found == {os.path.join("sub", "nested.md"), "top.md"}
+
+
+def test_walk_md_never_leaves_the_repo(tmp_path):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    for d in (repo / "scratch", repo / "scratch-hold", repo / "clone" / ".git", outside):
+        d.mkdir(parents=True)
+    for f in (repo / "top.md", repo / "scratch" / "s.md", repo / "scratch-hold" / "h.md",
+              repo / "clone" / "STUB-INDEX.md", outside / "STUB-INDEX.md"):
+        f.write_text("x", encoding="utf-8")
+    link = repo / "linked"
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))
+    else:
+        link.symlink_to(outside, target_is_directory=True)
+
+    found = {os.path.relpath(p, repo) for p in walk_md(str(repo))}
+    assert found == {"top.md"}
 
 
 def test_build_code_block_line_set_fenced_block():

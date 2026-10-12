@@ -16,37 +16,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.hooks import postuse_advisory_dispatch as pad  # noqa: E402
+from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 
-_TEST_SESSION_STATE_GLOBS = (
-    "advisory-hook-state-test-session-*.json",
-    ".advisory-hook-state-*.tmp",
-    "rt-bark-once-test-session-*",
-    "compaction-occurred-test-session-*",
-    "compaction-state-test-session-*.md",
-    "first-agent-dispatch-advisory-test-session-*",
-)
-
-
-def _sweep_test_session_state_files() -> None:
-    tmpdir = tempfile.gettempdir()
-    for pattern in _TEST_SESSION_STATE_GLOBS:
-        for path in glob.glob(os.path.join(tmpdir, pattern)):
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+def _managed() -> str:
+    return str(managed_tempdir())
 
 
 @pytest.fixture(autouse=True)
-def _reset_advisory_state_files():
-    _sweep_test_session_state_files()
-    yield
-    _sweep_test_session_state_files()
+def _isolated_temp(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
 
 def _bypass_throttle(session_id):
-    pad._save_advisory_state(tempfile.gettempdir(), session_id, {"throttle_last_check": 0.0})
+    pad._save_advisory_state(_managed(), session_id, {"throttle_last_check": 0.0})
 
 
 def test_throttle_suppresses_second_call_within_window_across_separate_invocations(
@@ -81,7 +64,7 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     assert "CONTEXT PRESSURE — INFORMATIONAL" in first
     assert "/handoff" not in first and "HANDOFF" not in first
 
-    state_path = pad._advisory_state_path(tempfile.gettempdir(), session_id)
+    state_path = pad._advisory_state_path(_managed(), session_id)
     assert os.path.isfile(state_path)
     with open(state_path, encoding="utf-8") as fh:
         persisted = json.load(fh)
@@ -107,7 +90,7 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
             now=time.time(),
         )
         pad._save_advisory_state(
-            tempfile.gettempdir(), session_id, {"throttle_last_check": time.time()}
+            _managed(), session_id, {"throttle_last_check": time.time()}
         )
 
     orange_session = "test-session-throttle-isolated-orange"
@@ -121,10 +104,10 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     assert "~95% of window used" in red
 
     pad._save_advisory_state(
-        tempfile.gettempdir(),
+        _managed(),
         red_session,
         dict(
-            pad._load_advisory_state(tempfile.gettempdir(), red_session),
+            pad._load_advisory_state(_managed(), red_session),
             throttle_last_check=0.0,
         ),
     )
@@ -138,7 +121,7 @@ def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path
     pre_size = post_size * 10
 
     session_id = "test-session-compaction-once"
-    tmpdir = tempfile.gettempdir()
+    tmpdir = _managed()
     sentinel = os.path.join(tmpdir, f"compaction-occurred-{session_id}")
     state_snapshot = os.path.join(tmpdir, f"compaction-state-{session_id}.md")
 
@@ -207,7 +190,7 @@ def test_first_agent_dispatch_sentinel_write_failure_degrades_to_silence(monkeyp
     result = pad._check_first_agent_dispatch_sync(session_id, "Agent")
     assert result == ""
 
-    tmpdir = tempfile.gettempdir()
+    tmpdir = _managed()
     sentinel = pad._first_agent_dispatch_sentinel_path(tmpdir, session_id)
     assert not os.path.isfile(sentinel)
 
@@ -216,7 +199,7 @@ def test_first_agent_dispatch_sentinel_partial_write_failure_allows_retry(monkey
     session_id = "test-session-first-agent-dispatch-partial-write"
 
     real_open = builtins.open
-    tmpdir = tempfile.gettempdir()
+    tmpdir = _managed()
     sentinel = pad._first_agent_dispatch_sentinel_path(tmpdir, session_id)
 
     class _FailingFile:
@@ -500,11 +483,6 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
         repo_root_seam, "show_toplevel", lambda cwd=None: str(git_root)
     )
 
-    isolated_tmpdir = tmp_path / "rt-tripwire-tmpdir"
-    isolated_tmpdir.mkdir()
-    monkeypatch.setattr(pad, "_tempfile", lambda: type(
-        "_Shim", (), {"gettempdir": staticmethod(lambda: str(isolated_tmpdir))}
-    )())
 
     result = pad._check_runtime_tripwire_sync(session_id, "")
 
@@ -608,3 +586,24 @@ def test_the_session_id_absent_short_circuit_also_fails_open(monkeypatch, capsys
 
     assert result == {}
     assert "leg=unauthorized_handoff" in capsys.readouterr().err
+
+
+def test_first_agent_dispatch_sentinel_is_written_under_the_fleet_root(tmp_path):
+    session_id = "test-session-fleet-root"
+    assert pad._check_first_agent_dispatch_sync(session_id, "Agent") != ""
+    assert (
+        tmp_path / "coordinator" / "_fleet" / f"first-agent-dispatch-advisory-{session_id}"
+    ).is_file()
+    assert not (tmp_path / f"first-agent-dispatch-advisory-{session_id}").exists()
+
+
+def test_first_agent_dispatch_honors_a_legacy_top_level_sentinel(tmp_path):
+    session_id = "test-session-legacy-sentinel"
+    (tmp_path / f"first-agent-dispatch-advisory-{session_id}").write_text("1")
+    assert pad._check_first_agent_dispatch_sync(session_id, "Agent") == ""
+
+
+def test_advisory_state_falls_back_to_the_legacy_top_level_file(tmp_path):
+    session_id = "test-session-legacy-state"
+    (tmp_path / f"advisory-hook-state-{session_id}.json").write_text('{"throttle_last_check": 7.0}')
+    assert pad._load_advisory_state(_managed(), session_id) == {"throttle_last_check": 7.0}

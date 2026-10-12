@@ -144,7 +144,7 @@ class AmbiguousCitationTests(unittest.TestCase):
     def test_each_doe_vs_claude_klabauter_collision_is_reported_unanchored(self):
         for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:
             with self.subTest(name=name):
-                fixture = FixtureCorpus(tempfile.mkdtemp())
+                fixture = FixtureCorpus(os.path.join(self._tmpdir.name, "sub-" + name))
                 fixture.write_corpus_file("doc.md", f"See docs/wiki/{name} for detail.\n")
                 code, findings, excluded, unresolved = _module.run(
                     [fixture.corpus], fixture.tree_roots, use_default_trees=False
@@ -159,7 +159,7 @@ class AmbiguousCitationTests(unittest.TestCase):
     def test_each_doe_vs_claude_klabauter_collision_anchored_is_still_ambiguous(self):
         for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:
             with self.subTest(name=name):
-                fixture = FixtureCorpus(tempfile.mkdtemp())
+                fixture = FixtureCorpus(os.path.join(self._tmpdir.name, "sub-" + name))
                 fixture.write_corpus_file("doc.md", f"See /docs/wiki/{name} for detail.\n")
                 code, findings, excluded, unresolved = _module.run(
                     [fixture.corpus], fixture.tree_roots, use_default_trees=False
@@ -182,7 +182,7 @@ class AmbiguousCitationTests(unittest.TestCase):
     def test_each_intra_doe_collision_is_reported_unanchored(self):
         for name in INTRA_DOE_COLLISIONS:
             with self.subTest(name=name):
-                fixture = FixtureCorpus(tempfile.mkdtemp())
+                fixture = FixtureCorpus(os.path.join(self._tmpdir.name, "sub-" + name))
                 fixture.write_corpus_file("doc.md", f"See docs/wiki/{name}.\n")
                 code, findings, excluded, unresolved = _module.run(
                     [fixture.corpus], fixture.tree_roots, use_default_trees=False
@@ -539,7 +539,7 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fixture = FixtureCorpus(self._tmpdir.name)
+        self.fixture = FixtureCorpus(os.path.join(self._tmpdir.name, "fixture"))
 
     def test_dotdot_citation_does_not_silently_pass_via_traversal_outside_consumer_root(self):
         decoy_root = os.path.dirname(os.path.dirname(self.fixture.claude_klabauter))

@@ -139,6 +139,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.session.machinery_paths import (
     LEGACY_MEMO_OUTBOX_RELDIR,
     MEMO_OUTBOX_RELDIR,
@@ -1174,7 +1175,7 @@ def _row_is_older_than_cutoff(line: str, cutoff: datetime.datetime) -> bool:
 
 
 def _write_msg_file(text: str) -> Path:
-    fd, name = tempfile.mkstemp(prefix="memo-send-msg-", suffix=".txt")
+    fd, name = tempfile.mkstemp(prefix="memo-send-msg-", suffix=".txt", dir=managed_tempdir())
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)

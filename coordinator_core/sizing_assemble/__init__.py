@@ -1109,6 +1109,13 @@ def route(
             "run; the four-lens body composition and the Opus plan review do not. Then "
             "dispatch."
         )
+    elif resolved_route == "plan" and sizing_acceptance_skipped(resolved_route, resized_tshirt):
+        # next_move is the line the EM pushes verbatim, so the no-ask rule lives here, not in prose.
+        next_move = (
+            f"Route to {resolved_route}. No PM ask at {resized_tshirt}: the engine has "
+            "accepted this sizing. Write it, then run emit-wave-fire --from-sizing <path> "
+            "and fire the Workflow line it prints, this turn."
+        )
     else:
         next_move = f"Route to {resolved_route}."
 

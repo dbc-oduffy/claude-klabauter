@@ -180,6 +180,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "bump_outside_repo_write": (
         lambda mod: "New-Item -Path C:/scratch-outside/file.txt -ItemType File"
     ),
+    "block_home_root_bash_write": (
+        lambda mod: "Out-File ~/home-root-dialect-probe.txt"
+    ),
     "guard_head_tail_rewrite": (
         lambda mod: "Get-Content foo.log | Select-Object -First 20"
     ),

@@ -72,6 +72,7 @@ from coordinator_core.benchmarks.process_time import (
 )
 from coordinator_core.git.run import run_git
 from coordinator_core.locked_write import held_lock
+from coordinator_core.temp_layout import managed_tempdir
 
 _ENV_PAYLOAD_KEY = "BASH_DISPATCH_PROBE_PAYLOAD"
 
@@ -108,7 +109,7 @@ def _sandbox_root() -> str:
     Invariant: nothing here runs at import or collection; `probe_root()` is
     the lazy entry. Raises `ProbeRootUnavailable` when `_REPO_ROOT` has no
     git HEAD to clone from (an assembled publish mirror)."""
-    root = os.path.join(tempfile.gettempdir(), "bash-dispatch-probe-root")
+    root = os.path.join(str(managed_tempdir(_REPO_ROOT)), "bash-dispatch-probe-root")
     try:
         head = _git("-C", _REPO_ROOT, "rev-parse", "HEAD")
     except subprocess.CalledProcessError as exc:

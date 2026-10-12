@@ -69,6 +69,7 @@ import pytest
 
 from coordinator_core.hooks import postuse_advisory_dispatch as pad
 from coordinator_core.session import context_usage_sidecar as sidecar_module
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.session.context_usage_sidecar import write_usage
 
 
@@ -77,7 +78,7 @@ def _isolated_state(tmp_path, monkeypatch):
     """Sandbox both durable surfaces this check touches.
 
     They no longer share a root: the advisory-state files still land under
-    `pad._tempfile().gettempdir()`, while the context-usage sidecar resolves
+    `temp_layout.managed_tempdir()`, while the context-usage sidecar resolves
     under `$COORDINATOR_SETTINGS_HOME` (the producer's settings home). Two
     patches, deliberately — a single tempdir patch would silently stop
     isolating the sidecar, and the tests would start reading whatever the real
@@ -110,7 +111,7 @@ def _red_bound_pct(context_window_size: int = 1_000_000) -> float:
 
 
 def _bypass_throttle(session_id: str) -> None:
-    tmpdir = tempfile.gettempdir()
+    tmpdir = str(managed_tempdir())
     state = pad._load_advisory_state(tmpdir, session_id)
     state["throttle_last_check"] = 0.0
     pad._save_advisory_state(tmpdir, session_id, state)
@@ -171,7 +172,7 @@ def test_unmeasured_never_escalates_however_many_fires():
     for _ in range(20):
         _bypass_throttle(session_id)
         assert _check(session_id) == ""
-    state = pad._load_advisory_state(tempfile.gettempdir(), session_id)
+    state = pad._load_advisory_state(str(managed_tempdir()), session_id)
     assert "unmeasured_streak" not in state
 
 
@@ -483,7 +484,7 @@ def test_unmeasured_path_writes_no_state_at_all(monkeypatch):
     assert _check("session-single-write") == ""
     assert saves.count("session-single-write") == 0
     assert "throttle_last_check" not in pad._load_advisory_state(
-        tempfile.gettempdir(), "session-single-write"
+        str(managed_tempdir()), "session-single-write"
     )
 
 

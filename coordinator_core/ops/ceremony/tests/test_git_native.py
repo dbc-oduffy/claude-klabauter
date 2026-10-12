@@ -3135,3 +3135,13 @@ def test_dirty_relpaths_from_porcelain_fails_closed_on_a_degraded_producer_recor
     dirty = git_native.dirty_relpaths_from_porcelain(tmp_path, ["a.txt", "b.txt"])
 
     assert dirty == {"a.txt", "b.txt"}
+
+
+def test_add_paths_refuses_dotgit_component(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    sess = repo / ".git" / "coordinator-sessions" / "sid"
+    sess.mkdir(parents=True)
+    (sess / "review-targets.txt").write_text("x\n", encoding="utf-8")
+    result = git_native.add_paths(repo, [".git/coordinator-sessions/sid/review-targets.txt"])
+    assert result.returncode != 0
+    assert "'.git' path component" in result.stderr

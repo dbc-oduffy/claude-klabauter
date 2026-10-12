@@ -15,6 +15,8 @@ guess. The decline list is CLOSED:
   - no leading `---`
   - no closing delimiter within the read budget
   - a tab anywhere in the frontmatter block's indentation
+  - an empty value followed by a block sequence/mapping (`blocked_by:` then
+    `  - id`), which a scalar scan would misread as the empty string
   - a value that is quoted, block (`|`/`>`), flow (`[`/`{`),
     anchored/aliased/tagged (`&`/`*`/`!`), or contains `#`
   - a duplicate occurrence of a requested key
@@ -66,6 +68,17 @@ def _plain_scalar_or_none(raw: str) -> Optional[str]:
     return raw
 
 
+def _opens_block(block_lines: list, idx: int) -> bool:
+    """True when the empty-valued key at `idx` is followed by a block
+    sequence or mapping (an indented line, or a column-0 `- ` item), not a
+    bare null. Comments and blank lines between are skipped."""
+    for nxt in block_lines[idx + 1:]:
+        if not nxt.strip() or nxt.lstrip().startswith("#"):
+            continue
+        return nxt[0] in " -" and (nxt[0] == " " or nxt.startswith("- "))
+    return False
+
+
 def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str, str]]:
     """Scan `path`'s frontmatter block for the given top-level scalar `keys`,
     reading at most `_READ_BUDGET_BYTES` bytes.
@@ -109,7 +122,7 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
         return None
 
     found: Dict[str, str] = {}
-    for ln in block_lines:
+    for idx, ln in enumerate(block_lines):
         stripped = ln.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -125,6 +138,8 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
         if key in found:
             return None
         raw_value = stripped[colon_idx + 1:].strip()
+        if not raw_value and _opens_block(block_lines, idx):
+            return None
         plain = _plain_scalar_or_none(raw_value)
         if plain is None:
             return None

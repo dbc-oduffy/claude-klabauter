@@ -24,14 +24,14 @@ the plan's Anti-scope — so the filename is keyed on the (session_id,
 guard_name) pair, not the session id alone, and a single grant clears
 exactly one guard once.
 
-Resolution follows the same convention as both siblings: the platform temp
-directory via `tempfile.gettempdir()` (honours TMPDIR/TEMP/TMP per-platform),
-never a hardcoded POSIX `/tmp`. Windows is first-class here — DR-record
+Resolution follows the same convention as both siblings: `temp_layout`'s
+fleet root under the platform temp directory (honours TMPDIR/TEMP/TMP
+per-platform), never a hardcoded POSIX `/tmp`; a file already at the legacy
+bare-Temp location is still honoured. Windows is first-class here — DR-record
 `docs/decisions/DR-222-health-sentinel-durability-parity-settings-home-dual-read.md`
 is the closest prior ruling on sentinel-home conventions and does not apply
-here: this sentinel has exactly one writer (the operator, by hand) and
-exactly one home, so a dual-home read would be unjustified complexity, not
-parity.
+here: this sentinel has exactly one writer (the operator, by hand), and the
+legacy read exists only for the move into the fleet root.
 
 Spec backlink: pln-in-session-operator-unlock-for-aa6cf9 § C1.
 
@@ -40,8 +40,8 @@ Negative-spec:
       directly at a new call site for this sentinel — import and call
       ``sentinel_path()`` so there is exactly one place this convention can
       drift again.
-    - Do NOT add a second candidate location or an OR-list of candidate
-      homes for this sentinel — it has exactly one home.
+    - Do NOT add a candidate location beyond the fleet home and the legacy
+      bare-Temp read inside ``sentinel_path()``.
     - Do NOT let ``consume()`` raise. A crash here would fail a guard OPEN
       — the one direction a hard-deny guard must never fail in — so every
       failure mode (vanished file, permissions error, unresolvable temp
@@ -112,9 +112,10 @@ Negative-spec:
 from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 _SENTINEL_PREFIX = "coordinator-guard-unlock-"
 
@@ -144,7 +145,7 @@ def _sanitize_component(value: str) -> str:
 def sentinel_path(session_id: str, guard_name: str) -> Path:
     """Return the guard-unlock sentinel path for ``(session_id, guard_name)``.
 
-    Resolves the platform temp directory via ``tempfile.gettempdir()``
+    Resolves the fleet root under the platform temp directory
     rather than a hardcoded POSIX ``/tmp`` — the single point of truth for
     both the operator who writes this sentinel by hand and the engine seam
     that consumes it. Keyed on both components so one unlock clears exactly
@@ -168,7 +169,11 @@ def sentinel_path(session_id: str, guard_name: str) -> Path:
     """
     session_part = _sanitize_component(session_id)
     guard_part = _sanitize_component(guard_name)
-    return Path(tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}{session_part}.{guard_part}"
+    name = f"{_SENTINEL_PREFIX}{session_part}.{guard_part}"
+    legacy = legacy_top_level_path(name)
+    if legacy.exists():
+        return legacy
+    return managed_tempdir() / name
 
 
 def consume(session_id: str, guard_name: str) -> bool:

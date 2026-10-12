@@ -39,9 +39,11 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.temp_layout import managed_tempdir
+
 
 def _probe_symlink_capability() -> bool:
-    base = Path(tempfile.mkdtemp(prefix="symlink-capability-probe-"))
+    base = Path(tempfile.mkdtemp(prefix="symlink-capability-probe-", dir=managed_tempdir()))
     target = base / "target"
     link = base / "link"
     try:

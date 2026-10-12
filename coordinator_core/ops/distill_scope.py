@@ -291,9 +291,9 @@ def _default_cohort_specs(handoffs_dir: str, memos_dir: str) -> list[CohortSpec]
 PM_RULING_2026_08_06_COHORT_SPECS: tuple[CohortSpec, ...] = (
     CohortSpec(name="memos", glob="cross-repo/archive/**/*.md", filter="memo_distill_fate_promote", mode="harvest"),
     CohortSpec(name="completed", glob="archive/completed/**/*.md", filter=None, mode="harvest"),
-    CohortSpec(name="week_changelog", glob="state/week-changelog/**/*.md", filter=None, mode="harvest"),
-    CohortSpec(name="handoffs", glob="archive/handoffs/**/*.md", filter="handoff_resolution_gate", mode="check-only"),
 )
+# No handoffs row (excluded from every cohort, DoE phase-0-scoping.md) and no
+# week_changelog row (its source is not in the target set yet).
 
 
 _LEGACY_MEMO_ARCHIVE = "cross-repo/archive"
@@ -511,17 +511,32 @@ def write_scope_manifest(worktree_root: Path, manifest: dict[str, Any]) -> Path:
     state/scratch/artifact-distillation/ is touched — never a sibling run-id's
     directory, never any other state/ path.
     """
-    run_dir = worktree_root / "state" / "scratch" / "artifact-distillation" / manifest["run_id"]
-    run_dir.mkdir(parents=True, exist_ok=True)
-    target = run_dir / "input.json"
-
     # Plain (insertion-order-preserving) serialization — NOT
     # manifest_schema.canonical_manifest_bytes(), which sort_keys=True
     # alphabetizes for the disposal-manifest's sha-stability contract (F3, a
     # concern this schema_version-only, no-stamp-field scope-manifest does not
     # share). schema_version stays the first on-disk key, per SCHEMA_VERSION's
     # own "always the first key written on disk" contract.
-    body = json.dumps(manifest, indent=2).encode("utf-8")
+    return _write_run_file(worktree_root, manifest["run_id"], "input.json", manifest)
+
+
+def workflow_input(manifest: dict[str, Any], worktree_root: Path) -> dict[str, Any]:
+    """The Workflow's INPUT for this manifest, via distill.workflow_input's translator.
+
+    Trap: the manifest's own shape is C9's pinned schema and is NOT what the
+    Workflow reads — handing it the manifest yields zero batches, which the
+    Workflow reports as "all-scan-agents-failed" (2026-10-12)."""
+    # Deferred: distill_workflow_input imports this module.
+    from coordinator_core.ops.distill_workflow_input import translate_to_workflow_input
+
+    return translate_to_workflow_input(manifest, repo_root=worktree_root.as_posix())
+
+
+def _write_run_file(worktree_root: Path, run_id: str, name: str, obj: dict[str, Any]) -> Path:
+    run_dir = worktree_root / "state" / "scratch" / "artifact-distillation" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    target = run_dir / name
+    body = json.dumps(obj, indent=2).encode("utf-8")
     fd, tmp_path = tempfile.mkstemp(dir=str(run_dir), suffix=".tmp")
     try:
         try:
@@ -654,10 +669,15 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
 
     result = compute_scope(worktree_root, **kwargs)
     written_path = write_scope_manifest(worktree_root, result.manifest)
+    workflow_path = _write_run_file(
+        worktree_root, run_id, "workflow-input.json", workflow_input(result.manifest, worktree_root)
+    )
 
     return {
         "run_id": run_id,
         "input_json_path": rel_id(written_path, worktree_root),
+        # Pass THIS as distill-harvest.workflow.js's args.inputFile, not input_json_path.
+        "workflow_input_path": rel_id(workflow_path, worktree_root),
         "counts": result.counts,
         "summary": render_summary(result.manifest, result.counts),
     }

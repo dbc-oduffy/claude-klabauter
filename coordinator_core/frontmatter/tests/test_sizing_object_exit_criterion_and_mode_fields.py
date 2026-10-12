@@ -273,7 +273,7 @@ class TestExistingCorpusStillValidates:
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
-    def test_no_new_failures_introduced_by_this_bump(self):
+    def test_no_new_failures_introduced_by_this_bump(self, tmp_path):
         # Spawns one `git show` to read the pre-bump schema off HEAD; runs at
         # cadence gates, not per-commit. Spawn ratchet:
         # coordinator_core/tests/test_no_new_spawning_tests.py
@@ -294,13 +294,8 @@ class TestExistingCorpusStillValidates:
             pytest.skip("could not read the pre-bump schema from git HEAD")
 
         import json
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".schema.json", delete=False, encoding="utf-8"
-        ) as fh:
-            fh.write(old_bytes.stdout)
-            old_schema_path = Path(fh.name)
+        old_schema_path = tmp_path / "pre-bump.schema.json"
+        old_schema_path.write_text(old_bytes.stdout, encoding="utf-8")
 
         try:
             regressions: list[str] = []

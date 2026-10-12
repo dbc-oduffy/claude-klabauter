@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -419,7 +420,7 @@ def active_reference_guard_many(
     if shutil.which("rg") is not None:
         from coordinator_core.win_portability import leaf_spawn_creationflags
 
-        pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True)
+        pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True, dir=managed_tempdir(repo_root))
         try:
             with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
                 pattern_file.write("\n".join(distinct_needles) + "\n")
@@ -468,6 +469,70 @@ def active_reference_guard_many(
         needle: _needle_referenced_in(needle, matched_paths)
         for needle in distinct_needles
     }
+
+
+def files_citing(needles: list[str], repo_root: Path, paths: list[str]) -> dict[str, list[str]]:
+    """`{needle: [repo-relative forward-slash file, ...]}` for every file under `paths` (dirs
+    or files, repo-relative; absent ones skipped) whose text contains the needle, from ONE
+    `rg -f` for the whole needle set. Raw containment: the caller decides which citing files
+    count. A file that cannot be read is listed under every needle (ambiguity blocks)."""
+    distinct = list(dict.fromkeys(needles))
+    existing = [p for p in paths if (repo_root / p).exists()]
+    hits: dict[str, list[str]] = {needle: [] for needle in distinct}
+    if not distinct or not existing:
+        return hits
+
+    if shutil.which("rg") is not None:
+        from coordinator_core.win_portability import leaf_spawn_creationflags
+
+        pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True, dir=managed_tempdir(repo_root))
+        try:
+            with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
+                pattern_file.write("\n".join(distinct) + "\n")
+            result = subprocess.run(
+                ["rg", "--fixed-strings", "--files-with-matches", "-f", pattern_path, *existing],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                **leaf_spawn_creationflags(),
+            )
+        finally:
+            os.unlink(pattern_path)
+        if result.returncode == 2:
+            raise RuntimeError(f"files_citing: ripgrep failed (exit 2): {result.stderr.strip()}")
+        matched = [] if result.returncode == 1 else result.stdout.splitlines()
+    else:
+        matched = []
+        for rel in existing:
+            top = repo_root / rel
+            if top.is_file():
+                matched.append(str(top))
+                continue
+            for dirpath, dirnames, filenames in os.walk(top):
+                dirnames[:] = [d for d in dirnames if d not in _FALLBACK_IGNORE_DIRS]
+                matched.extend(str(Path(dirpath) / name) for name in filenames)
+
+    root = repo_root.resolve()
+    for raw in matched:
+        if not raw:
+            continue
+        file_path = Path(raw) if Path(raw).is_absolute() else repo_root / raw
+        try:
+            rel = file_path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            rel = file_path.as_posix()
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        except OSError:
+            for needle in distinct:
+                hits[needle].append(rel)
+            continue
+        for needle in distinct:
+            if needle in text:
+                hits[needle].append(rel)
+    return hits
 
 
 # ---------------------------------------------------------------------------

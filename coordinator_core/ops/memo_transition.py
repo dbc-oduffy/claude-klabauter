@@ -161,6 +161,7 @@ from typing import Any
 import yaml
 
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
@@ -355,7 +356,8 @@ def _commit_terminal_write(
 
     message = f"memo.transition {verb}: {pathspec}\n"
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        mode="w", suffix=".txt", delete=False, encoding="utf-8",
+        dir=managed_tempdir(git_root),
     ) as fh:
         fh.write(message)
         msg_path = fh.name

@@ -7,7 +7,6 @@ the prior schema (git HEAD) newly fails.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -61,7 +60,7 @@ def test_invalid_baton_values_are_rejected(baton):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_no_new_corpus_failures_under_1_24_0():
+def test_no_new_corpus_failures_under_1_24_0(tmp_path):
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -76,11 +75,8 @@ def test_no_new_corpus_failures_under_1_24_0():
     )
     if old.returncode != 0:
         pytest.skip("could not read the pre-bump schema from git HEAD")
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".schema.json", delete=False, encoding="utf-8"
-    ) as tmp:
-        tmp.write(old.stdout)
-        old_path = Path(tmp.name)
+    old_path = tmp_path / "pre-bump.schema.json"
+    old_path.write_text(old.stdout, encoding="utf-8")
     try:
         regressed = []
         for f in files:

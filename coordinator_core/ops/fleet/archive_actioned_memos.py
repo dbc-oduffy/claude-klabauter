@@ -99,10 +99,10 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from coordinator_core.temp_layout import fleet_temp_root
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live
@@ -145,7 +145,8 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 # default.
 _RECOMMENDED_CAP_CHOICE = 150
 
-_NO_REPO_ROOT_RECEIPT_DIR = Path(tempfile.gettempdir()) / "coordinator-fleet-no-repo-root"
+# No mkdir at import: record_sweep_outcome creates the dir on first write.
+_NO_REPO_ROOT_RECEIPT_DIR = fleet_temp_root() / "no-repo-root"
 
 
 def _memo_sessions_dir(common_dir: Path) -> Path:

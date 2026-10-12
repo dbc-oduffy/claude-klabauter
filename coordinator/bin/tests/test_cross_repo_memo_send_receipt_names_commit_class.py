@@ -61,11 +61,7 @@ def test_successful_send_receipt_names_the_commit_class(monkeypatch):
     )
 
 
-def test_successful_send_prints_the_pm_relay_line(monkeypatch):
-    # Memo friction item 7: the CLI's own docstring/comments already claimed
-    # this line existed ("Hand the PM this path for relay"); it never
-    # actually printed (cross-repo/inbox/2026-09-28-example-retrieval-repo-em-memo-
-    # send-friction.md).
+def test_successful_send_names_the_receiver_path_and_no_pm_step(monkeypatch):
     mod = _load_cli_module()
 
     fake_cc_invoke = types.SimpleNamespace(
@@ -85,16 +81,13 @@ def test_successful_send_prints_the_pm_relay_line(monkeypatch):
 
     assert rc == 0
     out = buf.getvalue()
-    assert "Hand the PM this path for relay:" in out
     import os
 
     receiver_line = next(line for line in out.splitlines() if line.startswith("Receiver-side:"))
-    receiver_path = receiver_line.split("Receiver-side:", 1)[1].strip()
-    relay_line = next(
-        line for line in out.splitlines() if line.startswith("Hand the PM this path for relay:")
+    assert receiver_line.split("Receiver-side:", 1)[1].strip() == os.path.abspath(
+        "state/memo-outbox/sent/some-topic.md"
     )
-    relay_path = relay_line.split("Hand the PM this path for relay:", 1)[1].strip()
-    assert relay_path == receiver_path == os.path.abspath("state/memo-outbox/sent/some-topic.md")
+    assert "PM" not in out
 
 
 def test_sender_commit_failure_receipt_still_names_the_recovery_path(monkeypatch, capsys):

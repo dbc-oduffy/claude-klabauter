@@ -51,6 +51,7 @@ import os
 import re
 import subprocess
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
@@ -97,7 +98,7 @@ def _commit_moved(repo_root: str, srcs: List[str], dst_dir: str) -> bool:
         name = os.path.basename(src)
         rels.append(os.path.relpath(src, repo_root).replace(os.sep, "/"))
         rels.append(os.path.relpath(os.path.join(dst_dir, name), repo_root).replace(os.sep, "/"))
-    fd, pathspec_file = tempfile.mkstemp(prefix="migrate-legacy-pathspec-", suffix=".txt")
+    fd, pathspec_file = tempfile.mkstemp(prefix="migrate-legacy-pathspec-", suffix=".txt", dir=managed_tempdir(repo_root))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(rels) + "\n")

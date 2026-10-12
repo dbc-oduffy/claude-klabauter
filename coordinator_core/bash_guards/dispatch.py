@@ -1388,10 +1388,9 @@ def _session_advisory_already_fired(
         if gitdir is None:
             # A session rooted above its checkouts (cloud) has no gitdir; a
             # temp-dir store keeps the once-per-session contract.
-            import tempfile
-            from pathlib import Path
+            from coordinator_core.temp_layout import fleet_temp_root
 
-            gitdir = Path(tempfile.gettempdir()) / "coordinator-gitless-advisory-dedupe"
+            gitdir = fleet_temp_root() / "coordinator-gitless-advisory-dedupe"
         if _already_advised(gitdir, session_id, shape_key):
             return True
         _mark_advised(gitdir, session_id, shape_key)
@@ -2312,6 +2311,10 @@ def _build_guard_chain(
         check as _check_hand_authored_handoff_creation,
         MATCHERS as _matchers_hand_authored_handoff_creation,
     )
+    from coordinator_core.bash_guards.block_home_root_bash_write import (
+        check as _check_home_root_bash_write,
+        MATCHERS as _matchers_home_root_bash_write,
+    )
     # block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
     # but on the module whose registered leg here is `check_advisory` -- the
     # `check()` leg that pairs with the declaration was RETIRED from guard_chain
@@ -2611,6 +2614,14 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_hand_authored_handoff_creation),
+        ),
+        GuardEntry(
+            "block-home-root-bash-write",
+            lambda: _check_home_root_bash_write(payload),
+            False,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_home_root_bash_write),
         ),
         # Deny leg of `block-dev-repo-sentinel-removal` (direct match); its
         # advisory leg (indirection) is registered in ADVISORY_REWRITE below.

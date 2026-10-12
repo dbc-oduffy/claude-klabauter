@@ -122,6 +122,7 @@ from typing import Dict, List, Optional, Tuple
 
 from coordinator_core import machine_resolver, resolve_coordinator_clone
 from coordinator_core._settings_home import native_path_form
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.content_root import CONTENT_ROOT_KEY, POINTER_NAME, migrate_legacy_config
 from coordinator_core.install import gen_settings_hooks
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -1167,10 +1168,12 @@ def run_all(
     )
 
     try:
-        tmp_base = tempfile.gettempdir()  # addendum A4 — never os.environ["TMPDIR"] directly
+        # Managed fleet root (gettempdir-derived, addendum A4): a run killed before its
+        # finally leaves the sandbox where the SessionStart pruner reaps it by age.
+        tmp_base = str(managed_tempdir())
         sandbox = tempfile.mkdtemp(prefix="install-sandbox-check.", dir=tmp_base)
     except OSError as exc:
-        raise SandboxCheckTransportError(f"could not create sandbox tempdir under {tempfile.gettempdir()}: {exc}") from exc
+        raise SandboxCheckTransportError(f"could not create sandbox tempdir: {exc}") from exc
 
     r.info(f"Sandbox CLAUDE_HOME: {sandbox}")
 

@@ -19,7 +19,8 @@ def test_probe_is_cached_at_import_not_reprobed():
 def test_probe_leaves_nothing_behind(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
     assert symlink_capability._probe_symlink_capability() is True
-    assert list(tmp_path.iterdir()) == []
+    # The managed root may be created; nothing else may be left.
+    assert [p.name for p in tmp_path.iterdir()] in ([], ["coordinator"])
 
 
 def test_marker_is_a_skipif_mark_decorator():

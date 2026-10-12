@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from types import SimpleNamespace
 
@@ -142,3 +143,32 @@ def test_terminal_commit_reply_names_the_unsent_memo(tmp_path):
     (tmp_path / "pkg" / "a.py").write_text("a2\n", encoding="utf-8")
     out = terminal_commit._handler(params, repo_root=tmp_path / ".git")
     assert "memo_unsent" not in out
+
+
+def _with_verifier_and_criterion(tmp_path, *rows):
+    """The plan and roster under which both readers of the whole plan are emitted."""
+    plan = _plan(tmp_path, *rows)
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "title: p\n", "title: p\nprime_exit_criterion:\n  statement: the memo is sent and a.py changes\n", 1
+        ),
+        encoding="utf-8",
+    )
+    roster = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
+    wave = next(s for s in roster["execute_review"]["stages"] if s["kind"] == "review-wave")
+    wave["agents"].append(
+        {"agentType": "coordinator:delivery-verifier", "model": "sonnet", "effort": "low", "per": "whole-diff", "schema": "wave"}
+    )
+    return plan, {**REVIEW_KW, "review_roster_fragment": roster}
+
+
+def test_verifier_and_judge_are_told_the_memo_row_is_em_owned(tmp_path):
+    plan, kw = _with_verifier_and_criterion(tmp_path, _MEMO_ROW, _CODE_ROW)
+    script = emit_script(plan, repo_root=tmp_path, **kw)
+    assert script.count("EM-owned rows (never dispatched to an executor") >= 2
+    assert "M1 (EM: send topic" in script
+
+
+def test_no_em_owned_clause_when_every_row_is_dispatched(tmp_path):
+    plan, kw = _with_verifier_and_criterion(tmp_path, _CODE_ROW)
+    assert "EM-owned rows" not in emit_script(plan, repo_root=tmp_path, **kw)

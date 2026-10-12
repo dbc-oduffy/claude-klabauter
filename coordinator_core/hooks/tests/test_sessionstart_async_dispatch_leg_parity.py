@@ -16,6 +16,7 @@ PINNED_LEGS = [
     ("session_start_register_published_engine", ALL_FIVE),
     ("sessionstart_ensure_http_forwarder", ALL_FIVE),
     ("session_start_write_plugin_root_breadcrumb", ALL_FIVE),
+    ("prune_claude_temp", {"startup"}),
 ]
 
 _LEG_ATTRS = {
@@ -23,6 +24,7 @@ _LEG_ATTRS = {
     "session_start_register_published_engine": "_session_start_register_published_engine_handler",
     "sessionstart_ensure_http_forwarder": "_sessionstart_ensure_http_forwarder_handler",
     "session_start_write_plugin_root_breadcrumb": "_session_start_write_plugin_root_breadcrumb_handler",
+    "prune_claude_temp": "_prune_claude_temp_leg",
 }
 
 
@@ -82,5 +84,5 @@ def test_raising_leg_does_not_drop_others(calls, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_session_start_register_published_engine_handler", boom)
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_register_published_engine" not in calls
-    assert calls[-1] == "session_start_write_plugin_root_breadcrumb"
-    assert len(calls) == 3
+    assert calls[-1] == "prune_claude_temp"
+    assert len(calls) == 4

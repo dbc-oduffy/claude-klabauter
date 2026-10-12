@@ -92,6 +92,7 @@ from coordinator_core.hooks import nudge_hand_written_plan, nudge_unauthorized_h
 from coordinator_core.session.autonomous_sentinel import sentinel_path, sentinel_read_path
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 # `sentinel_path` is read directly by the mise-en-place CONTINUANCE detection
 # below: `resolve_mode("autonomous", ...)` answers presence only, not the
@@ -155,7 +156,7 @@ def _portable_arg(value: str) -> str | None:
 
 #: Generator-provenance declaration: every durable-state write in this
 #: module (advisory-hook-state-<sid>.json, rt-bark-once-<sid>,
-#: first-agent-dispatch-advisory-<sid>) lands under tempfile.gettempdir() —
+#: first-agent-dispatch-advisory-<sid>) lands under the fleet managed Temp root —
 #: never a tracked repo artifact.
 GENERATES: list = []
 
@@ -353,6 +354,20 @@ def _used_tokens_and_display_pct(
 # ---------------------------------------------------------------------------
 
 
+def _managed_tmpdir() -> str:
+    """Fleet-rooted managed Temp dir holding every session-keyed file this module writes."""
+    return str(managed_tempdir())
+
+
+def _dual_read_path(path: str) -> str:
+    """`path` when it exists, else its pre-managed-layout top-level twin when that exists,
+    else `path`: a session that began before the move keeps its state."""
+    if os.path.exists(path):
+        return path
+    legacy = str(legacy_top_level_path(os.path.basename(path)))
+    return legacy if os.path.exists(legacy) else path
+
+
 def _advisory_state_path(tmpdir: str, session_id: str) -> str:
     return os.path.join(tmpdir, f"advisory-hook-state-{session_id}.json")
 
@@ -366,7 +381,7 @@ def _load_advisory_state(tmpdir: str, session_id: str) -> dict:
     state file.
     """
     try:
-        with open(_advisory_state_path(tmpdir, session_id), "r", encoding="utf-8") as fh:
+        with open(_dual_read_path(_advisory_state_path(tmpdir, session_id)), "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -535,15 +550,13 @@ def _check_context_pressure_sync(
     if not session_id:
         return ""
 
-    # Use tempfile.gettempdir() throughout;
-    #   docstring motivates Windows portability and /tmp/ does not exist there.
-    tmpdir = _tempfile().gettempdir()
+    tmpdir = _managed_tmpdir()
 
     # -----------------------------------------------------------------------
     # Phase 1: Post-compaction sentinel bridge
     # -----------------------------------------------------------------------
-    compaction_sentinel = os.path.join(tmpdir, f"compaction-occurred-{session_id}")
-    compaction_state = os.path.join(tmpdir, f"compaction-state-{session_id}.md")
+    compaction_sentinel = _dual_read_path(os.path.join(tmpdir, f"compaction-occurred-{session_id}"))
+    compaction_state = _dual_read_path(os.path.join(tmpdir, f"compaction-state-{session_id}.md"))
 
     if os.path.isfile(compaction_sentinel):
         # Consume-by-delete (restored — B-F1 had replaced this with an
@@ -1068,10 +1081,9 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # SEPARATE file from the context-pressure state avoids a lost-update race
     # between the two checks, which run concurrently in the same process via
     # asyncio.gather + asyncio.to_thread (see the op handler below).
-    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
-    tmpdir = _tempfile().gettempdir()
+    tmpdir = _managed_tmpdir()
     rt_bark_sentinel = os.path.join(tmpdir, f"rt-bark-once-{session_id}")
-    if os.path.isfile(rt_bark_sentinel):
+    if os.path.isfile(_dual_read_path(rt_bark_sentinel)):
         return ""
     try:
         with open(rt_bark_sentinel, "w", encoding="utf-8", newline="\n") as fh:
@@ -1172,10 +1184,9 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     if not session_id or tool_name != "Agent":
         return ""
 
-    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
-    tmpdir = _tempfile().gettempdir()
+    tmpdir = _managed_tmpdir()
     sentinel = _first_agent_dispatch_sentinel_path(tmpdir, session_id)
-    if os.path.isfile(sentinel):
+    if os.path.isfile(_dual_read_path(sentinel)):
         return ""
 
     try:
@@ -1439,8 +1450,7 @@ def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, too
     if not task_id or not run_id or not transcript_dir:
         return
 
-    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
-    tmpdir = _tempfile().gettempdir()
+    tmpdir = _managed_tmpdir()
 
     # Scoped to the text strictly between the PRECEDING async_launched record
     # (or start of text) and the FOLLOWING one (or end of text) -- not the
@@ -1616,9 +1626,9 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
         )
         return ""
 
-    tmpdir = _tempfile().gettempdir()
+    tmpdir = _managed_tmpdir()
     sentinel = _group_em_watch_arm_sentinel_path(tmpdir, session_id)
-    if os.path.isfile(sentinel):
+    if os.path.isfile(_dual_read_path(sentinel)):
         return ""
 
     # The
@@ -1640,7 +1650,7 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     # already keeps.
     checked_sentinel = _group_em_watch_checked_sentinel_path(tmpdir, session_id)
     try:
-        checked_age = time.time() - os.path.getmtime(checked_sentinel)
+        checked_age = time.time() - os.path.getmtime(_dual_read_path(checked_sentinel))
     except OSError:
         checked_age = None
     if checked_age is not None and checked_age < _GROUP_EM_WATCH_CHECKED_TTL_SECONDS:

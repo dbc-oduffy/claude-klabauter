@@ -243,6 +243,19 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"would archive {len(moves)} handoff(s); {len(skipped)} refused")
         for move in moves:
             print(f"  {getattr(move, 'candidate_id', move)}")
+        if close:
+            from coordinator_core.housekeeping.cycle import plan_gate_releases
+
+            plan = plan_gate_releases(worktree, common_dir)
+            releases = plan["would_release"]
+            print(f"would release {len(releases)} gated handoff(s)")
+            for rel in releases:
+                print(f"  {rel}")
+            print(
+                f"{len(plan['dead_blockers'])} gated handoff(s) can never clear; "
+                f"{len(plan['unresolvable_blockers'])} name a blocker that resolves "
+                f"to no handoff (kept gated)"
+            )
         return 1 if heal_failed else 0
 
     from coordinator_core.housekeeping.cycle import _handler
@@ -277,8 +290,7 @@ def main(argv: "list[str] | None" = None) -> int:
             f"handoff-housekeeping: WARN: {len(failed)} move(s) failed — check claude-klabauter logs",
             file=sys.stderr,
         )
-        return 1
-    return 1 if heal_failed else 0
+    return 1 if (failed or result.get("close_error") or heal_failed) else 0
 
 
 if __name__ == "__main__":

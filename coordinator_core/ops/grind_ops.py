@@ -46,6 +46,7 @@ from coordinator_core.ceremony_common.cli_dispatch import (
     resolve_cli_script_root,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import managed_tempdir
 
 _SCRIPT_ROOT = resolve_cli_script_root()
 
@@ -117,7 +118,7 @@ def _lessons_verify_extraction(
     records = params["records"]
 
     tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False, encoding="utf-8"
+        mode="w", suffix=".json", delete=False, encoding="utf-8", dir=managed_tempdir()
     )
     try:
         json.dump({"records": records}, tmp)

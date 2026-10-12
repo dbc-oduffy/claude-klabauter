@@ -85,7 +85,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from coordinator_core.housekeeping import archive_index as archive_index_mod
 from coordinator_core.housekeeping.archive_index import ArchiveIndex
@@ -105,6 +105,7 @@ from coordinator_core.housekeeping.terminal import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
+from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
@@ -145,6 +146,88 @@ def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[s
         return set()
 
 
+def _evaluate_gates(
+    records: Dict[Path, Dict[str, Any]],
+    resolver: Any,
+    worktree_root: Path,
+    dead_blockers: List[Dict[str, Any]],
+    unresolvable: List[Dict[str, Any]],
+) -> List[Tuple[Path, Dict[str, Any]]]:
+    """The gated records whose gate clears now, in corpus order. A gate clears
+    only when every blocker resolves to a positively terminal record. An id
+    that resolves to no record (a stub or roadmap id, a deliverable id, a peer
+    name) is unknown, not dead: it stays gated and lands in `unresolvable`.
+    `dead_blockers` takes only gates that can never clear (no blocker named,
+    or an id that matches several distinct records). Pure: no reads, no writes."""
+    clearing: List[Tuple[Path, Dict[str, Any]]] = []
+    for path, record in records.items():
+        if record.get("deployment_state") != _AWAITING_GATE:
+            continue
+        verdict = evaluate_gate_clear(record, resolver)
+        reason = dead_blocker_reason(verdict)
+        if reason is not None:
+            finding = {
+                "id": rel_id(path, worktree_root),
+                "blocker_id": verdict.blocker_id,
+                "reason": reason,
+            }
+            (unresolvable if reason == "unresolved" else dead_blockers).append(finding)
+        if verdict.clears:
+            clearing.append((path, record))
+    return clearing
+
+
+def plan_gate_releases(worktree_root: Path, common_dir: Path) -> Dict[str, Any]:
+    """What the close pass would release, without writing: `would_release`
+    (repo-relative ids) and `dead_blockers`. The dry-run counterpart of the
+    close pass in `run`, sharing `_evaluate_gates` so the two cannot diverge."""
+    archive_dir = worktree_root / "archive" / "handoffs"
+    records = read_live_corpus(worktree_root / "state" / "handoffs").records
+    if archive_dir.is_dir():
+        archive_idx, _ = archive_index_mod.open_index(
+            archive_dir, archive_index_mod.cache_path_for(common_dir)
+        )
+    else:
+        archive_idx = ArchiveIndex(archive_dir=archive_dir)
+    dead: List[Dict[str, Any]] = []
+    unknown: List[Dict[str, Any]] = []
+    clearing = _evaluate_gates(
+        records, make_resolver(records, archive_idx), worktree_root, dead, unknown
+    )
+    return {
+        "would_release": sorted(rel_id(p, worktree_root) for p, _ in clearing),
+        "dead_blockers": sorted(dead, key=lambda item: item["id"]),
+        "unresolvable_blockers": sorted(unknown, key=lambda item: item["id"]),
+    }
+
+
+def _restore_clears(
+    worktree_root: Path,
+    clear_state: Dict[str, Tuple[Path, bytes, str]],
+    ids: Set[str],
+) -> None:
+    """Put back the pre-release bytes for `ids` whose release did not land in
+    a commit. Only a file still holding exactly the text this cycle wrote is
+    touched; anything a peer changed since is theirs. Bytes, not text: the
+    original may be CRLF, which a text round-trip would rewrite."""
+    for cid in ids:
+        path, old_bytes, new_text = clear_state[cid]
+
+        def mutate(current: str, path: Path = path, old_bytes: bytes = old_bytes,
+                   new_text: str = new_text) -> str:
+            if current != new_text:
+                raise MutateAbort("changed since release")
+            path.write_bytes(old_bytes)  # under the lock; rmw sees no text change
+            return current
+
+        try:
+            locked_rmw(path, mutate, repo_root=worktree_root)
+        except MutateAbort:
+            pass
+        except Exception:  # noqa: BLE001 -- restore is best-effort, the error is already reported
+            _LOG.warning("cycle.run: could not restore %s after a failed commit", cid, exc_info=True)
+
+
 def run(
     repo_root: PathLike,
     cap: int,
@@ -173,7 +256,10 @@ def run(
     changes `exit_code`), and `invariant` (every run, close or not): `archive_nonterminal`
     (`{id, deployment_state}` for archived records not in a terminal state,
     read after this cycle's own moves) and `gate_dead_blockers` (`{id,
-    blocker_id, reason}` for gated records whose gate can never clear).
+    blocker_id, reason}` for gated records that can never clear: no blocker
+    named, or an ambiguous id) and `gate_unresolvable_blockers` (same shape,
+    for gated records whose blocker id matches no handoff: unknown, not dead,
+    never released).
 
     `memos_archived` / `memos_failed` / `memos_skipped` (2026-08-30, the
     actioned-memo class gets an occasion, C2) — the MEMO family's own
@@ -215,36 +301,23 @@ def run(
         archive_idx, index_rebuilt = ArchiveIndex(archive_dir=archive_dir), False
 
     resolver = make_resolver(records, archive_idx)
-    gated = [
-        (path, record)
-        for path, record in records.items()
-        if record.get("deployment_state") == _AWAITING_GATE
-    ]
 
-    closed = 0
+    # Evaluation is pure and in memory: it decides which gates release and
+    # which are dead, and writes nothing. The writes happen below, after the
+    # dirty check, and ride the cycle's single commit.
     conflicts: List[str] = []
-    close_error: Optional[str] = None
+    close_errors: List[str] = []
     gate_dead_blockers: List[Dict[str, Any]] = []
+    gate_unresolvable: List[Dict[str, Any]] = []
+    clearing: List[Tuple[Path, Dict[str, Any]]] = []
     try:
-        for path, record in gated:
-            verdict = evaluate_gate_clear(record, resolver)
-            reason = dead_blocker_reason(verdict)
-            if reason is not None:
-                gate_dead_blockers.append({
-                    "id": rel_id(path, worktree_root),
-                    "blocker_id": verdict.blocker_id,
-                    "reason": reason,
-                })
-            if not close or not verdict.clears:
-                continue
-            result = apply_gate_clear(path, worktree_root)
-            if result.status == CONFLICT:
-                conflicts.append(str(path))
-                continue
-            records[path] = record_after_clear(record)
-            closed += 1
+        clearing = _evaluate_gates(
+            records, resolver, worktree_root, gate_dead_blockers, gate_unresolvable
+        )
     except Exception as exc:  # noqa: BLE001 -- the sweep survives a close failure
-        close_error = f"{type(exc).__name__}: {exc}"
+        close_errors.append(f"{type(exc).__name__}: {exc}")
+    if not close:
+        clearing = []
 
     excluded = exclude or frozenset()
     candidate_rels = sorted({
@@ -281,14 +354,45 @@ def run(
         p.relative_to(worktree_root).as_posix() for p in memo_candidate_paths
     })
 
+    clearing_rels = [p.relative_to(worktree_root).as_posix() for p, _ in clearing]
     dirty_rels = _dirty_handoff_relpaths(
         worktree_root,
-        sorted(set(candidate_rels) | set(memo_candidate_rels)),
+        sorted(set(candidate_rels) | set(memo_candidate_rels) | set(clearing_rels)),
         fallback_pathspecs=(
             "state/handoffs",
             memo_inbox_dir.relative_to(worktree_root).as_posix(),
         ),
     )
+
+    # Collect-then-commit. A record whose release fails (nested-shape or
+    # otherwise) fails BEFORE any write for that record, so the others still
+    # release; every written release rides the one commit below as an in-place
+    # Move, and a failed commit restores the bytes written. A record dirty
+    # against HEAD is left for the next cycle: the commit would absorb a
+    # peer's uncommitted edit under this cycle's subject.
+    clear_moves: List[Move] = []
+    clear_state: Dict[str, Tuple[Path, bytes, str]] = {}
+    for (path, record), rel in zip(clearing, clearing_rels):
+        if rel in dirty_rels or rel in excluded:
+            conflicts.append(str(path))
+            continue
+        try:
+            old_bytes = path.read_bytes()
+            old_text = path.read_text(encoding="utf-8")
+            applied = apply_gate_clear(path, worktree_root, old_text=old_text)
+        except Exception as exc:  # noqa: BLE001 -- one record never strands the rest
+            close_errors.append(f"{rel}: {type(exc).__name__}: {exc}")
+            continue
+        if applied.status == CONFLICT:
+            conflicts.append(str(path))
+            continue
+        records[path] = record_after_clear(record)
+        cid = rel_id(path, worktree_root)
+        clear_moves.append(Move(
+            src=path, dst=path, candidate_id=cid, force=False, restage_src=True,
+        ))
+        clear_state[cid] = (path, old_bytes, applied.new_text or "")
+
     def _retained(path: Path, record: Dict[str, Any]) -> bool:
         rel = path.relative_to(worktree_root).as_posix()
         return rel in excluded or rel in dirty_rels
@@ -320,16 +424,32 @@ def run(
         subject_parts.append(f"{len(terminal_entries)} terminal handoff(s)")
     if memo_moves:
         subject_parts.append(f"{len(memo_moves)} actioned memo(s)")
-    subject = "housekeeping: archive " + " and ".join(subject_parts) if subject_parts else \
+    clauses = []
+    if clear_moves:
+        clauses.append(f"release {len(clear_moves)} gated handoff(s)")
+    if subject_parts:
+        clauses.append("archive " + " and ".join(subject_parts))
+    subject = "housekeeping: " + "; ".join(clauses) if clauses else \
         "housekeeping: archive 0 terminal handoff(s)"
 
-    combined_moves = handoff_moves + memo_moves
+    combined_moves = clear_moves + handoff_moves + memo_moves
     if combined_moves:
-        acted, failed = asyncio.run(
-            archive_and_commit(worktree_root, combined_moves, subject)
-        )
+        try:
+            acted, failed = asyncio.run(
+                archive_and_commit(worktree_root, combined_moves, subject)
+            )
+        except BaseException:
+            _restore_clears(worktree_root, clear_state, set(clear_state))
+            raise
     else:
         acted, failed = [], []
+
+    clear_failed = {item["id"]: item for item in failed if item["id"] in clear_state}
+    _restore_clears(worktree_root, clear_state, set(clear_failed))
+    closed = sum(1 for item in acted if item["id"] in clear_state)
+    for cid, item in clear_failed.items():
+        close_errors.append(f"{cid}: gate release not committed: {item['reason']}")
+    close_error = "; ".join(close_errors) or None
 
     handoff_move_ids = {m.candidate_id for m in handoff_moves}
     memo_move_ids = {m.candidate_id for m in memo_moves}
@@ -350,11 +470,13 @@ def run(
         key=lambda item: item["id"],
     )
     gate_dead_blockers.sort(key=lambda item: item["id"])
-    if archive_nonterminal or gate_dead_blockers:
+    gate_unresolvable.sort(key=lambda item: item["id"])
+    if archive_nonterminal or gate_dead_blockers or gate_unresolvable:
         _LOG.warning(
             "cycle.run invariant: %d non-terminal archived record(s), "
-            "%d gated record(s) with a dead blocker",
-            len(archive_nonterminal), len(gate_dead_blockers),
+            "%d gated record(s) with a dead blocker, "
+            "%d gated record(s) whose blocker id resolves to no handoff",
+            len(archive_nonterminal), len(gate_dead_blockers), len(gate_unresolvable),
         )
 
     emitted_pruned: List[str] = []
@@ -410,6 +532,7 @@ def run(
         "invariant": {
             "archive_nonterminal": archive_nonterminal,
             "gate_dead_blockers": gate_dead_blockers,
+            "gate_unresolvable_blockers": gate_unresolvable,
         },
     }
 

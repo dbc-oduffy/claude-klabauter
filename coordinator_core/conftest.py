@@ -432,6 +432,16 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     if not request.node.get_closest_marker("real_machine_mutation"):
         monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
 
+    # Same shape as `warm-runtime-base` below: the engine data root defaults to
+    # `%LOCALAPPDATA%`, which the HOME/USERPROFILE quarantine does not cover, so a
+    # `real_home` oracle reaching an anchor or cache write would land in the
+    # operator's real data dir. Redirects a data dir, not the home, so it is safe
+    # above the `real_home` return.
+    monkeypatch.setenv(
+        "MACHINE_LOCAL_PATHS_ENGINE_DATA_ROOT",
+        str(tmp_path_factory.mktemp("engine-data-root")),
+    )
+
     if request.node.get_closest_marker("real_home"):
         return None
 

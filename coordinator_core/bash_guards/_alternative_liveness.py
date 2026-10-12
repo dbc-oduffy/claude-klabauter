@@ -131,6 +131,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
 from coordinator_core.bash_guards import dispatch_checks as _dc
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.bash_guards import block_approval_sentinel_creation
 from coordinator_core.bash_guards import block_disarm_marker_sentinel_creation
 from coordinator_core.bash_guards import block_illegal_filename
@@ -166,6 +167,7 @@ from coordinator_core.bash_guards import guard_offer_git_c
 from coordinator_core.bash_guards import guard_plumbing_and_loops
 from coordinator_core.bash_guards import block_fleet_delegation_creation
 from coordinator_core.bash_guards import block_hand_authored_handoff_creation
+from coordinator_core.bash_guards import block_home_root_bash_write
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
 from coordinator_core.bash_guards import guard_repo_setup_claude_home_refusal
 from coordinator_core.bash_guards import guard_host_subagent_bash_ban
@@ -341,7 +343,7 @@ def _trigger_host_subagent_policy_guard(
     box (measured 2026-08-30). A `mkdtemp` plus one small write is the whole
     cost, cleaned up before returning.
     """
-    scratch = tempfile.mkdtemp(prefix="altlive-policy-")
+    scratch = tempfile.mkdtemp(prefix="altlive-policy-", dir=_probe_temp_root())
     try:
         config = Path(scratch) / "coordinator.local.md"
         config.write_text(
@@ -353,6 +355,11 @@ def _trigger_host_subagent_policy_guard(
         from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
         rmtree_or_raise(Path(scratch), label="altlive-policy")
+
+
+def _probe_temp_root() -> str:
+    """Parent for every probe scratch dir: this checkout's managed Temp root."""
+    return str(managed_tempdir(Path(__file__).resolve().parents[2]))
 
 
 def _run(argv: List[str], cwd: str, timeout: int = _PROBE_TIMEOUT_SEC) -> None:
@@ -375,7 +382,7 @@ def _run(argv: List[str], cwd: str, timeout: int = _PROBE_TIMEOUT_SEC) -> None:
 def _scratch_git_repo():
     """A throwaway git repo (one committed file) in a tempdir -- cleaned up
     on every exit path. Never the real working tree."""
-    tmp = tempfile.mkdtemp(prefix="altlive-repo-")
+    tmp = tempfile.mkdtemp(prefix="altlive-repo-", dir=_probe_temp_root())
     try:
         _run(["git", "init", "-q"], cwd=tmp)
         _run(["git", "config", "user.email", "altlive-probe@example.com"], cwd=tmp)
@@ -752,6 +759,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_hand_authored_handoff_creation": lambda: block_hand_authored_handoff_creation.check(
         _payload("echo x > state/handoffs/hand-authored.md", agent_id=None)
     ),
+    "block_home_root_bash_write": lambda: block_home_root_bash_write.check(
+        _payload("echo x > ~/home-root-liveness-probe.txt", agent_id=None)
+    ),
     "guard_repo_setup_claude_home_refusal": lambda: guard_repo_setup_claude_home_refusal.check(
         _payload(
             "python3 -m coordinator_core.install.scaffold_structure --root "
@@ -1090,7 +1100,7 @@ def _isolated_session_scope():
     check -- cleanup after the fact cannot win that race."""
     prior = os.environ.get(_SESSION_SCOPED_ENV_VAR)
     fresh_sid = "altlive-probe-" + uuid.uuid4().hex
-    latch_root = Path(tempfile.mkdtemp(prefix="altlive-latch-"))
+    latch_root = Path(tempfile.mkdtemp(prefix="altlive-latch-", dir=_probe_temp_root()))
     real_latch_path = guard_inprocess_search._latch_path
     os.environ[_SESSION_SCOPED_ENV_VAR] = fresh_sid
     guard_inprocess_search._latch_path = (
@@ -1830,7 +1840,7 @@ def probe_command(alt: Alternative) -> Verdict:
         )
 
     safe_argv = [resolved] + [_dummy_substitute(t) for t in argv[1:]]
-    tmp = tempfile.mkdtemp(prefix="altlive-cmd-")
+    tmp = tempfile.mkdtemp(prefix="altlive-cmd-", dir=_probe_temp_root())
     try:
         try:
             proc = subprocess.run(safe_argv, cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)

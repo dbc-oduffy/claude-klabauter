@@ -81,6 +81,7 @@ from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.content_root import read_content_root
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
@@ -366,7 +367,7 @@ def main(argv: List[str]) -> int:
             print("ERROR: render-template-tree.sh not found or not executable", file=sys.stderr)
             return 1
 
-        staging = tempfile.mkdtemp()
+        staging = tempfile.mkdtemp(dir=managed_tempdir())
         try:
             try:
                 proc = subprocess.run(

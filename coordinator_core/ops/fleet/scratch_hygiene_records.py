@@ -19,6 +19,7 @@ ACTIONS = (
     "skipped-young",
     "skipped-link",
     "skipped-hold-pending",
+    "skipped-budget",
 )
 
 FINDINGS = ("held", "missing-readme", "hold-pending")

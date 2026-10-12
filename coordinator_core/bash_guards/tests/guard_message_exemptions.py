@@ -32,6 +32,8 @@ only.
 
 from __future__ import annotations
 
+import atexit
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -220,8 +222,17 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
     ),
 }
 
+def _mint_scratch(prefix: str) -> Path:
+    """A fixture dir under the corpus scratch parent, removed at interpreter exit."""
+    path = Path(
+        tempfile.mkdtemp(prefix=prefix, dir=guard_message_corpus._neutral_scratch_parent())
+    )
+    atexit.register(shutil.rmtree, str(path), True)
+    return path
+
+
 def _guard_host_subagent_bash_ban_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
+    scratch_dir = _mint_scratch("guard-message-exemption-scratch-")
     (scratch_dir / "coordinator.local.md").write_text(
         "---\nsubagent_bash_policy: deny\n---\n", encoding="utf-8"
     )
@@ -240,7 +251,7 @@ def _guard_host_subagent_bash_ban_fire_fixture() -> Tuple[str, str, str, Dict[st
 
 
 def _guard_host_subagent_bash_spawn_shapes_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
+    scratch_dir = _mint_scratch("guard-message-exemption-scratch-")
     (scratch_dir / "coordinator.local.md").write_text(
         "---\nsubagent_bash_spawn_shapes: deny\n---\n", encoding="utf-8"
     )
@@ -287,7 +298,7 @@ def _grep_via_bash_guard_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], 
 
 
 def _guard_repo_setup_claude_home_refusal_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    home = Path(tempfile.mkdtemp(prefix="guard-message-exemption-home-")) / ".claude"
+    home = _mint_scratch("guard-message-exemption-home-") / ".claude"
     home.mkdir(parents=True, exist_ok=True)
     cmd = "python3 -m coordinator_core.install.scaffold_structure --root %s" % home
     session_id = "guard-message-exemption-%s" % uuid.uuid4().hex

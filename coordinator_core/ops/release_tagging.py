@@ -101,6 +101,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import managed_tempdir
 
 _PathLike = Union[str, Path, None]
 
@@ -205,7 +206,8 @@ def _publish_release(tag: str, repo_root: Path, release_notes: str) -> tuple[boo
         import tempfile
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False, encoding="utf-8"
+            mode="w", suffix=".md", delete=False, encoding="utf-8",
+            dir=managed_tempdir(),
         ) as fh:
             fh.write(release_notes or "")
             notes_file = fh.name

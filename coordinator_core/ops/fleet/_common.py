@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     import asyncio
 
 from coordinator_core.dag import _read_meta, invalidate_git_history_cache
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.git.git_state import head_sha as _read_head_sha
@@ -612,7 +613,7 @@ def _message_with_hookless_trailers(
     hook's own contract that a trailer problem must never block a commit.
     """
     subject_text = subject.rstrip("\n")
-    fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-")
+    fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-", dir=managed_tempdir(worktree_root))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(subject_text + "\n")
@@ -705,9 +706,14 @@ class Move(NamedTuple):
     shipped a correctness regression (an archive-gate bypass on an
     uncommitted `deployment_state: shipped` write — the drift check is the
     ONLY thing that can refuse it once the SHA gate passes).
+
+    src == dst is an in-place rewrite: the caller has already written the new
+    bytes at src (with restage_src=True) and the move only carries them into
+    the batch's one commit. Nothing is renamed or reversed; on a failed
+    commit the caller restores the bytes it wrote.
     """
 
-    src: Path           # absolute source path (must exist and be git-tracked)
+    src: Path          # absolute source path (must exist and be git-tracked)
     dst: Path           # absolute destination path (parent directory will be created)
     candidate_id: str   # repo-relative source path — the wire 'id' (contract §2.1 :209-215)
     force: bool = False  # permit os.replace to clobber an existing dst — lossless-overwrite opt-in only
@@ -2233,6 +2239,13 @@ async def archive_and_commit(
         # syscall that either lands or raises. The single remaining
         # post-move split-failure point is the staging step below.
         for move in moves:
+            if move.src == move.dst:
+                # In-place rewrite: the caller already wrote the new bytes at
+                # src and rides this commit; nothing to rename or mkdir.
+                created_dirs_by_id[move.candidate_id] = []
+                acted.append({"id": move.candidate_id, "archived": True})
+                continue
+
             # Create destination directory — os.replace will not mkdir.
             # Tracked so a failed move (this loop), a failed stage (below),
             # or a failed commit (further below) can remove the empty tree
@@ -2379,7 +2392,8 @@ async def archive_and_commit(
                         continue
                     mode, dst_sha = head_entry[0], head_entry[1]
                 assembled[dst_rel] = (mode, dst_sha)
-                assembled[src_rel] = _ABSENT
+                if src_rel != dst_rel:
+                    assembled[src_rel] = _ABSENT
 
         # A restage_src=False move whose src carries no HEAD tree entry never
         # makes it into `assembled` above -- reverse its os.replace (mirrors
@@ -2465,7 +2479,7 @@ async def archive_and_commit(
                 worktree_root,
                 [str(m.dst) for m in moves if m.candidate_id in acted_ids],
             )
-            msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-")
+            msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-", dir=managed_tempdir(worktree_root))
             try:
                 with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as handle:
                     handle.write(message)
@@ -2526,6 +2540,10 @@ async def archive_and_commit(
             # Reverse all acted renames on disk — commit failed, nothing was committed.
             orphaned_reversal_ids = set()
             for move in moves:
+                if move.src == move.dst:
+                    # In-place rewrite: nothing was renamed, so nothing to
+                    # reverse here; the caller restores the bytes it wrote.
+                    continue
                 if move.candidate_id in acted_ids:
                     if move.dst.exists() and not move.src.exists():
                         try:
@@ -2801,7 +2819,7 @@ async def rm_and_commit(
         except ValueError:
             return None
 
-    idx_fd, idx_path = tempfile.mkstemp(prefix="fleet-git-idx-")
+    idx_fd, idx_path = tempfile.mkstemp(prefix="fleet-git-idx-", dir=managed_tempdir(worktree_root))
     os.close(idx_fd)
 
     # Holder for the in-flight pathspec-less commit, read by the `finally:`
@@ -2958,7 +2976,7 @@ async def rm_and_commit(
             assembled: Dict[str, Union[Tuple[int, str], object]] = {
                 rid: _ABSENT for _, rid in reaped_pairs
             }
-            msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-")
+            msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-", dir=managed_tempdir(worktree_root))
             try:
                 with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as handle:
                     handle.write(message)

@@ -504,7 +504,11 @@ def test_a_clean_repo_returns_both_invariant_lists_empty(tmp_path):
 
     result = cycle.run(root, cap=10)
 
-    assert result["invariant"] == {"archive_nonterminal": [], "gate_dead_blockers": []}
+    assert result["invariant"] == {
+        "archive_nonterminal": [],
+        "gate_dead_blockers": [],
+        "gate_unresolvable_blockers": [],
+    }
 
 
 def test_an_archived_in_flight_record_is_reported_nonterminal(tmp_path):
@@ -522,7 +526,7 @@ def test_an_archived_in_flight_record_is_reported_nonterminal(tmp_path):
     ]
 
 
-def test_a_gate_naming_no_record_is_a_dead_blocker_even_when_close_is_false(tmp_path):
+def test_a_gate_naming_no_record_is_unresolvable_not_dead_even_when_close_is_false(tmp_path):
     root = _init_repo(tmp_path / "repo")
     gated = root / "state" / "handoffs" / "2026-06-01_00004_gated.md"
     _write_frontmatter(
@@ -540,7 +544,8 @@ def test_a_gate_naming_no_record_is_a_dead_blocker_even_when_close_is_false(tmp_
 
     assert result["closed"] == 0
     assert gated.read_text(encoding="utf-8") == before
-    assert result["invariant"]["gate_dead_blockers"] == [
+    assert result["invariant"]["gate_dead_blockers"] == []
+    assert result["invariant"]["gate_unresolvable_blockers"] == [
         {
             "id": "state/handoffs/2026-06-01_00004_gated.md",
             "blocker_id": "no-such-stub",

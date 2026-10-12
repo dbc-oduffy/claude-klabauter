@@ -91,6 +91,7 @@ import tempfile
 from pathlib import Path
 
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.win_portability import no_console_creationflags
 
 from .gate_report import parse_junitxml, parse_vitest_json
@@ -289,7 +290,7 @@ def run_selected(
     pytest_timeout_s: float = _DEFAULT_PYTEST_TIMEOUT_S,
 ) -> dict | None:
     if runner == "pytest":
-        tmp_dir = tempfile.mkdtemp(prefix="source-edit-gate-pytest-")
+        tmp_dir = tempfile.mkdtemp(prefix="source-edit-gate-pytest-", dir=managed_tempdir(repo_root))
         try:
             junit_path = Path(tmp_dir) / "source-edit-gate-report.xml"
             basetemp_path = Path(tmp_dir) / "basetemp"
@@ -321,7 +322,7 @@ def run_selected(
         vitest_bin = shutil.which("pnpm") or shutil.which("npx")
         if not vitest_bin:
             return None
-        tmp_dir = tempfile.mkdtemp(prefix="source-edit-gate-vitest-")
+        tmp_dir = tempfile.mkdtemp(prefix="source-edit-gate-vitest-", dir=managed_tempdir(repo_root))
         try:
             out_path = Path(tmp_dir) / "source-edit-gate-report.json"
             argv = [

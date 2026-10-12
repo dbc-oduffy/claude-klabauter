@@ -60,6 +60,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.git.content_hash import (
     _autocrlf_checkin_normalize,
     _repo_autocrlf_true,
@@ -178,7 +179,7 @@ def _rollback_unwritten_file(target_file: Path) -> str:
 
 
 def _write_msg_file(text: str) -> Path:
-    fd, name = tempfile.mkstemp(prefix="memo-heal-msg-", suffix=".txt")
+    fd, name = tempfile.mkstemp(prefix="memo-heal-msg-", suffix=".txt", dir=managed_tempdir())
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)

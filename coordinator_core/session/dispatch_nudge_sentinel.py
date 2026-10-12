@@ -2,8 +2,8 @@
 coordinator_core.session.dispatch_nudge_sentinel — single-source resolver for
 the ``.dispatch-nudge-ok`` suppression sentinel, keyed by session id.
 
-This sentinel has exactly ONE home: the platform temp directory, resolved via
-``tempfile.gettempdir()``. Nothing in either repo (claude-klabauter or
+This sentinel's home is ``<gettempdir()>/coordinator/_fleet/``; a file already
+at the legacy bare-Temp location is still honoured (dual-read window). Nothing in either repo (claude-klabauter or
 Coordinator-content-repo) writes any other home — verified by census, not assumed. The
 reader ``nudge_em_code_dispatch.py`` historically carried a second, git-tree
 candidate location (``<repo_root>/coordinator-sessions/<sid>/.dispatch-nudge-ok``)
@@ -43,17 +43,22 @@ Negative-spec:
       directly at a new call site for this sentinel — import and call
       ``sentinel_path()`` so there is exactly one place this convention can
       drift again.
-    - Do NOT add a second candidate location or re-introduce an OR-list of
-      candidate homes for this sentinel — it has exactly one home.
+    - Do NOT add a candidate location beyond the fleet home and the legacy
+      bare-Temp read inside ``sentinel_path()``.
 """
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
+
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 _SENTINEL_PREFIX = "coordinator-dispatch-nudge-ok-"
 
 
 def sentinel_path(session_id: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}{session_id}"
+    """Path for ``session_id``: the legacy bare-Temp file while it exists, else the fleet path."""
+    legacy = legacy_top_level_path(f"{_SENTINEL_PREFIX}{session_id}")
+    if legacy.exists():
+        return legacy
+    return managed_tempdir() / f"{_SENTINEL_PREFIX}{session_id}"

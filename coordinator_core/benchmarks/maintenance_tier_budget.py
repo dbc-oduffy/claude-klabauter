@@ -11,8 +11,20 @@ import time
 from pathlib import Path
 
 from coordinator_core.git.run import run_git
+from coordinator_core.temp_layout import managed_tempdir
 
-SCRATCH_ROOT = Path(tempfile.gettempdir()) / "coordinator-falsifier"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def scratch_root() -> Path:
+    """Falsifier scratch dir under the per-repo managed Temp root, resolved per call."""
+    return managed_tempdir(_REPO_ROOT) / "coordinator-falsifier"
+
+
+def __getattr__(name: str):
+    if name == "SCRATCH_ROOT":
+        return scratch_root()
+    raise AttributeError(name)
 
 _TIER_BUDGET_SAMPLES = 3
 _TIER_BUDGET_CHURN = 200
@@ -78,8 +90,14 @@ def _churn(repo: Path, commits: int) -> None:
     run_git(["fast-import", "--quiet"], cwd=str(repo), input=b"".join(parts))
 
 
+def _ensure_scratch_root() -> Path:
+    root = scratch_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _make_throwaway_clone() -> Path:
-    work = Path(tempfile.mkdtemp(prefix="falsifier-worktree-", dir=str(SCRATCH_ROOT)))
+    work = Path(tempfile.mkdtemp(prefix="falsifier-worktree-", dir=str(_ensure_scratch_root())))
     run_git(["init", "-q"], cwd=str(work))
     (work / "seed.txt").write_text("seed\n", encoding="utf-8", newline="\n")
     run_git(["add", "seed.txt"], cwd=str(work))

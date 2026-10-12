@@ -60,6 +60,7 @@ from coordinator_core.ops.distill_scope import (
     render_summary,
     slugify_stem,
     wiki_slugs_as_dict,
+    workflow_input,
     write_scope_manifest,
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
@@ -326,25 +327,19 @@ def test_pm_ruling_cohort_specs_reproduces_ruling_as_config(fixture_repo):
     assert cohorts["completed"] == [
         "archive/completed/2026-08/2026-08-01-done.md"
     ]
-    assert cohorts["week_changelog"] == ["state/week-changelog/2026-08-03.md"]
     assert modes["completed"] == "harvest"
-    assert modes["week_changelog"] == "harvest"
+    assert "week_changelog" not in cohorts
 
     # memo-one now carries a promote-signal distill_fate and is included;
     # memo-two never got a distill_fate field and is excluded.
     assert cohorts["memos"] == ["cross-repo/archive/2026-07-01-memo-one.md"]
 
-    # archived handoffs are check-only: still reported...
-    assert cohorts["handoffs"] == [
-        "archive/handoffs/2026-07-01-eligible.md",
-        "archive/handoffs/2026-07-05-claimed.md",
-    ]
-    assert modes["handoffs"] == "check-only"
-    # ...but never batched for harvest.
+    # archived handoffs are no cohort at all, and never batched for harvest.
+    assert "handoffs" not in cohorts
     flat_batched = {p for batch in result.manifest["batches"] for p in batch}
     assert "archive/handoffs/2026-07-01-eligible.md" not in flat_batched
     assert "archive/completed/2026-08/2026-08-01-done.md" in flat_batched
-    assert "state/week-changelog/2026-08-03.md" in flat_batched
+    assert "state/week-changelog/2026-08-03.md" not in flat_batched
     assert "cross-repo/archive/2026-07-01-memo-one.md" in flat_batched
 
 
@@ -371,6 +366,16 @@ def test_write_scope_manifest_writes_valid_json(fixture_repo):
     loaded = json.loads(written.read_text(encoding="utf-8"))
     assert next(iter(loaded)) == "schema_version"
     assert loaded["run_id"] == "2026-07-23-01h00"
+
+
+def test_workflow_input_matches_distill_harvest_input_shape(fixture_repo):
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", batch_size=2)
+    wf = workflow_input(result.manifest, fixture_repo)
+    assert wf["runId"] == "2026-07-23-01h00"
+    assert wf["wikiDirs"] == result.manifest["wiki_dirs"]
+    assert isinstance(wf["wikiSlugs"], dict)
+    assert [b["files"] for b in wf["batches"]] == result.manifest["batches"]
+    assert wf["wikiSlugCount"] == len(wf["wikiSlugs"])
 
 
 def test_write_scope_manifest_write_confined_to_own_run_id(fixture_repo):

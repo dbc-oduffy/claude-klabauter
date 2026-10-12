@@ -16,6 +16,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
@@ -45,7 +46,7 @@ def main() -> int:
         print(f"gate script not found: {GATE}", file=sys.stderr)
         return 2
 
-    repo = Path(tempfile.mkdtemp())
+    repo = Path(tempfile.mkdtemp(dir=managed_tempdir()))
     try:
         return _run_smoke(repo)
     finally:

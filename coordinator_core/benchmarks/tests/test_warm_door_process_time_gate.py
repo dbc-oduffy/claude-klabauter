@@ -194,6 +194,7 @@ from coordinator_core.warm.tests.door_test_support import (
     resolve_stamped_source_root,
 )
 from coordinator_core.session.core import stable_pid_alive
+from coordinator_core.temp_layout import managed_tempdir
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -488,7 +489,7 @@ def _short_runtime_base() -> Path:
     returned directory."""
     from coordinator_core.warm.election import SUN_PATH_MAX_BYTES
 
-    roots = [r for r in ("/tmp", tempfile.gettempdir()) if os.path.isdir(r)]
+    roots = [r for r in ("/tmp", str(managed_tempdir())) if os.path.isdir(r)]
     roots.sort(key=lambda r: len(os.fsencode(os.path.realpath(r))))
     base = Path(os.path.realpath(tempfile.mkdtemp(prefix="warm-door-gate-rtb-", dir=roots[0])))
 

@@ -1760,3 +1760,37 @@ def test_a_common_dir_that_is_not_a_git_dir_is_a_caller_error(repo: Path):
             call()
         assert "common_dir" in str(excinfo.value)
         assert "--git-common-dir" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# The cascade_terminal shape: open, never claimed, shipped, stale plan-blitz hold
+# ---------------------------------------------------------------------------
+
+_CASCADE_SHIPPED_FM = (
+    "status: open\n"
+    "deployment_state: shipped\n"
+    "advanced_by: dlv-x-000000\n"
+    "pickup_ready: false\n"
+    'plan_blitz_hold_reason: "plan-blitz fire in flight"\n'
+    'plan_blitz_hold_cite: "scratch/r2c/fire-0-1.mjs.emitted.json"\n'
+    "shipped_in: {sha}\n"
+    "shipped_in_kind: ship-commit"
+)
+
+
+def test_cascade_terminal_shape_is_terminal_to_scan_and_to_the_cycle(repo: Path):
+    """`deliverable.cascade_terminal` flips a baton to shipped without ever
+    claiming it and leaves its plan-blitz hold behind. Neither fact is a
+    terminality input: the sweep keys on `deployment_state` alone."""
+    from coordinator_core.housekeeping import cycle
+
+    sha = _git(repo, "rev-parse", "--short=8", "HEAD").stdout.strip()
+    name = "2026-10-10-cascade-shipped.md"
+    _seed(repo, name, _CASCADE_SHIPPED_FM.format(sha=sha))
+
+    assert _cid(name) not in _scan_reasons(repo)
+
+    result = cycle.run(repo, 10, close=False)
+
+    assert _cid(name) in result["archived"], result
+    assert list((repo / "archive" / "handoffs").rglob(name))

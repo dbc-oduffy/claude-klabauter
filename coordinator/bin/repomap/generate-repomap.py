@@ -196,8 +196,12 @@ def get_git_tracked_files(project_root: Path) -> list[str] | None:
             file=sys.stderr,
         )
         raise RuntimeError(f"git ls-files failed: rc={result.returncode}")
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except FileNotFoundError:
         return None
+    except subprocess.TimeoutExpired as exc:
+        # Never "not a git repo": that reading falls back to a whole-tree walk, which
+        # enumerates every ignored scratch file the tracked list exists to exclude.
+        raise RuntimeError("git ls-files timed out after 30s") from exc
 
 
 def is_binary_file(path: Path) -> bool:
@@ -695,62 +699,97 @@ class TreeSitterParser:
         return (defs, refs)
 
 
-def get_git_log_data(
-    project_root: Path, files: list[str]
-) -> dict[str, dict]:
-    now = datetime.now(timezone.utc)
-    result = {}
+_GIT_LOG_CACHE_NAME = "git-log-stamps.json"
+_GIT_LOG_WINDOW_DAYS = 365
 
+
+def _git_change_stamps(project_root: Path, rev_range: str | None) -> dict[str, list[float]] | None:
+    """{path: [author epoch, ...]} for every commit in `rev_range` (or the last year when
+    None). None when git fails, so the caller can fall back instead of caching a gap."""
+    args = ["git", "log", "--format=%H %at", "--name-only", "--no-renames", "--diff-filter=ACDM"]
+    args.append(rev_range if rev_range else f"--since={_GIT_LOG_WINDOW_DAYS} days ago")
     try:
         log_output = subprocess.run(
-            [
-                "git", "log", "--format=%H %aI", "--name-only",
-                "--diff-filter=ACDMR", "--since=365 days ago",
-            ],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            **_no_console_kw(),
+            args, cwd=project_root, capture_output=True, text=True, timeout=60, **_no_console_kw(),
         )
-        if log_output.returncode != 0:
-            return result
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return result
-
-    file_set = set(files)
-    last_change = {}
-    commits_90d: dict[str, int] = {}
-    current_date = None
-
+        return None
+    if log_output.returncode != 0:
+        return None
+    stamps: dict[str, list[float]] = {}
+    current: float | None = None
     for line in log_output.stdout.splitlines():
         line = line.strip()
         if not line:
             continue
-        first_token = line.split()[0] if line.split() else ""
-        if " " in line and len(first_token) in (40, 64) and all(c in '0123456789abcdef' for c in first_token):
-            parts = line.split(" ", 1)
-            try:
-                current_date = datetime.fromisoformat(parts[1])
-            except (ValueError, IndexError):
-                current_date = None
+        head, _, tail = line.partition(" ")
+        if tail.isdigit() and len(head) in (40, 64) and all(c in "0123456789abcdef" for c in head):
+            current = float(tail)
             continue
-        if line in file_set and current_date:
-            if line not in last_change:
-                last_change[line] = current_date
-            days_ago = (now - current_date).total_seconds() / 86400
-            if days_ago <= 90:
-                commits_90d[line] = commits_90d.get(line, 0) + 1
+        if current is not None:
+            stamps.setdefault(line, []).append(current)
+    return stamps
 
+
+def _git_head(project_root: Path) -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_root, capture_output=True, text=True, timeout=30, **_no_console_kw(),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
+
+
+def get_git_log_data(
+    project_root: Path, files: list[str], cache_dir: Path | None = None
+) -> dict[str, dict]:
+    """Recency and 90-day frequency per file. A year of history is ~40k commit diffs on a
+    busy repo, so the stamps are cached by HEAD and only `<cached-head>..HEAD` is read."""
+    now = datetime.now(timezone.utc).timestamp()
+    head = _git_head(project_root)
+    cache_path = cache_dir / _GIT_LOG_CACHE_NAME if cache_dir is not None else None
+
+    stamps: dict[str, list[float]] | None = None
+    if head and cache_path is not None and cache_path.is_file():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached["head"] == head:
+                stamps = cached["stamps"]
+            else:
+                # A rewritten or unknown cached head makes the range fail: full read below.
+                fresh = _git_change_stamps(project_root, f"{cached['head']}..{head}")
+                if fresh is not None:
+                    stamps = cached["stamps"]
+                    for path, values in fresh.items():
+                        stamps.setdefault(path, []).extend(values)
+        except (OSError, ValueError, KeyError, TypeError):
+            stamps = None
+    if stamps is None:
+        stamps = _git_change_stamps(project_root, None)
+        if stamps is None:
+            return {}
+
+    floor = now - _GIT_LOG_WINDOW_DAYS * 86400
+    stamps = {path: kept for path, values in stamps.items() if (kept := [v for v in values if v >= floor])}
+    if head and cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"head": head, "stamps": stamps}), encoding="utf-8")
+            os.replace(tmp, cache_path)
+        except OSError:
+            pass
+
+    result = {}
+    recent_floor = now - 90 * 86400
     for f in files:
-        days = 365.0
-        if f in last_change:
-            days = max(0.0, (now - last_change[f]).total_seconds() / 86400)
+        values = stamps.get(f)
         result[f] = {
-            "last_change_days": days,
-            "commits_90d": commits_90d.get(f, 0),
+            "last_change_days": max(0.0, (now - max(values)) / 86400) if values else 365.0,
+            "commits_90d": sum(1 for v in values if v >= recent_floor) if values else 0,
         }
-
     return result
 
 
@@ -877,26 +916,33 @@ def pagerank(
     if n == 0:
         return {}
 
-    scores = {node: 1.0 / n for node in nodes}
-
-    in_edges: dict[str, list[tuple[str, float]]] = {node: [] for node in nodes}
-    out_degree: dict[str, float] = {node: 0.0 for node in nodes}
+    # Push form over integer ids: each edge is one multiply-add per iteration. The pull
+    # form re-divided by out-degree and re-hashed two dicts per edge, which on a 2.3M-edge
+    # graph was most of the generator's runtime.
+    order = list(nodes)
+    index = {node: i for i, node in enumerate(order)}
+    out_edges: list[tuple[list[int], list[float]]] = [([], []) for _ in order]
     for src, targets in graph.items():
         total_weight = sum(targets.values())
-        out_degree[src] = total_weight
+        if total_weight <= 0:
+            continue
+        tgt_ids, shares = out_edges[index[src]]
         for tgt, weight in targets.items():
-            in_edges[tgt].append((src, weight))
+            tgt_ids.append(index[tgt])
+            shares.append(damping * weight / total_weight)
 
+    base = (1 - damping) / n
+    rank = [1.0 / n] * n
     for _ in range(iterations):
-        new_scores = {}
-        for node in nodes:
-            rank_sum = sum(
-                scores[src] * (weight / out_degree[src])
-                for src, weight in in_edges[node]
-                if out_degree[src] > 0
-            )
-            new_scores[node] = (1 - damping) / n + damping * rank_sum
-        scores = new_scores
+        new_rank = [base] * n
+        for src_id, (tgt_ids, shares) in enumerate(out_edges):
+            if not tgt_ids:
+                continue
+            mass = rank[src_id]
+            for tgt_id, share in zip(tgt_ids, shares):
+                new_rank[tgt_id] += mass * share
+        rank = new_rank
+    scores = dict(zip(order, rank))
 
     sorted_nodes = sorted(scores.keys(), key=lambda nd: scores[nd])
     return {node: (rank + 1) / n for rank, node in enumerate(sorted_nodes)}
@@ -1267,7 +1313,7 @@ def generate_task_scoped_map(
     )
 
     if is_git:
-        ranking_data = get_git_log_data(project_root, valid_files)
+        ranking_data = get_git_log_data(project_root, valid_files, cache_dir)
     else:
         ranking_data = get_filesystem_ranking(project_root, valid_files)
 
@@ -1457,7 +1503,7 @@ def generate_repomap(
     )
 
     if is_git:
-        ranking_data = get_git_log_data(project_root, valid_files)
+        ranking_data = get_git_log_data(project_root, valid_files, cache_dir)
     else:
         ranking_data = get_filesystem_ranking(project_root, valid_files)
 

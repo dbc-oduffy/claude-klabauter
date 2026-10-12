@@ -19,6 +19,13 @@ import tempfile
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_temp(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
 
 def test_op_registers_and_resolves_through_op_for_path() -> None:
     module = importlib.import_module(

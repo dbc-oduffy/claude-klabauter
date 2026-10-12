@@ -312,7 +312,7 @@ def test_verify_stamp_and_throttle_refuses_sha_drift():
 def test_verify_stamp_and_throttle_refuses_unacknowledged_mass_throttle():
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")], mass_throttle=True)
     stamped = _stamped(manifest, note="approved, no special mention")
-    with pytest.raises(ApplyDisposalError, match="mass_throttle"):
+    with pytest.raises(ApplyDisposalError, match="re-assemble it, then stamp"):
         verify_stamp_and_throttle(stamped)
 
 

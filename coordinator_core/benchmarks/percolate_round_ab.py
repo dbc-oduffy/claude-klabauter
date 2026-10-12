@@ -92,6 +92,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS
+from coordinator_core.temp_layout import managed_tempdir
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -451,7 +452,7 @@ def _default_scratch_root() -> Path:
     env_scratch = os.environ.get("CLAUDE_SCRATCHPAD")
     if env_scratch:
         return Path(env_scratch)
-    return Path(tempfile.gettempdir())
+    return managed_tempdir(_REPO_ROOT)
 
 
 def measure_real_round_gate(

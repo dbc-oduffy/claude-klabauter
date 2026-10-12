@@ -155,8 +155,8 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
 import unicodedata
+from coordinator_core.temp_layout import managed_tempdir
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -429,7 +429,7 @@ def _commit_delivery(
     old_head = old_head_result.stdout.strip()
 
     temp_index = (
-        Path(tempfile.gettempdir()) / f"git-index-propagate-{os.getpid()}-{uuid.uuid4().hex}"
+        managed_tempdir(worktree) / f"git-index-propagate-{os.getpid()}-{uuid.uuid4().hex}"
     )
     private_env: Dict[str, str] = dict(os.environ)
     private_env["GIT_INDEX_FILE"] = str(temp_index)

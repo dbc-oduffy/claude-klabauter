@@ -89,7 +89,7 @@ from typing import Mapping
 
 import yaml
 
-from coordinator_core.distill._common import active_reference_guard, read_fm_field, split_frontmatter
+from coordinator_core.distill._common import active_reference_guard, files_citing, read_fm_field, split_frontmatter
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.wire_paths import rel_id
 
@@ -223,7 +223,7 @@ class DeleteCandidate:
 
 
 def classify_artifact(frontmatter_text: str, path: Path, repo_root: Path) -> str | None:
-    """Classify a candidate as "memo" or "handoff" (None if unresolvable).
+    """Classify a candidate as "memo", "handoff", "completion" or "plan" (None if unresolvable).
 
     Frontmatter SHAPE is primary — it survives relocation (a memo swept from
     cross-repo/inbox/ to cross-repo/archive/ keeps its shape) and matches how the
@@ -257,7 +257,16 @@ def classify_artifact(frontmatter_text: str, path: Path, repo_root: Path) -> str
         return "memo"
     if "handoffs" in parts:
         return "handoff"
+    # Harvested classes carry no distinguishing frontmatter shape; the tree is the claim.
+    if "completed" in parts and "archive" in parts:
+        return "completion"
+    if _adjacent(parts, "archive", "specs") or _adjacent(parts, "docs", "plans"):
+        return "plan"
     return None
+
+
+def _adjacent(parts: tuple[str, ...], first: str, second: str) -> bool:
+    return any(a == first and b == second for a, b in zip(parts, parts[1:]))
 
 
 def check_shipped_in(frontmatter_text: str) -> GuardResult:
@@ -788,6 +797,80 @@ def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path)
     )
 
 
+#: Plan statuses the plan class can clear. A delivered plan must also be harvested; a plan
+#: that was never delivered is never harvested, so it carries no harvest condition.
+PLAN_DELIVERED_STATUSES = frozenset({"implemented"})
+PLAN_NEVER_DELIVERED_STATUSES = frozenset({"superseded", "abandoned", "cancelled"})
+
+#: `scratch`/`scratch-hold` hold stale tree copies: `rg` searches an explicitly named path even
+#: when it is gitignored, and a copy's citation is not a dependency.
+_LIVE_SCOPE_SKIP_TOP = frozenset({"archive", "state", "docs", "node_modules", "scratch", "scratch-hold"})
+_LIVE_SCOPE_SKIP_DOCS = frozenset({"wiki", "decisions"})
+_LIVE_SCOPE_EXTRA = ("archive/specs", "state/handoffs")
+
+
+def live_reference_scope(repo_root: Path) -> list[str]:
+    """Where a citation of a harvested artifact is a dependency: code and test trees, tasks,
+    every docs/ entry except the harvest targets, archived specs and live handoffs. Excluded
+    by construction: docs/wiki and docs/decisions (a citation there is the harvest record)
+    and the dated logs under archive/ and state/ (point-in-time records, never rewritten)."""
+    scope: list[str] = []
+    try:
+        top = sorted(e.name for e in repo_root.iterdir() if e.is_dir() and not e.name.startswith("."))
+    except OSError:
+        top = []
+    scope.extend(name for name in top if name not in _LIVE_SCOPE_SKIP_TOP)
+    docs = repo_root / "docs"
+    if docs.is_dir():
+        scope.extend(f"docs/{e.name}" for e in sorted(docs.iterdir()) if e.name not in _LIVE_SCOPE_SKIP_DOCS)
+    scope.extend(_LIVE_SCOPE_EXTRA)
+    return scope
+
+
+@dataclass(frozen=True)
+class CitationPrefetch:
+    """Citing files per candidate needle, read once for a whole batch (`prefetch_citations`)."""
+
+    live: Mapping[str, list[str]]
+    harvest: Mapping[str, list[str]]
+
+
+def prefetch_citations(needles: list[str], repo_root: Path) -> CitationPrefetch:
+    """Two `rg` spawns for any number of candidates, in place of two per candidate."""
+    return CitationPrefetch(
+        live=files_citing(needles, repo_root, live_reference_scope(repo_root)),
+        harvest=files_citing(needles, repo_root, list(_HARVEST_PROVENANCE_SCOPE)),
+    )
+
+
+def check_plan_status(frontmatter_text: str) -> GuardResult:
+    """Plan class: only a plan whose work is over is deletable; an open one fails closed."""
+    value = read_fm_field(frontmatter_text, "status")
+    if value in PLAN_DELIVERED_STATUSES or value in PLAN_NEVER_DELIVERED_STATUSES:
+        return GuardResult("plan-status", True, f"status={value}")
+    return GuardResult("plan-status", False, f"status={value!r} is not a finished plan status")
+
+
+def check_live_reference(needle: str, citations: CitationPrefetch) -> GuardResult:
+    """Harvested classes: no file in `live_reference_scope` other than the candidate itself
+    may cite its repo-relative path. A test that opens the path is such a citation."""
+    citing = [f for f in citations.live.get(needle, []) if f != needle]
+    if citing:
+        return GuardResult("active-reference", False, f"still referenced by: {', '.join(citing[:3])}")
+    return GuardResult("active-reference", True, "no live references found")
+
+
+def check_harvest_citation(needle: str, citations: CitationPrefetch) -> GuardResult:
+    """Harvested classes: a docs/wiki or docs/decisions file must cite the candidate's full
+    repo-relative path. A distillation-log row is not proof the content reached a guide."""
+    citing = citations.harvest.get(needle, [])
+    if citing:
+        return GuardResult("harvest-provenance", True, f"cited by: {citing[0]}")
+    return GuardResult(
+        "harvest-provenance", False, f"no docs/wiki or docs/decisions citation found for {needle}"
+    )
+
+
 def _cites_only_memory_pointer(basis_refs: tuple[str, ...]) -> bool:
     """#12 memory-pointer exclusion check: True if `basis_refs` is non-empty and
     EVERY entry is a `~/.claude`-rooted path (no other basis reference present)."""
@@ -804,6 +887,7 @@ def evaluate_candidate_detailed(
     path: Path,
     repo_root: Path,
     existence_map: Mapping[str, bool] | None = None,
+    citations: CitationPrefetch | None = None,
 ) -> tuple[str | None, list[GuardResult]]:
     """Run the CLASS-APPLICABLE mechanical guard set (per `classify_artifact`)
     against one on-disk candidate and return `(artifact_class, guard_results)`
@@ -861,6 +945,19 @@ def evaluate_candidate_detailed(
         needle = path.name
 
     artifact_class = classify_artifact(frontmatter_text, path, repo_root)
+
+    if artifact_class in ("completion", "plan"):
+        # Neither class takes the memo guards (realized_by, commitment-closure, distill-fate).
+        citations = citations if citations is not None else prefetch_citations([needle], repo_root)
+        harvested: list[GuardResult] = []
+        needs_harvest = True
+        if artifact_class == "plan":
+            harvested.append(check_plan_status(frontmatter_text))
+            needs_harvest = read_fm_field(frontmatter_text, "status") not in PLAN_NEVER_DELIVERED_STATUSES
+        harvested.append(check_live_reference(needle, citations))
+        if needs_harvest:
+            harvested.append(check_harvest_citation(needle, citations))
+        return artifact_class, harvested
 
     guard_results: list[GuardResult] = []
     if artifact_class == "handoff":

@@ -805,11 +805,19 @@ def test_absent_appetite_succeeds_and_omits_appetite_detents(tshirt):
     assert "appetite_exceeded" not in decision["detents"]
 
 
-@pytest.mark.parametrize("tshirt", ["M", "L", "XL"])
-def test_absent_appetite_sets_post_size_prompt_pending_at_m_and_above(tshirt):
-    # AC4.
-    decision = sa.route(estimate={"tshirt": tshirt})
+def test_absent_appetite_sets_post_size_prompt_pending_at_xl():
+    # AC4, narrowed by the 2026-10-10 PM ruling: below XL a plan route is never asked.
+    decision = sa.route(estimate={"tshirt": "XL"})
     assert "post_size_prompt_pending" in decision["detents"]
+
+
+@pytest.mark.parametrize("tshirt", ["M", "L"])
+def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
+    decision = sa.route(estimate={"tshirt": tshirt})
+    assert decision["route"] == "plan"
+    assert "post_size_prompt_pending" not in decision["detents"]
+    assert "?" not in decision["next_move"]
+    assert "emit-wave-fire" in decision["next_move"]
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])
@@ -828,7 +836,7 @@ def test_absent_appetite_omits_post_size_prompt_pending_below_m(tshirt):
 def test_absent_appetite_next_move_excludes_closed_fork_tokens():
     # AC6: the open question never contains the closed cut_to_fit/
     # raise_appetite pair.
-    decision = sa.route(estimate={"tshirt": "M"})
+    decision = sa.route(estimate={"tshirt": "XL"})
     assert "post_size_prompt_pending" in decision["detents"]
     assert "cut_to_fit" not in decision["next_move"]
     assert "raise_appetite" not in decision["next_move"]
@@ -878,7 +886,7 @@ def test_absent_appetite_next_move_question_precedes_premise_advisory():
     # AC6: ordering — when both the open question and a premise advisory
     # apply, the question comes first.
     decision = sa.route(
-        estimate={"tshirt": "L"}, premise_provenance="read"
+        estimate={"tshirt": "XL"}, premise_provenance="read"
     )
     assert "post_size_prompt_pending" in decision["detents"]
     assert "premise_unproven" in decision["detents"]

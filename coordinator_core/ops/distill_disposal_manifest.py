@@ -78,8 +78,10 @@ from coordinator_core.distill import log_append as _log_append
 from coordinator_core.distill import manifest_render as _render
 from coordinator_core.distill import manifest_schema as _schema
 from coordinator_core.distill.delete_guard import (
+    CitationPrefetch,
     _cites_only_memory_pointer,
     evaluate_candidate_detailed,
+    prefetch_citations,
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -129,14 +131,17 @@ GROUP_THRESHOLD: int = 50
 
 
 def evaluate_candidate_receipts(
-    path: Path, repo_root: Path, basis_refs: tuple[str, ...] = ()
+    path: Path,
+    repo_root: Path,
+    basis_refs: tuple[str, ...] = (),
+    citations: CitationPrefetch | None = None,
 ) -> dict[str, Any]:
     try:
         needle = rel_id(path, repo_root)
     except ValueError:
         needle = path.name
 
-    artifact_class, guard_results = evaluate_candidate_detailed(path, repo_root)
+    artifact_class, guard_results = evaluate_candidate_detailed(path, repo_root, citations=citations)
 
     blocked_by = [r.guard for r in guard_results if not r.passed]
     if artifact_class is None:
@@ -188,6 +193,9 @@ def compute_disposal_manifest(
 ) -> DisposalManifestResult:
     rows: list[dict[str, Any]] = []
     eligible_paths: list[str] = []
+    citations = prefetch_citations(
+        [_normalize_candidate(entry)[0].replace(chr(92), "/") for entry in candidates], worktree_root
+    )
 
     for entry in candidates:
         rel_path, basis_refs = _normalize_candidate(entry)
@@ -210,7 +218,7 @@ def compute_disposal_manifest(
             )
             continue
 
-        receipt = evaluate_candidate_receipts(abs_path, worktree_root, basis_refs)
+        receipt = evaluate_candidate_receipts(abs_path, worktree_root, basis_refs, citations)
 
         log_row = ""
         row_kwargs: dict[str, Any] = {

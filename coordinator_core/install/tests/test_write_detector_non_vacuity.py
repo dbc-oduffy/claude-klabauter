@@ -572,14 +572,12 @@ def _build_branch_fixtures(tmp_dir: Path) -> dict[tuple[str, str], tuple[bool, b
     return fixtures
 
 
-def _fixture_dir() -> Path:
-    global _FIXTURE_TMPDIR
-    _FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
-    return Path(_FIXTURE_TMPDIR.name)
+def _build_fixtures_in_scratch() -> dict[tuple[str, str], tuple[bool, bool]]:
+    with tempfile.TemporaryDirectory() as scratch:
+        return _build_branch_fixtures(Path(scratch))
 
 
-_FIXTURE_TMPDIR: tempfile.TemporaryDirectory | None = None
-_BRANCH_FIXTURES: dict[tuple[str, str], tuple[bool, bool]] = _build_branch_fixtures(_fixture_dir())
+_BRANCH_FIXTURES: dict[tuple[str, str], tuple[bool, bool]] = _build_fixtures_in_scratch()
 
 
 def test_every_branch_site_has_a_fixture() -> None:

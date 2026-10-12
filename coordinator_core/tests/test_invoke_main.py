@@ -62,7 +62,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -365,8 +364,8 @@ def test_worktree_scoped_op_dispatches_inside_repo():
     )
 
 
-def test_none_scoped_outside_git_tree():
-    tmp_dir = tempfile.mkdtemp(dir=tempfile.gettempdir(), prefix="cc_invoke_test_")
+def test_none_scoped_outside_git_tree(tmp_path):
+    tmp_dir = str(tmp_path)
     try:
         probe = subprocess.run(
             ["git", "-C", tmp_dir, "rev-parse", "--git-dir"],

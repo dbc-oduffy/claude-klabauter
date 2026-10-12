@@ -191,6 +191,16 @@ def test_empty_pathspec_is_refused_never_defaulted(tmp_path):
         gcommit.commit_paths(repo, [], "nothing")
 
 
+@pytest.mark.parametrize("rel", [".git/coordinator-sessions/sid/review-targets.txt", "sub/.GIT/x"])
+def test_dotgit_path_component_is_refused(tmp_path, rel):
+    repo = _repo(tmp_path)
+    target = repo / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x\n", encoding="utf-8", newline="\n")
+    with pytest.raises(gcommit.CommitRefused, match="'.git' path component"):
+        gcommit.commit_paths(repo, [rel], "never")
+
+
 def test_directory_pathspec_is_refused(tmp_path):
     repo = _repo(tmp_path)
     (repo / "sub").mkdir()

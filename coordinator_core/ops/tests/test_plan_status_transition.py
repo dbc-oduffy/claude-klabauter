@@ -1600,7 +1600,7 @@ def test_rung_verb_at_or_past_target_is_byte_identical_no_op(
     before_mtime = p.stat().st_mtime_ns
     rc = main([verb, "--plan", str(p)])
     assert rc == 0
-    assert "already at or past" in capsys.readouterr().out
+    assert "already at or past" in capsys.readouterr().err
     assert p.read_text(encoding="utf-8") == original
     assert p.stat().st_mtime_ns == before_mtime
 
@@ -1668,7 +1668,7 @@ def test_landed_is_not_reentry_for_the_other_two_verbs(tmp_path, capsys, verb, t
     p = _write(tmp_path, "p.md", original)
     rc = main([verb, "--plan", str(p)])
     assert rc == 0
-    assert "already at or past" in capsys.readouterr().out
+    assert "already at or past" in capsys.readouterr().err
     assert p.read_text(encoding="utf-8") == original
 
 

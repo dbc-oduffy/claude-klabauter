@@ -62,6 +62,20 @@ def test_T2_nonue_daemon_present_tripwire_written(tmp_path, monkeypatch):
     assert _SENTINEL in claude_md.read_text(encoding="utf-8")
 
 
+def test_T2c_nonue_with_index_on_disk_no_tripwire(tmp_path, monkeypatch):
+    claude_md = _write_claude_md(tmp_path)
+    (tmp_path / ".project-rag").mkdir()
+    (tmp_path / ".project-rag" / "graph.db").write_bytes(b"")
+    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
+    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "true")
+    monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
+
+    rc = srd.main([])
+
+    assert rc == 0
+    assert _SENTINEL not in claude_md.read_text(encoding="utf-8")
+
+
 def test_T2b_nonue_daemon_absent_still_tripwire(tmp_path, monkeypatch):
     claude_md = _write_claude_md(tmp_path)
     monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")

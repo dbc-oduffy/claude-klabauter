@@ -32,6 +32,7 @@ from typing import Dict, List, Optional
 
 from coordinator_core.frontmatter.primitives import rebuild, serialize_yaml_scalar, split_frontmatter
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
@@ -176,7 +177,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"plan": rel, "changed": [], "committed": False, "message": "already met with this evidence"}
 
     msg = f"plan: gated_exit_criteria met ({', '.join(changed)}) — {rel}\n"
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8", dir=managed_tempdir(worktree_root)) as fh:
         fh.write(msg)
         msg_path = fh.name
     try:

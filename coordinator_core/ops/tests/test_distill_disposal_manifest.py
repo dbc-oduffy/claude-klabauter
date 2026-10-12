@@ -121,7 +121,7 @@ def _blocked_handoff(tmp_path: Path, name: str = "bad-candidate.md") -> Path:
 
 
 def _unclassifiable(tmp_path: Path, name: str = "spec.md") -> Path:
-    spec = tmp_path / "archive" / "specs" / name
+    spec = tmp_path / "docs" / "research" / name
     _write(spec, "---\nstatus: implemented\n---\nbody\n")
     return spec
 

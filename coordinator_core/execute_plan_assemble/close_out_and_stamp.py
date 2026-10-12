@@ -130,6 +130,7 @@ import os
 import re
 import sys
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
@@ -2218,7 +2219,7 @@ def _dry_run_scratch_plan(text: str, suffix: str) -> Path:
     `finally:` block) -- this helper does not clean up after itself, since
     the caller needs the file to exist for the duration of the call it
     wraps."""
-    fd, tmp_name = tempfile.mkstemp(prefix="close-out-and-stamp-dry-run-", suffix=suffix)
+    fd, tmp_name = tempfile.mkstemp(prefix="close-out-and-stamp-dry-run-", suffix=suffix, dir=managed_tempdir())
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(text)

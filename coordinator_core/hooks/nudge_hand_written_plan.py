@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import os
-import tempfile
+import tempfile  # noqa: F401  (tests redirect Temp via this module's `tempfile` attribute)
 
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.ops.artifact_adopt_contract import (
     adopt_command,
     has_plan_producer_provenance,
@@ -59,8 +60,11 @@ def _first_time_sync(session_id: str, rel_path: str) -> bool:
     # session_id is hook-payload text: hash it too so no separator or `..` reaches the path.
     sid = hashlib.sha1(session_id.encode("utf-8")).hexdigest()[:16]
     digest = hashlib.sha1(rel_path.encode("utf-8")).hexdigest()[:16]
-    sentinel = os.path.join(tempfile.gettempdir(), f"hand-written-plan-nudge-{sid}-{digest}")
+    name = f"hand-written-plan-nudge-{sid}-{digest}"
     try:
+        if os.path.exists(legacy_top_level_path(name)):
+            return False
+        sentinel = os.path.join(managed_tempdir(), name)
         fd = os.open(sentinel, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         return False

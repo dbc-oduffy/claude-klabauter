@@ -13,8 +13,8 @@ import hashlib
 import os
 import socket
 import struct
-import tempfile
 import threading
+from coordinator_core.temp_layout import managed_tempdir
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -285,7 +285,7 @@ def _try_lock(fd: int) -> bool:
 
 
 def _acquire_slot() -> int:
-    directory = _SLOT_DIR or Path(tempfile.gettempdir()) / "claude-klabauter-sshsig-slots"
+    directory = _SLOT_DIR or managed_tempdir() / "claude-klabauter-sshsig-slots"
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

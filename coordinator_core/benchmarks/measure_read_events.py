@@ -61,6 +61,7 @@ from coordinator_core.benchmarks import budget as budget_mod
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
 from coordinator_core.tracker_store import EVENTS_DIR_RELPATH
+from coordinator_core.temp_layout import managed_tempdir
 
 DEFAULT_N = 10
 """Default timed-sample count per measured point (post warm-up)."""
@@ -140,7 +141,7 @@ def measure(
     n: int = DEFAULT_N,
     warmup: int = DEFAULT_WARMUP,
 ) -> dict:
-    tmp_root = Path(tempfile.mkdtemp(prefix="sat01-read-events-bench-"))
+    tmp_root = Path(tempfile.mkdtemp(prefix="sat01-read-events-bench-", dir=str(managed_tempdir(Path(__file__).resolve().parents[2]))))
     try:
         materialize_fixture(tmp_root, events_per_shard=events_per_shard, shard_count=shard_count)
 

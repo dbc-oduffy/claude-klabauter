@@ -517,6 +517,33 @@ class TestBackfilledLineRender:
         content = Path(result["out_path"]).read_text(encoding="utf-8")
         assert "**Backfilled:** yes" in content
 
+    def test_backfill_links_the_legacy_summary_that_exists(self, tmp_path: Path) -> None:
+        """A backfill block's Links line names the daily summary actually on disk —
+        the legacy `<day>.md` shape — not the dangling `<day>-all-machines.md`."""
+        ds = tmp_path / "archive" / "daily-summaries"
+        ds.mkdir(parents=True)
+        (ds / "2026-02-01.md").write_text("# summary\n", encoding="utf-8")
+        result = append_day(
+            worktree=tmp_path,
+            date="2026-02-01",
+            machine="machine-a",
+            branch="main",
+            commit_count=0,
+            commit_range="n/a",
+            scope="",
+            plans_touched="none",
+            handoffs_list="none",
+            decisions="none",
+            blockers="none",
+            rc_validate="skipped",
+            rc_plugin_suite="n/a",
+            reviewed_lines=[],
+            has_non_trivial=False,
+            is_backfill=True,
+        )
+        content = Path(result["out_path"]).read_text(encoding="utf-8")
+        assert "**Links:** archive/daily-summaries/2026-02-01.md," in content
+
 
 # ---------------------------------------------------------------------------
 # _plans_touched — real frontmatter status, not a hardcoded literal

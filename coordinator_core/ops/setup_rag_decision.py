@@ -287,6 +287,11 @@ def _write_tripwire(root: str, dry_run: bool) -> None:
     """
     claude_md = Path(root) / "CLAUDE.md"
 
+    # An index on disk outranks the branch that led here: the block would be false.
+    if (Path(root) / ".project-rag" / "graph.db").is_file():
+        print(f"setup-rag-decision: {root} already has a example-retrieval-repo index — no tripwire written")
+        return
+
     if _tripwire_present(claude_md):
         if dry_run:
             print(

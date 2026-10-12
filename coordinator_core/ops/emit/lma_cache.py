@@ -73,13 +73,13 @@ best-effort. An absent, unreadable, malformed, or wrong-version cache file, an u
 HEAD, or any OSError on write all degrade to "derive it fresh, exactly as before" — never to
 a stale answer and never to an aborted emission.
 
-Cache location: ``<coordinator-settings-home>/claude-klabauter/emit-lma-cache/<slug>.json``,
-the contract-sanctioned consumer durable-data plane (CLAUDE.md § Durable-data plane —
-forward-binding: ``coordinator_core`` persistence outside the repo tree MUST use this
-plane, never an ad-hoc ``~/`` path). Deliberately NOT in-repo: ``repo_root`` here is the
-EMITTING repo, which is routinely a sibling clone (claude-klabauter emits for coordinator-content-repo), and a
-cache write must not dirty another repo's working tree. Paths are pathlib-only, so the
-layout is identical on Windows and macOS.
+Cache location: ``<engine_data_root()>/emit-lma-cache/<slug>.json``, the machine-local
+engine data root (docs/reference/boundary-and-data-planes.md), never the settings home.
+Deliberately NOT in-repo: ``repo_root`` here is the EMITTING repo, which is routinely a
+sibling clone (claude-klabauter emits for coordinator-content-repo), and a cache write must not dirty another
+repo's working tree. An unresolvable data root (``EngineDataRootUnresolved``, an
+``OSError``) means no cache: the answer is derived fresh and nothing is stored. Paths are
+pathlib-only, so the layout is identical on Windows and macOS.
 
 Spec backlink: emit() cost-lever work, 2026-07-29 (Lever 1 — cache _stamp_lma's per-path
 last-touch state).
@@ -96,18 +96,17 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._data_root import engine_data_root
 
 # Bumped whenever the on-disk entry shape changes; a mismatch is treated as a cold cache
 # rather than as an error, so an older/newer engine never reads an entry it cannot trust.
 _CACHE_VERSION = 2
 
-_CACHE_SUBDIR = ("claude-klabauter", "emit-lma-cache")
+_CACHE_SUBDIR = "emit-lma-cache"
 
-# Generator-provenance: writes only to the durable-data-plane cache file under
-# settings_home()/claude-klabauter/emit-lma-cache/<slug>.json -- deliberately
-# not in-repo (see module docstring "Cache location") -- never into claude-klabauter's
-# own tracked tree.
+# Generator-provenance: writes only to the machine-local cache file under
+# engine_data_root()/emit-lma-cache/<slug>.json -- deliberately not in-repo
+# (see module docstring "Cache location") -- never into claude-klabauter's own tracked tree.
 GENERATES = []
 
 
@@ -145,7 +144,9 @@ def _git(repo_root: Path, *args: str) -> Optional[str]:
 
 
 def cache_path(repo_root: Path) -> Path:
-    """Return the durable-data-plane cache file for *repo_root*.
+    """Return the engine-data-root cache file for *repo_root*.
+
+    Raises ``EngineDataRootUnresolved`` (an ``OSError``) when no data root resolves.
 
     The filename carries the repo's basename for human legibility plus a digest of its
     absolute path for uniqueness — two sibling clones with the same basename must not
@@ -154,7 +155,7 @@ def cache_path(repo_root: Path) -> Path:
     root = Path(repo_root)
     digest = hashlib.sha256(str(root.resolve() if root.exists() else root).encode("utf-8")).hexdigest()[:16]
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in root.name) or "repo"
-    return settings_home().joinpath(*_CACHE_SUBDIR, f"{safe_name}-{digest}.json")
+    return engine_data_root() / _CACHE_SUBDIR / f"{safe_name}-{digest}.json"
 
 
 def _load(path: Path) -> Optional[dict]:
@@ -271,7 +272,10 @@ def resolve_last_modified_at(repo_root: Path, wanted: set[str]) -> dict[str, str
         return enrich._walk_last_modified_at(Path(repo_root), wanted)
 
     head, head_ts = head_state
-    path = cache_path(repo_root)
+    try:
+        path = cache_path(repo_root)
+    except OSError:
+        return enrich._walk_last_modified_at(Path(repo_root), wanted)
     entry = _load(path)
 
     if entry is not None and wanted <= entry["queried"]:

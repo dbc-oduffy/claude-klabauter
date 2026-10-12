@@ -81,7 +81,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import time
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Tuple
@@ -90,6 +89,7 @@ from coordinator_core.hooks._envelope import context_only, no_advisory, payload_
 from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, resolve_forwarder
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import managed_tempdir
 
 
 _PICKUP_COMMAND_NAMES = frozenset({"pickup"})
@@ -512,7 +512,7 @@ def _probe_log_path() -> Path:
     override = os.environ.get(_PROBE_LOG_PATH_ENV)
     if override:
         return Path(override)
-    return Path(tempfile.gettempdir()) / _PROBE_LOG_NAME
+    return managed_tempdir() / _PROBE_LOG_NAME
 
 
 def _log_probe_event(payload: dict) -> None:

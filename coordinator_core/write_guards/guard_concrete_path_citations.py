@@ -350,9 +350,8 @@ def _session_key(payload: dict) -> str:
 def _sentinel_base(repo_root: "Path | None") -> Path:
     """Return the directory the per-session claim tree hangs off.
 
-    The git common dir when one is resolvable, else `tempfile.gettempdir()`
-    -- the same per-user, process-independent fallback base used by the
-    hook-side session sentinels (`coordinator_core.hooks` sentinel paths).
+    The git common dir when one is resolvable, else `temp_layout.fleet_temp_root()`
+    -- the per-user, process-independent fallback base.
     An out-of-repo target has no git dir by construction and is the QUIET
     tier's most common shape, so it needs a base that exists rather than an
     early "always warn" exit (module docstring's negative spec)."""
@@ -361,8 +360,8 @@ def _sentinel_base(repo_root: "Path | None") -> Path:
             return git_common_dir(repo_root)
         except (RuntimeError, OSError):
             pass
-    import tempfile
-    return Path(tempfile.gettempdir())
+    from coordinator_core.temp_layout import fleet_temp_root
+    return fleet_temp_root()
 
 
 #: Mirrors the one entry of `liveness._NON_SESSION_DIR_NAMES` this module

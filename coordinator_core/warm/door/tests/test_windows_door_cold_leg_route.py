@@ -35,6 +35,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.tests.door_test_support import (
     DOOR_WINDOWS_C,
@@ -79,7 +80,7 @@ def _locally_built_door() -> Path:
                 "gate-carrying door.exe from, and the committed prebuilt is "
                 "pre-C6 and therefore pre-gate"
             )
-        tmpdir = tempfile.TemporaryDirectory(prefix="cold-leg-route-door-")
+        tmpdir = tempfile.TemporaryDirectory(prefix="cold-leg-route-door-", dir=managed_tempdir())
         atexit.register(tmpdir.cleanup)
         out = Path(tmpdir.name) / "door.exe"
         _BUILT_DOOR.append(door_build.build(source_root, output=out))

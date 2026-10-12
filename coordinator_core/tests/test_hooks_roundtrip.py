@@ -845,18 +845,24 @@ def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path) -> None:
     authorized inline runs; a regression in sentinel-path construction would cause
     the nudge to fire on every authorized inline run.
     """
-    import tempfile
-    from pathlib import Path
     from coordinator_core.hooks.nudge_em_code_dispatch import _handler
+    from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
+    from coordinator_core.temp_layout import legacy_top_level_path
 
-    sid = "test-bypass3-sentinel-aa99"
-    p = Path(tempfile.gettempdir()) / f"coordinator-dispatch-nudge-ok-{sid}"
-    p.touch()
-    try:
-        result = _run(_handler({"file_path": "src/main.py", "session_id": sid}))
-        assert result == {}
-    finally:
-        p.unlink(missing_ok=True)
+    for sid, p in (
+        ("test-bypass3-sentinel-aa99", sentinel_path("test-bypass3-sentinel-aa99")),
+        (
+            "test-bypass3-legacy-aa98",
+            legacy_top_level_path("coordinator-dispatch-nudge-ok-test-bypass3-legacy-aa98"),
+        ),
+    ):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+        try:
+            result = _run(_handler({"file_path": "src/main.py", "session_id": sid}))
+            assert result == {}
+        finally:
+            p.unlink(missing_ok=True)
 
 
 def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path) -> None:
@@ -1001,24 +1007,24 @@ def test_ac10_nudge_foreground_agent_dispatch_scope_class_unchanged() -> None:
 
 def test_dispatch_nudge_sentinel_negative_spec_names_both_prohibitions() -> None:
     """Module docstring carries a Negative-spec block naming both prohibitions:
-    hardcoded /tmp, and a second (git-tree / OR-list) candidate location."""
+    hardcoded /tmp, and a candidate location beyond the fleet home and the
+    legacy bare-Temp read."""
     import coordinator_core.session.dispatch_nudge_sentinel as mod
 
     doc = mod.__doc__ or ""
     assert "Negative-spec:" in doc
     assert "/tmp" in doc
     assert "tempfile.gettempdir()" in doc
-    assert "second candidate location" in doc or "OR-list" in doc
+    assert "candidate location beyond" in doc
 
 
 def test_dispatch_nudge_sentinel_path_rooted_at_platform_tempdir() -> None:
-    """sentinel_path(sid) resolves under tempfile.gettempdir() and ends in the
+    """sentinel_path(sid) resolves under the fleet root and ends in the
     expected filename — the single-source resolver's own contract."""
-    import tempfile
-    from pathlib import Path
     from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
+    from coordinator_core.temp_layout import fleet_temp_root
 
     sid = "test-c4-sentinel-path-known-sid"
     result = sentinel_path(sid)
-    assert result.parent == Path(tempfile.gettempdir())
+    assert result.parent == fleet_temp_root()
     assert result.name == f"coordinator-dispatch-nudge-ok-{sid}"

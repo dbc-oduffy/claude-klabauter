@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.win_portability import no_console_creationflags
 
 _SEEDS: dict[tuple, Path] = {}
@@ -33,7 +34,7 @@ _SEED_ROOT: Path | None = None
 def _seed_root() -> Path:
     global _SEED_ROOT
     if _SEED_ROOT is None:
-        _SEED_ROOT = Path(tempfile.mkdtemp(prefix="mk-git-seed-"))
+        _SEED_ROOT = Path(tempfile.mkdtemp(prefix="mk-git-seed-", dir=managed_tempdir()))
         atexit.register(shutil.rmtree, _SEED_ROOT, True)
     return _SEED_ROOT
 

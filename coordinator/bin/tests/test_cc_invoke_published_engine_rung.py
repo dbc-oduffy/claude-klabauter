@@ -259,6 +259,15 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
             mock_get.assert_called_once()
 
 
+_MADE_TEMP_DIRS: list[str] = []
+
+
+def _mkdtemp_tracked() -> str:
+    path = tempfile.mkdtemp()
+    _MADE_TEMP_DIRS.append(path)
+    return path
+
+
 def _no_env_claude_klabauter_root():
     env = dict(os.environ)
     env.pop("COORDINATOR_ENGINE_ROOT", None)
@@ -270,7 +279,7 @@ def _no_pointer_file():
     so Rung 1.5 reliably misses without touching the real machine's state."""
     import tempfile
 
-    tmp = tempfile.mkdtemp()
+    tmp = _mkdtemp_tracked()
     env = dict(os.environ)
     env["COORDINATOR_SETTINGS_HOME"] = tmp
     return unittest.mock.patch.dict(os.environ, env, clear=False)
@@ -287,7 +296,7 @@ def _make_fake_coordinator_core_with_class(root: str, resolution_class: str) -> 
     """
     import tempfile
 
-    candidate_dir = tempfile.mkdtemp()
+    candidate_dir = _mkdtemp_tracked()
 
     cc_pkg = types.ModuleType("coordinator_core")
     cc_pkg.__path__ = []
@@ -322,6 +331,10 @@ def _cleanup_fake_coordinator_core():
     had_engine_root = "coordinator_core.engine_root" in sys.modules
     prior_engine_root = sys.modules.get("coordinator_core.engine_root")
     yield
+    import shutil
+
+    while _MADE_TEMP_DIRS:
+        shutil.rmtree(_MADE_TEMP_DIRS.pop(), ignore_errors=True)
     if had_pkg:
         sys.modules["coordinator_core"] = prior_pkg
     else:

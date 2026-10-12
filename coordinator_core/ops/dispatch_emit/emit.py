@@ -322,6 +322,7 @@ from coordinator_core.ops.dispatch_emit.predispatch import (
 )
 from coordinator_core.ops.dispatch_emit.predecessor_state import predecessor_state_section
 from coordinator_core.ops.dispatch_emit.spine_read import (
+    em_owned_rows,
     NON_DISPATCHABLE_DISPOSITIONS,
     UNDECLARED,
     load_frontmatter_doc,
@@ -5030,6 +5031,7 @@ def compose_script(
         criterion=plan_context.operative_criterion if plan_context is not None else None,
         run_key=(session_id or "")[:8] or (Path(script_path).stem if script_path else None),
         precredited_rows=precredited_rows,
+        em_owned_rows=em_owned_rows(excluded_rows),
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     ):
         phase_titles.append(title)
@@ -5061,6 +5063,7 @@ def compose_script(
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         evidence_path=judge_evidence_path,
         evidence=judge_register,
+        em_owned_rows=em_owned_rows(excluded_rows),
     )
     if judge_expr:
         phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)

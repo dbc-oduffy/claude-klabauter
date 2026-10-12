@@ -138,3 +138,18 @@ def test_scan_keys_omits_key_absent_after_fall_through(tmp_path):
     p = _write(tmp_path, "absent_after_fallthrough.md", '---\nstatus: "open"\n---\nbody\n')
     result = scan_keys(p, {"status", "deployment_state"})
     assert result == {"status": "open"}
+
+
+def test_empty_key_opening_a_block_sequence_declines_and_full_parse_reads_the_list(tmp_path):
+    p = _write(
+        tmp_path,
+        "nested.md",
+        "---\ndeployment_state: awaiting_gate\nblocked_by:\n  - sat-b1\n# note\ncategory: x\n---\nbody\n",
+    )
+    assert head_scan(p, {"blocked_by", "deployment_state"}) is None
+    assert scan_keys(p, {"blocked_by", "deployment_state"})["blocked_by"] == ["sat-b1"]
+
+
+def test_empty_key_followed_by_another_key_is_a_plain_null_not_a_decline(tmp_path):
+    p = _write(tmp_path, "null.md", "---\nblocked_by:\nstatus: open\n---\nbody\n")
+    assert head_scan(p, {"blocked_by", "status"}) == {"blocked_by": "", "status": "open"}

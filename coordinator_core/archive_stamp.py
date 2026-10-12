@@ -186,6 +186,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2800,7 +2801,7 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
     for root, entries in landed.items():
         pathspecs = [p for _, p in entries]
         subject = f"memo.transition resolve: {len(pathspecs)} memos\n\n" + "\n".join(f"- {p}" for p in pathspecs) + "\n"
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8", dir=managed_tempdir(root)) as fh:
             fh.write(subject)
             msg_path = fh.name
         try:

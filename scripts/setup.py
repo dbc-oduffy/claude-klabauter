@@ -3449,6 +3449,45 @@ def apply_settings_manifest_env(repo_root: Path, claude_klabauter_root_resolved:
     return True
 
 
+def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Set `cleanupPeriodDays: 7` in `settings.json` only when the key is absent.
+
+    ADVISORY, non-fatal. A user's existing value is never overridden; malformed
+    JSON is left untouched. Atomic write (temp + os.replace)."""
+    print()
+    print("--- Transcript retention default ---")
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core._settings_home import claude_config_dir
+
+        settings_path = claude_config_dir() / "settings.json"
+        data: dict = {}
+        if settings_path.exists():
+            try:
+                data = json.loads(settings_path.read_text(encoding="utf-8"))
+            except ValueError as exc:
+                print(f"WARN [retention] {settings_path} is not valid JSON ({exc}) — left untouched")
+                return
+            if not isinstance(data, dict):
+                print(f"WARN [retention] {settings_path} is not a JSON object — left untouched")
+                return
+        if "cleanupPeriodDays" in data:
+            print(f"SKIP [retention] cleanupPeriodDays already set ({data['cleanupPeriodDays']!r}) in {settings_path}")
+            return
+        data["cleanupPeriodDays"] = 7
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = settings_path.with_name(settings_path.name + f".{os.getpid()}.tmp")
+        try:
+            tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, settings_path)
+        finally:
+            tmp.unlink(missing_ok=True)
+        print(f"PASS [retention] cleanupPeriodDays=7 set in {settings_path}")
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
+
+
 def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
     """Best-effort install-chain step: lands the coordinator LFS pre-push gate
     at `.git/hooks/pre-push`, so the ~267ms / ~20-spawn stock git-lfs shim
@@ -4724,6 +4763,7 @@ def main(argv: list[str]) -> int:
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
             return 1
+        apply_transcript_retention_default(claude_klabauter_root_resolved, args)
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)

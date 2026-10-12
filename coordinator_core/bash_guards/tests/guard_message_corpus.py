@@ -119,6 +119,7 @@ from coordinator_core.hooks import (
 from coordinator_core.hooks import nudge_unrouted_sizing as _hook_nudge_unrouted_sizing
 from coordinator_core.ops import peer_notice_send as _ops_peer_notice_send
 from coordinator_core.write_guards import engine as write_guards_engine
+from coordinator_core.temp_layout import fleet_temp_root
 
 
 _CMD_OVERRIDE_KEY = "__cmd__"
@@ -159,12 +160,14 @@ _CWD_OVERRIDE_KEY = "__cwd__"
 #: `<drive>:/coordinator-guard-corpus-scratch` directory there -- the
 #: `TemporaryDirectory` children self-clean, the parent does not. PM
 #: ruling 2026-08-28: nothing writes to a drive root; every repo has its
-#: own scratch folder. The system temp root satisfies the two properties
-#: this constant actually needs -- no `.git` ancestor, and already an
-#: exempt member of `FIXTURE_SCRATCH_ROOTS` below, so a fixture path
-#: rendered into a guard message is still recognized as an echo and not
-#: reported as a redaction leak.
-_NEUTRAL_SCRATCH_PARENT = Path(tempfile.gettempdir()) / "coordinator-guard-corpus-scratch"
+#: own scratch folder. The fleet Temp root (under the system temp root)
+#: satisfies the two properties this constant actually needs -- no `.git`
+#: ancestor, and already an exempt member of `FIXTURE_SCRATCH_ROOTS` below
+#: (prefix of the system temp root), so a fixture path rendered into a
+#: guard message is still recognized as an echo and not reported as a
+#: redaction leak. Rooted under `fleet_temp_root()` so the SessionStart
+#: pruner covers it; never a bare top-level Temp name.
+_NEUTRAL_SCRATCH_PARENT = fleet_temp_root() / "guard-corpus-scratch"
 
 
 #: The roots every fixture tempdir in this module is minted under -- the
@@ -763,6 +766,16 @@ def _deploy_dirty_tree_setup(
 
     mp.setattr(guard, "_dirty_paths", lambda cwd: ["src/app.ts"])
     return {}
+
+
+def _home_root_bash_write_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    home = scratch_dir / "fixture-home"
+    home.mkdir(parents=True, exist_ok=True)
+    mp.setenv("HOME", str(home))
+    mp.setenv("USERPROFILE", str(home))
+    return {_CMD_OVERRIDE_KEY: "echo x > ~/stray.txt"}
 
 
 def _noncanonical_branch_creation_hazard_setup(
@@ -1470,6 +1483,23 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "block-hand-authored-handoff-creation",
         "block-hand-authored-handoff-creation-control",
+        "echo x > normal_file.txt",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-home-root-bash-write",
+        "block-home-root-bash-write-fire",
+        "echo x > ~/stray.txt",
+        True,
+        _DENY,
+        False,
+        setup=_home_root_bash_write_setup,
+    ),
+    CorpusRow(
+        "block-home-root-bash-write",
+        "block-home-root-bash-write-control",
         "echo x > normal_file.txt",
         False,
         _DENY,
@@ -2550,6 +2580,18 @@ def _wg_home_dir_memo_delivery_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -
     }
 
 
+def _wg_home_root_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    home = scratch_dir / "fixture-home"
+    home.mkdir(parents=True, exist_ok=True)
+    mp.setenv("HOME", str(home))
+    mp.setenv("USERPROFILE", str(home))
+    return {
+        "tool_name": "Write",
+        "cwd": str(scratch_dir),
+        "tool_input": {"file_path": str(home / "stray.txt"), "content": "x"},
+    }
+
+
 def _wg_illegal_filename_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     return {"tool_name": "Write", "tool_input": {"file_path": "bad?name.txt", "content": "x"}}
 
@@ -3240,6 +3282,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_hand_authored_sidecar_creation", "control", False, _wg_benign),
     WriteGuardRow("block_home_dir_memo_delivery", "fire", True, _wg_home_dir_memo_delivery_fire),
     WriteGuardRow("block_home_dir_memo_delivery", "control", False, _wg_benign),
+    WriteGuardRow("block_home_root_write", "fire", True, _wg_home_root_write_fire),
+    WriteGuardRow("block_home_root_write", "control", False, _wg_benign),
     WriteGuardRow("block_illegal_filename", "fire", True, _wg_illegal_filename_fire),
     WriteGuardRow("block_illegal_filename", "control", False, _wg_benign),
     WriteGuardRow("block_memo_status_hand_edit", "fire", True, _wg_memo_status_hand_edit_fire),

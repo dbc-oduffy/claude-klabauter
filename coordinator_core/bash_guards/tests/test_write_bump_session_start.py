@@ -53,6 +53,21 @@ def _isolated_settings_home(tmp_path, monkeypatch):
     it does not need HOME/CLAUDE_HOME/USERPROFILE to be scrubbed as well.
     """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.setenv(_ROOT_ENV, str(tmp_path / "data-root"))
+
+
+_ROOT_ENV = "MACHINE_LOCAL_PATHS_ENGINE_DATA_ROOT"
+
+
+def _raise_unresolved(*_a, **_k):
+    from coordinator_core._data_root import EngineDataRootUnresolved
+
+    raise EngineDataRootUnresolved("test")
+
+
+def _hub() -> Path:
+    """The data-root anchor hub under the fixture's isolated override."""
+    return Path(os.environ[_ROOT_ENV]) / "claude-klabauter" / "write-bump-anchor"
 
 
 def _git(root: str, *args: str) -> None:
@@ -242,22 +257,17 @@ def test_environment_probe_fixture_matches_dispatch_evidence(monkeypatch):
 
 
 def test_write_lands_settings_home_record_at_the_forward_bound_path(tmp_path, monkeypatch):
-    """AC11: the settings-home anchor record lives under
-    `$(coordinator-settings-home)/claude-klabauter/write-bump-anchor/`, never the settings-home
-    root or another ad-hoc `~/` path."""
+    """AC9: the anchor record lives under `<engine_data_root>/write-bump-anchor/`, and
+    nothing is written under the settings home."""
     root = _init_repo(tmp_path)
-    settings_home = os.environ["COORDINATOR_SETTINGS_HOME"]
+    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
 
     assert session_start.write_session_start_record("sess-h1", launch_cwd=str(root)) is True
 
-    record = (
-        Path(settings_home)
-        / "claude-klabauter"
-        / "write-bump-anchor"
-        / "sess-h1"
-        / "write_bump_launch_cwd"
-    )
+    record = _hub() / "sess-h1" / "write_bump_launch_cwd"
     assert record.is_file()
+    assert not (settings_home / "claude-klabauter").exists()
+    assert not settings_home.exists() or not any(settings_home.rglob("write_bump_launch_cwd"))
     assert record.read_text(encoding="utf-8").strip() == str(root)
 
 
@@ -266,19 +276,12 @@ def test_write_lands_settings_home_record_even_when_not_in_a_git_repo(tmp_path):
     the in-repo record, it must land even when `launch_cwd` names a directory with no git
     root at all. The overall return value still reflects ONLY the in-repo write (unchanged
     semantics -- see the next test), but the settings-home side effect must not be skipped."""
-    settings_home = os.environ["COORDINATOR_SETTINGS_HOME"]
-    scratch = Path(settings_home).parent / "not-a-repo"
+    scratch = Path(os.environ["COORDINATOR_SETTINGS_HOME"]).parent / "not-a-repo"
     scratch.mkdir(parents=True)
 
     session_start.write_session_start_record("sess-h2", launch_cwd=str(scratch))
 
-    record = (
-        Path(settings_home)
-        / "claude-klabauter"
-        / "write-bump-anchor"
-        / "sess-h2"
-        / "write_bump_launch_cwd"
-    )
+    record = _hub() / "sess-h2" / "write_bump_launch_cwd"
     assert record.is_file()
     assert record.read_text(encoding="utf-8").strip() == str(scratch)
 
@@ -296,7 +299,7 @@ def test_write_fails_open_when_settings_home_unwritable(tmp_path):
     """Fail-open on an unwritable settings home: the SessionStart hook must not crash, and
     the in-repo write's own success/failure must be unaffected."""
     root = _init_repo(tmp_path)
-    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
+    settings_home = Path(os.environ[_ROOT_ENV])
     settings_home.mkdir(parents=True, exist_ok=True)
 
     original_mode = settings_home.stat().st_mode
@@ -333,10 +336,7 @@ def test_read_falls_back_to_in_repo_record_when_settings_home_absent(tmp_path, m
     before this chunk landed, or the settings home was unwritable at write time), the read
     falls back to the in-repo record -- unchanged behaviour for the same-repo case."""
     root = _init_repo(tmp_path)
-    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
-    monkeypatch.delenv("CLAUDE_HOME", raising=False)
-    monkeypatch.delenv("HOME", raising=False)
-    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.setattr(session_start, "engine_data_root", _raise_unresolved)
 
     session_dir = root / ".git" / "coordinator-sessions" / "sess-h6"
     session_dir.mkdir(parents=True)
@@ -351,8 +351,8 @@ def test_write_and_read_honour_injected_env_over_process_environ(tmp_path, monke
     `bump_applies`) can thread one consistent mapping through every settings-home-anchored
     read in a single verdict."""
     root = _init_repo(tmp_path)
-    injected_home = tmp_path / "injected-settings-home"
-    injected_env = {"COORDINATOR_SETTINGS_HOME": str(injected_home)}
+    injected_home = tmp_path / "injected-data-root"
+    injected_env = {_ROOT_ENV: str(injected_home)}
 
     # A different value lives in the process-environ settings home (set by the autouse
     # fixture) versus the injected one -- proves the injected mapping, not os.environ, wins.
@@ -368,12 +368,7 @@ def test_write_and_read_honour_injected_env_over_process_environ(tmp_path, monke
     )
     assert injected_record.is_file()
 
-    process_env_record = (
-        Path(os.environ["COORDINATOR_SETTINGS_HOME"])
-        / "claude-klabauter"
-        / "write-bump-anchor"
-        / "sess-h7"
-    )
+    process_env_record = _hub() / "sess-h7"
     assert not process_env_record.exists()
 
     assert (
@@ -387,8 +382,7 @@ def test_delete_settings_home_session_record_removes_the_record(tmp_path):
     exact `session_id` match."""
     root = _init_repo(tmp_path)
     session_start.write_session_start_record("sess-h8", launch_cwd=str(root))
-    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
-    record_dir = settings_home / "claude-klabauter" / "write-bump-anchor" / "sess-h8"
+    record_dir = _hub() / "sess-h8"
     assert record_dir.exists()
 
     assert session_start.delete_settings_home_session_record("sess-h8") is True
@@ -402,8 +396,7 @@ def test_delete_settings_home_session_record_does_not_prefix_match(tmp_path):
     root = _init_repo(tmp_path)
     session_start.write_session_start_record("sess-h9", launch_cwd=str(root))
     session_start.write_session_start_record("sess-h9-longer", launch_cwd=str(root))
-    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
-    other_record_dir = settings_home / "claude-klabauter" / "write-bump-anchor" / "sess-h9-longer"
+    other_record_dir = _hub() / "sess-h9-longer"
     assert other_record_dir.exists()
 
     session_start.delete_settings_home_session_record("sess-h9")
@@ -427,8 +420,7 @@ def test_delete_settings_home_session_record_fails_open_on_permission_error(tmp_
     than raising."""
     root = _init_repo(tmp_path)
     session_start.write_session_start_record("sess-h11", launch_cwd=str(root))
-    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
-    anchor_dir = settings_home / "claude-klabauter" / "write-bump-anchor"
+    anchor_dir = _hub()
 
     original_mode = anchor_dir.stat().st_mode
     try:
@@ -446,7 +438,7 @@ def test_read_session_start_record_docstring_corrects_the_false_safety_claim():
     now state the settings-home hub is the actual cross-repo-safe primary read."""
     doc = session_start.read_session_start_record.__doc__ or ""
     assert "SILENTLY FALSE" in doc
-    assert "settings-home" in doc.lower()
+    assert "data-root" in doc.lower()
     assert "PRIMARY read for the" in doc
 
 
@@ -459,11 +451,11 @@ def test_settings_home_write_rejects_traversal_shaped_session_id(tmp_path, trave
     the settings-home anchor hub. Fail-open: the write returns whatever the in-repo write
     would return on its own, never raises, and lands no settings-home record at all."""
     root = _init_repo(tmp_path)
-    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
+    settings_home = Path(os.environ[_ROOT_ENV]) / "claude-klabauter"
 
     assert session_start.write_session_start_record(traversal_id, launch_cwd=str(root)) is True
 
-    anchor_root = settings_home / "claude-klabauter" / "write-bump-anchor"
+    anchor_root = _hub()
     # No record must exist anywhere -- neither inside the hub (as a literal, unresolved
     # sub-path) nor escaped outside it (the settings-home root or its parent).
     for candidate in (
@@ -491,11 +483,10 @@ def test_settings_home_still_accepts_a_plain_short_session_id(tmp_path):
     guard must not regress the deliberately-short session ids this subsystem relies on
     elsewhere (see this module's own prefix-collision tests above)."""
     root = _init_repo(tmp_path)
-    settings_home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
 
     assert session_start.write_session_start_record("abc", launch_cwd=str(root)) is True
 
-    record = settings_home / "claude-klabauter" / "write-bump-anchor" / "abc" / "write_bump_launch_cwd"
+    record = _hub() / "abc" / "write_bump_launch_cwd"
     assert record.is_file()
     assert record.read_text(encoding="utf-8").strip() == str(root)
     assert session_start.read_session_start_record("abc", cwd=str(root)) == str(root)

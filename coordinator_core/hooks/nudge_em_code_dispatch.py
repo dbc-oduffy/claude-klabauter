@@ -63,6 +63,7 @@ from coordinator_core.hooks._envelope import context_only, no_advisory, payload_
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
 )
@@ -341,14 +342,29 @@ def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: 
     )
 
 
-def _write_pending_dispatch_artifact(
-    session_id: str, file_path: str, executor_type: str, dispatch_brief_text: str
-) -> None:
-    import tempfile
+def _managed_root(payload: dict) -> str:
+    """Per-repo managed Temp dir when the payload's `cwd` sits in a repo, else the fleet one.
+    A directory walk, no process spawn."""
+    cwd = payload.get("cwd")
+    try:
+        if isinstance(cwd, str) and cwd:
+            from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 
+            repo_root = sizing._repo_root({"cwd": cwd})
+            if repo_root:
+                return str(managed_tempdir(repo_root))
+    except (ValueError, OSError):
+        pass
+    return str(managed_tempdir())
+
+
+def _write_pending_dispatch_artifact(
+    session_id: str, file_path: str, executor_type: str, dispatch_brief_text: str,
+    root: str,
+) -> None:
     hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
     artifact_path = os.path.join(
-        tempfile.gettempdir(),
+        root,
         f"coordinator-pending-dispatch-{session_id}-{hash8}.json",
     )
     now = datetime.now(timezone.utc)
@@ -526,13 +542,9 @@ def _edit_new_line_count(tool_input: dict) -> int:
     return sum(t.count("\n") + 1 for t in texts if isinstance(t, str) and t)
 
 
-def _nudged_marker_path(session_id: str, file_path: str) -> str:
-    import tempfile
-
+def _nudged_marker_path(session_id: str, file_path: str, root: str) -> str:
     hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
-    return os.path.join(
-        tempfile.gettempdir(), f"coordinator-nudged-{session_id}-{hash8}"
-    )
+    return os.path.join(root, f"coordinator-nudged-{session_id}-{hash8}")
 
 
 def _mark_nudged(path: str) -> None:
@@ -620,9 +632,13 @@ def op(payload: dict) -> dict | None:
     if _session_sizing_is_xs_dispatch(payload, session_id):
         return None
 
-    nudged_marker = _nudged_marker_path(session_id, file_path)
+    temp_root = _managed_root(payload)
+    nudged_marker = _nudged_marker_path(session_id, file_path, temp_root)
     if (
-        _sentinel_exists(nudged_marker)
+        (
+            _sentinel_exists(nudged_marker)
+            or _sentinel_exists(str(legacy_top_level_path(os.path.basename(nudged_marker))))
+        )
         and _edit_new_line_count(tool_input) <= _SMALL_EDIT_MAX_LINES
     ):
         return None
@@ -634,7 +650,7 @@ def op(payload: dict) -> dict | None:
 
     if not ambiguous and not multiple_code_files:
         _write_pending_dispatch_artifact(
-            session_id, file_path, executor_type, dispatch_brief_text
+            session_id, file_path, executor_type, dispatch_brief_text, temp_root
         )
 
     raw_sid = payload.get("session_id")

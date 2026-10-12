@@ -202,6 +202,14 @@ class TestSentinelLeg:
             path = self._real_sentinel_path(sid, guard_name)
             _deny(str(path), cwd=str(tmp_path))
 
+    def test_denies_sentinel_at_fleet_and_legacy_locations(self, tmp_path):
+        from coordinator_core.session.guard_unlock_sentinel import _SENTINEL_PREFIX
+        from coordinator_core.temp_layout import fleet_temp_root, legacy_top_level_path
+
+        name = f"{_SENTINEL_PREFIX}{_unique_sid()}.bump-foreign-repo-write"
+        _deny(str(fleet_temp_root() / name), cwd=str(tmp_path))
+        _deny(str(legacy_top_level_path(name)), cwd=str(tmp_path))
+
     def test_non_sentinel_file_in_temp_dir_allowed(self, tmp_path):
         unrelated = str(Path(tempfile.gettempdir()) / "some-unrelated-file.json")
         _allow(unrelated, cwd=str(tmp_path))

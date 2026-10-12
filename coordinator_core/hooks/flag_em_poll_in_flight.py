@@ -10,7 +10,8 @@ completion. Always allows — advisory only, never a deny.
 
 In-flight source: the Workflow run record `_capture_workflow_run_record_sync`
 (`coordinator_core.hooks.postuse_advisory_dispatch`) already persists under
-`tempfile.gettempdir()/workflow-run-<session>-<task>.json`. This op adds no second marker
+`<fleet managed Temp root>/workflow-run-<session>-<task>.json` (the legacy top-level Temp
+location is read too). This op adds no second marker
 and does not edit that file — it only reads whether a record for this session exists and
 whether the transcript tail carries that run's completion.
 
@@ -24,7 +25,7 @@ the EM's own halting decision), and the first status read right after a compacti
 (compaction re-orientation is a legitimate single status read, § Settled here 4).
 
 Per-session flag count is persisted the same way `postuse_advisory_dispatch` persists its own
-durable per-session state (`tempfile.gettempdir()/em-poll-count-<session>.json`, key `flags`) —
+durable per-session state (`<fleet managed Temp root>/em-poll-count-<session>.json`, key `flags`) —
 the metric the slate run (V1) reads. Written only on a flag.
 """
 
@@ -36,6 +37,7 @@ import re
 import tempfile
 from typing import Any, Mapping, Optional
 
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 
@@ -54,7 +56,7 @@ _ANCHOR = (
 
 
 def _tmpdir() -> str:
-    return tempfile.gettempdir()
+    return str(managed_tempdir())
 
 
 def _poll_state_path(tmpdir: str, session_id: str) -> str:
@@ -63,7 +65,10 @@ def _poll_state_path(tmpdir: str, session_id: str) -> str:
 
 def _load_poll_state(tmpdir: str, session_id: str) -> dict:
     try:
-        with open(_poll_state_path(tmpdir, session_id), "r", encoding="utf-8") as fh:
+        path = _poll_state_path(tmpdir, session_id)
+        if not os.path.exists(path):
+            path = str(legacy_top_level_path(os.path.basename(path)))
+        with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -169,17 +174,24 @@ def _run_ids_in_flight(tmpdir: str, session_id: str) -> list:
     try:
         prefix = f"workflow-run-{session_id}-"
         ids = []
-        for name in os.listdir(tmpdir):
-            if not (name.startswith(prefix) and name.endswith(".json")):
-                continue
+        legacy_dir = str(legacy_top_level_path(""))
+        roots = [tmpdir] if os.path.normcase(legacy_dir) == os.path.normcase(tmpdir) else [tmpdir, legacy_dir]
+        for root in roots:
             try:
-                with open(os.path.join(tmpdir, name), "r", encoding="utf-8") as fh:
-                    record = json.load(fh)
-                run_id = record.get("run_id") if isinstance(record, dict) else None
-                if isinstance(run_id, str) and run_id:
-                    ids.append(run_id)
-            except Exception:
+                names = os.listdir(root)
+            except OSError:
                 continue
+            for name in names:
+                if not (name.startswith(prefix) and name.endswith(".json")):
+                    continue
+                try:
+                    with open(os.path.join(root, name), "r", encoding="utf-8") as fh:
+                        record = json.load(fh)
+                    run_id = record.get("run_id") if isinstance(record, dict) else None
+                    if isinstance(run_id, str) and run_id:
+                        ids.append(run_id)
+                except Exception:
+                    continue
         return ids
     except Exception:
         return []

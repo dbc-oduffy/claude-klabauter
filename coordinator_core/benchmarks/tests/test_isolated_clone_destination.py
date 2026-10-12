@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from coordinator_core.temp_layout import managed_tempdir
 
 from coordinator_core.benchmarks.isolated_clone import (
     CloneTeardownLeak,
@@ -37,7 +38,7 @@ def test_rootless_destination_is_refused() -> None:
     drive root: both resolve under no repository, which is the predicate --
     not "is a drive root" specifically.
     """
-    rootless = Path(tempfile.mkdtemp(prefix="rootless-"))
+    rootless = Path(tempfile.mkdtemp(prefix="rootless-", dir=str(managed_tempdir())))
     try:
         with pytest.raises(RootlessCloneDestination):
             mkdtemp_for_clone(rootless, prefix="should-not-exist-")
@@ -48,7 +49,7 @@ def test_rootless_destination_is_refused() -> None:
 def test_rootless_destination_mints_nothing_before_raising() -> None:
     """The refusal precedes creation -- a raise that still left the scratch
     tree behind would reintroduce the accumulation it exists to prevent."""
-    rootless = Path(tempfile.mkdtemp(prefix="rootless-"))
+    rootless = Path(tempfile.mkdtemp(prefix="rootless-", dir=str(managed_tempdir())))
     try:
         with pytest.raises(RootlessCloneDestination):
             mkdtemp_for_clone(rootless, prefix="should-not-exist-")

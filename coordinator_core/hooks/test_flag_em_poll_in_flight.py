@@ -13,10 +13,16 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.hooks import flag_em_poll_in_flight as mod
+from coordinator_core.temp_layout import managed_tempdir
+
+
+@pytest.fixture(autouse=True)
+def _isolated_temp(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
 
 def _cleanup(session_id: str) -> None:
-    tmpdir = tempfile.gettempdir()
+    tmpdir = str(managed_tempdir())
     for pattern in (
         f"em-poll-count-{session_id}.json",
         f".em-poll-count-*.tmp",
@@ -76,7 +82,7 @@ def _payload(session_id, transcript_path, tool_name, agent_id=None):
 
 
 def _seed_run_record(session_id: str, run_id: str) -> None:
-    tmpdir = tempfile.gettempdir()
+    tmpdir = str(managed_tempdir())
     path = os.path.join(tmpdir, f"workflow-run-{session_id}-task1.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump({"run_id": run_id, "session_id": session_id}, fh)
@@ -95,6 +101,16 @@ def test_second_consecutive_poll_with_live_run_flags(session_id, transcript):
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result != {}
     assert "poll" in result["hookSpecificOutput"]["additionalContext"].lower()
+
+
+def test_legacy_top_level_run_record_still_counts_as_in_flight(session_id, transcript, tmp_path):
+    (tmp_path / f"workflow-run-{session_id}-task1.json").write_text(
+        json.dumps({"run_id": "run-legacy", "session_id": session_id}), encoding="utf-8"
+    )
+    _write_tail(transcript, [_tu("ReadNotifications")])
+    mod._handler(_payload(session_id, transcript, "ReadNotifications"))
+    result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
+    assert result != {}
 
 
 def test_tail_with_intervening_bash_resets(session_id, transcript):

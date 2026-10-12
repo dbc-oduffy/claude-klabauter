@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.hooks import postuse_advisory_dispatch as pad  # noqa: E402
 from coordinator_core.group_em import nomination as group_em_nomination  # noqa: E402
+from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -188,7 +189,7 @@ def test_fires_once_per_session_via_sentinel(
     second = pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
     assert second == ""
 
-    sentinel = pad._group_em_watch_arm_sentinel_path(tempfile.gettempdir(), SESSION)
+    sentinel = pad._group_em_watch_arm_sentinel_path(str(managed_tempdir()), SESSION)
     assert os.path.isfile(sentinel)
 
 
@@ -196,7 +197,7 @@ def test_never_touches_the_shared_advisory_hook_state_file(
     tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
-    shared_state_path = pad._advisory_state_path(tempfile.gettempdir(), SESSION)
+    shared_state_path = pad._advisory_state_path(str(managed_tempdir()), SESSION)
     assert not os.path.isfile(shared_state_path)
 
     result = pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
@@ -224,7 +225,7 @@ def test_sentinel_is_not_written_when_the_launcher_is_missing(
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
     pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
 
-    sentinel = pad._group_em_watch_arm_sentinel_path(tempfile.gettempdir(), SESSION)
+    sentinel = pad._group_em_watch_arm_sentinel_path(str(managed_tempdir()), SESSION)
     assert not os.path.isfile(sentinel)
 
 
@@ -311,7 +312,7 @@ def test_sentinel_is_not_written_when_composition_never_completes(
     with pytest.raises(RuntimeError):
         pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
 
-    sentinel = pad._group_em_watch_arm_sentinel_path(tempfile.gettempdir(), SESSION)
+    sentinel = pad._group_em_watch_arm_sentinel_path(str(managed_tempdir()), SESSION)
     assert not os.path.isfile(sentinel)
 
 

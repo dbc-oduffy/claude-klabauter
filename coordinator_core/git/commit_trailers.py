@@ -83,6 +83,8 @@ import os
 import re
 import tempfile
 from pathlib import Path
+
+from coordinator_core.temp_layout import managed_tempdir
 from typing import List, Optional, Sequence, Union
 
 from coordinator_core.content_root import read_pointer_files
@@ -1703,7 +1705,7 @@ def apply_missing_trailers(
     required, independent of session-id resolution). `None` (the default)
     is byte-identical to HEAD.
     """
-    fd, msg_path = tempfile.mkstemp(prefix="commit-trailers-stage-")
+    fd, msg_path = tempfile.mkstemp(prefix="commit-trailers-stage-", dir=managed_tempdir())
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(message)
@@ -1743,7 +1745,7 @@ def apply_missing_trailers(
 
     from coordinator_core.git.run import run_git
 
-    fd2, apply_path = tempfile.mkstemp(prefix="commit-trailers-apply-")
+    fd2, apply_path = tempfile.mkstemp(prefix="commit-trailers-apply-", dir=managed_tempdir())
     try:
         with os.fdopen(fd2, "wb") as handle:
             handle.write(raw)

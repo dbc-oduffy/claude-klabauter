@@ -40,6 +40,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     _schema_literal,
     compose_criterion_judge,
     delivery_supersession_clause,
+    em_owned_clause,
     resolve_operative_criterion_for_plan,
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
@@ -278,6 +279,8 @@ def compose_reverify_script(
             "claims_unbacked listing every claim unbacked at HEAD, PASS only when all are backed.\n"
         )
     lead += _commit_credit_note(repo_root, plan_path, base)
+    owned = _em_owned_rows(plan_path, repo_root)
+    lead += em_owned_clause(owned).lstrip() + (chr(10) if owned else "")
     evidence_path = _row_evidence_path(plan_path, repo_root)
     if evidence_path:
         lead += (
@@ -315,6 +318,7 @@ def compose_reverify_script(
         host_degraded=host_degraded,
         evidence_path=evidence_path,
         evidence=_register_evidence(plan_path, repo_root),
+        em_owned_rows=owned,
     )
     phases = [_js_string_literal(_PHASE)]
     tests_lines = ""
@@ -763,6 +767,7 @@ def compose_rejudge_script(
         host_degraded=host_degraded,
         evidence_path=_row_evidence_path(plan_path, repo_root),
         evidence=_register_evidence(plan_path, repo_root),
+        em_owned_rows=_em_owned_rows(plan_path, repo_root),
     )
     if call is None:
         raise ReverifyRefused("rejudge: the review roster declares no criterion judge")
@@ -899,14 +904,40 @@ def _unwrap_task_output(result: Any) -> dict:
     raise ValueError("result carries no reverify_delivery payload, bare or in a task-output wrapper")
 
 
+def _em_owned_rows(plan_path: str, repo_root: Optional[Path]) -> List[str]:
+    """The plan's EM-owned rows as the emit run saw them; empty when the spine cannot be read,
+    since a re-verify must still run against a plan whose spine has since changed shape."""
+    from coordinator_core.ops.dispatch_emit.spine_read import em_owned_rows, read_spine
+
+    plan_file = Path(plan_path)
+    if not plan_file.is_absolute() and repo_root is not None:
+        plan_file = Path(repo_root) / plan_file
+    exclusions: list = []
+    try:
+        read_spine(plan_file, exclusions=exclusions, schema_preflight=False)
+    except Exception:
+        return []
+    return em_owned_rows(exclusions)
+
+
 def _repo_of_record(record: Path) -> Path:
     """The repo owning a run record: the parent of its `.coordinator-local` (or `.git`) ancestor;
-    the cwd when the record sits under neither."""
+    the checkout enclosing the cwd when the record sits under neither."""
     start = record.resolve()
     for parent in start.parents:
         if parent.name == ".coordinator-local" or (parent / ".git").exists():
             return parent.parent if parent.name == ".coordinator-local" else parent
-    return Path.cwd()
+    return _repo_of_cwd()
+
+
+def _repo_of_cwd() -> Path:
+    """The checkout enclosing the cwd; the cwd itself outside any. A verdict written relative to
+    a subdirectory lands where `review-stamp mint` never reads it."""
+    cwd = Path.cwd().resolve()
+    for candidate in (cwd, *cwd.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return cwd
 
 
 def main(argv: "Optional[list[str]]" = None) -> int:
@@ -928,7 +959,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         ident = result["reverify_delivery"]
         if ident.get("rejudge"):
             print(record_criterion_rejudge(
-                repo_root=Path(args.repo_root) if args.repo_root else Path.cwd(),
+                repo_root=Path(args.repo_root) if args.repo_root else _repo_of_cwd(),
                 plan_id=ident.get("plan_id"),
                 head_sha=ident["head_sha"],
                 criterion=result.get("criterion"),

@@ -22,6 +22,8 @@ noted):
   - `session_start_register_published_engine`
   - `sessionstart_ensure_http_forwarder`
   - `session_start_write_plugin_root_breadcrumb`
+  - `prune_claude_temp` (`startup` only; stamp check, then a detached
+    `ops/prune_claude_temp.py` spawn)
 
 SOURCE-GATING lives here, because the caller is an http entry on the union
 matcher. The handler reads `payload["source"]`: a missing source runs no leg; a
@@ -42,6 +44,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core._hook_envelope import payload_of
@@ -59,6 +62,8 @@ from coordinator_core.hooks.sessionstart_ensure_http_forwarder import (
     _handler as _sessionstart_ensure_http_forwarder_handler,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import prune_claude_temp
+from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 
 
 def _extract_context(result) -> "Optional[str]":
@@ -85,7 +90,30 @@ _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
      lambda p: _sessionstart_ensure_http_forwarder_handler(p)),
     ("session_start_write_plugin_root_breadcrumb", _ALL_SOURCES,
      lambda p: _session_start_write_plugin_root_breadcrumb_handler(p)),
+    ("prune_claude_temp", _STARTUP_ONLY,
+     lambda p: _prune_claude_temp_leg(p)),
 )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PRUNER_SCRIPT = "coordinator_core/ops/prune_claude_temp.py"
+
+
+def _prune_claude_temp_leg(payload_params: dict) -> None:
+    """Stamp check only; spawns the detached pruner when the 24h throttle is due.
+    Never raises."""
+    try:
+        payload = payload_params.get("payload") or {}
+        repo_root = prune_claude_temp.find_repo_root(str(payload.get("cwd") or ""))
+        if not prune_claude_temp.roots_due(repo_root=repo_root):
+            return None
+        args = [str(payload.get("session_id") or "")]
+        if repo_root:
+            args.append(repo_root)
+        spawn_detached(str(_REPO_ROOT), _PRUNER_SCRIPT, args)
+    except Exception:
+        pass
+    return None
 
 
 def _unmatched_source_breadcrumb(source: object) -> str:

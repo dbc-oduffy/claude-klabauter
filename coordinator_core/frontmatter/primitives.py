@@ -211,7 +211,7 @@ def _locate_nested_block(fm: str, key: str) -> Optional[tuple[int, int, int]]:
         nl = fm.find('\n', idx)
         line_end = nl if nl != -1 else len(fm)
         line = fm[idx:line_end]
-        if line == '' or line[:1] in (' ', '\t'):
+        if line == '' or line[:1] in (' ', '\t') or line == '-' or line.startswith('- '):
             idx = line_end + 1 if nl != -1 else len(fm)
         else:
             break

@@ -83,6 +83,7 @@ import subprocess
 from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 import sys
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from pathlib import Path
 from typing import List, Optional
 
@@ -187,7 +188,8 @@ def _lint_files(repo_root: Path, rel_paths: List[str], deadline: float) -> List[
 
             normalized = raw.replace("\r", "")
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".sh", delete=False, encoding="utf-8"
+                mode="w", suffix=".sh", delete=False, encoding="utf-8",
+                dir=managed_tempdir(repo_root),
             ) as tmp:
                 tmp.write(normalized)
                 tmp_path = Path(tmp.name)

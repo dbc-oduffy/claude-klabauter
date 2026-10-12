@@ -58,7 +58,12 @@ def run_capture(command: list[str], keep_log: bool = False) -> dict:
     if not command:
         raise ValueError("no command given (usage: ... -- <command> [args...])")
 
-    log_fd, log_path = tempfile.mkstemp(prefix="spawn-trace-", suffix=".jsonl")
+    _no_console_kw()
+    from coordinator_core.temp_layout import managed_tempdir
+
+    log_fd, log_path = tempfile.mkstemp(
+        prefix="spawn-trace-", suffix=".jsonl", dir=managed_tempdir()
+    )
     os.close(log_fd)
     os.unlink(log_path)
 

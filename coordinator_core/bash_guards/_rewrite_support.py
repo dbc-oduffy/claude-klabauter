@@ -97,7 +97,7 @@ def _bt_python3_invocation_cache_path() -> str:
     § What this repo is); falls back to the OS temp dir if `state/` cannot
     be created (read-only checkout, permissions), matching the fail-open
     discipline `_bt_python3_invocation` itself already promises."""
-    import tempfile
+    from coordinator_core.temp_layout import fleet_temp_root
 
     try:
         repo_root = Path(__file__).resolve().parents[2]
@@ -105,7 +105,9 @@ def _bt_python3_invocation_cache_path() -> str:
         state_dir.mkdir(parents=True, exist_ok=True)
         return str(state_dir / "bt-python3-invocation-cache.json")
     except OSError:
-        return os.path.join(tempfile.gettempdir(), "coordinator-bt-python3-invocation-cache.json")
+        return os.path.join(
+            str(fleet_temp_root()), "coordinator-bt-python3-invocation-cache.json"
+        )
 
 
 def _bt_python3_invocation_cache_key() -> Optional[List[Any]]:

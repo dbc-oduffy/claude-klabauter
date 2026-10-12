@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from coordinator_core.session import guard_unlock_sentinel as gus
+from coordinator_core.temp_layout import fleet_temp_root
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +22,7 @@ GUARD = "block_dev_repo_sentinel_write"
 class TestSentinelPathShape:
     def test_lives_under_the_resolved_tempdir(self, tmp_path):
         p = gus.sentinel_path(SID, GUARD)
-        assert p.parent == tmp_path
+        assert p.parent == fleet_temp_root()
 
     def test_keyed_on_both_session_and_guard(self):
         a = gus.sentinel_path(SID, GUARD)
@@ -44,29 +45,29 @@ class TestSentinelPathShape:
 class TestPathTraversalShapedInputsSanitizeSafely:
     def test_dotdot_slash_session_id_does_not_escape_tempdir(self, tmp_path):
         p = gus.sentinel_path("../../etc/passwd", GUARD)
-        assert p.parent == tmp_path
+        assert p.parent == fleet_temp_root()
         assert ".." not in p.name
         assert "/" not in p.name
 
     def test_dotdot_slash_guard_name_does_not_escape_tempdir(self, tmp_path):
         p = gus.sentinel_path(SID, "../../../etc/shadow")
-        assert p.parent == tmp_path
+        assert p.parent == fleet_temp_root()
         assert ".." not in p.name
         assert "/" not in p.name
 
     def test_backslash_separator_sanitized(self, tmp_path):
         p = gus.sentinel_path("sess\\..\\..\\x", GUARD)
-        assert p.parent == tmp_path
+        assert p.parent == fleet_temp_root()
         assert "\\" not in p.name
 
     def test_null_byte_sanitized(self, tmp_path):
         p = gus.sentinel_path(SID + "\x00evil", GUARD)
-        assert p.parent == tmp_path
+        assert p.parent == fleet_temp_root()
         assert "\x00" not in p.name
 
     def test_empty_components_still_produce_a_single_file(self, tmp_path):
         p = gus.sentinel_path("", "")
-        assert p.parent == tmp_path
+        assert p.parent == fleet_temp_root()
         assert "/" not in p.name and "\\" not in p.name
 
 

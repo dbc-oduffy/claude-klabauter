@@ -21,7 +21,7 @@ SUMMARY_KEYS = ["op", "summary", "entries", "bytes", "applied", "capabilities"]
 def test_action_enum_is_the_contracts_seven():
     assert rec.ACTIONS == (
         "deleted", "would-delete", "skipped-live", "skipped-unverified", "skipped-young", "skipped-link",
-        "skipped-hold-pending",
+        "skipped-hold-pending", "skipped-budget",
     )
 
 

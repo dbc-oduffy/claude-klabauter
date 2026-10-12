@@ -77,7 +77,7 @@ _EAGER_IMPORT_CEILING = 21
 # 11315 -> 11321: a leading assignment no longer makes a heredoc shell-fed (74c18c98e6,
 # orphan-guard false positive, break-class).
 _DISPATCH_CHECKS_LINE_CEILING = 11321
-_REGISTERED_ENTRY_CEILING = 68  # + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
+_REGISTERED_ENTRY_CEILING = 69  # + block-home-root-bash-write; + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
 
 
 def _count_module_scope_imports(source: str) -> int:

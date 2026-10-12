@@ -208,6 +208,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.session import core as _session_core
 from coordinator_core.ops.ceremony.git_native import check_ignore, commit_authored_new_file
 from coordinator_core.ops.emit._slug import tracker_machine_slug as machine_slug
@@ -523,7 +524,7 @@ def _commit_envelope(receiver_repo_path: Path, rel_path: str, content: str) -> d
     check used to. Never raises — every failure arm returns
     `{"committed": False, "reason": <str>}`.
     """
-    msg_fd, msg_name = tempfile.mkstemp(prefix="push-suggestion-msg-", suffix=".txt")
+    msg_fd, msg_name = tempfile.mkstemp(prefix="push-suggestion-msg-", suffix=".txt", dir=managed_tempdir())
     msg_file = Path(msg_name)
     try:
         with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as f:

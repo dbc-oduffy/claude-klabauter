@@ -167,8 +167,14 @@ def discover_artifacts(root: str) -> dict:
         plugin_pairs.append(("notebooklm", nlm_dir))
 
     for plugin, plugin_dir in plugin_pairs:
-        skills_dir = os.path.join(plugin_dir, "skills")
-        if os.path.exists(skills_dir):
+        # dist/oss-only-skills/ ships only in the OSS mirror (injected at percolate),
+        # so a ref to one resolves for OSS consumers even though skills/ lacks it.
+        for skills_dir in (
+            os.path.join(plugin_dir, "skills"),
+            os.path.join(plugin_dir, "dist", "oss-only-skills"),
+        ):
+            if not os.path.exists(skills_dir):
+                continue
             for entry in sorted(os.scandir(skills_dir), key=lambda e: e.name):
                 if not entry.is_dir():
                     continue
@@ -216,8 +222,33 @@ def strip_code_fences(content: str) -> str:
     return out
 
 
+def gitignored_dirs(root: str) -> Set[str]:
+    """Normalized absolute paths of the directories under `root` that git ignores, from ONE
+    `git ls-files`. Empty outside a checkout: the basename exclusions still apply there."""
+    from coordinator_core.git.run import run_git
+
+    try:
+        proc = run_git(
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+            cwd=root,
+            timeout=30,
+        )
+    except Exception:
+        return set()
+    if proc.returncode != 0:
+        return set()
+    return {
+        os.path.normcase(os.path.normpath(os.path.join(root, rel)))
+        for rel in proc.stdout.split("\0")
+        if rel.endswith("/")
+    }
+
+
 def walk_markdown(
-    root: str, exclude: Optional[Set[str]] = None, errors: Optional[List[str]] = None
+    root: str,
+    exclude: Optional[Set[str]] = None,
+    errors: Optional[List[str]] = None,
+    ignored_dirs: Optional[Set[str]] = None,
 ) -> Iterator[str]:
     """Walk all .md files under a directory tree, depth-first (stack-based,
     matching the JS oracle's `while (stack.length)` shape).
@@ -245,6 +276,8 @@ def walk_markdown(
                 if entry.name in ("node_modules", ".git") or entry.name in exclude:
                     continue
                 if entry.name == "worktrees" and os.path.basename(d) == ".claude":
+                    continue
+                if ignored_dirs and os.path.normcase(os.path.normpath(full)) in ignored_dirs:
                     continue
                 stack.append(full)
             elif entry.is_file() and entry.name.endswith(".md"):
@@ -429,6 +462,12 @@ REF_ALLOWLIST: Set[str] = {
     # exists is the point -- see cross-repo/archive/2026-08-05-coordinator-content-repo-em-plan-
     # reviewer-lens-registration.md (decision: partial). Drop when DR-133 ships.
     "coordinator:plan-reviewer",
+    # RETIRED (DoE c05a797a1): every remaining mention is a dated observation of
+    # a past dispatch, which renaming would falsify.
+    "coordinator:review-integrator",
+    # FORWARD-reference: the approved cloud-fanout-engine-ops plan names this DoE
+    # skill; drop when it ships.
+    "coordinator:cloud-fanout",
     "coordinator:fleet-only",
     "coordinator:research-",
     "coordinator:inspiration-audit",
@@ -520,6 +559,18 @@ def main(argv: List[str]) -> int:
     # inbox/, sent/ and dispatch-briefs/ are the same class again, found the same
     # way (the gate HALTed /update-docs on 11 of them, claude-klabauter 2026-08-27).
     # A DELIVERED memo -- inbound under cross-repo/inbox/ or outbound under
+    # sent/ -- and a dispatch brief record what was true when they were sent.
+    #
+    # handoffs/, plan-blitz/ and mise-inventory/ are dated session records, the
+    # same class a fifth time (HALT on 21 refs, claude-klabauter 2026-10-12).
+    # scratch/ is never a live surface -- it held three stale tree copies that
+    # contributed 63 of the 84 orphans in that halt. recovery/, research-corpus/,
+    # reviews/ and .coordinator-local/ (plan-sidecars) are the same day's DoE and
+    # example-game-repo halts (cross-repo/inbox/2026-10-12-coordinator-content-repo-em-verify-coverage-
+    # historical-carveout.md).
+    #
+    # A gitignored tree holds no doctrine surface whatever it is named; `ignored_dirs`
+    # is the general rule and the basenames above cover the TRACKED historical classes.
     walk_dir_errors: List[str] = []
     for file in walk_markdown(
         sweep_root,
@@ -535,8 +586,17 @@ def main(argv: List[str]) -> int:
             "sent",
             "dispatch-briefs",
             "recovered",
+            "handoffs",
+            "plan-blitz",
+            "mise-inventory",
+            "scratch",
+            "recovery",
+            "research-corpus",
+            "reviews",
+            ".coordinator-local",
         },
         errors=walk_dir_errors,
+        ignored_dirs=gitignored_dirs(sweep_root),
     ):
         try:
             with open(file, "r", encoding="utf-8") as fh:

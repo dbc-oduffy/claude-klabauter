@@ -136,8 +136,8 @@ Negative-spec:
     different repo's hub entirely, where this session's record was never
     written. That is exactly why `resolve_launch_anchor` does not rely on
     the in-repo hub alone: `read_session_start_record` reads the
-    settings-home anchor (cwd-INDEPENDENT by construction) first, falling
-    back to the in-repo hub only when the settings-home read is empty. See
+    data-root anchor (cwd-INDEPENDENT by construction) first, falling
+    back to the in-repo hub only when the data-root read is empty. See
     `_write_bump_session_start.read_session_start_record`'s own docstring
     for the corrected argument. `own_repo_write_gitdir` (coordinator-
     claude#42 B2) is the one deliberate, narrow exception: a same-request
@@ -523,7 +523,7 @@ def resolve_launch_anchor(
     session_id: str, cwd: Optional[str] = None, env: Optional[dict] = None
 ) -> Optional[str]:
     """The session's anchored launch directory -- PRIMARY: C0's session-start
-    record (itself settings-home-first, falling back to the in-repo hub --
+    record (itself data-root-first, falling back to the in-repo hub --
     see `_write_bump_session_start.read_session_start_record`); FALLBACK:
     `CLAUDE_PROJECT_DIR`, currently known-absent from a live hook subprocess
     (see module docstring, "TWO ANCHORS"). Returns `None` (fail open) when
@@ -532,7 +532,7 @@ def resolve_launch_anchor(
     apply" rather than guessing.
 
     `env` is threaded into `read_session_start_record` (optional, defaulting
-    to `None` -- resolve from `os.environ`) so its settings-home-first read
+    to `None` -- resolve from `os.environ`) so its data-root-first read
     resolves from the SAME injected `env` mapping this function's own
     `CLAUDE_PROJECT_DIR` fallback and `_anchor_is_under_claude_home` use --
     otherwise a single `bump_applies` verdict could resolve the anchor from

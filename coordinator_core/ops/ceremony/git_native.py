@@ -57,8 +57,8 @@ import os
 import posixpath
 import shutil
 import subprocess
-import tempfile
 import threading
+from coordinator_core.temp_layout import managed_tempdir
 import time
 import uuid
 from dataclasses import dataclass
@@ -576,6 +576,21 @@ def _git(
 #: `coordinator_core.ops.fleet._common.EMPTY_TREE_SHA`; the two seams are
 #: independent commit paths and neither imports the other.
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _dotgit_path_refusal(paths) -> Optional["GitResult"]:
+    """Refusal result iff any path has a `.git` component (casefolded). Every staging and
+    pathspec-commit primitive checks this: one tracked `.git/...` entry makes GitHub's fsck
+    (hasDotgit) reject every later push, which strands the branch until history is rewritten."""
+    for candidate_path in paths:
+        parts = str(candidate_path).replace("\\", "/").split("/")
+        if any(p.casefold() == ".git" for p in parts):
+            return GitResult(
+                returncode=1,
+                stdout="",
+                stderr=f"refusing to stage {candidate_path!r}: a '.git' path component is never committable",
+            )
+    return None
 
 
 def _empty_private_index_refusal(
@@ -1395,7 +1410,7 @@ def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
     `-F <msgfile>` flow's own discipline elsewhere in this module.
     """
     pathspec_file = (
-        Path(tempfile.gettempdir())
+        managed_tempdir(root)
         / f"git-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
     )
     # NUL-separated, and every caller MUST pass `--pathspec-file-nul`.
@@ -1425,6 +1440,9 @@ def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitR
     pathspec-file call replaces one argv-list call with no chunking needed,
     and no atomicity concern either (staging is not the commit itself).
     """
+    refusal = _dotgit_path_refusal(paths)
+    if refusal is not None:
+        return refusal
     root = Path(cwd)
     pathspec_file = _write_pathspec_file(root, paths)
     try:
@@ -1505,6 +1523,9 @@ def commit_with_message_file_pathspec_scoped(
     supplies it, with `_trailer_sentinel_env()` -- see that function's own
     docstring for why nowhere else may.
     """
+    refusal = _dotgit_path_refusal(paths)
+    if refusal is not None:
+        return refusal
     root = Path(cwd)
     pathspec_file = _write_pathspec_file(root, paths)
     try:
@@ -2447,7 +2468,7 @@ def stage_from_patch(
             reason="unkeyable-path",
         )
 
-    temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+    temp_index = managed_tempdir(root) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
     try:
         private_env: Dict[str, str] = dict(os.environ)
         private_env["GIT_INDEX_FILE"] = str(temp_index)
@@ -3356,7 +3377,7 @@ def _commit_scoped_private_index(
         # ---- ladder: a private index, populated from `tree_input`/
         # `absent` (never re-derived from `ls-files`/`_resolve_mode_for_
         # paths`) ------------------------------------------------------
-        temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+        temp_index = managed_tempdir(root) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
         try:
             private_env: Dict[str, str] = dict(os.environ)
             private_env["GIT_INDEX_FILE"] = str(temp_index)
@@ -5204,7 +5225,7 @@ def commit_authored_content(
         # `GitResult.cas_ref_relpath`'s documented "no ref is being
         # reported here" meaning for `None`, not "the CAS failed".
         fast_path_cas_ref_relpath = None
-        temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+        temp_index = managed_tempdir(root) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
         try:
             private_env: Dict[str, str] = dict(os.environ)
             private_env["GIT_INDEX_FILE"] = str(temp_index)

@@ -124,6 +124,7 @@ import json
 import logging
 import os
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,6 +141,7 @@ from coordinator_core.frontmatter.primitives import (
     serialize_yaml_scalar,
     split_frontmatter,
 )
+from coordinator_core.distill.delete_guard import prefetch_citations
 from coordinator_core.ops.distill_disposal_manifest import (
     MASS_THROTTLE_HARD_CAP,
     evaluate_candidate_receipts,
@@ -325,13 +327,9 @@ def verify_stamp_and_throttle(manifest: dict[str, Any]) -> None:
         note = manifest.get("disposal_authorized_note") or ""
         if MASS_THROTTLE_ACK_MARKER not in note.lower():
             raise ApplyDisposalError(
-                "distill.apply_disposal refuses: manifest-level mass_throttle "
-                "flag is set but the stamped disposal_authorized_note does "
-                f"not acknowledge it (expected the substring "
-                f"{MASS_THROTTLE_ACK_MARKER!r}, case-insensitive) — F2: the "
-                "PM stamp alone is not sufficient defense-in-depth for a "
-                "mass-eligible manifest; re-stamp with an acknowledging note "
-                "to proceed."
+                "distill.apply_disposal refuses: the manifest is mass-throttled and "
+                f"its stamp note lacks {MASS_THROTTLE_ACK_MARKER!r}. A stamped manifest "
+                "cannot be re-stamped: re-assemble it, then stamp with that note."
             )
 
     # Gate 4b (hard cap): unconditional, checked regardless of mass_throttle
@@ -606,6 +604,10 @@ def compute_apply_plan(worktree_root: Path, manifest: dict[str, Any]) -> ApplyPl
     already_deleted: list[dict[str, str]] = []
     newly_blocked: list[dict[str, str]] = []
 
+    citations = prefetch_citations(
+        [row["path"] for row in manifest["rows"] if row.get("eligible")], worktree_root
+    )
+
     for row in manifest["rows"]:
         if not row.get("eligible"):
             continue
@@ -617,7 +619,7 @@ def compute_apply_plan(worktree_root: Path, manifest: dict[str, Any]) -> ApplyPl
             already_deleted.append({"path": row["path"], "reason": "already-deleted"})
             continue
 
-        receipt = evaluate_candidate_receipts(abs_path, worktree_root)
+        receipt = evaluate_candidate_receipts(abs_path, worktree_root, citations=citations)
         if not receipt["eligible"]:
             # D2a-iv — act-time-terminality-re-verifying (TOCTOU re-block):
             # the manifest said eligible=True at assemble time, but re-running
@@ -880,7 +882,7 @@ async def _delete_tracked_and_append_log(
     if not tracked_paths and not log_rows and not denorm_writes:
         return [], [], [], []
 
-    idx_fd, idx_path = tempfile.mkstemp(prefix="distill-apply-idx-")
+    idx_fd, idx_path = tempfile.mkstemp(prefix="distill-apply-idx-", dir=managed_tempdir(worktree_root))
     os.close(idx_fd)
 
     try:

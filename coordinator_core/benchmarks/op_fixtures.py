@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
+from coordinator_core.temp_layout import managed_tempdir
 
 
 FIXTURE_CONTENT_DIR: Path = Path(__file__).parent / "fixtures" / "repo"
@@ -78,7 +79,7 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
     writes back into the checked-in tree.
     """
     if dest is None:
-        dest = Path(tempfile.mkdtemp(prefix="claude-klabauter-bench-fixture-"))
+        dest = Path(tempfile.mkdtemp(prefix="claude-klabauter-bench-fixture-", dir=str(managed_tempdir(Path(__file__).resolve().parents[2]))))
     dest = Path(dest)
     if dest.exists():
         shutil.rmtree(dest)

@@ -170,3 +170,11 @@ def test_module_spawns_nothing():
         for a in n.names
     } | {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     assert "subprocess" not in imported
+
+
+def test_docstring_placeholder_is_not_an_op_key():
+    from coordinator_core.bash_guards.commit_tripwires import _REGISTER_OP_KEY_RE
+
+    assert _REGISTER_OP_KEY_RE.match('@register_op("...") async def _handler(params)') is None
+    assert _REGISTER_OP_KEY_RE.match('@register_op("ping")').group(1) == "ping"
+    assert _REGISTER_OP_KEY_RE.match('@register_op("distill.scope")').group(1) == "distill.scope"

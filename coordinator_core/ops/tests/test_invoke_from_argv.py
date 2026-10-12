@@ -50,7 +50,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
 from unittest import mock
@@ -215,7 +214,7 @@ def test_served_dispatch_never_checks_warm_enabled():
     assert json.loads(result["stdout"])["result"]["ok"] is True
 
 
-def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd():
+def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd(tmp_path):
     """A worktree-scoped op (handoff.blocked_by_dependents — handoff.has_live_children's
     sibling in the same module and same `candidate`-param shape, swapped in because
     has_live_children was killed under DR-344 2026-08-30 and dropped out of
@@ -231,7 +230,7 @@ def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd():
     dispatch SUCCESSFULLY instead of failing — a false green that this test
     exists to catch.
     """
-    tmp_dir = tempfile.mkdtemp(dir=tempfile.gettempdir(), prefix="invoke_from_argv_test_")
+    tmp_dir = str(tmp_path)
     try:
         probe = subprocess.run(
             ["git", "-C", tmp_dir, "rev-parse", "--git-dir"],

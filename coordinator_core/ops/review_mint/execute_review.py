@@ -214,6 +214,19 @@ def prep_slice_id_for(
     return "-".join(p for p in parts if p) + "-prep"
 
 
+def em_owned_clause(em_owned_rows: Optional[List[str]]) -> str:
+    """The prompt clause naming rows no executor was dispatched for. The verifier and the
+    judge read the whole plan, so without it an EM-owned row reads as an unbacked claim."""
+    if not em_owned_rows:
+        return ""
+    return (
+        "\nEM-owned rows (never dispatched to an executor; the EM performs them outside this "
+        "run): " + "; ".join(em_owned_rows) + ". This run's diff holds no hunk for them by "
+        "construction. Never list them in claims_unbacked, and never hold the criterion unmet "
+        "on a clause that depends only on them: report that clause as owed by the EM."
+    )
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -226,6 +239,7 @@ def compose_execute_review(
     prep_suffix_js: Optional[str] = None,
     criterion: Optional["OperativeCriterion"] = None,
     precredited_rows: Optional[List[str]] = None,
+    em_owned_rows: Optional[List[str]] = None,
     run_key: Optional[str] = None,
     host_degraded: bool = False,
     slice_key_js: Optional[str] = None,
@@ -304,7 +318,7 @@ def compose_execute_review(
         "for them by construction. Count them backed; never list them in claims_unbacked."
         if precredited_rows
         else ""
-    )
+    ) + em_owned_clause(em_owned_rows)
     prep_type, prep_role = _host_native(review.prep.agent_type, host_degraded)
     prep_prompt = (
         f"{prompt_head}\n\n{prep_role}"
@@ -801,6 +815,7 @@ def compose_criterion_judge(
     prompt_suffix_js: Optional[str] = None,
     evidence_path: Optional[str] = None,
     evidence: Optional[JudgeEvidence] = None,
+    em_owned_rows: Optional[List[str]] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. ``evidence_path`` names the
@@ -828,6 +843,7 @@ def compose_criterion_judge(
         f"weigh one only for a leg you are denied, and mark it provenance em-recorded)"
         f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
+        f"{em_owned_clause(em_owned_rows)}"
         + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence and `criterion_evidence` clause entries; weigh them, cite them)" if evidence_path else "")
     ).strip()
     call = _agent_call_literal(

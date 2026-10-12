@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,9 @@ _ARG_CASES = {
 }
 
 
+_WORK_DIRS: list[Path] = []
+
+
 def _render_probe_tree() -> Path:
     src = Path(tempfile.mkdtemp(prefix="fwd_repro_src_"))
     (src / "probe-cli.py").write_text(ENTRY_SRC, encoding="utf-8")
@@ -66,6 +70,7 @@ def _render_probe_tree() -> Path:
 
 def _run(launcher: list[str], arg: str) -> tuple[int, dict[str, int], str]:
     work = Path(tempfile.mkdtemp(prefix="fwd_repro_w_"))
+    _WORK_DIRS.append(work)
     proc = subprocess.run(
         [*launcher, arg], cwd=work, capture_output=True, text=True, creationflags=NO_WINDOW
     )
@@ -103,10 +108,15 @@ def main() -> int:
         print("Windows-only: the defect is cmd.exe's re-parse of a substituted %*.")
         return 0
     src = _render_probe_tree()
-    print("cmd forwarders — a non-empty `stray` is the defect:")
-    _probe_cmd(src)
-    print("\n.ps1 twin — expected clean on every row:")
-    _probe_ps1_twin(src)
+    try:
+        print("cmd forwarders — a non-empty `stray` is the defect:")
+        _probe_cmd(src)
+        print("\n.ps1 twin — expected clean on every row:")
+        _probe_ps1_twin(src)
+    finally:
+        shutil.rmtree(src, ignore_errors=True)
+        for work in _WORK_DIRS:
+            shutil.rmtree(work, ignore_errors=True)
     return 0
 
 

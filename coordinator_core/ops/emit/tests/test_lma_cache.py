@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core._data_root import ENV_OVERRIDE, EngineDataRootUnresolved, engine_data_root
 from coordinator_core.ops.emit import enrich, lma_cache
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -53,6 +54,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "Test User")
     _git(root, "config", "commit.gpgsign", "false")
+    monkeypatch.setenv(ENV_OVERRIDE, str(tmp_path / "data-root"))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     return root
 
@@ -373,7 +375,7 @@ def test_wrong_version_cache_file_degrades_to_a_fresh_walk(repo: Path) -> None:
 
 def test_non_repo_root_degrades_without_caching(tmp_path: Path, monkeypatch) -> None:
     """No resolvable HEAD (not a repo) — derive fresh, write nothing, never raise."""
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.setenv(ENV_OVERRIDE, str(tmp_path / "data-root"))
     plain = tmp_path / "not-a-repo"
     plain.mkdir()
     assert lma_cache.resolve_last_modified_at(plain, {"a.md"}) == {}
@@ -384,20 +386,39 @@ def test_empty_wanted_set_is_a_no_op(repo: Path) -> None:
     assert lma_cache.resolve_last_modified_at(repo, set()) == {}
 
 
-def test_cache_path_lives_under_the_durable_data_plane(repo: Path, tmp_path: Path) -> None:
-    """CLAUDE.md § Durable-data plane — out-of-repo persistence uses the sanctioned prefix.
-
-    Asserted rather than assumed because the alternative failure is silent: an ad-hoc ``~/``
-    path would work locally and be invisible to coordinator uninstall's provenance sweep. Also
-    asserts the cache is NOT written into the emitting repo, which is routinely a sibling clone.
-    """
+def test_cache_path_lives_under_the_engine_data_root(repo: Path, tmp_path: Path) -> None:
+    """AC7: the cache is under the data root, not the emitting repo, and nothing lands in the settings home."""
     path = lma_cache.cache_path(repo)
-    assert path.is_relative_to(tmp_path / "settings-home" / "claude-klabauter")
+    assert path.is_relative_to(engine_data_root() / "emit-lma-cache")
+    assert path.is_relative_to(tmp_path / "data-root")
     assert not path.is_relative_to(repo)
+
+    wanted = {"a.md"}
+    _commit(repo, "a.md", "one")
+    lma_cache.resolve_last_modified_at(repo, wanted)
+    lma_cache.resolve_last_modified_at(repo, wanted)
+    assert path.is_file()
+    assert not (tmp_path / "settings-home" / "claude-klabauter").exists()
+
+
+def test_unresolved_data_root_returns_the_oracle_and_writes_no_cache(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC8: an unresolvable data root means no cache, never an error."""
+    _commit(repo, "a.md", "one")
+
+    def _raise(env=None):
+        raise EngineDataRootUnresolved("none")
+
+    monkeypatch.setattr(lma_cache, "engine_data_root", _raise)
+    wanted = {"a.md"}
+    assert lma_cache.resolve_last_modified_at(repo, wanted) == _oracle(repo, wanted)
+    assert not (tmp_path / "data-root").exists()
+    assert not (tmp_path / "settings-home").exists()
 
 
 def test_sibling_clones_with_the_same_basename_do_not_share_a_cache_file(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.setenv(ENV_OVERRIDE, str(tmp_path / "data-root"))
     a = tmp_path / "x" / "same-name"
     b = tmp_path / "y" / "same-name"
     a.mkdir(parents=True)

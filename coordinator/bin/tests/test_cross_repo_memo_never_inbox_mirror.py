@@ -119,6 +119,9 @@ def test_cli_send_refuses_mirror_via_real_engine_op(
     mirror_repo = _make_mirror_git_repo(tmp_path, receiver_dir)
     claude_home = _make_claude_home(tmp_path, {receiver_key: mirror_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    # COORDINATOR_SETTINGS_HOME outranks CLAUDE_HOME. Inherited from the operator's shell, it
+    # resolves the live registry and this send delivers into a real repo's inbox.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(claude_home / ".coordinator-claude-settings"))
     _write_draft(sender_repo, "cli-topic-mirror", to=to_id)
 
     mod = _load_cli_module()

@@ -55,9 +55,10 @@ modules. This matches both the modelled precedent
 ``claude_md_grant``) and leg (2)'s ``_SENTINEL_PREFIX`` discipline below.
 
 PATH-RESOLUTION aspect, leg (2) (the sentinel): resolves the platform temp
-directory the SAME way ``guard_unlock_sentinel.sentinel_path`` does — via
-``tempfile.gettempdir()`` — and matches any candidate whose containing
-directory equals that resolved temp dir (case-folded) and whose basename
+directory via ``tempfile.gettempdir()`` and the fleet root via
+``temp_layout.fleet_temp_root`` — the two homes
+``guard_unlock_sentinel.sentinel_path`` can return — and matches any
+candidate whose containing directory equals either (case-folded) and whose basename
 starts with ``guard_unlock_sentinel._SENTINEL_PREFIX``. Deliberately NOT
 scoped to one specific ``(session_id, guard_name)`` pair: a subagent
 attempting this bypass could name ANY session id or ANY grantable guard
@@ -140,6 +141,7 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session.em_guard_grant import _GRANT_FILENAME
 from coordinator_core.session.guard_unlock_sentinel import _SENTINEL_PREFIX
+from coordinator_core.temp_layout import fleet_temp_root
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 
@@ -244,13 +246,15 @@ def _is_sentinel_path(normalized_file_path: str) -> bool:
     relative candidate is resolved against the temp dir the same way an
     absolute one is compared against it.
     """
-    temp_dir = casefold_path(_normalize_path(str(Path(tempfile.gettempdir()))))
-    abs_candidate = casefold_path(
-        _resolve_abs_candidate(normalized_file_path, str(Path(tempfile.gettempdir())))
-    )
+    base_dir = str(Path(tempfile.gettempdir()))
+    homes = {
+        casefold_path(_normalize_path(base_dir)).rstrip("/"),
+        casefold_path(_normalize_path(str(fleet_temp_root()))).rstrip("/"),
+    }
+    abs_candidate = casefold_path(_resolve_abs_candidate(normalized_file_path, base_dir))
 
     parent, _, basename = abs_candidate.rpartition("/")
-    if parent != temp_dir.rstrip("/"):
+    if parent not in homes:
         return False
     return basename.startswith(_SENTINEL_PREFIX.casefold())
 

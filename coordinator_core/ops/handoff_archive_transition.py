@@ -297,6 +297,7 @@ from typing import List, Optional
 
 import yaml
 
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -1170,7 +1171,8 @@ def _commit_retained_supersede_flip(
         return "flip landed on disk, left uncommitted (not yet tracked in HEAD)"
 
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        mode="w", suffix=".txt", delete=False, encoding="utf-8",
+        dir=managed_tempdir(worktree),
     ) as fh:
         fh.write(f"handoff-archive-transition: supersede (retained) {rel_path}\n")
         msg_path = fh.name

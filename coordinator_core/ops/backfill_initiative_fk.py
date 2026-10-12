@@ -35,7 +35,7 @@ Public API:
         `coordinator/bin/`, but there is no other sensible default for a bare import).
 
 Concurrency safety (unchanged from the oracle):
-    A lockfile at `tempfile.gettempdir()/backfill-initiative-fk.lock` structurally
+    A lockfile at `<fleet temp root>/backfill-initiative-fk.lock` structurally
     prevents two concurrent invocations. Per concurrent-em-hazards §H1, concurrent
     frontmatter writers corrupt the tree. Uses an atomic `os.O_CREAT | os.O_EXCL`
     initial create (Python equivalent of the oracle's `set -C` noclobber fix, review
@@ -68,7 +68,7 @@ over from the oracle, NOT fixed by this port):
     `kill -0 ... 2>/dev/null` short-circuit, which does the same thing), so a live
     foreign-owned lock can be incorrectly treated as stale and overwritten. If the
     lock appears stuck, remove it manually:
-    `rm -f "$(python3 -c 'import tempfile;print(tempfile.gettempdir())')/backfill-initiative-fk.lock"`.
+    `rm -f "$(python3 -c 'from coordinator_core.temp_layout import fleet_temp_root;print(fleet_temp_root())')/backfill-initiative-fk.lock"`.
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
     - Does NOT auto-create initiatives; run `coordinator-initiative create` first.
@@ -120,13 +120,14 @@ import re
 import subprocess
 import sys
 import tempfile
+from coordinator_core.temp_layout import managed_tempdir
 from typing import IO, Iterable, List, Optional, Tuple
 from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS
 from coordinator_core.win_portability import no_console_creationflags
 
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census). This module
-# writes only a PID lockfile at tempfile.gettempdir()/_LOCK_BASENAME --
+# writes only a PID lockfile at the fleet temp root/_LOCK_BASENAME --
 # process-runtime lock in the OS temp dir, never a tracked artifact. The
 # actual FK attach work is delegated via subprocess to the sibling
 # coordinator-initiative CLI, not written by this module.
@@ -155,7 +156,7 @@ _ATTACH_TIMEOUT_SECS = DISPATCH_TIMEOUT_SECS
 
 
 def _lock_path() -> str:
-    return os.path.join(tempfile.gettempdir(), _LOCK_BASENAME)
+    return os.path.join(str(managed_tempdir()), _LOCK_BASENAME)
 
 
 def _pid_is_live(pid: int) -> bool:
@@ -279,7 +280,7 @@ def _attach_batch(
     The one spawn is bounded by the FLAT `_ATTACH_TIMEOUT_SECS` — see that
     constant's negative spec for why nothing here scales with `len(pairs)`.
     """
-    tmp_fd, pairs_file = tempfile.mkstemp(suffix=".tsv", prefix="backfill-initiative-fk-pairs-")
+    tmp_fd, pairs_file = tempfile.mkstemp(suffix=".tsv", prefix="backfill-initiative-fk-pairs-", dir=managed_tempdir())
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as fh:
             for _, artifact_path, initiative_id in pairs:

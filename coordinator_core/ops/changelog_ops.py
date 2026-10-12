@@ -15,7 +15,7 @@ Three ops registered here, byte-parity ports of claude-klabauter-owned CLI write
         2026-07-06_210200_strang-10-inject-anchor-archive-carveout.md).
 
 Handler shape (matches queue_append.py pattern):
-    @register_op("...") async def _handler(params, repo_root=None)
+    register_op(<key>)-decorated async def _handler(params, repo_root=None)
     repo_root = git_common_dir from _OP_KEY_SCOPE=common_dir
     worktree = main_worktree_root(repo_root) before any state/ or archive/ path join
 
@@ -177,8 +177,13 @@ def _compose_block(
     reviewed_lines: List[str],
     has_non_trivial: bool,
     is_backfill: bool = False,
+    summary_link: Optional[str] = None,
 ) -> str:
     """Compose the daily changelog block. Mirrors compose_block() in step9-append-changelog.sh.
+
+    `summary_link`: the daily summary actually on disk (see
+    `_resolve_daily_summary_target`); `None` falls back to the `{date}-{machine}.md`
+    shape, which dangles when a repo names its summaries `{date}.md`.
 
     Byte-parity: field order and printf format strings reproduced exactly.
     The **Scope:** line is omitted when `scope` is empty (oracle C4 omit-by-default).
@@ -222,7 +227,7 @@ def _compose_block(
     # Links line — matches oracle printf exactly
     month = date[:7]
     lines.append(
-        f"**Links:** archive/daily-summaries/{date}-{machine}.md, "
+        f"**Links:** {summary_link or f'archive/daily-summaries/{date}-{machine}.md'}, "
         f"archive/completed/{month}/ "
         f"(per-entry files; query via "
         f'`bin/query-completions --where "created={date}"`)'
@@ -406,6 +411,7 @@ def append_day(
         reviewed_lines=reviewed_lines,
         has_non_trivial=has_non_trivial,
         is_backfill=is_backfill,
+        summary_link=_daily_summary_link(worktree, date, machine),
     )
     section_header = f"## {date} — {machine}"
 
@@ -1578,6 +1584,12 @@ def _resolve_daily_summary_target(worktree: Path, date: str, machine: str) -> Op
     if cand3.is_file():
         return cand3
     return None
+
+
+def _daily_summary_link(worktree: Path, date: str, machine: str) -> Optional[str]:
+    """Repo-relative POSIX path of the daily summary on disk for (date, machine), else None."""
+    target = _resolve_daily_summary_target(Path(worktree), date, machine)
+    return target.relative_to(Path(worktree)).as_posix() if target is not None else None
 
 
 def _render_anchor_injection(

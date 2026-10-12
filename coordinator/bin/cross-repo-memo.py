@@ -53,7 +53,7 @@ fleet-wide constant.
 Single-delivery-copy model (PM ruling 2026-05-23):
 - Sender writes ONE memo into receiver's (per-receiver-resolved) cross-repo
   directory — NO sender copy, NO archive write at send time.
-- The CLI prints the receiver path and a "hand the PM this path for relay" line.
+- The CLI prints the receiver path; that line is delivery, and no PM step follows it.
 - The receiver reads the dirty file, acts on it, flips status: open → actioned
   in place via a normal Edit + commit. Terminal state — no move, no closure
   subcommand, no second side.
@@ -1743,9 +1743,9 @@ def _print_premise_check_advisory(
     receiver's clone to have resolved to a local path.
 
     Never blocks, never changes exit code, at any stage — advisory only.
-    At `send`, this prints alongside (not instead of) the existing "Hand the
-    PM this path for relay" stdout contract line, which callers must keep
-    intact for programmatic capture. At `draft`/`compose`, EVERYTHING this
+    At `send`, this prints alongside (not instead of) the `Receiver-side:`
+    stdout contract line, which callers must keep intact for programmatic
+    capture. At `draft`/`compose`, EVERYTHING this
     function prints goes to stderr — both stages' stdout contracts are a
     single captured line (the draft/outbox absolute path) and must not
     gain a second line.
@@ -1758,9 +1758,8 @@ def _print_premise_check_advisory(
     effective_kind = kind if kind is not None else "ask"
     if not receiver_path:
         return
-    # Absolutize to match the adjacent "Hand the
-    # PM this path for relay" line's os.path.abspath normalization, so both
-    # paths in the same stdout block are consistently absolute.
+    # Absolutize to match the `Receiver-side:` line's os.path.abspath
+    # normalization, so both paths in the same stdout block are absolute.
     abs_receiver_path = os.path.abspath(receiver_path)
 
     # draft/compose hold the outbox buffer open for edits when they call
@@ -3355,15 +3354,6 @@ def _cmd_send(args: argparse.Namespace) -> int:
             "That commit is the channel, not a cross-repo write grant — it "
             "touches cross-repo/ only."
         )
-        # Memo friction item 7 (cross-repo/inbox/2026-09-28-example-retrieval-repo-em-
-        # memo-send-friction.md): "a memo without PM relay is dropped in a
-        # hole" — the CLI's own docstring/comments elsewhere already claimed
-        # this line existed; it never actually printed. No live-session ping
-        # primitive exists to notify the PM directly (checked
-        # coordinator_core.session.liveness — it can only ask "is session X
-        # live", not deliver to one), so this stays the one line for the
-        # sender to hand the PM, not new infrastructure.
-        print(f"Hand the PM this path for relay: {abs_receiver_path}")
     sent_receipt = acted_item.get("sent_receipt")
     if sent_receipt:
         print(f"Sender-side receipt: {sent_receipt}")

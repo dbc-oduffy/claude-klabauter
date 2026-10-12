@@ -177,6 +177,30 @@ def test_compute_cleared_frontmatter_flips_state_and_strips_blocker():
     assert new_text.endswith("body text\n")
 
 
+@pytest.mark.parametrize("item_indent", ["  ", ""])
+def test_compute_cleared_frontmatter_strips_a_block_sequence_blocked_by(item_indent):
+    old_text = (
+        "---\n"
+        "status: open\n"
+        "deployment_state: awaiting_gate\n"
+        "pickup_ready: false\n"
+        "blocked_by:\n"
+        f"{item_indent}- hnd-b1\n"
+        f"{item_indent}- hnd-b2\n"
+        "# minted by x\n"
+        "authoring_session: s\n"
+        "---\n"
+        "\n"
+        "body\n"
+    )
+    new_text = compute_cleared_frontmatter(old_text)
+    assert "deployment_state: ready_to_fire" in new_text
+    assert "blocked_by" not in new_text
+    assert "hnd-b1" not in new_text and "hnd-b2" not in new_text
+    assert "\n- " not in new_text
+    assert "pickup_ready: false\n# minted by x\nauthoring_session: s\n---" in new_text
+
+
 def test_compute_cleared_frontmatter_rejects_non_awaiting_gate_state():
     old_text = "---\ndeployment_state: ready_to_fire\n---\n\nbody\n"
     with pytest.raises(GateClearError):

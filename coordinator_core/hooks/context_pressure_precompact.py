@@ -45,10 +45,11 @@ legacy bash's unconditional `exit 0`.
 
 Windows-portability divergence from the bash oracle (intentional, per
 W4a-sessionstart-recipe.md § 2.6): both files are written under
-`tempfile.gettempdir()`, NOT a hardcoded `/tmp`. This is required, not
+the fleet managed Temp root (`temp_layout.managed_tempdir()`), NOT a hardcoded `/tmp`.
+This is required, not
 optional — `coordinator_core.hooks.postuse_advisory_dispatch` (the existing
-CONSUMER of these files, `postuse_advisory_dispatch.py:151`, Review:
-code-reviewer B-F3) already reads from `tempfile.gettempdir()`; a producer
+CONSUMER of these files, Review:
+code-reviewer B-F3) reads from the same root; a producer
 that wrote to a literal `/tmp` would silently desync from its own consumer on
 native Windows, where `/tmp` does not resolve to the same path
 `gettempdir()` returns. The legacy bash producer's hardcoded `/tmp` was
@@ -91,6 +92,7 @@ from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_@-]+$")
 
@@ -306,9 +308,11 @@ def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
     if not session_id:
         lines.append("(none)")
         return lines
-    pattern = os.path.join(tmpdir, f"workflow-run-{session_id}-*.json")
+    name_glob = f"workflow-run-{session_id}-*.json"
+    legacy_dir = str(legacy_top_level_path(""))
+    roots = [tmpdir] if os.path.normcase(legacy_dir) == os.path.normcase(tmpdir) else [tmpdir, legacy_dir]
     try:
-        matches = sorted(_glob.glob(pattern))
+        matches = sorted(m for root in roots for m in _glob.glob(os.path.join(root, name_glob)))
     except Exception:
         matches = []
     rendered: List[str] = []
@@ -444,9 +448,7 @@ def run(raw_stdin: str) -> str:
         if not session_id or not _SESSION_ID_RE.fullmatch(session_id):
             return _STEERING_RULES
 
-        import tempfile
-
-        tmpdir = tempfile.gettempdir()
+        tmpdir = str(managed_tempdir())
 
         _write_sentinel(tmpdir, session_id, transcript_path)
         _write_state_snapshot(tmpdir, session_id)

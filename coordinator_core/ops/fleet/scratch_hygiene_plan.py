@@ -71,6 +71,7 @@ class _Walk:
     bytes: int = 0
     newest: float = 0.0
     young: bool = False
+    out_of_time: bool = False
     paths: list[str] = field(default_factory=list)
 
 
@@ -79,8 +80,9 @@ def _entry_is_junction(e: os.DirEntry) -> bool:
     return probe() if probe is not None else is_junction(e.path)
 
 
-def _walk(top: str, cutoff: float) -> _Walk:
-    """No-follow scandir walk; stops at the first node newer than ``cutoff``.
+def _walk(top: str, cutoff: float, deadline: Optional[float] = None) -> _Walk:
+    """No-follow scandir walk; stops at the first node newer than ``cutoff``, or sets
+    ``out_of_time`` at the first directory read past ``deadline``.
 
     A nested link is skipped entirely: its own mtime is not a write into the entry.
     """
@@ -98,6 +100,9 @@ def _walk(top: str, cutoff: float) -> _Walk:
         return w
     stack = [top]
     while stack:
+        if deadline is not None and time.monotonic() >= deadline:
+            w.out_of_time = True
+            return w
         try:
             it = os.scandir(stack.pop())
         except OSError:
@@ -131,8 +136,9 @@ def _tree_totals(path: str) -> tuple[int, int]:
 
 if os.name == "nt":
 
-    def _busy(paths: list[str]) -> bool:
-        """True when any file refuses a share-mode-0 open: held by a process."""
+    def _busy(paths: list[str], deadline: Optional[float] = None) -> Optional[bool]:
+        """True when any file refuses a share-mode-0 open: held by a process. None when
+        ``deadline`` passes before every file is probed."""
         import ctypes
         from ctypes import wintypes
 
@@ -145,7 +151,9 @@ if os.name == "nt":
         k32.CloseHandle.argtypes = [wintypes.HANDLE]
         invalid = wintypes.HANDLE(-1).value
         generic_read, open_existing = 0x80000000, 3
-        for p in paths:
+        for i, p in enumerate(paths):
+            if deadline is not None and not i % 256 and time.monotonic() >= deadline:
+                return None
             full = os.path.abspath(p)
             h = k32.CreateFileW(full if full.startswith("\\\\") else "\\\\?\\" + full, generic_read, 0, None, open_existing, 0x80, None)
             if h == invalid or h is None:
@@ -153,12 +161,12 @@ if os.name == "nt":
             k32.CloseHandle(h)
         return False
 
-    def _has_open_handle(entry: str, walk: _Walk, ctx: _Context) -> bool:
-        return _busy(walk.paths)
+    def _has_open_handle(entry: str, walk: _Walk, ctx: _Context, deadline: Optional[float] = None) -> Optional[bool]:
+        return _busy(walk.paths, deadline)
 
 else:
 
-    def _has_open_handle(entry: str, walk: _Walk, ctx: _Context) -> bool:
+    def _has_open_handle(entry: str, walk: _Walk, ctx: _Context, deadline: Optional[float] = None) -> Optional[bool]:
         """POSIX unlink never blocks on an open file; the gate is registry-live pids holding a file under the entry."""
         prefix = _norm(entry) + os.sep
         return any(p.startswith(prefix) or p == prefix[:-1] for p in ctx.open_files())
@@ -172,11 +180,14 @@ def classify_entry(
     verify_copy: Optional[Mapping[str, str]] = None,
     registry_dir: Optional[Path] = None,
     now: Optional[float] = None,
+    deadline: Optional[float] = None,
     _ctx: Optional[_Context] = None,
 ) -> dict[str, Any]:
     """Gate one top-level entry and return its purge record (``would-delete`` or one ``skipped-*``).
 
-    Usable as apply's ``recheck``: it reads current disk state on every call.
+    Usable as apply's ``recheck``: it reads current disk state on every call. ``deadline`` is a
+    ``time.monotonic()`` instant: past it the entry is reported ``skipped-budget`` unwalked, since
+    the walk and the probe both scale with the entry's file count.
     """
     entry = os.fspath(entry)
     repo_root = Path(repo_root)
@@ -195,6 +206,9 @@ def classify_entry(
             repo_root=repo_root,
         )
 
+    if deadline is not None and time.monotonic() >= deadline:
+        return rec("skipped-budget", reason="budget-exhausted")
+
     if _is_link(entry):
         return rec("skipped-link", reason="link-not-followed")
 
@@ -208,7 +222,9 @@ def classify_entry(
             return rec("skipped-live", reason=f"live-session-cwd:{row.session_id}")
 
     cutoff = now - quiescence_hours * 3600.0
-    w = _walk(entry, cutoff)
+    w = _walk(entry, cutoff, deadline)
+    if w.out_of_time:
+        return rec("skipped-budget", reason="budget-exhausted")
     if w.young:
         return rec("skipped-young", w, reason=f"written-within-{quiescence_hours:g}h")
 
@@ -218,7 +234,10 @@ def classify_entry(
         if src != dst:
             return rec("skipped-unverified", w, reason=f"copy-mismatch:files={src[0]}/{dst[0]},bytes={src[1]}/{dst[1]}")
 
-    if _has_open_handle(entry, w, ctx):
+    held = _has_open_handle(entry, w, ctx, deadline)
+    if held is None:
+        return rec("skipped-budget", reason="budget-exhausted")
+    if held:
         return rec("skipped-live", w, reason="open-handle")
 
     return rec("would-delete", w)
@@ -231,6 +250,19 @@ def _entries(root: Path) -> list[str]:
         return []
 
 
+def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
+    """Every top-level entry in ``<repo>/scratch`` and ``coordinator_temp_root(repo)``.
+    ``pytest/`` under the Temp root is not an entry: its per-run children are."""
+    repo_root = Path(repo_root)
+    paths = _entries(repo_root / "scratch")
+    for p in _entries(coordinator_temp_root(repo_root)):
+        if os.path.basename(p) == _PYTEST_DIRNAME and not _is_link(p) and os.path.isdir(p):
+            paths.extend(_entries(Path(p)))
+        else:
+            paths.append(p)
+    return paths
+
+
 def plan_purge(
     repo_root: str | os.PathLike[str],
     *,
@@ -238,22 +270,13 @@ def plan_purge(
     verify_copy: Optional[Mapping[str, str]] = None,
     registry_dir: Optional[Path] = None,
     now: Optional[float] = None,
+    deadline: Optional[float] = None,
 ) -> list[dict[str, Any]]:
-    """Purge records for every top-level entry in ``<repo>/scratch`` and ``coordinator_temp_root(repo)``.
-
-    Deletes nothing. A missing root yields no records. ``pytest/`` under the Temp root is not an
-    entry: its per-run children are.
-    """
+    """Dry-run purge records for every candidate entry. Deletes nothing. A missing root
+    yields no records."""
     repo_root = Path(repo_root)
     ctx = _Context(registry_dir=registry_dir)
     now = time.time() if now is None else now
-    temp_root = coordinator_temp_root(repo_root)
-    paths = _entries(repo_root / "scratch")
-    for p in _entries(temp_root):
-        if os.path.basename(p) == _PYTEST_DIRNAME and not _is_link(p) and os.path.isdir(p):
-            paths.extend(_entries(Path(p)))
-        else:
-            paths.append(p)
     return [
         classify_entry(
             p,
@@ -261,7 +284,8 @@ def plan_purge(
             quiescence_hours=quiescence_hours,
             verify_copy=verify_copy,
             now=now,
+            deadline=deadline,
             _ctx=ctx,
         )
-        for p in paths
+        for p in purge_candidates(repo_root)
     ]

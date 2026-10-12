@@ -66,12 +66,19 @@ def test_refused_partial_scoped_to_prints_its_reason(tmp_path, warm):
 
 @pytest.fixture
 def cc_invoke():
+    """The real module, with its import-time process state undone: it stays in no later
+    test's `sys.modules`, `sys.path` or environment."""
+    modules, path, environ = dict(sys.modules), list(sys.path), dict(os.environ)
     sys.path.insert(0, str(_BIN / "lib"))
     try:
         import cc_invoke as mod
         yield mod
     finally:
-        sys.path.remove(str(_BIN / "lib"))
+        sys.path[:] = path
+        for name in set(sys.modules) - set(modules):
+            del sys.modules[name]
+        os.environ.clear()
+        os.environ.update(environ)
 
 
 def test_refusal_message_surfaces_rejection_class_when_no_stderr_crossed(cc_invoke):
