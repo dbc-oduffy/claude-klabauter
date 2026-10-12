@@ -669,6 +669,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/distill_curate_clusters.py",
         ("_handler",),
     ),
+    "distill.write_curated_clusters": (
+        "coordinator_core/ops/distill_write_curated_clusters.py",
+        ("_handler",),
+    ),
     "distill.stamp_disposal": (
         "coordinator_core/ops/distill_stamp_disposal.py",
         ("_handler",),
@@ -2985,11 +2989,13 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "deliverable.cascade_terminal": (),
     "distill.apply_disposal": (
         ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "files_citing", "rg", 0),
         ("coordinator_core/distill/delete_guard.py", "_candidate_actioned_date", "git", 0),
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
     "distill.assemble_disposal_manifest": (
         ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "files_citing", "rg", 0),
         ("coordinator_core/distill/delete_guard.py", "_candidate_actioned_date", "git", 0),
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
@@ -3110,9 +3116,9 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # onto `git/run.py::run_git` (a D3 file), so `handoff.columns` reaches no D5 site.
     # 33 -> 32 on 2026-10-03: `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
-    assert total_pairs == 32, (
+    assert total_pairs == 34, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
+        "34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -6791,7 +6797,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm
     # first). That site is already priced into memo.transition and housekeeping.cycle.
     "session.safe_commit_offer": 2,
-    "plugin_health.sentinel": 20,
+    # 20 -> 21, 2026-10-12 (3843db8c19): P-24 runs `machine-local check` once per sentinel
+    # run, not per key -- one constant spawn under the probe's own timeout.
+    "plugin_health.sentinel": 21,
     "fleet.migrate_handoff_vocabulary": 4,
     "handoff.transition": 4,
     "fleet.reap_integrated_findings": 9,
@@ -6818,7 +6826,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 8 -> 9, 2026-10-09: bash guard `deploy-dirty-tree` adds one `git status --porcelain`
     # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
     "warm_guard.evaluate": 9,
-    "distill.apply_disposal": 9,
+    # 9 -> 10, 2026-10-12 (f10d5c0233): `_common.files_citing` is the batched citation
+    # prefetch -- one `rg -f` per needle set (live scope, harvest scope), never per candidate.
+    "distill.apply_disposal": 10,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
     "cruft_sweep.run": 8,
@@ -6830,7 +6840,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
     "branch.merge_into_workstream": 3,
-    "distill.assemble_disposal_manifest": 3,
+    # 3 -> 4, 2026-10-12 (f10d5c0233): same batched `files_citing` prefetch as apply_disposal.
+    "distill.assemble_disposal_manifest": 4,
     # 4 -> 5, 2026-09-12: the Perforce second-class plan's p4 leg adds one
     # reachable spawn site (`coordinator_core/p4/runner.py::run`), reached
     # through `p4/shelve.py`. DELIBERATE growth, recorded rather than drifted.

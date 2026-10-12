@@ -2054,8 +2054,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "4f7059553b09a1157341042353abf5d5b01863ec",
-    "coordinator_core/_engine_stamp": "d0b429e7d02e1760652ba0fddb507901dcd8e92a",
+    "coordinator_core/_engine_published_at": "c6cdc724ea612443917fc9a18bdb1249ea8b7980",
+    "coordinator_core/_engine_stamp": "bea77b12fcf66ca1282cda47b256da2e60aaa6cd",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4396,7 +4396,7 @@
     "coordinator_core/ops/distill_disposal_manifest.py": "85f8fbdaf72a58c6217f6c17552cc8344b7a01d5",
     "coordinator_core/ops/distill_scope.py": "b0df45892ca5b17edb8099b3e2226f5aa5fea3bf",
     "coordinator_core/ops/distill_stamp_disposal.py": "8bf53e8ddaac71bee36472c1fd0a5d199906d6f2",
-    "coordinator_core/ops/distill_workflow_input.py": "38e6b3d7a583317560879171b1a149981d03237c",
+    "coordinator_core/ops/distill_workflow_input.py": "db85cb2708616032e69aa60f28b55898b724a52e",
     "coordinator_core/ops/distill_write_curated_clusters.py": "ea5e580e1bd81bdeb2273a4f9bb64d1de938e72c",
     "coordinator_core/ops/doc_content_verify.py": "a00e58f3006e761e3a0365154b5c7c35559ba8b1",
     "coordinator_core/ops/doc_registry.py": "95f1e7184c4b157ac84e98b922009f1bea3a7ec5",
@@ -5408,7 +5408,7 @@
     "coordinator_core/ops/tests/test_distill_disposal_manifest.py": "32f1bbd1293511286633f2beeed9d43f4e018a58",
     "coordinator_core/ops/tests/test_distill_scope.py": "4f4e2b04019c6bdc0b75e34253f2ac463b36b2d4",
     "coordinator_core/ops/tests/test_distill_stamp_disposal.py": "94667e00c76b28499718bbe442354dd3e311d725",
-    "coordinator_core/ops/tests/test_distill_workflow_input.py": "162a1bfcf18733a47d21f74390ee3aeea34dbde0",
+    "coordinator_core/ops/tests/test_distill_workflow_input.py": "bfd19028dd422d7f0d6ecf69df1a26ee432fd4dc",
     "coordinator_core/ops/tests/test_distill_write_curated_clusters.py": "a44417907e5179dd89b68bab9b6eda341e7b0625",
     "coordinator_core/ops/tests/test_docindex_emit_rebaseline.py": "4b2659ccdbe23358503cdb7e0ea54e7e6915cdbe",
     "coordinator_core/ops/tests/test_doctor.py": "50155fe2e346aefa4a138ff3b2b07e57da7bb6a7",
@@ -6604,7 +6604,7 @@
     "coordinator_core/tests/test_no_spawn_per_item_loop.py": "2163627a642534cf496bded8f9a98df18bbbf0b2",
     "coordinator_core/tests/test_no_stage_without_commit.py": "2bb471e643bfca3be585d0674bf2abe9f8de9fe2",
     "coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py": "b3d0ef23d994435f2430f84af45dfca6e59278bd",
-    "coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py": "d88c529d4470bda3c95228be33d1c80bbb4a03f5",
+    "coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py": "5de988c4e515934400374125fa2351f3446f2489",
     "coordinator_core/tests/test_no_unsanctioned_shell_spawn.py": "ddb452c5e21cb432619da93ad6f5f67117f64166",
     "coordinator_core/tests/test_no_wall_clock_ratchets.py": "23b414486a5c1794696586c0cceb225c3859d59d",
     "coordinator_core/tests/test_normalize_snippet.py": "44698f16a1a14b25151c364d181769f56ce7ca20",
@@ -7382,5 +7382,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "15bd67108fbb804bfd01cf04c475d4220c124642"
+  "source_head": "ca7d1a8cf9704609411253ec4ad404070d1cac80"
 }

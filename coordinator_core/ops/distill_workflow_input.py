@@ -41,6 +41,7 @@ inputfile-silent-truncation.md
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from coordinator_core.distill.manifest_schema import check_schema_version
@@ -107,27 +108,54 @@ def translate_to_workflow_input(
     }
 
 
-#: Most slug entries per `wikislugs-NNNN.json` shard — sized so one shard is a single
-#: small read an LLM loader relays whole (the 261 KB single map was not).
-SLUG_SHARD_SIZE = 100
+#: Most compact-JSON bytes per `wikislugs-NNNN.json` shard. The loader relays a shard whole
+#: to one agent, and that relay caps near 15 KB; an entry count cannot hold that bound,
+#: since slug and path lengths vary (100 real entries measured 18,125 bytes).
+SLUG_SHARD_MAX_BYTES = 12_000
+
+
+def _compact(obj: Any) -> str:
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _slug_shards(slugs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Greedy split of `slugs` into chunks whose shard body stays within SLUG_SHARD_MAX_BYTES.
+    One entry larger than the cap still gets a shard of its own, never dropped."""
+    # Envelope priced at its widest counters so the running total never undercounts.
+    envelope = len(_compact({"shard": 9999, "slug_count": len(slugs), "entries": {}}).encode())
+    chunks: list[dict[str, Any]] = []
+    chunk: dict[str, Any] = {}
+    size = envelope
+    for slug, path in slugs.items():
+        entry = len(_compact({slug: path}).encode()) - 2 + (1 if chunk else 0)
+        if chunk and size + entry > SLUG_SHARD_MAX_BYTES:
+            chunks.append(chunk)
+            chunk, size = {}, envelope
+            entry -= 1
+        chunk[slug] = path
+        size += entry
+    if chunk:
+        chunks.append(chunk)
+    return chunks
 
 
 def shard_workflow_input(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Split a consumer payload into the on-disk sharded form: a small manifest plus
     `{filename: body}` for one `batch-NNNN.json` per batch and `wikislugs-NNNN.json` shards
-    of at most SLUG_SHARD_SIZE entries. The manifest's counts are the integrity totals the
+    of at most SLUG_SHARD_MAX_BYTES compact-JSON bytes each. The manifest's counts are the integrity totals the
     Workflow re-sums from the shards (`input-count-mismatch`, `wiki-slugs-dropped`)."""
     files: dict[str, dict[str, Any]] = {}
     batch_files: list[str] = []
     for idx, batch in enumerate(payload["batches"], start=1):
         name = f"batch-{idx:04d}.json"
         files[name] = {**batch, "file_count": len(batch["files"])}
+        # A batch is one unit of work and is never split; over the relay cap is a scope defect.
+        if len(_compact(files[name]).encode()) > SLUG_SHARD_MAX_BYTES:
+            raise ValueError(f"{name} exceeds {SLUG_SHARD_MAX_BYTES} bytes of compact JSON")
         batch_files.append(name)
 
-    slugs = list(payload["wikiSlugs"].items())
     shard_files: list[str] = []
-    for shard, start in enumerate(range(0, len(slugs), SLUG_SHARD_SIZE), start=1):
-        chunk = dict(slugs[start : start + SLUG_SHARD_SIZE])
+    for shard, chunk in enumerate(_slug_shards(payload["wikiSlugs"]), start=1):
         name = f"wikislugs-{shard:04d}.json"
         files[name] = {"shard": shard, "slug_count": len(chunk), "entries": chunk}
         shard_files.append(name)

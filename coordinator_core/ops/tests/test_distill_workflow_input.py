@@ -134,10 +134,15 @@ def test_dispatch_message_smoke():
 
 
 def test_shard_splits_batches_and_slugs_with_matching_counts():
-    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_SIZE, shard_workflow_input
+    import json
+
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
 
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
-    payload["wikiSlugs"] = {f"s{i}": f"docs/wiki/s{i}.md" for i in range(SLUG_SHARD_SIZE * 2 + 1)}
+    # ~180-byte entries, the real backlog's width: 100 of them would be ~18 KB.
+    payload["wikiSlugs"] = {
+        f"slug-{i:04d}-{'x' * 60}": f"docs/wiki/{'y' * 80}/s{i}.md" for i in range(250)
+    }
     payload["wikiSlugCount"] = len(payload["wikiSlugs"])
     manifest, files = shard_workflow_input(payload)
 
@@ -145,7 +150,33 @@ def test_shard_splits_batches_and_slugs_with_matching_counts():
     assert len(manifest["batchFiles"]) == manifest["batch_count"]
     assert sum(files[n]["file_count"] for n in manifest["batchFiles"]) == manifest["total_file_count"]
     assert all(files[n]["file_count"] == len(files[n]["files"]) for n in manifest["batchFiles"])
-    assert manifest["slugShardFiles"] == ["wikislugs-0001.json", "wikislugs-0002.json", "wikislugs-0003.json"]
-    assert [files[n]["slug_count"] for n in manifest["slugShardFiles"]] == [100, 100, 1]
+    shards = manifest["slugShardFiles"]
+    assert len(shards) > 2 and shards[0] == "wikislugs-0001.json"
+    sizes = [len(json.dumps(files[n], separators=(",", ":"), ensure_ascii=False).encode()) for n in shards]
+    assert max(sizes) <= SLUG_SHARD_MAX_BYTES
+    assert min(sizes[:-1]) > SLUG_SHARD_MAX_BYTES - 400  # greedy fill, not a fixed count
+    merged = {k: v for n in shards for k, v in files[n]["entries"].items()}
+    assert list(merged) == list(payload["wikiSlugs"])
     assert sum(files[n]["slug_count"] for n in manifest["slugShardFiles"]) == manifest["wikiSlugCount"]
     assert manifest["batchFiles"][0] == "batch-0001.json"
+
+
+def test_oversize_slug_entry_gets_its_own_shard():
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
+
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
+    payload["wikiSlugs"] = {"a": "docs/wiki/a.md", "huge": "z" * SLUG_SHARD_MAX_BYTES, "b": "docs/wiki/b.md"}
+    payload["wikiSlugCount"] = 3
+    manifest, files = shard_workflow_input(payload)
+    assert [list(files[n]["entries"]) for n in manifest["slugShardFiles"]] == [["a"], ["huge"], ["b"]]
+
+
+def test_batch_over_relay_cap_refuses():
+    import pytest
+
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
+
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
+    payload["batches"][0]["files"] = ["f" * SLUG_SHARD_MAX_BYTES]
+    with pytest.raises(ValueError, match="batch-0001.json"):
+        shard_workflow_input(payload)
