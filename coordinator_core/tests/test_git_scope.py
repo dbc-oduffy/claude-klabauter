@@ -262,3 +262,46 @@ def test_module_never_raises_when_git_is_missing(monkeypatch, tmp_path):
 
 def test_probe_verdict_constants_are_three_distinct_values():
     assert len({PROBE_YES, PROBE_NO, PROBE_UNKNOWN}) == 3
+
+
+# --- wall bound (git/run.py::_wall_bound): a slow healthy child is answered, a hung child is "hung" ---
+
+import sys
+
+from coordinator_core import git_scope as _gs
+from coordinator_core.git import run as _git_run
+
+
+def _swap_child(monkeypatch, code: str) -> None:
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        return real_run([sys.executable, "-c", code], **kwargs)
+
+    monkeypatch.setattr(_gs.subprocess, "run", run)
+
+
+@pytest.mark.slow
+@pytest.mark.deliberate_wall_clock(reason="a child that outlives the old 2s wall cap must still be answered")
+def test_git_predicate_uses_the_answer_of_a_child_slower_than_the_old_wall_cap(monkeypatch, tmp_path):
+    _swap_child(monkeypatch, "import time; time.sleep(5)")
+    assert git_predicate(tmp_path, ["rev-parse", "HEAD"]) == (PROBE_YES, "")
+
+
+@pytest.mark.slow
+@pytest.mark.deliberate_wall_clock(reason="a child that outlives the wall bound must be killed and named hung")
+def test_git_predicate_reports_a_wall_kill_as_hung(monkeypatch, tmp_path):
+    monkeypatch.setattr(_git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.0)
+    _swap_child(monkeypatch, "import time; time.sleep(60)")
+    verdict, reason = git_predicate(tmp_path, ["rev-parse", "HEAD"], timeout=0.3)
+    assert verdict == PROBE_UNKNOWN
+    assert "hung" in reason and "timed out" not in reason
+
+
+@pytest.mark.slow
+@pytest.mark.deliberate_wall_clock(reason="a child that outlives the wall bound must be killed and named hung")
+def test_foreign_repo_probe_reports_a_wall_kill_as_hung(monkeypatch, tmp_path):
+    monkeypatch.setattr(_git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.0)
+    _swap_child(monkeypatch, "import time; time.sleep(60)")
+    reason = _gs._probe_foreign_repo(str(tmp_path), 0.3)
+    assert reason and "hung" in reason and "timed out" not in reason

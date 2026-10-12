@@ -1,6 +1,7 @@
 """workday-start-run end to end: fixture repo under tmp_path, fake dispatch table, fixture template."""
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
@@ -9,8 +10,9 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
-from coordinator_core.workday_start import cli, ledger, manifest, single_flight
-from coordinator_core.workday_start.runner import ChildOutcome
+from coordinator_core.ceremony_common.run import ledger, single_flight
+from coordinator_core.ceremony_common.run.runner import ChildOutcome
+from coordinator_core.workday_start import cli, manifest
 
 DAY1, DAY2, DAY3 = "2026-10-12", "2026-10-13", "2026-10-14"
 TEMPLATE = (
@@ -18,7 +20,7 @@ TEMPLATE = (
     "export default async function run() { return args.digest.run_id }\n"
 )
 CONFLICT = "RECONCILE-CONFLICT branch=work/test"
-SOURCES = Path(cli.__file__).parent
+NEUTRAL_SOURCES = Path(ledger.__file__).parent
 
 
 class Box:
@@ -170,7 +172,7 @@ def test_missing_template_exits_4_with_ledger_briefing_marker_and_lock_released(
 
 
 def test_failures_past_the_cap_file_one_row_for_the_run(box):
-    sentinels = [s.id for s in manifest.steps_for(["sentinels"], repo_root=box.root, today=cli._dt.date(2026, 10, 12))
+    sentinels = [s.id for s in manifest.steps_for(["sentinels"], repo_root=box.root, today=datetime.date(2026, 10, 12))
                  if s.cost_class != "over-bar"]
     assert len(sentinels) > cli.FAILURE_ROWS_FILED_MAX
     for step_id in sentinels:
@@ -326,5 +328,5 @@ def test_no_output_carries_parked_for_you(box):
 
 @pytest.mark.parametrize("name", ["runner.py", "ledger.py", "single_flight.py", "emit.py", "decide.py"])
 def test_neutral_modules_name_no_ceremony(name):
-    text = (SOURCES / name).read_text(encoding="utf-8")
+    text = (NEUTRAL_SOURCES / name).read_text(encoding="utf-8")
     assert "workday-start" not in text and "workday_start" not in text

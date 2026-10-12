@@ -2093,9 +2093,7 @@ def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]
         if op in _OP_TIMEOUTS_MAP:
             budget = _OP_TIMEOUTS_MAP[op]
         elif is_ceremony:
-            budget = _OP_TIMEOUTS_MAP.get(
-                "__ceremony_budget__", _OP_TIMEOUTS_MAP["__default__"]
-            )
+            budget = _OP_TIMEOUTS_MAP["__default__"]
         else:
             budget = _OP_TIMEOUTS_MAP["__default__"]
 

@@ -85,6 +85,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "sweep-terminal-handoffs.py",
     "workstream-complete-assemble.py",
     "app-session.py",
+    "ceremony-run.py",
     "check-sidecar-fill.py",
     "classify-engine-root-residue.py",
     "coordinator-cockpit-emit-schema.py",

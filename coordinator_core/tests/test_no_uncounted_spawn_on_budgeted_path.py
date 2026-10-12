@@ -2420,9 +2420,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
     ),
-    "orientation.regenerate_cache": (
-        ("coordinator_core/git/repo_root.py", "_spawn_rev_parse", "git", 0),
-    ),
+    "orientation.regenerate_cache": (),
     "priority.drain": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
@@ -2612,9 +2610,10 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # `cascade_terminal_op.py` and no longer reaches `git_native.py::_git._invoke`: -1.
     # 58 -> 59 (2026-10-08): new op `review.reachability` reaches `git/run.py::run_git`: +1.
     # 59 -> 60 (2026-10-08): new op `research.close` reaches `git/run.py::run_git` (CRLF blob fallback): +1.
-    assert total_pairs == 60, (
+    # 60 -> 59 (2026-10-12): `orientation.regenerate_cache` no longer reaches `repo_root.py::_spawn_rev_parse`.
+    assert total_pairs == 59, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -4602,7 +4601,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/tracker/push_suggestion.py", "_commit_envelope._run", "git", 0),
         ("coordinator_core/ops/updatedocs_gates.py", "_run", "<dynamic>", 0),
         ("coordinator_core/ops/verify_fix_files_changed.py", "_changed_files", "git", 0),
-        ("coordinator_core/orientation/regenerate_cache.py", "_find_uproject", "<dynamic>", 0),
         ("coordinator_core/orientation/regenerate_cache.py", "_git", "git", 0),
         ("coordinator_core/plugin_health/drift.py", "_run_git", "git", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p10", "<dynamic>", 0),
@@ -5102,16 +5100,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "argv0 shapes chosen by `cli_path.suffix`/`sys.platform` at call time."
     ),
     (
-        "coordinator_core/orientation/regenerate_cache.py",
-        "_find_uproject",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 resolves to 'find' on a one-hop read -- `args = [\"find\", "
-        "str(repo_root), \"-maxdepth\", \"6\", ...]` is a literal built above "
-        "the `subprocess.run` call."
-    ),
-    (
         "coordinator_core/plugin_health/sentinel.py",
         "probe_p10",
         "<dynamic>",
@@ -5169,10 +5157,10 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "sub-chunk's job) or this entry is a leftover that should be removed:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 31, (
+    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 30, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
-        "entries, not the 31 <dynamic>-argv0 sites tranche dyn's inventory now "
-        "names -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
+        "entries, not the 30 <dynamic>-argv0 sites tranche dyn's inventory now "
+        "names (31 until 2026-10-12, when regenerate_cache.py::_find_uproject was deleted) -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
         "gravestone deletion of review_trail_readjudication_report.py "
         "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
         "DR-374's last row) removed its `_run` site along with the whole module, "
@@ -6838,7 +6826,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # an enrolment is dead weight (AC20c).
     "workflow.fire": 5,
     "machine.hibernate": 4,
-    "orientation.regenerate_cache": 4,
+    # 4 -> 1, 2026-10-12: build_cache resolves its git facts once through `_git`; the
+    # `find` argv, the `is_inside_work_tree` probe and the per-fact rev-parse spawns are gone.
+    "orientation.regenerate_cache": 1,
     "branch.merge_into_workstream": 3,
     # 3 -> 4, 2026-10-12 (f10d5c0233): same batched `files_citing` prefetch as apply_disposal.
     "distill.assemble_disposal_manifest": 4,
@@ -7023,7 +7013,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.sessionend_auto_commit": 2,
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
-    "hooks.sweep_boot": 10,
+    # 10 -> 7, 2026-10-12: sweep_boot reaches build_cache; the same three sites left its reach.
+    "hooks.sweep_boot": 7,
     "learn_lessons_pipeline.apply": 2,
     "learn_lessons_pipeline.brief": 2,
     "memo.correct_note": 4,

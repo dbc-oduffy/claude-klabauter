@@ -20,7 +20,9 @@ from typing import Any, Callable, Mapping
 from coordinator_core.contract import apply_base
 from coordinator_core.git.run import GitResult, run_git
 
-from . import decide
+from coordinator_core.ceremony_common.run import decide
+from coordinator_core.ceremony_common.run.decide import RECOMMENDATION, recommendation
+
 from .contract import DECISIONS_FILE, Decision
 
 NO_ACTION_DISPOSITIONS: frozenset[str] = frozenset({"defer", "leave", "leave_as_is", "leave_for_now"})
@@ -54,15 +56,6 @@ def _decision(point: Mapping[str, Any], rule: str, value: str, rationale: str, e
         rationale=rationale,
         evidence=evidence,
     )
-
-
-def recommendation(point: Mapping[str, Any], *, context: Mapping[str, Any]) -> Decision | None:
-    """DR-312: a point recommending one of its own non-handback dispositions takes it."""
-    picked = decide.recommended_disposition(point)
-    if picked is None:
-        return None
-    value, rationale = picked
-    return _decision(point, "recommendation", value, rationale, str(point.get("evidence", "")))
 
 
 def memo_inbox(point: Mapping[str, Any], *, context: Mapping[str, Any]) -> Decision | None:
@@ -204,11 +197,11 @@ def step0_reconcile_outcome(step: Any, result: Any, *, repo_root: Path, run_dir:
 RULES: dict[str, Callable[..., Any]] = {
     "step0-stale-branch": step0_stale_branch,
     "step0-reconcile-outcome": step0_reconcile_outcome,
-    "recommendation": recommendation,
+    RECOMMENDATION: recommendation,
     "memo-inbox": memo_inbox,
 }
 
 POINT_RULES = decide.RuleTable(
-    point_rules=(("memo-inbox", memo_inbox), ("recommendation", recommendation)),
+    point_rules=(("memo-inbox", memo_inbox), (RECOMMENDATION, recommendation)),
     exhausted_rule="no-live-disposition",
 )

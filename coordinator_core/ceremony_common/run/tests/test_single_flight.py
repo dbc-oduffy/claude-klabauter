@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from coordinator_core.workday_start import single_flight as sf
+from coordinator_core.ceremony_common.run import single_flight as sf
 
 TODAY = "2026-10-12"
 YESTERDAY = "2026-10-11"
@@ -20,7 +20,7 @@ def env(tmp_path):
 
 def _acq(env, session="s1", today=TODAY):
     root, marker = env
-    return sf.acquire(root, ceremony="workday-start", marker_path=marker, today=today, session_id=session)
+    return sf.acquire(root, ceremony="fixture-ceremony", marker_path=marker, today=today, session_id=session)
 
 
 def _dead_pid():
@@ -40,6 +40,15 @@ def test_admits_then_second_is_in_flight(env):
     assert a.state == sf.ADMITTED and a.run_id
     b = _acq(env, "s2")
     assert b.state == sf.IN_FLIGHT and b.run_id == a.run_id
+
+
+def test_no_marker_path_skips_the_once_per_day_check(env):
+    root, _ = env
+    first = sf.acquire(root, ceremony="fixture-ceremony", today=TODAY, session_id="s1")
+    assert first.state == sf.ADMITTED
+    assert sf.release(first)
+    again = sf.acquire(root, ceremony="fixture-ceremony", today=TODAY, session_id="s2")
+    assert again.state == sf.ADMITTED
 
 
 def test_release_allows_next(env):
@@ -106,6 +115,6 @@ def test_gitfile_worktree_resolves_common_dir(tmp_path):
     wt = tmp_path / "wt"
     wt.mkdir()
     (wt / ".git").write_text(f"gitdir: {common / 'worktrees' / 'w'}")
-    a = sf.acquire(wt, ceremony="workday-start", marker_path=wt / "m", today=TODAY, session_id="s")
+    a = sf.acquire(wt, ceremony="fixture-ceremony", marker_path=wt / "m", today=TODAY, session_id="s")
     assert a.state == sf.ADMITTED
-    assert a.lock_path.resolve().parent == (common / "coordinator-sessions" / "workday-start-runs").resolve()
+    assert a.lock_path.resolve().parent == (common / "coordinator-sessions" / "fixture-ceremony-runs").resolve()

@@ -6,9 +6,9 @@ import pytest
 from coordinator_core.composition_budget import CompositionBudget
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.apply_base import UnrecognizedDirective
-from coordinator_core.workday_start import ledger, runner
-from coordinator_core.workday_start.contract import StepSpec
-from coordinator_core.workday_start.runner import BudgetRefused, ChildOutcome, rule_child, run_stages
+from coordinator_core.ceremony_common.run import ledger, runner
+from coordinator_core.ceremony_common.run.contract import StepSpec
+from coordinator_core.ceremony_common.run.runner import BudgetRefused, ChildOutcome, rule_child, run_stages
 
 
 @pytest.fixture(autouse=True)
@@ -210,7 +210,7 @@ def test_op_and_inproc_kinds_skip_the_dispatch_row(tmp_path):
 
 
 def test_ledger_rows_carry_exactly_the_contract_keys(tmp_path):
-    from coordinator_core.workday_start.contract import LEDGER_ROW_KEYS
+    from coordinator_core.ceremony_common.run.contract import LEDGER_ROW_KEYS
 
     _, rows = _run(tmp_path, [_step("a")], Fake())
     assert tuple(rows[0]) == LEDGER_ROW_KEYS
@@ -224,6 +224,118 @@ def test_cold_measure_reports_exit_and_output(tmp_path):
     )
     assert out.exit_code == 0 and out.stdout.strip() == "hi"
     assert out.process_ms is not None and out.spawns and out.spawns >= 1
+
+
+def _wide(id_, *, target="alpha", cost="engine", gates=False, stdin_from=None, best_effort=False):
+    return StepSpec(
+        id=id_, stage="s", kind="cli", target=target, args=(), depends_on=None,
+        already_satisfied=False, detail="", heading=id_, cost_class=cost, gates_next=gates,
+        stdin_from=stdin_from, best_effort=best_effort,
+    )
+
+
+class Recorder:
+    def __init__(self, codes=None, stdout=None):
+        self.codes, self.out = codes or {}, stdout or {}
+        self.started: list[str] = []
+        self.stdin: dict[str, str] = {}
+
+    def table(self):
+        def run(step, *, repo_root, run_dir, deadline_s, stdin_text=None):
+            self.started.append(step.id)
+            if stdin_text is not None:
+                self.stdin[step.id] = stdin_text
+            return ChildOutcome(exit_code=self.codes.get(step.id, 0), process_ms=1.0, spawns=1,
+                                stdout=self.out.get(step.id, ""))
+
+        return {"cli": run, "op": run, "inproc": run, "rule-child": lambda *a, **k: ChildOutcome(0)}
+
+
+def _run_wide(tmp_path, steps, rec, **kw):
+    run_dir = tmp_path / "run"
+    results = run_stages(steps, ceremony="demo", repo_root=tmp_path, run_dir=run_dir, dispatch=rec.table(), **kw)
+    return results, ledger.read(run_dir)
+
+
+def test_stdin_from_delivers_the_upstream_stdout(tmp_path):
+    rec = Recorder(stdout={"a": "payload"})
+    _, rows = _run_wide(tmp_path, [_wide("a"), _wide("b", target="beta", stdin_from="a")], rec)
+    assert rec.stdin == {"b": "payload"} and rows[1]["status"] == "ran"
+
+
+def test_stdin_consumer_without_upstream_ran_row_is_not_composed(tmp_path):
+    rec = Recorder()
+    _, rows = _run_wide(tmp_path, [_wide("b", stdin_from="a")], rec)
+    assert rows[0]["status"] == "not-composed" and rows[0]["reason"] == "a"
+    assert rec.started == []
+
+
+def test_stdin_consumer_of_failed_upstream_is_not_composed(tmp_path):
+    rec = Recorder(codes={"a": 1})
+    _, rows = _run_wide(tmp_path, [_wide("a"), _wide("b", target="beta", stdin_from="a")], rec)
+    assert [r["status"] for r in rows] == ["failed", "not-composed"]
+    assert rec.started == ["a"]
+
+
+def test_stdin_consumer_of_over_bar_upstream_is_not_composed(tmp_path):
+    rec = Recorder()
+    _, rows = _run_wide(tmp_path, [_wide("a", cost="over-bar"), _wide("b", target="beta", stdin_from="a")], rec)
+    assert [r["status"] for r in rows] == ["not-composed", "not-composed"]
+    assert rows[1]["reason"] == "a" and rec.started == []
+
+
+def test_failing_best_effort_gate_halts_nothing(tmp_path):
+    rec = Recorder(codes={"g": 1})
+    steps = [_wide("g", gates=True, best_effort=True), _wide("b", target="beta")]
+    _, rows = _run_wide(tmp_path, steps, rec)
+    assert [r["status"] for r in rows] == ["failed", "ran"]
+
+
+def test_suite_step_needs_allow_and_a_ran_grant_row(tmp_path):
+    steps = [_wide("grant"), _wide("t", target="beta", cost="suite")]
+    rec = Recorder()
+    _, rows = _run_wide(tmp_path, steps, rec, allow_suite=False, suite_grant="grant")
+    assert rows[1]["status"] == "not-composed" and rows[1]["reason"] == "not-in-launch"
+    rec = Recorder()
+    _, rows = _run_wide(tmp_path / "x", [_wide("t", target="beta", cost="suite")], rec, allow_suite=True, suite_grant="grant")
+    assert rows[0]["reason"] == "no-grant" and rec.started == []
+    rec = Recorder(codes={"grant": 1})
+    _, rows = _run_wide(tmp_path / "y", steps, rec, allow_suite=True, suite_grant="grant")
+    assert rows[1]["reason"] == "no-grant" and rec.started == ["grant"]
+
+
+def test_suite_step_runs_with_allow_and_grant(tmp_path):
+    rec = Recorder()
+    steps = [_wide("grant"), _wide("t", target="beta", cost="suite")]
+    _, rows = _run_wide(tmp_path, steps, rec, allow_suite=True, suite_grant="grant")
+    assert rec.started == ["grant", "t"] and rows[1]["status"] == "ran"
+
+
+def test_launch_row_carries_child_run_id(tmp_path):
+    rid = "20261012T101010Z-1234560abc"
+    rec = Recorder(stdout={"l": f"digest: /x/{rid}/digest.json\nWorkflow(...)\n"})
+    _, rows = _run_wide(tmp_path, [_wide("l", cost="launch")], rec)
+    assert rows[0]["status"] == "ran" and rows[0]["reason"] == f"child-run:{rid}"
+
+
+def test_launch_already_ran_and_in_flight(tmp_path):
+    rec = Recorder(stdout={"l": '{"state": "already-ran", "run_id": "20261012T101010Z-already-ran"}'})
+    _, rows = _run_wide(tmp_path, [_wide("l", cost="launch")], rec)
+    assert rows[0]["status"] == "ran" and rows[0]["reason"] == "already-ran"
+    rec = Recorder(codes={"l": 3})
+    _, rows = _run_wide(tmp_path / "y", [_wide("l", cost="launch")], rec)
+    assert rows[0]["status"] == "failed"
+
+
+def test_cold_stdin_reaches_the_child(tmp_path):
+    import sys
+
+    script = tmp_path / "echo.py"
+    script.write_text("import sys\nprint(sys.stdin.read().upper(), sys.argv[1:])\n", encoding="utf-8")
+    out = runner._measure_cold(
+        [sys.executable, str(script), "x"], repo_root=tmp_path, deadline_s=30.0, io_dir=tmp_path, stdin_text="hello"
+    )
+    assert out.exit_code == 0 and out.stdout.strip() == "HELLO ['x']"
 
 
 def test_source_names_no_ceremony():

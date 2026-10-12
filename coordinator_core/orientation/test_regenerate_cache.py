@@ -75,15 +75,11 @@ def test_pinboard_only_performs_zero_section_rederive(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     cache_file = _seed_full_cache(repo, pinboard="2026-07-23 handoff: old note")
 
-    calls = {"git": 0, "find": 0, "uproject": 0, "workstreams": 0, "rechecks": 0, "branch": 0, "push_health": 0}
+    calls = {"git": 0, "uproject": 0, "workstreams": 0, "rechecks": 0, "branch": 0, "push_health": 0}
 
     def _boom_git(*a, **k):
         calls["git"] += 1
         raise AssertionError("patch_pinboard_only must not spawn git")
-
-    def _boom_find(*a, **k):
-        calls["find"] += 1
-        raise AssertionError("patch_pinboard_only must not run a find(1) uproject walk")
 
     def _boom_uproject(*a, **k):
         calls["uproject"] += 1
@@ -98,7 +94,6 @@ def test_pinboard_only_performs_zero_section_rederive(tmp_path, monkeypatch):
         raise AssertionError("patch_pinboard_only must not glob tasks/ for rechecks")
 
     monkeypatch.setattr(mod, "_git", _boom_git)
-    monkeypatch.setattr(mod, "_find_uproject", _boom_find)
     monkeypatch.setattr(mod, "detect_uproject", _boom_uproject)
     monkeypatch.setattr(mod, "emit_workstreams", _boom_workstreams)
     monkeypatch.setattr(mod, "emit_rechecks", _boom_rechecks)
@@ -111,7 +106,7 @@ def test_pinboard_only_performs_zero_section_rederive(tmp_path, monkeypatch):
 
     mod.patch_pinboard_only(cache_file, "2026-07-23 handoff: new note")
 
-    assert calls == {"git": 0, "find": 0, "uproject": 0, "workstreams": 0, "rechecks": 0, "branch": 0, "push_health": 0}
+    assert calls == {"git": 0, "uproject": 0, "workstreams": 0, "rechecks": 0, "branch": 0, "push_health": 0}
 
     after = cache_file.read_text(encoding="utf-8")
     before_lines = before.splitlines()
@@ -1642,3 +1637,53 @@ def test_detached_head_is_silent(tmp_path: Path) -> None:
         cwd=str(repo), check=True, **no_console_passthrough_kwargs(),
     )
     assert mod.emit_auto_push_health(repo) == ""
+
+
+# ---------------------------------------------------------------------------
+# One build_cache call resolves its git facts once: at most three git
+# processes, and no other process.
+# ---------------------------------------------------------------------------
+
+
+def test_build_cache_starts_at_most_three_git_processes(tmp_path: Path, monkeypatch) -> None:
+    repo = _make_repo_with_upstream(tmp_path, branch="work/spawns", unpushed=2)
+    (repo / "tasks").mkdir()
+    (repo / "state").mkdir()
+    started: list = []
+    real_run = subprocess.run
+
+    def _counting_run(args, *a, **k):
+        started.append(list(args))
+        return real_run(args, *a, **k)
+
+    monkeypatch.setattr(mod.subprocess, "run", _counting_run)
+
+    result = mod.build_cache(invoker="handoff", repo_root=repo)
+
+    assert not result["skipped"]
+    assert len(started) <= 3, started
+    assert all(argv[0] == "git" for argv in started), started
+    assert not any("find" in argv[0] for argv in started)
+
+
+def test_untracked_uproject_found_at_root_and_one_level_only(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    nested = repo / "a" / "b"
+    nested.mkdir(parents=True)
+    (nested / "Deep.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == ""
+
+    (repo / "Game").mkdir()
+    (repo / "Game" / "Game.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == "Game/Game.uproject"
+
+    (repo / "Root.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == "Root.uproject"
+
+
+def test_uproject_inside_git_dir_and_node_modules_is_skipped(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "X.uproject").write_text("{}", encoding="utf-8")
+    (repo / ".git" / "X.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == ""

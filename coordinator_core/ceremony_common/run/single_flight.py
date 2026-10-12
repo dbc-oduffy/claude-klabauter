@@ -83,17 +83,21 @@ def _try_create(lock_path: Path, record: dict) -> bool:
     return True
 
 
-def acquire(repo_root, *, ceremony: str, marker_path, today: str | None = None, session_id: str) -> Admission:
-    """Admit one run of `ceremony`, or say why not. `today` defaults to `daily_day.local_day`."""
+def acquire(repo_root, *, ceremony: str, marker_path=None, today: str | None = None, session_id: str) -> Admission:
+    """Admit one run of `ceremony`, or say why not. `today` defaults to `daily_day.local_day`.
+
+    A None `marker_path` skips the once-per-day check.
+    """
     root = Path(repo_root)
     day = today or local_day(str(root))
     lock_dir = _lock_dir(root, ceremony)
     run_dir = lock_dir / day
     lock_path = lock_dir / _LOCK_NAME
 
-    marker = Path(marker_path)
-    if marker.is_file() and marker.read_text(encoding="utf-8", errors="replace").strip() == day:
-        return Admission(ALREADY_RAN, run_dir, lock_path)
+    if marker_path is not None:
+        marker = Path(marker_path)
+        if marker.is_file() and marker.read_text(encoding="utf-8", errors="replace").strip() == day:
+            return Admission(ALREADY_RAN, run_dir, lock_path)
 
     lock_dir.mkdir(parents=True, exist_ok=True)
     run_id = f"{day}-{uuid.uuid4().hex[:8]}"

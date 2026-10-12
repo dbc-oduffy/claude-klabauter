@@ -50,11 +50,11 @@ Invocation:
                          <op> required. Lets an external caller (e.g. DoE's
                          cc_invoke, which applies a flat 10s cap) read
                          claude-klabauter's real per-op dispatch-timeout budgets instead
-                         of guessing. Every `ceremony.*` op is projected
-                         EXPLICITLY at the 2s ceremony budget rather than left
-                         to fall through to "__default__" (30s) — a caller
-                         sizing its kill ceiling off the default would wait on
-                         a request the engine already abandoned at 2s.
+                         of guessing. Every ceremony op is projected
+                         EXPLICITLY at its resolved wall deadline (the
+                         dispatch backstop, `ipc._timeout_for`);
+                         "__ceremony_budget__" is a process-time bar, not a
+                         wall deadline.
                          Source of truth is coordinator_core.ipc.
                          OP_TIMEOUT_OVERRIDES / DISPATCH_TIMEOUT_SECS /
                          CEREMONY_BUDGET_SECS, re-read live at call time (this
@@ -240,7 +240,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "\"__ceremony_budget__\": <ipc.CEREMONY_BUDGET_SECS>, "
             "\"__ceremony_mutation_read_deadline__\": <the unclamped transport "
             "deadline a delivered ceremony mutation is read for>}, with every "
-            "ceremony.* op projected explicitly at the ceremony budget. Takes priority "
+            "ceremony op projected explicitly at its resolved wall deadline "
+            "(\"__ceremony_budget__\" is a process-time bar). Takes priority "
             "over <op>: if both are passed, <op> is ignored."
         ),
     )
@@ -312,28 +313,20 @@ def _dump_op_timeouts() -> dict:
     empty; a future dynamic mutation of the private table post-import would
     not appear in this dump even though _timeout_for() would see it.
 
-    Ceremony ops are projected EXPLICITLY at `ipc.CEREMONY_BUDGET_SECS` rather than
-    left to fall through to "__default__". An external caller sizes its own kill
-    ceiling off this dump (DoE's cc_invoke: `engine_budget(op) + MARGIN`), so a
-    ceremony op reporting the 30s default here would hand that caller a ~40s ceiling
-    for an op the engine abandons at 2s -- the caller would sit waiting on a request
-    already cancelled. Every op the keying table knows about is emitted by name, and
-    "__ceremony_budget__" carries the ceiling itself so a caller can bound a
-    ceremony op this table does not list (the budget is prefix-matched in
-    `ipc._timeout_for`, so an unlisted `ceremony.*` op is still capped).
+    Ceremony ops are projected EXPLICITLY at their resolved wall deadline,
+    `ipc._timeout_for(op)` (the dispatch backstop, 30s by default), rather than left
+    to fall through to "__default__". Since 2026-10-12
+    (state/rulings/2026-10-12-apm-ceremony-budget-process-time.md)
+    `CEREMONY_BUDGET_SECS` is a process-time bar, so a caller sizing its kill ceiling
+    off it would kill a healthy op that is merely slow on the wall clock.
+    "__ceremony_budget__" is still emitted, as that process-time bar: a caller must
+    not read it as a wall deadline. Every op the keying table knows about is emitted
+    by name.
 
-    THE ENGINE DOES NOT ABANDON A DELIVERED MUTATION AT THE CEREMONY BUDGET, and
-    a caller that sizes its kill ceiling as if it did kills its own client before
-    the client can report what happened. `warm/client.py` keeps reading the answer
-    to a mutation it has already put on the wire for
-    `ipc.mutation_read_deadline_for(op)` -- the TRANSPORT deadline, which is
-    deliberately NOT ceremony-clamped, because the question there is whether the
-    answer arrives rather than whether the op was fast. Publishing only the
-    performance budget left that wait (30s for a ceremony op) outside a 2+2=4s
-    client ceiling, so the `WARM_DISPATCH_INDETERMINATE` envelope -- the one signal
-    that tells an operator a commit may have landed -- was unreachable on exactly
-    the ops that commit. "__ceremony_mutation_read_deadline__" carries the
-    transport number so the caller can bound BOTH: see
+    `warm/client.py` reads the answer to a mutation it has already put on the wire
+    for `ipc.mutation_read_deadline_for(op)` -- the TRANSPORT deadline, because the
+    question there is whether the answer arrives rather than whether the op was fast.
+    "__ceremony_mutation_read_deadline__" carries that number: see
     `cc_invoke._op_timeout_ceiling`, which takes the max of the two.
 
     MEMBERSHIP IS PUBLISHED, NOT RE-SPELLED, which is what the per-op
@@ -367,24 +360,16 @@ def _dump_op_timeouts() -> dict:
         CEREMONY_BUDGET_SECS,
         OP_TIMEOUT_OVERRIDES,
         _resolve_dispatch_timeout_secs,
+        _timeout_for,
         is_ceremony_method,
         mutation_read_deadline_for,
     )
     from coordinator_core.op_scopes import OP_KEY_SCOPE
 
-    # A second clamp pass over `payload` (re-applying `min(budget,
-    # CEREMONY_BUDGET_SECS)` to every entry) was deliberately dropped here: it
-    # would only fire for a ceremony op present in `OP_TIMEOUT_OVERRIDES` but
-    # absent from `OP_KEY_SCOPE`, and `test_ceremony_budget_ratchet.py`
-    # enforces that no such row can ever land -- it fails the build on any
-    # edit that "admits a widening override row for a ceremony op." The same
-    # ratchet that makes `_timeout_for`'s clamp unconditional makes this dump
-    # loop's projection exact by construction: every ceremony op source is
-    # `OP_KEY_SCOPE`, already set to `CEREMONY_BUDGET_SECS` below.
     payload = dict(OP_TIMEOUT_OVERRIDES)
     for op in OP_KEY_SCOPE:
         if is_ceremony_method(op):
-            payload[op] = CEREMONY_BUDGET_SECS
+            payload[op] = _timeout_for(op)
 
     # Computed before the reserved rows are added so the loop only ever sees op names.
     ceremony_read_deadlines = {

@@ -112,6 +112,7 @@ from coordinator_core._settings_home import home_dir, normalize_native_path, set
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.data_root import content_root_for
 from coordinator_core.content_root import POINTER_NAME, read_content_root, read_pointer_files
+from coordinator_core.git.run import _wall_bound
 from coordinator_core.install import check_install_singularity
 from coordinator_core.install._shared import require_home
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
@@ -144,6 +145,13 @@ _PROG = "coordinator-doctor-sentinel.sh"
 # this by widening `CEREMONY_BUDGET_SECS` -- that constant is a ratchet
 # (DR-348) whose blast radius is every ceremony op in the engine.
 _PROBE_SPAWN_BUDGET_SECS: float = CEREMONY_BUDGET_SECS
+
+
+def _probe_wall_secs() -> float:
+    """The wall-clock `subprocess` timeout for a probe spawn: the process-time
+    budget plus `git/run.py`'s scheduling headroom. Read at call time."""
+    return _wall_bound(_PROBE_SPAWN_BUDGET_SECS, False)
+
 
 # severity in {"red", "amber", "advisory"} — advisory NEVER contributes to verdict.
 ProbeNote = namedtuple("ProbeNote", ["id", "severity", "message"])
@@ -360,7 +368,7 @@ def _exec_detail(exc: BaseException) -> str:
     """Render an exec failure for an inconclusive() message — the observed
     error, never an invented cause."""
     if isinstance(exc, subprocess.TimeoutExpired):
-        return f"exec: timed out after {exc.timeout}s"
+        return f"exec: hung, killed at the {exc.timeout}s wall bound"
     return f"exec: {type(exc).__name__}: {exc}"
 
 
@@ -575,7 +583,7 @@ def probe_p2(registry_path: Path, ml_dir: Path, py_bin: str, py_args: List[str])
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=_PROBE_SPAWN_BUDGET_SECS,
+                timeout=_probe_wall_secs(),
                 **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -640,7 +648,7 @@ def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
             from coordinator_core.win_portability import no_console_creationflags
 
             proc = subprocess.run(
-                [ml_cmd, "keys"], capture_output=True, timeout=_PROBE_SPAWN_BUDGET_SECS,
+                [ml_cmd, "keys"], capture_output=True, timeout=_probe_wall_secs(),
                 **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -817,7 +825,7 @@ def probe_p10(ch_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
 
             proc = subprocess.run(
                 [ch_cmd, "plugins"], capture_output=True, text=True,
-                timeout=_PROBE_SPAWN_BUDGET_SECS,
+                timeout=_probe_wall_secs(),
                 **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1450,7 +1458,7 @@ def _shadowed_key_notes(ml_cmd: Optional[str]) -> List[ProbeNote]:
 
         proc = subprocess.run(
             [ml_cmd, "check"], capture_output=True, text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS, **no_console_creationflags(),
+            timeout=_probe_wall_secs(), **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _inconclusive(
@@ -1514,7 +1522,7 @@ def probe_p20() -> List[ProbeNote]:
             [bash_path, "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
             capture_output=True,
             text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
+            timeout=_probe_wall_secs(),
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

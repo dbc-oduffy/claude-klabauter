@@ -105,10 +105,10 @@ latter does not, regardless of how useful it looks in isolation.
 Behavior contract (byte-for-byte with the bash oracle for the sections both
 still emit, except the one named parity-plus below):
   - Same tier resolution (ceremony vs mid-session), same section-omission-when-
-    empty rules, same *.uproject detection (including the intentional git-vs-find
-    exclusion-list DIVERGENCE between the two branches of detect_uproject — the
-    bash oracle's ELSE branch's ``find`` has no node_modules/.git exclusions;
-    this is preserved, not "fixed", per parity discipline).
+    empty rules, same *.uproject detection for a tracked project (index scan); an
+    untracked one is found at the repo root or one directory down only, with
+    no ``find``. The git facts are resolved once per regeneration by
+    ``_GitFacts``: at most three ``git`` spawns and no other process.
   - PARITY-PLUS (explicitly authorized upgrade, not a silent deviation): the
     bash oracle writes via a direct ``printf > "$CACHE_FILE"`` overwrite (NOT
     atomic). This port writes via mkstemp-in-same-dir + os.replace (atomic
@@ -195,6 +195,7 @@ import re
 import subprocess
 import tempfile
 import time
+from functools import cached_property
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -203,7 +204,9 @@ from coordinator_core._claude_klabauter_root import _claude_home, _machine_local
 from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
+from coordinator_core.git.git_objects import read_ref_loose_or_packed
+from coordinator_core.git.git_state import IndexParseError, head_branch, head_sha, read_index
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
 from coordinator_core.orientation.route_unreachable_signal import emit_route_unreachable
@@ -386,49 +389,124 @@ def resolve_repo_root(cwd: Optional[Path] = None) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def detect_uproject(repo_root: Path) -> str:
-    inside_repo = is_inside_work_tree(str(repo_root))
-    if inside_repo:
-        out = _git(["ls-files", "*.uproject"], repo_root) or ""
-        first = out.splitlines()[0] if out else ""
-        if first:
-            return first
-        # find fallback WITH exclusions (bash:74-76)
-        found = _find_uproject(repo_root, exclude_node_modules_and_git=True)
-        if found:
-            return _strip_repo_prefix(found, repo_root)
+_UPROJECT_SCAN_SKIP = frozenset({".git", "node_modules"})
+
+
+def _scan_uproject(repo_root: Path, skip: frozenset) -> str:
+    """First ``*.uproject`` in *repo_root* or one directory below it, as a
+    repo-relative POSIX path, or "". Never descends further: an untracked
+    project deeper than one level is not found."""
+    try:
+        entries = sorted(os.scandir(repo_root), key=lambda e: e.name)
+    except OSError:
         return ""
-    # else-branch find fallback WITHOUT exclusions (bash:79-80 — intentional divergence)
-    found = _find_uproject(repo_root, exclude_node_modules_and_git=False)
-    if found:
-        return _strip_repo_prefix(found, repo_root)
+    for e in entries:
+        if e.name.endswith(".uproject") and e.is_file():
+            return e.name
+    for e in entries:
+        if e.name in skip or not e.is_dir(follow_symlinks=False):
+            continue
+        try:
+            children = sorted(
+                n.name for n in os.scandir(e.path)
+                if n.name.endswith(".uproject") and n.is_file()
+            )
+        except OSError:
+            continue
+        if children:
+            return f"{e.name}/{children[0]}"
     return ""
 
 
-def _find_uproject(repo_root: Path, exclude_node_modules_and_git: bool) -> str:
-    args = ["find", str(repo_root), "-maxdepth", "6", "-name", "*.uproject"]
-    if exclude_node_modules_and_git:
-        args += ["-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"]
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
+class _GitFacts:
+    """The git facts one regeneration needs, each resolved at most once.
 
-        result = subprocess.run(
-            args, capture_output=True, text=True, check=False,
-            **no_console_creationflags(),
+    Spawn-free reads answer branch, ref existence, repo-or-not and the tracked
+    ``*.uproject``. Three ``git`` spawns remain, each lazy and skipped when its
+    answer is already known: ``log -5 --oneline`` (recent subjects and the
+    short HEAD sha), ``rev-list --left-right --count`` (distance from
+    origin/main), ``log --format=%ct`` (unpushed commit times)."""
+
+    def __init__(self, repo_root: Path) -> None:
+        self.repo_root = repo_root
+
+    @cached_property
+    def in_repo(self) -> bool:
+        return (self.repo_root / ".git").exists()
+
+    @cached_property
+    def born(self) -> bool:
+        return head_sha(self.repo_root) is not None
+
+    @cached_property
+    def branch(self) -> str:
+        """``"unknown"`` for a non-repo or unborn HEAD, ``"HEAD"`` when detached."""
+        if not self.born:
+            return "unknown"
+        return head_branch(self.repo_root) or "unknown"
+
+    @cached_property
+    def head_log(self) -> List[str]:
+        if not self.born:
+            return []
+        out = _git(["log", f"-{RECENT_COMMITS_MAX}", "--oneline"], self.repo_root)
+        return out.splitlines() if out else []
+
+    @property
+    def short_head(self) -> str:
+        for raw in self.head_log:
+            sha = raw.strip().partition(" ")[0]
+            if sha:
+                return sha
+        return "unknown"
+
+    def remote_ref_exists(self, name: str) -> bool:
+        return (
+            read_ref_loose_or_packed(
+                resolve_git_common_dir(self.repo_root), f"refs/remotes/origin/{name}"
+            )
+            is not None
         )
-    except OSError:
-        return ""
-    out = result.stdout.strip()
-    if not out:
-        return ""
-    return out.splitlines()[0]
+
+    @cached_property
+    def ahead_behind(self) -> tuple:
+        """``(ahead, behind)`` against origin/main as strings; ``("0", "0")`` on failure."""
+        if not self.born:
+            return ("0", "0")
+        out = _git(["rev-list", "--left-right", "--count", "origin/main...HEAD"], self.repo_root)
+        parts = (out or "").split()
+        if len(parts) != 2:
+            return ("0", "0")
+        return (parts[1], parts[0])
+
+    @cached_property
+    def unpushed_times(self) -> List[str]:
+        """``%ct`` of each commit not on the upstream, or on any remote when
+        the branch has none; ``[]`` for a detached or unborn HEAD."""
+        if self.branch in ("unknown", "HEAD"):
+            return []
+        if self.remote_ref_exists(self.branch):
+            rev_range = [f"origin/{self.branch}..HEAD"]
+        else:
+            rev_range = ["HEAD", "--not", "--remotes"]
+        out = _git(["log", "--format=%ct", *rev_range], self.repo_root)
+        return out.splitlines() if out else []
+
+    @cached_property
+    def uproject(self) -> str:
+        if self.in_repo:
+            try:
+                tracked = sorted(k for k in read_index(self.repo_root) if k.endswith(".uproject"))
+            except (OSError, IndexParseError):
+                tracked = []
+            if tracked:
+                return tracked[0]
+            return _scan_uproject(self.repo_root, _UPROJECT_SCAN_SKIP)
+        return _scan_uproject(self.repo_root, frozenset())
 
 
-def _strip_repo_prefix(path: str, repo_root: Path) -> str:
-    prefix = str(repo_root).rstrip("/") + "/"
-    if path.startswith(prefix):
-        return path[len(prefix):]
-    return path
+def detect_uproject(repo_root: Path, facts: Optional[_GitFacts] = None) -> str:
+    return (facts or _GitFacts(repo_root)).uproject
 
 
 def _read_text_or_empty(path: Path) -> str:
@@ -750,11 +828,11 @@ def emit_rechecks(repo_root: Path) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-def emit_branch_line(repo_root: Path) -> str:
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root) or "unknown"
-    if _git(["rev-parse", "--verify", "origin/main"], repo_root) is not None:
-        ahead = _git(["rev-list", "--count", "origin/main..HEAD"], repo_root) or "0"
-        behind = _git(["rev-list", "--count", "HEAD..origin/main"], repo_root) or "0"
+def emit_branch_line(repo_root: Path, facts: Optional[_GitFacts] = None) -> str:
+    facts = facts or _GitFacts(repo_root)
+    branch = facts.branch
+    if facts.remote_ref_exists("main"):
+        ahead, behind = facts.ahead_behind
         return f"`{branch}` — {ahead}/{behind} vs origin/main"
     return f"`{branch}` (no origin/main reference)"
 
@@ -770,8 +848,8 @@ def emit_branch_line(repo_root: Path) -> str:
 # were independently re-deriving this fact at boot via their own git log call
 # (state/audits/2026-07-29-orientation-cache-boot-facts.md, coordinator-content-repo) before
 # this section existed. One cache-time git spawn here amortizes that cost
-# across every one of them: this adds ONE git spawn to build_cache -- an
-# explicitly cold, ceremony/machine-invoked path (~10 spawns already) with no
+# across every one of them: this is one of the THREE git spawns build_cache
+# makes -- an explicitly cold, ceremony/machine-invoked path with no
 # hot-path spawn-tax concern (constraint 7 does not apply here; see module
 # docstring's own "no hot-path spawn-tax concern" framing for build_cache as a
 # whole). It is NOT on the sync boot path -- boot only ever reads the cache
@@ -817,17 +895,14 @@ splitting a multi-byte character mid-sequence for no real budget gain, since
 the elastic trim already catches a genuine flood."""
 
 
-def emit_recent_commits(repo_root: Path) -> List[str]:
+def emit_recent_commits(repo_root: Path, facts: Optional[_GitFacts] = None) -> List[str]:
     """Render the ``## Recent commits`` section's bullet lines from ``git log
     --oneline -5`` -- ``- <short sha> <subject>`` per line, subject truncated to
     ``_COMMIT_SUBJECT_TRUNCATE_CHARS``. Degrades to ``[]`` on any git failure
     (detached HEAD with no commits, not a git repo, etc.) -- never raises;
     matches every other emit_* helper's fail-open posture in this module."""
-    out = _git(["log", f"-{RECENT_COMMITS_MAX}", "--oneline"], repo_root)
-    if not out:
-        return []
     lines: List[str] = []
-    for raw in out.splitlines():
+    for raw in (facts or _GitFacts(repo_root)).head_log:
         raw = raw.strip()
         if not raw:
             continue
@@ -944,7 +1019,7 @@ def _parse_log_timestamp(line: str) -> Optional[datetime]:
         return None
 
 
-def emit_auto_push_health(repo_root: Path) -> str:
+def emit_auto_push_health(repo_root: Path, facts: Optional[_GitFacts] = None) -> str:
     """One line naming work this repo is holding that nothing is going to
     publish on its own, or "" when there is nothing to say.
 
@@ -966,14 +1041,14 @@ def emit_auto_push_health(repo_root: Path) -> str:
     cadence is willing to publish. The remedy string is the operator's, because
     on both classes above the correct action is a decision (adopt an upstream,
     or move the work to a `work/*` branch), not a retry."""
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root) or "unknown"
+    facts = facts or _GitFacts(repo_root)
+    branch = facts.branch
     # Detached HEAD has no branch to publish and no upstream to name; `origin/
     # HEAD` would otherwise resolve and make this report against the remote's
     # default branch, which is not what the tree is sitting on.
     if branch in ("unknown", "HEAD"):
         return ""
-    upstream = f"origin/{branch}"
-    has_upstream = _git(["rev-parse", "--verify", upstream], repo_root) is not None
+    has_upstream = facts.remote_ref_exists(branch)
     # One spawn carries both facts this signal needs: the line count is the
     # unpushed count, and the LAST line is the oldest unpushed commit -- the
     # age the cadence grace is measured against. Measuring the newest commit
@@ -983,11 +1058,9 @@ def emit_auto_push_health(repo_root: Path) -> str:
     # With no upstream there is no ref to diff against, so "outstanding" is
     # everything unreachable from ANY remote ref -- which is also the honest
     # answer for a branch whose upstream was never created.
-    rev_range = [f"{upstream}..HEAD"] if has_upstream else ["HEAD", "--not", "--remotes"]
-    log = _git(["log", "--format=%ct", *rev_range], repo_root)
-    if not log:
+    lines = facts.unpushed_times
+    if not lines:
         return ""
-    lines = log.splitlines()
     unpushed = len(lines)
     now = time.time()
     try:
@@ -1405,14 +1478,15 @@ def build_cache(
     cache_file = state_root / "orientation_cache.md"
 
     iso_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    git_head = _git(["rev-parse", "--short", "HEAD"], repo_root) or "unknown"
-    uproject_path = detect_uproject(repo_root)
+    facts = _GitFacts(repo_root)
+    recent_commits = emit_recent_commits(repo_root, facts)
+    git_head = facts.short_head
+    uproject_path = detect_uproject(repo_root, facts)
 
     workstreams = emit_workstreams(repo_root)
     rechecks = emit_rechecks(repo_root)
-    branch_line = emit_branch_line(repo_root)
-    recent_commits = emit_recent_commits(repo_root)
-    push_health = emit_auto_push_health(repo_root)
+    branch_line = emit_branch_line(repo_root, facts)
+    push_health = emit_auto_push_health(repo_root, facts)
     wiki_lines = emit_wiki_pointer(repo_root)
     atlas_lines = emit_architecture_atlas(repo_root)
     capability_pointers_lines = emit_capability_pointers(repo_root)

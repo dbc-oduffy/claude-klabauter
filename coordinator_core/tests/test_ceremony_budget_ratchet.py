@@ -1,45 +1,36 @@
-"""The ceremony budget is a one-directional ratchet.
+"""The ceremony budget is a one-directional ratchet on PROCESS TIME.
 
-`ipc.CEREMONY_BUDGET_SECS` bounds every `ceremony.*` op end-to-end. This module is
-the enforcement the constant's own comment block names: it fails on any edit that
-raises the ceiling, admits a widening override row for a ceremony op, or lets the
-`COORDINATOR_DISPATCH_TIMEOUT_SECS` env knob out-resolve the clamp.
+`ipc.CEREMONY_BUDGET_SECS` is the process-time bar every ceremony op is held to. Measured
+today: a sync handler's thread CPU plus the CPU `run_git` charges for its git children
+(Windows only). A coroutine handler is not measured; the rule binds it and no check
+enforces it yet. An op over the bar is reported and
+returns its result unchanged. The only wall-clock limit on a ceremony op is the
+backstop, `ipc.DISPATCH_TIMEOUT_SECS`, which means "hung", never "slow"
+(state/rulings/2026-10-12-apm-ceremony-budget-process-time.md).
 
-Why this test exists rather than trusting the constant: a number in a source file is
-a suggestion to the next reader. The failure mode is not malice, it is a plausible
-local argument -- "my op is structurally different", "its cost scales with input",
-"the box was busy" -- and that argument has already won once here. The 150.0s
-`ceremony.scoped_git_commit` row this budget revoked was added with an honest
-measurement attached (three trials, 53 git spawns, a 40.9s worst sample) and a
-reasonable-sounding sizing rule, and it still amounted to a per-op cap 300x the
-500ms end-to-end target of the ceremony that invoked it. The measurement was not
-the problem; treating a measurement as a budget was. So the ratchet is written to
-be unarguable at the point of edit: PINNED_CEILING below is a second, independent
-copy of the number, and lifting the constant without lifting this one fails the
-suite. Lifting both is a deliberate, reviewable act with a PM ruling behind it
-(DR-348), not a quiet retune.
+This module fails on any edit that raises the bar above `PINNED_CEILING_SECS`, lets an
+override row or the env knob widen a ceremony op past the backstop, or re-introduces a
+wall-clock clamp at the bar. `PINNED_CEILING_SECS` is a second, independent copy of the
+number: lifting the constant without lifting this one fails the suite, and lifting both
+is a deliberate act with a PM ruling behind it (DR-348).
 
-Negative spec -- what this module does NOT assert, deliberately:
-  - It does NOT assert any ceremony op COMPLETES within the budget. That is a
-    latency property, measured by the per-op KPI tests
-    (e.g. `test_wsc_tail_parity.py::test_kpi_wsc_tail_blocking_path_under_2s`).
-    This module only pins the CEILING that bounds them.
-  - It does NOT forbid a ceremony op resolving BELOW the budget. Narrowing is the
-    permitted direction; an operator dialling the env knob down for a fast-fail run
-    is a supported use, and asserting equality would break it.
-  - It does NOT pin the non-ceremony ceiling. The global runaway guard is a separate
-    question with a separate rationale (DEC-2), and conflating them here would make
-    an unrelated 30s retune read as a ceremony-budget breach; its high-water mark
-    lives in `test_ipc_per_request_state.py`. What this module DOES now assert about
-    non-ceremony ops is narrower and belongs here: that the same env knob cannot
-    WIDEN them either. One variable resolves both lanes, so proving it cannot widen
-    ceremony while it can still widen everything else proves less than it looks.
+Negative spec -- what this module does NOT assert:
+  - That any ceremony op COMPLETES within the budget. That is a latency property,
+    measured by per-op KPI tests.
+  - That a ceremony op cannot resolve BELOW the backstop; an operator dialling
+    `COORDINATOR_DISPATCH_TIMEOUT_SECS` down for a fast-fail run is a supported use.
+  - The CPU of an async handler or of children started outside `run_git`: the overrun
+    report covers a sync handler's thread plus CPU charged through
+    `ipc.charge_op_cpu_secs`, which only `run_git` calls.
 
 Spec backlink: docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md
-Load-norm backlink: docs/wiki/machine-load-norm.md -- ">2s for any process is
-FORBIDDEN"; the budget is that ruling expressed at the dispatch seam.
 """
 from __future__ import annotations
+
+import asyncio
+import json
+import sys
+import time
 
 import pytest
 
@@ -47,6 +38,7 @@ from coordinator_core import ipc
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
 PINNED_CEILING_SECS = 2.0
+PINNED_BACKSTOP_SECS = 30.0
 
 CEREMONY_OPS = sorted(op for op in OP_KEY_SCOPE if ipc.is_ceremony_method(op))
 
@@ -55,34 +47,33 @@ def test_budget_constant_is_at_or_below_the_pinned_ceiling():
     assert ipc.CEREMONY_BUDGET_SECS <= PINNED_CEILING_SECS, (
         f"ceremony budget raised to {ipc.CEREMONY_BUDGET_SECS}s, above the pinned "
         f"{PINNED_CEILING_SECS}s ceiling. The budget ratchets DOWN only. An op that "
-        f"needs a wider cap is an op with a defect -- make it cheaper (fewer spawns, "
-        f"batched git, a warm path). Raising this pair requires a PM ruling recorded "
-        f"in DR-348."
+        f"needs a wider cap is an op with a defect -- make it cheaper. Raising this "
+        f"pair requires a PM ruling recorded in DR-348."
     )
+
+
+def test_the_backstop_is_not_widened():
+    assert ipc.DISPATCH_TIMEOUT_SECS <= PINNED_BACKSTOP_SECS
 
 
 def test_the_keying_table_actually_holds_ceremony_ops():
     """Guards the guard: an empty CEREMONY_OPS would make the sweeps below vacuous."""
-    assert CEREMONY_OPS, (
-        "no ceremony.* ops found in OP_KEY_SCOPE -- the parametrized sweeps in this "
-        "module would silently pass over an empty set. Either the keying table's "
-        "naming changed or ipc.is_ceremony_method no longer matches it."
-    )
+    assert CEREMONY_OPS
 
 
 @pytest.mark.parametrize("method", CEREMONY_OPS)
-def test_every_ceremony_op_resolves_within_budget(method):
-    assert ipc._timeout_for(method) <= PINNED_CEILING_SECS
+def test_every_ceremony_op_resolves_to_the_backstop(method):
+    assert ipc._timeout_for(method) == ipc.DISPATCH_TIMEOUT_SECS == PINNED_BACKSTOP_SECS
 
 
-def test_an_unlisted_future_ceremony_op_is_bounded_by_construction():
-    assert ipc._timeout_for("ceremony.not_yet_written") <= PINNED_CEILING_SECS
+def test_an_unlisted_future_ceremony_op_resolves_to_the_backstop():
+    assert ipc._timeout_for("ceremony.not_yet_written") == PINNED_BACKSTOP_SECS
 
 
 def test_env_knob_cannot_widen_a_ceremony_op(monkeypatch):
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "9999")
-    assert ipc._timeout_for("ceremony.scoped_git_commit") <= PINNED_CEILING_SECS
-    assert ipc._timeout_for("ceremony.wsc_tail") <= PINNED_CEILING_SECS
+    assert ipc._timeout_for("ceremony.scoped_git_commit") == PINNED_BACKSTOP_SECS
+    assert ipc._timeout_for("ceremony.wsc_tail") == PINNED_BACKSTOP_SECS
 
 
 def test_env_knob_may_still_narrow_a_ceremony_op(monkeypatch):
@@ -90,40 +81,28 @@ def test_env_knob_may_still_narrow_a_ceremony_op(monkeypatch):
     assert ipc._timeout_for("ceremony.wsc_tail") == pytest.approx(0.5)
 
 
-def test_no_override_row_widens_a_ceremony_op():
+def test_no_override_row_widens_a_ceremony_op_past_the_backstop():
     offenders = {
         op: secs
         for op, secs in ipc._OP_TIMEOUT_OVERRIDES.items()
-        if ipc.is_ceremony_method(op) and secs > PINNED_CEILING_SECS
+        if ipc.is_ceremony_method(op) and secs > PINNED_BACKSTOP_SECS
     }
-    assert not offenders, (
-        f"ceremony override rows exceed the budget: {offenders}. The clamp in "
-        f"_timeout_for makes such a row inert, so it is not a live regression -- it "
-        f"is a lie left in the table for the next reader to act on. Delete it."
-    )
+    assert not offenders, f"ceremony override rows exceed the backstop: {offenders}. Delete them."
 
 
-def test_an_injected_widening_row_is_still_clamped(monkeypatch):
+def test_an_injected_widening_row_is_still_ignored(monkeypatch):
     monkeypatch.setitem(ipc._OP_TIMEOUT_OVERRIDES, "ceremony.scoped_git_commit", 150.0)
-    assert ipc._timeout_for("ceremony.scoped_git_commit") <= PINNED_CEILING_SECS
+    assert ipc._timeout_for("ceremony.scoped_git_commit") == PINNED_BACKSTOP_SECS
 
 
-def test_non_ceremony_ops_are_untouched_by_the_clamp():
+def test_non_ceremony_ops_resolve_to_the_global_guard():
     assert ipc._timeout_for("ping") == ipc._resolve_dispatch_timeout_secs()
 
 
-#: Second independent copy of the implementation-package path, same reasoning as
-#: PINNED_CEILING_SECS: importing `ipc._CEREMONY_PACKAGE_PREFIX` would make this
-#: file agree with whatever the constant says and assert nothing.
 PINNED_CEREMONY_PACKAGE = "coordinator_core.ops.ceremony."
 
 
 def _ceremony_package_ops():
-    """Ops whose implementation lives in the ceremony package, read from the static map.
-
-    Read live rather than hardcoded, for the same reason as CEREMONY_OPS: a new op
-    added to the package is covered the moment it lands.
-    """
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     return sorted(
@@ -135,74 +114,59 @@ def _ceremony_package_ops():
 
 def test_ops_implemented_in_the_ceremony_package_are_ceremony_ops():
     package_ops = _ceremony_package_ops()
-    assert package_ops, (
-        "no ops found under " + PINNED_CEREMONY_PACKAGE + " in OP_MODULE_MAP -- "
-        "either the package moved or the map's shape changed, and this sweep is "
-        "now silently passing over an empty set."
-    )
+    assert package_ops
     for op in package_ops:
-        assert ipc.is_ceremony_method(op), (
-            f"{op} is implemented in the ceremony package but is not recognised as "
-            f"a ceremony op -- the rename bypass is open again."
-        )
-        assert ipc._timeout_for(op) <= PINNED_CEILING_SECS
+        assert ipc.is_ceremony_method(op), f"{op} lives in the ceremony package but is not ceremony"
+        assert ipc._timeout_for(op) <= PINNED_BACKSTOP_SECS
 
 
 def test_ceremony_package_membership_survives_a_cold_interpreter():
-    """The package signal alone is NOT enough, and this is what proves it.
+    """The import-free signals (prefix or alias table) must cover every package op.
 
-    `ipc._owning_module_is_ceremony` reads two tables that must already be
-    resident and is forbidden from importing (`_registry_map` costs a measured
-    470ms, a DR-344 breach on the dispatch hot path). So it answers False in a
-    fresh interpreter, and an op whose ONLY membership signal is its owning
-    module gets 30s cold and 2s warm -- the same op budgeted or not depending on
-    what else the process happened to import, which is verbatim the silent
-    escape `is_ceremony_method`'s docstring says the explicit table exists to
-    make impossible.
-
-    `test_ops_implemented_in_the_ceremony_package_are_ceremony_ops` cannot catch
-    that: it reads `OP_MODULE_MAP` to build its roster, so the map is loaded by
-    the time it asks, and the backstop answers True for exactly the op that is
-    broken cold. This asserts the IMPORT-FREE signals instead -- the name prefix
-    or the alias table -- which are the two that are true everywhere.
-
-    Measured 2026-08-26 on `push.outstanding`: 30.0s cold, 2.0s after
-    `import coordinator_core.ops._registry_map`. It was resolved by moving the
-    op out of the ceremony package (a remote leg cannot live under a 2s wall
-    ceiling; see that module's docstring), not by an alias row -- either
-    resolution satisfies this test, which is the point: it pins determinism, not
-    which budget an op lands in.
+    `ipc._owning_module_is_ceremony` never imports, so it answers False in a fresh
+    interpreter; an op resting on it alone is budgeted or not depending on what the
+    process happened to import.
     """
     for op in _ceremony_package_ops():
-        assert (
-            op.startswith("ceremony.") or op in ipc._CEREMONY_PACKAGE_ALIASES
-        ), (
-            f"{op} lives in {PINNED_CEREMONY_PACKAGE} but is recognised as ceremony "
-            f"ONLY by ipc._owning_module_is_ceremony, which cannot import and so "
-            f"answers False in a cold interpreter. Its budget is therefore "
-            f"load-order dependent: 30s cold, {PINNED_CEILING_SECS}s warm. Fix it in "
-            f"one of the two import-free directions -- add a row to "
-            f"_CEREMONY_PACKAGE_ALIASES if the op belongs inside the budget, or move "
-            f"the implementation out of the ceremony package if it does not (a remote "
-            f"leg does not). Do not leave it resting on the backstop."
+        assert op.startswith("ceremony.") or op in ipc._CEREMONY_PACKAGE_ALIASES, (
+            f"{op} lives in {PINNED_CEREMONY_PACKAGE} but is ceremony ONLY by the "
+            f"warm-process backstop. Add it to _CEREMONY_PACKAGE_ALIASES or move it out."
         )
 
 
-def test_a_renamed_ceremony_op_does_not_escape_the_budget(monkeypatch):
+@pytest.mark.spawns_process
+def test_regenerate_cache_is_a_ceremony_op_in_a_cold_interpreter():
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys;from coordinator_core import ipc;"
+        "assert 'coordinator_core.ops._registry_map' not in sys.modules;"
+        "assert ipc.is_ceremony_method('orientation.regenerate_cache')"
+    )
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "orientation.regenerate_cache" in ipc._CEREMONY_PACKAGE_ALIASES
+
+
+def test_a_renamed_ceremony_op_is_still_recognised_as_ceremony(monkeypatch):
     def _renamed_handler(params, ctx=None, repo_root=None):
         return {}
 
     _renamed_handler.__module__ = PINNED_CEREMONY_PACKAGE + "scoped_git_commit"
     monkeypatch.setitem(ipc._REGISTRY, "commit.scoped_git_commit", _renamed_handler)
-    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "9999")
 
     assert ipc.is_ceremony_method("commit.scoped_git_commit")
-    assert ipc._timeout_for("commit.scoped_git_commit") <= PINNED_CEILING_SECS
+    assert ipc._timeout_for("commit.scoped_git_commit") == PINNED_BACKSTOP_SECS
 
 
 def test_membership_is_a_union_not_an_intersection():
     assert ipc.is_ceremony_method("ceremony.init_anchor_injection_state")
-    assert ipc._timeout_for("ceremony.init_anchor_injection_state") <= PINNED_CEILING_SECS
 
 
 def test_membership_resolution_never_imports_the_ops_package(monkeypatch):
@@ -227,7 +191,6 @@ def test_env_knob_cannot_widen_a_non_ceremony_op(monkeypatch):
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "9999")
     baseline = ipc.DISPATCH_TIMEOUT_SECS
     assert ipc._timeout_for("ping") <= baseline
-    assert ipc._timeout_for("session.boot_sweep") <= baseline
     assert ipc._timeout_for("no.such.op") <= baseline
 
 
@@ -236,19 +199,166 @@ def test_env_knob_may_still_narrow_a_non_ceremony_op(monkeypatch):
     assert ipc._timeout_for("ping") == pytest.approx(0.5)
 
 
-def test_the_two_ceilings_do_not_collapse_into_one():
+def test_the_bar_is_below_the_backstop():
     assert ipc.CEREMONY_BUDGET_SECS < ipc.DISPATCH_TIMEOUT_SECS
-    assert ipc._timeout_for("ceremony.wsc_tail") < ipc._timeout_for("ping")
 
 
-def test_dump_op_timeouts_projects_the_budget_to_external_callers():
+def test_dump_op_timeouts_projects_the_wall_deadline_and_the_bar():
     from coordinator_core.invoke.__main__ import _dump_op_timeouts
 
     payload = _dump_op_timeouts()
     assert payload["__ceremony_budget__"] <= PINNED_CEILING_SECS
     for method in CEREMONY_OPS:
-        assert method in payload, (
-            f"{method} absent from --dump-op-timeouts; an external caller would "
-            f"fall back to __default__ and size its ceiling for the wrong budget."
-        )
-        assert payload[method] <= PINNED_CEILING_SECS
+        assert method in payload
+        assert payload[method] == ipc._timeout_for(method)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch behaviour: the bar is process time, reported not enforced
+# ---------------------------------------------------------------------------
+
+_PROBE_OP = "ceremony.budget_probe"
+
+
+def _dispatch_probe(monkeypatch, handler, *, rows):
+    monkeypatch.setitem(ipc._REGISTRY, _PROBE_OP, handler)
+    monkeypatch.setitem(ipc._OP_KEY_SCOPE, _PROBE_OP, "none")
+    monkeypatch.setattr(ipc, "record_op_process_time", lambda **kw: rows.append(kw))
+    msg = {"jsonrpc": "2.0", "id": 1, "method": _PROBE_OP, "params": {}}
+    return asyncio.run(ipc._dispatch_message_impl(msg))
+
+
+def _overruns(rows):
+    return [r for r in rows if r.get("source_path") == "ceremony_budget_overrun"]
+
+
+@pytest.mark.slow
+@pytest.mark.deliberate_wall_clock(reason="a 5s sleep must not be cut off by a process-time budget")
+def test_a_low_cpu_ceremony_op_over_the_bar_in_wall_time_is_not_cut_off(monkeypatch):
+    rows: list = []
+
+    def _sleeper(params, ctx=None, repo_root=None):
+        time.sleep(5.0)
+        return {"ok": True}
+
+    response = _dispatch_probe(monkeypatch, _sleeper, rows=rows)
+
+    assert response["result"] == {"ok": True}
+    assert not _overruns(rows)
+
+
+@pytest.mark.slow
+def test_a_cpu_bound_ceremony_op_past_the_bar_is_reported_and_returns(monkeypatch):
+    rows: list = []
+
+    def _burner(params, ctx=None, repo_root=None):
+        end = time.thread_time() + ipc.CEREMONY_BUDGET_SECS + 0.3
+        while time.thread_time() < end:
+            pass
+        return {"ok": True}
+
+    response = _dispatch_probe(monkeypatch, _burner, rows=rows)
+
+    assert response["result"] == {"ok": True}
+    overruns = _overruns(rows)
+    assert len(overruns) == 1
+    assert overruns[0]["op"] == _PROBE_OP
+    assert overruns[0]["process_ms"] > ipc.CEREMONY_BUDGET_SECS * 1000.0
+    assert overruns[0]["measurement_scope"] == ipc.MEASUREMENT_SCOPE_THREAD_AND_CHILDREN
+
+
+def test_child_cpu_charged_to_the_dispatch_counts_toward_the_bar(monkeypatch):
+    rows: list = []
+
+    def _spawner(params, ctx=None, repo_root=None):
+        ipc.charge_op_cpu_secs(ipc.CEREMONY_BUDGET_SECS + 0.5)
+        return {"ok": True}
+
+    response = _dispatch_probe(monkeypatch, _spawner, rows=rows)
+
+    assert response["result"] == {"ok": True}
+    assert len(_overruns(rows)) == 1
+
+
+def test_a_cheap_ceremony_op_records_no_overrun(monkeypatch):
+    rows: list = []
+    response = _dispatch_probe(monkeypatch, lambda p, ctx=None, repo_root=None: {"ok": 1}, rows=rows)
+    assert response["result"] == {"ok": 1}
+    assert not _overruns(rows)
+
+
+def test_charge_outside_a_dispatch_is_a_noop():
+    ipc.charge_op_cpu_secs(5.0)
+
+
+_ONE_TICK_MS = 15.625
+_GIT_OP = "ceremony.budget_probe_git"
+_SLEEP_OP = "ceremony.budget_probe_sleep"
+
+
+def _git_spawner(params, ctx=None, repo_root=None):
+    from coordinator_core.git.run import run_git
+
+    start = time.thread_time()
+    for _ in range(20):
+        assert run_git(["--version"]).ok
+    return {"thread_ms": (time.thread_time() - start) * 1000.0}
+
+
+def _sleeper(params, ctx=None, repo_root=None):
+    time.sleep(0.5)
+    return {"ok": True}
+
+
+async def _dispatch_both(monkeypatch, rows):
+    monkeypatch.setattr(ipc, "CEREMONY_BUDGET_SECS", 0.0)
+    monkeypatch.setattr(ipc, "record_op_process_time", lambda **kw: rows.append(kw))
+    for op, handler in ((_GIT_OP, _git_spawner), (_SLEEP_OP, _sleeper)):
+        monkeypatch.setitem(ipc._REGISTRY, op, handler)
+        monkeypatch.setitem(ipc._OP_KEY_SCOPE, op, "none")
+    msgs = [
+        {"jsonrpc": "2.0", "id": i, "method": op, "params": {}}
+        for i, op in enumerate((_GIT_OP, _SLEEP_OP), start=1)
+    ]
+    return await asyncio.gather(*(ipc._dispatch_message_impl(m) for m in msgs))
+
+
+@pytest.mark.spawns_process
+@pytest.mark.skipif(sys.platform != "win32", reason="POSIX charges no child CPU")
+def test_a_git_child_is_charged_to_its_op_and_not_to_a_concurrent_sibling(monkeypatch):
+    rows: list = []
+    git_resp, sleep_resp = asyncio.run(_dispatch_both(monkeypatch, rows))
+
+    thread_ms = git_resp["result"]["thread_ms"]
+    by_op = {r["op"]: r["process_ms"] for r in _overruns(rows)}
+    assert by_op[_GIT_OP] - thread_ms > _ONE_TICK_MS
+    assert by_op.get(_SLEEP_OP, 0.0) < _ONE_TICK_MS
+    assert sleep_resp["result"] == {"ok": True}
+
+
+@pytest.mark.spawns_process
+def test_run_git_outside_a_dispatch_charges_nothing_and_still_returns_its_result():
+    from coordinator_core.git.run import GitResult, run_git
+
+    assert ipc._op_cpu_secs_var.get() is None
+    result = run_git(["--version"])
+    assert isinstance(result, GitResult)
+    assert result.ok and result.stdout.startswith("git version")
+    assert not result.timed_out
+
+
+@pytest.mark.deliberate_wall_clock(reason="the hung envelope fires on a wall-clock backstop CPU time cannot see")
+def test_a_hung_ceremony_op_returns_the_hung_envelope_at_the_backstop(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "0.2")
+    rows: list = []
+
+    def _hung(params, ctx=None, repo_root=None):
+        time.sleep(0.8)
+        return {"late": True}
+
+    response = _dispatch_probe(monkeypatch, _hung, rows=rows)
+
+    assert "result" not in response
+    text = json.dumps(response["error"])
+    assert "hung" in text
+    assert "abandoned, not stopped" in text

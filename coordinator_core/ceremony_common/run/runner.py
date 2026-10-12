@@ -22,13 +22,13 @@ from coordinator_core.composition_budget import CompositionBudget
 from coordinator_core.contract.apply_base import assert_dispatchable
 from coordinator_core.telemetry.composition_record import flush_composition_record, make_fleet_budget
 from . import ledger
-from .contract import DEADLINE_S, StepResult, StepSpec
+from .contract import DEADLINE_S, RUN_ID_RE, StepResult, StepSpec
 
 OUTPUT_CAP = 4000
 REASON_COLD = "cold"
 
-_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-_ALLOWLIST = Path(__file__).resolve().parents[1] / "ops" / "warm_entrypoint_allowlist.json"
+_BIN_DIR = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
+_ALLOWLIST = Path(__file__).resolve().parents[2] / "ops" / "warm_entrypoint_allowlist.json"
 
 
 class BudgetRefused(RuntimeError):
@@ -100,14 +100,36 @@ def _warm_entrypoints() -> frozenset[str]:
         return frozenset()
 
 
-def _measure_cold(cmd: Sequence[str], *, repo_root: Path, deadline_s: float, io_dir: Path | None = None) -> ChildOutcome:
-    """Run `cmd` once under process-time accounting; a child past the deadline is reported, not awaited."""
+_STDIN_SHIM = (
+    "import os, runpy, sys\n"
+    "fd = os.open(sys.argv[1], os.O_RDONLY)\n"
+    "os.dup2(fd, 0)\n"
+    "os.close(fd)\n"
+    "sys.stdin = open(0, encoding='utf-8', errors='replace', closefd=False)\n"
+    "sys.argv = sys.argv[2:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+
+
+def _measure_cold(
+    cmd: Sequence[str], *, repo_root: Path, deadline_s: float, io_dir: Path | None = None,
+    stdin_text: str | None = None,
+) -> ChildOutcome:
+    """Run `cmd` once under process-time accounting; a child past the deadline is reported, not awaited.
+
+    `stdin_text` reaches a `python <script> ...` command as its stdin through a shim that stands
+    in for the child's interpreter entry, so it adds no process.
+    """
     import tempfile
 
     from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
 
     out_dir = Path(tempfile.mkdtemp(prefix="run-io-", dir=str(io_dir) if io_dir else None))
     out_path, err_path = out_dir / "stdout", out_dir / "stderr"
+    if stdin_text is not None:
+        in_path = out_dir / "stdin"
+        in_path.write_text(stdin_text, encoding="utf-8")
+        cmd = [cmd[0], "-c", _STDIN_SHIM, str(in_path), *cmd[1:]]
     box: dict[str, Any] = {}
 
     def _work() -> None:
@@ -145,23 +167,26 @@ def _warm_request(method: str, params: dict[str, Any], deadline_s: float) -> dic
     return try_warm_dispatch(msg, read_deadline_secs=deadline_s)
 
 
-def _cold_cli(step: StepSpec, *, repo_root: Path, deadline_s: float) -> ChildOutcome:
+def _cold_cli(step: StepSpec, *, repo_root: Path, deadline_s: float, stdin_text: str | None = None) -> ChildOutcome:
     script = _BIN_DIR / f"{step.target}.py"
-    out = _measure_cold([sys.executable, str(script), *step.args], repo_root=repo_root, deadline_s=deadline_s)
+    out = _measure_cold(
+        [sys.executable, str(script), *step.args], repo_root=repo_root, deadline_s=deadline_s, stdin_text=stdin_text
+    )
     return ChildOutcome(
         exit_code=out.exit_code, process_ms=out.process_ms, spawns=out.spawns,
         stdout=out.stdout, stderr=out.stderr, reason=out.reason or REASON_COLD,
     )
 
 
-def _dispatch_cli(step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float) -> ChildOutcome:
+def _dispatch_cli(
+    step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float, stdin_text: str | None = None
+) -> ChildOutcome:
     """Allowlisted barewords go through the warm door; others start a cold child."""
     if step.target in _warm_entrypoints():
-        resp = _warm_request(
-            "invoke.from_argv",
-            {"argv": list(step.args), "cwd": str(repo_root), "entrypoint": step.target},
-            deadline_s,
-        )
+        params: dict[str, Any] = {"argv": list(step.args), "cwd": str(repo_root), "entrypoint": step.target}
+        if stdin_text is not None:
+            params["stdin"] = stdin_text
+        resp = _warm_request("invoke.from_argv", params, deadline_s)
         if resp is not None:
             result = resp.get("result")
             if isinstance(result, dict):
@@ -174,10 +199,12 @@ def _dispatch_cli(step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s:
                     stderr=str(result.get("stderr", "")),
                 )
             return ChildOutcome(exit_code=1, spawns=0, stderr=_clip(json.dumps(resp.get("error", resp))))
-    return _cold_cli(step, repo_root=repo_root, deadline_s=deadline_s)
+    return _cold_cli(step, repo_root=repo_root, deadline_s=deadline_s, stdin_text=stdin_text)
 
 
-def _dispatch_op(step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float) -> ChildOutcome:
+def _dispatch_op(
+    step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float, stdin_text: str | None = None
+) -> ChildOutcome:
     params = json.loads(step.args[0]) if step.args else {}
     resp = _warm_request(step.target, params, deadline_s)
     if resp is None:
@@ -193,7 +220,9 @@ def _dispatch_op(step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: 
     return ChildOutcome(exit_code=0, process_ms=spent_ms, spawns=0, stdout=json.dumps(resp.get("result")))
 
 
-def _dispatch_inproc(step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float) -> ChildOutcome:
+def _dispatch_inproc(
+    step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float, stdin_text: str | None = None
+) -> ChildOutcome:
     """`target` is `package.module:function`, called as `function(repo_root)` and returning `(exit_code, text)`.
 
     The manifest's inproc targets (`probes.*`, `touch_weekly_marker`) share that shape; the text
@@ -286,12 +315,15 @@ def run_stages(
     dispatch: Mapping[str, Dispatcher] | None = None,
     budget: CompositionBudget | None = None,
     rules: Mapping[str, Rule] | None = None,
+    allow_suite: bool = False,
+    suite_grant: str | None = None,
 ) -> list[StepResult]:
     """Run `steps` in order, appending exactly one terminal ledger row per step.
 
     A raising step is a `failed` row and the run continues. A gating step that ends unresolved
-    (failed, raised, deadline, not-composed) gives every remaining step `halted-by-gate`.
-    Raises before any child starts when a `cli` step's bareword is outside the dispatch row.
+    (failed, raised, deadline, not-composed) gives every remaining step `halted-by-gate`, unless
+    it is `best_effort`. A `suite` step starts only with `allow_suite=True` and a `ran` row for
+    the step id `suite_grant`. Raises before any child starts when a `cli` step's bareword is outside the dispatch row.
     """
     repo = Path(repo_root)
     table = dict(default_dispatch())
@@ -305,6 +337,7 @@ def run_stages(
     scope = _RuleScope(repo_root=repo, budget=owned_budget, measure=table["rule-child"])
     results: list[StepResult] = []
     halted_by: str | None = None
+    done: dict[str, StepResult] = {}
     try:
         for step in steps:
             result = StepResult(id=step.id, status="failed", reason="runner-aborted")
@@ -312,16 +345,20 @@ def run_stages(
                 if halted_by is not None:
                     result = StepResult(id=step.id, status="halted-by-gate", reason=halted_by)
                 else:
-                    result = _run_step(step, table, rule_table, scope, run_dir=run_dir)
-                    if step.gates_next and result.status in ("failed", "not-composed"):
+                    result = _run_step(
+                        step, table, rule_table, scope, run_dir=run_dir, done=done,
+                        allow_suite=allow_suite, suite_grant=suite_grant,
+                    )
+                    if step.gates_next and not step.best_effort and result.status in ("failed", "not-composed"):
                         halted_by = step.id
             except Exception as exc:  # noqa: BLE001 -- the row is the report
                 result = StepResult(id=step.id, status="failed", reason=f"raised {type(exc).__name__}: {exc}")
-                if step.gates_next:
+                if step.gates_next and not step.best_effort:
                     halted_by = step.id
             finally:
                 ledger.append(run_dir, result)
             results.append(result)
+            done[result.id] = result
     finally:
         failed = any(r.status == "failed" for r in results)
         flush_composition_record(
@@ -333,22 +370,66 @@ def run_stages(
     return results
 
 
+def _child_run(stdout: str) -> tuple[str, str]:
+    """Return `(state, run_id)` from a chained launch's output; either is empty when it printed none."""
+    try:
+        obj = json.loads(stdout)
+    except ValueError:
+        obj = None
+    if isinstance(obj, dict):
+        return str(obj.get("state", "")), str(obj.get("run_id", ""))
+    match = RUN_ID_RE.search(stdout)
+    return "", match.group(0) if match else ""
+
+
+def _launch_result(result: StepResult) -> StepResult:
+    """Record the chained child's run id, or `already-ran` when it started no new run."""
+    if result.status != "ran":
+        return result
+    state, run_id = _child_run(result.stdout)
+    if state == "already-ran":
+        reason = "already-ran"
+    elif run_id:
+        reason = f"child-run:{run_id}"
+    else:
+        return result
+    return StepResult(
+        id=result.id, status="ran", reason=reason, exit_code=result.exit_code,
+        process_ms=result.process_ms, spawns=result.spawns, stdout=result.stdout, stderr=result.stderr,
+    )
+
+
 def _run_step(
     step: StepSpec, table: Mapping[str, Dispatcher], rules: Mapping[str, Rule], scope: _RuleScope,
-    *, run_dir: Path,
+    *, run_dir: Path, done: Mapping[str, StepResult], allow_suite: bool = False, suite_grant: str | None = None,
 ) -> StepResult:
     if step.already_satisfied:
         return StepResult(id=step.id, status="ran", reason="already-satisfied")
     if step.cost_class == "over-bar":
         return StepResult(id=step.id, status="not-composed", reason="over-bar")
+    stdin_text: str | None = None
+    if step.stdin_from is not None:
+        upstream = done.get(step.stdin_from)
+        if upstream is None or upstream.status != "ran" or upstream.reason == "already-satisfied":
+            return StepResult(id=step.id, status="not-composed", reason=step.stdin_from)
+        stdin_text = upstream.stdout
+    if step.cost_class == "suite":
+        if not allow_suite:
+            return StepResult(id=step.id, status="not-composed", reason="not-in-launch")
+        granted = done.get(suite_grant) if suite_grant else None
+        if granted is None or granted.status != "ran":
+            return StepResult(id=step.id, status="not-composed", reason="no-grant")
     if not scope.budget.check():
         return StepResult(id=step.id, status="not-composed", reason=scope.budget.breached_units[-1])
     scope.budget.record_invocation(step.id)
     deadline_s = DEADLINE_S[step.cost_class]
-    outcome = table[step.kind](step, repo_root=scope.repo_root, run_dir=run_dir, deadline_s=deadline_s)
+    extra = {} if stdin_text is None else {"stdin_text": stdin_text}
+    outcome = table[step.kind](step, repo_root=scope.repo_root, run_dir=run_dir, deadline_s=deadline_s, **extra)
     result = _result_from(step, outcome)
-    if result.status == "failed" and step.gates_next and outcome.reason != "deadline":
+    if result.status == "failed" and step.gates_next and not step.best_effort and outcome.reason != "deadline":
         rule_id = step.on_exit.get(outcome.exit_code)
         if rule_id is not None:
             result = _apply_rule(step, result, rule_id, rules.get(rule_id), scope, run_dir=run_dir)
+    if step.cost_class == "launch":
+        result = _launch_result(result)
     return result

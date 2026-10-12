@@ -755,6 +755,15 @@ _CLASS_TAG = re.compile(r"#\s*class:\s*([a-zA-Z0-9-]+)")
     # One merge order, measured: exactly this key, zero collateral.
 _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
     {
+        # 2026-10-12 -- # class: structural-floor. `ceremony_common.run.driver._run_segments`
+        # walks a ceremony spec's front door then its residue segments: a fixed, spec-declared
+        # handful of ordered stages, not data items. Each segment's owed steps come from the run
+        # state the previous segment left (the front door produces the envelope the launch
+        # directives gate on), so no single call can run two segments. The steps inside one
+        # segment are already one `_run_batch`.
+        ('coordinator_core/ceremony_common/run/driver.py', '_run_segments', '_segment', 0),
+        ('coordinator_core/ceremony_common/run/driver.py', '_run_segments', '_run_batch', 0),
+        ('coordinator_core/ceremony_common/run/driver.py', '_run_segments', '_launch_directives', 0),
         # 2026-10-07 -- # class: retained-fallback. `check_destructive_rm` asks ONE
         # `git status --porcelain -- <all targets>` per repo root; the per-target call fires only
         # when that batch fails or a porcelain line cannot be attributed to a target (a rename

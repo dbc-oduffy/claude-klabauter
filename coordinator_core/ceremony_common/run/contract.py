@@ -65,7 +65,7 @@ NARRATION_DENY_LIST: tuple[str, ...] = (
     "please confirm",
 )
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contract" / "workday-start-run-digest.schema.json"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contract" / "ceremony-run-digest.schema.json"
 
 
 @dataclass(frozen=True)

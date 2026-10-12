@@ -990,36 +990,79 @@ _OP_TIMEOUT_OVERRIDES: Dict[str, float] = {"push.outstanding": 130.0}
 
 
 # ---------------------------------------------------------------------------
-# The ceremony budget -- a ratchet, not a tunable (2026-08-21, PM ruling)
+# The ceremony budget -- a ratchet on PROCESS TIME, not a tunable
+# (2026-08-21 PM ruling; restated 2026-10-12, state/rulings/2026-10-12-apm-ceremony-budget-process-time.md)
 #
-# EVERY `ceremony.*` op is bounded at CEREMONY_BUDGET_SECS end-to-end. No per-op
-# exception, no env override, no future widening. The number may be LOWERED, never
-# raised: `coordinator_core/tests/test_ceremony_budget_ratchet.py` is the enforcement
-# and fails on any edit that lifts the constant, admits a widening override row for a
-# ceremony op, or lets the env knob out-resolve the ceiling.
+# EVERY ceremony op is held to CEREMONY_BUDGET_SECS of its own process time. What is
+# measured today: the CPU of a SYNC handler's thread, plus child CPU charged through
+# `charge_op_cpu_secs` -- only `git.run.run_git` charges it, and only on Windows. A
+# coroutine handler is NOT measured (loop-thread `thread_time` mixes the coroutines
+# interleaved on that thread); it is charged only for `run_git` children, so an overrun
+# row can under-report it. The rule still binds it; no check enforces it yet. Children
+# started outside `run_git` are not charged. Wall clock is not a
+# cost -- it measures peer load. An op over the bar is REPORTED (a process-time row from
+# `_report_ceremony_overrun`) and its result is returned unchanged; nothing is killed,
+# cancelled or retried on a breach. The only wall-clock limit is the backstop,
+# `DISPATCH_TIMEOUT_SECS`, which means "hung", never "slow". No per-op exception, no env
+# widening: `coordinator_core/tests/test_ceremony_budget_ratchet.py` fails on any edit
+# that lifts the constant or lets an override row widen a ceremony op past the backstop.
+# The number may be LOWERED, never raised.
 #
 # Why a ceiling rather than a table of per-op rows: a new ceremony op must be BORN
-# inside the budget, not admitted to it. A table binds only the ops someone remembered
-# to list, and "the next EM remembers to add a row" is not an artifact (CLAUDE.md
-# § North star). Prefix matching makes the correct path the default and leaves no shape
-# for an exception to take -- there is no row to add, so there is nothing to negotiate.
+# inside the budget, not admitted to it. Prefix matching makes the correct path the
+# default and leaves no shape for an exception to take.
 #
-# Why 2s when the brightline is 500ms: 500ms is the end-to-end target the close ceremony
-# is held to (DR-344). This is the RUNAWAY guard around a single op -- already 4x that
-# target, deliberately generous so a breach is unambiguous evidence of a real defect
-# rather than a tight-cap artifact. It is a ceiling, never a target. An op that needs
-# all of it is an op with a problem.
+# Why 2s when the brightline is 500ms: 500ms is the end-to-end target (DR-344); this is
+# the runaway bar, deliberately generous so a report is unambiguous evidence of a real
+# defect. The remedy is always to make the op cheaper, never to raise the number.
 #
-# What this breaks, on purpose: a ceremony op whose real cost exceeds 2s now FAILS
-# instead of quietly occupying the box for the ~50 peers queued behind it. That failure
-# is the signal, and the remedy is always to make the op cheaper -- fewer spawns,
-# batched git, a warm path -- never to come back here and raise the number. A request
-# to widen it is denied by construction, not by review.
-#
-# Read docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md before touching this
-# number.
+# Read docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md before touching it.
 # ---------------------------------------------------------------------------
 CEREMONY_BUDGET_SECS: float = 2.0
+
+# CPU seconds charged to the dispatch in flight: a sync handler's thread appends its own
+# `thread_time` delta, and `git.run.run_git` (the only child runner that charges, Windows
+# only) appends each git child's Job CPU through `charge_op_cpu_secs`. A list, bound before
+# `to_thread` copies the context, so appends from the pool thread are visible to the
+# dispatcher.
+_op_cpu_secs_var: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
+    "coordinator_core_ipc_op_cpu_secs", default=None
+)
+
+
+def charge_op_cpu_secs(secs: float) -> None:
+    """Charge `secs` of CPU to the dispatch in flight; no-op outside one.
+
+    Today the only caller that charges a child's CPU is `git.run.run_git` (Windows).
+    """
+    bucket = _op_cpu_secs_var.get()
+    if bucket is not None:
+        bucket.append(secs)
+
+
+def _report_ceremony_overrun(method: str, cpu_secs: float, repo_root: Any) -> None:
+    """Record a process-time row when a ceremony op's CPU exceeds CEREMONY_BUDGET_SECS.
+
+    Report only: the caller returns the op's result unchanged. Never raises.
+    """
+    if cpu_secs <= CEREMONY_BUDGET_SECS or not is_ceremony_method(method):
+        return
+    import time as _t
+
+    try:
+        record_op_process_time(
+            op=method,
+            process_ms=cpu_secs * 1000.0,
+            measurement_scope=MEASUREMENT_SCOPE_THREAD_AND_CHILDREN,
+            source_path="ceremony_budget_overrun",
+            t_start=_t.time(),
+            repo_root=Path(repo_root) if repo_root else None,
+        )
+    except Exception:
+        # A failed report row must not turn a completed op into an error response.
+        import logging
+
+        logging.getLogger(__name__).debug("ceremony overrun report failed for %s", method, exc_info=True)
 
 _CEREMONY_METHOD_PREFIX = "ceremony."
 
@@ -1028,6 +1071,8 @@ _CEREMONY_PACKAGE_PREFIX = "coordinator_core.ops.ceremony."
 
 _CEREMONY_PACKAGE_ALIASES = frozenset({
     "commit.exec_bit_change",
+    # Ceremony-invoked outside the `ceremony.` prefix.
+    "orientation.regenerate_cache",
     "review.snapshot_diff_and_head",
 })
 
@@ -1118,8 +1163,7 @@ def _resolve_dispatch_timeout_secs() -> float:
     identically to before.
 
     The env-derived value is then `min()`-ed against `DISPATCH_TIMEOUT_SECS` —
-    the same one-directional shape the ceremony budget uses one level down. This
-    is THE seam, not one of several: `os.environ` is read here and nowhere else,
+    narrow-only, never widening. This is THE seam, not one of several: `os.environ` is read here and nowhere else,
     so every consumer downstream (`_timeout_for`, `warm.lifecycle`'s drain
     ceiling, `--dump-op-timeouts`) inherits the ceiling without re-stating it,
     and there is no path by which an unclamped env value reaches a caller.
@@ -1142,76 +1186,47 @@ def _resolve_dispatch_timeout_secs() -> float:
 
 
 def _dispatch_timeout_unclamped(method: str, msg: Any = None) -> float:
-    """Per-op timeout resolution WITHOUT the ceremony clamp -- the shared body
-    of `_timeout_for` and `mutation_read_deadline_for`, which differ only in
-    whether that clamp is then applied. Kept in one place so a change to the
-    resolution order cannot land in one and miss the other."""
+    """Per-op timeout resolution honouring `_OP_TIMEOUT_OVERRIDES` -- the shared
+    body of `_timeout_for` (for non-ceremony ops) and `mutation_read_deadline_for`."""
     if method in _OP_TIMEOUT_OVERRIDES:
         return _OP_TIMEOUT_OVERRIDES[method]
     return _resolve_dispatch_timeout_secs()
 
 
 def _timeout_for(method: str, msg: Any = None) -> float:
-    """Per-op dispatch timeout, with the ceremony budget applied as a hard ceiling.
+    """Per-op WALL-CLOCK backstop: how long before a dispatch is declared hung.
 
     `msg` is the JSON-RPC request envelope when one is in hand; optional because most
-    resolution paths need only the method name. Defaulting to None keeps every existing
-    call site — and the ratchet tests, which call this with a bare method name to prove
-    the 2s clamp — byte for byte unchanged in behaviour.
+    resolution paths need only the method name.
 
-    Resolution order: `_OP_TIMEOUT_OVERRIDES[method]` if listed, else the global
-    runaway-guard timeout re-resolved per request (C11) via
-    `_resolve_dispatch_timeout_secs()` rather than the import-time constant. That
-    result is then CLAMPED to `CEREMONY_BUDGET_SECS` for any `ceremony.*` method.
+    A ceremony op resolves to `_resolve_dispatch_timeout_secs()` (`DISPATCH_TIMEOUT_SECS`,
+    narrow-only via `COORDINATOR_DISPATCH_TIMEOUT_SECS`) and an `_OP_TIMEOUT_OVERRIDES`
+    row cannot widen it. `CEREMONY_BUDGET_SECS` is a process-time bar enforced after the
+    handler returns, never a wall-clock limit
+    (state/rulings/2026-10-12-apm-ceremony-budget-process-time.md).
 
-    The clamp is one-directional by construction — `min`, never `max`. A ceremony op
-    can resolve BELOW the budget (a future narrower row, or an operator dialling
-    `COORDINATOR_DISPATCH_TIMEOUT_SECS` down for a fast-fail run) but can never
-    resolve above it, no matter what an override row or the env knob says. That is
-    the whole point: the knob that would otherwise be the escape hatch is the one
-    thing the clamp is positioned after.
-
-    NON-ceremony ops are bounded too, one level up: `_resolve_dispatch_timeout_secs()`
-    clamps the env knob to `DISPATCH_TIMEOUT_SECS`, so an unlisted op resolves to at
-    most the built-in default no matter what the environment asks for. The two
-    ceilings are separate rules with separate rationales (DR-348 for the ceremony
-    budget, the narrow-only knob for the global guard) and neither subsumes the other:
-    a ceremony op is capped at 2s even where the global default is 30s, and lowering
-    the global default is a distinct change that does not touch this function.
-
-    `_OP_TIMEOUT_OVERRIDES` holds one row, `push.outstanding` (DEC-2 retired its
-    three earlier rows; `coverage.gate` removed by K-001, state/kill-ledger.md;
-    `ceremony.scoped_git_commit`'s 150s row revoked 2026-08-21 by the budget). It
-    stays a live table so a genuinely justified NON-ceremony widening has somewhere
-    to land.
+    Any other op resolves to its `_OP_TIMEOUT_OVERRIDES` row if listed, else the same
+    global backstop. The table holds one row, `push.outstanding`; it stays live so a
+    justified NON-ceremony widening has somewhere to land.
     """
-    resolved = _dispatch_timeout_unclamped(method, msg)
     if is_ceremony_method(method):
-        return min(resolved, CEREMONY_BUDGET_SECS)
-    return resolved
+        return _resolve_dispatch_timeout_secs()
+    return _dispatch_timeout_unclamped(method, msg)
 
 
 def mutation_read_deadline_for(method: str, msg: Any = None) -> float:
     """How long a client may wait to READ the answer to a mutation it has
-    already put on the wire. `_timeout_for` without the ceremony clamp.
+    already put on the wire. The override-honouring resolution of `_timeout_for`.
 
-    THE TWO ARE NOT THE SAME KIND OF NUMBER, which is why this has its own
-    name. `CEREMONY_BUDGET_SECS` is a PERFORMANCE bar: an op over it is a
-    defect (DR-344). This is a TRANSPORT deadline: how long before a client
-    concludes it will never hear back. Using the performance bar as the
-    transport deadline means that the moment an op misses its target, the
-    client destroys its own ability to learn whether the mutation happened --
-    a slowness report becomes an integrity unknown, exactly when the op is
-    slow. `warm/client.py::_mutation_deadline_for` is the caller, and its own
-    comment records what that cost in practice.
-
-    NOT A BUDGET WIDENING: `CEREMONY_BUDGET_SECS` and `_timeout_for` are
-    untouched, and every ceremony op is still held to the bar and still
-    reported when it misses. Only the reading of the answer is longer, and a
-    longer read is never a resend, so it cannot double-execute.
+    `CEREMONY_BUDGET_SECS` is a process-time PERFORMANCE bar (DR-344); this is a
+    TRANSPORT deadline: how long before a client concludes it will never hear
+    back. Since 2026-10-12 (state/rulings/2026-10-12-apm-ceremony-budget-process-time.md)
+    both resolve a ceremony op to the same wall backstop, so this differs from
+    `_timeout_for` only for a non-ceremony `_OP_TIMEOUT_OVERRIDES` row. A longer
+    read is never a resend, so it cannot double-execute.
 
     Negative spec: not a general-purpose timeout. "How long may this op take"
-    is `_timeout_for`, clamp included. This is only for a client that has
+    is `_timeout_for`. This is only for a client that has
     already delivered a mutating request and is deciding how long to keep
     reading the same response.
     """
@@ -2104,13 +2119,17 @@ def _run_handler_absorbing_base(handler, params, repo_root):
     imported it, so the statement is a ``sys.modules`` dict lookup.
     """
     import asyncio
+    import time
 
+    cpu_start = time.thread_time()
     try:
         return handler(params, repo_root=repo_root)
     except (Exception, asyncio.CancelledError):
         raise
     except BaseException as exc:
         raise _EscapedBaseException(exc) from exc
+    finally:
+        charge_op_cpu_secs(time.thread_time() - cpu_start)
 
 
 async def _await_handler_absorbing_base(awaitable):
@@ -2401,6 +2420,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     from coordinator_core import dispatch_abandon
     _abandoned = threading.Event()
     _abandoned_token = dispatch_abandon.ACTIVE.set(_abandoned)
+    _op_cpu: list = []
+    _op_cpu_token = _op_cpu_secs_var.set(_op_cpu)
     import inspect
     try:
         if inspect.iscoroutinefunction(handler):
@@ -2477,8 +2498,10 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             deduped = list(dict.fromkeys(merged))
             result[_SCOPE_TOUCH_PATHS_KEY] = deduped
         result = _record_self_reported_touches(result, str(request_repo) if request_repo else None)
+        _report_ceremony_overrun(method, sum(_op_cpu), request_repo)
         return {"jsonrpc": "2.0", "id": id_, "result": result}
     finally:
+        _op_cpu_secs_var.reset(_op_cpu_token)
         _declared_writes_var.reset(_declared_writes_token)
         dispatch_abandon.ACTIVE.reset(_abandoned_token)
 
@@ -2515,11 +2538,9 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
         handler protocol does. A genuinely slow commit still occupies the box
         for its full duration while its caller has moved on. This removes the
         DOUBLE EXECUTION, which is the disease; the misreport was the symptom.
-      - Does NOT widen any budget. `CEREMONY_BUDGET_SECS` is untouched and must
-        stay untouched -- the ratchet's own rule is that the remedy is to make
-        the op cheaper, never to raise the number. What this changes is that a
-        breach is now a CLEAN failure, which is what that ratchet already
-        assumed it was.
+      - Does NOT widen any budget. `CEREMONY_BUDGET_SECS` is a process-time bar
+        reported after the handler returns; this envelope fires only at the wall
+        backstop (`DISPATCH_TIMEOUT_SECS`), which means the op is HUNG, not slow.
       - Imports `warm.client` LAZILY, inside the function. `warm.client`
         imports this module (`_mutation_deadline_for` reads `_timeout_for`), so
         a module-scope import here is a cycle; this module is also measured
@@ -2552,7 +2573,8 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
                 "code": WARM_DISPATCH_INDETERMINATE,
                 "message": (
                     f"{_OP_TIMEOUT_INDETERMINATE_MESSAGE} "
-                    f"(op {method!r} timed out after {op_timeout}s)"
+                    f"(op {method!r} timed out after {op_timeout}s and is hung; its thread is "
+                    f"abandoned, not stopped -- reconcile before any retry)"
                 ),
                 "data": {
                     "diagnosis": {
@@ -2570,7 +2592,10 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
         "id": id_,
         "error": {
             "code": INTERNAL_ERROR,
-            "message": f"op timed out after {op_timeout}s",
+            "message": (
+                f"op timed out after {op_timeout}s: the op is hung; its thread is "
+                f"abandoned, not stopped"
+            ),
         },
     }
 
@@ -2893,7 +2918,12 @@ async def dispatch_message(
 MEASUREMENT_SCOPE_PER_OP_HANDLER = "per_op_handler"
 MEASUREMENT_SCOPE_PER_OP_PROCESS = "per_op_process"
 MEASUREMENT_SCOPE_PROCESS_WIDE = "process_wide"
+#: THREAD_AND_CHILDREN: `time.thread_time()` delta of a sync handler's thread plus the CPU
+#: charged through `charge_op_cpu_secs` (`run_git` children, Windows only); excludes
+#: sibling ops' CPU. A coroutine handler is not thread-measured.
+MEASUREMENT_SCOPE_THREAD_AND_CHILDREN = "thread_and_children"
 _MEASUREMENT_SCOPES = frozenset({
+    MEASUREMENT_SCOPE_THREAD_AND_CHILDREN,
     MEASUREMENT_SCOPE_PER_OP_HANDLER,
     MEASUREMENT_SCOPE_PER_OP_PROCESS,
     MEASUREMENT_SCOPE_PROCESS_WIDE,

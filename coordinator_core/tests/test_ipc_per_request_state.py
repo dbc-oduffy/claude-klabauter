@@ -25,9 +25,10 @@ both only observable under OVERLAPPING dispatch:
      knob's per-request re-resolution. Both rows this docstring used to name
      are gone — `coverage.gate` (600s, removed K-001, state/kill-ledger.md)
      and `ceremony.scoped_git_commit` (150s, revoked 2026-08-21 by the
-     ceremony budget, DR-348). Ceremony ops now have their own bound, owned
-     by `coordinator_core/tests/test_ceremony_budget_ratchet.py`, not by any
-     row in this table — see `ipc.CEREMONY_BUDGET_SECS`.
+     ceremony budget, DR-348). A ceremony op resolves to the global wall
+     backstop whatever this table says; its process-time bar is owned by
+     `coordinator_core/tests/test_ceremony_budget_ratchet.py` — see
+     `ipc.CEREMONY_BUDGET_SECS`.
 
 Handlers use `asyncio.run()` in sync test functions — no pytest-asyncio
 dependency, matching `test_dispatch_message.py`'s own pattern.
@@ -213,8 +214,8 @@ def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch
     (removed, K-001) now tracks the live global knob like any unlisted op,
     and `ceremony.scoped_git_commit` (revoked 2026-08-21, DR-348) can no
     longer carry a widening row at all — a live row would still be inert,
-    clamped by `CEREMONY_BUDGET_SECS`
-    (test_ceremony_budget_ratchet.py::test_an_injected_widening_row_is_still_clamped),
+    ignored by `_timeout_for`
+    (test_ceremony_budget_ratchet.py::test_an_injected_widening_row_is_still_ignored),
     which would make it useless as a test of "override wins over the env
     knob". A synthetic NON-ceremony row keeps that property under test
     without depending on a row that must never exist again."""

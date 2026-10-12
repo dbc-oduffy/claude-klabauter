@@ -686,7 +686,7 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
         f"__default__ must be a float; got {parsed['__default__']!r} ({type(parsed['__default__']).__name__})"
     )
 
-    from coordinator_core.ipc import CEREMONY_BUDGET_SECS, is_ceremony_method
+    from coordinator_core.ipc import CEREMONY_BUDGET_SECS, _timeout_for, is_ceremony_method
 
     reserved = {
         "__default__",
@@ -709,9 +709,10 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
             f"documented _OP_TIMEOUT_OVERRIDES rows; {key!r} is neither reserved, an override, "
             f"nor a ceremony op. Full payload: {parsed}"
         )
-        assert value == CEREMONY_BUDGET_SECS, (
-            f"projected ceremony op {key!r} must carry the ceremony budget, not {value!r}"
+        assert value == _timeout_for(key), (
+            f"projected ceremony op {key!r} must carry its resolved wall deadline, not {value!r}"
         )
+        assert value > CEREMONY_BUDGET_SECS
 
     assert parsed["__ceremony_budget__"] == CEREMONY_BUDGET_SECS
     assert set(parsed) >= reserved, f"missing reserved rows; got {sorted(parsed)}"
@@ -757,10 +758,10 @@ def test_dump_op_timeouts_projects_the_transport_deadline():
             "child will wait"
         )
         assert parsed[row] == mutation_read_deadline_for(op)
-        assert parsed[row] > parsed[op], (
-            "the transport deadline must exceed the performance budget -- equal is the "
-            "collapse this projection exists to prevent"
+        assert parsed[row] >= parsed[op], (
+            "the transport deadline must not undercut the op's wall deadline"
         )
+        assert parsed[row] > CEREMONY_BUDGET_SECS
 
     for alias in ("commit.exec_bit_change", "review.snapshot_diff_and_head"):
         assert not alias.startswith("ceremony.")

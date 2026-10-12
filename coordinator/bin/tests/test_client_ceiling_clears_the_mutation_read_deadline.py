@@ -122,7 +122,7 @@ def test_a_non_ceremony_op_is_untouched():
     ) + math.ceil(payload["__warm_miss_wait__"]) + 2
 
 
-def test_an_unlisted_ceremony_op_is_bounded_by_the_ceremony_budget_not_the_default():
+def test_an_unlisted_ceremony_op_is_bounded_by_the_default_not_the_process_time_bar():
     """`OP_KEY_SCOPE` drives the dump's projection; `ipc._timeout_for`
     prefix-matches. So a `ceremony.*` op the dump omits is clamped to 2s
     server-side while its row is absent here -- and the caller used to fall
@@ -147,7 +147,7 @@ def test_an_unlisted_ceremony_op_is_bounded_by_the_ceremony_budget_not_the_defau
 
     with unittest.mock.patch.object(_mod, "_resolve_op_timeouts", _install_stripped):
         assert _mod._op_timeout_ceiling(unlisted, "/nonexistent", {}) == int(
-            payload["__ceremony_budget__"]
+            payload["__default__"]
         ) + 2
 
     with unittest.mock.patch.object(_mod, "_resolve_op_timeouts", _install):

@@ -69,6 +69,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Sequence
 
+from coordinator_core.git.run import _wall_bound
+
 __all__ = [
     "REPO_SCOPING_ENV_VARS",
     "PROBE_YES",
@@ -104,17 +106,14 @@ PROBE_UNKNOWN = "unknown"
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-#: The single dial for every probe in this module, and the only one — no caller
-#: passes a `timeout=`. Every call here is a local object-database read against
-#: an already-resolved path, measured at 26.9ms for `git -C <repo> rev-parse
-#: HEAD` on the reference box (DR-344 § 4), so 2.0 is the same clamp value
-#: `ipc.py :: CEREMONY_BUDGET_SECS` holds an entire op to. A probe that cannot
-#: answer a local object-database question inside a whole ceremony's budget is
-#: an UNKNOWN, not something to wait on.
+#: The single process-time budget input for every probe in this module. It is
+#: NOT a wall clock: each spawn's `subprocess` timeout is
+#: `_wall_bound(budget, remote=False)`, this budget plus the scheduling
+#: headroom, so a healthy probe queued behind peers is not killed. A wall kill
+#: is reported as "hung", never as a budget breach.
 #:
-#: Negative-spec: this number may be lowered, never raised (DR-349 § 3). A site
-#: that cannot live inside it is a defect report about that site, not a case for
-#: widening the dial for every other caller.
+#: Negative-spec: this number may be lowered, never raised (DR-349 § 3). It
+#: stays the budget input; do not pass it to `subprocess` as a timeout.
 FOREIGN_REPO_GIT_TIMEOUT_SECONDS = 2.0
 
 _UNUSABLE_REASON_MEMO: "dict[tuple[str, int], Optional[str]]" = {}
@@ -190,18 +189,19 @@ def reset_foreign_repo_probe_memo() -> None:
 
 
 def _probe_foreign_repo(root: str, timeout: float) -> Optional[str]:
+    wall = _wall_bound(timeout, False)
     try:
         probe = subprocess.run(
             ["git", "-C", root, "rev-parse", "--absolute-git-dir"],
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=wall,
             check=False,
             env=scoped_git_env(),
             creationflags=_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
-        return f"git rev-parse timed out after {timeout}s resolving {root}"
+        return f"git rev-parse hung: killed at the {wall}s wall bound resolving {root}"
     except OSError as exc:
         return f"could not run git: {exc}"
     if probe.returncode != 0:
@@ -244,19 +244,19 @@ def git_predicate(
     `FOREIGN_REPO_GIT_TIMEOUT_SECONDS` (DR-349 § 3). These are local object-database
     predicates; one that needs longer is a defect report about the call site.
     """
-    timeout = min(timeout, FOREIGN_REPO_GIT_TIMEOUT_SECONDS)
+    wall = _wall_bound(min(timeout, FOREIGN_REPO_GIT_TIMEOUT_SECONDS), False)
     try:
         probe = subprocess.run(
             ["git", "-C", str(repo_path), *args],
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=wall,
             check=False,
             env=scoped_git_env(),
             creationflags=_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
-        return PROBE_UNKNOWN, f"git timed out after {timeout}s"
+        return PROBE_UNKNOWN, f"git hung: killed at the {wall}s wall bound"
     except OSError as exc:
         return PROBE_UNKNOWN, f"could not run git: {exc}"
     if probe.returncode == 0:
@@ -278,7 +278,7 @@ def scoped_cat_file_batch(
             ["git", "-C", str(repo_path), "cat-file", "--batch"],
             input=("\n".join(tokens) + "\n").encode("utf-8"),
             capture_output=True,
-            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
+            timeout=_wall_bound(FOREIGN_REPO_GIT_TIMEOUT_SECONDS, False),
             env=scoped_git_env(),
             creationflags=_NO_WINDOW,
         )

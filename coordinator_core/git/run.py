@@ -22,11 +22,12 @@ objects when it tries.
 TWO BUDGETS AND ONE HEADROOM TERM, ALL NAMED, NONE PER-SITE.
 
   - `LOCAL_PLUMBING_BUDGET_SECS = 2.0` -- every local git read and write.
-    Matches what `git/repo_root.py` already ships and what
-    `ipc.CEREMONY_BUDGET_SECS` clamps every `ceremony.*` op to (DR-348), so
-    a plumbing call on a ceremony path cannot out-live the op that issued
-    it. A local git call that does not fit inside it is a defect report, not
-    a candidate for a wider dial.
+    Matches what `git/repo_root.py` already ships and the process-time bar
+    `ipc.CEREMONY_BUDGET_SECS` holds a `ceremony.*` op to (DR-348). That bar
+    is CPU, not a wall clamp; this runner is the only code that charges a
+    child's CPU to the op (Windows only), and a coroutine handler is not
+    measured at all. A local git call that does not fit inside this budget is
+    a defect report, not a candidate for a wider dial.
   - `REMOTE_BUDGET_SECS` -- the single constant for the handful of legs
     that genuinely talk to a remote (`fetch`, `push`, `ls-remote`, `clone`).
     This is a RUNAWAY GUARD, not a budget, and the distinction is
@@ -103,6 +104,7 @@ Decision backlink: docs/decisions/DR-344-the-brightline-process-budget-for-claud
 from __future__ import annotations
 
 import os
+import sys
 
 from typing import Mapping, NamedTuple, Optional, Sequence
 
@@ -150,6 +152,99 @@ REMOTE_BUDGET_SECS: float = 30.0
 #: This is the load norm made visible, and it is the one constant here whose
 #: growth means the BOX changed rather than our code. Ratchets DOWN only.
 _SPAWN_SCHEDULING_HEADROOM_SECS: float = 10.0
+
+_CREATE_SUSPENDED = 0x00000004
+
+# Child CPU, Windows only. Inside a dispatch (the `ipc._op_cpu_secs_var` bucket is bound)
+# each spawn starts suspended, joins its own Job object before it runs a single
+# instruction, is resumed with one `NtResumeProcess`, and the Job's user+kernel time is
+# charged through `ipc.charge_op_cpu_secs` on every exit path. Attribution is by
+# construction: a Job holds only this spawn's process tree. Post-spawn assignment loses the
+# children that finish first. POSIX charges no child CPU: `RUSAGE_CHILDREN` is
+# process-wide and would bill an op for its siblings' children. `ctypes` loads only here,
+# never at import. `ipc` is reached through `sys.modules` so this module never adds it to
+# its import closure.
+_win32 = None
+
+
+def _win32_api():
+    global _win32
+    if _win32 is None:
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicAccounting(ctypes.Structure):
+            _fields_ = [
+                ("TotalUserTime", ctypes.c_longlong),
+                ("TotalKernelTime", ctypes.c_longlong),
+                ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+                ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+                ("TotalPageFaultCount", wintypes.DWORD),
+                ("TotalProcesses", wintypes.DWORD),
+                ("ActiveProcesses", wintypes.DWORD),
+                ("TotalTerminatedProcesses", wintypes.DWORD),
+            ]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.AssignProcessToJobObject.restype = wintypes.BOOL
+        k32.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
+        ]
+        k32.QueryInformationJobObject.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.CloseHandle.restype = wintypes.BOOL
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        _win32 = (ctypes, k32, ntdll, _BasicAccounting)
+    return _win32
+
+
+def _open_charging_job():
+    """A fresh Job handle when a dispatch is in flight on Windows, else None."""
+    if sys.platform != "win32":
+        return None
+    ipc = sys.modules.get("coordinator_core.ipc")
+    if ipc is None or ipc._op_cpu_secs_var.get() is None:
+        return None
+    try:
+        _, k32, _, _ = _win32_api()
+        return k32.CreateJobObjectW(None, None) or None
+    except Exception:
+        return None
+
+
+def _assign_and_resume(job, proc) -> bool:
+    """Put the suspended `proc` in `job` and resume it; False only if it could not be resumed.
+
+    A failed assignment still resumes the child, which then charges nothing.
+    """
+    try:
+        _, k32, ntdll, _ = _win32_api()
+        handle = int(proc._handle)
+        k32.AssignProcessToJobObject(job, handle)
+        return ntdll.NtResumeProcess(handle) >= 0
+    except Exception:
+        return False
+
+
+def _charge_and_close_job(job) -> None:
+    try:
+        ctypes, k32, _, accounting = _win32_api()
+        try:
+            info = accounting()
+            if k32.QueryInformationJobObject(job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+                ipc = sys.modules.get("coordinator_core.ipc")
+                if ipc is not None:
+                    ipc.charge_op_cpu_secs((info.TotalUserTime + info.TotalKernelTime) / 1e7)
+        finally:
+            k32.CloseHandle(job)
+    except Exception:
+        pass
+
 
 class GitResult(NamedTuple):
     """One git invocation's outcome, with the three failure kinds kept
@@ -426,27 +521,38 @@ def run_git(
     if fed_input is not None:
         mode_kwargs["stdin"] = subprocess.PIPE
     wall = _wall_bound(timeout, remote)
+    job = _open_charging_job()
+    spawn_flags = no_console_creationflags()
+    if job is not None:
+        spawn_flags = {"creationflags": spawn_flags.get("creationflags", 0) | _CREATE_SUSPENDED}
     try:
-        with subprocess.Popen(
-            ["git", *args],
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=_remote_env(env) if remote else (dict(env) if env is not None else None),
-            **mode_kwargs,
-            **no_console_creationflags(),
-        ) as proc:
-            try:
-                stdout, stderr = proc.communicate(input=fed_input, timeout=wall)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        try:
+            with subprocess.Popen(
+                ["git", *args],
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=_remote_env(env) if remote else (dict(env) if env is not None else None),
+                **mode_kwargs,
+                **spawn_flags,
+            ) as proc:
+                if job is not None and not _assign_and_resume(job, proc):
+                    proc.kill()
+                    return GitResult(returncode=127, stdout="", stderr="", timed_out=False)
                 try:
-                    proc.wait(timeout=_SPAWN_SCHEDULING_HEADROOM_SECS)
+                    stdout, stderr = proc.communicate(input=fed_input, timeout=wall)
                 except subprocess.TimeoutExpired:
-                    pass
-                return GitResult(returncode=-1, stdout="", stderr="", timed_out=True)
-    except OSError:
-        return GitResult(returncode=127, stdout="", stderr="", timed_out=False)
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=_SPAWN_SCHEDULING_HEADROOM_SECS)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    return GitResult(returncode=-1, stdout="", stderr="", timed_out=True)
+        except OSError:
+            return GitResult(returncode=127, stdout="", stderr="", timed_out=False)
+    finally:
+        if job is not None:
+            _charge_and_close_job(job)
 
     completed = subprocess.CompletedProcess(
         args=["git", *args],

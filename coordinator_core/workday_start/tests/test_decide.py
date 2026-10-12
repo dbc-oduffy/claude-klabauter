@@ -1,4 +1,4 @@
-"""Pins for the in-run resolver (decide.py) and the workday-start rule table (rules.py).
+"""Pins for workday-start's rule table (rules.py) over the shared resolver.
 
 Git-backed fixtures spawn real processes, so the module runs at the cadence tier.
 """
@@ -12,9 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from coordinator_core.ceremony_common.run import decide
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.workday_start import decide, rules
+from coordinator_core.workday_start import rules
 from coordinator_core.workday_start.contract import (
     DECISIONS_FILE,
     HANDBACK_DISPOSITIONS,
@@ -25,10 +26,9 @@ from coordinator_core.workday_start.contract import (
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 ORIENT_BRIEF = Path(__file__).resolve().parents[2] / "orient_brief"
-DECIDE_SOURCE = Path(decide.__file__)
 
 
-def _point(pid, dispositions, *, recommendation=None, reportable=None, evidence="ev"):
+def _point(pid, dispositions, *, recommendation=None, evidence="ev"):
     return build_judgment_point(
         recommendation,
         id=pid,
@@ -36,82 +36,18 @@ def _point(pid, dispositions, *, recommendation=None, reportable=None, evidence=
         dispositions=[build_disposition(v) for v in dispositions],
         evidence=evidence,
         reason="r" if recommendation is None else "",
-        reportable=reportable,
     )
 
 
-def _resolve(points, directives=(), context=None):
-    return decide.resolve(points, list(directives), rules=rules.POINT_RULES, context=context or {})
+def _resolve(points, context=None):
+    return decide.resolve(points, [], rules=rules.POINT_RULES, context=context or {})
 
 
-def _ids(items):
-    return [i["id"] if isinstance(i, dict) else i.point_id for i in items]
-
-
-def test_every_point_lands_in_exactly_one_list():
-    points = [
-        _point("j-rec", ["pin", "leave"], recommendation={"disposition": "pin", "rationale": "because"}),
-        _point("j-handback-rec", ["surface_to_pm", "leave"],
-               recommendation={"disposition": "surface_to_pm", "rationale": "x"}),
-        _point("j-open", ["close_stubs", "leave_as_is"]),
-        _point("j-only-person", ["surface_to_pm", "pm_reviews_manually"]),
-        _point("j-memo-1", ["accept", "decline", "surface_to_pm"]),
-        _point("j-note", ["defer"], recommendation={"disposition": "defer", "rationale": "n"}, reportable=True),
-    ]
-    out = _resolve(points)
-    placed = _ids(out.decisions) + _ids(out.observations) + _ids(out.judgment_entries)
-    assert sorted(placed) == sorted(p["id"] for p in points)
-    assert len(placed) == len(set(placed))
-
-
-def test_recommended_point_is_decided_by_recommendation():
-    out = _resolve([_point("j-rec", ["pin", "leave"],
-                           recommendation={"disposition": "pin", "rationale": "because"})])
+def test_recommendation_is_the_shared_rule():
+    assert rules.RULES[decide.RECOMMENDATION] is decide.recommendation
+    out = _resolve([_point("j-rec", ["pin", "leave"], recommendation={"disposition": "pin", "rationale": "b"})])
     (decision,) = out.decisions
-    assert (decision.decision, decision.rule, decision.decided_by) == ("pin", "recommendation", "rule")
-    assert decision.rationale == "because"
-    assert not out.judgment_entries
-
-
-def test_point_recommending_a_handback_value_is_an_entry_not_a_decision():
-    out = _resolve([_point("j-hb", ["surface_to_pm", "leave"],
-                           recommendation={"disposition": "surface_to_pm", "rationale": "x"})])
-    assert not out.decisions
-    (entry,) = out.judgment_entries
-    assert [d["value"] for d in entry["dispositions"]] == ["leave"]
-
-
-def test_no_entry_offers_a_handback_disposition():
-    out = _resolve([
-        _point("a", ["surface_to_pm", "accept"]),
-        _point("b", ["pm_reviews_manually", "leave_for_now", "pin"]),
-    ])
-    for entry in out.judgment_entries:
-        assert not {d["value"] for d in entry["dispositions"]} & HANDBACK_DISPOSITIONS
-    assert out.judgment_entries[0]["agent"] == decide.DEFAULT_AGENT
-
-
-def test_routing_table_picks_the_agent():
-    table = decide.RuleTable(point_rules=(), exhausted_rule="no-live-disposition",
-                             routing={"j-special": "reviewer:x"})
-    out = decide.resolve([_point("j-special-1", ["pin"]), _point("j-other", ["pin"])], [],
-                         rules=table, context={})
-    assert [e["agent"] for e in out.judgment_entries] == ["reviewer:x", decide.DEFAULT_AGENT]
-
-
-def test_point_with_only_handback_dispositions_is_no_change():
-    out = _resolve([_point("j-hb", ["surface_to_pm", "pm_reviews_manually"], evidence="producer X")])
-    (decision,) = out.decisions
-    assert (decision.decision, decision.rule) == ("no-change", "no-live-disposition")
-    assert "producer X" in decision.evidence
-    assert not out.judgment_entries
-
-
-def test_reportable_gate_nothing_point_is_an_observation():
-    out = _resolve([_point("j-note", ["leave"],
-                           recommendation={"disposition": "leave", "rationale": "n"}, reportable=True)])
-    assert _ids(out.observations) == ["j-note"]
-    assert not out.decisions and not out.judgment_entries
+    assert (decision.decision, decision.rule) == ("pin", "recommendation")
 
 
 @pytest.mark.parametrize("state", ["escalate", "inventory"])
@@ -124,43 +60,6 @@ def test_memo_point_is_routed_to_inbox_agents_whatever_the_assembler_state(state
     assert all(d.rule == "memo-inbox" for d in out.decisions)
     assert '"open_count": 4' in out.decisions[0].evidence and "dispatches=1" in out.decisions[0].evidence
     assert not any(d.decision == "left-in-inbox" for d in out.decisions)
-
-
-def _entry(pid="j-1", dispositions=("pin", "leave"), agent="coordinator:apm"):
-    return {"id": pid, "question": "q", "evidence": "e", "agent": agent,
-            "dispositions": [{"value": v, "resolves": []} for v in dispositions]}
-
-
-def test_agent_result_with_undeclared_disposition_is_undecided(tmp_path):
-    results = {"groups": {"judgment": [
-        {"key": "j-1", "outcome": "ok", "decision": {"disposition": "switch", "rationale": "r"}},
-        {"key": "j-2", "outcome": "ok", "decision": {"disposition": "pin", "rationale": "r"}},
-        {"key": "j-3", "outcome": "ok", "decision": None},
-    ]}}
-    entries = [_entry("j-1"), _entry("j-2", agent="coordinator:the Staff Engineer"), _entry("j-3"), _entry("j-4")]
-    decisions, undecided = decide.record_agent_decisions(tmp_path, entries, results)
-    assert [(d.point_id, d.decided_by, d.decision) for d in decisions] == [
-        ("j-2", "agent:coordinator:the Staff Engineer", "pin")]
-    assert {u["id"]: u["reason"] for u in undecided} == {
-        "j-1": "undeclared-disposition:switch",
-        "j-3": "result-carries-no-decision",
-        "j-4": "no-agent-result",
-    }
-    rows = [json.loads(ln) for ln in (tmp_path / DECISIONS_FILE).read_text().splitlines()]
-    assert [r["point_id"] for r in rows] == ["j-2"]
-
-
-def test_record_appends_one_object_per_line(tmp_path):
-    d = Decision("p", "q", "v", "rule", "recommendation", "r", "e")
-    decide.record(tmp_path / "run", [d])
-    decide.record(tmp_path / "run", [d])
-    lines = (tmp_path / "run" / DECISIONS_FILE).read_text().splitlines()
-    assert len(lines) == 2 and json.loads(lines[0])["point_id"] == "p"
-
-
-def test_decisions_map_has_the_apply_base_shape():
-    d = Decision("p", "q", "pin", "rule", "recommendation", "r", "e")
-    assert decide.decisions_map([d]) == {"p": {"disposition": "pin"}}
 
 
 def test_rules_cover_every_rule_id_but_no_live_disposition():
@@ -177,11 +76,6 @@ def test_every_orient_brief_disposition_is_classed_exactly_once():
                rules.ACTING_DISPOSITIONS]
     for value in values:
         assert sum(value in c for c in classes) == 1, value
-
-
-def test_decide_holds_no_ceremony_name():
-    text = DECIDE_SOURCE.read_text(encoding="utf-8")
-    assert "workday-start" not in text and "workday_start" not in text
 
 
 # ---- Step 0 rules (fixture repo) -------------------------------------------------------------

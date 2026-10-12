@@ -273,5 +273,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "workweek-start-goal-and-priorities",
         "goal-coverage-scan",
         "coordinator-invoke",
+        "workday-start-run",
     }),
 })

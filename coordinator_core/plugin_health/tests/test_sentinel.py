@@ -550,7 +550,7 @@ def test_inconclusive_is_amber_with_honest_prefix():
 
 def test_exec_detail_names_the_observed_error():
     assert "OSError" in _exec_detail(OSError(193, "%1 is not a valid Win32 application"))
-    assert "timed out" in _exec_detail(subprocess.TimeoutExpired(["x"], 60))
+    assert "hung" in _exec_detail(subprocess.TimeoutExpired(["x"], 60))
 
 
 # --- _call_native_main SystemExit handling: None -> 0, non-int -> 1 ---
@@ -1289,3 +1289,36 @@ def test_p22_driver_without_its_checker_is_inconclusive(tmp_path):
     (note,) = S.probe_p22(tmp_path)
     assert note.severity == "amber"
     assert note.message.startswith("inconclusive(")
+
+
+# --- wall bound (git/run.py::_wall_bound): a slow healthy probe child is answered, a hung one is "hung" ---
+
+
+def _swap_probe_child(monkeypatch, code: str) -> None:
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        return real_run([sys.executable, "-c", code], **kwargs)
+
+    monkeypatch.setattr(S.shutil, "which", lambda name: "bash")
+    monkeypatch.setattr(S.subprocess, "run", run)
+
+
+@pytest.mark.slow
+@pytest.mark.deliberate_wall_clock(reason="a child that outlives the old 2s wall cap must still be answered")
+def test_probe_spawn_is_not_killed_at_the_old_wall_cap(monkeypatch):
+    _swap_probe_child(monkeypatch, "import time; time.sleep(5); print(5)")
+    assert S.probe_p20() == []
+
+
+@pytest.mark.slow
+@pytest.mark.deliberate_wall_clock(reason="a child that outlives the wall bound must be killed and named hung")
+def test_probe_spawn_wall_kill_is_reported_as_hung(monkeypatch):
+    from coordinator_core.git import run as git_run
+
+    monkeypatch.setattr(git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.0)
+    monkeypatch.setattr(S, "_PROBE_SPAWN_BUDGET_SECS", 0.3)
+    _swap_probe_child(monkeypatch, "import time; time.sleep(60)")
+    (note,) = S.probe_p20()
+    assert note.severity == "amber"
+    assert "hung" in note.message and "timed out" not in note.message

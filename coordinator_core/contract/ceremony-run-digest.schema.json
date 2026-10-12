@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://coordinator.local/schemas/workday-start-run-digest.schema.json",
-  "x-schema-name": "workday-start-run-digest",
+  "$id": "https://coordinator.local/schemas/ceremony-run-digest.schema.json",
+  "x-schema-name": "ceremony-run-digest",
   "x-schema-version": "1.0.0",
   "x-bump-class": "initial",
-  "title": "Ceremony run digest and agent results (named for workday-start, the first adopter)",
-  "description": "The two documents a ceremony runner exchanges with its workflow template. `digest` is what `launch` writes: the run identity, the state, and agent_work.groups[] (the only work a model does). `agent_results` is what the template's last phase hands `finish`. The group list is data and no group id is enumerated, so one template serves any ceremony. Workday-start's four groups: `inbox` (ruling_agent coordinator:apm; one entry per assembler dispatch, brief and memos[] verbatim, stage/id/depends_on/report_path/bucket/label in the entry's inputs, supersession_candidates[] in the group's inputs; below the trigger that is one entry), `backfill` (one entry per gap, argv set, inputs.kind day or week), `alignment` (one entry whose inputs are the ledger paths of the whats-next and query-completions outputs), `judgment` (agent coordinator:apm; one entry per judgment point no rule decided, inputs the point record with handback dispositions removed).",
+  "title": "Ceremony run digest and agent results",
+  "description": "The two documents a ceremony runner exchanges with its workflow template. `digest` is what `launch` writes: the run identity, the state, and agent_work.groups[] (the only work a model does). `agent_results` is what the template's last phase hands `finish`. The group list is data and no group id is enumerated, so one template serves any ceremony. Example, workday-start's four groups (workday-complete declares its own: daily-summary, backfill-summary, clustering, health-ledger, archive-audit, memory-drain): `inbox` (ruling_agent coordinator:apm; one entry per assembler dispatch, brief and memos[] verbatim, stage/id/depends_on/report_path/bucket/label in the entry's inputs, supersession_candidates[] in the group's inputs; below the trigger that is one entry), `backfill` (one entry per gap, argv set, inputs.kind day or week), `alignment` (one entry whose inputs are the ledger paths of the whats-next and query-completions outputs), `judgment` (agent coordinator:apm; one entry per judgment point no rule decided, inputs the point record with handback dispositions removed).",
   "type": "object",
   "required": ["digest", "agent_results"],
   "properties": {

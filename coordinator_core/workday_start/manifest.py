@@ -180,7 +180,7 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
          "Step 5.7: watch verdict."),
     _inproc("read-tool-availability", f"{_PROBES}:tool_availability", [],
             "Step 5: scc and shellcheck on PATH."),
-    _inproc("decide-resolve", "coordinator_core.workday_start.decide:resolve", [],
+    _inproc("decide-resolve", "coordinator_core.ceremony_common.run.decide:resolve", [],
             "Resolve the orient envelope's judgment points."),
     _cli("goal-append-goal-event", "append-goal-event",
          ["--period", "day", "--period-value", "{today}", "--text-file", "{goal_event_text}"],

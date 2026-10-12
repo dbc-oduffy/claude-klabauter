@@ -2,7 +2,8 @@
 
 The module is ceremony-neutral: the rule table, the routing and the point-claiming rules arrive
 as arguments, so another ceremony imports it unchanged. Nothing here hands a decision to a
-person: handback dispositions are removed from every entry before an agent is offered it.
+person: handback and never-offered dispositions are removed from every entry before an agent
+is offered it.
 """
 from __future__ import annotations
 
@@ -13,9 +14,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 from coordinator_core.contract.decision_object.judgment import partition_reportable
 
-from .contract import DECISIONS_FILE, HANDBACK_DISPOSITIONS, Decision
+from .contract import DECISIONS_FILE, HANDBACK_DISPOSITIONS, NEVER_OFFERED_DISPOSITIONS, Decision
 
 DEFAULT_AGENT = "coordinator:apm"
+RECOMMENDATION = "recommendation"
 
 PointRule = Callable[..., "Decision | None"]
 
@@ -58,6 +60,23 @@ def recommended_disposition(point: Mapping[str, Any]) -> tuple[str, str] | None:
     if value not in declared:
         return None
     return value, str(recommendation.get("rationale") or "")
+
+
+def recommendation(point: Mapping[str, Any], *, context: Mapping[str, Any]) -> Decision | None:
+    """DR-312: a point recommending one of its own non-handback dispositions takes it."""
+    picked = recommended_disposition(point)
+    if picked is None:
+        return None
+    value, rationale = picked
+    return Decision(
+        point_id=str(point.get("id", "")),
+        question=str(point.get("question", "")),
+        decision=value,
+        decided_by="rule",
+        rule=RECOMMENDATION,
+        rationale=rationale,
+        evidence=str(point.get("evidence", "")),
+    )
 
 
 def _agent_for(point_id: str, rules: RuleTable) -> str:
@@ -104,7 +123,11 @@ def resolve(
         if decided is not None:
             decisions.append(decided)
             continue
-        live = [d for d in (point.get("dispositions") or []) if d.get("value") not in HANDBACK_DISPOSITIONS]
+        live = [
+            d
+            for d in (point.get("dispositions") or [])
+            if d.get("value") not in HANDBACK_DISPOSITIONS | NEVER_OFFERED_DISPOSITIONS
+        ]
         if not live:
             decisions.append(_no_live_decision(point, rules))
             continue
@@ -159,6 +182,7 @@ def record_agent_decisions(
             undecided.append({"id": point_id, "reason": "result-carries-no-decision"})
             continue
         value = answer["disposition"]
+        payload = result.get("payload")
         declared = {d.get("value") for d in (entry.get("dispositions") or [])}
         if value not in declared:
             undecided.append({"id": point_id, "reason": f"undeclared-disposition:{value}"})
@@ -172,6 +196,7 @@ def record_agent_decisions(
                 rule="",
                 rationale=str(answer.get("rationale", "")),
                 evidence=str(entry.get("evidence", "")),
+                payload=payload if isinstance(payload, Mapping) else None,
             )
         )
     record(run_dir, decisions)
