@@ -333,3 +333,24 @@ def test_probe_first_free_then_probe_denied(repo) -> None:
     assert g.check(_bash(repo, "python3 -c 'import os'")) is None
     assert g.check(_bash(repo, "python3 /elsewhere/scratchpad/census.py")) is None
     assert _denied(g.check(_bash(repo, "python3 /elsewhere/scratchpad/census.py")))
+
+
+def test_no_executor_record_python_script_then_directory_pytest_never_denied(repo, tmp_path) -> None:
+    script = tmp_path / "tmp" / "probe.py"
+    script.write_text("print(1)\n")
+    (repo / "tests").mkdir()
+    for cmd in (f"python {script}", "python -m pytest tests", "pytest tests -q"):
+        assert g.check(_bash(repo, cmd)) is None
+    assert g.check(_bash(repo, "pytest tests -q")) is None
+
+
+def test_payload_without_session_id_never_adopts_a_process_scoped_ledger(repo, monkeypatch) -> None:
+    from coordinator_core.hooks import dispatch_escape
+
+    fallback = dispatch_escape._resolve_session_id_op({})
+    d = repo / ".git" / "coordinator-sessions" / fallback
+    d.mkdir(parents=True)
+    (d / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
+    anon = {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "pytest tests -q"}}
+    for _ in range(3):
+        assert g.check(anon) is None

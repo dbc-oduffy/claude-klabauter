@@ -116,3 +116,14 @@ def test_twenty_records_one_stalled_within_budget_no_subprocess(tmp_path, tdir, 
     elapsed = time.process_time() - start
     assert "wf_stuck" in text
     assert elapsed < 0.05
+
+
+def test_workflow_stall_resume_text_contract_for_doe_stop_shim() -> None:
+    # External consumer: DoE coordinator/hooks/scripts/stop-workflow-stall.py (DoE commit 90ffb846d7)
+    # imports this symbol from this exact module and fails open silently if it moves or renames.
+    import importlib
+    import inspect
+
+    mod = importlib.import_module("coordinator_core.hooks.postuse_advisory_dispatch")
+    fn = getattr(mod, "workflow_stall_resume_text")
+    assert list(inspect.signature(fn).parameters) == ["session_id", "transcript_path", "now"]

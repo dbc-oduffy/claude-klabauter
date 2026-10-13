@@ -14,7 +14,8 @@ process; a package added mid-process is not seen. The Write/Edit half (a ``.py``
 ``scratch/``) lives in ``hooks.nudge_em_code_dispatch.op`` and shares this
 module's ``after_executor_deny``.
 
-Executor signal: a ``coordinator:executor`` row in the session's
+Executor signal: only for a payload carrying its own ``session_id`` (the host-pid fallback
+id is shared by every session on a warm engine and never vouches for an executor); a ``coordinator:executor`` row in the session's
 ``dispatched-agents.txt`` -- one small file read, no spawn, no transcript. The
 file records dispatch, not arrival; a foreground dispatch has returned before
 the EM's next tool call, which is the case this targets.
@@ -377,7 +378,8 @@ def _gate(payload: dict, subject: str):
 
     session_id = nd._resolve_session_id_op(payload)
     repo_root = sizing._repo_root({"cwd": payload.get("cwd") or os.getcwd()})
-    if not repo_root:
+    sid = payload.get("session_id")
+    if not repo_root or not (isinstance(sid, str) and sid.strip()):
         return session_id, repo_root, "exempt"
     if not executor_reported(payload, session_id, repo_root):
         return session_id, repo_root, "exempt"

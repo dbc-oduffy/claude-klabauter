@@ -97,8 +97,10 @@ vocabulary (review, critique, verdict, ruling, assess, audit, plan, design ...)
 is DENIED with a pointer to `coordinator:executor` -- denied, not rewritten,
 because a persona on Sonnet is still the wrong worker. Every other brief,
 ambiguous ones included, returns `None`: an Opus-pinned persona is trusted for
-judgment work. The env grant and fork exits run before this and still
-override. The composed sibling `enforce_agent_model_pin` already
+judgment work. The env grant runs before this and still overrides. A fork
+runs before this too: it cannot be re-modelled, so an execution brief on a
+gated-tier parent is denied with the same pointer and any other fork passes.
+The composed sibling `enforce_agent_model_pin` already
 governs any attempt to run it under a passed value that isn't equal-to or
 cheaper-than its own pin (a passed `model: "fable"` against an `opus` pin
 is `enforce_agent_model_pin`'s own "unorderable -> deny" leg, upstream of
@@ -225,6 +227,14 @@ def _persona_execution_reason(subagent_type: str) -> str:
     )
 
 
+def _fork_execution_reason(parent_model: str) -> str:
+    return (
+        f"AGENT DISPATCH BLOCKED: a fork runs on the parent's model ({parent_model!r}) and "
+        "ignores `model`; the brief is execution/diagnosis work. Dispatch "
+        "coordinator:executor with a self-contained brief."
+    )
+
+
 def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
     return (
         f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} resolves to "
@@ -247,7 +257,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     if subagent_type == _FORK_TYPE:
-        return None
+        # A fork cannot be re-modelled: it always runs on the parent's model. An
+        # execution brief on a gated-tier parent is therefore denied, not rewritten.
+        if not _is_execution_brief(tool_input):
+            return None
+        parent_model = _clean_str(payload.get("model")) or resolve_last_assistant_model(
+            payload.get("transcript_path")
+        )
+        if parent_model is not None and not _is_gated_tier(parent_model):
+            return None
+        return deny("PreToolUse", _fork_execution_reason(parent_model or "<unresolved>"))
 
     pins, _error_reason = resolve_model_pins()
     if pins is None:

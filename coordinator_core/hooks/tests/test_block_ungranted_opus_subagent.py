@@ -384,3 +384,28 @@ def test_composed_seam_passes_clean_dispatch(monkeypatch: pytest.MonkeyPatch, tm
         "transcript_path": transcript,
     }
     assert unenumerated_mod.check(payload) is None
+
+
+def test_fork_execution_brief_on_opus_parent_denies_with_executor_pointer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pins(monkeypatch, {})
+    payload = _agent_payload("fork", prompt="Fix plugin-band TU include/define gaps")
+    payload["model"] = "claude-opus-5-5"
+    hso = mod.check(payload)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "coordinator:executor" in hso["permissionDecisionReason"]
+
+
+def test_fork_execution_brief_on_sonnet_parent_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_pins(monkeypatch, {})
+    payload = _agent_payload("fork", prompt="Fix the loader")
+    payload["model"] = "claude-sonnet-5-5"
+    assert mod.check(payload) is None
+
+
+def test_fork_non_execution_brief_on_opus_parent_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_pins(monkeypatch, {})
+    payload = _agent_payload("fork", prompt="Survey where the loader is called and report.")
+    payload["model"] = "claude-opus-5-5"
+    assert mod.check(payload) is None
