@@ -2022,6 +2022,8 @@ def _background_legs(worktree_root: Path, ctx: dict) -> dict:
             review_receipt=ctx.get("review_receipt"),
             run_base_sha=ctx.get("run_base_sha"),
             terminal_sha=ctx.get("terminal_sha"),
+            criterion=_judged if isinstance(_judged := ctx["inline_review"].get("criterion"), dict) else None,
+            falsifier_broken=ctx.get("falsifier_broken"),
         )
     except (OSError, ValueError) as exc:
         legs.update({leg: _leg("failed", f"close job record not written: {type(exc).__name__}") for leg in queue})
@@ -2108,7 +2110,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
 
     Params:
-        script_path (str, required)      -- the emitted Workflow script to
+        script_path (str, required unless plan_path and run_id are given without it)
+                                          -- the emitted Workflow script to
                                              parse the terminal-commit-request
                                              marker (D2) out of. Guarded under
                                              the caller's own worktree before
@@ -2193,6 +2196,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes, or under its declared prefixes, that no chunk declares: work the
     commit could never see. Reported, never committed. ``None`` when git could
     not answer; ``undeclared_dirty_total`` appears when the list is capped.
+
+    No-script close: a call carrying ``plan_path`` and ``run_id`` and no ``script_path``
+    (the caller's own params; a ``task_output_path`` digest's script does not count) closes
+    a run whose terminal commit already landed, from the plan and the run's close-job
+    record. The judge verdict is the first of: the close-job record's ``criterion``, the
+    run's review record (when it is the plan's), the supplied ``task_output_path`` digest's
+    ``inline_review.criterion``. ``task_output_path`` must be this run's own output. Its
+    reply is ``close_without_script.close_landed_run``'s own (``criterion_status``,
+    ``verdict_source``, ``review_stamp``, ``plan_status``, ``close``) with no ``stranded``,
+    ``undeclared_dirty``, ``incomplete_reasons`` or ``next`` key. ``refused`` is one of
+    ``no-close-job``, ``close-job-plan-mismatch``, ``terminal-commit-not-landed``,
+    ``no-judge-verdict``, ``task-output-run-mismatch``.
     """
     stranded: dict = {}
     scope: dict = {}
@@ -2203,6 +2218,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     reply = _terminal_commit(
         params, repo_root, stranded, scope, gated_ids, blockers, regraded, close_ctx=close_ctx
     )
+    if _is_no_script_call(params):
+        return reply
     if close_ctx:
         reply["close"] = _close_block(close_ctx, reply)
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS:
@@ -2301,6 +2318,16 @@ def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set
     return out
 
 
+def _is_no_script_call(params: object) -> bool:
+    """True for a call that names a plan and a run and carries no ``script_path`` key of its own."""
+    return (
+        isinstance(params, dict)
+        and "script_path" not in params
+        and isinstance(params.get("plan_path"), str)
+        and isinstance(params.get("run_id"), str)
+    )
+
+
 def _terminal_commit(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
     gated_ids: Optional[set] = None, blockers: Optional[dict] = None,
@@ -2312,6 +2339,12 @@ def _terminal_commit(
             "dispatch.terminal_commit requires a common_dir-keyed dispatch; "
             "repo_root (git common dir) was not supplied"
         )
+
+    if _is_no_script_call(params):
+        from coordinator_core.ops.dispatch_emit import close_without_script
+        from coordinator_core.ops.fleet._common import main_worktree_root
+
+        return close_without_script.close_landed_run(main_worktree_root(repo_root), repo_root, params)
 
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
@@ -3019,6 +3052,8 @@ def _terminal_commit(
                 _pay_inline_legs(worktree_root, close_ctx, str(reply["sha"]), session_id, snapshot)
             )
         broken_tells = _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path)
+        if close_ctx is not None:
+            close_ctx["falsifier_broken"] = broken_tells
         flips = bool(
             request.plan_path
             and reply.get("review_stamp") == "minted"

@@ -43,13 +43,14 @@ def env(tmp_path, monkeypatch):
     return {"repo": repo, "script": script, "outbox": outbox}
 
 
-def _fire(env, review=None, script=None) -> dict:
+def _fire(env, review=None, script=None, **extra) -> dict:
     return terminal_commit._handler(
         {
             "script_path": script or env["script"],
             "incomplete_chunks": [],
             "session_id": driver.SESSION_ID,
             "inline_review": review or copy.deepcopy(driver.INLINE_REVIEW),
+            **extra,
         },
         repo_root=env["repo"] / ".git",
     )
@@ -217,6 +218,40 @@ def test_background_legs_match_the_job(env):
     from coordinator_core.ops.ceremony import close_background
 
     assert terminal_commit._BACKGROUND_LEGS == ("review", *close_background.BACKGROUND_LEGS)
+
+
+def _record(env) -> dict:
+    return json.loads((env["repo"] / run_close.close_job_path("run")).read_text(encoding="utf-8"))
+
+
+def test_record_persists_the_judged_criterion(env):
+    _fire(env)
+
+    record = _record(env)
+    assert record["criterion"]["status"] == driver.INLINE_REVIEW["criterion"]["status"]
+    assert record["falsifier_broken"] is None
+
+
+def test_record_persists_a_demoted_verdict(env):
+    _fire(env, _judge(status="not_met", reason="r"))
+
+    assert _record(env)["criterion"]["status"] == "not_met"
+
+
+def test_record_without_a_digest_criterion_writes_null(env):
+    review = copy.deepcopy(driver.INLINE_REVIEW)
+    review.pop("criterion")
+
+    _fire(env, review)
+
+    assert _record(env)["criterion"] is None
+
+
+def test_record_persists_the_falsifier_broken_tells(env):
+    _fire(env, plan_path=driver.PLAN_REL,
+          falsifier_broken=[{"plan": driver.PLAN_REL, "tells": ["t1", "t2"]}])
+
+    assert _record(env)["falsifier_broken"] == ["t1", "t2"]
 
 
 def test_no_leg_detail_names_a_machine_path(env):

@@ -404,6 +404,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "goal.kr2_two_repo_rate":                   "common_dir",
     "deliverable.fork_detect":                  "common_dir",
     "sizing.decline":                           "common_dir",
+    "sizing.supersede":                         "common_dir",
     "sizing.ship":                               "common_dir",
     "sizing.mark_routed":                        "common_dir",
     "review.reachability":                       "show_top",

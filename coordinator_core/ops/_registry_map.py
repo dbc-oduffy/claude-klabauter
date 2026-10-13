@@ -248,6 +248,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "spec_backlink.resolve":                  "coordinator_core.ops.spec_backlink_resolve",
     "spec_backlink.rewrite":                  "coordinator_core.ops.spec_backlink_resolve",
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",
+    "sizing.supersede":                        "coordinator_core.ops.sizing_supersede",
     "sizing.ship":                              "coordinator_core.ops.sizing_ship",
     "sizing.mark_routed":                       "coordinator_core.ops.sizing_mark_routed",
     "sizing.discharge_surfaced":                "coordinator_core.ops.sizing_discharge_surfaced",

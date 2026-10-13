@@ -1065,6 +1065,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/sizing_decline.py",
         ("_handler",),
     ),
+    "sizing.supersede": (
+        "coordinator_core/ops/sizing_supersede.py",
+        ("_handler",),
+    ),
     "sizing.read_object_fields": (
         "coordinator_core/ops/read_sizing_object_fields.py",
         ("_handler",),
