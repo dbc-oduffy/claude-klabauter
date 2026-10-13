@@ -123,6 +123,11 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
     from coordinator_core import warp_live
 
     if sizing_rel:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        stale = warp_live.unlaunched_run_for_sizing(root, sizing_rel, session_id)
+        if stale:
+            run_token.consume(root, stale)
         live = warp_live.live_run_for_sizing(
             root, sizing_rel, session_id=session_id, transcript_path=transcript
         )
@@ -162,6 +167,7 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
         return _refuse(f"The engine emitted no run: {detail}")
 
     run_id = result.get("run_id") or Path(script).name
+    call_id = payload.get("tool_use_id")
     try:
         warp_live.record_submission(
             root,
@@ -170,6 +176,7 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
             transcript_path=transcript,
             script_path=str(script),
             sizing_rel=sizing_rel,
+            tool_use_id=call_id if isinstance(call_id, str) else None,
         )
     except OSError:
         pass  # liveness then reads the run token alone

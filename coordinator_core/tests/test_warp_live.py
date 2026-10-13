@@ -106,6 +106,55 @@ def test_a_consumed_token_is_not_live(repo, dirs):
     assert warp_live.live_run_for_sizing(repo, SIZING) is None
 
 
+def _submit(repo, run_id, transcript, tool_use_id="tu1", session="s1"):
+    warp_live.record_submission(
+        repo, run_id, session_id=session, transcript_path=transcript, script_path=SCRIPT,
+        sizing_rel=SIZING, tool_use_id=tool_use_id,
+    )
+
+
+def _result_line(tool_use_id, launch=False):
+    obj = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id}]}}
+    if launch:
+        obj["toolUseResult"] = {"status": "async_launched", "taskType": "local_workflow"}
+    return json.dumps(obj) + "\n"
+
+
+def test_unlaunched_for_own_session_once_the_call_was_refused(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    transcript = _transcript(tmp_path, _result_line("tu1"))
+    _submit(repo, "r1", transcript)
+    assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") == "r1"
+
+
+def test_not_unlaunched_for_another_session(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
+    assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s2") is None
+
+
+def test_not_unlaunched_once_a_launch_record_exists(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
+    _launch(dirs[0], "s1", "w1")
+    assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") is None
+
+
+def test_not_unlaunched_while_the_call_has_no_result_or_launched(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    in_flight = _transcript(tmp_path, '{"type":"assistant","id":"tu1","name":"tool_use"}\n')
+    _submit(repo, "r1", in_flight)
+    assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") is None
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1", launch=True)))
+    assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") is None
+
+
+def test_not_unlaunched_when_the_submission_stored_no_tool_use_id(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")), tool_use_id=None)
+    assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") is None
+
+
 def test_the_reader_names_no_system_tempdir():
     text = Path(warp_live.__file__).read_text(encoding="utf-8")
     assert "gettempdir" not in text and "sizing_mtime" not in text

@@ -10,8 +10,9 @@ the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) captur
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
 A token owns a sizing only when its record names it; a raw ask's run is reachable through
-`live_run_for_session`. Launch records are read from the managed temp dir and the legacy
-top-level dir.
+`live_run_for_session`. `unlaunched_run_for_sizing` names this session's token whose submitting
+call was refused (a non-launch result for the stored `tool_use_id`). Launch records are read from
+the managed temp dir and the legacy top-level dir.
 
 Read-only except `record_submission` and the `managed_tempdir` mkdir on an unscoped lookup. No spawn. Every read failure answers "not live": a wrong
 "live" refuses a legitimate fire, a wrong "not live" costs at most a duplicate run.
@@ -55,6 +56,7 @@ def record_submission(
     transcript_path: Optional[str],
     script_path: str,
     sizing_rel: Optional[str],
+    tool_use_id: Optional[str] = None,
 ) -> None:
     """Write the run's submission record; the liveness read joins it to the harness task."""
     path = _submission_path(repo_root, run_id)
@@ -65,6 +67,7 @@ def record_submission(
         "transcript_path": transcript_path or None,
         "script_path": script_path,
         "sizing_rel": sizing_rel,
+        "tool_use_id": tool_use_id or None,
         "submitted_at": time.time(),
     }
     path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
@@ -229,5 +232,71 @@ def live_run_for_session(
         if record.get("session_id") != session_id:
             continue
         if _record_live(root, record, session_id, transcript_path, dirs):
+            return record["run_id"]
+    return None
+
+
+def _call_refused(transcript_tail: str, tool_use_id: str) -> bool:
+    """True only when the transcript holds a lone `tool_result` for `tool_use_id` that is not an
+    `async_launched` launch. A call with no result yet, a launch, or a result line carrying
+    several results (its `toolUseResult` is unattributable) is not refused."""
+    if tool_use_id not in transcript_tail:
+        return False
+    for line in transcript_tail.split("\n"):
+        if tool_use_id not in line or '"tool_result"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        message = obj.get("message") if isinstance(obj, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+        if len(blocks) != 1 or blocks[0].get("tool_use_id") != tool_use_id:
+            continue
+        launch = obj.get("toolUseResult")
+        launched = isinstance(launch, dict) and launch.get("status") == "async_launched"
+        return not launched
+    return False
+
+
+def unlaunched_run_for_sizing(
+    repo_root: Path,
+    sizing_rel: str,
+    session_id: Optional[str],
+    *,
+    tmpdir: Optional[str] = None,
+) -> Optional[str]:
+    """The run id of this session's token for `sizing_rel` whose submitting call was refused.
+
+    Superseded only on positive evidence: no joined launch record AND the submission's
+    `tool_use_id` has a non-launch `tool_result` in the transcript. A call still in flight (no
+    result yet), a call absent from the transcript, a submission that stored no id, and a token
+    of another session all read "not unlaunched"; the grace period retires the rest."""
+    if not session_id:
+        return None
+    root = Path(repo_root)
+    rel = _run_token.normalize_sizing_rel(root, sizing_rel)
+    if not rel:
+        return None
+    dirs = _launch_dirs(tmpdir)
+    for record in _token_records(root):
+        named = record.get("sizing_rel")
+        if not isinstance(named, str) or _run_token.normalize_sizing_rel(root, named) != rel:
+            continue
+        submission = _read_json(_submission_path(root, record["run_id"])) or {}
+        if (submission.get("session_id") or record.get("session_id")) != session_id:
+            continue
+        script = submission.get("script_path") or record.get("script_path")
+        if isinstance(script, str) and _launched_task_ids(session_id, script, dirs):
+            continue
+        tool_use_id = submission.get("tool_use_id")
+        transcript = submission.get("transcript_path")
+        if not isinstance(tool_use_id, str) or not tool_use_id or not isinstance(transcript, str):
+            continue
+        tail = _tail(transcript)
+        if tail and _call_refused(tail, tool_use_id):
             return record["run_id"]
     return None

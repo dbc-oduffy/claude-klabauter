@@ -201,6 +201,53 @@ def test_second_submission_of_a_live_sizing_is_denied(tmp_path):
     assert len(emit.calls) == 1
 
 
+def _tokens(root: Path) -> list:
+    return [r["run_id"] for r in warp_live._token_records(root)]
+
+
+def _result_line(tool_use_id: str) -> str:
+    return json.dumps(
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id}]}}
+    ) + "\n"
+
+
+def test_a_resubmit_after_a_refused_call_emits_anew_and_leaves_one_token(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    sizing = {"sizing": "state/sizings/a.yaml"}
+    assert _hso(mod.evaluate(_payload(root, sizing, tool_use_id="tu1"), emit=emit))["permissionDecision"] == "allow"
+    (root / "transcript.jsonl").write_text(_result_line("tu1"), encoding="utf-8")
+    second = mod.evaluate(_payload(root, sizing, tool_use_id="tu2"), emit=emit)
+    assert _hso(second)["permissionDecision"] == "allow"
+    assert len(emit.calls) == 2
+    assert _tokens(root) == ["ask-20261013T000000-abcdef"]
+
+
+def test_a_resubmit_while_the_first_call_has_no_result_is_denied(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    sizing = {"sizing": "state/sizings/a.yaml"}
+    mod.evaluate(_payload(root, sizing, tool_use_id="tu1"), emit=emit)
+    (root / "transcript.jsonl").write_text('{"type":"assistant"}\n', encoding="utf-8")
+    second = mod.evaluate(_payload(root, sizing, tool_use_id="tu2"), emit=emit)
+    assert _hso(second)["permissionDecision"] == "deny"
+    assert len(emit.calls) == 1
+    assert _tokens(root) == ["ask-20261013T000000-abcdef"]
+
+
+def test_a_run_with_a_launch_record_is_never_unlaunched_even_after_a_result(tmp_path):
+    root = _repo(tmp_path)
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    emit = _Emit()
+    sizing = {"sizing": "state/sizings/a.yaml"}
+    mod.evaluate(_payload(root, sizing, tool_use_id="tu1"), emit=emit)
+    script = str(root / "scratch" / "warp" / "ask-20261013T000000-abcdef.workflow.mjs")
+    _launch(scratch, "sess-1", "w1", script)
+    (root / "transcript.jsonl").write_text(_result_line("tu1"), encoding="utf-8")
+    assert warp_live.unlaunched_run_for_sizing(root, "state/sizings/a.yaml", "sess-1", tmpdir=str(scratch)) is None
+
+
 def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra) -> dict:
     tool_input = {"prompt": "size"}
     if subagent_type is not None:

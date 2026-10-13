@@ -492,3 +492,39 @@ def test_write_tools_record_their_touch_claim(tmp_path, monkeypatch, tool_name, 
     assert bool(calls) is recorded
     if recorded:
         assert calls[0]["file_path"] == target
+
+
+def test_by_name_launch_record_takes_the_script_path_from_the_launch_result(tmp_path):
+    import json as _json
+
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    script = str(repo / "scratch" / "warp" / "r1.workflow.mjs")
+    rel = "state/sizings/a.yaml"
+    run_token.mint(repo, "r1", script, session_id="s1", sizing_rel=rel)
+    use = {"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "name": "Workflow", "id": "tu1",
+        "input": {"name": "coordinator:engine-ask", "args": {"sizing": rel}}}]}}
+    result = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tu1"}]},
+              "toolUseResult": {"status": "async_launched", "taskType": "local_workflow", "taskId": "w1",
+                                "runId": "wf_1", "transcriptDir": "/x", "scriptPath": script}}
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(_json.dumps(use) + "\n" + _json.dumps(result) + "\n", encoding="utf-8")
+    tdir = tmp_path / "tmp"
+    tdir.mkdir()
+    written = pad.resolve_workflow_run_records("s1", str(transcript), str(tdir))
+    assert written[0]["scriptPath"] == script
+    ended = tmp_path / "ended.jsonl"
+    ended.write_text(
+        "<task-notification><task-id>w1</task-id><status>completed</status></task-notification>\n",
+        encoding="utf-8",
+    )
+    assert warp_live.live_run_for_sizing(
+        repo, rel, session_id="s1", transcript_path=str(ended), tmpdir=str(tdir)
+    ) is None
+    assert warp_live.live_run_for_sizing(
+        repo, rel, session_id="s1", transcript_path=str(transcript), tmpdir=str(tdir)
+    ) == "r1"

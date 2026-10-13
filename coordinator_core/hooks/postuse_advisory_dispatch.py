@@ -1426,7 +1426,7 @@ def resolve_workflow_run_records(session_id: str, transcript_path: str, tmpdir: 
                     fired_at = prior["fired_at"]
                 record = {
                     "run_id": run_id,
-                    "scriptPath": use.get("scriptPath"),
+                    "scriptPath": launch.get("scriptPath") or use.get("scriptPath"),
                     "args": use.get("args"),
                     "fired_at": fired_at,
                     "session_id": session_id,
