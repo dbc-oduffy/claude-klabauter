@@ -186,7 +186,7 @@
     "coordinator/bin/check-competitor-positioning-nudge.py": "a13677727133bc8077f6c410201a9297443da837",
     "coordinator/bin/check-decision-citations.cmd": "a7a93fbf1522f2b87911badb7d5168e436e7dfaf",
     "coordinator/bin/check-decision-citations.ps1": "755e0e8fcf6a6963a280d3abd37b7b7cf4d6de8f",
-    "coordinator/bin/check-decision-citations.py": "f10f3e8caf3108496a2e2460724312c77333f1dd",
+    "coordinator/bin/check-decision-citations.py": "1d361cb48bebe951765c9bf93ea71bae5b698b4f",
     "coordinator/bin/check-deferral-orphan-memo.cmd": "fac2ee8403f95ee800ca3541b59073f0f2c8c85f",
     "coordinator/bin/check-deferral-orphan-memo.py": "ab6ec8006eaa4ab4b930a5070cd47654d9cce995",
     "coordinator/bin/check-deferral-partial-strangle.cmd": "2916f4131294e5daa3237302cd2f479f3f7bc063",
@@ -887,7 +887,7 @@
     "coordinator/bin/publish-resolve-target.py": "1bf3db81840e305c065e4b4de85a7c5414d31ffe",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "99da381428c8bd02aeced3ee50f338f080484588",
-    "coordinator/bin/published-name-map.json": "da4b3fa2f0b25a3fa82c127708461f650e27a571",
+    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
     "coordinator/bin/push-hold.cmd": "f02664333181a2ec7a3385dcbfb141b92399d88c",
     "coordinator/bin/push-hold.py": "c0fff21a69360eb2e547edd5478de7689f272ac8",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -1449,7 +1449,7 @@
     "coordinator/bin/tests/test_cross_repo_memo_send_receipt_names_commit_class.py": "9ae4318f0daee1388fd5da73ff811726fdd97232",
     "coordinator/bin/tests/test_cross_repo_memo_summary_cap_on_stdout.py": "954b6a220b1519e15774425efbaab50edc9d5d20",
     "coordinator/bin/tests/test_data_home_stamp_guard.py": "c02ad819bbd602cdda30927fd94a26b893a3fe70",
-    "coordinator/bin/tests/test_decision_citations_cli.py": "d78d5e42ec2a1f0939e68176047bb2ba8506c316",
+    "coordinator/bin/tests/test_decision_citations_cli.py": "df37c5f3891e52e30494bf5805533c13728cd8a0",
     "coordinator/bin/tests/test_delegate_to_gate_root_identity.py": "f78e7c5850b055ba6e18f4a8e3013992a70742d8",
     "coordinator/bin/tests/test_denied_package_importers_are_locator_axis.py": "3d348bc6303bcab7835b1de5ac831f8eb1ffceab",
     "coordinator/bin/tests/test_detect_initiative_candidates_help.py": "40254e4dcf7c11c8285d805deb7b18963e6a323c",
@@ -2056,8 +2056,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "6c26641e86453f66e2cc52d1a7c8e3f0fac2767a",
-    "coordinator_core/_engine_stamp": "072b1f9d10e9b6e309921f71d764cca7cd611c4a",
+    "coordinator_core/_engine_published_at": "5fb8be513efec6bf1e295a2d70a0a7512cb33d7a",
+    "coordinator_core/_engine_stamp": "571053291fc5f22d9947071215df53ad08c68cf0",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -7457,5 +7457,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "98159d745be54e8fd09e31b7912aadbf33836fa0"
+  "source_head": "a0bebb5f28dbbee0fe33090fc90ce12df6d6a45b"
 }

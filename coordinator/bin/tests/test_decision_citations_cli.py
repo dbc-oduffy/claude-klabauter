@@ -161,3 +161,63 @@ def test_repo_root_is_the_callers_repo_not_the_script_location(corpus, tmp_path,
     monkeypatch.chdir(elsewhere)
     monkeypatch.setenv("COORDINATOR_SUBJECT_REPO_ROOT", str(corpus))
     assert cdc.repo_root() == corpus.resolve()
+
+
+def _commit(root: Path, msg: str) -> None:
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg)
+
+
+def _delete_in_history(root: Path, rel: str) -> None:
+    _write(root, rel, "# gone\n")
+    _add(root)
+    _commit(root, "add")
+    _git(root, "rm", "-q", rel)
+    _commit(root, "delete")
+
+
+def test_deleted_decision_id_resolves(corpus, capsys):
+    _seed_baseline(corpus)
+    _delete_in_history(corpus, f"docs/decisions/{NEW}-gone.md")
+    _write(corpus, "docs/fresh.md", f"{NEW}\n")
+    _add(corpus)
+    assert cdc.check(corpus, SIBLINGS()) == 0
+    assert NEW not in capsys.readouterr().out
+    assert NEW not in cdc.classify(corpus, cdc.live_tokens(corpus), SIBLINGS())[0]
+
+
+def test_never_existing_id_stays_dangling(corpus, capsys):
+    _seed_baseline(corpus)
+    _delete_in_history(corpus, f"docs/decisions/{_id('4')}-gone.md")
+    _write(corpus, "docs/fresh.md", f"{NEW}\n")
+    _add(corpus)
+    assert cdc.check(corpus, SIBLINGS()) == 1
+    assert NEW in capsys.readouterr().out
+
+
+def test_deleted_longer_id_does_not_resolve_shorter_prefix(corpus):
+    _seed_baseline(corpus)
+    _delete_in_history(corpus, f"docs/decisions/{NEW}1-gone.md")
+    assert cdc.deleted_decision_ids(corpus) == set()
+    _write(corpus, "docs/fresh.md", f"{NEW}\n")
+    _add(corpus)
+    assert cdc.check(corpus, SIBLINGS()) == 1
+
+
+def test_git_log_failure_exits_two(corpus, monkeypatch, capsys):
+    _seed_baseline(corpus)
+    _write(corpus, "docs/fresh.md", f"{NEW}\n")
+    _add(corpus)
+    real = subprocess.run
+
+    def fake(argv, *a, **kw):
+        if "log" in argv:
+            return subprocess.CompletedProcess(argv, 128, "", "boom")
+        return real(argv, *a, **kw)
+
+    monkeypatch.setattr(cdc.subprocess, "run", fake)
+    assert cdc.main(["--root", str(corpus)]) == 2
+    assert "git log exited 128" in capsys.readouterr().err
+
+
+def test_unborn_repo_has_no_deleted_ids(corpus):
+    assert cdc.deleted_decision_ids(corpus) == set()
