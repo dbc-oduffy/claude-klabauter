@@ -241,6 +241,14 @@ def test_write_on_a_missing_file_scaffolds_then_writes(repo: Path) -> None:
     assert doc["premise"] == {"provenance": "read", "evidence": "tests/x.py:3"}
 
 
+def test_refused_write_on_a_missing_file_leaves_no_scaffold(repo: Path) -> None:
+    decision = _decision("M")
+    decision["detents"] = ["not-a-real-detent"]
+    with pytest.raises(sizing_assemble.SizingAssembleError):
+        sizing_assemble.write_back(repo, "state/sizings/2026-10-02-new.yaml", decision)
+    assert not (repo / "state" / "sizings" / "2026-10-02-new.yaml").exists()
+
+
 def test_write_on_a_missing_file_without_intent_still_refuses(repo: Path) -> None:
     decision = sizing_assemble.route(estimate={"tshirt": "S"})
     with pytest.raises(sizing_assemble.SizingAssembleError):

@@ -40,7 +40,6 @@ def _research_errors(research: dict) -> list[dict]:
 
 
 def test_vendored_versions():
-    # Re-pinned 1.36.0 -> 1.37.0: DoE c01e16d913 adds `unrelated_turns` and the `visual` surface.
     assert _version(_SIZING) == "1.37.0"
     assert _version(_HANDOFF) == "11.0.1"
     assert _version(_PLAN_TASKS) == "3.15.0"
@@ -61,8 +60,8 @@ def test_register_rows_shape():
     spec = json.loads(_PLAN_TASKS.read_text(encoding="utf-8"))["properties"]["register_rows"]
     assert spec["minItems"] == 1 and spec["uniqueItems"] is True
     pattern = re.compile(spec["items"]["pattern"])
-    assert pattern.match("R1.a-b_c")
-    assert not pattern.match("../x") and not pattern.match("")
+    assert pattern.fullmatch("R1.a-b_c")
+    assert not any(pattern.fullmatch(s) for s in ("../x", "", "R1\n"))
 
 
 def test_sizing_unrelated_turns_and_visual_surface():
@@ -71,7 +70,8 @@ def test_sizing_unrelated_turns_and_visual_surface():
     assert turns["items"]["additionalProperties"] is False
     assert turns["items"]["required"] == ["turn", "reason"]
     assert turns["items"]["properties"]["turn"]["minimum"] == 0
-    assert any("visual" in e for e in _find_key(schema, "enum") if isinstance(e, list))
+    surfaces = [s for s in _find_key(schema, "surface") if isinstance(s, dict) and "enum" in s]
+    assert surfaces and all("visual" in s["enum"] for s in surfaces)
 
 
 def test_research_block_accepts_repo_deep_target():

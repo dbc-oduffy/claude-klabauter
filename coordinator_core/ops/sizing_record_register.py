@@ -104,7 +104,7 @@ def _overlay(recorded: Optional[dict], overlay: dict) -> dict:
             unrelated[e["turn"]] = e
     out: dict = {rr.SOURCES_KEY: sources}
     if unrelated:
-        out[rr.UNRELATED_TURNS_KEY] = [unrelated[t] for t in sorted(unrelated, key=str)]
+        out[rr.UNRELATED_TURNS_KEY] = [unrelated[t] for t in sorted(unrelated, key=lambda t: (not isinstance(t, int), t if isinstance(t, int) else 0, str(t)))]
     out[rr.ROWS_KEY] = rows
     return out
 

@@ -118,7 +118,7 @@ def test_second_call_returns_same_baton_and_writes_nothing(repo):
     assert len(list((repo / "state" / "handoffs").glob("*.md"))) == 1
 
 
-@pytest.mark.parametrize("tshirt", ["XS"])  # S mints a spec-dispatch baton (3a51713bb7)
+@pytest.mark.parametrize("tshirt", ["XS"])  # S mints a spec-dispatch baton, so only XS is refused
 def test_small_sizing_is_refused_naming_tshirt(repo, tshirt):
     _put(repo, _sizing_text(tshirt=tshirt))
     with pytest.raises(_cli.SizingMintRefused) as exc:

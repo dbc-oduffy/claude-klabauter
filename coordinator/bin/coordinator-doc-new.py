@@ -1827,9 +1827,10 @@ def _resolve_cited_sizing_pm_carry(
             read_register,
         )
 
-        _text = open(
+        with open(
             os.path.join(repo_root, sizing_object_relpath), encoding="utf-8"
-        ).read()
+        ) as _fh:
+            _text = _fh.read()
         _data = yaml.safe_load(_text)
         _verbatims = _data.get("pm_verbatims") if isinstance(_data, dict) else None
         _texts = [

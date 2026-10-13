@@ -317,7 +317,6 @@ def _derive_register_cli(
 
     import yaml
 
-    from coordinator_core.ops import requirement_register as rr
     from coordinator_core.ops.sizing_record_register import _handler as record_register
 
     root = _cli_repo_root(write_path)
@@ -336,10 +335,7 @@ def _derive_register_cli(
         sizing_rel = target.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         sizing_rel = f"state/sizings/{target.name}"
-    register: dict[str, Any] = {rr.SOURCES_KEY: [{"doc": sizing_rel, "ref": ref} for ref in refs]}
-    if unrelated:
-        register[rr.UNRELATED_TURNS_KEY] = unrelated
-    register[rr.ROWS_KEY] = rows
+    register = _derived_register_block(rows, unrelated, refs, sizing_rel)
     if dropped:
         print(
             f"{sizing_rel}: scout register row(s) {', '.join(dropped)} dropped: source_text is not "
@@ -1627,6 +1623,19 @@ def derive_register(
     return rows, unrelated, refs, dropped
 
 
+def _derived_register_block(
+    rows: list[dict[str, Any]], unrelated: list[dict[str, Any]], refs: list[str], sizing_rel: str,
+) -> dict[str, Any]:
+    """The register block for `derive_register`'s output."""
+    from coordinator_core.ops import requirement_register as rr
+
+    block: dict[str, Any] = {rr.SOURCES_KEY: [{"doc": sizing_rel, "ref": ref} for ref in refs]}
+    if unrelated:
+        block[rr.UNRELATED_TURNS_KEY] = unrelated
+    block[rr.ROWS_KEY] = rows
+    return block
+
+
 def _mint_register(
     text: str, rows: list[dict[str, Any]], unrelated: list[dict[str, Any]], refs: list[str],
     sizing_rel: str, now: Any,
@@ -1635,14 +1644,25 @@ def _mint_register(
     `requirement_register.write_register_text`."""
     from coordinator_core.ops import requirement_register as rr
 
-    block: dict[str, Any] = {rr.SOURCES_KEY: [{"doc": sizing_rel, "ref": ref} for ref in refs]}
-    if unrelated:
-        block[rr.UNRELATED_TURNS_KEY] = unrelated
-    block[rr.ROWS_KEY] = rows
-    return rr.write_register_text(text, block, now)
+    return rr.write_register_text(
+        text, _derived_register_block(rows, unrelated, refs, sizing_rel), now
+    )
 
 
-def write_back(
+def write_back(root: Path, sizing: str, decision: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """`_write_back`, holding its nothing-written-on-refusal contract for a record it scaffolds:
+    a scaffold created by this call is removed when the write is then refused."""
+    candidate = Path(sizing) if Path(sizing).is_absolute() else Path(root) / sizing
+    existed = candidate.is_file()
+    try:
+        return _write_back(root, sizing, decision, **kwargs)
+    except SizingAssembleError:
+        if not existed:
+            candidate.unlink(missing_ok=True)
+        raise
+
+
+def _write_back(
     root: Path,
     sizing: str,
     decision: dict[str, Any],
@@ -1680,7 +1700,6 @@ def write_back(
     `scout_register` (the scout's report: `register_rows`, `verbatim_accounting`) when given.
     """
     import json
-    import re
 
     import yaml
 

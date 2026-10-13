@@ -527,7 +527,13 @@ def compose_ask_script(
             f"  const _assembled = await {_agent(assemble_prompt, label='assemble', phase='size', agent_type=agent_type, schema=_ASSEMBLE_SCHEMA)};"
         )
         b.append("  let _decision = null;")
-        b.append("  try { _decision = JSON.parse(_assembled.stdout); } catch (_e) { _decision = null; }")
+        # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
+        # JSON; the decision is the span from the first `{` to the last column-0 `}`.
+        b.append(
+            "  try { const _out = String(_assembled.stdout ?? ''); "
+            "_decision = JSON.parse(_out.slice(_out.indexOf('{'), _out.lastIndexOf('\\n}') + 2)); } "
+            "catch (_e) { _decision = null; }"
+        )
         b.append(
             "  if (_assembled.exit_code !== 0 || !_decision) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _assembled.exit_code + '); "

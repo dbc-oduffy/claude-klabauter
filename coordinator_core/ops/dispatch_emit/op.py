@@ -2198,7 +2198,7 @@ def _emit_lanes(params: dict, repo_root: Optional[Path]) -> dict:
 def _read_baton_ids(root: Path, baton: Optional[str], deliverable_id: Optional[str]) -> Optional[dict]:
     """`{"path", "deliverable_id"}` read in-process from an existing baton, or None when neither
     flag is given. Refuses a missing file, a null id, or a `deliverable_id` the baton disagrees with."""
-    from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
 
     if baton is None and deliverable_id is None:
@@ -2214,8 +2214,8 @@ def _read_baton_ids(root: Path, baton: Optional[str], deliverable_id: Optional[s
         raise SizingFireRefused([f"baton not found on disk: {rel}"])
     split = split_frontmatter(target.read_text(encoding="utf-8"))
     fm = split.fm_text if split else ""
-    handoff_id = read_fm_field(fm, "handoff_id")
-    baton_dlv = read_fm_field(fm, "deliverable_id")
+    handoff_id = read_fm_field_unquoted(fm, "handoff_id")
+    baton_dlv = read_fm_field_unquoted(fm, "deliverable_id")
     if not handoff_id or handoff_id == "null":
         raise SizingFireRefused([f"baton {rel} carries no handoff_id"])
     if not baton_dlv or baton_dlv == "null":

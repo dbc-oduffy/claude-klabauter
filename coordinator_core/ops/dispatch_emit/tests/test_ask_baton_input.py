@@ -63,6 +63,11 @@ def test_read_baton_ids_returns_path_and_id(repo):
     assert _read_baton_ids(repo, None, None) is None
 
 
+def test_read_baton_ids_unquotes_a_quoted_id(repo):
+    _baton(repo, dlv='"dlv-x-abc123"')
+    assert _read_baton_ids(repo, BATON, "dlv-x-abc123")["deliverable_id"] == "dlv-x-abc123"
+
+
 def test_read_baton_ids_refuses_missing_null_and_mismatch(repo):
     with pytest.raises(SizingFireRefused, match="not found"):
         _read_baton_ids(repo, BATON, None)

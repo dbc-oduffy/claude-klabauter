@@ -74,6 +74,16 @@ def test_assemble_command_carries_the_no_hand_off_flag_and_deliverable_id():
     )
 
 
+def test_assemble_decision_parse_tolerates_trailing_stderr_notes():
+    """The agent's Bash tool folds stderr into stdout; the JSON is sliced out, not parsed whole."""
+    import json
+
+    line = next(ln for ln in _compose().splitlines() if "_decision = JSON.parse" in ln)
+    assert "_out.slice(_out.indexOf('{'), _out.lastIndexOf('\\n}') + 2)" in line
+    out = '{\n  "route": "plan"\n}\nderived 2 requirement_register rows (T0, T1)\nembedded 2 pm_verbatims (turns 0-1)\n'
+    assert json.loads(out[out.index("{") : out.rindex("\n}") + 2]) == {"route": "plan"}
+
+
 def test_failed_assembler_halts_the_chain_naming_what_was_skipped():
     script = _compose()
     assert "_assembled.exit_code !== 0" in script
