@@ -1,9 +1,8 @@
 """
-coordinator_core.hooks.nudge_em_code_dispatch — PreToolUse advisory op.
+coordinator_core.hooks.nudge_em_code_dispatch — PreToolUse op.
 
-Purpose: Offers the executor-dispatch path (fan-out wave, /execute-plan) when the
-EM (main-agent) writes a code file inline. Design-as-offers: leads with the better
-path, names the inline carve-out, never blocks.
+Purpose: Routes the EM's (main-agent) inline code writes to executor dispatch.
+The async `_handler` below stays advisory; `op()` denies.
 
 Suppression conditions (no_advisory):
   1. agent_id present — subagent writes are always allowed; executors write code.
@@ -24,10 +23,11 @@ Suppression conditions (no_advisory):
      diff sizes was REJECTED (one session's datapoint, wrong unit — see
      `_is_semantic_bypass_edit`'s docstring) in favor of this semantic mechanism.
 
-  6. `op()` ONLY: a repeat small edit (<= `_SMALL_EDIT_MAX_LINES` new lines in the
-     call) to a file already nudged this session. The nudge fires once per file per
-     session (marker in the platform temp dir); a new file, or a call writing more
-     than the threshold, still nudges.
+  6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` DENIES the main EM's
+     product-code write at every size (default strict dispatch). The sentinel
+     (3) suppresses only when its content is a non-empty reason line; each
+     honoured sentinel appends a JSON line to the per-session escape log
+     (`dispatch-escapes.jsonl` in the session's share dir).
 
 Negative-spec:
   - MultiEdit edits[] are NOT forwarded by the mcp_tool hook (only scalar fields
@@ -47,7 +47,6 @@ Tripwire: coordinator-tripwires.md § NUDGE-EM-CODE-DISPATCH
 from __future__ import annotations
 
 import difflib
-import hashlib
 import io
 import json
 import os
@@ -59,13 +58,20 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core._hook_envelope import deny
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.ipc import register_op
-from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
+)
+from coordinator_core.hooks.dispatch_escape import (  # noqa: F401
+    ESCAPE_LOG_NAME,
+    _log_escape,
+    _take_escape,
+    _resolve_session_id_op,
+    _sentinel_reason,
 )
 from coordinator_core.session.mode_resolution import resolve_mode
 
@@ -342,59 +348,6 @@ def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: 
     )
 
 
-def _managed_root(payload: dict) -> str:
-    """Per-repo managed Temp dir when the payload's `cwd` sits in a repo, else the fleet one.
-    A directory walk, no process spawn."""
-    cwd = payload.get("cwd")
-    try:
-        if isinstance(cwd, str) and cwd:
-            from coordinator_core.hooks import nudge_unrouted_sizing as sizing
-
-            repo_root = sizing._repo_root({"cwd": cwd})
-            if repo_root:
-                return str(managed_tempdir(repo_root))
-    except (ValueError, OSError):
-        pass
-    return str(managed_tempdir())
-
-
-def _write_pending_dispatch_artifact(
-    session_id: str, file_path: str, executor_type: str, dispatch_brief_text: str,
-    root: str,
-) -> None:
-    hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
-    artifact_path = os.path.join(
-        root,
-        f"coordinator-pending-dispatch-{session_id}-{hash8}.json",
-    )
-    now = datetime.now(timezone.utc)
-    generated_at = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
-    artifact = {
-        "schema": "coordinator-pending-dispatch/v1",
-        "generated_at": generated_at,
-        "session_id": session_id,
-        "file_path": file_path,
-        "executor_type": executor_type,
-        "dispatch_brief_text": dispatch_brief_text,
-        "ambiguous": False,
-    }
-    try:
-        with open(artifact_path, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(artifact, fh, indent=2)
-    except OSError:
-        pass
-
-
-def _resolve_session_id_op(payload: dict) -> str:
-    sid = payload.get("session_id")
-    if isinstance(sid, str) and sid.strip():
-        safe = re.sub(r"[^A-Za-z0-9_-]", "", sid.strip())
-        if safe:
-            return safe
-    hostname = _sanitize_for_hostname(socket.gethostname())
-    return f"{hostname}-{os.getpid()}"
-
-
 # ---------------------------------------------------------------------------
 # Semantic-bypass mechanism (AC6) — the size floor for the nudge.
 #
@@ -529,61 +482,69 @@ def _semantic_bypass_applies(file_path: str, tool_input: dict) -> bool:
     return False
 
 
-_SMALL_EDIT_MAX_LINES = 40
+def _is_scratch_or_tmp(file_path: str) -> bool:
+    import tempfile
+
+    abs_path = os.path.abspath(file_path)
+    if "scratch" in abs_path.replace("\\", "/").split("/"):
+        return True
+    tmp = os.path.normcase(os.path.abspath(tempfile.gettempdir()))
+    return (os.path.normcase(abs_path) + os.sep).startswith(tmp + os.sep)
 
 
-def _edit_new_line_count(tool_input: dict) -> int:
-    """Lines this one tool call writes (new_string / content)."""
-    edits = tool_input.get("edits")
-    if isinstance(edits, list) and edits:
-        texts = [e.get("new_string") for e in edits if isinstance(e, dict)]
-    else:
-        texts = [tool_input.get("new_string"), tool_input.get("content")]
-    return sum(t.count("\n") + 1 for t in texts if isinstance(t, str) and t)
+def _is_scratch_py(file_path: str) -> bool:
+    """A `.py` file under a `scratch/` directory: the probe-script shape."""
+    if _ext_of(file_path) != ".py":
+        return False
+    return "scratch" in os.path.abspath(file_path).replace("\\", "/").split("/")[:-1]
 
 
-def _nudged_marker_path(session_id: str, file_path: str, root: str) -> str:
-    hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
-    return os.path.join(root, f"coordinator-nudged-{session_id}-{hash8}")
-
-
-def _mark_nudged(path: str) -> None:
-    try:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write("1")
-    except OSError:
-        pass
-
-
-def _session_sizing_is_xs_dispatch(payload: dict, session_id: str) -> bool:
-    """True iff a sizing this session touched has route `dispatch` and tshirt XS.
-
-    Reuses nudge_unrouted_sizing's session-to-sizing join. Any failure or a
-    missing sizing is False, keeping the nudge.
-    """
+def _session_sizing_state(payload: dict, session_id: str) -> tuple[bool, bool]:
+    """(has_sizing, plan_pending): this session touched a sizing object, and one
+    of them routed to a plan this session has not touched. Failure is
+    (True, False), so the generic dispatch message stands."""
     try:
         from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 
         cwd = payload.get("cwd") or os.getcwd()
-        if not isinstance(cwd, str):
-            return False
-        repo_root = sizing._repo_root({"cwd": cwd})
+        repo_root = sizing._repo_root({"cwd": cwd}) if isinstance(cwd, str) else None
         if not repo_root:
-            return False
-        for rel_path in sizing._session_touched_sizing_files(session_id, repo_root):
-            obj = sizing._load_sizing_object(repo_root, rel_path)
-            if not obj or obj.get("route") != "dispatch":
-                continue
-            estimate = obj.get("estimate")
-            tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
-            if isinstance(tshirt, str) and tshirt.strip().upper() == "XS":
-                return True
+            return True, False
+        rels = sizing._session_touched_sizing_files(session_id, repo_root)
+        if not rels:
+            return False, False
+        routes = {(sizing._load_sizing_object(repo_root, rel) or {}).get("route") for rel in rels}
+        plan_pending = bool(routes & set(sizing._SKILL_BY_ROUTE)) and not (
+            sizing._session_touched_plan_files(session_id, repo_root)
+        )
+        return True, plan_pending
     except Exception:
-        return False
-    return False
+        return True, False
 
+
+_UNSIZED_DENY = (
+    "No sizing this session. Run coordinator:sizing (confident XS: "
+    "sizing-assemble --express-lane --tshirt XS) — then dispatch."
+)
+
+
+_SIZED_DENY = (
+    "EM edits route through dispatch. Dispatch a coordinator:executor "
+    "with the sizing's brief."
+)
+
+_PLAN_ROUTE_DENY = (
+    "This session's sizing routed to a plan. Run coordinator:plan; "
+    "execute-plan dispatches the executors."
+)
 
 def op(payload: dict) -> dict | None:
+    """Deny the main EM's product-code write at every size.
+
+    Exempt: subagents, doc/data files, bootstrap/out-of-repo, semantic-bypass
+    diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason
+    (each honoured sentinel is logged to the session escape log).
+    """
     if "agent_id" in payload:
         return None
 
@@ -591,21 +552,16 @@ def op(payload: dict) -> dict | None:
     if not isinstance(tool_input, dict):
         tool_input = {}
     file_path = tool_input.get("file_path")
-    multiple_code_files = False
 
     edits = tool_input.get("edits")
     if not file_path and isinstance(edits, list):
-        code_file_count = 0
         for edit in edits:
             if not isinstance(edit, dict):
                 continue
             edit_path = edit.get("file_path") or ""
-            edit_ext = os.path.splitext(edit_path)[1].lower()
-            if edit_ext not in _DOC_DATA_EXTENSIONS:
-                code_file_count += 1
-                if not file_path:
-                    file_path = edit_path
-        multiple_code_files = code_file_count > 1
+            if os.path.splitext(edit_path)[1].lower() not in _DOC_DATA_EXTENSIONS:
+                file_path = edit_path
+                break
 
     if not file_path:
         return None
@@ -613,73 +569,39 @@ def op(payload: dict) -> dict | None:
     if _is_bootstrap_or_out_of_repo(file_path):
         return None
 
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in _DOC_DATA_EXTENSIONS:
+    if os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS:
         return None
 
     if _semantic_bypass_applies(file_path, tool_input):
         return None
 
+    if _is_scratch_py(file_path):
+        from coordinator_core.bash_guards.guard_post_executor_verification import (
+            after_executor_deny,
+        )
+
+        if resolve_mode("autonomous", _resolve_session_id_op(payload)):
+            return None
+        return after_executor_deny(payload, file_path)
+
+    if _is_scratch_or_tmp(file_path):
+        return None
+
     session_id = _resolve_session_id_op(payload)
 
-    nudge_ok_sentinel = str(dispatch_nudge_sentinel_path(session_id))
-    if _sentinel_exists(nudge_ok_sentinel):
+    if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
         return None
 
     if resolve_mode("autonomous", session_id):
         return None
 
-    if _session_sizing_is_xs_dispatch(payload, session_id):
-        return None
-
-    temp_root = _managed_root(payload)
-    nudged_marker = _nudged_marker_path(session_id, file_path, temp_root)
-    if (
-        (
-            _sentinel_exists(nudged_marker)
-            or _sentinel_exists(str(legacy_top_level_path(os.path.basename(nudged_marker))))
-        )
-        and _edit_new_line_count(tool_input) <= _SMALL_EDIT_MAX_LINES
-    ):
-        return None
-    _mark_nudged(nudged_marker)
-
-    executor_type, ambiguous = _derive_executor_info(file_path)
-    edit_description = _describe_edit(payload)
-    dispatch_brief_text = _build_dispatch_brief(file_path, executor_type, edit_description)
-
-    if not ambiguous and not multiple_code_files:
-        _write_pending_dispatch_artifact(
-            session_id, file_path, executor_type, dispatch_brief_text, temp_root
-        )
-
-    raw_sid = payload.get("session_id")
-    has_true_session_id = isinstance(raw_sid, str) and raw_sid.strip() != ""
-
-    # TRIMMED (C8c, docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
-    # dropped `artifact_note` ("Artifact written."/"") from the rendered message —
-    # the artifact is a best-effort convenience file (see
-    # `_write_pending_dispatch_artifact`'s own docstring), not something the EM
-    # needs stated in the advisory to act on; `ambiguous`/`multiple_code_files`
-    # still gate whether the artifact is written, only its mention in text is
-    # cut. Also dropped "EM, not typist.", "Code write:" -> "Write:", "Dispatch
-    # an executor instead", and the "agent-dispatch-economics.md" doc-pointer
-    # parenthetical — the brief below already names type/task, and the
-    # sentinel path is the one piece of information this message must carry
-    # that nothing else in the envelope does. Measured after this trim: hooks
-    # 216 / write_guards 171 prose bytes (both <= MESSAGE_PROSE_CAP_BYTES ==
-    # 220) against the corpus rows in guard_message_corpus.py, on this tree —
-    # the sentinel path embeds session_id, so a session_id longer than this
-    # module's own test-fixture uuid-suffixed one could still push a live
-    # firing over cap; that residual is inherent to the sentinel contract
-    # (`dispatch_nudge_sentinel.sentinel_path`), out of this chunk's scope
-    # (constraint per this chunk's body: "Trim the text, not the builder
-    # calls").
-    sentinel_suffix = "." if has_true_session_id else " (this OS pid only — session_id absent)."
-
-    nudge_message = (
-        f"Write: {file_path}. Suppress: write {nudge_ok_sentinel}{sentinel_suffix}"
-        f"\n\n{dispatch_brief_text}"
+    has_sizing, plan_pending = _session_sizing_state(payload, session_id)
+    if not has_sizing:
+        return deny("PreToolUse", _UNSIZED_DENY)
+    if plan_pending:
+        return deny("PreToolUse", _PLAN_ROUTE_DENY)
+    return deny(
+        "PreToolUse",
+        f"{_SIZED_DENY} No self-escape: dispatch; if an executor BLOCKs, "
+        f"a reason line in {dispatch_nudge_sentinel_path(session_id)} is honoured once.",
     )
-
-    return context_only("PreToolUse", f"[em-code-dispatch nudge] {nudge_message}")

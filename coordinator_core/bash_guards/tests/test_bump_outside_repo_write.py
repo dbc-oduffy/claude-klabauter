@@ -32,6 +32,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import sys
+
 import pytest
 
 from coordinator_core.bash_guards import bump_outside_repo_write as guard
@@ -456,7 +458,9 @@ def test_devnull_redirect_plus_genuine_outside_write_still_bumps(env, monkeypatc
 
 
 @pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
-@pytest.mark.parametrize("slashes", ["/", "\\"])
+# A backslash is a path separator only on Windows; on POSIX `\\tmp\\x` names a
+# relative file inside the repo, which correctly does not bump.
+@pytest.mark.parametrize("slashes", ["/", "\\"] if sys.platform == "win32" else ["/"])
 def test_redirect_to_a_non_repo_dir_bumps_under_both_tools(env, monkeypatch, tool, slashes):
     _set_anchor(monkeypatch, env, "sess-redir-" + tool)
     dest = str(env["outside"] / "redir.txt").replace("\\", "/").replace("/", slashes)

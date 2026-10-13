@@ -556,6 +556,10 @@ _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
         "its dynamic pre-filter matches whatever test command the repo configures, which is arbitrary text",
     ),
     (
+        "guard-post-executor-verification",
+        "denies by token-structure shape (a pytest command word in any segment); no necessary substring",
+    ),
+    (
         "guard-doctrine-surface-bash-write",
         "its trigger set is the runtime governed-surface manifest plus indirection markers, not a fixed list",
     ),
@@ -2370,6 +2374,10 @@ def _build_guard_chain(
         check as _check_subagent_findings_reject,
         MATCHERS as _matchers_subagent_findings_reject,
     )
+    from coordinator_core.bash_guards.guard_post_executor_verification import (
+        check as _check_post_executor_verification,
+        MATCHERS as _matchers_post_executor_verification,
+    )
     from coordinator_core.bash_guards.block_subagent_guard_grant import (
         check as _check_subagent_guard_grant,
         MATCHERS as _matchers_subagent_guard_grant,
@@ -2876,6 +2884,10 @@ def _build_guard_chain(
         # sibling of block-subagent-grant-acquisition: EM-only surface of the
         # M3, retire-review-integrator: reviewer-applies-own-findings ledger.
         GuardEntry("block-subagent-findings-reject", lambda: _check_subagent_findings_reject(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_findings_reject)),
+        # guard-post-executor-verification -- main-EM-only: after the session has
+        # dispatched a coordinator:executor, a second pytest run routes through
+        # coordinator:test-runner. Hard-deny, spawn-free, escape = dispatch sentinel.
+        GuardEntry("guard-post-executor-verification", lambda: _check_post_executor_verification(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_post_executor_verification)),
         # block-subagent-guard-grant -- Bash-channel leg of the EM
         # guard-grant route (plan 2026-08-13-em-exercisable-in-band-grant-
         # route.md, C3), load-bearing per PM ruling 1 (see that module's own

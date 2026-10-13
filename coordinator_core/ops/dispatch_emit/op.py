@@ -1631,6 +1631,8 @@ def _dispatch_emit(
                 hold_rows=hold_rows or None,
                 hold_reason=params.get("hold_reason"),
                 held_out=held_out,
+                auto_split=bool(params.get("auto_split")),
+                sibling=params.get("sibling"),
             )
         except ScriptOverCapError as over:
             # Part emits re-enter on this tranche record, not a fresh one (`_emit_inventory_parts`).

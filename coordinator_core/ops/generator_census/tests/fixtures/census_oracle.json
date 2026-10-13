@@ -1234,13 +1234,6 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator_core/ops/install_lfs_pre_push_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/ops/install_lfs_pre_push_hook.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": null
-  },
-  {
     "detail": "coordinator_core/ops/install_meta_repo_precommit_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/install_meta_repo_precommit_hook.py",
     "mutates": [],

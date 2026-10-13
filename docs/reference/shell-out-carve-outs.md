@@ -152,7 +152,6 @@ Sites:
 - `coordinator_core/ops/install_meta_repo_precommit_hook.py` `main()` (~:190, fresh-install `#!/bin/sh` shim-body generation)
 - `coordinator_core/ops/install_publish_repo_precommit_hook.py` `_FRESH_HOOK_TEMPLATE` (~:64, shim-body constant rendered in `main()`)
 - `coordinator_core/ops/edit_live_hook.py` `cmd_commit()` (~:227, `sh -n` validation before an atomic live-hook swap — narrowed from `bash -n` to `sh -n` at execute)
-- `coordinator_core/ops/install_lfs_pre_push_hook.py` `_HOOK_TEMPLATE` (the `#!/bin/sh` **`pre-push`** LFS-gate body, rendered by `install()`; tracked source of truth so the gate survives a re-clone — C8/AC7, DR-223's `pre-push` row)
 
 ## (c) bash-as-required-parser — RESOLVED/retired 2026-07-22, no site remains
 

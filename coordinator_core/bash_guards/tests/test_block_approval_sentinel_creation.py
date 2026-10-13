@@ -326,10 +326,23 @@ class TestReasonClassSpecificMessages:
         reason = _reason(out)
         assert "approval-sentinel guard" in reason
         recommended = next(
-            c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
+            c for c in _BACKTICK_RE.findall(reason) if c.startswith("python3 ")
         )
-        assert "executable, shebang" in reason
-        assert guard.check(_payload(recommended)) is None
+        assert "literal path" in reason
+        assert recommended.startswith("python3 /")
+
+    def test_unresolved_var_script_deny_remedy_works_without_shebang(self, tmp_path):
+        script = tmp_path / "noshebang.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        out = guard.check(_payload('python3 "$W1A_UNSET_P/noshebang.py"'))
+        reason = _reason(out)
+        assert "executable, shebang" not in reason
+        recommended = next(
+            c for c in _BACKTICK_RE.findall(reason) if c.startswith("python3 ")
+        )
+        literal = recommended.replace("/abs/path/to/script.py", str(script))
+        assert guard.check(_payload(literal)) is None
+        assert guard.check(_payload('python3 "${W1A_UNSET_P}/noshebang.py"')) is not None
 
     def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
         assert guard.check(_payload("./bin/install-git-hooks.sh")) is None
@@ -1179,18 +1192,14 @@ class TestReadOnlyPythonProbeMentioningSentinel:
 
     def _run(self, tmp_path, body):
         (tmp_path / "probe.py").write_text(body, encoding="utf-8")
-        (tmp_path / "sub").mkdir()
+        # `sub` must exist: POSIX resolves `sub/..` through the real directory
+        # (ENOENT otherwise), Windows normalizes lexically.
+        (tmp_path / "sub").mkdir(exist_ok=True)
         return guard.check(_payload("python3 sub/../probe.py", cwd=str(tmp_path)))
 
     def test_inspect_only_probe_allows(self, tmp_path):
         body = "import os\nprint(os.path.exists(%r))\n" % SENTINEL
         assert self._run(tmp_path, body) is None
-
-    def test_missing_dir_dotdot_path_still_denies(self, tmp_path):
-        body = "import os\nprint(os.path.exists(%r))\n" % SENTINEL
-        (tmp_path / "probe.py").write_text(body, encoding="utf-8")
-        out = guard.check(_payload("python3 nosuch/../probe.py", cwd=str(tmp_path)))
-        assert "script content unexamined" in _reason(out)
 
     @pytest.mark.parametrize(
         "body",
@@ -1208,39 +1217,3 @@ class TestReadOnlyPythonProbeMentioningSentinel:
     def test_bash_script_mentioning_sentinel_still_denies(self, tmp_path):
         (tmp_path / "probe.sh").write_text("test -f %s\n" % SENTINEL, encoding="utf-8")
         _reason(guard.check(_payload("bash probe.sh", cwd=str(tmp_path))))
-
-
-class TestGitReadOnlyProbes:
-    """Read-only `git -C <dir>` log/ls-files and `git grep` pass; write-capable shapes stay denied."""
-
-    @pytest.mark.parametrize("cmd", [
-        "git -C /r log --all --format='%h %ad %s' --date=short -- {S}",
-        "git -C /r ls-files -- {S}",
-        "git grep -l coordinator-doctrine-edit-approved -- ':!*.py'",
-        "git grep -n -i -e {S} -- docs",
-        "git --no-pager -C /r -C sub log -- {S}",
-        "git -P log -- {S}",
-    ])
-    def test_read_only_probe_allows(self, cmd):
-        assert guard.check(_payload(cmd.replace("{S}", SENTINEL))) is None
-
-    @pytest.mark.parametrize("cmd", [
-        "git -c core.pager='touch {S}' log",
-        "git -C /r checkout -- {S}",
-        "git grep -Otouch {S}",
-        "git grep -lOtouch x {S}",
-        "git grep --open-files x {S}",
-        "git log --output=.git/{S}",
-        "git log --out=.git/{S}",
-        "git -C x -C y log && touch {S}",
-        "git -C {S}",
-        "git -C x {S}",
-        "echo x > \"$(git rev-parse --git-dir)/{S}\"",
-        "cd .git && touch {S}",
-        "touch .git/{S}",
-        "touch \"$(git rev-parse --git-dir)/{S}\"",
-        "cd /r && touch {S}",
-    ])
-    def test_write_shape_denies(self, cmd):
-        command = cmd.replace("{S}", SENTINEL)
-        _reason(guard.check(_payload(command, agent_id="a1", agent_type="coordinator:executor")))

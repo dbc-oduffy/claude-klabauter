@@ -162,6 +162,11 @@ def check_statusline(claude_dir: Path) -> CheckItem:
     command = status.get("command") if isinstance(status, dict) else None
     if not command:
         return CheckItem("statusline", False, f"no statusLine.command in {claude_dir / 'settings.json'}")
+    normalized = command.replace("\\", "/")
+    if ("coordinator" in normalized and "/bin/statusline.py" in normalized
+            and ".coordinator-plugin-root" not in normalized):
+        return CheckItem("statusline", False,
+                         "statusLine runs a pinned coordinator copy, not the live plugin -- re-run scripts/setup.py")
     head = command_head(command)
     if head is None or not _resolves(head):
         return CheckItem("statusline", False, f"statusLine command does not resolve: {command}")

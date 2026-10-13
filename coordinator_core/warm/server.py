@@ -1126,6 +1126,22 @@ _TEST_HARNESS_ENV_KEYS = (
 )
 
 
+def _pin_cwd(repo_root: Path) -> None:
+    """Move this process's cwd to the engine root, the one directory that lives
+    as long as the server does.
+
+    A detached spawn inherits its spawner's cwd, often a session or test temp
+    dir. Once that dir is deleted, every ``os.getcwd()`` (and every relative
+    path resolve) in a request raises ``FileNotFoundError``, the worker drops
+    the connection unanswered, and every door call on the box reads -32004
+    until the server is replaced. Pool workers fork after this and inherit it.
+    """
+    try:
+        os.chdir(repo_root)
+    except OSError as exc:
+        print(f"[warm-server] could not pin cwd to {repo_root}: {exc!r}", file=sys.stderr)
+
+
 def _scrub_test_harness_env() -> None:
     """Drop test-harness-only env vars from this process's own `os.environ`.
 
@@ -2922,6 +2938,7 @@ def _run_guarded() -> int:
 
     _declare_execution_route()
     _scrub_test_harness_env()
+    _pin_cwd(repo_root)
 
     _stack_dump_remedy = _register_stack_dump_signal(repo_root)
     print(

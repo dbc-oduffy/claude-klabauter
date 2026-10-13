@@ -40,11 +40,6 @@ def test_gen_settings_hooks_usage_text_keeps_functional_env_key():
     assert "repos.content_root" in usage
 
 
-def test_probe_git_lfs_remediation_does_not_name_example_retrieval_repo_ue_addon():
-    line = prereq_probe.probe_git_lfs()
-    assert "example-retrieval-repo-ue-addon" not in line
-
-
 def test_probe_ue_functional_env_key_untouched(monkeypatch, tmp_path: Path):
     # EXAMPLE_GAME_REPO_UE_ROOT is a functional env-var identifier, not narrative
     # prose naming a repo — it must survive the sweep unchanged.

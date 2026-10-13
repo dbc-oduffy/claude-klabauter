@@ -166,6 +166,7 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "check_raw_pid_liveness": lambda mod: "Get-Process -Id 12345",
     "check_test_suite_invocation": lambda mod: "pytest tests/",
+    "guard_post_executor_verification": lambda mod: "pytest tests/",
     "guard_grep_via_bash": lambda mod: "Select-String -Pattern foo -Path bar.py",
     "guard_inprocess_search": lambda mod: "Select-String -Pattern foo -Path bar.py",
     "guard_multiprobe_banner": (

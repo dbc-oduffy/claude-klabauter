@@ -93,6 +93,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     _CMD_OVERRIDE_KEY,
     _CWD_OVERRIDE_KEY,
     CONFINEMENT_ROWS,
+    _post_executor_setup,
     CorpusRow,
 )
 
@@ -233,6 +234,18 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         GuardBand.CONFINEMENT_DENY,
         False,
         setup=_subagent_grant_acquisition_identity_setup,
+    ),
+    # EM-only guard: a subagent render is silent by design, so its firing row
+    # cannot sit in CONFINEMENT_ROWS (the register lint's B8 leg forces the
+    # subagent audience over every row there).
+    CorpusRow(
+        "guard-post-executor-verification",
+        "guard-post-executor-verification-fire",
+        "python -m pytest tests/test_x.py",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=lambda scratch_dir, mp: _post_executor_setup(scratch_dir, runs_so_far=1),
     ),
 ]
 

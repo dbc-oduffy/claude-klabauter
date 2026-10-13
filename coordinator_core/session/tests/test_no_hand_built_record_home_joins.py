@@ -221,7 +221,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "hooks/tests/test_arrival_w4_c12.py",
     "hooks/tests/test_arrival_w4_c7.py",
     "hooks/tests/test_guard_terminal_review.py",
-    "hooks/tests/test_nudge_em_code_dispatch.py",
     "hooks/tests/test_nudge_unrouted_sizing_touch_seam.py",
     "hooks/tests/test_watchdog_undischarged_next_move.py",
     "housekeeping/cycle.py",

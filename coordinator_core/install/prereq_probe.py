@@ -735,33 +735,6 @@ def probe_longpaths() -> str:
 
 
 # ---------------------------------------------------------------------------
-# _co_probe_git_lfs
-# ---------------------------------------------------------------------------
-def probe_git_lfs() -> str:
-    remediation = (
-        "enable Git LFS so LFS-backed dependent repos clone real objects: "
-        "brew install git-lfs (macOS) / winget install GitHub.GitLFS (Windows), then git lfs install"
-    )
-    if _run(["git", "--version"]) is None:
-        return emit_line("git_lfs", "warn", "advisory", "git not found on PATH; cannot probe git-lfs", remediation)
-
-    lfs_ver = _run(["git", "lfs", "version"])
-    if lfs_ver is None or lfs_ver.returncode != 0 or not (lfs_ver.stdout or "").strip():
-        return emit_line("git_lfs", "warn", "advisory", "git-lfs not found or `git lfs version` failed", remediation)
-
-    lfs_clean = _run(["git", "config", "--global", "--get", "filter.lfs.clean"])
-    clean_val = (lfs_clean.stdout or "").strip() if lfs_clean is not None else ""
-    if not clean_val:
-        return emit_line(
-            "git_lfs", "warn", "advisory",
-            f"git-lfs present ({(lfs_ver.stdout or '').strip()}) but not configured "
-            "(filter.lfs.clean missing; run: git lfs install)",
-            remediation,
-        )
-    return emit_line("git_lfs", "pass", "advisory", (lfs_ver.stdout or "").strip(), "")
-
-
-# ---------------------------------------------------------------------------
 # _co_probe_shell_login_env
 # ---------------------------------------------------------------------------
 def probe_shell_login_env() -> str:
@@ -1040,7 +1013,6 @@ _PROBE_ORDER = (
     probe_ue,
     probe_clone_auth,
     probe_longpaths,
-    probe_git_lfs,
     probe_shell_login_env,
     probe_skill_frontmatter_valid,
     probe_windows_terminal_presence,

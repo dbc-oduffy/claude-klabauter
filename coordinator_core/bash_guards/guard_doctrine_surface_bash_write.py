@@ -1147,6 +1147,32 @@ def _is_commit_wrapper_read_shape(segment: str) -> bool:
     return not _has_code_execution_marker(without_heredocs)
 
 
+#: The sanctioned sizing-record writers the sizing deny message names, and
+#: `coordinator-invoke`, which runs the `sizing.*`/`fleet.*` ops that amend or
+#: archive a record. Each validates the record itself, so the segment's own
+#: write is the sanctioned route.
+_SIZING_WRITER_BASENAMES = frozenset(
+    {"sizing-assemble", "coordinator-doc-new", "coordinator-invoke"}
+)
+
+
+def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
+    """A sanctioned writer as the segment's command, with no shell write of
+    its own. Its operands are data -- an interpreter name in ``--intent`` or
+    in the record's filename runs nothing -- so the only execution left in
+    the segment is a substitution: a live ``$(``/backtick or ``<(``."""
+    token = _segment_command_token(segment)
+    if token is None:
+        return False
+    basename = _CMD_SUFFIX_RE.sub("", _command_token_basename(token)).lower()
+    if basename not in _SIZING_WRITER_BASENAMES:
+        return False
+    if "<<" in segment or _has_live_command_substitution(segment):
+        return False
+    bare = _strip_quoted_spans(segment)
+    return "<(" not in bare and not _has_write_marker(bare)
+
+
 def _is_git_content_mutation(segment: str) -> bool:
     return _git_subcommand(segment) in _GIT_CONTENT_MUTATING_SUBCOMMANDS
 
@@ -1675,6 +1701,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             _is_git_read_shape(segment)
             or _is_file_test_read_shape(segment)
             or _is_commit_wrapper_read_shape(segment)
+            or _is_sanctioned_sizing_writer_shape(segment)
             or _is_claude_md_grant_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
             or _is_assignment_captured_substitution_read_shape(segment, identifiers_lower)

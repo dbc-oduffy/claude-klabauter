@@ -159,6 +159,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_consumed_handoff_edit": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 50],
 "block_cutover_phase_hand_edit": ["hard-deny", ["Write", "Edit", "MultiEdit"], 112],
 "block_derived_global_doctrine_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 10],
+"block_hand_set_test_verdict": ["hard-deny", ["Write", "Edit", "MultiEdit"], 32],
 "block_dev_repo_sentinel_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 122],
 "block_dev_side_mirror_wiki": ["hard-deny", ["Write", "Edit", "NotebookEdit"], 172],
 "block_disarm_marker_sentinel_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 130],

@@ -11,10 +11,10 @@ from typing import Tuple
 
 
 def load_entries() -> Tuple:
-    from . import lfs_pre_push_gate, retired_auto_push_post_commit, retired_engine_pre_commit
+    from . import retired_auto_push_post_commit, retired_engine_pre_commit, retired_lfs_pre_push_gate
 
     return (
         retired_auto_push_post_commit.ENTRY,
         retired_engine_pre_commit.ENTRY,
-        lfs_pre_push_gate.ENTRY,
+        retired_lfs_pre_push_gate.ENTRY,
     )

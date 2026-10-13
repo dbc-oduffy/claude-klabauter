@@ -191,22 +191,6 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "OVERRIDE-WITHHOLDING fact). None can be cut without reopening a fixed "
         "defect or losing what-was-denied information."
     ),
-    ("nudge_em_code_dispatch", "fire-code-write"): (
-        "the overage is the suppression-sentinel path "
-        "(`dispatch_nudge_sentinel.sentinel_path`), which embeds "
-        "`tempfile.gettempdir()` plus the session_id verbatim so the EM can "
-        "touch the exact file that suppresses a repeat fire -- on this dev "
-        "host that path alone is 131 bytes, over half the cap before any "
-        "authored text. The surrounding prose (file_path, dispatch-brief "
-        "`type:`/`task:` lines) is already trimmed per this module's own "
-        "'TRIMMED (C8c...)' comment, and `task: {edit_description}` is "
-        "byte-pinned by `test_firing_shape_gate.py::"
-        "test_post_fix_brief_still_names_a_concrete_task_line`. Shortening "
-        "the sentinel path would change the suppression contract "
-        "(`dispatch_nudge_sentinel.sentinel_path`'s own callers), out of "
-        "this cell's scope -- residual is environment-dependent path "
-        "length, not authored prose."
-    ),
     ("multiprobe-banner", "multiprobe-banner-fire"): (
         "same root cause and same 'embed verbatim, unrunnable is worse than "
         "over-budget' constraint as `grep-via-bash-guard` above, one layer "

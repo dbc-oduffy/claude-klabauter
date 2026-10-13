@@ -328,6 +328,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     load_frontmatter_doc,
     read_spine,
 )
+from coordinator_core.ops.dispatch_emit import sibling_split as _sibling_split
 from coordinator_core.ops.dispatch_emit.wave_map import (
     WaveRow,
     _normalize_path,
@@ -4485,6 +4486,27 @@ def _row_verify_scope(
     return targets
 
 
+def _widen_marker_scope(rows, row_pathspecs, row_prefixes, extra_rows, repo_root):
+    """The terminal-commit marker's rows/pathspecs/prefixes with ``extra_rows`` (other sibling
+    workflows' rows) appended after this script's own, derived as ``compose_script`` derives them."""
+    extras = [r for r in extra_rows if r.id not in row_pathspecs]
+    specs = {r.id: _widen_with_test_candidates(commit_pathspec_or_none([r]) or [], repo_root) for r in extras}
+    ignored, _ = _gitignored_paths(
+        _dedupe_preserve_order(
+            [*(p for ps in specs.values() for p in ps), *(_prefix_probe(x) for r in extras for x in r.writes_under)]
+        ),
+        repo_root=repo_root,
+    )
+    return (
+        [*rows, *extras],
+        {**row_pathspecs, **{rid: [p for p in ps if p not in ignored] for rid, ps in specs.items()}},
+        {
+            **row_prefixes,
+            **{r.id: tuple(x for x in r.writes_under if _prefix_probe(x) not in ignored) for r in extras},
+        },
+    )
+
+
 def compose_script(
     waves: list[list[WaveRow]],
     *,
@@ -4518,6 +4540,9 @@ def compose_script(
     seam: Optional[SeamInputs] = None,
     plan_text: Optional[str] = None,
     carried_gate_owed: Optional[dict] = None,
+    terminal_commit: bool = True,
+    commit_scope: Sequence[WaveRow] = (),
+    split_note: Optional[dict] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -4564,6 +4589,11 @@ def compose_script(
     one ``review_specs`` agent per falsifier-carrying plan, in one
     ``parallel([...])``. ``review_specs`` without ``predispatch`` raises
     ``ValueError``. Review prompts get no plan-context preamble.
+
+    Sibling-split emission (``sibling_split``): ``terminal_commit=False`` emits no
+    commit marker; ``commit_scope`` rows (other siblings' rows) ride in this script's
+    marker beside its own; ``split_note`` adds the sibling width-report line. Defaults
+    leave every emitted byte unchanged.
 
     ``chatty`` (opt-in, default off; absent leaves every emitted byte
     unchanged) composes a schema-valid roster template (``chatty.build_roster``),
@@ -4777,6 +4807,8 @@ def compose_script(
         body_blocks.append(
             f"  log({_js_string_literal(_dag_width_narration(dag, len(flat_rows), runtime_cap))});"
         )
+        if split_note:
+            body_blocks.append(f"  log({_js_string_literal(_sibling_split.width_narration(split_note))});")
 
         body_blocks.append("  const _rows = {};")
         roster = None
@@ -4937,17 +4969,28 @@ def compose_script(
                 "waves were not checked): ' + _seamFailures.join('; '));"
             )
 
-    marker = _terminal_commit_marker(
-        flat_rows,
-        row_pathspecs,
-        plan_path=plan_path,
-        deliverable_id=deliverable_id,
-        session_id=session_id,
-        expected_branch=expected_branch,
-        row_prefixes=row_prefixes,
-        review_only=review_only,
-        review_open_rows=review_open_rows,
-        run_base_sha=run_base_sha,
+    marker_rows = flat_rows
+    marker_pathspecs = row_pathspecs
+    marker_prefixes = row_prefixes
+    if terminal_commit and commit_scope:
+        marker_rows, marker_pathspecs, marker_prefixes = _widen_marker_scope(
+            flat_rows, row_pathspecs, row_prefixes, commit_scope, repo_root
+        )
+    marker = (
+        _terminal_commit_marker(
+            marker_rows,
+            marker_pathspecs,
+            plan_path=plan_path,
+            deliverable_id=deliverable_id,
+            session_id=session_id,
+            expected_branch=expected_branch,
+            row_prefixes=marker_prefixes,
+            review_only=review_only,
+            review_open_rows=review_open_rows,
+            run_base_sha=run_base_sha,
+        )
+        if terminal_commit
+        else None
     )
     if marker is not None:
         # Unindented: commit_request.parse_marker matches on line-start
@@ -5749,12 +5792,19 @@ def emit_script(
     hold_reason: Optional[str] = None,
     held_out: Optional[dict] = None,
     certified_plans: Sequence[str] = (),
+    auto_split: bool = False,
+    sibling: Optional[dict] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
     ``certified_plans`` is the full certified set a tranche spine was cut from; it rides
     into the wave-boundary seam leg so a consumer plan of another tranche still counts
     as in the set.
+
+    ``auto_split`` raises ``sibling_split.WidthOverCapError`` when the DAG is wider than the
+    per-workflow runtime cap (a plan of <= cap rows never pays for the check). ``sibling``
+    (``{"index", "count", "stage", "stages", "cap", "plan_width", "achieved_width", "keep_rows",
+    "commit_scope", "terminal_commit"}``) emits exactly that sibling's rows.
 
     ``hold_rows`` (with a ``hold_reason``) keeps those rows, and every row that
     depends on one over declared or read-after-write edges, out of the waves
@@ -5903,6 +5953,14 @@ def emit_script(
         if held_out is not None:
             held_out.update(rows=sorted(hold_rows), dependents=dependents, reason=hold_reason.strip())
 
+    full_rows = rows
+    commit_scope_rows: list = []
+    if sibling is not None:
+        keep = frozenset(sibling["keep_rows"])
+        rows = _keep_landed_rows(rows, keep)
+        scope_ids = frozenset(sibling.get("commit_scope") or ())
+        commit_scope_rows = [r for r in full_rows if r.id in scope_ids]
+
     resolved_name = name or plan_path.stem
     resolved_description = description or (
         f"Emitted executor/commit/test workflow for {plan_path.stem}"
@@ -5939,6 +5997,12 @@ def emit_script(
         findings_out.extend(find_new_module_with_importer(rows, repo_root))
 
     waves = build_waves(rows)
+    if auto_split and sibling is None:
+        cap = _sibling_split.runtime_cap()
+        if len(rows) > cap:
+            split = _sibling_split.plan_split(dag_from_waves(waves), cap)
+            if split is not None:
+                raise _sibling_split.WidthOverCapError(split)
 
     spec_path = _spec_path_for_prompt(plan_path, repo_root)
 
@@ -6025,6 +6089,12 @@ def emit_script(
             rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root, certified_plans
         ),
         plan_text=plan_text,
+        terminal_commit=True if sibling is None else bool(sibling.get("terminal_commit", True)),
+        commit_scope=commit_scope_rows,
+        split_note=None if sibling is None else {
+            k: sibling[k]
+            for k in ("index", "count", "stage", "stages", "cap", "plan_width", "achieved_width")
+        },
     )
 
 

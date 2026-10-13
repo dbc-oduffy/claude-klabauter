@@ -526,3 +526,28 @@ def test_predicate_still_fails_on_method_call_on_a_non_literal():
     )
     findings = sc.find_module_body_violations(source, "fixture/nonliteral_method.py")
     assert [f for f in findings if f.reason == "module-scope process mutation"] != []
+
+
+def test_predicate_passes_tuple_of_a_generator_over_literals():
+    """`publish`'s `_DOOR_INPUT_RELS = tuple(f"..." for name in (...))` builds a
+    value and touches nothing; `tuple` sits beside `set`/`frozenset`."""
+    source = (
+        chr(39) * 3 + "A CLI with a tuple built from a generator." + chr(39) * 3 + chr(10)
+        + "RELS = tuple(f" + chr(34) + "d/{n}" + chr(34) + " for n in (" + chr(34) + "a" + chr(34) + ", " + chr(34) + "b" + chr(34) + "))" + chr(10) * 2
+        + "def main(argv):" + chr(10)
+        + "    return 0" + chr(10)
+    )
+    findings = sc.find_module_body_violations(source, "fixture/tuple_genexpr.py")
+    assert [f for f in findings if f.reason == "module-scope process mutation"] == []
+
+
+def test_predicate_still_fails_on_tuple_of_an_impure_call():
+    source = (
+        chr(39) * 3 + "A CLI whose tuple reads process state." + chr(39) * 3 + chr(10)
+        + "import os" + chr(10) * 2
+        + "X = tuple(os.listdir())" + chr(10) * 2
+        + "def main(argv):" + chr(10)
+        + "    return 0" + chr(10)
+    )
+    findings = sc.find_module_body_violations(source, "fixture/tuple_impure.py")
+    assert [f for f in findings if f.reason == "module-scope process mutation"] != []

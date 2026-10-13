@@ -2195,11 +2195,21 @@ def _open_routed_obligation(write_path: str) -> None:
     if root is None:
         return
     target = Path(write_path) if Path(write_path).is_absolute() else Path(root) / write_path
+    from coordinator_core.session.core import resolve_session_id
+
+    # The resolver, not os.environ: a warm-served request carries the caller's id in
+    # a per-request binding that the server's own environment never holds.
+    session_id = resolve_session_id() or None
     try:
         rel = target.resolve().relative_to(Path(root).resolve()).as_posix()
-        open_sizing_routed(root, rel, os.environ.get("CLAUDE_CODE_SESSION_ID"))
+        open_sizing_routed(root, rel, session_id)
     except (ValueError, OSError):
         return
+    # This write happens under Bash, which the Write/Edit touch tracker never sees;
+    # without the claim the dispatch gate keeps answering "No sizing this session".
+    from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
+
+    append_touch_claims([rel], session_id, root, kind=KIND_WRITE)
 
 
 def _load_emit_wave_fire():

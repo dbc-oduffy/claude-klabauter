@@ -4512,9 +4512,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/install/prereq_probe.py", "probe_gh", "gh", 1),
         ("coordinator_core/install/prereq_probe.py", "probe_gh", "gh", 2),
         ("coordinator_core/install/prereq_probe.py", "probe_git", "git", 0),
-        ("coordinator_core/install/prereq_probe.py", "probe_git_lfs", "git", 0),
-        ("coordinator_core/install/prereq_probe.py", "probe_git_lfs", "git", 1),
-        ("coordinator_core/install/prereq_probe.py", "probe_git_lfs", "git", 2),
         ("coordinator_core/install/prereq_probe.py", "probe_longpaths", "git", 0),
         ("coordinator_core/install/prereq_probe.py", "probe_node", "node", 0),
         ("coordinator_core/install/prereq_probe.py", "probe_pwsh", "powershell", 1),
@@ -4830,7 +4827,7 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
     ): (
         "2026-08-23 dynamic argv0, runtime evidence not gathered -- `_run` is a "
         "generic subprocess.run wrapper; `argv` is entirely caller-supplied and "
-        "differs across this module's own probe_gh/probe_git/probe_git_lfs/"
+        "differs across this module's own probe_gh/probe_git/"
         "probe_pwsh/probe_uv/... call sites."
     ),
     (
@@ -5323,35 +5320,6 @@ _NAMED_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
     ),
     (
         "coordinator_core/install/prereq_probe.py",
-        "probe_git_lfs",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- `git --version` presence gate, the first of "
-        "`probe_git_lfs`'s three sequential git calls; same non-budgeted "
-        "install-diagnostic scope."
-    ),
-    (
-        "coordinator_core/install/prereq_probe.py",
-        "probe_git_lfs",
-        "git",
-        1,
-    ): (
-        "2026-08-23 exempt -- `git lfs version` check, the second of "
-        "`probe_git_lfs`'s three sequential calls; same non-budgeted scope."
-    ),
-    (
-        "coordinator_core/install/prereq_probe.py",
-        "probe_git_lfs",
-        "git",
-        2,
-    ): (
-        "2026-08-23 exempt -- `git config --global --get filter.lfs.clean` "
-        "read, the third of `probe_git_lfs`'s three sequential calls; same "
-        "non-budgeted scope."
-    ),
-    (
-        "coordinator_core/install/prereq_probe.py",
         "probe_longpaths",
         "git",
         0,
@@ -5577,9 +5545,10 @@ def test_named_argv0_sites_in_tranche_a_are_dispositioned_on_their_own_terms():
         "reaches outside tranche a's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS) == 30, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS) == 27, (
         f"_NAMED_ARGV0_DISPOSITIONS carries {len(_NAMED_ARGV0_DISPOSITIONS)} "
-        "entries, not the 31 expected after fleet.archive_completed_plans's kill "
+        "entries, not the 27 expected after probe_git_lfs's 3 rows were deleted "
+        "(2026-10-13), fleet.archive_completed_plans's kill "
         "removed its 2 named-argv0 sites (archive_plans.py deleted whole) from "
         "the dispatch brief's own tranche-a slice of 35, "
         "fleet.archive_shipped_handoffs's kill (2026-08-25, C1b) removed "

@@ -11,6 +11,7 @@ ALLOWLIST = {
     "coordinator_core/ipc.py": "dispatch core",
     "coordinator_core/warm/entry_seam.py": "the seam",
     "coordinator_core/ops/session/guard_roster_ops.py": "metadata read, never invoked",
+    "coordinator_core/invoke/__main__.py": "--describe reads the docstring, never invoked",
 }
 
 

@@ -206,8 +206,11 @@ def test_ctx_shutdown_removes_only_its_own_socket_file(tmp_path, monkeypatch) ->
 
     ctx = _ctx(engine_root=tmp_path, endpoint_path=endpoint)
 
-    endpoint.unlink()
-    endpoint.write_bytes(b"successor")
+    # Replace while the original still exists: a bound socket holds its inode
+    # in production, and unlink-then-create lets the filesystem reuse the number.
+    successor = tmp_path / "tok.sock.next"
+    successor.write_bytes(b"successor")
+    os.replace(successor, endpoint)
 
     ctx._ctx_shutdown()
     assert endpoint.exists(), "a departing generation deleted its successor's socket"

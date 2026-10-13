@@ -33,7 +33,9 @@ Supported types:
                        REQUIRES an explicit sizing answer: --sizing-object PATH, or
                        --no-sizing-object to declare the plan genuinely has none
   decision           — architecture decision record (docs/decisions/DR-NNN-<slug>.md,
-                       DR number allocated + collision-checked; optional --dr-prefix)
+                       DR number allocated + collision-checked; optional --dr-prefix;
+                       optional --supersedes DR-N: deletes DR-N in the same change, refused
+                       while a live surface cites DR-N; a partial change edits DR-N instead)
   audit-record       — architecture audit record (docs/architecture/audit-records/YYYY-MM-DD-<system>.md)  requires --system <name>
   completion         — workstream completion log entry (archive/completed/YYYY-MM/YYYY-MM-DD-<slug>.md)  optional --nature, --chain
   goal               — goal artifact with OKR frontmatter (state/goals/YYYY-MM-DD-<slug>.yaml)
@@ -5296,7 +5298,45 @@ def mint_baton_from_sizing(
     return {"id": handoff_id, "path": out_rel, "title": title, "created": True}
 
 
-def _scaffold_decision(title: str, dr_id: str) -> str:
+def _resolve_supersedes_target(args, doc_type: str, repo_root: str) -> "tuple[str | None, str | None]":
+    """Validate the `--supersedes` flag family; return (old_record_abs_path, error)."""
+    import glob as _glob  # noqa: PLC0415
+    import re as _re  # noqa: PLC0415
+
+    if doc_type != "decision":
+        return None, "--supersedes is accepted only for --type decision"
+    if args.dr_prefix:
+        return None, "--supersedes cannot be combined with --dr-prefix"
+    if not _re.fullmatch(r"DR-[0-9]+", args.supersedes):
+        return None, f"--supersedes takes an unprefixed id like DR-12, got {args.supersedes!r}"
+    pattern = os.path.join(_glob.escape(os.path.join(repo_root, "docs", "decisions")), f"{args.supersedes}-*.md")
+    matches = sorted(_glob.glob(pattern))
+    if len(matches) != 1:
+        return None, f"{args.supersedes} matches {len(matches)} files under docs/decisions/, need exactly 1"
+    return matches[0], None
+
+
+def _apply_supersession(old_path: str, declare_write) -> None:
+    """Delete the superseded record, then declare the write.
+
+    There is no partial mode: a decision changed in part is edited in place to
+    state what is true now, never answered with a second record.
+    On failure restores the old record's original bytes; the caller removes the new file.
+    """
+    with open(old_path, "rb") as fh:
+        original = fh.read()
+    try:
+        os.remove(old_path)
+        declare_write(old_path)
+    except Exception:
+        with open(old_path, "wb") as fh:
+            fh.write(original)
+        raise
+
+
+def _scaffold_decision(
+    title: str, dr_id: str, supersedes: "tuple[str, str] | None" = None,
+) -> str:
     """Generate validator-clean decision frontmatter + canonical section skeleton.
 
     Produces a conformant decision against schemas/decision.yaml: required
@@ -5317,6 +5357,7 @@ def _scaffold_decision(title: str, dr_id: str) -> str:
         f"created: {today}",
         "status: proposed",
         f"id: {dr_id}",
+        *([f"supersedes: {supersedes[0]}"] if supersedes else []),
         "deciders:",
         "  - PLACEHOLDER  # replace with decision-maker names",
         "---",
@@ -5325,6 +5366,14 @@ def _scaffold_decision(title: str, dr_id: str) -> str:
         "",
         "## Problem",
         "",
+        *(
+            [
+                f"Supersedes {supersedes[0]}; removed from the working tree, stays in git "
+                f"history: git log --diff-filter=D -- docs/decisions/{supersedes[1]}",
+                "",
+            ]
+            if supersedes else []
+        ),
         "<!-- What problem does this decision solve? -->",
         "",
         "## Decision",
@@ -7112,6 +7161,15 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
 
     # Decision fields.
     parser.add_argument(
+        "--supersedes",
+        default=None,
+        metavar="DR-N",
+        help=(
+            "(decision) Unprefixed id of the record this one replaces outright; deleted in "
+            "the same change. A partial change is an edit to that record, not a new one."
+        ),
+    )
+    parser.add_argument(
         "--dr-prefix",
         default=None,
         metavar="PREFIX",
@@ -8737,6 +8795,33 @@ def main(argv: "list[str] | None" = None) -> int:
     # numbering namespace, not the write target of this particular invocation.
     # Spec backlink: cross-repo/inbox/2026-07-20-example-game-repo-em-dr-number-allocator-collision.md
     _resolved_dr_id: str | None = None
+    _supersede_old_path: str | None = None
+    if args.supersedes is not None:
+        _sup_root = _current_repo_root() or "."
+        _supersede_old_path, _sup_err = _resolve_supersedes_target(args, doc_type, _sup_root)
+        if _sup_err:
+            print(f"error: {_sup_err}", file=sys.stderr)
+            return 1
+        _ensure_engine_on_path()
+        from pathlib import Path as _SupPath  # noqa: PLC0415
+        from coordinator_core.ops.fleet._decision_citations import (  # noqa: PLC0415
+            CitationTarget as _CitationTarget,
+            live_citations as _live_citations,
+        )
+
+        _sup_rel = os.path.relpath(_supersede_old_path, _sup_root).replace(os.sep, "/")
+        _sup_hits = _live_citations(
+            _SupPath(_sup_root),
+            [_CitationTarget(_sup_rel, int(args.supersedes[3:]), None)],
+        ).get(_sup_rel, [])
+        if _sup_hits:
+            print(
+                f"refused: {args.supersedes} is cited on a live surface: "
+                f"{', '.join(_sup_hits)}; repoint or remove each, or edit "
+                f"{args.supersedes} in place if only part of it changes",
+                file=sys.stderr,
+            )
+            return 1
     if doc_type == "decision" and _adopt_id:
         _resolved_dr_id = _adopt_id
     elif doc_type == "decision":
@@ -9082,7 +9167,14 @@ def main(argv: "list[str] | None" = None) -> int:
             sizing_repo_root=(_current_repo_root() or ".") if args.sizing_object else None,
         )
     elif doc_type == "decision":
-        content = _scaffold_decision(title=title, dr_id=_resolved_dr_id)
+        content = _scaffold_decision(
+            title=title,
+            dr_id=_resolved_dr_id,
+            supersedes=(
+                (args.supersedes, os.path.basename(_supersede_old_path))
+                if _supersede_old_path else None
+            ),
+        )
     elif doc_type == "audit-record":
         content = _scaffold_audit_record(title=title, system=args.system)
     elif doc_type == "problem-set":
@@ -9379,11 +9471,15 @@ def main(argv: "list[str] | None" = None) -> int:
                 # pre-mutation text was empty is still a landed write.
                 if _sizing_reverse_old_text is not None:
                     declare_write(_sizing_abs_path)
+                if _supersede_old_path:
+                    _apply_supersession(_supersede_old_path, declare_write)
         else:
             with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(content)
                 if not content.endswith("\n"):
                     fh.write("\n")
+            if _supersede_old_path:
+                _apply_supersession(_supersede_old_path, lambda _p: None)
     except Exception:
         # The plan-file write failed after the sizing reverse edge already
         # landed — revert it so a half-written pair (sizing flipped to
@@ -9393,6 +9489,8 @@ def main(argv: "list[str] | None" = None) -> int:
         # maintained"). Re-raises the ORIGINAL exception either way.
         if _sizing_reverse_old_text is not None:
             _revert_sizing_reverse_edge(_sizing_abs_path, _sizing_reverse_old_text, _write_repo_root)
+        if _supersede_old_path and os.path.exists(out_path):
+            os.remove(out_path)
         raise
 
     # Success-path-only liveness stamp (completion_scaffold): reached only after the

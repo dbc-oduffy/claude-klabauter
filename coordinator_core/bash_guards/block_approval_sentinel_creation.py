@@ -320,6 +320,16 @@ def _first_operand_token(interpreter_args: List[str]) -> Optional[str]:
     return None
 
 
+#: This guard reads a literal script path and allows it when clean; a path
+#: it cannot resolve (`$VAR` unset or assigned in-command) stays denied. The
+#: shared `./script` remedy fails for a script with no shebang/exec bit.
+#: Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window (see
+#: `_sentinel_creation_guard.INDIRECTION_REMEDY`).
+_LITERAL_PATH_REMEDY = (
+    "Use instead: `python3 /abs/path/to/script.py` (literal path, no `$VAR`)."
+)
+
+
 def _extract_heredoc_bodies(cmd: str) -> "list[str]":
     """Item 33 (F3, GH #71 follow-up): mirror of the shared engine's
     `_strip_heredoc_bodies` walk, except it COLLECTS each heredoc's body
@@ -1305,7 +1315,9 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         # Redact the basename out regardless of which sub-path produced it,
         # rather than trusting the branch alone to guarantee echo-safety.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
-        return indirection_deny_reason("approval-sentinel guard", safe_shape)
+        return indirection_deny_reason(
+            "approval-sentinel guard", safe_shape, _LITERAL_PATH_REMEDY
+        )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     safe_argv0 = ", ".join(
         "`%s`" % name for name in sorted(_ApprovalSentinelDetector._SAFE_ARGV0)

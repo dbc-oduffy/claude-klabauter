@@ -630,6 +630,23 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
             "coordinator_core/session/claims.py",
             "_clear_path_claim_if_dead._lookup",
         ),
+        # Review-stamp reverify: reports which frozen claims a live peer
+        # still holds as `foreign_claims` evidence. Fail-closed toward
+        # "held", read-only -- it never refuses or narrows a commit.
+        (
+            "coordinator_core/ops/dispatch_emit/reverify_delivery.py",
+            "_claim_held",
+        ),
+        (
+            "coordinator_core/ops/dispatch_emit/reverify_delivery.py",
+            "live_held_claims",
+        ),
+        # Explicit-pathspec contest read: returns {path: [peer_sid]} (or
+        # None when unestablishable) for the caller to report; fails open.
+        (
+            "coordinator_core/session/scope.py",
+            "contested_by_live_peers",
+        ),
         # Neighbour discovery: who else holds paths near mine. Fail-soft by
         # its own contract (a raising lookup degrades every path to
         # `unanswerable_paths`), and its product is an advisory list.
@@ -715,6 +732,15 @@ def _census_claim_index_lookup_call_sites(root: Path) -> frozenset:
 #: leg, and a further one needs the same deliberate edit.
 _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
     {
+        # REPORT-ONLY: terminal commit sets aside peer-claimed paths in the
+        # run's directories so they are not reported as this run's residue;
+        # a raising classify degrades to "none held". It never adds a path
+        # to a pathspec.
+        (
+            "classify_paths",
+            "coordinator_core/ops/dispatch_emit/terminal_commit.py",
+            "_peer_held",
+        ),
         (
             "classify_paths",
             "coordinator_core/ops/session/scope_report.py",

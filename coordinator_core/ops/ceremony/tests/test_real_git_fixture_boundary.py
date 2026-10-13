@@ -71,10 +71,14 @@ _TESTS_DIR = Path(__file__).resolve().parent
 #     resolves-one-pass-context.md) -- pins the index compare-and-swap
 #     REFUSAL against a simulated peer write to a real `.git/index`; the CAS
 #     comparand is git's own on-disk stat identity.
+# test_commit_authored_new_file_onto_ref.py: `onto_ref=` lands on a ref HEAD
+# does not name; the oracle is the real ref/HEAD/worktree state after the
+# in-process commit, which a mocked git cannot exhibit.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_admission.py",
     "test_commit_authored_content_edges.py",
     "test_commit_authored_new_file.py",
+    "test_commit_authored_new_file_onto_ref.py",
     "test_commit_cas_freshness.py",
     "test_commit_leaves_index_agreeing_with_head.py",
     "test_commit_path_legality.py",

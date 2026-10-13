@@ -151,6 +151,7 @@ EXPECTED: Dict[str, _Expected] = {
     "block-subagent-destructive-action": _Expected(("Bash", "PowerShell")),
     "block-subagent-plan-body-bash-write": _Expected(("Bash", "PowerShell")),
     "block-subagent-findings-reject": _Expected(("Bash", "PowerShell")),
+    "guard-post-executor-verification": _Expected(("Bash", "PowerShell")),
     "block-subagent-stash-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-sentinel-creation": _Expected(("Bash", "PowerShell")),

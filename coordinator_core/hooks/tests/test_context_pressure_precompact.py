@@ -11,6 +11,7 @@ Spec backlink: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-mis
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -183,6 +184,10 @@ def test_build_git_section_outside_repo(tmp_path):
 # ---------------------------------------------------------------------------
 # Compaction steering: run() returns the summarizer instructions.
 # ---------------------------------------------------------------------------
+
+
+def _git(repo, *args):
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
 
 
 def _session_repo(tmp_path, sid, *, notes=None, turns=0):

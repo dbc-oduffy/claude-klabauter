@@ -656,6 +656,21 @@ def fire_row(row: CorpusRow) -> GuardCapture:
 
 _DENY = dispatch.GuardBand.CONFINEMENT_DENY
 
+def _post_executor_setup(scratch_dir: Path, runs_so_far: int) -> Dict[str, str]:
+    """A repo whose session has dispatched an executor and run pytest `runs_so_far` times."""
+    import os
+
+    sid = os.environ["CLAUDE_CODE_SESSION_ID"]
+    ledger = scratch_dir / ".git" / "coordinator-sessions" / sid
+    ledger.mkdir(parents=True)
+    (ledger / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
+    if runs_so_far:
+        share = scratch_dir / ".coordinator-local" / "subagent-share" / sid
+        share.mkdir(parents=True)
+        (share / "post-executor-pytest-runs").write_text(str(runs_so_far))
+    return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
+
+
 def _approval_gate_on_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1314,6 +1329,15 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    CorpusRow(
+        "guard-post-executor-verification",
+        "guard-post-executor-verification-control",
+        "python -m pytest tests/test_x.py",
+        False,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: _post_executor_setup(scratch_dir, runs_so_far=0),
     ),
     CorpusRow(
         "block-subagent-grant-acquisition",

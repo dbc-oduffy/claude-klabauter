@@ -98,6 +98,22 @@ def test_invalid_agent_id_guard_breadcrumbs_and_stays_fail_closed(tmp_path, caps
     assert not (tmp_path / "coordinator-sessions").exists()
 
 
+@pytest.mark.parametrize("real_id", ["a660bc396b0f73115", "a59e8cbb2b3a44dd2"])
+def test_harness_shaped_17_char_agent_id_is_recorded(git_repo, real_id, capsys):
+    params = _payload(
+        session_id=VALID_SESSION_ID, agent_id=real_id, subagent_type="coordinator:executor"
+    )
+    asyncio.run(tda._handler(params, repo_root=str(git_repo)))
+
+    rows = (
+        (git_repo / ".git" / "coordinator-sessions" / VALID_SESSION_ID / "dispatched-agents.txt")
+        .read_text()
+        .splitlines()
+    )
+    assert [r.split("\t")[:3] for r in rows] == [[real_id, "unknown", "coordinator:executor"]]
+    assert "guard=" not in capsys.readouterr().err
+
+
 def test_empty_repo_root_guard_breadcrumbs_and_writes_nothing(capsys):
     params = _payload(session_id=VALID_SESSION_ID, agent_id=VALID_AGENT_ID)
     result = asyncio.run(tda._handler(params, repo_root=None))

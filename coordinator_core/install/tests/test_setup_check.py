@@ -48,6 +48,14 @@ def test_statusline_pass_and_fail(tmp_path):
     assert not setup_check.check_statusline(tmp_path).ok
 
 
+def test_statusline_fails_on_a_pinned_plugin_cache_copy(tmp_path):
+    stale = ('S="$(ls -d "$HOME"/.claude/plugins/cache/coordinator-claude/coordinator/*/bin/'
+             'statusline.py | sort -V | tail -1)"; python3 "$S"')
+    _write_settings(tmp_path, {"statusLine": {"type": "command", "command": stale}})
+    item = setup_check.check_statusline(tmp_path)
+    assert not item.ok and "live plugin" in item.detail
+
+
 def test_guards_flag_unresolvable_hook_command(tmp_path):
     root = tmp_path / "root"
     (root / "coordinator_core" / "bash_guards").mkdir(parents=True)

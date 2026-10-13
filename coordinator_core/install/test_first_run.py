@@ -37,7 +37,6 @@ def test_parse_args_no_flags_defaults_off():
     args = fr.parse_args([])
     assert args.dry_run is False
     assert args.confirm is False
-    assert args.no_git_lfs is False
     assert args.non_interactive is False
 
 
@@ -51,8 +50,9 @@ def test_parse_args_confirm_aliases(flag):
     assert fr.parse_args([flag]).confirm is True
 
 
-def test_parse_args_no_git_lfs():
-    assert fr.parse_args(["--no-git-lfs"]).no_git_lfs is True
+def test_parse_args_rejects_retired_no_git_lfs_flag():
+    with pytest.raises(fr._UsageError):
+        fr.parse_args(["--no-git-lfs"])
 
 
 def test_parse_args_non_interactive_flag():
@@ -67,8 +67,8 @@ def test_parse_args_non_interactive_env_var(monkeypatch):
 
 
 def test_parse_args_combined_flags():
-    args = fr.parse_args(["--no-git-lfs", "--confirm", "--non-interactive"])
-    assert args.no_git_lfs and args.confirm and args.non_interactive
+    args = fr.parse_args(["--confirm", "--non-interactive"])
+    assert args.confirm and args.non_interactive
 
 
 def test_parse_args_unknown_arg_raises():
@@ -132,13 +132,13 @@ def test_derive_repo_key_matches_oracle_shell_pipeline(repo_base):
 
 def _all_missing_env() -> fr._Env:
     env = fr._Env()
-    env.bash_ok = env.python_ok = env.node_ok = env.uv_ok = env.git_lfs_ok = env.brew_ok = False
+    env.bash_ok = env.python_ok = env.node_ok = env.uv_ok = env.brew_ok = False
     return env
 
 
 def _all_present_env() -> fr._Env:
     env = fr._Env()
-    env.bash_ok = env.python_ok = env.node_ok = env.uv_ok = env.git_lfs_ok = env.brew_ok = True
+    env.bash_ok = env.python_ok = env.node_ok = env.uv_ok = env.brew_ok = True
     return env
 
 
@@ -147,13 +147,13 @@ def test_build_plan_all_missing_lists_every_install_step(monkeypatch):
     macOS answer, so on any Linux runner it described the wrong behaviour and
     passed only by accident of where it ran."""
     monkeypatch.setattr(fr.sys, "platform", "darwin")
-    steps = fr.build_plan(_all_missing_env(), no_git_lfs=False)
+    steps = fr.build_plan(_all_missing_env())
     assert steps[0] == "install Homebrew (absent on this machine)"
     assert "brew install bash  (>=4.3 required; stock macOS is 3.2)" in steps
     assert "brew install python@3.12  (Python 3.11+ required)" in steps
     assert "brew install node" in steps
     assert "brew install uv" in steps
-    assert "brew install git-lfs  then  git lfs install  (global, idempotent)" in steps
+    assert not any("lfs" in s for s in steps)
     assert steps[-1] == "tell you to /reload-plugins"
     assert "seed machine-local registry  (post-toolchain, C1b, Step 3)" in steps
     # Step 4b (ensure-coordinator-venv) is retired outright from this chain
@@ -166,26 +166,10 @@ def test_build_plan_all_missing_lists_every_install_step(monkeypatch):
 
 
 def test_build_plan_all_present_only_lists_orchestration_tail():
-    steps = fr.build_plan(_all_present_env(), no_git_lfs=False)
+    steps = fr.build_plan(_all_present_env())
     assert not any("install Homebrew" in s for s in steps)
     assert not any("brew install" in s for s in steps)
     assert len(steps) == 3  # seed registry, run chain, reload-plugins
-
-
-def test_build_plan_no_git_lfs_flag_emits_skip_line_even_when_present():
-    """Review F1 regression (cited in the oracle's own comment L68-70):
-    --no-git-lfs must show the SKIPPED line even when git-lfs happens to
-    already be installed."""
-    steps = fr.build_plan(_all_present_env(), no_git_lfs=True)
-    assert "git-lfs SKIPPED (--no-git-lfs passed; LFS-backed clones will be pointer-only)" in steps
-    assert not any("brew install git-lfs" in s for s in steps)
-
-
-def test_build_plan_no_git_lfs_and_missing_prefers_skip_line():
-    env = _all_missing_env()
-    steps = fr.build_plan(env, no_git_lfs=True)
-    assert "git-lfs SKIPPED (--no-git-lfs passed; LFS-backed clones will be pointer-only)" in steps
-    assert not any("brew install git-lfs" in s for s in steps)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +191,7 @@ def _linux(monkeypatch, manager="apt-get", root=True):
 
 def test_build_plan_on_linux_never_offers_homebrew(monkeypatch):
     env = _linux(monkeypatch)
-    steps = fr.build_plan(env, no_git_lfs=False)
+    steps = fr.build_plan(env)
     assert not any("Homebrew" in s for s in steps)
     assert not any("brew install" in s for s in steps)
 
@@ -217,18 +201,18 @@ def test_build_plan_on_linux_names_the_command_this_box_will_run(monkeypatch):
     Printing `brew install ...` on a Debian box asked for consent to something
     that would never run."""
     env = _linux(monkeypatch)
-    steps = fr.build_plan(env, no_git_lfs=False)
+    steps = fr.build_plan(env)
     assert "apt-get install -y bash  (>=4.3 required)" in steps
     assert "apt-get install -y python3  (Python 3.11+ required)" in steps
     assert "apt-get install -y nodejs" in steps
-    assert "apt-get install -y git-lfs  then  git lfs install  (global, idempotent)" in steps
+    assert not any("lfs" in s for s in steps)
 
 
 def test_build_plan_on_linux_special_cases_uv(monkeypatch):
     """No mainstream distro packages `uv`, so it must not be handed to the
     package manager as a name that resolves to nothing."""
     env = _linux(monkeypatch)
-    steps = fr.build_plan(env, no_git_lfs=False)
+    steps = fr.build_plan(env)
     assert any(s.startswith("install uv (pip --user") for s in steps)
     assert not any("install -y uv" in s for s in steps)
 
@@ -261,7 +245,7 @@ def test_build_plan_on_linux_with_no_package_manager_says_so(monkeypatch):
     """A box with none of the supported managers must be told that, not handed
     a macOS command."""
     env = _linux(monkeypatch, manager=None)
-    steps = fr.build_plan(env, no_git_lfs=False)
+    steps = fr.build_plan(env)
     assert any("NO SUPPORTED PACKAGE MANAGER ON PATH" in s for s in steps)
 
 
@@ -570,7 +554,6 @@ def test_run_post_toolchain_success_runs_all_steps_in_order(tmp_path, monkeypatc
     monkeypatch.setitem(sys.modules, "coordinator_core.hooks.platform_localize", fake_platform_localize)
 
     args = fr._Args()
-    args.no_git_lfs = True  # skip real `git lfs install` mutation in CI
     rc = fr.run_post_toolchain(plugin_root, args)
     assert rc == fr.EXIT_OK
     fake_substrate.main.assert_called_once_with([])
@@ -626,7 +609,6 @@ def test_run_post_toolchain_preflight_calls_setup_chain_walker_in_process(tmp_pa
     monkeypatch.setitem(sys.modules, "coordinator_core.ops.setup_chain_walker", fake_walker)
 
     args = fr._Args()
-    args.no_git_lfs = True
     rc = fr.run_post_toolchain(plugin_root, args)
     assert rc == fr.EXIT_OK
     assert captured_env["argv"] == ["--preflight"]
@@ -666,7 +648,6 @@ def test_run_post_toolchain_preflight_failure_is_non_fatal(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, "coordinator_core.ops.setup_chain_walker", fake_walker)
 
     args = fr._Args()
-    args.no_git_lfs = True
     rc = fr.run_post_toolchain(plugin_root, args)
     assert rc == fr.EXIT_OK
 

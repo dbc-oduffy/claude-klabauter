@@ -73,6 +73,7 @@ CONFINEMENT_DENY_NAMES = [
     "guard-heavy-command-admission",
     "block-subagent-grant-acquisition",
     "block-subagent-findings-reject",
+    "guard-post-executor-verification",
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
     # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
     # PORT of block_subagent_grant_acquisition.py").

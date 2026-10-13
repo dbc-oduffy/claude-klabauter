@@ -335,7 +335,8 @@ def test_cloud_session_still_denies_a_non_claude_topic_branch(repo):
     assert _denied(_check(repo, "git push origin fix/foo", env=CLOUD))
 
 
-def test_claude_branch_denied_outside_cloud(repo):
+def test_claude_branch_denied_outside_cloud(repo, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     assert _denied(_check(repo, "git push origin claude/fix-abc123", env={}))
 
 

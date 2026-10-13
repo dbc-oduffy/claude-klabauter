@@ -534,6 +534,21 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "to release",
         "confirmed": True,
     },
+    "ops/fleet/_receiver_landing.py::apply_receiver_landing": {
+        "reason": "ineligible: mints/switches a branch ref via `cas_ref` and "
+        "the HEAD symref -- no commit is authored, no pathspec, no session id",
+        "confirmed": True,
+    },
+    "ops/research_close.py::_close_committed": {
+        "reason": "ineligible: threads no session id (params carry none), so "
+        "there is no id to release claims under",
+        "confirmed": True,
+    },
+    "warm/push_cadence.py::_push_foreign": {
+        "reason": "ineligible: pushes a branch and advances a remote-tracking "
+        "ref -- no commit, no worktree paths, no session id",
+        "confirmed": True,
+    },
     "hooks/session_start_cloud_focus.py::write_anchor_commit": {
         "reason": "ineligible: lands an empty anchor commit reusing HEAD's "
         "own tree at session start -- zero pathspec, and the session id is "

@@ -126,9 +126,12 @@ def _leg_write_bump_anchor(payload: dict) -> None:
     if not isinstance(session_id, str) or not session_id:
         return None
     cwd = payload.get("cwd")
-    _write_session_start_record(
-        session_id, launch_cwd=cwd if isinstance(cwd, str) and cwd else None
-    )
+    cwd = cwd if isinstance(cwd, str) and cwd else None
+    _write_session_start_record(session_id, launch_cwd=cwd)
+    if payload.get("source") == "resume":
+        from coordinator_core.session.scope import unarchive_on_resume
+
+        unarchive_on_resume(session_id, cwd)
     return None
 
 

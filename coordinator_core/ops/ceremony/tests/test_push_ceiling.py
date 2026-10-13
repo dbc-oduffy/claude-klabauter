@@ -27,6 +27,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     pc._GLOBAL_MEMO.clear()
+    real_read = pc._read
+    monkeypatch.setattr(
+        pc, "_read", lambda path: "" if str(path) == "/etc/gitconfig" else real_read(path)
+    )
     return home
 
 

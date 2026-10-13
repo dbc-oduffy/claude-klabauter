@@ -823,6 +823,50 @@ def attribution_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=capped)
 
 
+# `.coordinator-local/` is not here: the engine force-tracks dispatch briefs, the memo ledger
+# and review sidecars under it, so it is process residue (advisory), not never-commit.
+_NEVER_COMMIT_PREFIXES = ("scratch/",)
+_PROCESS_PREFIXES = ("archive/", "state/", "docs/plans/", ".coordinator-local/")
+_DOE_SENTINEL = ".coordinator-dev-repo"
+_RESIDUE_GATE_REMEDY = "unstage them; they are never committed."
+
+
+def _norm(path: str) -> str:
+    return path.replace("\\", "/")
+
+
+def residue_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+) -> GateOutcome:
+    """Refuse a commit carrying `scratch/` paths (never committed anywhere).
+
+    Zero spawns: prefix classification over `gate_paths`.
+    """
+    bad = [p for p in gate_paths if _norm(p).startswith(_NEVER_COMMIT_PREFIXES)]
+    if not bad:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+    diagnostics = [f"{p}: scratch in a commit" for p in bad[:5]]
+    if len(bad) > 5:
+        diagnostics.append(f"...and {len(bad) - 5} more")
+    diagnostics.append(_RESIDUE_GATE_REMEDY)
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
+
+
+def residue_advisory(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+) -> Optional[str]:
+    """One advisory line when process paths (`archive/`, `state/`, `docs/plans/`, `.coordinator-local/`) mix with product
+    paths on a non-DoE repo; `None` otherwise. Never a refusal."""
+    process = sum(1 for p in gate_paths if _norm(p).startswith(_PROCESS_PREFIXES))
+    if not process or process == len(gate_paths):
+        return None
+    if (Path(worktree_root) / _DOE_SENTINEL).exists():
+        return None
+    return f"{process} process path(s) (archive/state/docs/plans/.coordinator-local) mixed with product files; consider splitting."
+
+
 _REGISTRY_MAP_RELPATH = "coordinator_core/ops/_registry_map.py"
 _OP_SCOPES_RELPATH = "coordinator_core/op_scopes.py"
 _OP_MODULE_MAP_VAR = "OP_MODULE_MAP"

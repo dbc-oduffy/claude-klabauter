@@ -202,8 +202,11 @@ def test_socket_identity_and_ownership_checked_unlink(tmp_path: Path) -> None:
     mine = election.socket_identity(path)
     assert mine is not None
 
-    path.unlink()
-    path.write_bytes(b"successor")
+    # Replace while the original exists, so the filesystem cannot hand the
+    # successor the freed inode number (a bound socket pins it in production).
+    successor = tmp_path / "endpoint.sock.next"
+    successor.write_bytes(b"successor")
+    os.replace(successor, path)
     assert election.unlink_if_owned(path, mine) is False
     assert path.exists()
 

@@ -523,6 +523,7 @@ def test_engine_root_gate_memo_keys_per_interleaved_session_root(
     running the full gate."""
     engine_root._reset_gate_memo()
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
 
     calls = {"n": 0}
     current_session_root = {"root": "/repo/session-a"}

@@ -5360,3 +5360,50 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
     except OSError:
         return False
     return True
+
+
+def unarchive_on_resume(sid: str, cwd: Optional[str] = None) -> bool:
+    """Bring the newest ``.archive/<sid>-*`` dir back to ``<sessions_dir>/<sid>/``.
+
+    For a resumed session whose SessionEnd :func:`archive` moved its state away.
+    SessionStart writers may already have recreated the live dir, so archived
+    entries are merged in; a live entry always wins, nothing is overwritten.
+    Fail-open (returns ``False``, never raises). ``.agents/`` dirs dropped at
+    archive time are not restored.
+    """
+    try:
+        if not sid:
+            return False
+        base = core.sessions_dir(cwd)
+        if not base:
+            return False
+        live = os.path.join(base, sid)
+        root = os.path.join(base, ".archive")
+        prefix = f"{sid}-"
+        # Date suffix is YYYY-MM-DD (or "unknown"), so a lexical max is newest;
+        # the 10-char/"unknown" tail check keeps sid "a" from claiming "a-b-<date>".
+        cands = [
+            n
+            for n in os.listdir(root)
+            if n.startswith(prefix)
+            and (re.fullmatch(r"\d{4}-\d{2}-\d{2}", n[len(prefix):]) or n[len(prefix):] == "unknown")
+        ]
+        if not cands:
+            return False
+        src = os.path.join(root, max(cands))
+        if not os.path.lexists(live):
+            os.rename(src, live)
+            return True
+        if not os.path.isdir(live) or os.path.islink(live):
+            return False
+        for name in os.listdir(src):
+            dst = os.path.join(live, name)
+            if not os.path.lexists(dst):
+                os.rename(os.path.join(src, name), dst)
+        try:
+            os.rmdir(src)
+        except OSError:
+            pass  # a live-wins leftover stays archived
+        return True
+    except Exception:
+        return False

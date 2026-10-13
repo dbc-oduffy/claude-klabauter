@@ -5,11 +5,11 @@ bootstrap entrypoint `coordinator/scripts/first-run.sh` (DoE c3322493,
 
 Purpose: lands a freshly git-cloned coordinator-claude checkout on a new
 machine. Detects/installs the toolchain (Homebrew, bash>=4.3, python@3.12,
-node, uv, git-lfs) via `brew`, seeds the machine-local repo registry, then
+node, uv) via `brew`, seeds the machine-local repo registry, then
 runs the post-toolchain orchestration chain: install-substrate (in-process
 import, template-variant #1) -> platform-localize (in-process import,
 native as of the 2026-07-21 pure-Python-shop cutover -- see
-run_post_toolchain's Step 4c) -> git lfs install. Step 4b
+run_post_toolchain's Step 4c). Step 4b
 (ensure-coordinator-venv) is RETIRED (docs/plans/2026-08-18-retire-
 coordinator-venv.md chunk C4): `coordinator_core.install.ensure_venv
 .ensure_coordinator_venv` is reachable only via the explicit
@@ -127,7 +127,6 @@ def _run(cmd: List[str], timeout: int = _SHORT_TIMEOUT, **kwargs) -> subprocess.
 class _Args:
     dry_run: bool = False
     confirm: bool = False
-    no_git_lfs: bool = False
     post_toolchain: bool = False
     non_interactive: bool = False
 
@@ -148,8 +147,6 @@ def parse_args(argv: List[str]) -> _Args:
             args.dry_run = True
         elif tok in ("--confirm", "--yes"):
             args.confirm = True
-        elif tok == "--no-git-lfs":
-            args.no_git_lfs = True
         elif tok == "--post-toolchain":
             args.post_toolchain = True
         elif tok == "--non-interactive":
@@ -213,7 +210,6 @@ _LINUX_PKG_NAMES: dict[str, dict[str, str]] = {
         "pacman": "nodejs",
         "apk": "nodejs",
     },
-    "git-lfs": {"apk": "git-lfs"},
 }
 
 
@@ -319,7 +315,6 @@ class _Env:
         self.python_ok = False
         self.node_ok = False
         self.uv_ok = False
-        self.git_lfs_ok = False
         self.brew_ok = False
         self.pkg_manager: Optional[str] = None
 
@@ -363,12 +358,6 @@ def detect_environment() -> _Env:
 
     env.uv_ok = shutil.which("uv") is not None
 
-    try:
-        proc = _run(["git", "lfs", "version"], capture_output=True, text=True)
-        env.git_lfs_ok = proc.returncode == 0
-    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        env.git_lfs_ok = False
-
     env.brew_ok = shutil.which("brew") is not None
     if _host_platform() == "linux":
         env.pkg_manager = _detect_linux_pkg_manager()
@@ -392,7 +381,7 @@ def _plan_install_line(env: _Env, formula: str, suffix: str = "") -> str:
     return f"install {formula} — NO SUPPORTED PACKAGE MANAGER ON PATH{suffix}"
 
 
-def build_plan(env: _Env, no_git_lfs: bool) -> List[str]:
+def build_plan(env: _Env) -> List[str]:
     steps: List[str] = []
     if _host_platform() == "darwin" and not env.brew_ok:
         steps.append("install Homebrew (absent on this machine)")
@@ -409,10 +398,6 @@ def build_plan(env: _Env, no_git_lfs: bool) -> List[str]:
         steps.append(_plan_install_line(env, "node"))
     if not env.uv_ok:
         steps.append(_plan_install_line(env, "uv"))
-    if not no_git_lfs and not env.git_lfs_ok:
-        steps.append(_plan_install_line(env, "git-lfs", "  then  git lfs install  (global, idempotent)"))
-    elif no_git_lfs:
-        steps.append("git-lfs SKIPPED (--no-git-lfs passed; LFS-backed clones will be pointer-only)")
     steps.append("seed machine-local registry  (post-toolchain, C1b, Step 3)")
     steps.append("run install-substrate -> platform-localize  (post-toolchain, C1b, Step 4)")
     steps.append("tell you to /reload-plugins")
@@ -434,7 +419,7 @@ site and `WRITE_SURFACE`'s shaped-clause template read one spelling."""
 _REPOS_REGISTRY_CLAUSE_INDEX = 0
 """Index of `WRITE_SURFACE`'s sole SHAPED clause (the `repos.<derived-key>`
 machine-local registry seed) — the only clause `_seed_machine_local_registry`
-journals against; the other two clauses are `StaticClause`s and need no
+journals against; the other clause is a `StaticClause` and needs no
 resolution."""
 
 
@@ -443,16 +428,8 @@ def _record_resolution(clause_index: int, entries) -> None:
 
     resolution_journal.record_resolution("first-run", clause_index, entries)
 
-_GIT_LFS_GLOBAL_CONFIG_REASON = (
-    "`git lfs install` (global, idempotent — Step 5) writes the LFS smudge/"
-    "clean/process filter into the operator's global git config; the exact "
-    "key set (`filter.lfs.*`) is determined by the installed git-lfs "
-    "version, not enumerable from this repo's own source, so this clause "
-    "states the mechanism rather than an assumed key list."
-)
-
 _BREW_INSTALL_REASON = (
-    "`brew install <formula>` (bash/python@3.12/node/uv/git-lfs, via "
+    "`brew install <formula>` (bash/python@3.12/node/uv, via "
     "`_brew_install`) invokes Homebrew, a third-party installer whose "
     "on-disk footprint (Cellar paths, symlinks, formula-specific post-"
     "install steps) is unbounded and not ours to enumerate — none of the "
@@ -844,18 +821,6 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
         return EXIT_FAIL
     print("[post-toolchain] platform-localize: done.")
 
-    if args.no_git_lfs:
-        print("[post-toolchain] Skipping git lfs install (--no-git-lfs). LFS-backed clones will be pointer-only.")
-    else:
-        print("[post-toolchain] Running: git lfs install (global, idempotent)...")
-        try:
-            proc = _run(["git", "lfs", "install"], timeout=30)
-            if proc.returncode != 0:
-                print("[post-toolchain] WARNING: git lfs install failed (is git-lfs installed?). Continuing.", file=sys.stderr)
-        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-            print("[post-toolchain] WARNING: git lfs install failed (is git-lfs installed?). Continuing.", file=sys.stderr)
-        print("[post-toolchain] git lfs install: done.")
-
     print()
     print("================================================================")
     print("  first-run complete.")
@@ -943,7 +908,7 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
     except _UsageError as exc:
         print(f"first-run: unknown argument: {exc.unknown_arg}", file=sys.stderr)
         print(
-            "Usage: first-run [--plan|--dry-run] [--confirm|--yes] [--no-git-lfs] [--non-interactive]",
+            "Usage: first-run [--plan|--dry-run] [--confirm|--yes] [--non-interactive]",
             file=sys.stderr,
         )
         return EXIT_FAIL
@@ -964,7 +929,7 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         plugin_root = Path.cwd()
 
     env = detect_environment()
-    steps = build_plan(env, args.no_git_lfs)
+    steps = build_plan(env)
 
     if args.dry_run:
         print("\nfirst-run.sh — dry run (no changes will be made)\n")
@@ -1028,14 +993,6 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         if rc != EXIT_OK:
             return rc
 
-    if args.no_git_lfs:
-        print("[first-run] Skipping git-lfs (--no-git-lfs). LFS-backed clones will be pointer-only.")
-    elif not env.git_lfs_ok:
-        rc = _pkg_install("git-lfs", "git-lfs")
-        if rc != EXIT_OK:
-            return rc
-        print("[first-run] git-lfs package installed. `git lfs install` runs in post-toolchain Step 5.")
-
     return run_post_toolchain(plugin_root, args)
 
 
@@ -1050,15 +1007,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 key=f"{_ML_REPOS_KEY_PREFIX}<derived-key>",
             ),
         ),
-        StaticClause(
-            entries=(
-                WriteSurfaceEntry(
-                    kind="git-config-key",
-                    reason=_GIT_LFS_GLOBAL_CONFIG_REASON,
-                ),
-            ),
-        ),
-        # Clause 3 — `_brew_install` (bash/python@3.12/node/uv/git-lfs
+        # Clause 2 — `_brew_install` (bash/python@3.12/node/uv
         # formulae, invoked from `_main_body` when `detect_environment`
         # finds a tool absent). No kind in the eight-kind vocabulary
         # honestly names an unbounded third-party-installer footprint (see

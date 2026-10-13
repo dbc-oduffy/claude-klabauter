@@ -3421,6 +3421,36 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
         print(line)
 
 
+def repair_status_lines(claude_klabauter_root_resolved: Path) -> None:
+    """Re-point an already-wired coordinator status line at the live plugin on every re-run.
+
+    Wiring is install-chain step 5's decision (`coordinator_install.step_status_lines`); a re-run
+    of this script alone never reached it, so a box keeping an older install's plugin-cache glob
+    kept rendering that stale copy's line. Repair only -- a box with no coordinator status line
+    (declined, or the operator's own command) is left untouched. Runs step 5's own step so the
+    two can never disagree on the wanted shape. ADVISORY like its siblings.
+    """
+    script = claude_klabauter_root_resolved / "coordinator" / "lib" / "install" / "coordinator_install.py"
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_setup_coordinator_install", script)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module  # its dataclasses resolve their module by name
+        spec.loader.exec_module(module)
+        settings = module.claude_dir() / "settings.json"
+        doc = module._read_json_strict(settings) or {}
+        current = doc.get("statusLine")
+        command = current.get("command") if isinstance(current, dict) else None
+        if not isinstance(command, str) or not module._is_coordinator_status_line(command):
+            return
+        result = module.step_status_lines(module.Ctx(answers={"status_lines": "wire"}))
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [statusline] repair skipped ({type(exc).__name__}: {exc})")
+        return
+    if result.status == module.RAN:
+        print(f"OK   [statusline] {result.detail} -> live plugin (next session)")
+
+
 def apply_settings_manifest_env(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> bool:
     """Write the settings manifest's all-machines env values into
     `settings.json` via `<plugin-root>/bin/check-settings-env.py --apply`.
@@ -3486,96 +3516,6 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
         print(f"PASS [retention] cleanupPeriodDays=7 set in {settings_path}")
     except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
         print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
-
-
-def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
-    """Best-effort install-chain step: lands the coordinator LFS pre-push gate
-    at `.git/hooks/pre-push`, so the ~267ms / ~20-spawn stock git-lfs shim
-    stops firing on every push of a repo that tracks zero LFS files.
-
-    This step is the whole reason the gate survives a re-clone. `.git/hooks/`
-    is untracked per-clone state, so without an installer the optimisation
-    exists only on whichever box someone hand-installed it. Spec backlink:
-    chunk C8 of `docs/plans/2026-08-25-push-re-homes-onto-the-cadence-
-    surfaces.md`, discharging AC7's "the disposition survives re-clone"
-    clause; decision record DR-223's `pre-push` row.
-
-    ADVISORY, non-fatal, mirroring `run_health_probe` — a setup run must
-    never abort over a push-path optimisation.
-
-    In-process, not a subprocess: the installer is a plain import off the
-    engine this script has already verified importable, so this step costs no
-    interpreter start (§ The brightline — an interpreter start ahead of
-    warmth is break-class).
-
-    The hooks directory is resolved via
-    `git rev-parse --git-path hooks` (one subprocess, cold install path
-    only), not hardcoded as `.git/hooks`, so a repo with `core.hooksPath`
-    set gets the gate written where git actually reads it. Falls back to
-    `repo_root/.git/hooks` on any resolution failure, advised on stderr.
-    """
-    print()
-    print("--- Install: LFS pre-push gate ---")
-
-    try:
-        from coordinator_core.ops.install_lfs_pre_push_hook import install as _install_gate
-    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
-        print(f"[ADVISORY] LFS pre-push gate installer not importable ({exc}) — skipping.", file=sys.stderr)
-        return
-
-    if not (repo_root / ".git").is_dir():
-        print("[ADVISORY] no .git directory at the repo root — skipping LFS pre-push gate.")
-        return
-
-    # Resolve the ACTUAL hooks directory via
-    # `git rev-parse --git-path hooks` rather than hardcoding `.git/hooks`.
-    # A repo with `core.hooksPath` set writes the gate somewhere git never
-    # reads, so the installer reports success while the vendor shim keeps
-    # running on the real push path — a silent no-op reported as done. One
-    # subprocess, cold install path only, never near the push hot path.
-    hooks_dir = repo_root / ".git" / "hooks"
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--git-path", "hooks"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=10.0,
-            **_NO_CONSOLE,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            resolved = Path(proc.stdout.strip())
-            if not resolved.is_absolute():
-                resolved = repo_root / resolved
-            hooks_dir = resolved.resolve()
-        else:
-            print(
-                "[ADVISORY] git rev-parse --git-path hooks failed — falling back to "
-                f"{hooks_dir} (a core.hooksPath override, if any, would be missed).",
-                file=sys.stderr,
-            )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(
-            f"[ADVISORY] could not resolve hooks directory via git ({exc}) — falling back to "
-            f"{hooks_dir} (a core.hooksPath override, if any, would be missed).",
-            file=sys.stderr,
-        )
-
-    try:
-        code, message = _install_gate(hooks_dir)
-    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
-        print(f"[ADVISORY] LFS pre-push gate install raised ({exc}) — push path unchanged.", file=sys.stderr)
-        return
-
-    if not args.agent_mode and message:
-        print(message)
-    if code != 0:
-        print(
-            "[ADVISORY] LFS pre-push gate install reported a non-zero exit — the stock "
-            "git-lfs shim may still be on the push path.",
-            file=sys.stderr,
-        )
-        # Non-fatal: setup must still complete even if this step failed.
 
 
 def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -4761,10 +4701,10 @@ def main(argv: list[str]) -> int:
         forwarders_failed = install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
+        repair_status_lines(claude_klabauter_root_resolved)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)
-        install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)

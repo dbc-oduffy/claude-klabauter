@@ -138,6 +138,7 @@ from coordinator_core.bash_guards import block_illegal_filename
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist
 from coordinator_core.bash_guards import block_subagent_commit
+from coordinator_core.bash_guards import guard_post_executor_verification
 from coordinator_core.bash_guards import block_subagent_destructive_action
 from coordinator_core.bash_guards import block_subagent_plan_body_bash_write
 from coordinator_core.bash_guards import block_subagent_stash_creation
@@ -557,6 +558,17 @@ def _trigger_block_noncanonical_branch_creation() -> Optional[Dict[str, Any]]:
         block_noncanonical_branch_creation._is_hazard_repo = orig_hazard
 
 
+def _trigger_guard_post_executor_verification() -> Optional[Dict[str, Any]]:
+    g = guard_post_executor_verification
+    orig_gate, orig_bump = g._gate, g._bump_counter
+    g._gate = lambda payload, subject: ("altlive-probe", "/altlive", "deny")
+    g._bump_counter = lambda repo_root, session_id: 1
+    try:
+        return g.check(_payload("python3 -m pytest tests", agent_id=None))
+    finally:
+        g._gate, g._bump_counter = orig_gate, orig_bump
+
+
 def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
     """``check_blanket_git_add`` resolves its hazard-repo git root from
     ``os.getcwd()`` (or a ``-C <dir>`` embedded in ``cmd`` itself, see
@@ -852,6 +864,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         )
     ),
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
+    "guard_post_executor_verification": _trigger_guard_post_executor_verification,
 }
 
 

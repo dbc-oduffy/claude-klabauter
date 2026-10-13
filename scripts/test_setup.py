@@ -1058,7 +1058,7 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
     for name in (
         "install_bin_forwarders", "install_warm_door",
         "register_live_plugin_root",
-        "install_lfs_pre_push_gate", "install_percolate_identity",
+        "install_percolate_identity",
         "install_machine_identity", "install_host_sampler_task",
         "install_verify_settings_home",
     ):
@@ -3386,71 +3386,6 @@ def test_install_warm_door_claims_the_bare_name(
         "PowerShell would resolve the bare name to it and never reach the door"
     )
     assert "PASS [door]" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# install_lfs_pre_push_gate — hooks-dir resolution
-# ---------------------------------------------------------------------------
-
-
-def test_install_lfs_pre_push_gate_honours_a_non_default_hooks_path(
-    setup_mod, tmp_path, monkeypatch
-):
-    """A repo with `core.hooksPath` set must have
-    the gate written where git actually reads it, not hardcoded
-    `.git/hooks`. Simulates `git rev-parse --git-path hooks` resolving to a
-    non-default directory and asserts the gate lands there, not at the
-    default `.git/hooks/pre-push`."""
-    repo_root = tmp_path / "repo"
-    (repo_root / ".git").mkdir(parents=True)
-    custom_hooks = tmp_path / "custom-hooks-dir"
-    custom_hooks.mkdir()
-
-    real_run = setup_mod.subprocess.run
-
-    def _fake_run(argv, **kwargs):
-        if argv[:3] == ["git", "rev-parse", "--git-path"]:
-            return setup_mod.subprocess.CompletedProcess(
-                argv, 0, stdout=str(custom_hooks) + "\n", stderr=""
-            )
-        return real_run(argv, **kwargs)
-
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
-
-    args = setup_mod.Args()
-    setup_mod.install_lfs_pre_push_gate(repo_root, args)
-
-    installed = custom_hooks / "pre-push"
-    default_installed = repo_root / ".git" / "hooks" / "pre-push"
-    assert installed.is_file(), "the gate must land at the git-resolved hooks directory"
-    assert not default_installed.exists(), (
-        "the gate must NOT fall back to .git/hooks when core.hooksPath resolves elsewhere"
-    )
-
-
-def test_install_lfs_pre_push_gate_falls_back_on_git_resolution_failure(
-    setup_mod, tmp_path, monkeypatch, capsys
-):
-    """A failed `git rev-parse --git-path hooks` must fall back to
-    `repo_root/.git/hooks` and say so on stderr, never silently no-op."""
-    repo_root = tmp_path / "repo"
-    (repo_root / ".git").mkdir(parents=True)
-
-    real_run = setup_mod.subprocess.run
-
-    def _fake_run(argv, **kwargs):
-        if argv[:3] == ["git", "rev-parse", "--git-path"]:
-            return setup_mod.subprocess.CompletedProcess(argv, 1, stdout="", stderr="not a git repo")
-        return real_run(argv, **kwargs)
-
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
-
-    args = setup_mod.Args()
-    setup_mod.install_lfs_pre_push_gate(repo_root, args)
-
-    installed = repo_root / ".git" / "hooks" / "pre-push"
-    assert installed.is_file()
-    assert "falling back" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

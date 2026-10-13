@@ -227,6 +227,7 @@ _PURE_CALL_TARGETS = frozenset(
         "re.compile",
         "frozenset",
         "set",
+        "tuple",
         "contextvars.ContextVar",
         "str",
         "textwrap.dedent",

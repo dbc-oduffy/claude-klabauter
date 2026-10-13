@@ -6313,10 +6313,6 @@
       "TREES"
     ],
     [
-      "coordinator_core/tests/test_lfs_pre_push_hook_is_installable.py",
-      "_STOCK_LFS_SHIM"
-    ],
-    [
       "coordinator_core/tests/test_lifecycle_constants.py",
       "_HANDOFF_NEW_VOCAB_TOKENS"
     ],

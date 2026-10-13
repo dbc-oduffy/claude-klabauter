@@ -780,9 +780,17 @@ def test_em_audience_remote_true_names_the_venue_not_the_doc(monkeypatch):
     assert guard._SENTINEL_NAME not in reason
 
 
+def _clear_secondary_cloud_markers(monkeypatch):
+    """`harness_rung` also reads these, and a cloud host running the suite sets them."""
+    for name in ("CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
+                 "CLAUDE_CODE_ENTRYPOINT"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_em_audience_remote_unset_keeps_todays_doc_pointer(monkeypatch):
     monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: True)
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    _clear_secondary_cloud_markers(monkeypatch)
     reason = guard._deny_reason("CLAUDE.md", payload={})
     assert "guard-override-keys.md" in reason
     assert "cloud session" not in reason
@@ -815,6 +823,7 @@ def test_subagent_audience_unchanged_regardless_of_remote_env(monkeypatch):
 def test_in_cloud_session_reads_the_same_env_var_as_repin_cloud_engine_root(monkeypatch):
     from coordinator_core.hooks import repin_cloud_engine_root as venue
 
+    _clear_secondary_cloud_markers(monkeypatch)
     monkeypatch.setenv(venue.REMOTE_ENV_VAR, venue.REMOTE_ENV_TRUE)
     assert guard._in_cloud_session() is True
     monkeypatch.setenv(venue.REMOTE_ENV_VAR, "false")

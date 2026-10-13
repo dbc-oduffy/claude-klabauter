@@ -290,7 +290,7 @@ RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # 2026-09-29) is a new corpus population member, not a trimmable
     # regression -- raw raised from 165 to ceil5(172.46)=175.
     "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
-    "platform-conditioned-deny": 585 + JITTER_ALLOWANCE_BYTES,
+    "platform-conditioned-deny": 560 + JITTER_ALLOWANCE_BYTES,
     "directory:write_guards": 145 + JITTER_ALLOWANCE_BYTES,
     # Legitimate bump (this dispatch): five new `hooks/*` corpus rows
     # (guard_config_change_hookstack_selfdefence, nudge_cross_repo_cwd_

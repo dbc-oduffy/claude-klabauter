@@ -266,3 +266,34 @@ def test_i_empty_candidate_path_spawns_no_git_grep(tmp_path):
         )
     assert result["candidates"] == []
     spy.assert_not_called()
+
+
+def test_j_superseded_record_is_a_candidate_whatever_its_successor_says(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _seed_dr(repo, "DR-110-narrower.md", 'status: accepted\nsupersedes: "DR-111"\n')
+    _seed_dr(repo, "DR-111-old.md", "status: superseded\n")
+    _seed_dr(repo, "DR-114-orphan.md", "status: superseded\n")
+    _seed_dr(repo, "DR-119-ceiling.md", "status: accepted\n")
+    common_dir = _common_dir(repo)
+
+    preview = _handler({"dry_run": True, "cap": 10}, repo_root=common_dir)
+    ids = {c["id"] for c in preview["candidates"]}
+    assert ids == {"docs/decisions/DR-111-old.md", "docs/decisions/DR-114-orphan.md"}
+
+
+def test_k_mode_defaults_and_act_names_index_followup(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _seed_dr(repo, "DR-120-new.md", "status: accepted\n")
+    _seed_dr(repo, "DR-121-old.md", 'status: superseded\nsuperseded_by: "DR-120"\n')
+    _seed_dr(repo, "DR-122-ceiling.md", "status: accepted\n")
+    common_dir = _common_dir(repo)
+
+    result = _handler(
+        {"dry_run": False, "cap": 10, "candidate_ids": ["docs/decisions/DR-121-old.md"]},
+        repo_root=common_dir,
+    )
+    assert result["exit_code"] == 0
+    assert [a["id"] for a in result["acted"]] == ["docs/decisions/DR-121-old.md"]
+    assert "index" in result["followup"]

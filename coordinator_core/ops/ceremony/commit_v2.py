@@ -90,6 +90,8 @@ from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_gates import (
     carry_gate,
+    residue_advisory,
+    residue_gate,
     claude_md_budget_gate,
     declared_deletion_gate,
     machine_path_leak_gate,
@@ -521,6 +523,7 @@ def _pre_commit_gates(
     # somebody needs to know which gate refused.
     for name, gate in (
         ("carry_gate", carry_gate),
+        ("residue_gate", residue_gate),
         ("op_scope_coverage_gate", partial(op_scope_coverage_gate, read_source=read_source)),
         ("leak_gate", leak_gate),
         ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
@@ -1006,6 +1009,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
+    residue_note = residue_advisory(worktree_root, list(raw_paths) + list(raw_removed))
+    if residue_note is not None:
+        warnings.append(residue_note)
     if outcome.sign_warning is not None:
         # First-class: the only warning meaning "this commit is not what the branch's protection expects."
         warnings.append(outcome.sign_warning)

@@ -60,7 +60,7 @@ Advisory hook ops ported from ~/.claude advisory/nudge command hooks (pcore-04, 
                                        calibration marker is a .git/coordinator-sessions/
                                        sentinel write — see authz/classification.py
     suggest_sonnet_research          — advisory; subagent suppression via agent_id
-    nudge_em_code_dispatch           — advisory; subagent + session suppression
+    nudge_em_code_dispatch           — denies EM code writes; subagent + session suppression
     nudge_unauthorized_handoff       — advisory; PostToolUse translation; env-hatch re-plumb
     postuse_advisory_dispatch        — advisory; context-pressure + runtime-tripwire
     nudge_named_agent_report_delivery — advisory; PreToolUse Agent; warns that a NAMED

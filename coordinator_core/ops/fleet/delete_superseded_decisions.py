@@ -30,15 +30,19 @@ or refuse-to-delete only.
 Successor: the victim's `superseded_by:` field
 (`_common.parse_frontmatter_field`), or else any record whose `supersedes:`
 names the victim's id, collected in the same scan pass. May be absent.
-The module text names no deletable record id: a live-surface citation here
+
+There is no partial supersession: a decision changed in part is edited in
+place, so every `status: superseded` record is a deletion candidate. A stray
+one whose successor only narrows it is fixed by folding the surviving ruling
+into the successor; git history keeps the original either way. The module text names no deletable record id: a live-surface citation here
 would strand the very record this op exists to delete.
 
 Citation-stranding refusal — ONE batched search, never a per-record spawn:
 a single `git grep -n -w -E 'DR-(<id1>|<id2>|…)' -- <live pathspecs>` spawn
 over every candidate at once, parsed in-process, and skipped entirely when
-the candidate set is empty. The live pathspecs
-(`_LIVE_SURFACE_PATHSPECS`) are `coordinator_core`, `coordinator`, `scripts`,
-`docs/decisions`, `docs/reference`, `docs/wiki`, `CLAUDE.md`. Everything
+the candidate set is empty. The scan lives in
+`_decision_citations.live_citations`; its live pathspecs are `coordinator_core`,
+`coordinator`, `scripts`, `docs/decisions`, `docs/reference`, `docs/wiki`, `CLAUDE.md`. Everything
 else — `archive/`, `state/`, `docs/plans/`, `docs/research/`,
 `docs/problems/`, `tasks/`, generated indexes — counts as history and is not
 searched, matching the decision-renumbering precedent: "Citations … in
@@ -48,9 +52,7 @@ file, when it is in X's successor's file (that file IS the live pointer), or
 when the same line also names X's successor id (known false-negative: a line
 asserting the victim OVER its successor is still exempt by this heuristic —
 accepted, not hardened against, per C2's own review note). Any other hit
-refuses X, and the refusal names every `path:line`. A victim with no
-successor can only be deleted once nothing on a live surface names it at
-all.
+refuses X, and the refusal names every `path:line`.
 
 Max-id floor: `dr_allocator.allocate_dr_number` returns
 `max(on-disk id) + 1`. Deleting the highest-numbered record in the namespace
@@ -66,11 +68,20 @@ Message register: the act commit is subject-only
 recovery pointer ("Removed from the working tree; stays in git history:
 git log --diff-filter=D -- docs/decisions/<file>") is carried once per
 deleted entry in the result payload's `acted[]` item and once in the
-`record_sweep_outcome` receipt's `detail`, never in the commit body.
+`record_sweep_outcome` receipt's `detail`, never in the commit body. An act
+that deletes anything also returns `followup`: a repo-local decision index is
+the repo's own surface, which this op neither knows nor runs, so it names the
+regeneration rather than skipping it silently.
+
+`mode` defaults to `already-terminal`, the only value `validate_params`
+accepts; an explicit unknown value still fails closed.
 
 No occasion is wired — reachable on demand only
 (`python -m coordinator_core.invoke fleet.delete_superseded_decisions '<params>'`),
 mirroring `fleet.archive_terminal_sizings` before its close-verb caller.
+A FULL supersession at authoring time deletes through
+`coordinator-doc-new --supersedes`, which composes the citation scan from
+`_decision_citations`; this op sweeps records already marked `status: superseded`.
 
 Spec: docs/plans/2026-09-11-delete-superseded-drs-and-put-the-prune-rule-to-the-pm.md (C1)
 Spec backlinks:
@@ -119,7 +130,7 @@ from coordinator_core.ops.fleet._common import (
     validate_params,
 )
 from coordinator_core.ops.fleet._sweep_receipt import record_sweep_outcome
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.ops.fleet._decision_citations import CitationTarget, live_citations
 
 _LOG = logging.getLogger(__name__)
 _LOG.addHandler(logging.NullHandler())
@@ -128,21 +139,13 @@ _OP_KEY = "fleet.delete_superseded_decisions"
 
 _FAMILY = "decision-record"
 
-_LIVE_SURFACE_PATHSPECS: Tuple[str, ...] = (
-    "coordinator_core",
-    "coordinator",
-    "scripts",
-    "docs/decisions",
-    "docs/reference",
-    "docs/wiki",
-    "CLAUDE.md",
-)
-
 _REASON_MAX_ID_FLOOR = "max-id-floor"
 
-_DR_ID_RE = re.compile(r"^DR-(\d+)-")
+_FOLLOWUP_INDEX = (
+    "Regenerate this repo's decision index, if it keeps one, in the same change."
+)
 
-_DR_ID_ANY_RE = re.compile(r"DR-(\d+)")
+_DR_ID_RE = re.compile(r"^DR-(\d+)-")
 
 _RECOVERY_SENTENCE_TEMPLATE = (
     "Removed from the working tree; stays in git history: "
@@ -162,7 +165,7 @@ def _dr_number(filename: str) -> Optional[int]:
 
 
 class _Candidate:
-    __slots__ = ("path", "rel", "dr_id", "number", "successor")
+    __slots__ = ("path", "rel", "dr_id", "successor")
 
     def __init__(self, path: Path, rel: str, dr_id: Optional[int], successor: Optional[str]):
         self.path = path
@@ -211,85 +214,18 @@ def _scan_superseded(worktree_root: Path) -> Tuple[List[_Candidate], int]:
     return candidates, max_id
 
 
-def _successor_filename(successor: Optional[str]) -> Optional[str]:
-    if not successor:
-        return None
-    return successor
-
-
-async def _live_citations(
+def _live_citations(
     worktree_root: Path,
     candidates: List[_Candidate],
 ) -> Dict[str, List[str]]:
-    if not candidates:
-        return {}
-
-    import asyncio
-
-    ids = []
-    for c in candidates:
-        if c.dr_id is not None:
-            ids.append(str(c.dr_id))
-    if not ids:
-        return {}
-
-    pattern = "DR-(" + "|".join(ids) + ")"
-    argv = [
-        "git", "grep", "-n", "-w", "-E", pattern, "--",
-    ] + list(_LIVE_SURFACE_PATHSPECS)
-
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=str(worktree_root),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **no_console_creationflags(),
-    )
-    out, stderr = await proc.communicate()
-    if proc.returncode not in (0, 1):
-        _LOG.warning(
-            "fleet.delete_superseded_decisions: git grep failed (rc=%s): %s",
-            proc.returncode, stderr.decode(errors="replace").strip(),
-        )
-        return {}
-
-    id_to_candidate = {str(c.dr_id): c for c in candidates if c.dr_id is not None}
-    hits: Dict[str, List[str]] = {}
-    id_hit_re = re.compile(r"\bDR-(\d+)\b")
-
-    for line in out.decode(errors="replace").splitlines():
-        if not line:
-            continue
-        parts = line.split(":", 2)
-        if len(parts) < 3:
-            continue
-        hit_path, hit_lineno, content = parts[0], parts[1], parts[2]
-
-        matched_ids = set(id_hit_re.findall(content))
-        for mid in matched_ids:
-            candidate = id_to_candidate.get(mid)
-            if candidate is None:
-                continue
-            if hit_path == candidate.rel or Path(hit_path).name == candidate.path.name:
-                continue
-            successor = _successor_filename(candidate.successor)
-            succ_num: Optional[int] = None
-            if successor:
-                m = _DR_ID_ANY_RE.search(successor)
-                if m:
-                    succ_num = int(m.group(1))
-            if succ_num is not None and _dr_number(Path(hit_path).name) == succ_num:
-                continue
-            if succ_num is not None and f"DR-{succ_num}" in content:
-                continue
-            hits.setdefault(candidate.rel, []).append(f"{hit_path}:{hit_lineno}")
-
-    return hits
+    targets = [
+        CitationTarget(c.rel, c.dr_id, c.successor)
+        for c in candidates if c.dr_id is not None
+    ]
+    return live_citations(worktree_root, targets)
 
 
 def _handle_preview(worktree_root: Path, cap: int) -> Tuple[dict, List[dict]]:
-    import asyncio
-
     candidates, max_id = _scan_superseded(worktree_root)
     scan_skipped: List[dict] = []
 
@@ -302,7 +238,7 @@ def _handle_preview(worktree_root: Path, cap: int) -> Tuple[dict, List[dict]]:
 
     survivors = [c for c in candidates if c.rel not in floor_refused]
 
-    hits = asyncio.run(_live_citations(worktree_root, survivors))
+    hits = _live_citations(worktree_root, survivors)
     for rel, locs in hits.items():
         scan_skipped.append({
             "id": rel,
@@ -311,7 +247,6 @@ def _handle_preview(worktree_root: Path, cap: int) -> Tuple[dict, List[dict]]:
 
     clean = [c for c in survivors if c.rel not in hits]
     clean = clean[:cap]
-    deferred = survivors[len(clean):] if len(survivors) > cap else []
 
     wire_candidates = []
     for c in clean:
@@ -331,7 +266,6 @@ def _handle_preview(worktree_root: Path, cap: int) -> Tuple[dict, List[dict]]:
 def _handle_act(worktree_root: Path, candidate_ids: List[str], cap: int) -> dict:
     import asyncio
 
-    decisions_dir = _decisions_dir(worktree_root)
     candidates, max_id = _scan_superseded(worktree_root)
     by_rel = {c.rel: c for c in candidates}
 
@@ -360,7 +294,7 @@ def _handle_act(worktree_root: Path, candidate_ids: List[str], cap: int) -> dict
         to_delete.append(c)
 
     if to_delete:
-        hits = asyncio.run(_live_citations(worktree_root, to_delete))
+        hits = _live_citations(worktree_root, to_delete)
         for rel, locs in hits.items():
             skipped.append({"id": rel, "reason": f"live-citation: {', '.join(locs)}"})
         to_delete = [c for c in to_delete if c.rel not in hits]
@@ -390,7 +324,10 @@ def _handle_act(worktree_root: Path, candidate_ids: List[str], cap: int) -> dict
                 )
                 failed.append({"id": c.rel, "reason": failure_reason})
 
-    return build_act_result("already-terminal", acted, skipped, failed)
+    result = build_act_result("already-terminal", acted, skipped, failed)
+    if acted:
+        result["followup"] = _FOLLOWUP_INDEX
+    return result
 
 
 @register_op(_OP_KEY)
@@ -407,6 +344,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Worktree root is derived via main_worktree_root(common_dir) — NOT
     params.repo_root, which is the optional D3 consistency check only.
     """
+    params = {"mode": "already-terminal", **params}
     parsed = validate_params(params)
     if isinstance(parsed, dict):
         record_sweep_outcome(

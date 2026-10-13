@@ -200,14 +200,16 @@ REASON_INDIRECTION = "indirection"
 INDIRECTION_REMEDY = "Use instead: `./path/to/script.py` (executable, shebang)."
 
 
-def indirection_deny_reason(label: str, safe_shape: str) -> str:
+def indirection_deny_reason(
+    label: str, safe_shape: str, remedy: str = INDIRECTION_REMEDY
+) -> str:
     """The shared indirection-deny text: one fact (the payload is unreadable,
     and its shape) plus the offered route. `safe_shape` must already have the
     target basename redacted."""
     return "BLOCKED (%s): unreadable payload (%s).\n\n%s" % (
         label,
         safe_shape,
-        INDIRECTION_REMEDY,
+        remedy,
     )
 
 

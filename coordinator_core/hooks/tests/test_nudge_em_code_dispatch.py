@@ -26,8 +26,20 @@ def _isolated_tempdir(monkeypatch, tmp_path):
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
 
-def _advisory_text(result: dict) -> str:
-    return result["hookSpecificOutput"]["additionalContext"]
+_REAL_SIZING_STATE = _mod._session_sizing_state
+
+
+@pytest.fixture(autouse=True)
+def _sized_by_default(monkeypatch):
+    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, False))
+
+
+def _is_deny(result) -> bool:
+    return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def _reason(result: dict) -> str:
+    return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_whitespace_only_diff_true() -> None:
@@ -112,11 +124,7 @@ def test_edit_substantive_change_fires_and_brief_has_no_todo() -> None:
             "new_string": "def f():\n    return compute_something(x, y)",
         },
     }
-    result = op(payload)
-    assert result is not None
-    text = _advisory_text(result)
-    assert "[TODO" not in text
-    assert "module.py" in text
+    assert _is_deny(op(payload))
 
 
 def test_multiedit_all_bypass_suppresses_nudge() -> None:
@@ -148,9 +156,7 @@ def test_multiedit_one_substantive_entry_fires() -> None:
             ],
         },
     }
-    result = op(payload)
-    assert result is not None
-    assert "[TODO" not in _advisory_text(result)
+    assert _is_deny(op(payload))
 
 
 def test_multiedit_malformed_entry_does_not_bypass() -> None:
@@ -164,7 +170,7 @@ def test_multiedit_malformed_entry_does_not_bypass() -> None:
             ],
         },
     }
-    assert op(payload) is not None
+    assert _is_deny(op(payload))
 
 
 def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -> None:
@@ -181,7 +187,8 @@ def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -
     assert op(payload) is None
 
 
-def test_write_substantive_change_against_disk_content_fires(tmp_path) -> None:
+def test_write_substantive_change_against_disk_content_fires(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_mod, "_is_scratch_or_tmp", lambda p: False)
     target = tmp_path / "module.py"
     target.write_text("def f():\n    return 1\n", encoding="utf-8")
     payload = {
@@ -192,12 +199,11 @@ def test_write_substantive_change_against_disk_content_fires(tmp_path) -> None:
             "content": "def f():\n    return compute_something(x, y)\n",
         },
     }
-    result = op(payload)
-    assert result is not None
-    assert "[TODO" not in _advisory_text(result)
+    assert _is_deny(op(payload))
 
 
-def test_write_brand_new_file_never_bypasses(tmp_path) -> None:
+def test_write_brand_new_file_never_bypasses(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_mod, "_is_scratch_or_tmp", lambda p: False)
     target = tmp_path / "does-not-exist-yet.py"
     payload = {
         "tool_name": "Write",
@@ -207,42 +213,7 @@ def test_write_brand_new_file_never_bypasses(tmp_path) -> None:
             "content": "x = 1\n",
         },
     }
-    assert op(payload) is not None
-
-
-@pytest.mark.parametrize(
-    "tool_name,tool_input",
-    [
-        ("Write", {"file_path": "/repo/pkg/new_module.py", "content": "def g():\n    return compute(a, b)\n"}),
-        (
-            "Edit",
-            {
-                "file_path": "/repo/pkg/module.py",
-                "old_string": "def f(): pass",
-                "new_string": "def f(): return compute(a, b, c)",
-            },
-        ),
-        (
-            "MultiEdit",
-            {
-                "edits": [
-                    {
-                        "file_path": "/repo/pkg/module.py",
-                        "old_string": "def f(): pass",
-                        "new_string": "def f(): return compute(a, b, c)",
-                    },
-                ],
-            },
-        ),
-    ],
-)
-def test_dispatch_brief_never_contains_todo_placeholder(tool_name, tool_input) -> None:
-    payload = {"tool_name": tool_name, "session_id": "sess-1", "tool_input": tool_input}
-    result = op(payload)
-    assert result is not None
-    text = _advisory_text(result)
-    assert "[TODO" not in text
-    assert "acceptance-criteria" not in text
+    assert _is_deny(op(payload))
 
 
 def test_op_is_registered() -> None:
@@ -252,10 +223,10 @@ def test_op_is_registered() -> None:
     assert get_op_handler("hooks.nudge_em_code_dispatch") is not None
 
 
-def _sizing_payload() -> dict:
+def _payload(sid: str = "sess-sizing-1") -> dict:
     return {
         "tool_name": "Edit",
-        "session_id": "sess-sizing-1",
+        "session_id": sid,
         "tool_input": {
             "file_path": "/repo/pkg/module.py",
             "old_string": "def f(): pass",
@@ -264,73 +235,130 @@ def _sizing_payload() -> dict:
     }
 
 
-def _stub_sizing(monkeypatch, sizing_obj) -> None:
+def _unsized(monkeypatch) -> None:
+    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
+
+
+def test_unsized_deny(monkeypatch) -> None:
+    _unsized(monkeypatch)
+    out = op(_payload())
+    assert _is_deny(out)
+    assert "No sizing" in _reason(out)
+
+
+def test_sized_deny_even_xs(monkeypatch) -> None:
+    out = op(_payload())
+    assert _is_deny(out)
+    assert "route through dispatch" in _reason(out)
+
+
+def test_plan_routed_sizing_without_a_plan_names_the_plan_skill(monkeypatch) -> None:
+    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, True))
+    reason = _reason(op(_payload()))
+    assert "coordinator:plan" in reason and "Dispatch a coordinator:executor" not in reason
+
+
+@pytest.mark.parametrize("route,plans,pending", [
+    ("plan", [], True), ("spec-dispatch", [], True),
+    ("plan", ["docs/plans/p.md"], False), ("dispatch", [], False),
+])
+def test_session_sizing_state_reads_the_route(monkeypatch, route, plans, pending) -> None:
     from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 
-    monkeypatch.setattr(sizing, "_repo_root", lambda payload: "/repo")
-    monkeypatch.setattr(
-        sizing,
-        "_session_touched_sizing_files",
-        lambda sid, root: ["state/sizings/s.yaml"] if sizing_obj is not None else [],
-    )
-    monkeypatch.setattr(sizing, "_load_sizing_object", lambda root, rel: sizing_obj)
+    monkeypatch.setattr(sizing, "_repo_root", lambda p: "/repo")
+    monkeypatch.setattr(sizing, "_session_touched_sizing_files", lambda s, r: ["state/sizings/a.yaml"])
+    monkeypatch.setattr(sizing, "_load_sizing_object", lambda r, rel: {"route": route})
+    monkeypatch.setattr(sizing, "_session_touched_plan_files", lambda s, r: plans)
+    assert _REAL_SIZING_STATE({"cwd": "/repo"}, "s") == (True, pending)
 
 
-def test_xs_dispatch_sizing_silences_nudge(monkeypatch) -> None:
-    _stub_sizing(monkeypatch, {"route": "dispatch", "estimate": {"tshirt": "XS"}})
-    assert op(_sizing_payload()) is None
+def test_subagent_allowed(monkeypatch) -> None:
+    _unsized(monkeypatch)
+    p = _payload()
+    p["agent_id"] = "a1"
+    assert op(p) is None
 
 
-def test_s_dispatch_sizing_still_nudges(monkeypatch) -> None:
-    _stub_sizing(monkeypatch, {"route": "dispatch", "estimate": {"tshirt": "S"}})
-    assert op(_sizing_payload()) is not None
+def test_doc_file_allowed(monkeypatch) -> None:
+    _unsized(monkeypatch)
+    p = _payload()
+    p["tool_input"]["file_path"] = "/repo/docs/x.md"
+    assert op(p) is None
 
 
-def test_xs_other_route_still_nudges(monkeypatch) -> None:
-    _stub_sizing(monkeypatch, {"route": "plan", "estimate": {"tshirt": "XS"}})
-    assert op(_sizing_payload()) is not None
+def test_scratch_path_allowed(monkeypatch) -> None:
+    _unsized(monkeypatch)
+    p = _payload()
+    p["tool_input"]["file_path"] = "/repo/scratch/probe.py"
+    assert op(p) is None
 
 
-def test_no_sizing_still_nudges(monkeypatch) -> None:
-    _stub_sizing(monkeypatch, None)
-    assert op(_sizing_payload()) is not None
+def test_autonomous_allowed(monkeypatch) -> None:
+    monkeypatch.setattr(_mod, "resolve_mode", lambda k, sid: True)
+    assert op(_payload()) is None
 
 
-def _edit(path: str, new: str, sid: str = "sess-rep") -> dict:
-    return {
-        "tool_name": "Edit",
-        "session_id": sid,
-        "tool_input": {
-            "file_path": path,
-            "old_string": "def f():\n    return 1",
-            "new_string": new,
-        },
-    }
+def test_empty_sentinel_still_denies(monkeypatch) -> None:
+    open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w").close()
+    assert _is_deny(op(_payload()))
 
 
-_SMALL = "def f():\n    return g(1, 2)"
+def _repo_with_reason(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    with open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w") as fh:
+        fh.write("hotfix, executor unavailable\n")
+    p = _payload()
+    p["cwd"] = str(repo)
+    return repo, p
 
 
-def test_repeat_small_edit_to_same_file_nudges_once() -> None:
-    p = "/repo/pkg/script.py"
-    assert op(_edit(p, _SMALL)) is not None
-    assert op(_edit(p, "def f():\n    return g(3, 4)")) is None
-    assert op(_edit(p, "def f():\n    return g(5, 6)")) is None
+def _sidecar(repo, status: str, agent: str = "coordinator:executor") -> None:
+    from coordinator_core.session.machinery_paths import share_dir
+
+    d = share_dir(str(repo), "sess-sizing-1")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "coordinator-executor.a1.md"), "w") as fh:
+        fh.write(f"---\nstatus: {status}\nagent_type: {agent}\n---\n")
 
 
-def test_second_file_still_nudges() -> None:
-    assert op(_edit("/repo/pkg/a.py", _SMALL)) is not None
-    assert op(_edit("/repo/pkg/b.py", _SMALL)) is not None
+def test_reason_without_grant_or_failure_denies_and_keeps_sentinel(tmp_path) -> None:
+    _repo, p = _repo_with_reason(tmp_path)
+    assert _is_deny(op(p))
+    assert os.path.exists(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"))
 
 
-def test_large_repeat_edit_still_nudges() -> None:
-    p = "/repo/pkg/big.py"
-    assert op(_edit(p, _SMALL)) is not None
-    big = "\n".join(f"    x{i} = compute({i})" for i in range(60))
-    assert op(_edit(p, "def f():\n" + big)) is not None
+def test_non_failed_executor_with_reason_denies(tmp_path) -> None:
+    repo, p = _repo_with_reason(tmp_path)
+    _sidecar(repo, "complete")
+    assert _is_deny(op(p))
+    assert os.path.exists(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"))
 
 
-def test_other_session_nudges_again() -> None:
-    p = "/repo/pkg/s.py"
-    assert op(_edit(p, _SMALL, "s-one")) is not None
-    assert op(_edit(p, _SMALL, "s-two")) is not None
+def test_pm_grant_is_honoured(tmp_path) -> None:
+    from coordinator_core.session import guard_unlock_sentinel as gus
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    gus.sentinel_path("sess-sizing-1", "nudge-em-code-dispatch").write_text("")
+    p = _payload()
+    p["cwd"] = str(repo)
+    assert op(p) is None
+    assert _is_deny(op(p))
+
+
+def test_reasoned_sentinel_allows_and_logs_one_line(monkeypatch, tmp_path) -> None:
+    import json
+
+    repo, p = _repo_with_reason(tmp_path)
+    _sidecar(repo, "blocked")
+    assert op(p) is None
+    logs = list((repo / ".coordinator-local").rglob(_mod.ESCAPE_LOG_NAME))
+    assert len(logs) == 1
+    lines = logs[0].read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["reason"] == "hotfix, executor unavailable"
+    assert entry["session_id"] == "sess-sizing-1"
+    assert entry["path"] == "/repo/pkg/module.py"
+    assert "ts" in entry

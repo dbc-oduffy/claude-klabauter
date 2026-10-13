@@ -210,6 +210,7 @@ EXPECTED_READERS = (
     "coordinator_core.hooks.test_postuse_advisory_dispatch",
     "coordinator_core.hooks.tests.test_fleet_mode_reaches_the_hooks",
     "coordinator_core.hooks.tests.test_nudge_em_code_dispatch",
+    "coordinator_core.hooks.tests.test_post_executor_verification",
     "coordinator_core.hooks.tests.test_postuse_advisory_dispatch",
     "coordinator_core.hooks.tests.test_postuse_context_pressure",
     "coordinator_core.hooks.tests.test_runtime_tripwire_em_check",

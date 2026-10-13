@@ -27,7 +27,7 @@ sibling_dir_exists gate -- see dep_probe()'s inline comment for why a
 registry-resolved dep (claude-klabauter itself) cannot be sibling-directory
 probed the way ordinary plugin-to-plugin deps are. Machine environment
 prerequisite probing (git, python, uv, gh, node, pwsh, ue, clone_auth,
-longpaths, git_lfs, shell_login_env) is NOT reimplemented in this module —
+longpaths, shell_login_env) is NOT reimplemented in this module —
 it consumes the already-landed native port, `coordinator_core.install.
 prereq_probe` (the same module `coordinator_core.ops.normalize_env` cut
 over to on 2026-07-21), via `prereq_probe_all_via_bash` (name kept for
@@ -55,7 +55,7 @@ Exit codes (parity-critical — matches the bash oracle exactly):
 
 Negative-spec:
     - Does NOT probe git/python/uv/gh/node/pwsh/ue/clone_auth/longpaths/
-      git_lfs/shell_login_env itself — delegates to `prereq_probe.probe_all()`
+      shell_login_env itself — delegates to `prereq_probe.probe_all()`
       (see Scope boundary above). This is a faithful scope subset, not a
       silent behavior drop: the delegate reproduces the oracle's own NDJSON
       contract byte-for-byte, and callers observe identical rows/exit codes.

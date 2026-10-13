@@ -106,6 +106,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
     subjects_from_value,
 )
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
+from coordinator_core.ops.dispatch_emit.sibling_split import WidthOverCapError
 from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError, part_run_id
 from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
@@ -533,6 +534,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "is emitted (per batch when it fans over a list) and filled with it; refused when no stage names it",
     )
     parser.add_argument(
+        "--sibling",
+        type=int,
+        default=None,
+        metavar="N",
+        help="plan route: when the plan is wider than the per-workflow cap, emit only sibling N "
+        "of the split (re-emit a later stage at fire time, admitted afresh)",
+    )
+    parser.add_argument(
+        "--merge-digests",
+        nargs="+",
+        default=None,
+        metavar="MANIFEST DIGEST",
+        help="merge sibling wake digests into one: the sibling manifest JSON, then one "
+        "<sibling-id>=<digest.json> per sibling; prints the merged digest",
+    )
+    parser.add_argument(
         "--flag",
         action="append",
         default=None,
@@ -762,6 +779,103 @@ def _emit_inventory_parts(
     return EXIT_OK if all(r["ok"] for r in results) else EXIT_DATA_ERROR
 
 
+def _sibling_out_path(out_path: str, index: int) -> str:
+    out = Path(out_path)
+    stem = out.name[: -len(_REQUIRED_OUT_SUFFIX)]
+    return str(out.with_name(f"{stem}.sib{index}{_REQUIRED_OUT_SUFFIX}"))
+
+
+def _merge_digests_main(items: "list[str]") -> int:
+    from coordinator_core.ops.dispatch_emit.sibling_split import merge_digests
+
+    try:
+        manifest = json.loads(Path(items[0]).read_text(encoding="utf-8"))
+        digests = {}
+        for item in items[1:]:
+            sib, _, path = item.partition("=")
+            digests[sib] = json.loads(Path(path).read_text(encoding="utf-8"))
+        merged = merge_digests(digests, manifest)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"emit-dispatch-workflow: ERROR — --merge-digests: {exc}", file=sys.stderr)
+        return EXIT_DATA_ERROR
+    print(json.dumps(merged, indent=2, sort_keys=True))
+    return EXIT_OK
+
+
+def _emit_sibling_workflows(
+    params: dict,
+    repo_root: "Optional[Path]",
+    wide: WidthOverCapError,
+    only: "Optional[int]",
+    fire: bool,
+    admission_record: dict,
+) -> int:
+    """Emit the plan as sibling workflow scripts (``sibling_split``), each admitted on its own,
+    and print the manifest that fixes their firing order."""
+    from coordinator_core.ops.dispatch_emit import admission
+    from coordinator_core.ops.dispatch_emit.sibling_split import build_manifest, sibling_id, width_note
+    from coordinator_core.telemetry import op_latency
+
+    split = wide.split
+    if fire:
+        print(
+            "emit-dispatch-workflow: ERROR — --fire fires one script; the plan was split into "
+            f"{len(split.siblings)} siblings, none fired",
+            file=sys.stderr,
+        )
+        return EXIT_DATA_ERROR
+    if only is not None and not 1 <= only <= len(split.siblings):
+        print(
+            f"emit-dispatch-workflow: ERROR — --sibling {only} outside 1..{len(split.siblings)}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not params.get("output_path"):
+        print("emit-dispatch-workflow: ERROR — a split plan needs --out (sibling scripts derive from it)", file=sys.stderr)
+        return EXIT_USAGE
+    all_ids = [r for sib in split.siblings for r in sib.rows]
+    hold_allowed = op_latency.execution_route() != op_latency.WARM_SERVER
+    results: dict = {}
+    admissions: dict = {}
+    paths = {sib.index: _sibling_out_path(params["output_path"], sib.index) for sib in split.siblings}
+    for sib in split.siblings:
+        if only is not None and sib.index != only:
+            continue
+        if sib.index != (only or 1):
+            admissions[sibling_id(sib.index)] = admission.await_admission(Path.cwd(), hold_allowed=hold_allowed)
+        else:
+            admissions[sibling_id(sib.index)] = admission_record
+        note = width_note(split, sib)
+        sibling_params = {
+            **params,
+            "output_path": paths[sib.index],
+            "sibling": {
+                **note,
+                "keep_rows": list(sib.rows),
+                "terminal_commit": sib.carrier,
+                "commit_scope": [r for r in all_ids if r not in sib.rows] if sib.carrier else [],
+            },
+        }
+        results[sibling_id(sib.index)] = _dispatch_emit(sibling_params, repo_root=repo_root)
+    manifest = build_manifest(split, plan_path=str(params.get("plan_path")), script_paths=paths)
+    print(
+        f"emit-dispatch-workflow: plan width {split.plan_width} exceeds the per-workflow cap "
+        f"{split.cap}; {len(split.siblings)} sibling workflows in {len(split.stages)} stage(s), "
+        f"achieved width {split.achieved_width}. Fire per the manifest.",
+        file=sys.stderr,
+    )
+    print(
+        json.dumps(
+            {"manifest": manifest, "siblings": results, "admission": admissions},
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    for res in results.values():
+        _print_workflow_invocation(res, is_queue_route=False, repo_root=repo_root)
+    return EXIT_OK if all(r["ok"] for r in results.values()) else EXIT_DATA_ERROR
+
+
 def _lane_inventories(record: Path) -> "list[Path]":
     """The inventory records beside a continuance record: every `<run-id>*.md`
     in its directory carrying a `## Chunk table`, minus the record itself and
@@ -883,6 +997,9 @@ def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+
+    if args.merge_digests:
+        return _merge_digests_main(args.merge_digests)
 
     review_only_error = _review_only_refusal(args)
     if review_only_error:
@@ -1556,8 +1673,15 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     hold=frozenset(params.get("hold_rows") or ()),
                     landed=frozenset(params.get("landed_rows") or ()),
                 )
+        if params.get("plan_path") and not args.inventory and args.review_only is None:
+            params["auto_split"] = True
         try:
             result = _dispatch_emit(params, repo_root=repo_root)
+        except WidthOverCapError as wide:
+            return _emit_sibling_workflows(
+                {k: v for k, v in params.items() if k != "auto_split"},
+                repo_root, wide, args.sibling, args.fire, admission_record,
+            )
         except ScriptOverCapError as over:
             if not args.inventory or args.lanes:
                 raise

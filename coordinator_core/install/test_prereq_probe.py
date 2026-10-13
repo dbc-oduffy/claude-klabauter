@@ -314,37 +314,6 @@ def test_probe_longpaths_windows_unset():
     assert "<unset>" in rec["detail"]
 
 
-def test_probe_git_lfs_pass():
-    def fake_run(argv, **kw):
-        if argv == ["git", "--version"]:
-            return _cp(0, "git version 2.42.0")
-        if argv == ["git", "lfs", "version"]:
-            return _cp(0, "git-lfs/3.4.0")
-        if argv == ["git", "config", "--global", "--get", "filter.lfs.clean"]:
-            return _cp(0, "git-lfs clean -- %f\n")
-        raise AssertionError(argv)
-
-    with mock.patch.object(pp, "_run", side_effect=fake_run):
-        rec = _parse(pp.probe_git_lfs())
-    assert rec["status"] == "pass"
-
-
-def test_probe_git_lfs_not_configured():
-    def fake_run(argv, **kw):
-        if argv == ["git", "--version"]:
-            return _cp(0, "git version 2.42.0")
-        if argv == ["git", "lfs", "version"]:
-            return _cp(0, "git-lfs/3.4.0")
-        if argv == ["git", "config", "--global", "--get", "filter.lfs.clean"]:
-            return _cp(1, "")
-        raise AssertionError(argv)
-
-    with mock.patch.object(pp, "_run", side_effect=fake_run):
-        rec = _parse(pp.probe_git_lfs())
-    assert rec["status"] == "warn"
-    assert "git lfs install" in rec["remediation"]
-
-
 def test_probe_shell_login_env_non_macos_short_circuits():
     with mock.patch.object(pp, "_os_name", return_value="Linux"):
         rec = _parse(pp.probe_shell_login_env())
@@ -407,13 +376,13 @@ def test_probe_shell_login_env_non_bash_login_shell():
 def test_probe_all_order_and_count():
     names = [
         "git", "python", "uv", "gh", "node", "pwsh", "ue", "clone_auth", "longpaths",
-        "git_lfs", "shell_login_env", "skill_frontmatter_valid", "windows_terminal_presence",
+        "shell_login_env", "skill_frontmatter_valid", "windows_terminal_presence",
     ]
     stub_lines = [f'{{"name":"{n}","status":"pass","severity":"advisory","detail":"","remediation":""}}\n' for n in names]
 
     with mock.patch.object(pp, "_PROBE_ORDER", tuple(lambda line=line: line for line in stub_lines)):
         lines = pp.probe_all()
-    assert len(lines) == 13
+    assert len(lines) == 12
     for line, name in zip(lines, names):
         assert _parse(line)["name"] == name
 
