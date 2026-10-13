@@ -14,9 +14,10 @@ An explicit ``--basetemp`` and an xdist worker never delete.
 
 Redirect: the controller points TMP/TEMP/TMPDIR and ``tempfile.tempdir`` at
 ``<gettempdir()>/coordinator/<repo>/run-temp/<pid>-<hex>/`` (workers inherit it;
-a configure already inside one does not nest). That root is watched per test,
-and at session finish anything but ``coordinator`` left in it is reported and
-turns a passing exit status into 1; the root is then deleted.
+a configure already inside one does not nest). That root is not watched per
+test: every worker and subprocess writes it, so an entry cannot be attributed
+to a test. At session finish anything but ``coordinator`` left in it is
+reported and turns a passing exit status into 1; the root is then deleted.
 
 Stdlib + pytest only, and no package-relative imports: repos without
 ``coordinator_core`` load this file by path and register the module object.
@@ -143,7 +144,8 @@ def pytest_configure(config: pytest.Config) -> None:
     # Captured here, before any fixture sandboxes HOME/USERPROFILE: a later
     # Path.home() read would watch the sandbox instead of the real home.
     repo = _resolve(config.rootpath)
-    # A worker or nested configure inherits the redirect and watches it too.
+    # Needed for the sanctioned managed dir only: every worker and subprocess writes the
+    # run-temp root, so a per-test snapshot cannot attribute an entry to a test.
     if _REDIRECT is not None:
         redirect_root: "Path | None" = _REDIRECT.root
     elif nested:
@@ -154,8 +156,6 @@ def pytest_configure(config: pytest.Config) -> None:
     _SANCTIONED[:] = [repo, _resolve(managed)]
     roots: "list[Path]" = []
     candidates = [Path.home(), config.rootpath.parent]
-    if redirect_root is not None:
-        candidates.append(redirect_root)
     for candidate in candidates:
         try:
             root = _resolve(candidate)

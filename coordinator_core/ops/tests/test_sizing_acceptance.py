@@ -4,6 +4,7 @@ from pathlib import Path
 
 from coordinator_core.ops.sizing_acceptance import (
     APM_ADMISSIBLE_MODES,
+    apm_ruling_admissible,
     acceptance_source,
     acceptance_words,
 )
@@ -31,13 +32,30 @@ def test_source():
     assert acceptance_source({}) is None
 
 
+def _mode_enums(schema_node):
+    return {
+        tuple(n["properties"]["mode"]["enum"])
+        for n in schema_node
+        if "mode" in n.get("properties", {})
+    }
+
+
 def test_admissible_modes_match_the_schema_apm_mode_enum():
     schema = json.loads(_SCHEMA.read_text(encoding="utf-8"))
-    accepted = schema["properties"]["exit_criterion"]["anyOf"][1]["properties"]["accepted"]
+    ec = schema["properties"]["exit_criterion"]["anyOf"][1]["properties"]
     apm_shape = next(
-        s for s in accepted["anyOf"] if s.get("properties", {}).get("source", {}).get("const") == "apm"
+        s for s in ec["accepted"]["anyOf"] if s.get("properties", {}).get("source", {}).get("const") == "apm"
     )
-    assert tuple(apm_shape["properties"]["mode"]["enum"]) == APM_ADMISSIBLE_MODES
+    enum = tuple(apm_shape["properties"]["mode"]["enum"])
+    # pm/ceo are admissible at any size; hands-on only below XL, which the op gates on tshirt.
+    assert set(APM_ADMISSIBLE_MODES) < set(enum) and set(enum) - set(APM_ADMISSIBLE_MODES) == {"hands-on"}
+    assert apm_ruling_admissible("hands-on", "L") and not apm_ruling_admissible("hands-on", "XL")
+    assert all(apm_ruling_admissible(m, "XXL") for m in APM_ADMISSIBLE_MODES)
+    amend_apm = next(
+        a for a in ec["amendments"]["items"]["anyOf"]
+        if "ruling_ref" in a.get("required", []) or "apm_ruling" in a.get("properties", {})
+    )
+    assert tuple(amend_apm["properties"]["mode"]["enum"]) == APM_ADMISSIBLE_MODES
 
 
 ENGINE = {

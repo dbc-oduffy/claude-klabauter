@@ -162,3 +162,46 @@ def test_criterion_open_ok_lets_an_unmet_criterion_stamp_and_never_a_failed_deli
     rec["criterion"]["status"] = "not_met"
     rec["tests"]["status"] = "fail"
     assert "build/test verdict is 'fail'" in mint_refusal(rec, rec["prep"], rec["tests"], criterion_open_ok=True)
+
+
+# --- baseline-equal test failures -------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from coordinator_core.completion_receipts.verdict import baseline_clears, effective_test_verdict  # noqa: E402
+
+
+def _baseline_record(**over):
+    record = {
+        "test_verdict": "fail",
+        "tests_failed": 12,
+        "baseline_method": "export",
+        "baseline": {"pre_existing": [f"t{i}" for i in range(12)], "caused": [], "unverified": []},
+    }
+    record.update(over)
+    return record
+
+
+def test_failures_identical_at_baseline_read_as_pass():
+    assert baseline_clears(_baseline_record()) and effective_test_verdict(_baseline_record()) == "pass"
+
+
+def test_baseline_equal_tests_do_not_block_the_mint():
+    integration = {"delivery": {"verdict": "PASS"}, "criterion": {"status": "met"}}
+    prep = {"slice_files": ["a.py"], "product_files": ["a.py"]}
+    assert mint_refusal(integration, prep, _baseline_record()) is None
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"baseline": {"pre_existing": ["t0"], "caused": ["t1"], "unverified": []}},
+        {"baseline": {"pre_existing": ["t0"], "caused": [], "unverified": ["t1"]}},
+        {"tests_failed": 13},
+        {"baseline_method": "rerun"},
+        {"baseline": {"pre_existing": [], "caused": [], "unverified": []}},
+    ],
+)
+def test_a_caused_unverified_or_unattributed_failure_still_refuses(over):
+    record = _baseline_record(**over)
+    assert not baseline_clears(record) and effective_test_verdict(record) == "fail"

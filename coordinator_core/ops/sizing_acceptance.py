@@ -7,6 +7,13 @@ SOURCE_PM = "pm"
 SOURCE_APM = "apm"
 SOURCE_ENGINE = "engine-size-rule"
 APM_ADMISSIBLE_MODES = ("pm", "ceo")
+_APM_HANDS_ON_TSHIRTS = frozenset({"XS", "S", "M", "L"})
+
+
+def apm_ruling_admissible(mode: object, tshirt: object) -> bool:
+    """True when an APM ruling may stand in for the PM's words: always in pm/ceo mode, and in
+    hands-on mode only below XL."""
+    return mode in APM_ADMISSIBLE_MODES or (mode == "hands-on" and tshirt in _APM_HANDS_ON_TSHIRTS)
 
 
 def acceptance_words(accepted) -> str | None:
@@ -49,3 +56,14 @@ def sizing_acceptance_skipped(route: object, tshirt: object) -> bool:
     """True when the engine, not the PM, discharges the sizing-stage acceptance for this
     route at this size, in every interaction mode."""
     return route in _SKIP_SIZING_ACCEPTANCE_ROUTES and tshirt in _SKIP_SIZING_ACCEPTANCE_TSHIRTS
+
+
+#: Modes in which the APM picks a `pm-decision` sizing's XL exit in-run. Only `ceo`: there the PM
+#: delegates direction to the run, and XL/XXL go through to execution without a room; `pm` and
+#: `hands-on` keep the XL+ exit as the PM's.
+XL_EXIT_APM_MODES = ("ceo",)
+
+
+def apm_picks_xl_exit(mode: object) -> bool:
+    """True when the APM, not the PM, records the XL exit for a sizing in `mode`."""
+    return mode in XL_EXIT_APM_MODES

@@ -30,14 +30,13 @@ def _script(monkeypatch) -> str:
 
 
 def _next_action(script: str) -> str:
-    return script[script.index("next_action: { kind: ") :]
+    return script[script.index("  _nextAction = ") :]
 
 
 def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
     na = _next_action(_script(monkeypatch))
-    assert na.startswith("next_action: { kind: 'terminal_commit', op: 'dispatch.terminal_commit'")
-    override = f"...({_GUARD} ? {{}} : {{ next_action: {{ kind: 'none', op: null, params: null }} }}),"
-    assert override in na
+    assert na.startswith(f"  _nextAction = {_GUARD} ? {{ kind: 'terminal_commit', op: 'dispatch.terminal_commit'")
+    assert ": { kind: 'none', op: null, params: null };" in na.split("\n", 1)[0]
     assert na.rstrip().endswith("get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }, };")
 
 

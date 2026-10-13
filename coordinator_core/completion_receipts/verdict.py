@@ -53,6 +53,33 @@ def test_verdict_of(build_test: dict) -> Any:
     return verdict if verdict is not None else build_test.get("status")
 
 
+def baseline_clears(build_test: dict) -> bool:
+    """True for a `fail` whose every failure the runner re-ran in an export of the run base and
+    found failing there too: nothing the run caused, nothing unverified. Mirrors the digest's
+    `wake_digest._BASELINE_CLEARS_JS`; keep the two in step."""
+    if test_verdict_of(build_test) != "fail" or build_test.get("baseline_method") != "export":
+        return False
+    baseline = build_test.get("baseline")
+    if not isinstance(baseline, dict):
+        return False
+    pre_existing = baseline.get("pre_existing") or []
+    failed = build_test.get("tests_failed", build_test.get("failed")) or 0
+    return (
+        not (baseline.get("caused") or [])
+        and not (baseline.get("unverified") or [])
+        and isinstance(pre_existing, list)
+        and len(pre_existing) > 0
+        and isinstance(failed, int)
+        and len(pre_existing) >= failed
+    )
+
+
+def effective_test_verdict(build_test: dict) -> Any:
+    """`test_verdict_of`, with a baseline-equal `fail` read as `pass`: a run is held to the
+    baseline it started from, never to an all-green suite it did not break."""
+    return "pass" if baseline_clears(build_test) else test_verdict_of(build_test)
+
+
 def mint_refusal(
     integration: dict, prep: dict, build_test: dict, *, criterion_open_ok: bool = False
 ) -> str | None:
@@ -72,7 +99,7 @@ def mint_refusal(
     delivery_verdict = delivery.get("verdict") if isinstance(delivery, dict) else None
     unresolved = integration.get("unresolved") or []
     confinement_violations = _count(integration.get("confinement_violations"))
-    tests_status = test_verdict_of(build_test)
+    tests_status = effective_test_verdict(build_test)
     criterion = integration.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 

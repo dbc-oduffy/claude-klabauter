@@ -155,6 +155,25 @@ def test_review_wave_is_one_parallel_with_slice_map_and_whole_diff_calls():
     assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in wave_block
 
 
+def test_delivery_skip_js_gates_only_the_delivery_verifier_at_run_time():
+    review, phases = _compose()
+    gated = compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["coordinator_core/ops/review_mint/execute_review.py"],
+        prompt_head="BRIEF PRECEDENCE CLAUSE",
+        delivery_skip_js="_ledgerCloses",
+    )
+    wave_block = gated[1][1]
+    assert wave_block.count("() => (_ledgerCloses) ? null : (") == 1
+    assert wave_block.count("() => _verifyOnly ? null : (") == phases[1][1].count("() => _verifyOnly ? null : (")
+    # The delivery verifier keeps its end-anchored slot, so the rebind still reads it (null when skipped).
+    assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in wave_block
+    assert "_ledgerCloses" not in phases[1][1]
+
+
 def test_every_wave_call_carries_its_roster_model_effort_and_schema():
     _, phases = _compose()
     _, wave_block = phases[1]

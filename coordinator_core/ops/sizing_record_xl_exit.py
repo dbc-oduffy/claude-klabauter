@@ -64,8 +64,14 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _PARAMS_HINT = (
     "params: sizing (required, path under the sizings home), "
-    f"xl_exit (required, one of {list(XL_EXIT_PICKS)}), pm_quote (required), decided_on"
+    f"xl_exit (required, one of {list(XL_EXIT_PICKS)}), pm_quote or apm_ruling+ruling_ref "
+    "(exactly one), decided_on"
 )
+
+#: The APM picks only exits that carry the work on to execution; `shape` needs the PM's JTBD.
+_APM_PICKS = frozenset({"roadmap", "accept_multi_session"})
+#: The `pm_resolution` key an APM pick is recorded under: never `xl_exit`, which is the PM's words.
+_APM_RESOLUTION_KEY = "xl_exit_apm"
 
 
 def _err(msg: str) -> dict:
@@ -93,7 +99,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Params:
         sizing     (str) — path to the sizing-object under the sizings home. Required.
         xl_exit    (str) — shape | roadmap | accept_multi_session. Required.
-        pm_quote   (str) — the PM's verbatim words picking the exit. Required, non-empty.
+        pm_quote   (str) — the PM's verbatim words picking the exit.
+        apm_ruling (str) — in place of pm_quote: the APM's verbatim ruling, admitted only when the
+                           sizing's `interaction_mode` delegates the XL exit
+                           (`sizing_acceptance.apm_picks_xl_exit`) and the pick is roadmap or
+                           accept_multi_session. Recorded under `pm_resolution.xl_exit_apm`.
+        ruling_ref (str) — required with apm_ruling: the run id that ruled.
         decided_on (str) — YYYY-MM-DD the PM decided. Defaults to today.
 
     Returns: {exit_code, applied, message|error}.
@@ -108,13 +119,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_raw: str = (params.get("sizing") or "").strip()
     pick: str = (params.get("xl_exit") or "").strip()
     pm_quote: str = (params.get("pm_quote") or "").strip()
+    apm_ruling: str = (params.get("apm_ruling") or "").strip()
+    ruling_ref: str = (params.get("ruling_ref") or "").strip()
     decided_on: str = (params.get("decided_on") or "").strip() or date.today().isoformat()
 
     if not sizing_raw:
         return _err(f"missing required param: sizing — {_PARAMS_HINT}")
     if pick not in XL_EXIT_PICKS:
         return _err(f"xl_exit must be one of {list(XL_EXIT_PICKS)!r}, got {pick!r}")
-    if not pm_quote:
+    if pm_quote and apm_ruling:
+        return _err(f"pass exactly one of pm_quote / apm_ruling; {_PARAMS_HINT}")
+    if apm_ruling:
+        from coordinator_core.ops.signoff_provenance import apm_admissible
+
+        if not ruling_ref:
+            return _err(f"missing required param: ruling_ref with apm_ruling; {_PARAMS_HINT}")
+        if pick not in _APM_PICKS:
+            return _err(f"an APM ruling picks only {sorted(_APM_PICKS)}, got {pick!r}")
+        if not apm_admissible(apm_ruling):
+            return _err("refusing: the APM ruling names an irreversible or external act; that is the PM's")
+    elif not pm_quote:
         return _err(
             "missing required param: pm_quote — the PM's verbatim pick; this op never "
             f"composes or infers one; {_PARAMS_HINT}"
@@ -147,6 +171,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if not isinstance(doc, dict):
             raise MutateAbort("record_xl_exit: sizing-object is not a YAML mapping")
 
+        if apm_ruling:
+            from coordinator_core.ops.sizing_acceptance import apm_picks_xl_exit
+
+            mode = doc.get("interaction_mode")
+            if not apm_picks_xl_exit(mode):
+                raise MutateAbort(
+                    f"refusing to record on {p}: interaction_mode {mode!r} keeps the XL exit the PM's; "
+                    "an APM ruling records it only in ceo mode"
+                )
         prior = doc.get("xl_exit")
         if prior == pick:
             return old_text
@@ -164,7 +197,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         prior_res = doc.get("pm_resolution")
         mapping: dict = dict(prior_res) if isinstance(prior_res, dict) else {}
         mapping.pop("decided_on", None)
-        mapping["xl_exit"] = pm_quote
+        if apm_ruling:
+            mapping[_APM_RESOLUTION_KEY] = f"{ruling_ref}: {apm_ruling}"
+        else:
+            mapping["xl_exit"] = pm_quote
         text = write_fm_nested_field(
             text, "pm_resolution", _render_pm_resolution({"decided_on": decided_on, **mapping})
         )

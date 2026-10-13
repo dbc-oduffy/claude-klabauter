@@ -464,6 +464,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ask route: file holding the EM brief (exclusive of --brief)",
     )
     parser.add_argument(
+        "--all-of-pm-ask",
+        action="store_true",
+        help="ask route: the final ledger checker holds every PM requirement mandatory "
+        "(also settable mid-run: coordinator-invoke workflow.revise)",
+    )
+    parser.add_argument(
         "--subjects",
         default=None,
         metavar="VALUE",
@@ -1218,6 +1224,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE
+    if args.all_of_pm_ask and not is_ask_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --all-of-pm-ask is accepted only with --ask/--sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
 
     if (args.baton or args.deliverable_id) and not is_ask_route:
         print(
@@ -1469,6 +1481,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["ask_brief_file"] = args.brief_file
         if args.context:
             params["ask_context"] = [*args.context]
+        if args.all_of_pm_ask:
+            params["all_of_pm_ask"] = True
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_research_route:
@@ -1700,7 +1714,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     result["admission"] = admission_record
     if regenerable_dirty:
         result["regenerable_dirty"] = regenerable_dirty
-    print(json.dumps(result, indent=2, sort_keys=True))
+    printed = dict(result)
+    if isinstance(printed.get("fire_args"), dict):
+        printed["fire_args"] = {k: v for k, v in printed["fire_args"].items() if k != "runToken"}
+    print(json.dumps(printed, indent=2, sort_keys=True))
     if args.lanes:
         for emitted in result["parts"]:
             _print_workflow_invocation(

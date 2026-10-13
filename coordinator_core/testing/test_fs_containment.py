@@ -207,20 +207,33 @@ def test_nested_configure_does_not_nest_a_second_redirect(tmp_path, monkeypatch)
     fc.pytest_configure(_Cfg(tmp_path / "myrepo"))
     assert fc._REDIRECT is None
     assert not list(outer.root.rglob(fc._RUN_TEMP_DIRNAME))
-    assert outer.root in fc._WATCHED
+    assert outer.root.resolve() not in fc._WATCHED
 
 
-def test_redirect_root_is_watched_and_its_coordinator_dir_sanctioned(tmp_path, monkeypatch):
+def test_redirect_root_is_not_watched_and_its_coordinator_dir_sanctioned(tmp_path, monkeypatch):
     _, _, redirect = _redirected(monkeypatch, tmp_path)
-    assert redirect.root.resolve() in fc._WATCHED
+    assert redirect.root.resolve() not in fc._WATCHED
     assert fc._leads_into_sanctioned(redirect.root, "coordinator")
-    before = fc._snapshot()
-    (redirect.root / "stray").mkdir()
-    (redirect.root / "coordinator").mkdir()
-    after = fc._snapshot()
-    gained = after[redirect.root.resolve()] - before[redirect.root.resolve()]
-    assert gained == {"stray", "coordinator"}
     assert not fc._leads_into_sanctioned(redirect.root, "stray")
+
+
+def test_worker_inheriting_the_redirect_does_not_watch_it(tmp_path, monkeypatch):
+    import tempfile
+
+    _, _, redirect = _redirected(monkeypatch, tmp_path)
+    root = redirect.root
+    monkeypatch.setattr(fc, "_WATCHED", [])
+    monkeypatch.setattr(fc, "_SANCTIONED", [])
+    monkeypatch.setattr(fc, "_REDIRECT", None)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(root))
+    fc.pytest_configure(_Cfg(tmp_path / "myrepo", worker=True))
+    assert root.resolve() not in fc._WATCHED
+    before = fc._snapshot()
+    assert before
+    (root / "stray").mkdir()
+    after = fc._snapshot()
+    assert all(after[r] - before[r] == set() for r in before)
+    assert fc._leads_into_sanctioned(root, "coordinator")
 
 
 def _finish(monkeypatch, tmp_path, status):

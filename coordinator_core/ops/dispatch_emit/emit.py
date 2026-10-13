@@ -432,7 +432,7 @@ _AGENT_MODELS = {
     _EXECUTOR_AGENT_TYPE: "sonnet",
     _ENRICHER_AGENT_TYPE: "sonnet",
     _TEST_AGENT_TYPE: "haiku",
-    _COMMIT_AGENT_TYPE: "sonnet",
+    _COMMIT_AGENT_TYPE: "haiku",
 }
 
 #: The Workflow runtime aborts an agent call after this many stalled ms

@@ -6809,6 +6809,45 @@ def _deny_reason(
     )
 
 
+#: The one op a run-scoped token admits, through the on-PATH door only.
+_RUN_TOKEN_OP = "dispatch.terminal_commit"
+
+
+def _warp_run_token_admits(
+    raw_cmd: str, cmd_for_scan: str, git_root: str, legs: Set[str], heredoc_hit: bool
+) -> bool:
+    """A warp run's own terminal commit: exactly one bare `coordinator-invoke
+    dispatch.terminal_commit <params>` segment whose params carry the run token the emit
+    minted for `run_id` (`dispatch_emit.run_token`). Caller has already required the
+    harness-supplied `agent_type` to be `coordinator:git-commit-agent`.
+
+    Trap: no wrapper, env prefix, `--repo` override, interpreter payload or second segment
+    is admitted -- the token authorizes one op invocation, never a shell.
+    """
+    if legs or heredoc_hit or not _command_is_single_segment(cmd_for_scan):
+        return False
+    if _has_git_commit(cmd_for_scan) or _has_coordinator_safe_commit(cmd_for_scan):
+        return False
+    tokens = _tokenize_full_command(cmd_for_scan)
+    if tokens is None:
+        return False
+    segments = [seg for seg in _segments_from_tokens(tokens) if seg]
+    if len(segments) != 1 or not _token_matches_binary(segments[0][0], _COORDINATOR_INVOKE_BINARY):
+        return False
+    seg = segments[0]
+    op_idx = _first_positional_after_invoke_module(seg, 1)
+    if op_idx is None or seg[op_idx] != _RUN_TOKEN_OP:
+        return False
+    if any(t.split("=", 1)[0] == "--repo" for t in seg[1:op_idx]):
+        return False
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    params = run_token.token_params_from_command(raw_cmd)
+    return params is not None and run_token.admits(
+        git_root, params["run_id"], params["run_token"], params["script_path"]
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -6958,6 +6997,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             cmd_for_scan, git_root, session_id, cwd
         )
         if may_commit:
+            return None
+        if git_root and _warp_run_token_admits(
+            cmd, cmd_for_scan, git_root, payload_legs, heredoc_stdin_import_hit
+        ):
             return None
 
     kind_unresolved = not effective_type

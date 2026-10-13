@@ -576,3 +576,27 @@ def test_no_words_at_xl_is_refused_and_leaves_the_file_untouched(tmp_path):
     result = _run({"sizing": "state/sizings/20260101-a.yaml"}, repo)
     assert result["exit_code"] == 1 and "pm_quote or apm_ruling" in result["error"]
     assert sizing.read_bytes() == before
+
+
+def _shape_setup(tmp_path, tshirt):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED, tshirt=tshirt)
+    sizing.write_text(sizing.read_text(encoding="utf-8").replace("route: plan", "route: shape"), encoding="utf-8")
+    return repo, sizing
+
+
+def test_hands_on_apm_ruling_below_xl_on_a_non_skipped_route_is_accepted(tmp_path):
+    repo, sizing = _shape_setup(tmp_path, "L")
+    result = _run(_apm(), repo)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    accepted = _doc(sizing)["exit_criterion"]["accepted"]
+    assert accepted["source"] == "apm" and accepted["mode"] == "hands-on"
+
+
+def test_hands_on_apm_ruling_at_xl_is_refused(tmp_path):
+    repo, sizing = _shape_setup(tmp_path, "XL")
+    before = sizing.read_bytes()
+    result = _run(_apm(), repo)
+    assert result["exit_code"] == 1 and "hands-on" in result["error"], result
+    assert sizing.read_bytes() == before

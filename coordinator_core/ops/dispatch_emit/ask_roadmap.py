@@ -54,24 +54,16 @@ def approver_for(interaction_mode: object) -> str:
     return _PM_APPROVER if interaction_mode == "hands-on" else _APM_APPROVER
 
 
-def compose_roadmap_script(
-    *,
-    repo_root: str,
-    sizing_rel: str,
-    run_id: str,
-    interaction_mode: object,
-    roadmap_text: Optional[str],
-    plan_blitz_fn: str,
-    plan_blitz_phases: list[str],
-    plan_blitz_args: Optional[dict],
-    wrap_roadmap: Optional[Callable[[str], tuple[str, list[str]]]] = None,
-) -> str:
-    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _executed = [];", "  let _complete = null;")
 
-    wrap = wrap_roadmap or wrap_roadmap_stage
-    rb_fn, rb_phases = wrap(roadmap_text if roadmap_text is not None else load_roadmap_blitz_text())
-    if f"async function {ROADMAP_STAGE_FN}(" not in rb_fn:
-        raise ac.AskComposeRefused(f"wrapped roadmap-blitz stage does not define async function {ROADMAP_STAGE_FN}")
+
+def roadmap_stage_lines(
+    *, repo_root: str, run_id: str, interaction_mode: object, plan_blitz_args: Optional[dict]
+) -> list[str]:
+    """roadmap-blitz, plan-blitz waves, execute per plan, workstream-complete: each block under
+    `if (!_halted)`. Reads `REPO_ROOT`, `_sizingRel`, `_runId`, `_halted` and the
+    `ROADMAP_DECLS` bindings; the caller embeds both stage functions."""
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
 
     lit, agent, cat = ac._lit, ac._agent, ac._cat
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
@@ -87,13 +79,6 @@ def compose_roadmap_script(
     def prompt_of(*parts: str) -> str:
         return cat(f"{head}\n\n{anchor}\n\n", *parts)
 
-    gate_prompt = prompt_of(
-        f"Run `{ac._INVOKE} {OP_ASK_GATE} '",
-        "js:JSON.stringify({ sizing_path: _sizingRel, writes: [] })",
-        "'` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
-        "js:_sizingRel",
-        " and return its estimate.tshirt as tshirt and its route as route.",
-    )
     waves_prompt = prompt_of(
         "Read the frozen gate report at ",
         "js:_rb.gate_report_path",
@@ -125,23 +110,7 @@ def compose_roadmap_script(
             }
         },
     )
-
-    b: list[str] = [
-        f"  const REPO_ROOT = {lit(repo_root)};",
-        f"  const _runId = {lit(run_id)};",
-        f"  let _sizingRel = {lit(sizing_rel)};",
-        "  let _halted = null;",
-        "  let _rb = null;",
-        "  const _ready = [];",
-        "  const _executed = [];",
-        "  let _complete = null;",
-        rb_fn,
-        plan_blitz_fn,
-        "  phase('gate');",
-        f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=agent_type, schema=ac._GATE_SCHEMA)};",
-        "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
-        f"{lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}",
-        f"  if (!_halted && _gate.arm !== {lit('roadmap')}) {{ {halt(lit('sizing resolved to a non-roadmap arm in the roadmap script'))} }}",
+    return [
         "  if (!_halted) {",
         "  phase('roadmap-blitz');",
         f"  _rb = await {ROADMAP_STAGE_FN}({{ repoRoot: REPO_ROOT, sizing: _sizingRel, "
@@ -176,12 +145,64 @@ def compose_roadmap_script(
         "  phase('workstream-complete');",
         f"  _complete = await {agent(done_prompt, label='workstream-complete', phase='workstream-complete', agent_type=agent_type, schema=exec_schema)};",
         "  }",
+    ]
+
+
+def compose_roadmap_script(
+    *,
+    repo_root: str,
+    sizing_rel: str,
+    run_id: str,
+    interaction_mode: object,
+    roadmap_text: Optional[str],
+    plan_blitz_fn: str,
+    plan_blitz_phases: list[str],
+    plan_blitz_args: Optional[dict],
+    wrap_roadmap: Optional[Callable[[str], tuple[str, list[str]]]] = None,
+) -> str:
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+
+    wrap = wrap_roadmap or wrap_roadmap_stage
+    rb_fn, rb_phases = wrap(roadmap_text if roadmap_text is not None else load_roadmap_blitz_text())
+    if f"async function {ROADMAP_STAGE_FN}(" not in rb_fn:
+        raise ac.AskComposeRefused(f"wrapped roadmap-blitz stage does not define async function {ROADMAP_STAGE_FN}")
+
+    lit, agent, cat = ac._lit, ac._agent, ac._cat
+    anchor = ac._ANCHOR_CLAUSE.format(root=repo_root)
+    head = _emit._BRIEF_PRECEDENCE_CLAUSE
+    agent_type = _emit._EXECUTOR_AGENT_TYPE
+    halt = lambda reason: (  # noqa: E731
+        f"_halted = {{ halted: {lit(HALT_REFUSAL)}, reason: {reason}, sizing: _sizingRel, run_id: _runId }};"
+    )
+    gate_prompt = cat(
+        f"{head}\n\n{anchor}\n\n",
+        f"Run `{ac._INVOKE} {OP_ASK_GATE} '",
+        "js:JSON.stringify({ sizing_path: _sizingRel, writes: [] })",
+        "'` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
+        "js:_sizingRel",
+        " and return its estimate.tshirt as tshirt and its route as route.",
+    )
+
+    b: list[str] = [
+        f"  const REPO_ROOT = {lit(repo_root)};",
+        f"  const _runId = {lit(run_id)};",
+        f"  let _sizingRel = {lit(sizing_rel)};",
+        "  let _halted = null;",
+        *ROADMAP_DECLS,
+        rb_fn,
+        plan_blitz_fn,
+        "  phase('gate');",
+        f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=agent_type, schema=ac._GATE_SCHEMA)};",
+        "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
+        f"{lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}",
+        f"  if (!_halted && _gate.arm !== {lit('roadmap')}) {{ {halt(lit('sizing resolved to a non-roadmap arm in the roadmap script'))} }}",
+        *roadmap_stage_lines(
+            repo_root=repo_root, run_id=run_id, interaction_mode=interaction_mode, plan_blitz_args=plan_blitz_args
+        ),
         "  return { arm: 'roadmap', sizing: _sizingRel, run_id: _runId, roadmap: _rb, ready: _ready, "
         "executed: _executed, workstream_complete: _complete, halted_by: _halted };",
     ]
-    titles = ["gate", "roadmap-blitz", *rb_phases, "plan", *plan_blitz_phases, "execute", "workstream-complete"]
-    seen: list[str] = []
-    titles = [t for t in titles if not (t in seen or seen.append(t))]
+    titles = roadmap_phase_titles(rb_phases, plan_blitz_phases)
     meta = _emit._meta_block(
         "warp-ask-roadmap",
         "One in-session run from a roadmap sizing: roadmap-blitz, plan-blitz waves, execute, workstream-complete.",
@@ -193,6 +214,12 @@ def compose_roadmap_script(
             f"composed ask script is over the Workflow runner's {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte cap"
         )
     return script
+
+
+def roadmap_phase_titles(rb_phases: list[str], plan_blitz_phases: list[str]) -> list[str]:
+    titles = ["gate", "roadmap-blitz", *rb_phases, "plan", *plan_blitz_phases, "execute", "workstream-complete"]
+    seen: list[str] = []
+    return [t for t in titles if not (t in seen or seen.append(t))]
 
 
 def _plan_blitz_call(spread: str, run_dir: str) -> str:

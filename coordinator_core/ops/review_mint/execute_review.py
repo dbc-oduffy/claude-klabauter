@@ -244,6 +244,7 @@ def compose_execute_review(
     host_degraded: bool = False,
     slice_key_js: Optional[str] = None,
     slice_identity_sha: Optional[str] = None,
+    delivery_skip_js: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -275,6 +276,9 @@ def compose_execute_review(
     ``run_base_sha`` may carry a prompt marker (``compose.PROMPT_MARKER_DELIM``) naming a script
     variable resolved at fire. The slice id is an identity, not content, so it stays on
     ``slice_identity_sha`` (the emit-time sha) while every prompt reads the fire-time base.
+
+    ``delivery_skip_js`` is a JS boolean expression: when it holds at run time the delivery
+    verifier is not dispatched and ``_deliveryVerdict`` reads null (a close-out another stage owns).
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -532,9 +536,12 @@ def compose_execute_review(
         )
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
         degraded = _degrading(call)
-        item_lines.append(
-            f"    {degraded}" if is_delivery_verifier else f"    () => _verifyOnly ? null : ({degraded})()"
-        )
+        if is_delivery_verifier:
+            item_lines.append(
+                f"    () => ({delivery_skip_js}) ? null : ({degraded})()" if delivery_skip_js else f"    {degraded}"
+            )
+        else:
+            item_lines.append(f"    () => _verifyOnly ? null : ({degraded})()")
 
     map_lines = ",\n".join(item_lines)
 

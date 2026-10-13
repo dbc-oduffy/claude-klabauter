@@ -149,8 +149,9 @@ def test_size_agent_must_return_a_footprint():
 
 def test_return_carries_the_plan_routes_terminal_commit_next_action():
     script = _compose(script_path="scratch/warp/ask.workflow.mjs", session_id="d7b9dc1a-1455-43e8-922f-87e734b5634e")
-    ret = script[script.rindex("  return { arm:"):]
-    assert "next_action: { kind: 'terminal_commit', op: 'dispatch.terminal_commit'" in ret
+    ret = script[script.index("  _nextAction = "):]
+    assert "? { kind: 'terminal_commit', op: 'dispatch.terminal_commit'" in ret
+    assert "next_action: _nextAction" in ret[ret.rindex("  return { arm:"):]
     assert 'script_path: "scratch/warp/ask.workflow.mjs"' in ret
     assert 'session_id: "d7b9dc1a-1455-43e8-922f-87e734b5634e"' in ret
     assert f"integration_stem: '{_RUN_ID}.review-wave-bookkeeping'" in ret

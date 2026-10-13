@@ -41,6 +41,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_leading_subshell_and_env,
     _tokenize_full_command,
 )
+from coordinator_core.warp_fire import fire_step
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -53,8 +54,8 @@ _PYTHON_RE = re.compile(r"^python[0-9.]*$")
 _DASH_M_BUNDLED_RE = re.compile(r"^-m(.+)$")
 
 _DENY_BODY = (
-    "Verification after an executor routes through dispatch. "
-    "Dispatch coordinator:test-runner, or ask the executor."
+    "Verification after an executor is the warp run's test stage, not the EM's. "
+    + fire_step("<this session's sizing path>")
 )
 
 

@@ -171,6 +171,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ceremony.close_review", 'registers "close.review"'),
     ("coordinator_core.ops.dispatch_emit.ask_gate", 'registers "dispatch.ask_gate"'),
     ("coordinator_core.ops.dispatch_emit.ask_stage", 'registers "dispatch.ask_stage"'),
+    ("coordinator_core.ops.dispatch_emit.requirements_ledger", 'registers "workflow.revise"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.baton_supersede", 'registers "baton.supersede"'),

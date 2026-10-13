@@ -33,6 +33,17 @@ Negative-spec:
   - Carries exactly one undeclared file: the ``state/sizings/`` sizing the
     plan (or minted spine) cites as ``sizing_object:``, which the ask arm
     rewrites mid-run. Never for an anchor-only run, never outside that dir.
+  - A warp ask run (its script carries the ask-run-manifest marker) lands
+    PRODUCT ONLY: its declared writes plus docs output (``docs/delivery/``, a
+    wiki, a README, and the cited sizing's ``doc_consumers``/``ask_conflicts``). Its process records -- sizing, plan, review record,
+    sidecars, completion receipts -- stay on disk (receipts under
+    ``.coordinator-local/``) and are named by trailers instead
+    (``Completion-Receipt``, ``Review``, ``Falsifier``, ``Resolves-Sizing``);
+    the run makes no second, plan-only commit. When the run dir holds a
+    requirements ledger, the commit refuses unless ``ledger_verdict`` passes
+    ``requirements_ledger.judge`` against the live ledger, in addition to
+    the delivery, criterion and falsifier gates at every size. A docs path
+    rides the commit only if ``params.doc_writes`` declares it.
   - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine.
   - Does NOT write a receipt when there is nothing to commit.
@@ -80,6 +91,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageM
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
     PREFIX_CLAIM_LABEL,
+    ChunkCommit,
     CommitRequest,
     MalformedCommitRequestError,
     parse_manifest_marker,
@@ -99,7 +111,20 @@ _PARAM_FIELDS = (
     Field("plan_path", "nonempty_str"),
     Field("falsifier_broken", "list"),
     Field("held", "list"),
+    Field("run_id", "nonempty_str"),
+    Field("run_token", "nonempty_str"),
+    Field("doc_paths", "str_list"),
+    Field("doc_writes", "str_list"),
+    Field("ledger_verdict", "dict"),
 )
+
+#: Where a run's docs stage may write and have the terminal commit carry it: product docs and
+#: the run's delivery note, never run residue under `scratch/`.
+_DOC_PATH_PREFIX = "docs/"
+_DOC_SUFFIX = ".md"
+#: An ask run's product commit admits only these docs: the delivery note, a wiki, a README.
+_ASK_DOC_PREFIXES = ("docs/delivery/", "docs/wiki/", "wiki/")
+_PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
 
 
 def _params_from_task_output(path_raw: str) -> dict:
@@ -835,11 +860,194 @@ def _review_only_coding(
     return coded, no_delta
 
 
+def _is_ask_doc(rel: str) -> bool:
+    return rel.endswith(_DOC_SUFFIX) and (
+        rel.startswith(_ASK_DOC_PREFIXES) or PurePosixPath(rel).name.upper().startswith("README")
+    )
+
+
+_DOC_TARGET_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?|#.*)$")
+
+
+def _sizing_doc_targets(worktree_root: Path, plan_path: Optional[str]) -> frozenset:
+    """Paths the cited sizing names in ``doc_consumers`` and ``ask_conflicts`` (a ``:<line>`` or
+    ``#<anchor>`` suffix stripped): the docs stage's mandate beyond README and wiki pages.
+    A sizing or plan path is never a target -- those stay process records. In-process only."""
+    sizing_rel = _cited_sizing(worktree_root, plan_path)
+    text = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
+    if text is None:
+        return frozenset()
+    import yaml
+
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return frozenset()
+    if not isinstance(doc, dict):
+        return frozenset()
+    raw = [p for p in doc.get("doc_consumers") or [] if isinstance(p, str)]
+    raw += [c.get("path") for c in doc.get("ask_conflicts") or [] if isinstance(c, dict) and isinstance(c.get("path"), str)]
+    process = (home_dir(".", "sizings"), "docs/plans/")
+    out = set()
+    for entry in raw:
+        rel = PurePosixPath(_DOC_TARGET_SUFFIX.sub("", entry.strip()).replace("\\", "/")).as_posix()
+        if rel and not any(rel.startswith(PurePosixPath(h).as_posix().rstrip("/") + "/") for h in process):
+            out.add(rel)
+    return frozenset(out)
+
+
+def _fold_doc_paths(
+    worktree_root: Path, doc_paths: list, plan_path: Optional[str], session_id: Optional[str],
+    product_only: bool = False, doc_writes: Optional[list] = None,
+) -> tuple:
+    """(kept, dropped) of a docs stage's reported writes: a kept path is an existing ``.md``
+    under ``docs/`` (or the run's own plan), inside the worktree, and held by no peer's touch
+    claim; for an ask run (``product_only``) only a delivery note, wiki page, README, or a
+    path the cited sizing names in ``doc_consumers``/``ask_conflicts``, and only when it is also in
+    ``doc_writes`` (the docs stage's declared set). In-process only: no spawn."""
+    kept: list = []
+    dropped: list = []
+    targets = _sizing_doc_targets(worktree_root, plan_path) if product_only else frozenset()
+    declared = {PurePosixPath(p.replace("\\", "/")).as_posix() for p in doc_writes or ()}
+    for raw in doc_paths:
+        rel = PurePosixPath(raw.replace("\\", "/")).as_posix()
+        admitted = (
+            rel in declared and (_is_ask_doc(rel) or rel in targets)
+        ) if product_only else (
+            rel == plan_path or (rel.startswith(_DOC_PATH_PREFIX) and rel.endswith(_DOC_SUFFIX))
+        )
+        ok = (
+            not PurePosixPath(rel).is_absolute()
+            and ".." not in PurePosixPath(rel).parts
+            and admitted
+            and contained_path(worktree_root / rel, [worktree_root]) is not None
+            and (worktree_root / rel).is_file()
+        )
+        (kept if ok else dropped).append(rel)
+    peer = _peer_held(worktree_root, session_id, kept)
+    return [p for p in kept if p not in peer], dropped + sorted(peer)
+
+
+#: The engine's resolution ledger: one row per sizing a run landed whole, never committed.
+SIZING_LEDGER_REL = ".coordinator-local/sizings.jsonl"
+
+
+def _resolving_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional[dict]:
+    """``{rel, id, tshirt, ask_sha256}`` for the run's cited sizing, else None. In-process reads."""
+    rel = _cited_sizing(worktree_root, plan_path)
+    text = _read_rel(worktree_root, rel) if rel else None
+    if text is None:
+        return None
+    import hashlib
+
+    import yaml
+
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    estimate = doc.get("estimate") if isinstance(doc.get("estimate"), dict) else {}
+    words = "\n\n".join(
+        str(v.get("text")) for v in doc.get("pm_verbatims") or [] if isinstance(v, dict) and v.get("text")
+    ) or str(doc.get("intent") or "")
+    return {
+        "rel": rel,
+        "id": doc.get("deliverable_id") or PurePosixPath(rel).stem,
+        "tshirt": estimate.get("tshirt") or "?",
+        "route": doc.get("route"),
+        "ask_sha256": hashlib.sha256(words.encode("utf-8")).hexdigest(),
+    }
+
+
+def _record_resolution(worktree_root: Path, resolves: dict, sha: str) -> dict:
+    """Append the sizing's resolution row (``{id, tshirt, route, ask_sha256, resolved_sha, ts,
+    sizing}``) to ``SIZING_LEDGER_REL``. Never raises: the product commit stands."""
+    from datetime import datetime, timezone
+
+    row = {
+        "id": resolves["id"],
+        "tshirt": resolves["tshirt"],
+        "route": resolves["route"],
+        "ask_sha256": resolves["ask_sha256"],
+        "resolved_sha": sha,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sizing": resolves["rel"],
+    }
+    try:
+        from coordinator_core.atomic_append import append_line
+
+        sink = worktree_root / SIZING_LEDGER_REL
+        sink.parent.mkdir(parents=True, exist_ok=True)
+        append_line(sink, (json.dumps(row, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
+        return {"sizing_ledger_error": repr(exc)}
+    return {"sizing_resolved": row}
+
+
+def _ship_cited_sizing(worktree_root: Path, repo_root: Path, plan_path: Optional[str]) -> dict:
+    """Flip the run's cited sizing to ``status: shipped`` through ``sizing.ship`` once its work
+    has landed whole. ``{"sizing_shipped": rel}`` on a write, ``{}`` when nothing applies or it
+    was already shipped, ``{"sizing_ship_skipped": reason}`` when ``sizing.ship`` refuses (a
+    register-bearing or cascade-only sizing closes through the deliverable cascade); never raises -- the
+    product commit stands. The sizing schema has no SHA field: the SHA rides the carrying
+    commit's ``Sizing-Shipped`` trailer."""
+    sizing_rel = _cited_sizing(worktree_root, plan_path)
+    if sizing_rel is None:
+        return {}
+    try:
+        reply = reentrant_dispatch("sizing.ship", {"sizing_path": sizing_rel}, repo_root=repo_root)
+    except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
+        return {"sizing_ship_skipped": repr(exc)}
+    if not isinstance(reply, dict) or reply.get("exit_code") != 0:
+        return {"sizing_ship_skipped": str(reply.get("error") if isinstance(reply, dict) else reply)}
+    return {"sizing_shipped": sizing_rel} if reply.get("applied") else {}
+
+
+_RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
+_RESOLUTION_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
+
+
+def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: str) -> dict:
+    """Write ``resolution: {sha, run_id}`` beside the sizing's ``status: shipped``, in place and
+    schema-checked. ``{}`` on a write, ``{"resolution_error": reason}`` otherwise; never raises --
+    the product commit stands."""
+    if not _RESOLUTION_SHA.match(sha or "") or not _RESOLUTION_RUN_ID.match(run_id or ""):
+        return {"resolution_error": f"unrecordable resolution sha={sha!r} run_id={run_id!r}"}
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import write_fm_nested_field
+    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
+    from coordinator_core.locked_write import MutateAbort, locked_rmw
+
+    schema_path = Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+
+    def mutate(old: str) -> str:
+        new = write_fm_nested_field(old, "resolution", f'  sha: "{sha}"\n  run_id: "{run_id}"\n')
+        try:
+            errors = validate_frontmatter(yaml.safe_load(new) or {}, schema_path)
+        except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
+            raise MutateAbort(f"resolution write refused: {exc}")
+        if errors:
+            raise MutateAbort(f"resolution write refused: {format_validation_errors(errors)}")
+        return new
+
+    try:
+        locked_rmw(worktree_root / sizing_rel, mutate, repo_root=worktree_root)
+    except MutateAbort as exc:
+        return {"resolution_error": str(exc.args[0]) if exc.args else "resolution write refused"}
+    except Exception as exc:  # noqa: BLE001 -- lock timeout, I/O: refuse, keep the commit
+        return {"resolution_error": f"resolution write refused: {exc!r}"}
+    return {}
+
+
 def _stamp_coded_commit(
     commit_v2, worktree_root: Path, repo_root: Path, source_rows: dict,
     sha: str, session_id: Optional[str], also_commit: tuple = (),
     noop_rows: Optional[dict] = None, checkpoint_rows: Optional[dict] = None,
     snapshot: Optional[_Snapshot] = None, flip_plan: Optional[str] = None,
+    trailers: tuple = (), commit: bool = True,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -854,7 +1062,8 @@ def _stamp_coded_commit(
     committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
     the one commit below carries rows, minted stamp and status together; its reply
     returns under ``_flip``. A commit that does not land restores the flip with the rows.
-    ``_committed`` names the paths the commit carried.
+    ``commit=False`` (an ask run, whose plan is a process record) leaves the stamps on disk and
+    lands nothing. ``_committed`` names the paths the commit carried.
     Returns ``{"rows_coded", "coded_sha"}`` or ``{"coded_stamp_error"}``.
     """
     from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
@@ -894,6 +1103,8 @@ def _stamp_coded_commit(
         originals[plan_rel] = original
         rows_coded[plan_rel] = flipped
 
+    if not commit:
+        return {"rows_coded": rows_coded, "coded_sha": None}
     # A plan `review_stamp.mint` just wrote rides this commit even when none of
     # its rows flipped (a re-fire over already-coded rows).
     paths = sorted(set(rows_coded) | set(also_commit))
@@ -918,6 +1129,8 @@ def _stamp_coded_commit(
         return {"rows_coded": {}, "coded_sha": None}
     n = sum(len(v) for v in rows_coded.values())
     message = f"mark {n} rows coded ({sha[:7]})" if n else f"review stamp ({sha[:7]})"
+    if trailers:
+        message += "\n\n" + "\n".join(trailers)
     params: dict = {"paths": paths, "message": message}
     if snapshot is not None and not uncovered:
         params["ignored_untracked"] = []
@@ -1020,6 +1233,62 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
         out["integration_sidecar"] = integration.get("sidecar")
         out["unresolved"] = integration.get("unresolved") or []
         out["confinement_violations"] = integration.get("confinement_violations") or 0
+    return out
+
+
+def _ledger_gate(run_dir: Path, verdict: object) -> Optional[dict]:
+    """The refusal when the run's requirements ledger is not met by ``verdict``, else None.
+    A run emitted before the ledger existed (no ledger file) is not gated."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+    ledger = requirements_ledger.read_ledger(run_dir)
+    if ledger is None:
+        return None
+    if not isinstance(verdict, dict):
+        return _error(
+            "the run keeps a requirements ledger but params.ledger_verdict is absent: the final "
+            "ledger checker's verdict gates this commit. Re-run the run's ledger check and pass "
+            "its verdict, or revise the ledger with workflow.revise and re-run the check",
+            refused="ledger-unjudged",
+        )
+    result = requirements_ledger.judge(ledger, verdict)
+    if result["pass"]:
+        return None
+    return _error(
+        "the requirements ledger is not met: "
+        + "; ".join(f"{f['id']}: {f['reason']}" for f in result["failures"][:10]),
+        refused="ledger-unmet",
+        ledger_failures=result["failures"],
+        ledger_items=len(ledger.items),
+        all_of_pm_ask=ledger.all_of_pm_ask,
+    )
+
+
+def _ask_trailers(
+    worktree_root: Path, plan_path: Optional[str], record_abs: Optional[Path], receipts: list
+) -> list:
+    """The trailers an ask run's product commit carries in place of the process records it
+    leaves out: ``Falsifier: <pytest node>`` (the plan's falsifier), ``Review: <sha256>`` (the
+    review record under ``.coordinator-local/``) and one ``Completion-Receipt: <id>`` each."""
+    import hashlib
+
+    from coordinator_core.completion_receipts.model import RECEIPT_TRAILER
+
+    out = []
+    plan_text = _read_rel(worktree_root, plan_path) if plan_path else None
+    if plan_text is not None:
+        from coordinator_core.ops.dispatch_emit.emit import _prime_exit_criterion_falsifier
+
+        falsifier = _prime_exit_criterion_falsifier(plan_text) or {}
+        node = _PYTEST_NODE.search(str(falsifier.get("how") or ""))
+        if node:
+            out.append(f"Falsifier: {node.group(0)}")
+    if record_abs is not None:
+        try:
+            out.append(f"Review: {hashlib.sha256(record_abs.read_bytes()).hexdigest()}")
+        except OSError:
+            pass
+    out.extend(f"{RECEIPT_TRAILER}: {fm['receipt_id']}" for fm, _prose in receipts)
     return out
 
 
@@ -1861,6 +2130,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              inline_review, explicit params win.
         session_id (str, optional)       -- forwarded to ``ceremony.commit_v2``
                                              when canonical-UUID shaped.
+        ledger_verdict (dict, optional)  -- an ask run's final ledger-checker
+                                             verdict ``{items: [{id, status,
+                                             essential?, superseded_by?}]}``;
+                                             required when the run dir holds a
+                                             requirements ledger, re-judged
+                                             against it (``refused`` is
+                                             ``ledger-unjudged`` / ``ledger-unmet``).
 
     Returns: ``ceremony.commit_v2``'s reply dict plus ``chunks_committed``
     (ids), ``dropped_absent`` (paths dropped as absent-and-untracked) and
@@ -2022,6 +2298,15 @@ def _terminal_commit(
 
     worktree_root = main_worktree_root(repo_root)
 
+    if params.get("run_token") is not None:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        if not run_token.admits(worktree_root, params.get("run_id"), params["run_token"], script_path_raw):
+            return _error(
+                "params.run_token does not match a live token minted for params.run_id and this script",
+                refused="run-token",
+            )
+
     guarded_script = contained_path(worktree_root / script_path_raw, [worktree_root])
     if guarded_script is None:
         return _error(
@@ -2035,6 +2320,7 @@ def _terminal_commit(
         return _error(f"cannot read params.script_path {script_path_raw!r}: {exc}")
 
     manifest_rel: Optional[str] = None
+    ask_run_dir: Optional[Path] = None
     request: Optional[CommitRequest] = None
     try:
         manifest_rel = parse_manifest_marker(script_text)
@@ -2061,6 +2347,7 @@ def _terminal_commit(
                 return _error(f"cannot read ask-run manifest {manifest_rel!r}: {exc!r}")
             if gated_ids is not None:
                 gated_ids.update(g.id for g in manifest.gated)
+            ask_run_dir = manifest_abs.parent
             request_abs = contained_path(worktree_root / manifest.marker_path, [run_root])
             if request_abs is None:
                 return _error(
@@ -2081,6 +2368,8 @@ def _terminal_commit(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     anchor_only = not request.chunks
+    # An ask run commits product only; its process records stay on disk, named by trailers.
+    product_only = ask_run_dir is not None
     # A review-only run closes no row: a row reopened since its emit must stay open.
     rows_untouched = anchor_only or request.review_only
     if close_ctx is not None:
@@ -2120,6 +2409,10 @@ def _terminal_commit(
             "Use the digest's `terminal_commit_cli` line verbatim",
             refused="unreviewed",
         )
+    if ask_run_dir is not None:
+        unmet = _ledger_gate(ask_run_dir, params.get("ledger_verdict"))
+        if unmet is not None:
+            return unmet
 
     observed_branch = head_branch(worktree_root)
     if observed_branch == "HEAD":
@@ -2309,7 +2602,7 @@ def _terminal_commit(
         all_paths.extend(list(chunk.paths) + own_prefix_files)
         prefix_files.extend(own_prefix_files)
 
-    if bookkeeping_record_path is not None and bookkeeping_record_path not in all_paths:
+    if bookkeeping_record_path is not None and not product_only and bookkeeping_record_path not in all_paths:
         all_paths.append(bookkeeping_record_path)
 
     # A sibling-checkout path never reaches the home commit (it would drop as
@@ -2330,7 +2623,7 @@ def _terminal_commit(
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    if not anchor_only:
+    if not anchor_only and not product_only:
         for companion in companions:
             if companion not in all_paths:
                 all_paths.append(companion)
@@ -2339,6 +2632,15 @@ def _terminal_commit(
         ):
             if seam_rel not in all_paths:
                 all_paths.append(seam_rel)
+
+    doc_dropped: list = []
+    doc_kept: list = []
+    if not anchor_only and params.get("doc_paths"):
+        doc_kept, doc_dropped = _fold_doc_paths(
+            worktree_root, params["doc_paths"], request.plan_path, session_id, product_only,
+            params.get("doc_writes"),
+        )
+        all_paths.extend(p for p in doc_kept if p not in all_paths)
 
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
@@ -2370,7 +2672,14 @@ def _terminal_commit(
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    scope.update(root=worktree_root, request=request, snapshot=snapshot)
+    scope_request = request
+    if product_only and params.get("doc_writes"):
+        scope_request = CommitRequest(
+            chunks=request.chunks + (ChunkCommit(id="docs", title="docs", paths=tuple(params["doc_writes"])),),
+            deliverable_id=request.deliverable_id, plan_path=request.plan_path,
+            session_id=request.session_id,
+        )
+    scope.update(root=worktree_root, request=scope_request, snapshot=snapshot)
     final_paths_set = set(all_paths)
     changed = _changed(snapshot, worktree_root, all_paths)
 
@@ -2410,11 +2719,13 @@ def _terminal_commit(
             base_sha=head_sha(worktree_root),
             branch=observed_branch,
             now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            local=product_only,
         )
         receipt_paths = write_run_receipts(worktree_root, receipts_built) if receipts_built else []
     except Exception as exc:  # noqa: BLE001 -- write_run_receipts already removed its partial writes
         return _error(f"completion receipt write failed: {exc}", refused="receipt-write-failed")
-    all_paths.extend(receipt_paths)
+    if not product_only:
+        all_paths.extend(receipt_paths)
 
     subject = (
         f"review anchor: {request.plan_path} -- delivery PASS, no product files"
@@ -2440,10 +2751,15 @@ def _terminal_commit(
     trailers = []
     if request.deliverable_id:
         trailers.append(f"Deliverable-Id: {request.deliverable_id}")
+    resolves = None if anchor_only or incomplete_chunks else _resolving_sizing(worktree_root, request.plan_path)
+    if resolves is not None:
+        trailers.append(f"Resolves-Sizing: {resolves['id']} {resolves['tshirt']}")
     trailers.append(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
+    if product_only:
+        trailers.extend(_ask_trailers(worktree_root, request.plan_path, record_abs, receipts_built))
     paragraphs.append("\n".join(trailers))
     message = "\n\n".join(paragraphs)
 
@@ -2579,11 +2895,22 @@ def _terminal_commit(
                     tree=reply.get("tree"),
                 )
             )
+        shipped_sizing = None
+        if not anchor_only and not incomplete_chunks and not register_sizing:
+            shipped = _ship_cited_sizing(worktree_root, repo_root, request.plan_path)
+            shipped_sizing = shipped.pop("sizing_shipped", None)
+            reply.update(shipped)
+            if shipped_sizing:
+                run_id = params.get("run_id") or (
+                    ask_run_dir.name if ask_run_dir is not None else PurePosixPath(script_path_raw).stem
+                )
+                reply.update(_write_resolution(worktree_root, shipped_sizing, str(reply["sha"]), str(run_id)))
         also_commit = tuple(
             p for p in (
                 request.plan_path if reply.get("review_stamp") == "minted" else None,
                 reply.get("review_receipt"),
                 register_sizing,
+                shipped_sizing,
             ) if p
         )
         paying_close = close_ctx is not None and close_ctx["applies"]
@@ -2617,12 +2944,18 @@ def _terminal_commit(
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
                 snapshot=snapshot,
                 flip_plan=request.plan_path if flips else None,
+                trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
+                commit=not product_only,
             )
         )
         flipped = reply.pop("_flip", None)
         scope["landed"].update(reply.pop("_committed", ()))
         if paying_close:
             _settle_close(worktree_root, close_ctx, "coded_stamp_error" not in reply)
+        if shipped_sizing:
+            reply["sizing_shipped"] = {"sizing": shipped_sizing, "sha": str(reply["sha"])}
+        if resolves is not None:
+            reply.update(_record_resolution(worktree_root, resolves, str(reply["sha"])))
         coded_stale = reply.pop("coded_index_stale", [])
         if coded_stale:
             reply["index_stale"] = sorted(set(reply.get("index_stale") or []) | set(coded_stale))
@@ -2639,6 +2972,8 @@ def _terminal_commit(
             reply["plan_status_reason"] = register_failure
         elif flips and reply.get("coded_sha") and flipped is not None:
             reply.update(flipped)
+        elif flips and product_only and "coded_stamp_error" not in reply:
+            reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
         elif request.plan_path and reply.get("review_stamp") == "minted":
             reply["plan_status"] = "not-stamped"
             reply["plan_status_reason"] = (
@@ -2676,6 +3011,8 @@ def _terminal_commit(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
+    if doc_dropped:
+        reply["doc_paths_dropped"] = doc_dropped
     if reply.get("committed") or reply.get("nothing_to_commit"):
         _with_siblings(reply)
     elif sibling_paths:

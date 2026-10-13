@@ -67,7 +67,7 @@ def test_first_pytest_allowed_second_denied(repo) -> None:
     out = g.check(_bash(repo, "pytest b.py -q"))
     assert _denied(out)
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "Dispatch coordinator:test-runner, or ask the executor." in reason
+    assert "emit-dispatch-workflow --sizing" in reason
     assert "No self-escape" in reason and "honoured once." in reason
 
 
@@ -162,7 +162,7 @@ def test_scratch_py_write_denied_after_executor(repo) -> None:
     _executor_ran(repo)
     out = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))
     assert _denied(out)
-    assert "coordinator:test-runner" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "warp run's test stage" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_scratch_py_write_allowed_before_executor(repo) -> None:

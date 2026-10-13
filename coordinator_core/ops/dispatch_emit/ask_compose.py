@@ -21,7 +21,9 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
+    PM_INTENT_FILE,
     HALT_REFUSAL,
+    HALT_ROOM,
     HALT_TOUCHPOINT,
     NO_PLAN_HAND_OFF_FLAG,
     OP_ASK_GATE,
@@ -32,6 +34,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     STOP_AFTER_PLAN,
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
+from coordinator_core.ops.dispatch_emit.requirements_ledger import (
+    LEDGER_VIEW_FILE,
+    STATUSES as LEDGER_STATUSES,
+)
 from coordinator_core.ops.dispatch_emit.pm_adjudication import (
     ADJUDICATOR_AGENT_TYPE,
     IRREVERSIBLE_GATE_SOURCE,
@@ -87,13 +93,44 @@ def _cat(*parts: str) -> str:
 
 
 def _agent(
-    prompt_expr: str, *, label: str, phase: str, agent_type: str, schema: dict, agent_model: Optional[str] = None
+    prompt_expr: str,
+    *,
+    label: str,
+    phase: str,
+    agent_type: str,
+    schema: dict,
+    agent_model: Optional[str] = None,
+    effort: Optional[str] = None,
 ) -> str:
+    effort_opt = f"effort: {_lit(effort)}, " if effort else ""
     return (
         f"agent({prompt_expr}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
-        f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, "
+        f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, {effort_opt}"
         f"schema: {json.dumps(schema, sort_keys=True)} }})"
     )
+
+
+#: Model and effort per stage. Sonnet executes and runs mechanical engine calls at low effort;
+#: Opus only where judgment carries the run: the S plan, and the ceo XL exit. Each Opus stage
+#: uses an agent type whose definition pins `model: opus`, so `block_ungranted_opus_subagent`
+#: admits it and `enforce_agent_model_pin` sees an equal model and a cheaper-or-equal effort.
+_MECHANICAL_EFFORT = "low"
+_PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
+_PLAN_AUTHOR_MODEL, _PLAN_AUTHOR_EFFORT = "opus", "low"
+_XL_EXIT_MODEL, _XL_EXIT_EFFORT = "opus", "low"
+_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
+#: The git-commit-agent definition pins haiku; one fixed command needs nothing more.
+_COMMIT_MODEL = "haiku"
+_DOCS_MODEL = "sonnet"
+#: The run's delivery note: what was asked, what shipped, review findings, judge verdict.
+DELIVERY_NOTE_DIR = "docs/delivery"
+#: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
+#: followed a memo over the ask on the strength of an APM ruling).
+_KEEP_THE_ASK = (
+    " The PM's verbatim words (the sizing's pm_verbatims, and {run_dir}/ask.md when it exists) "
+    "outrank any in-repo memo, plan or doctrine: never rule against them on a memo's strength. "
+    "Where they conflict, keep the ask and name the conflict in your ruling."
+)
 
 
 def _obj(required: list[str], properties: dict) -> dict:
@@ -145,6 +182,72 @@ _ACCEPT_SCHEMA = _obj(
 )
 _ACCEPT_RESULT_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
+_XL_SCHEMA = _obj(
+    ["verdict", "pmOnly", "ruling"],
+    {
+        "verdict": {"type": "string", "enum": ["ruled", "pm-only"]},
+        "pick": {"type": "string", "enum": ["roadmap", "accept_multi_session"]},
+        "pmOnly": {"type": "boolean"},
+        "pmOnlyGround": _STR,
+        "ruling": _STR,
+    },
+)
+_DOCS_SCHEMA = _obj(
+    ["doc_paths", "doc_writes"],
+    {
+        "doc_paths": {"type": "array", "items": _STR},
+        "doc_writes": {"type": "array", "items": _STR},
+        "note_path": _STR,
+    },
+)
+
+# Mirrors emit.py::_REPO_ROOT_DECLARATION: the token arrives as a fire arg, never as script bytes.
+_RUN_TOKEN_DECLARATION = (
+    "  const _RUN_TOKEN = (typeof args !== 'undefined' && args && typeof args.runToken === 'string' "
+    "&& args.runToken) ? args.runToken : null;"
+)
+_COMMIT_SCHEMA = _obj(
+    ["committed"],
+    {
+        "committed": {"type": "boolean"},
+        "sha": {"type": ["string", "null"]},
+        "error": {"type": ["string", "null"]},
+        "refused": {"type": ["string", "null"]},
+        "sizing_shipped": {"type": ["object", "null"]},
+        "close": {"type": ["object", "null"]},
+    },
+)
+_LEDGER_CHECK_SCHEMA = _obj(
+    ["verdict", "items"],
+    {
+        "verdict": {"type": "string", "enum": ["pass", "fail"]},
+        "all_of_pm_ask": {"type": "boolean"},
+        "items": {
+            "type": "array",
+            "items": _obj(
+                ["id", "status"],
+                {
+                    "id": _STR,
+                    "status": {"type": "string", "enum": list(LEDGER_STATUSES)},
+                    "essential": {"type": "boolean"},
+                    "superseded_by": _STR,
+                    "evidence": _STR,
+                },
+            ),
+        },
+        "conflicts": {"type": "array", "items": _STR},
+    },
+)
+_LEDGER_CHECK_AGENT_TYPE = "coordinator:code-reviewer"
+#: The stage-start read every judgment-bearing stage makes: the EM can revise the ask mid-run
+#: (`workflow.revise`), so a stage that read the ask only at emit would act on a stale one.
+_LEDGER_CLAUSE = (
+    "Requirements ledger: read {ledger} at the start of this stage, before anything else. It holds "
+    "every PM requirement for this run in arrival order: the PM's own words and each revision the "
+    "EM sent while the run was in flight, and it can grow mid-run. Each item outranks every brief, "
+    "plan and in-repo memo; a later revision governs over an earlier item it changes. Carry every "
+    "item into what you hand on."
+)
 _MANIFEST_SCHEMA = _obj(
     ["run_dir", "rows", "review_declared_paths", "marker_path"],
     {
@@ -171,6 +274,24 @@ _MANIFEST_SCHEMA = _obj(
         "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "closure_key": {}})},
     },
 )
+
+
+_LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
+
+
+def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
+    """`planBlitz` defined inside a scope whose `agent` prefixes the ledger clause, so every
+    plan-blitz prompt reads the requirements ledger first. An EM-brief shadow inside the function
+    calls `_askAgent`, rebound here to the ledger-prefixed agent: the brief and the ledger compose."""
+    rebind = "    const _askAgent = (p, o) => agent(p, o);\n" if em_brief else ""
+    return (
+        "  const _outerAgent = agent;\n"
+        f"  const {_PLAN_BLITZ_FN} = (() => {{\n"
+        f"    const agent = (p, o) => _outerAgent({_LEDGER_PREFIX_VAR} + p, o);\n"
+        f"{rebind}{blitz_fn}\n"
+        f"    return {_PLAN_BLITZ_FN};\n"
+        "  })();"
+    )
 
 
 _SCOPE_SLOT = "SCOPE_SLOT_X"
@@ -258,6 +379,23 @@ def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
         return None
 
 
+def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
+    """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, ceo mode."""
+    if not sizing_rel:
+        return False
+    from coordinator_core.ops.sizing_acceptance import apm_picks_xl_exit
+
+    try:
+        sizing = load_sizing(Path(repo_root), sizing_rel)
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return False
+    return (
+        sizing.get("route") == "pm-decision"
+        and sizing.get("xl_exit") is None
+        and apm_picks_xl_exit(sizing.get("interaction_mode"))
+    )
+
+
 def _read_plan_blitz() -> str:
     from coordinator_core.ops.dispatch_emit.ask_plan_blitz import load_plan_blitz_text
 
@@ -272,6 +410,7 @@ def _phase_titles(
     judged: bool = False,
     with_accept: bool = False,
     through_plan: bool = False,
+    extra: Sequence[str] = (),
 ) -> list[str]:
     titles: list[str] = []
     for phase in ASK_PHASES:
@@ -285,9 +424,9 @@ def _phase_titles(
             if through_plan:
                 return titles
     judge_titles = [CRITERION_JUDGE_PHASE_TITLE] if judged else []
-    for extra in [_emit._EXECUTE_PHASE_TITLE, *review_titles, *judge_titles, _emit._TEST_PHASE_TITLE]:
-        if extra not in titles:
-            titles.append(extra)
+    for title in [_emit._EXECUTE_PHASE_TITLE, *review_titles, *judge_titles, _emit._TEST_PHASE_TITLE, *extra]:
+        if title not in titles:
+            titles.append(title)
     return titles
 
 
@@ -345,6 +484,7 @@ def compose_ask_script(
     preamble: Optional[str] = None,
     em_brief: Optional[EmBrief] = None,
     stop_after: Optional[str] = None,
+    in_run_commit: bool = False,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -367,6 +507,11 @@ def compose_ask_script(
     `stop_after=STOP_AFTER_PLAN` ends the script at the plan wave with the single exit
     `{planned, sizing, run_id}` (XS: `{route: 'dispatch', sizing}`); stage, execute and review
     are not composed.
+    `in_run_commit` composes the docs and commit stages: the run lands its own terminal commit and
+    reports the close-job record; without it the EM runs the commit. The run token is read at
+    runtime from `args.runToken`; no token bytes are ever emitted.
+    On a raw ask in ceo mode an XL `pm-decision` sizing gets its exit picked in-run by the APM;
+    `roadmap_blitz_text` (or the plugin asset) embeds the roadmap arm that pick can lead to.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
@@ -399,6 +544,22 @@ def compose_ask_script(
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
 
+    xl_open = _xl_exit_open(repo_root, sizing_rel)
+    # A raw ask is sized in-run, so any size can reach the XL exit.
+    xl_possible = not sizing_rel or xl_open
+    rb_fn: str = ""
+    rb_phases: list[str] = []
+    if xl_possible and not em_brief:
+        from coordinator_core.ops.dispatch_emit import ask_roadmap
+        from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
+
+        try:
+            rb_text = roadmap_blitz_text if roadmap_blitz_text is not None else ask_roadmap.load_roadmap_blitz_text()
+            rb_fn, rb_phases = ask_roadmap.wrap_roadmap_stage(rb_text)
+        except (AskPlanBlitzRefused, OSError):
+            # Unembedded, an in-run roadmap pick halts naming the `--ask --sizing` re-fire.
+            rb_fn, rb_phases = "", []
+
     if known_arm == ARM_ROADMAP:
         if em_brief:
             raise AskComposeRefused("the roadmap arm takes no EM brief; drop --brief/--brief-file/--context")
@@ -426,7 +587,14 @@ def compose_ask_script(
     def prompt_of(*lines_and_exprs: str) -> str:
         return _cat(f"{head}\n\n{anchor}\n\n", *lines_and_exprs)
 
-    review_head = head + session_tail
+    ledger_rel = f"{run_dir}/{LEDGER_VIEW_FILE}"
+    ledger_clause = "\n\n" + _LEDGER_CLAUSE.format(ledger=ledger_rel)
+    intent_clause = (
+        f"\n\nFirst read {run_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
+        "criterion. They outrank every brief, plan and in-repo memo; judge the change against them, "
+        "and treat a claim the change leaves untrue, or a brief that weakened it, as a finding."
+    ) + ledger_clause
+    review_head = head + intent_clause + session_tail
     run_base_sha = head_sha(repo_root) or ""
     review_blocks = compose_execute_review(
         review,
@@ -444,7 +612,7 @@ def compose_ask_script(
         review,
         review_stage_schemas,
         run_base_sha=run_base_sha,
-        head=head,
+        head=head + intent_clause,
         agent_type_host=agent_type_host,
     )
 
@@ -459,11 +627,25 @@ def compose_ask_script(
     b.append("  let _planRel = null;")
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
+    b.append("  let _viaRoadmap = false;")
+    if in_run_commit:
+        b.append(_RUN_TOKEN_DECLARATION)
+        b.append("  let _docWrites = [];")
+    b.append("  let _nextAction = null;")
+    b.append("  let _docs = null;")
+    b.append("  let _commit = null;")
+    b.append("  let _ledger = null;")
+    if rb_fn:
+        from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS
+
+        b.extend(ROADMAP_DECLS)
+        b.append(rb_fn)
     if em_brief:
         b.append(f"  {brief_decl_js(em_brief)}")
         b.append("  const _askAgent = agent;")
+    b.append(f"  const {_LEDGER_PREFIX_VAR} = {_lit(_LEDGER_CLAUSE.format(ledger=ledger_rel) + chr(10) * 2)};")
     if blitz_fn:
-        b.append(blitz_fn)
+        b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief)))
     runner_js = _row_runner_js()
     if em_brief:
         if runner_js.count(_ROW_VERIFY_PROMPT_OPEN) != 1:
@@ -493,7 +675,9 @@ def compose_ask_script(
             "not a step change, however much it rebuilds. Return "
             "as `gated` every deliverable the ask declares as owned by another repo or blocked on an "
             "external gate (title, owner_repo, requires): never fold one into `writes` and never omit "
-            "one.\n\nAsk:\n"
+            "one."
+            + ledger_clause
+            + "\n\nAsk:\n"
             + (prompt or "")
         )
         b.append(
@@ -558,12 +742,14 @@ def compose_ask_script(
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
     )
-    gate_call = _agent(gate_prompt, label="gate", phase="gate", agent_type=agent_type, schema=_GATE_SCHEMA)
+    gate_call = _agent(
+        gate_prompt, label="gate", phase="gate", agent_type=agent_type, schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT
+    )
     b.append(
         f"  let _gate = {'_halted ? { arm: null, halt: null } : ' if not sizing_rel else ''}await {gate_call};"
     )
 
-    if accept_pending or not sizing_rel:
+    if accept_pending or xl_possible:
         apm_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             "phase: accept\n\nYou are the PM's delegate for one exit criterion. Nobody escalates to the "
@@ -576,7 +762,7 @@ def compose_ask_script(
             "publish, push to main or cross-repo commit gate: return verdict 'pm-only' with "
             "pmOnlyGround and pmOnly true ONLY when the matter is important AND urgent AND has no clear "
             "right answer, or needs such an external or irreversible action. Being unsure is not a "
-            "ground. You stage and commit nothing.",
+            "ground. You stage and commit nothing." + _KEEP_THE_ASK.format(run_dir=run_dir) + ledger_clause,
         )
         apm_call = _agent(
             apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
@@ -594,25 +780,80 @@ def compose_ask_script(
             "and that message as error.",
         )
         run_call = _agent(
-            run_prompt, label="accept-record", phase="accept", agent_type=agent_type, schema=_ACCEPT_RESULT_SCHEMA
+            run_prompt, label="accept-record", phase="accept", agent_type=agent_type,
+            schema=_ACCEPT_RESULT_SCHEMA, effort=_MECHANICAL_EFFORT,
         )
+        xl_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "phase: xl-exit\n\nYou are the PM's delegate for one XL exit; this sizing runs in ceo mode, "
+            "so nobody escalates to the human here. Read the sizing at ",
+            "js:_sizingRel",
+            " (intent, estimate, exit_criterion, research) and pick its exit: 'accept_multi_session' when "
+            "the work is one deliverable a single multi-session plan can carry; 'roadmap' when it spans two "
+            "or more named workstreams or needs an initiative or goal link. Return verdict 'ruled', the "
+            "pick, and your one-paragraph reasoning verbatim as ruling. Return verdict 'pm-only' with "
+            "pmOnly true and pmOnlyGround ONLY when the job-to-be-done itself is unstated, or the work "
+            "needs a merge, publish, push to main or cross-repo commit. Being unsure is not a ground. "
+            "You stage and commit nothing." + _KEEP_THE_ASK.format(run_dir=run_dir) + ledger_clause,
+        )
+        xl_call = _agent(
+            xl_prompt, label="xl-exit", phase="xl-exit", agent_type=ADJUDICATOR_AGENT_TYPE,
+            schema=_XL_SCHEMA, agent_model=_XL_EXIT_MODEL, effort=_XL_EXIT_EFFORT,
+        )
+        xl_record_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run `{_INVOKE} sizing.record_xl_exit '",
+            "js:JSON.stringify({ sizing: _sizingRel, xl_exit: _xl.pick, apm_ruling: _xl.ruling, ruling_ref: _runId })",
+            "'` and return ok true when its reply has exit_code 0. Otherwise return ok false and its "
+            "error as error.",
+        )
+        xl_record_call = _agent(
+            xl_record_prompt, label="xl-exit-record", phase="xl-exit", agent_type=agent_type,
+            schema=_ACCEPT_RESULT_SCHEMA, effort=_MECHANICAL_EFFORT,
+        )
+        irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append(
-            f"  if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)}) {{\n"
+            # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
+            # owe both the exit pick and the exit-criterion acceptance. No progress ends the loop.
+            "  for (let _round = 0; _round < 3 && _gate.halt; _round++) {\n"
+            "    let _progressed = false;\n"
+            f"    if (_gate.halt.kind === {_lit(HALT_TOUCHPOINT)}) {{\n"
             "    phase('accept');\n"
             "    let _apm = null;\n"
             f"    try {{ _apm = await {apm_call}; }} catch (_e) {{ _apm = null; }}\n"
-            f"    const _apmGated = new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i').test(_apm?.ruling ?? '');\n"
+            f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling) {\n"
             "      let _recorded = null;\n"
             f"      try {{ _recorded = await {run_call}; }} catch (_e) {{ _recorded = null; }}\n"
             "      if (_recorded && _recorded.ok === true) {\n"
             f"        _gate = await {gate_call};\n"
+            "        _progressed = true;\n"
             "      }\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
             "      _gate = { ..._gate, halt: { ..._gate.halt, apm: { verdict: _apm.verdict, "
             "pmOnlyGround: _apm.pmOnlyGround ?? (_apmGated ? 'external-or-irreversible' : null), ruling: _apm.ruling ?? null } } };\n"
             "    }\n"
+            f"    }} else if ({'true' if xl_possible else 'false'} && _gate.halt.kind === {_lit(HALT_ROOM)} && _gate.halt.apm_xl_exit === true) {{\n"
+            "    phase('xl-exit');\n"
+            "    let _xl = null;\n"
+            f"    try {{ _xl = await {xl_call}; }} catch (_e) {{ _xl = null; }}\n"
+            f"    const _xlGated = {irreversible}.test(_xl?.ruling ?? '');\n"
+            "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
+            "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick)) {\n"
+            "      let _xr = null;\n"
+            f"      try {{ _xr = await {xl_record_call}; }} catch (_e) {{ _xr = null; }}\n"
+            "      if (_xr && _xr.ok === true) {\n"
+            f"        _gate = await {gate_call};\n"
+            "        _progressed = true;\n"
+            "      }\n"
+            "    }\n"
+            f"    if (!_progressed && _xl) {{\n"
+            "      _gate = { ..._gate, halt: { ..._gate.halt, apm: { verdict: _xl.verdict, pick: _xl.pick ?? null, "
+            "pmOnlyGround: _xl.pmOnlyGround ?? (_xlGated ? 'external-or-irreversible' : null), ruling: _xl.ruling ?? null } } };\n"
+            "    }\n"
+            "    }\n"
+            "    if (!_progressed) break;\n"
             "  }"
         )
     if sizing_rel:
@@ -650,7 +891,13 @@ def compose_ask_script(
         "script; never author the frontmatter block by hand), then change its existing `scope_mode:` line to `spec-dispatch`, derive its "
         "spine from the sizing, then FILL the "
         "scaffold: no PLACEHOLDER, `path/to/file` or `<REPLACE:` marker may remain anywhere in the "
-        "plan -- stage refuses a plan that still carries one. Return its repo-relative path as plan_rel."
+        "plan -- stage refuses a plan that still carries one. Each row states an outcome: the PM's "
+        "verbatim words it serves, what is true when it is done, and the files it may touch; the "
+        "executor designs the change, so never write the code, a diff or an 'implement exactly' "
+        "instruction into a row. The sizing's pm_verbatims outrank any in-repo memo or doctrine. "
+        "Return its repo-relative path as plan_rel."
+        + ledger_clause
+        + " Every ledger item is one the plan's rows must serve; quote each in the row that serves it."
         + (
             " Read the sizing's `scout_evidence` entries, if it has any, before deriving the spine."
             if plan_blitz_args
@@ -661,7 +908,7 @@ def compose_ask_script(
     b.append("    if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
     b.append("    phase('plan');")
     b.append(
-        f"    _planRel = (await {_agent(plan_author, label='plan', phase='plan', agent_type=agent_type, schema=_PLAN_SCHEMA)}).plan_rel;"
+        f"    _planRel = (await {_agent(plan_author, label='plan', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_PLAN_SCHEMA, agent_model=_PLAN_AUTHOR_MODEL, effort=_PLAN_AUTHOR_EFFORT)}).plan_rel;"
     )
     b.append("    }")
     b.append("  }")
@@ -710,10 +957,29 @@ def compose_ask_script(
             ),
         )
 
+    if xl_possible:
+        b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_ROADMAP)}) {{")
+        b.append("    _viaRoadmap = true;")
+        if rb_fn and blitz_fn:
+            from coordinator_core.ops.dispatch_emit.ask_roadmap import roadmap_stage_lines
+
+            b.extend(
+                roadmap_stage_lines(
+                    repo_root=repo_root, run_id=run_id, interaction_mode="ceo", plan_blitz_args=plan_blitz_args
+                )
+            )
+        else:
+            b.append(
+                f"    _halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to the roadmap arm, "
+                "which this script does not embed: re-fire emit-dispatch-workflow --ask --sizing ' + _sizingRel, "
+                "sizing: _sizingRel, run_id: _runId };"
+            )
+        b.append("  }")
+    b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     b.append("  phase('stage');")
     b.append(
-        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA)};"
+        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT)};"
     )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append(
@@ -733,7 +999,7 @@ def compose_ask_script(
         f"{brief_prefix}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
-        f" -- read it completely, then execute it as written.{session_tail}",
+        f" -- read it completely, then execute it as written.{ledger_clause}{session_tail}",
     )
     b.append(
         f"      _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
@@ -791,9 +1057,61 @@ def compose_ask_script(
         script_path=script_path,
         session_id=session_id,
     )
+    ledger_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "phase: ledger-check\n\nRead-only: edit, stage and commit nothing. You are the run's final "
+        "checker: judge the result against every requirement the PM has on record, never against the "
+        f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
+        f"since the run started), then {run_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
+        "(`git status --porcelain` and `git diff`), the plan when one exists (",
+        "js:(_planRel ?? 'none')",
+        f"), and the briefs under {run_dir}/briefs. Return one entry in items for EVERY ledger item, by "
+        "its id (R1, R2, ...): status 'met' when the change makes the item literally true; 'drifted' "
+        "when it was lost or reinterpreted in transit -- a brief, plan, memo or stage narrowed, "
+        "softened or re-read it (name where in evidence); 'superseded' only when a LATER revision item "
+        "replaces it, named as superseded_by; otherwise 'not_met'. Set essential false only for an "
+        "item that is an aside rather than something the PM asked to have delivered; when the ledger "
+        "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
+        "or two sentences naming the file or behaviour. Return all_of_pm_ask as the ledger states it, "
+        "and list any in-repo memo or doctrine that conflicts with the ask as conflicts. verdict is "
+        "'pass' only when every item is judged, none drifted, and no mandatory or essential item is "
+        "not_met; otherwise 'fail'.",
+    )
+    ledger_call = _agent(
+        ledger_prompt, label="ledger-check", phase="ledger-check",
+        # A bare host has no coordinator review type; the prompt carries the whole charter.
+        agent_type="general-purpose" if agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED else _LEDGER_CHECK_AGENT_TYPE,
+        schema=_LEDGER_CHECK_SCHEMA, agent_model="sonnet", effort=_MECHANICAL_EFFORT,
+    )
+    b.append("  if (!_halted && _manifest && !_manifest.error) {")
+    b.append("    phase('ledger-check');")
+    b.append(f"    try {{ _ledger = await {ledger_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(
-        f"  {CAP_HELPER_JS}\n"
-        f"  {TERMINAL_COMMIT_CLI_HELPER_JS}\n"
+        "    if (!_halted && (!_ledger || _ledger.verdict !== 'pass')) { _halted = { halted: 'ledger-check', "
+        "items: (_ledger?.items ?? []).filter((i) => i && i.status !== 'met'), "
+        f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
+        "next_action: 'Revise the ask with coordinator-invoke workflow.revise (run_id, verbatim), or fix the "
+        "change, then re-fire.' }; }"
+    )
+    b.append("  }")
+    b.append("  }")
+    b.append(f"  {CAP_HELPER_JS}")
+    b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
+    b.append(
+        "  _nextAction = (_manifest && !_manifest.error) "
+        f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
+        ": { kind: 'none', op: null, params: null };"
+    )
+    b.append(
+        "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
+        ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, "
+        "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}) })) }; }"
+    )
+    stage_titles: list[str] = []
+    if in_run_commit:
+        stage_titles = ["docs", "commit"]
+        _append_docs_and_commit(b, head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, manifest_rel=manifest_rel)
+    b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
@@ -802,8 +1120,11 @@ def compose_ask_script(
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
-        f"next_action: {{ kind: {na_kind}, op: {na_op}, params: {na_params} }}, "
-        "...((_manifest && !_manifest.error) ? {} : { next_action: { kind: 'none', op: null, params: null } }),"
+        + (
+            "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, executed: _executed, workstream_complete: _complete } : null, "
+            if rb_fn else ""
+        )
+        + "ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, "
         f"{TERMINAL_COMMIT_CLI_PROPERTY_JS} }};"
     )
 
@@ -815,7 +1136,19 @@ def compose_ask_script(
             if sizing_rel
             else "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review."
         ),
-        _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=review_titles, judged=judge_expr is not None, with_accept=accept_pending or not sizing_rel),
+        _phase_titles(
+            with_size=not sizing_rel,
+            blitz_phases=blitz_phases,
+            review_titles=review_titles,
+            judged=judge_expr is not None,
+            with_accept=accept_pending or not sizing_rel,
+            extra=[
+                *(["xl-exit"] if accept_pending or not sizing_rel else []),
+                *(["roadmap-blitz", *rb_phases, "workstream-complete"] if rb_fn else []),
+                "ledger-check",
+                *stage_titles,
+            ],
+        ),
     )
 
 
@@ -833,3 +1166,75 @@ def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titl
             f"composed ask script is over the Workflow runner's {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte cap"
         )
     return script
+
+
+def _append_docs_and_commit(
+    b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str
+) -> None:
+    """The run's last two stages, under a live terminal-commit `_nextAction` and no halt: a Sonnet
+    docs stage (stale README and wiki pages, the delivery note) whose reported files ride the
+    commit as `doc_paths`, then a git-commit-agent running `dispatch.terminal_commit` with the run
+    token. The commit lands product only: plans, sizings, briefs and sidecars are process records
+    it never carries. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has no commit to run.
+
+    Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
+    `block_subagent_commit` run-token leg admits nothing else.
+    """
+    note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
+    live = "!_halted && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
+    docs_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "phase: docs\n\nThis run's change is on disk, uncommitted. Read the sizing at ",
+        "js:_sizingRel",
+        "js:(_planRel ? ', the plan at ' + _planRel : '')",
+        f", and the run manifest at {manifest_rel}. The run's verdicts, verbatim:\n",
+        "js:_cap(JSON.stringify({ ledger: _ledger, delivery: _deliveryVerdict, integration: _reviewIntegration, "
+        f"wave: _reviewWave, tests: {_emit._TEST_RESULT_VAR}, criterion: (typeof {_emit._FALSIFIER_RESULT_VAR} === 'undefined' ? null : {_emit._FALSIFIER_RESULT_VAR}) }}), 12000)",
+        "\n\n(0) Before you edit anything, decide the complete set of repo-relative paths you will write "
+        "(the sizing's `doc_consumers` targets, the `ask_conflicts` paths, stale README and wiki pages, "
+        "and the delivery note); that set is your doc_writes, and you write nothing outside it. "
+        "(1) Update every README and wiki page (docs/wiki/, wiki/) that the change makes stale "
+        "(list the change with `git status --porcelain`); edit only what the change truly alters. "
+        "Then update every path the sizing's `doc_consumers` lists (each restates the rule this ask "
+        "changes; a `:<line>` or `#<anchor>` suffix names where), and amend or supersede the text at "
+        "each `ask_conflicts` path so it no longer contradicts the ask -- the ask outranks it. "
+        f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RUN_DIR_ROOT}/"
+        f"{run_id}/{LEDGER_VIEW_FILE}) with the ledger checker's status for it, what shipped (files "
+        "and why), each review finding and how it was resolved, the test result, and every decision "
+        "or deviation taken in-run with its reason -- read them off the row briefs under ",
+        f"{RUN_DIR_ROOT}/{run_id}/briefs",
+        ", which are never committed. The commit carries product files plus the delivery note, "
+        "README and wiki pages, and the sizing's doc_consumers and ask_conflicts paths only: never edit a plan, sizing or other process record to carry "
+        "this. Never write under scratch/, never stage or commit. Return as doc_writes the set "
+        "you declared in (0), as doc_paths every repo-relative file you wrote or edited, and the note's "
+        "path as note_path.",
+    )
+    docs_call = _agent(
+        docs_prompt, label="docs", phase="docs", agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=_DOCS_SCHEMA, agent_model=_DOCS_MODEL,
+    )
+    commit_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "phase: commit\n\nThen run exactly this one command as its own Bash call: no `cd &&`, no "
+        "wrapper, no env prefix, no edit to it.\n\n",
+        "js:_terminalCommitCli({ ..._nextAction.params, doc_paths: (_docs?.doc_paths ?? []), doc_writes: _docWrites, run_id: _runId, run_token: _RUN_TOKEN })",
+        "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped and close, verbatim "
+        "(null where absent). Run nothing else.",
+    )
+    commit_call = _agent(
+        commit_prompt, label="commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
+        schema=_COMMIT_SCHEMA, agent_model=_COMMIT_MODEL, effort=_MECHANICAL_EFFORT,
+    )
+    b.append(f"  if ({live}) {{")
+    b.append("    phase('docs');")
+    b.append(f"    try {{ _docs = await {docs_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append("    _docWrites = _docs?.doc_writes ?? [];")
+    b.append("  }")
+    b.append(f"  if ({live}) {{")
+    b.append("    phase('commit');")
+    b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(
+        "    if (_commit && _commit.committed === true) { _nextAction = { kind: 'close_job', op: null, "
+        "params: { run_id: _runId, close: _commit.close ?? null } }; }"
+    )
+    b.append("  }")

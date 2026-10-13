@@ -420,3 +420,41 @@ def test_fresh_scaffold_carries_the_join_wording_not_the_rescaffold_promise(repo
     text = (repo / _NEW).read_text(encoding="utf-8")
     assert "re-scaffold with --deliverable-id" not in text
     assert "a --deliverable-id join works on a new record" in text
+
+
+def test_cli_write_carries_the_scouts_doc_consumers_and_ask_conflicts(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    from coordinator_core.session import fleet_mode as fleet_mode_module
+    from coordinator_core.session import mode_resolution as mode_resolution_module
+
+    monkeypatch.setattr(fleet_mode_module, "read_fleet_mode", lambda: {})
+    monkeypatch.setattr(mode_resolution_module, "read_fleet_mode", lambda: {})
+    path = _sizing(repo)
+    monkeypatch.chdir(repo)
+    rc = sizing_assemble.main(
+        [
+            "--tshirt", "M",
+            "--write", Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
+            "--doc-consumer", "README.md:12",
+            "--doc-consumer", "docs/wiki/x.md#rule",
+            "--ask-conflict", "state/cross-repo/memo.md=says keep the old bar",
+            "--ask-conflict", "docs/decisions/DR-1.md",
+        ]
+    )
+    assert rc == sizing_assemble.EXIT_OK, capsys.readouterr().err
+    doc = _load(path)
+    assert doc["doc_consumers"] == ["README.md:12", "docs/wiki/x.md#rule"]
+    assert doc["ask_conflicts"] == [
+        {"path": "state/cross-repo/memo.md", "conflict": "says keep the old bar"},
+        {"path": "docs/decisions/DR-1.md"},
+    ]
+
+
+def test_an_empty_scout_claim_is_written_and_absence_writes_nothing(repo: Path) -> None:
+    path = _sizing(repo)
+    sizing_assemble.write_back(repo, str(path), _decision("M"))
+    assert "doc_consumers" not in _load(path) and "ask_conflicts" not in _load(path)
+    sizing_assemble.write_back(repo, str(path), _decision("M"), doc_consumers=[], ask_conflicts=[])
+    doc = _load(path)
+    assert doc["doc_consumers"] == [] and doc["ask_conflicts"] == []

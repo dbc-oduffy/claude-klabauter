@@ -820,6 +820,22 @@ def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
     assert "emit-wave-fire" in decision["next_move"]
 
 
+@pytest.mark.parametrize("tshirt", ["XL", "XXL"])
+def test_absent_appetite_sets_post_size_prompt_pending_at_xl_and_above(tshirt):
+    # AC4, narrowed by the engine size rule: only sizes whose acceptance the PM keeps ask.
+    decision = sa.route(estimate={"tshirt": tshirt})
+    assert "post_size_prompt_pending" in decision["detents"]
+
+
+@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
+@pytest.mark.parametrize("tshirt", ["M", "L"])
+def test_absent_appetite_drops_post_size_prompt_where_engine_skips_acceptance(tshirt, mode):
+    # A plan-route M/L goes straight to execution in every mode, so nothing asks the PM.
+    decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode=mode)
+    assert sa.sizing_acceptance_skipped(decision["route"], tshirt)
+    assert "post_size_prompt_pending" not in decision["detents"]
+
+
 @pytest.mark.parametrize("tshirt", ["XS", "S"])
 def test_absent_appetite_omits_post_size_prompt_pending_below_m(tshirt):
     # AC5: no post_size_prompt_pending, and next_move equals today's text for
@@ -1078,6 +1094,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # see the vendored schema's own x-bump-note.
     # Moved 1.24.0 -> 1.25.0 (additive optional `exit_criterion.amendments`).
     # Moved 1.25.0 -> 1.26.0 (additive APM-ruling branch on accepted/amendments).
+    # Moved 1.36.0 -> 1.37.0 (2026-10-13): optional `resolution {sha, run_id}`, `doc_consumers`,
+    # `ask_conflicts`; declares `pm_resolution.xl_exit_apm`. Additive.
     # Moved 1.35.0 -> 1.36.0 (2026-10-09): DoE b555e3b7c optional `research.destination`. Additive.
     # Moved 1.34.0 -> 1.35.0 (2026-10-09): DoE e9b4f15f5 optional `research.questions`. Additive.
     # Moved 1.33.0 -> 1.34.0 (2026-10-09): DoE c79e1b9f1 amendments APM arm matches accepted
@@ -1095,7 +1113,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # `exit_criterion.click_paths`; 1.29.0 optional `research`; 1.30.0 optional
     # `pm_verbatims`. All additive; nothing joined `required`.
     # Moved 1.36.0 -> 1.37.0 (2026-10-12): DoE c01e16d913 `unrelated_turns` + `visual` surface. Additive.
-    assert schema["x-schema-version"] == "1.37.0"
+    # Moved 1.37.0 -> 1.38.0 (2026-10-13): APM-ruling `accepted` arm admits `hands-on` mode (below XL).
+    assert schema["x-schema-version"] == "1.38.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1996,3 +2015,26 @@ def test_ask_scope_raise_names_the_raise_line():
 
 def test_no_raise_line_without_a_resize():
     assert sa.route(estimate={"tshirt": "L"})["probe_raise"] is None
+
+
+# --- the one fire line ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("appetite, tshirt", [("small", "XS"), ("small", "S"), ("medium", "M")])
+def test_fire_routes_print_the_one_workflow_fire(appetite, tshirt):
+    from coordinator_core import warp_fire
+
+    decision = sa.route(appetite=appetite, estimate={"tshirt": tshirt})
+    assert decision["route"] in warp_fire.FIRE_ROUTES
+    assert decision["fire"] == warp_fire.fire_command(sa._SCAFFOLDED_SIZING)
+    assert decision["next_move"].startswith(warp_fire.fire_step(sa._SCAFFOLDED_SIZING))
+
+
+def test_room_routes_print_no_fire():
+    assert sa.route(appetite="large", estimate={"tshirt": "XL"})["fire"] is None
+
+
+def test_express_lane_fires_the_ask_not_a_hand_dispatch():
+    decision = sa.route(appetite="small", estimate={"tshirt": "XS"}, express_lane=True)
+    assert decision["fire"].startswith('emit-dispatch-workflow --ask "')
+    assert "Dispatch directly" not in decision["next_move"]

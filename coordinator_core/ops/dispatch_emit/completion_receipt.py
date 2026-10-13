@@ -201,6 +201,7 @@ def _compose(
     base_sha: Optional[str],
     now: str,
     prose: str,
+    local: bool = False,
 ) -> tuple[dict, str]:
     receipt_id = mint_receipt_id(slug_source)
     verdict, judge = verdict_pair
@@ -220,7 +221,7 @@ def _compose(
         "started_at": started_at,
         "concluded_at": now,
         "loe": loe,
-        "prose_ref": receipt_rel_path(receipt_id, now),
+        "prose_ref": receipt_rel_path(receipt_id, now, local=local),
         "supersedes": None,
         "approved_by": None,
         "provenance": {
@@ -244,8 +245,10 @@ def build_run_receipts(
     base_sha: Optional[str],
     branch: Optional[str],
     now: str,
+    local: bool = False,
 ) -> list[tuple[dict, str]]:
-    """One ``(frontmatter, prose)`` receipt per baton the run claimed.
+    """One ``(frontmatter, prose)`` receipt per baton the run claimed; ``local`` homes each under
+    ``.coordinator-local/`` (a warp ask run, whose product commit names it by trailer).
 
     Plan and warp runs record ``run.kind: execute-plan``; a run whose marker names a
     minted mise spine records ``mise-en-place`` (plan § D3). ``[]`` when no baton or
@@ -260,7 +263,7 @@ def build_run_receipts(
     prose = _prose(list(done_ids), list(incomplete_ids), record)
     common = dict(
         run_id=run_id, started_at=started_at, branch=branch, base_sha=base_sha, now=now,
-        prose=prose,
+        prose=prose, local=local,
     )
 
     def loe_for(sizing_rel: Optional[str]) -> dict:

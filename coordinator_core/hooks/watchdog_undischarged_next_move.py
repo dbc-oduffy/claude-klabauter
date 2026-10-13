@@ -572,7 +572,22 @@ def _skill_of(tool_input) -> Any:
     return skill if isinstance(skill, str) else tool_input.get("command")
 
 
+#: The warp `--ask` script's default names (`dispatch_emit.op`, `<RUN_DIR_ROOT>/<run_id>.workflow.mjs`).
+#: One fire of it carries a routed sizing of any route through to its commit.
+_WARP_ASK_SCRIPT_GLOBS = ("ask-*.workflow.mjs", "warp-*.workflow.mjs")
+
+
+def _is_warp_ask_fire(tool_name, tool_input) -> bool:
+    if tool_name != "Workflow" or not isinstance(tool_input, dict):
+        return False
+    script = tool_input.get("scriptPath")
+    name = os.path.basename(script.replace("\\", "/")) if isinstance(script, str) else ""
+    return any(fnmatch.fnmatchcase(name, g) for g in _WARP_ASK_SCRIPT_GLOBS)
+
+
 def _matches_next_action(next_action: str, tool_name, tool_input) -> bool:
+    if next_action in _ROUTE_TERMINAL.values() and _is_warp_ask_fire(tool_name, tool_input):
+        return True
     kind, _ident = _split_call(next_action)
     if kind is None:
         return False

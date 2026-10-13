@@ -74,6 +74,7 @@ from coordinator_core.hooks.dispatch_escape import (  # noqa: F401
     _sentinel_reason,
 )
 from coordinator_core.session.mode_resolution import resolve_mode
+from coordinator_core.warp_fire import fire_step
 
 GENERATES: list = []
 
@@ -522,21 +523,13 @@ def _session_sizing_state(payload: dict, session_id: str) -> tuple[bool, bool]:
         return True, False
 
 
-_UNSIZED_DENY = (
-    "No sizing this session. Run coordinator:sizing (confident XS: "
-    "sizing-assemble --express-lane --tshirt XS) — then dispatch."
-)
+_SESSION_SIZING = "<this session's sizing path>"
 
+_UNSIZED_DENY = "No sizing this session. " + fire_step()
 
-_SIZED_DENY = (
-    "EM edits route through dispatch. Dispatch a coordinator:executor "
-    "with the sizing's brief."
-)
+_SIZED_DENY = "EM edits route through the warp run. " + fire_step(_SESSION_SIZING)
 
-_PLAN_ROUTE_DENY = (
-    "This session's sizing routed to a plan. Run coordinator:plan; "
-    "execute-plan dispatches the executors."
-)
+_PLAN_ROUTE_DENY = "This session's sizing routed to a plan. " + fire_step(_SESSION_SIZING)
 
 def op(payload: dict) -> dict | None:
     """Deny the main EM's product-code write at every size.
@@ -602,6 +595,6 @@ def op(payload: dict) -> dict | None:
         return deny("PreToolUse", _PLAN_ROUTE_DENY)
     return deny(
         "PreToolUse",
-        f"{_SIZED_DENY} No self-escape: dispatch; if an executor BLOCKs, "
+        f"{_SIZED_DENY} No self-escape; if the run's executor BLOCKs, "
         f"a reason line in {dispatch_nudge_sentinel_path(session_id)} is honoured once.",
     )

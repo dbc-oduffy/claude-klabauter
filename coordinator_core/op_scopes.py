@@ -52,6 +52,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.subagent_arrival_check":          "none",
     "hooks.cater_subagent_start":            "none",
     "hooks.flag_em_poll_in_flight":          "none",
+    "hooks.submit_engine_ask":               "none",
     "hooks.taskstop_launch_recorder":        "none",
     "hooks.taskstop_reaper":                 "none",
     "hooks.nudge_unauthorized_handoff":      "none",
@@ -723,6 +724,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.ask_gate / dispatch.ask_stage — keyed like dispatch.terminal_commit: the caller's own worktree.
     "dispatch.ask_gate":                        "common_dir",
     "dispatch.ask_stage":                       "common_dir",
+    # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
+    "workflow.revise":                          "common_dir",
     # review_stamp.mint / review_stamp.check — MUTATING (mint only): both read
     # and mint writes only the caller's own worktree, keyed identically to
     # dispatch.terminal_commit (never a `params.repo_root` override).

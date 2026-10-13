@@ -211,6 +211,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # only (always allows), but the write disqualifies COMPUTE_ONLY under the five-question
     # test the same way hooks.postuse_advisory_dispatch's own durable state does.
     "hooks.flag_em_poll_in_flight": OpClass.MUTATING,
+    # hooks.submit_engine_ask — MUTATING: emits a warp run through dispatch.emit (script,
+    # receipt, run token, ask.md) and writes the run's submission record beside its briefs.
+    "hooks.submit_engine_ask": OpClass.MUTATING,
     # hooks.taskstop_launch_recorder — MUTATING: appends launch records under settings_home().
     "hooks.taskstop_launch_recorder": OpClass.MUTATING,
     # hooks.taskstop_reaper — MUTATING: kills orphaned launch trees and writes the reaper log
@@ -2271,6 +2274,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
     "dispatch.ask_stage": OpClass.MUTATING,
+    # workflow.revise — MUTATING: appends one line to scratch/warp/<run_id>/requirements.jsonl and
+    # rewrites requirements.md beside it (ops/dispatch_emit/requirements_ledger.py); nothing else.
+    # DR-208 five-question affirmation (citing workflow.revise handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      The run dir's ledger files only; no git object, no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Ledger files, contained by _path_guard.contained_path before any write.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      The ledger belongs to one run; only that run's stages and terminal commit read it.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The in-flight run's later stages read the appended revision.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "workflow.revise": OpClass.MUTATING,
     # review_stamp.mint — MUTATING: writes `review_stamp:` into the plan's own
     # frontmatter, the record the implemented refusal and the close gate read.
     # DR-208 five-question affirmation:

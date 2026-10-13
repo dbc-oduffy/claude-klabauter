@@ -506,6 +506,28 @@ class FiredDriftError(ValueError):
     """
 
 
+def _seed_requirements_ledger(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
+    """Seed the run's requirements ledger with the sizing's PM words and the raw ask, verbatim.
+
+    Every stage reads it, `workflow.revise` grows it, and the terminal commit judges against it.
+    """
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as ledger
+
+    root = Path(ask_ctx["root"])
+    run_dir = ledger.run_dir(root, ask_ctx["run_id"])
+    words: list = []
+    if ask_ctx.get("sizing_rel"):
+        from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
+
+        try:
+            words = ledger.pm_words(load_sizing(root, ask_ctx["sizing_rel"]))
+        except (SizingFireRefused, OSError, ValueError):
+            words = []
+    ledger.seed(run_dir, ask_ctx["run_id"], words, origin=ledger.ORIGIN_PM_VERBATIMS, all_of_pm_ask=all_of_pm_ask)
+    if ask_ctx.get("prompt"):
+        ledger.seed(run_dir, ask_ctx["run_id"], [ask_ctx["prompt"]], origin=ledger.ORIGIN_ASK)
+
+
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
     """``guarded_path`` as the repo-relative forward-slash path
     ``dispatch.terminal_commit`` takes as ``script_path``; None if not under ``root``."""
@@ -726,6 +748,7 @@ _PARAM_FIELDS = (
     Field("ask_brief_file", "str"),
     Field("stop_after", "str"),
     Field("ask_context", "str_list"),
+    Field("all_of_pm_ask", "bool"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
@@ -1571,6 +1594,18 @@ def _dispatch_emit(
         from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
+        ask_script_path = _script_path_under(guarded_path, ask_ctx["root"])
+        from coordinator_core.ops.dispatch_emit import run_token as _run_token
+
+        try:
+            ask_run_token = _run_token.mint(
+                Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path,
+                session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"],
+            )
+        except (OSError, ValueError):
+            # No git dir to hold the record: the run hands its commit back to the EM.
+            ask_run_token = None
+        ask_ctx["run_token"] = ask_run_token
         script = compose_ask_script(
             review_roster_fragment=review_roster_fragment,
             review_stage_schemas=review_stage_schemas,
@@ -1579,7 +1614,7 @@ def _dispatch_emit(
             sizing_rel=ask_ctx["sizing_rel"],
             run_id=ask_ctx["run_id"],
             session_id=emitting_session_id,
-            script_path=_script_path_under(guarded_path, ask_ctx["root"]),
+            script_path=ask_script_path,
             plan_blitz_args=ask_ctx.get("plan_blitz_args"),
             writes=ask_ctx.get("writes", ()),
             cross_repo_approved=bool(params.get("cross_repo_approved")),
@@ -1589,7 +1624,16 @@ def _dispatch_emit(
             preamble=preamble,
             em_brief=ask_ctx.get("em_brief"),
             stop_after=params.get("stop_after"),
+            in_run_commit=ask_run_token is not None,
         )
+        if ask_ctx["prompt"]:
+            # Verbatim, engine-written: the stage reads it into every brief; no agent copies it.
+            from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE
+
+            ask_file = Path(ask_ctx["root"]) / RUN_DIR_ROOT / ask_ctx["run_id"] / ASK_TEXT_FILE
+            ask_file.parent.mkdir(parents=True, exist_ok=True)
+            ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
+        _seed_requirements_ledger(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
         receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
@@ -1792,6 +1836,8 @@ def _dispatch_emit(
         )
         if anchor_root is not None:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
+            if plan_path is None and ask_ctx is not None and ask_ctx.get("run_token"):
+                reply["fire_args"]["runToken"] = ask_ctx["run_token"]
 
     return reply
 
@@ -2293,7 +2339,8 @@ def _gate_sizing_at_emit(
 
     Returns ``plan_blitz_args``, ``writes``, ``batons`` and ``uncommitted`` for the emit, plus
     ``baton`` and ``accept_pending`` when they apply; raises ``SizingFireRefused`` on any halt.
-    A ``touchpoint`` halt on a sizing whose mode is in ``APM_ADMISSIBLE_MODES`` is non-fatal:
+    A ``touchpoint`` halt on a sizing whose mode is in ``APM_ADMISSIBLE_MODES``, or whose route and
+    size skip sizing acceptance (``sizing_acceptance_skipped``), is non-fatal:
     the script embeds the accept phase and re-gates in-run. In-process only; ``uncommitted``
     is derived from whether the sizing already named a baton, never from git.
     """
@@ -2310,7 +2357,7 @@ def _gate_sizing_at_emit(
         load_sizing,
         resolve_arm,
     )
-    from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES
+    from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES, sizing_acceptance_skipped
 
     try:
         check_cross_repo_writes(
@@ -2333,7 +2380,12 @@ def _gate_sizing_at_emit(
     if (
         verdict.halt is not None
         and verdict.halt.get("kind") == HALT_TOUCHPOINT
-        and sizing.get("interaction_mode") in APM_ADMISSIBLE_MODES
+        and (
+            sizing.get("interaction_mode") in APM_ADMISSIBLE_MODES
+            or sizing_acceptance_skipped(
+                sizing.get("route"), (sizing.get("estimate") or {}).get("tshirt")
+            )
+        )
     ):
         accept_pending = True
         verdict = replace(verdict, arm=resolve_arm(sizing), halt=None)

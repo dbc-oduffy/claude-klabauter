@@ -136,7 +136,9 @@ a resized t-shirt at or above `"M"` (see `_POST_SIZE_PROMPT_TSHIRTS`) sets
 the `post_size_prompt_pending` detent and `next_move` appends an OPEN
 question asking the PM whether to proceed, split, or cut — never the closed
 cut_to_fit/raise_appetite pair, which presumes a budget the PM was never
-asked for. XS/S never ask; `route` itself is identical across appetite
+asked for. XS/S never ask, and neither does any size where
+`sizing_acceptance_skipped` holds (a plan/dispatch M or L goes straight to
+execution in every mode); `route` itself is identical across appetite
 absent/small/medium/large for every t-shirt (AC2) — appetite never feeds the
 route, only the detent.
 
@@ -268,6 +270,8 @@ import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
+
+from coordinator_core import warp_fire as _warp_fire
 
 from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
 from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
@@ -754,6 +758,10 @@ def _assert_stage_table_total() -> None:
 _assert_stage_table_total()
 
 
+#: Stands in for the sizing path in the fire line until `coordinator-doc-new` scaffolds it.
+_SCAFFOLDED_SIZING = "<the sizing path coordinator-doc-new prints>"
+
+
 def stages(resolved_route: str, resized_tshirt: str) -> dict:
     """The stage chain `resolved_route` commits the session to, at that size.
 
@@ -1035,7 +1043,8 @@ def route(
             "stages": stages("dispatch", tshirt),
             "dispositions": dispositions("dispatch", tshirt, pre_resize_tshirt=True),
             "narration": "Express lane: trivial ask, no sizing ceremony.",
-            "next_move": "Dispatch directly. No sizing-object persisted (D3).",
+            "next_move": "No sizing-object persisted (D3). " + _warp_fire.fire_step(),
+            "fire": _warp_fire.fire_command(),
             "directives": [],
             "exit_criterion": exit_criterion_field,
             "interaction_mode": interaction_mode,
@@ -1325,6 +1334,11 @@ def route(
         else:
             next_move += f" Also ask the PM to {criterion_clause}."
 
+    fire = None
+    if resolved_route in _warp_fire.FIRE_ROUTES:
+        # The sizing's path is known once scaffolded; the run carries the route from there.
+        fire = _warp_fire.fire_command(_SCAFFOLDED_SIZING)
+        next_move = _warp_fire.fire_step(_SCAFFOLDED_SIZING) + " " + next_move
     touchpoint_ids = ", ".join(t["id"] for t in mode_touchpoints) or "none"
     next_move += (
         f" Mode {interaction_mode} (source: {interaction_mode_source or 'default'}) "
@@ -1344,6 +1358,7 @@ def route(
         "narration": narration,
         "probe_raise": raise_line,
         "next_move": next_move,
+        "fire": fire,
         "exit_criterion": exit_criterion_field,
         "interaction_mode": interaction_mode,
         "interaction_mode_source": interaction_mode_source,
@@ -1679,12 +1694,15 @@ def _write_back(
     intent_verbatim: bool = False,
     name: Optional[str] = None,
     scout_register: Optional[dict[str, Any]] = None,
+    doc_consumers: Optional[list[str]] = None,
+    ask_conflicts: Optional[list[dict[str, str]]] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
 
     Sets estimate.tshirt, route, detents, fork/xl_exit (only when the decision
-    resolved one), scout_evidence and premise (only when given), and status
+    resolved one), scout_evidence, the scout's doc_consumers and ask_conflicts, and premise
+    (only when given; an empty list is a claim and is written), and status
     `draft`/`sized` -> `routed` (terminal statuses are never regressed); a
     scaffold-placeholder `intent` is replaced by the computed one. exit_criterion.statement is written only while
     `accepted` is null or the engine's own record; interaction_mode only while absent. Where
@@ -1805,6 +1823,10 @@ def _write_back(
                 text = _set_scalar(text, key, decision[key])
         if scout_evidence:
             text = _set_scalar(text, "scout_evidence", json.dumps(list(scout_evidence)))
+        if doc_consumers is not None:
+            text = _set_scalar(text, "doc_consumers", json.dumps(list(doc_consumers)))
+        if ask_conflicts is not None:
+            text = _set_scalar(text, "ask_conflicts", json.dumps(list(ask_conflicts)))
         if record_premise:
             text = write_fm_nested_field(
                 text,
@@ -2126,7 +2148,9 @@ def _usage(prog: str, stream=None) -> int:
         "[--scout-evidence-kind mention-count|change-set|site-count] "
         "[--scout-evidence <str> ...] "
         "[--intent <str> | --intent-turn N] [--intent-source pm-verbatim|em-elaborated] "
-        "[--name <short label>] "
+        "[--doc-consumer <path> ... | --no-doc-consumers] "
+        "[--ask-conflict <path>[=<conflict>] ... | --no-ask-conflicts] "
+                "[--name <short label>] "
         "[--precedent shipped-before|novel] "
         "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
         "[--exit-criterion <str>] "
@@ -2282,6 +2306,8 @@ def main(argv: list[str]) -> int:
     precedent = None
     probe_raise_basis = None
     scout_evidence: list[str] = []
+    doc_consumers: Optional[list[str]] = None
+    ask_conflicts: Optional[list[dict[str, str]]] = None
     exit_criterion = None
     click_paths: list = []
     interaction_mode_flag = None
@@ -2359,6 +2385,23 @@ def main(argv: list[str]) -> int:
         elif tok == "--scout-evidence" and i + 1 < len(argv):
             scout_evidence.append(argv[i + 1])
             i += 2
+        elif tok == "--doc-consumer" and i + 1 < len(argv):
+            doc_consumers = [*(doc_consumers or []), argv[i + 1]]
+            i += 2
+        elif tok == "--no-doc-consumers":
+            doc_consumers = doc_consumers or []
+            i += 1
+        elif tok == "--ask-conflict" and i + 1 < len(argv):
+            # `<path>=<what it says against the ask>`; the conflict text is optional.
+            path, sep, conflict = argv[i + 1].partition("=")
+            entry = {"path": path.strip()}
+            if sep and conflict.strip():
+                entry["conflict"] = conflict.strip()
+            ask_conflicts = [*(ask_conflicts or []), entry]
+            i += 2
+        elif tok == "--no-ask-conflicts":
+            ask_conflicts = ask_conflicts or []
+            i += 1
         elif tok == "--intent" and i + 1 < len(argv):
             intent = argv[i + 1]
             i += 2
@@ -2670,6 +2713,8 @@ def main(argv: list[str]) -> int:
                 intent_verbatim=intent_verbatim,
                 name=name,
                 scout_register=scout_register,
+                doc_consumers=doc_consumers,
+                ask_conflicts=ask_conflicts,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)

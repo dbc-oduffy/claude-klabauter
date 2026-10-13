@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.sizing_acceptance import (
     ENGINE_SIZE_RULE,
+    apm_picks_xl_exit,
     lacks_human_acceptance,
     sizing_acceptance_skipped,
 )
@@ -57,7 +58,7 @@ def handback_line(sizing: dict) -> str:
     )
 
 
-def _halt(kind: str, reason: str, **extra: str) -> GateVerdict:
+def _halt(kind: str, reason: str, **extra: object) -> GateVerdict:
     return GateVerdict(arm=None, halt={"kind": kind, "reason": reason, **extra})
 
 
@@ -99,10 +100,15 @@ def gate(
             handback=handback_line(sizing),
         )
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
+        extra = {}
+        if route == "pm-decision" and apm_picks_xl_exit(sizing.get("interaction_mode")):
+            # The script's xl-exit stage records the APM's pick and re-gates; pm mode halts here.
+            extra["apm_xl_exit"] = True
         return _halt(
             HALT_ROOM,
             f"route {route!r} is room-owned: {sa._ROOM_ENTRY[route]}",
             route=route,
+            **extra,
         )
 
     refusals = collect_fire_refusals(

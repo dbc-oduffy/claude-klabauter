@@ -20,6 +20,8 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_TEXT_FILE,
+    PM_INTENT_FILE,
     RUN_DIR_ROOT,
     ManifestRow,
     StageManifest,
@@ -50,6 +52,12 @@ from coordinator_core.ops.dispatch_emit.emit import (
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec_or_none
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.ops.dispatch_emit.requirements_ledger import (
+    LEDGER_FILE,
+    ORIGIN_PM_VERBATIMS,
+    pm_words,
+    seed as seed_ledger,
+)
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
@@ -71,7 +79,49 @@ _PARAMS = (
     Field("session_id", "str"),
 )
 
-__all__ = ["AskStageError", "stage", "scaffold_markers"]
+__all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block"]
+
+PM_INTENT_HEADING = "## PM intent (verbatim)"
+
+
+def pm_intent_block(sizing: Optional[Mapping], ask_text: Optional[str]) -> str:
+    """The brief's head: the PM's own words (sizing `pm_verbatims`, else a PM-verbatim `intent`,
+    plus the ask as submitted), the exit criterion, and the precedence rule. Never the EM's
+    paraphrase: an `em-elaborated` intent is left out. Empty when no PM words are on record."""
+    sizing = sizing or {}
+    quotes = pm_words(sizing)
+    if ask_text and ask_text.strip() and ask_text.strip() not in quotes:
+        quotes.append(ask_text.strip())
+    if not quotes:
+        return ""
+    lines = [PM_INTENT_HEADING, ""]
+    for q in quotes:
+        lines.extend("> " + ln if ln else ">" for ln in q.splitlines())
+        lines.append("")
+    criterion = sizing.get("exit_criterion")
+    statement = criterion.get("statement") if isinstance(criterion, Mapping) else None
+    if isinstance(statement, str) and statement.strip():
+        lines.extend([f"Exit criterion: {statement.strip()}", ""])
+    lines.append(
+        "These words are the outcome you are held to; design the change that makes each of them "
+        "literally true. Where the brief below, a plan, a memo or in-repo doctrine reads narrower "
+        "than these words or against them, these words win: keep the ask and name the conflict in "
+        "your report."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _run_sizing(root: Path, sizing_rel: Optional[str], plan_text: str) -> Optional[dict]:
+    rel = sizing_rel
+    if not rel:
+        split = split_frontmatter(plan_text)
+        rel = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    if not rel:
+        return None
+    try:
+        return load_sizing(root, rel)
+    except (SizingFireRefused, OSError, ValueError):
+        return None
 
 # Mirrors DoE's coordinator/lib/plan_scaffold_markers.py; claude-klabauter never imports DoE's tree.
 _SCAFFOLD_MARKERS = (
@@ -186,6 +236,16 @@ def stage(
 
     clauses = _discharge_clauses_for(plan_text, root, list(raw_by_id.values()))
 
+    ask_file = run_dir / ASK_TEXT_FILE
+    ask_text = ask_file.read_text(encoding="utf-8") if ask_file.is_file() else None
+    run_sizing = _run_sizing(root, sizing_rel or commit_sizing_rel, plan_text)
+    intent = pm_intent_block(run_sizing, ask_text)
+    if intent:
+        _write(run_dir / PM_INTENT_FILE, intent)
+    if (run_dir / LEDGER_FILE).is_file():
+        # A raw ask's sizing is minted in-run: its PM words join the ledger the emit seeded.
+        seed_ledger(run_dir, run_id, pm_words(run_sizing), origin=ORIGIN_PM_VERBATIMS)
+
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     manifest_rows: list[ManifestRow] = []
     chunks: list[ChunkCommit] = []
@@ -197,6 +257,8 @@ def stage(
             model = row.agent_model or _AGENT_MODELS[agent_type]
             brief = run_dir / "briefs" / f"{row.id}.md"
             text = _row_prompt(row, plan_posix, context)
+            if intent:
+                text = intent + "\n" + text
             if row.id in clauses:
                 text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
             _write(brief, text)

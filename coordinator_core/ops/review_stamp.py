@@ -91,7 +91,11 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
-from coordinator_core.completion_receipts.verdict import mint_refusal, superseding_delivery, test_verdict_of
+from coordinator_core.completion_receipts.verdict import (
+    effective_test_verdict,
+    mint_refusal,
+    superseding_delivery,
+)
 from coordinator_core.session.claimed_write import replace_text
 
 
@@ -672,7 +676,7 @@ def mint(
         if not isinstance(build_test_data, dict):
             raise MintRefusal("review-stamp: refusing to mint: no build/test record (--build-test required)")
         build_test_sidecar = build_test_data.get("sidecar")
-    tests_status = test_verdict_of(build_test_data)
+    tests_status = effective_test_verdict(build_test_data)
     criterion = integration_data.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 

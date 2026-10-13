@@ -534,3 +534,27 @@ def test_sizing_assemble_write_opens_the_obligation_only_with_a_session(tmp_path
     sizing_assemble._open_routed_obligation("state/sizings/thing.yaml")
     intake = machinery_paths.intake_path(repo_root, session_id or "sid-assemble")
     assert os.path.isfile(intake) is (session_id is not None)
+
+
+@pytest.mark.parametrize(
+    "script, discharged",
+    [
+        ("scratch/warp/ask-20261013T101010-abc123.workflow.mjs", True),
+        (r"C:\repo\scratch\warp\warp-2026-10-01-thing-20261013T101010-abc123.workflow.mjs", True),
+        ("scratch/warp/research-x.workflow.mjs", False),
+    ],
+)
+def test_the_warp_ask_fire_discharges_a_routed_sizing(tmp_path, script, discharged) -> None:
+    session_id = "sid-warp"
+    repo_root = _open_plan_route(tmp_path, session_id)
+    _post(repo_root, session_id, "Workflow", {"scriptPath": script})
+    assert _sizing_open(repo_root, session_id) is not discharged
+
+
+@pytest.mark.parametrize("route", ["dispatch", "spec-dispatch", "plan", "shape", "roadmap"])
+def test_every_route_terminal_accepts_the_warp_ask_fire(route) -> None:
+    from coordinator_core.hooks.watchdog_undischarged_next_move import _ROUTE_TERMINAL, _matches_next_action
+
+    fire = {"scriptPath": "scratch/warp/ask-1.workflow.mjs"}
+    assert _matches_next_action(_ROUTE_TERMINAL[route], "Workflow", fire)
+    assert not _matches_next_action("Agent(<named Opus reviewer>)", "Workflow", fire)

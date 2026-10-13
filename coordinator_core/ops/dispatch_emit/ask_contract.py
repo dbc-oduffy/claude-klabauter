@@ -29,6 +29,10 @@ SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
 PM_EXIT_QUESTION_KEY = "pm_exit_question"
 RUN_DIR_ROOT = "scratch/warp"
+#: Engine-written beside the run's briefs: the ask as submitted (raw asks), and the PM's verbatim
+#: intent every executor brief carries and every reviewer, judge and docs prompt reads first.
+ASK_TEXT_FILE = "ask.md"
+PM_INTENT_FILE = "pm-intent.md"
 ASK_MANIFEST_MARKER = "// coordinator:ask-run-manifest v1 "
 
 

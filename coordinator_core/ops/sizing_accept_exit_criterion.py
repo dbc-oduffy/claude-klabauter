@@ -70,6 +70,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.signoff_provenance import apm_admissible, countersign
 from coordinator_core.ops.sizing_acceptance import (
     APM_ADMISSIBLE_MODES,
+    apm_ruling_admissible,
     SOURCE_APM,
     SOURCE_ENGINE,
     SOURCE_PM,
@@ -295,10 +296,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     f"refusing to accept on {p}: mode {mode!r} contradicts the recorded "
                     f"interaction_mode {recorded_mode!r}; an APM ruling is gated on the record"
                 )
-            if eff_mode not in APM_ADMISSIBLE_MODES:
+            if not apm_ruling_admissible(eff_mode, estimate.get("tshirt")):
                 raise MutateAbort(
                     f"refusing to accept on {p}: an APM ruling stands in for the PM only in "
-                    f"{list(APM_ADMISSIBLE_MODES)!r} mode; this sizing is {eff_mode!r}"
+                    f"{list(APM_ADMISSIBLE_MODES)!r} mode, or hands-on below XL; this sizing is "
+                    f"{eff_mode!r} at {estimate.get('tshirt')!r}"
                 )
             if existing_source == SOURCE_PM:
                 raise MutateAbort(

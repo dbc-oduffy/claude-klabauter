@@ -1133,3 +1133,42 @@ def test_plan_criteria_function_direct_unit_cases():
         {"execution_authorized_by": "pm", "status": None}
     ) is False
     assert m._plan_execution_authorized_and_active({}) is False
+
+
+# --- an in-flight warp run owns its sizing --------------------------------------------------------
+
+
+def _incident(repo, session_id):
+    rel = "state/sizings/2026-07-31-quick-wrap-a-lightweight-end-of-work-cer.yaml"
+    _write_sizing(repo, rel, _INCIDENT_SIZING_YAML)
+    _write_touched(repo, session_id, rel)
+    return rel, _transcript_plain(repo)
+
+
+def test_live_warp_run_on_the_sizing_does_not_fire(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    rel, transcript = _incident(repo, "sess-warp")
+    run_token.mint(repo, "warp-x-1", "scratch/warp/x.mjs", session_id="sess-warp", sizing_rel=rel)
+    assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is None
+
+
+def test_live_warp_run_on_a_different_sizing_still_fires(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    rel, transcript = _incident(repo, "sess-warp")
+    run_token.mint(
+        repo, "warp-x-1", "scratch/warp/x.mjs", session_id="sess-warp",
+        sizing_rel="state/sizings/2026-01-01-unrelated.yaml",
+    )
+    assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is not None
+
+
+def test_another_sessions_or_consumed_run_still_fires(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    rel, transcript = _incident(repo, "sess-warp")
+    run_token.mint(repo, "warp-x-1", "scratch/warp/x.mjs", session_id="sess-other", sizing_rel=rel)
+    run_token.mint(repo, "warp-x-2", "scratch/warp/y.mjs", session_id="sess-warp", sizing_rel=rel)
+    run_token.consume(repo, "warp-x-2")
+    assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is not None

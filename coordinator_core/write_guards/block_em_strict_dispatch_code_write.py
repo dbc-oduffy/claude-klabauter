@@ -40,6 +40,7 @@ from coordinator_core.hooks.nudge_unrouted_sizing import (
 )
 from coordinator_core.ops.read_sizing_object_fields import _read_sizing_object_fields
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.warp_fire import fire_step
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -78,8 +79,7 @@ def _no_sizing_deny() -> Dict[str, Any]:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "strict_dispatch: no sizing this session.\n"
-                "Use instead: run coordinator:sizing first."
+                "strict_dispatch: no sizing this session.\n" + fire_step()
             ),
         }
     }
@@ -92,9 +92,7 @@ def _dispatch_deny(tshirt_display: str) -> Dict[str, Any]:
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"strict_dispatch: sized {tshirt_display} — EM does not type "
-                "code at ≥S.\n"
-                "Use instead: dispatch an executor (plan -> execute-plan / "
-                "Workflow)."
+                "code at ≥S.\n" + fire_step("<this session's sizing path>")
             ),
         }
     }
