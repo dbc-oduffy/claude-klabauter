@@ -2056,8 +2056,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "467a660f3efbe058a92fa9d1e50efef993e31dea",
-    "coordinator_core/_engine_stamp": "8cb24e1a5659b919ebc01a9c59ed52b3df9cb882",
+    "coordinator_core/_engine_published_at": "1fbf5b13c35b22429795935f8a0856c16050f154",
+    "coordinator_core/_engine_stamp": "f7ed6cb7d74bb7d81f5670c38d1ae9bfc7d66b4a",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2766,7 +2766,7 @@
     "coordinator_core/ceremony_config/argv_only.py": "7c5db8ea8614f1f6aa4dac74b5ae5040aad60085",
     "coordinator_core/ceremony_config/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ceremony_config/tests/test_argv_only.py": "fe668adc664a9f800673d1abdc46a3934a8fe92f",
-    "coordinator_core/chain_attribution.py": "8503f6f75a6d2df9da318a4f1d7458eabf688c5e",
+    "coordinator_core/chain_attribution.py": "cc9dacc6150a7ecf390b6a92bc9e4ae025636e87",
     "coordinator_core/citation_graph.py": "b3e7d6e31e23ee17d1a3530e640cf241d5715fe3",
     "coordinator_core/claim_state.py": "3a895afaa9b10bc0886e3f6e8714dab216fcd9db",
     "coordinator_core/claims_emit.py": "527ac26cae8d8d67b872929d75c6b11f406734c8",
@@ -5238,7 +5238,7 @@
     "coordinator_core/ops/test_completion_record_repair.py": "4ce781d290b58b82e8b1371c19e2aa2bac826395",
     "coordinator_core/ops/test_completion_record_sweep.py": "5b99096fc86251fda56a122fabc925cfe3cb6853",
     "coordinator_core/ops/test_configure_git.py": "7a303c79f031dba63411aef9968f023c0c0841b0",
-    "coordinator_core/ops/test_coordinator_complete_entry.py": "89f9b2bbe3ae40291be87d34bd501ac5a3a3a4a2",
+    "coordinator_core/ops/test_coordinator_complete_entry.py": "5cd9b586c7524d6b33fba9bcd62bf43f5111adec",
     "coordinator_core/ops/test_coordinator_complete_entry_receipts.py": "a23905cf33b079aa56a765c687880abb38455c68",
     "coordinator_core/ops/test_coordinator_postsync_marker_resync_check.py": "e7197bba128d5cd35baa8f345de23e7994a96d37",
     "coordinator_core/ops/test_coordinator_precommit_settings_tracking_check.py": "b45d8b12f36ece9d8bb5fee40599a5e52ade5307",
@@ -6512,7 +6512,7 @@
     "coordinator_core/tests/test_ceremony_brief_budget.py": "c3ce069fe092870e499f9562afb00284c1b9c60c",
     "coordinator_core/tests/test_ceremony_budget_ratchet.py": "b45221d48ba174862c14e32ce697e52779880a85",
     "coordinator_core/tests/test_chain_attribution.py": "61cce6266510b9a7ba7b009b1d261fdc9c444d12",
-    "coordinator_core/tests/test_chain_attribution_since_window.py": "0323240865237aa70f21274530c7ac6da09dc3a6",
+    "coordinator_core/tests/test_chain_attribution_since_window.py": "b1446271f30baf7bdda50972aade89f2297bacd1",
     "coordinator_core/tests/test_check_surface_inline_budget.py": "378da60f7826793abeb6fb6cf17420a92f427008",
     "coordinator_core/tests/test_check_wsc_inline_budget.py": "47de68e92e8c908cada83ad6b7f023c4e6a245ac",
     "coordinator_core/tests/test_citation_graph.py": "010dc1e5c7910627d4f31249f96cc23151368327",
@@ -7478,5 +7478,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "c73106b6aa4c6c3b25aa2ee43ba542e69e05274c"
+  "source_head": "5876316ab8addb00c5e68129bc2af967ee9d7766"
 }

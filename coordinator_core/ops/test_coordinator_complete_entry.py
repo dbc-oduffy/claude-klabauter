@@ -1155,7 +1155,7 @@ class TestResolveSessionCommits:
         assert len(fake.calls) == 1
         argv, cwd = fake.calls[0]
         today = date.today().strftime("%Y-%m-%d")
-        assert f"--since={today}" in argv
+        assert f"--since={today}T00:00:00" in argv
         assert argv[-1] == "HEAD"
         assert cwd == str(repo)
 
@@ -1183,7 +1183,7 @@ class TestResolveSessionCommits:
         assert rc == 0
         assert len(fake.calls) == 1
         argv, _ = fake.calls[0]
-        assert "--since=2026-07-15" in argv
+        assert "--since=2026-07-15T00:00:00" in argv
 
     def test_no_op_rerun_on_fully_authored_entry_spawns_zero_git_calls(
         self, tmp_path, monkeypatch

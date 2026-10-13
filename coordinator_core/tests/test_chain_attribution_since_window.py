@@ -55,10 +55,10 @@ def test_since_appends_exactly_one_since_argv_element():
         "git", "log", "--no-merges",
         f"--grep=^Session-Id: {_SID}$",
         "--format=%H",
-        "--since=2026-09-01",
+        "--since=2026-09-01T00:00:00",
         "HEAD",
     ]
-    assert argv.count("--since=2026-09-01") == 1
+    assert argv.count("--since=2026-09-01T00:00:00") == 1
     assert sum(1 for a in argv if a.startswith("--since=")) == 1
 
 

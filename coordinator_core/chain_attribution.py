@@ -179,6 +179,15 @@ def bulk_commit_attribution_map(
     return result
 
 
+def _since_arg(since: str) -> str:
+    """`--since=` argv element. git reads a bare ``YYYY-MM-DD`` as that date at
+    the CURRENT time of day, silently dropping the day's earlier commits;
+    pin it to midnight."""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+        since = f"{since}T00:00:00"
+    return f"--since={since}"
+
+
 def bulk_grep_attributed_shas(
     range_str: str,
     session_id: Optional[str],
@@ -236,7 +245,7 @@ def bulk_grep_attributed_shas(
         "--format=%H",
     ]
     if since is not None:
-        argv.append(f"--since={since}")
+        argv.append(_since_arg(since))
     argv.append(range_str)
     rc, out, err = run(argv, cwd)
     if rc != 0:
@@ -268,7 +277,7 @@ def shas_touching_paths(
         return []
     argv = ["git", "log", "--no-merges", "--format=%H"]
     if since is not None:
-        argv.append(f"--since={since}")
+        argv.append(_since_arg(since))
     argv.append(range_str)
     argv.append("--")
     argv.extend(f":(literal){p}" for p in sorted(scope_paths))
