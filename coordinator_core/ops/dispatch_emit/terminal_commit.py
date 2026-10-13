@@ -2229,7 +2229,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed) - set(regraded))
     if isinstance(incomplete, list) and isinstance(landed, list):
         entangled = reply.get("entangled") or {}
-        open_ids = (set(incomplete) - set(landed) - set(regraded)) | set(entangled)
+        open_ids = (set(incomplete) - set(landed) - set(regraded)) | set(entangled) | set(held)
         reasons = {}
         for i in sorted(open_ids):
             if i in held:
@@ -2262,6 +2262,43 @@ def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
             f"then re-emit with {command}"
         )
     return f"re-emit the incomplete rows with {command}"
+
+
+def _held_ids(params: dict) -> set:
+    held = params.get("held")
+    return {
+        h["chunk"] for h in (held if isinstance(held, list) else [])
+        if isinstance(h, dict) and isinstance(h.get("chunk"), str)
+    }
+
+
+def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set) -> dict:
+    """``{path: [held chunk ids]}`` of every ``writes:`` path a held chunk declares: the marker's
+    chunk paths plus the plan spine row of the same id (a held chunk may be absent from the marker)."""
+    out: dict = {}
+    for chunk in request.chunks:
+        if chunk.id in held_ids:
+            for p in chunk.paths:
+                out.setdefault(p, []).append(chunk.id)
+    text = _read_rel(worktree_root, request.plan_path) if request.plan_path else None
+    if text is not None:
+        import yaml
+
+        from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+        located = locate_fenced_block(text.replace("\r\n", "\n"))
+        try:
+            rows = yaml.safe_load(located.body) or [] if located.status == LocateStatus.LOCATED else []
+        except yaml.YAMLError:
+            rows = []
+        for row in rows if isinstance(rows, list) else ():
+            if isinstance(row, dict) and str(row.get("id")) in held_ids:
+                for p in row.get("writes") or ():
+                    if isinstance(p, str):
+                        ids = out.setdefault(PurePosixPath(p.replace("\\", "/")).as_posix(), [])
+                        if str(row["id"]) not in ids:
+                            ids.append(str(row["id"]))
+    return out
 
 
 def _terminal_commit(
@@ -2572,6 +2609,9 @@ def _terminal_commit(
     # The wake digest lists every unfinished row, including rows that never
     # started and so never reached the marker; those carry no paths to hold
     # back, so they are reported, not refused.
+    # A held chunk's work is not the run's to land, whatever its report or the review's slice say.
+    held_ids = _held_ids(params)
+    incomplete_chunks = incomplete_chunks | (held_ids & known_ids)
     unmarked_incomplete = sorted(incomplete_chunks - known_ids)
     stranded.update(
         {c.id: list(c.paths) for c in request.chunks if c.id in incomplete_chunks}
@@ -2587,7 +2627,30 @@ def _terminal_commit(
         incomplete_chunks = incomplete_chunks | set(entangled)
         partial_chunks = [c for c in partial_chunks if c.id not in entangled]
         stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in entangled})
+    partial_chunks = [c for c in partial_chunks if c.id not in held_ids]
     done_chunks = [c for c in request.chunks if c.id not in incomplete_chunks]
+
+    held_paths = _held_write_paths(worktree_root, request, held_ids) if held_ids else {}
+    if held_paths:
+        overlap: dict = {}
+        for chunk in done_chunks + partial_chunks:
+            for p in list(chunk.paths) + (_own_prefix_files(worktree_root, chunk, report_cache) or []):
+                if p in held_paths:
+                    entry = overlap.setdefault(p, {"held": held_paths[p], "landed": []})
+                    if chunk.id not in entry["landed"]:
+                        entry["landed"].append(chunk.id)
+        if overlap:
+            shown = "; ".join(
+                f"{p} (held {', '.join(e['held'])}; landed {', '.join(e['landed'])})"
+                for p, e in sorted(overlap.items())
+            )
+            return _error(
+                f"path(s) declared by both a held chunk and a landed chunk cannot be committed "
+                f"consistently: {shown}. Re-fire with the landed chunk listed in params.held, or "
+                "release the held chunk first",
+                refused="held-landed-overlap",
+                overlap=overlap,
+            )
 
     all_paths: list = []
     prefix_files: list = []
@@ -2651,6 +2714,9 @@ def _terminal_commit(
         )
         all_paths.extend(p for p in doc_kept if p not in all_paths)
 
+    if held_paths:
+        all_paths = [p for p in all_paths if p not in held_paths]
+
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
     dropped_absent: list = []
@@ -2689,6 +2755,22 @@ def _terminal_commit(
             session_id=request.session_id,
         )
     scope.update(root=worktree_root, request=scope_request, snapshot=snapshot)
+    # Unlike a hand commit, a run's product commit never absorbs a live peer's in-flight edit.
+    from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
+
+    peer_holds: list = []
+    commit_v2_mod._peer_claim_warnings(
+        worktree_root, all_paths + deleted_paths, peer_holds, own_sid=session_id
+    )
+    if peer_holds:
+        sids = sorted({sid for _p, sid in peer_holds})
+        return _error(
+            "live peer session(s) " + ", ".join(sids) + " hold write claims on path(s) this "
+            "commit would carry: " + ", ".join(sorted({p for p, _s in peer_holds})) + ". "
+            "Wait for the peer to finish, or have it commit them, then re-fire",
+            refused="peer-claim",
+            peer_claims=[{"path": p, "session": s} for p, s in peer_holds],
+        )
     final_paths_set = set(all_paths)
     changed = _changed(snapshot, worktree_root, all_paths)
 

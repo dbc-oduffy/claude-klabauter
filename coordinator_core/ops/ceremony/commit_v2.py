@@ -329,21 +329,23 @@ def _disclose_gone_deletions(message: str, gone: list) -> str:
 
 
 def _peer_claim_warnings(
-    worktree_root: Path, paths: list, peer_holds: Optional[list] = None
+    worktree_root: Path, paths: list, peer_holds: Optional[list] = None,
+    own_sid: Optional[str] = None,
 ) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
     ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. Each live peer also
     gets one warning naming (capped at 5) its untracked files outside ``paths``, degrading likewise.
+    ``own_sid`` (opt-in) names the caller's session when it is not the worktree's resolved one.
     """
     if not paths:
         return []
 
-    own_sid = None
-    try:
-        own_sid = session_core.resolve_session_id(str(worktree_root))
-    except Exception:
-        own_sid = None
+    if own_sid is None:
+        try:
+            own_sid = session_core.resolve_session_id(str(worktree_root))
+        except Exception:
+            own_sid = None
 
     try:
         lookup_result = session_claim_index.lookup(list(paths), cwd=str(worktree_root))
