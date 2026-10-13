@@ -85,7 +85,7 @@ def _run_digest(script: str, tmp_path) -> dict:
     tail = script[script.index("function _cap("):]
     harness = tmp_path / "digest.js"
     harness.write_text(
-        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _stoppedBy = [], "
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _stoppedBy = [], _gateOwed = {}, "
         "_blockedChunks = [], _verifications = [], _alreadyDone = new Set(), _falsifierBroken = new Map(), "
         "_routedOut = [], _skippedDone = [], _unusableChecks = [], _reviews = [], "
         "_reviewPrep = null, _reviewWave = null, _deliveryVerdict = null, _reviewIntegration = null, "

@@ -782,7 +782,8 @@ def compose_rejudge_script(
         f"  phase({_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)});\n"
         f"  const _judge = await {call};\n"
         f"  return {{ reverify_delivery: {json.dumps(ident, sort_keys=True)}, "
-        "criterion: _judge ? { status: _judge.status ?? null, observation: _judge.observation ?? null } : null };\n"
+        "criterion: _judge ? { status: _judge.status ?? null, observation: _judge.observation ?? null, "
+        "register_rows: _judge.register_rows ?? null } : null };\n"
     )
 
 
@@ -880,6 +881,10 @@ def record_criterion_rejudge(
         "session_id": session_id,
         "criterion": {"status": status, "observation": criterion.get("observation"), "sidecar": None},
     }
+    rows = criterion.get("register_rows")
+    if isinstance(rows, list):
+        # review_stamp.rejudge runs terminal_commit's register gate over these.
+        fm["criterion"]["register_rows"] = [r for r in rows if isinstance(r, dict)]
     target = repo_root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "x", encoding="utf-8", newline="\n") as fh:

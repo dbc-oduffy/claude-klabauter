@@ -131,3 +131,52 @@ def test_unrelated_turn_not_embedded_is_refused(turns_repo, capsys):
     (turns_repo / "reg.yaml").write_text(_reg(rows, extra), encoding="utf-8")
     assert sa.main(["--register", "reg.yaml", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL
     assert "turn 5" in capsys.readouterr().out
+
+
+def _register_of(repo):
+    return yaml.safe_load((repo / _REL).read_text(encoding="utf-8"))["requirement_register"]
+
+
+def test_register_overlay_from_stdin_drops_waives_and_adds_with_defaults(turns_repo, monkeypatch):
+    import io
+
+    full = f"  - id: a\n    source_text: \"{_PHRASE}\"\n    surface: cli\n    status: open\n"
+    full += "  - id: nap\n    source_text: take a nap\n    surface: internal\n    status: open\n"
+    extra = "unrelated_turns:\n  - turn: 2\n    reason: chat\n"
+    (turns_repo / "reg.yaml").write_text(_reg(full, extra), encoding="utf-8")
+    assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
+
+    overlay = (
+        "drop: [nap]\nunrelated_turns:\n  - turn: 2\n    reason: conversational\n"
+        "rows:\n  - id: b\n    source_text: keep the groom parameters exposed\n"
+        "  - id: a\n    surface: ui\n"
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(overlay))
+    assert sa.main(["--register", "-", "--write", _REL]) == 0
+    reg = _register_of(turns_repo)
+    assert [(r["id"], r["surface"], r["status"]) for r in reg["rows"]] == [
+        ("a", "ui", "open"), ("b", "internal", "open"),
+    ]
+    assert reg["rows"][1]["claimed_by"] == []
+    assert reg["unrelated_turns"] == [{"turn": 2, "reason": "conversational"}]
+
+
+def test_overlay_dropping_an_unknown_row_is_refused(repo, capsys):
+    assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
+    (repo / "over.yaml").write_text("drop: [zz]\n", encoding="utf-8")
+    before = (repo / _REL).read_bytes()
+    assert sa.main(["--register", "over.yaml", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL
+    assert "zz" in capsys.readouterr().out
+    assert (repo / _REL).read_bytes() == before
+
+
+def test_derive_register_backfills_a_sizing_that_embeds_turns(turns_repo, capsys):
+    assert sa.main(["--derive-register", "--write", _REL]) == 0
+    reg = _register_of(turns_repo)
+    assert [r["id"] for r in reg["rows"]] == ["T2", "T9"]
+    assert all(r["status"] == "open" and r["surface"] == "internal" for r in reg["rows"])
+    assert sa.main(["--derive-register", "--write", _REL]) == 0  # identical: idempotent
+
+
+def test_derive_register_without_pm_words_is_refused(repo):
+    assert sa.main(["--derive-register", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL

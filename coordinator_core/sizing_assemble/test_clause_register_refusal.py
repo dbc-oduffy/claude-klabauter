@@ -86,7 +86,7 @@ def test_two_enumerated_lines_mint_one_row_per_clause(repo, capsys):
     assert doc["status"] == "routed"
     assert validate_frontmatter(doc, SCHEMA) == []
     err = capsys.readouterr().err
-    assert "T7.1" in err and "--register <yaml> --supersede --write" in err
+    assert "T7.1" in err and "--register - --write" in err
 
 
 def test_clauses_of_two_turns_both_mint_in_turn_order(repo):
@@ -144,10 +144,14 @@ def test_fenced_quoted_and_agent_message_lists_do_not_trigger():
     assert sa.pm_clause_list([("T1", text)]) == []
 
 
-def test_single_item_and_no_list_write_as_before(repo):
+def test_a_turn_without_a_list_is_one_whole_turn_row(repo):
     path = _sizing(repo)
     _write(repo, [_v(1, "just one:\n- only item"), _v(2, "prose")])
-    assert "requirement_register" not in _load(path)
+    rows = _load(path)["requirement_register"]["rows"]
+    assert [(r["id"], r["source_text"], r["anchor"]) for r in rows] == [
+        ("T1", "just one:\n- only item", "pm_verbatims turn 1"),
+        ("T2", "prose", "pm_verbatims turn 2"),
+    ]
 
 
 def test_list_only_in_intent_without_pm_verbatim_does_not_trigger(repo):
@@ -171,9 +175,49 @@ def test_pm_verbatim_intent_list_mints_intent_rows(repo, monkeypatch):
 
 def test_stubbed_mint_flags_uncovered_turns_and_never_refuses(repo, monkeypatch, capsys):
     path = _sizing(repo)
-    monkeypatch.setattr(sa, "_mint_clause_register", lambda text, *a, **k: text)
+    monkeypatch.setattr(sa, "_mint_register", lambda text, *a, **k: text)
     result = _write(repo, [_v(7, _LIST)])
     assert "requirement_register" not in yaml.safe_load(path.read_text(encoding="utf-8"))
     assert result["register_coverage"] == {"turns_total": 1, "turns_uncovered": [7]}
     err = capsys.readouterr().err
     assert "turn(s) 7" in err and "--register" in err
+
+
+def test_agent_message_only_turn_is_unrelated_and_pm_segments_are_rows(repo):
+    path = _sizing(repo)
+    relay = '<agent-message from="x">do a thing</agent-message>'
+    _write(repo, [_v(1, relay), _v(2, f"before {relay} after")])
+    reg = _load(path)["requirement_register"]
+    assert [(r["id"], r["source_text"]) for r in reg["rows"]] == [("T2.p1", "before"), ("T2.p2", "after")]
+    assert reg["unrelated_turns"] == [{"turn": 1, "reason": "relayed agent message only, no PM words"}]
+    assert validate_frontmatter(_load(path), SCHEMA) == []
+
+
+def test_scout_rows_seed_the_register_and_a_paraphrase_is_dropped(repo, capsys):
+    path = _sizing(repo)
+    scout = {
+        "register_rows": [
+            {"id": "R1", "source_text": "keep the  groom parameters", "surface": "ui"},
+            {"id": "R2", "source_text": "a paraphrase the PM never said", "surface": "cli"},
+            {"id": "R3", "source_text": "nap", "surface": "bogus"},
+        ],
+        "verbatim_accounting": [
+            {"turn": 3, "rows": ["R1"]},
+            {"turn": 4, "account": "unrelated — small talk"},
+        ],
+    }
+    _write(repo, [_v(3, "please keep the groom parameters exposed"), _v(4, "back after a nap")],
+           scout_register=scout)
+    reg = _load(path)["requirement_register"]
+    assert [(r["id"], r["surface"]) for r in reg["rows"]] == [("R1", "ui"), ("R3", "internal")]
+    assert "unrelated_turns" not in reg  # R3 covers turn 4, so the scout's waiver is moot
+    assert "R2" in capsys.readouterr().err
+
+
+def test_scout_unrelated_turn_is_waived_not_minted(repo):
+    path = _sizing(repo)
+    scout = {"register_rows": [], "verbatim_accounting": {"4": "unrelated — small talk"}}
+    _write(repo, [_v(3, "ship it"), _v(4, "back after a nap")], scout_register=scout)
+    reg = _load(path)["requirement_register"]
+    assert [r["id"] for r in reg["rows"]] == ["T3"]
+    assert reg["unrelated_turns"] == [{"turn": 4, "reason": "small talk"}]

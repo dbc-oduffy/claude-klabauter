@@ -195,7 +195,7 @@ class Manifest:
     unselected: tuple[str, ...] = ()
 
 
-def _repo_relative(path: Path, repo_root: Path) -> str:
+def _repo_relative(path: Path, repo_root: Path, resolved: Optional[dict] = None) -> str:
     """POSIX path relative to ``repo_root``, so the frozen manifest names no
     host path.
 
@@ -205,8 +205,14 @@ def _repo_relative(path: Path, repo_root: Path) -> str:
     # across machines/CI. Refused instead; the only current caller
     # (queue_emit.py) already enforces containment before calling in.
     """
+    # `resolved` memoizes realpath per directory: one syscall pair per row dominated a
+    # 900-row emit. A row's name is kept as listed; only its directory is resolved.
+    if resolved is None:
+        resolved = {}
     try:
-        return path.resolve().relative_to(repo_root.resolve()).as_posix()
+        root = resolved.get(None) or resolved.setdefault(None, repo_root.resolve())
+        parent = resolved.get(path.parent) or resolved.setdefault(path.parent, path.parent.resolve())
+        return (parent / path.name).relative_to(root).as_posix()
     except ValueError as exc:
         raise ValueError(
             f"queue_select: row {path!s} does not resolve under repo_root "
@@ -717,8 +723,9 @@ def select_rows(
 
     entries: list[ManifestEntry] = []
     declined: list[DeclinedEntry] = []
+    resolved_dirs: dict = {}
     for row_id, row_path, digest, normalised in filtered:
-        rel_path = _repo_relative(row_path, repo_root)
+        rel_path = _repo_relative(row_path, repo_root, resolved_dirs)
         mark = handback_marks.get(row_id, "")
         if mark.startswith("route-to-"):
             declined.append(

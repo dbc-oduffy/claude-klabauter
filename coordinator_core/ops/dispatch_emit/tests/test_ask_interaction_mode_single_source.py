@@ -27,9 +27,10 @@ def test_size_prompt_names_no_mode_and_relays_the_returned_one():
         plan_blitz_text="stub",
         **REVIEW_KW,
     )
-    clause = re.search(r"--interaction-mode \((.*?verbatim[^)]*)\)", script).group(1)
-    assert "`interaction_mode`" in clause and "verbatim" in clause
-    assert not re.search(r"\b(hands-on|pm|ceo)\b", clause)
+    # sizing-assemble resolves the mode itself; the composed command never supplies one.
+    cmd = next(ln for ln in script.splitlines() if "const _assembleCmd" in ln)
+    assert "--interaction-mode" not in cmd
+    assert not re.search(r"\b(hands-on|ceo)\b", cmd)
 
 
 def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeypatch):

@@ -84,6 +84,46 @@ def test_s_and_l_fire(repo, emitted, capsys, tshirt):
     assert len(emitted) == 1
 
 
+def _write_no_hand_off(repo: Path, tshirt: str, capsys, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import NO_PLAN_HAND_OFF_FLAG
+
+    opened: list = []
+    monkeypatch.setattr(sizing_assemble, "_open_routed_obligation", lambda p: opened.append(p))
+    path = Path(record_homes.record_path(str(repo), "sizings", "2026-10-12-x.yaml"))
+    code = sizing_assemble.main(["--tshirt", tshirt, *_COMMON, "--write", str(path),
+                                  "--interaction-mode", "hands-on", NO_PLAN_HAND_OFF_FLAG])
+    out, _err = capsys.readouterr()
+    return code, json.loads(out), path, opened
+
+
+def test_flag_literal_is_the_ask_contract_constant():
+    from coordinator_core.ops.dispatch_emit.ask_contract import NO_PLAN_HAND_OFF_FLAG, PM_EXIT_QUESTION_KEY
+
+    assert NO_PLAN_HAND_OFF_FLAG == "--no-plan-hand-off"
+    assert PM_EXIT_QUESTION_KEY == "pm_exit_question"
+
+
+def test_no_plan_hand_off_at_m_writes_without_firing(repo, emitted, capsys, monkeypatch):
+    code, decision, path, opened = _write_no_hand_off(repo, "M", capsys, monkeypatch)
+    assert code == 0
+    assert emitted == []
+    assert opened == []
+    assert path.exists()
+    assert decision["route"] == "plan"
+    assert decision["pm_exit_question"] is None
+
+
+def test_no_plan_hand_off_at_xl_carries_the_next_move_question(repo, emitted, capsys, monkeypatch):
+    _code, decision, _path, _opened = _write_no_hand_off(repo, "XL", capsys, monkeypatch)
+    question = decision["pm_exit_question"]
+    assert question and question in decision["next_move"]
+    assert emitted == []
+
+
+def test_pm_exit_question_on_a_shape_route_is_the_room_entry():
+    assert sizing_assemble.pm_exit_question("M", "shape", prompt_pending=False) == "enter coordinator:shape"
+
+
 def test_xl_keeps_the_pm_touchpoint(repo, emitted, capsys):
     code, out, _path = _write(repo, "XL", capsys)
     assert code == 0

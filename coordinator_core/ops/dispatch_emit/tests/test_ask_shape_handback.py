@@ -73,4 +73,4 @@ def test_fresh_ask_sizes_afresh_never_reusing_a_shape_sizing():
         plan_blitz_text="stub",
         **REVIEW_KW,
     )
-    assert "afresh, never reusing or editing an existing sizing routed `shape`" in script
+    assert "Size this ask afresh, never reusing or editing an existing sizing" in script

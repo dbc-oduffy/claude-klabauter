@@ -10,6 +10,8 @@ dispatch.ask_stage; the script only interprets the manifest. Pure composition: n
 from __future__ import annotations
 
 import json
+import shlex
+from datetime import date
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -21,9 +23,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_PHASES,
     HALT_REFUSAL,
     HALT_TOUCHPOINT,
+    NO_PLAN_HAND_OFF_FLAG,
     OP_ASK_GATE,
     OP_ASK_STAGE,
+    PM_EXIT_QUESTION_KEY,
     RUN_DIR_ROOT,
+    SIZING_SCOUT_AGENT_TYPE,
+    STOP_AFTER_PLAN,
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.pm_adjudication import (
@@ -59,6 +65,7 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
 _DOC_NEW = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new"'
+_SIZING_ASSEMBLE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/sizing-assemble"'
 _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
@@ -94,17 +101,6 @@ def _obj(required: list[str], properties: dict) -> dict:
 
 
 _STR = {"type": "string"}
-_SIZE_SCHEMA = _obj(
-    ["sizing_rel", "writes"],
-    {
-        "sizing_rel": _STR,
-        "writes": {"type": "array", "items": _STR},
-        "gated": {
-            "type": "array",
-            "items": _obj(["title", "owner_repo"], {"title": _STR, "owner_repo": _STR, "requires": _STR}),
-        },
-    },
-)
 _GATE_SCHEMA = _obj(
     ["arm", "halt"],
     {
@@ -115,6 +111,27 @@ _GATE_SCHEMA = _obj(
         "route": _STR,
         "resume_plan": {"type": ["string", "null"]},
     },
+)
+_SCOUT_SCHEMA = _obj(
+    ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"],
+    {
+        "tshirt": {"type": "string", "enum": ["XS", "S", "M", "L", "XL", "XXL"]},
+        "intent": _STR,
+        "name": _STR,
+        "premise_provenance": {"type": "string", "enum": ["executed", "read", "not-applicable"]},
+        "premise_evidence": _STR,
+        "exit_criterion": _STR,
+        "writes": {"type": "array", "items": _STR},
+        "jtbd_unclear": {"type": "boolean"},
+        "well_trodden_step_change": {"type": "boolean"},
+        "gated": {
+            "type": "array",
+            "items": _obj(["title", "owner_repo"], {"title": _STR, "owner_repo": _STR, "requires": _STR}),
+        },
+    },
+)
+_ASSEMBLE_SCHEMA = _obj(
+    ["exit_code", "stdout"], {"exit_code": {"type": "integer"}, "stdout": _STR, "stderr": _STR}
 )
 _ACCEPT_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
@@ -254,6 +271,7 @@ def _phase_titles(
     review_titles: list[str],
     judged: bool = False,
     with_accept: bool = False,
+    through_plan: bool = False,
 ) -> list[str]:
     titles: list[str] = []
     for phase in ASK_PHASES:
@@ -264,6 +282,8 @@ def _phase_titles(
         titles.append(phase)
         if phase == "plan":
             titles.extend(t for t in blitz_phases if t not in titles)
+            if through_plan:
+                return titles
     judge_titles = [CRITERION_JUDGE_PHASE_TITLE] if judged else []
     for extra in [_emit._EXECUTE_PHASE_TITLE, *review_titles, *judge_titles, _emit._TEST_PHASE_TITLE]:
         if extra not in titles:
@@ -324,6 +344,7 @@ def compose_ask_script(
     accept_pending: bool = False,
     preamble: Optional[str] = None,
     em_brief: Optional[EmBrief] = None,
+    stop_after: Optional[str] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -341,10 +362,16 @@ def compose_ask_script(
     every agent prompt the script composes, plan-blitz's included (through `wrap_stage`'s
     `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`); the roadmap
     arm refuses it. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
-    authoring.
+    authoring. A raw ask sizes through the scout agent and one composed
+    `sizing-assemble --write` step; a gate halt carries the assemble decision's `pm_exit_question`.
+    `stop_after=STOP_AFTER_PLAN` ends the script at the plan wave with the single exit
+    `{planned, sizing, run_id}` (XS: `{route: 'dispatch', sizing}`); stage, execute and review
+    are not composed.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
+    if stop_after not in (None, STOP_AFTER_PLAN):
+        raise AskComposeRefused(f"stop_after takes {STOP_AFTER_PLAN!r} or nothing, got {stop_after!r}")
 
     if review_roster_fragment is None or review_stage_schemas is None:
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
@@ -451,34 +478,64 @@ def compose_ask_script(
 
     if not sizing_rel:
         b.append("  phase('size');")
-        size_prompt = prompt_of(
-            "Size this ask afresh, never reusing or editing an existing sizing routed `shape`, by "
-            "following the sizing skill (`coordinator:sizing`) to a sizing the "
-            "gate can read, in this order: (1) run `sizing-assemble` for the estimate and route; "
-            "(2) scaffold with `coordinator-doc-new --type sizing-object`, passing --tshirt, "
-            "--route, --name, --premise executed|read|not-applicable with --premise-evidence, --exit-criterion (one sentence "
-            "stating what done means) and --interaction-mode (the `interaction_mode` step (1)'s sizing-assemble returned, verbatim; never choose one); "
-            + (
-                f"also pass --deliverable-id {baton['deliverable_id']} to that scaffold call, and "
-                if baton
-                else ""
-            )
-            + "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
-            "`exit_criterion.accepted` null: never accept it yourself; the gate halts at the "
-            "touchpoint when the mode asks the PM. Return the sizing's repo-relative path as "
-            "sizing_rel, and as `writes` the repo-relative files the ask will create, edit or "
-            "delete -- every file the ask names, plus any you find it must touch. An XS with "
-            "empty `writes` is refused at the gate. Return as `gated` every deliverable the ask declares "
-            "as owned by another repo or blocked on an external gate (title, owner_repo, requires): "
-            "never fold one into `writes` and never omit one.\n\nAsk:\n"
+        scout_prompt = prompt_of(
+            "Size this ask afresh, never reusing or editing an existing sizing, by following the "
+            "sizing skill (`coordinator:sizing`). Judge only; write no file and run no "
+            "`sizing-assemble`. Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), "
+            "name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with "
+            "premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` "
+            "the repo-relative files the ask will create, edit or delete -- every file the ask names, "
+            "plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set "
+            "jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), "
+            "and well_trodden_step_change true for a step change on well-trodden ground. Return "
+            "as `gated` every deliverable the ask declares as owned by another repo or blocked on an "
+            "external gate (title, owner_repo, requires): never fold one into `writes` and never omit "
+            "one.\n\nAsk:\n"
             + (prompt or "")
         )
         b.append(
-            f"  const _sized = await {_agent(size_prompt, label='size', phase='size', agent_type=agent_type, schema=_SIZE_SCHEMA)};"
+            f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_SCOUT_SCHEMA, agent_model='sonnet')};"
         )
-        b.append("  _sizingRel = _sized.sizing_rel;")
-        b.append("  _writes = _sized.writes ?? [];")
-        b.append("  _gated = _sized.gated ?? [];")
+        b.append("  _writes = _scouted.writes ?? [];")
+        b.append("  _gated = _scouted.gated ?? [];")
+        b.append(
+            "  const _slug = String(_scouted.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
+            ".replace(/^-+|-+$/g, '') || 'ask';"
+        )
+        b.append(f"  const _sizingPath = 'state/sizings/' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
+        b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
+        deliverable = (
+            f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
+        )
+        b.append(
+            f"  const _assembleCmd = {_lit(_SIZING_ASSEMBLE)} + ' --tshirt ' + _q(_scouted.tshirt)"
+            " + ' --intent ' + _q(_scouted.intent) + ' --name ' + _q(_scouted.name)"
+            " + ' --premise-provenance ' + _q(_scouted.premise_provenance)"
+            " + ' --premise-evidence ' + _q(_scouted.premise_evidence)"
+            f" + ' --exit-criterion ' + _q(_scouted.exit_criterion){deliverable}"
+            " + (_scouted.jtbd_unclear === true ? ' --jtbd-unclear' : '')"
+            " + (_scouted.well_trodden_step_change === true ? ' --well-trodden-step-change' : '')"
+            f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)};"
+        )
+        assemble_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "Run exactly this one command and nothing else, then return its exit code as exit_code and "
+            "its stdout verbatim as stdout (stderr as stderr). Do not edit, retry or repair it:\n\n",
+            "js:_assembleCmd",
+        )
+        b.append(
+            f"  const _assembled = await {_agent(assemble_prompt, label='assemble', phase='size', agent_type=agent_type, schema=_ASSEMBLE_SCHEMA)};"
+        )
+        b.append("  let _decision = null;")
+        b.append("  try { _decision = JSON.parse(_assembled.stdout); } catch (_e) { _decision = null; }")
+        b.append(
+            "  if (_assembled.exit_code !== 0 || !_decision) { _halted = { halted: "
+            f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _assembled.exit_code + '); "
+            "the gate, plan, stage, execute and review phases were skipped', "
+            "detail: String(_assembled.stderr ?? _assembled.stdout ?? '').slice(0, 300), run_id: _runId }; }"
+        )
+        b.append("  else { _sizingRel = _sizingPath; }")
+        b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")
 
     b.append("  phase('gate');")
     gate_payload = "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes" + (
@@ -493,7 +550,9 @@ def compose_ask_script(
         " and return its estimate.tshirt as tshirt and its route as route.",
     )
     gate_call = _agent(gate_prompt, label="gate", phase="gate", agent_type=agent_type, schema=_GATE_SCHEMA)
-    b.append(f"  let _gate = await {gate_call};")
+    b.append(
+        f"  let _gate = {'_halted ? { arm: null, halt: null } : ' if not sizing_rel else ''}await {gate_call};"
+    )
 
     if accept_pending or not sizing_rel:
         apm_prompt = _cat(
@@ -547,10 +606,17 @@ def compose_ask_script(
             "    }\n"
             "  }"
         )
-    b.append(
-        "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
-        f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}"
-    )
+    if sizing_rel:
+        b.append(
+            "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
+            f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}"
+        )
+    else:
+        b.append(
+            "  if (_gate.halt || !_gate.arm) { if (!_halted) _halted = { halted: (_gate.halt && _gate.halt.kind) || "
+            f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId"
+            f", ...(_pmExit ? {{ {PM_EXIT_QUESTION_KEY}: _pmExit }} : {{}}) }}; }}"
+        )
 
     stage_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
@@ -614,6 +680,25 @@ def compose_ask_script(
             f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'sizing resolved to M+ at emit time but the plan-blitz stage was not embedded', "
             "sizing: _sizingRel, run_id: _runId }; }"
+        )
+
+    if stop_after:
+        b.append(
+            "  return _halted ? { halted_by: _halted, sizing: _sizingRel, run_id: _runId } : "
+            f"(_gate.arm === {_lit(ARM_XS)} ? {{ route: 'dispatch', sizing: _sizingRel }} : "
+            "{ planned: [_planRel], sizing: _sizingRel, run_id: _runId });"
+        )
+        return _finish_script(
+            b,
+            manifest_rel,
+            "Size, gate and plan from an ask, then stop before stage.",
+            _phase_titles(
+                with_size=not sizing_rel,
+                blitz_phases=blitz_phases,
+                review_titles=[],
+                with_accept=accept_pending or not sizing_rel,
+                through_plan=True,
+            ),
         )
 
     b.append("  if (!_halted) {")
@@ -713,8 +798,9 @@ def compose_ask_script(
         f"{TERMINAL_COMMIT_CLI_PROPERTY_JS} }};"
     )
 
-    meta = _emit._meta_block(
-        "warp-ask",
+    return _finish_script(
+        b,
+        manifest_rel,
         (
             f"Plan, stage, execute, review from accepted sizing {Path(sizing_rel).stem}."
             if sizing_rel
@@ -722,6 +808,11 @@ def compose_ask_script(
         ),
         _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=review_titles, judged=judge_expr is not None, with_accept=accept_pending or not sizing_rel),
     )
+
+
+def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titles: list[str]) -> str:
+    """The script text from its composed body lines, refused over the Workflow runner's byte cap."""
+    meta = _emit._meta_block("warp-ask", description, phase_titles)
     script = (
         f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n"
         f"{ASK_MANIFEST_MARKER}{manifest_rel}\n"

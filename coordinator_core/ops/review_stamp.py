@@ -516,6 +516,7 @@ def mint(
     resolved: Optional[tuple] = None,
     superseding_record: Optional[Path] = None,
     criterion_open_ok: bool = False,
+    terminal_tree_sha: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
     Returns the written stamp dict. Raises `MintRefusal` on any refusal
@@ -529,7 +530,9 @@ def mint(
     record_path, record)` from a caller that just landed the terminal commit
     itself (`dispatch.terminal_commit`): the trailer walk is skipped.
     `criterion_open_ok` mints over a `not_met`/`indeterminate` criterion, recording its
-    status on the stamp (see `verdict.mint_refusal`)."""
+    status on the stamp (see `verdict.mint_refusal`). `terminal_tree_sha` is the
+    tree of the terminal commit when the caller already holds it (the commit
+    reply's `tree`); when given, the `log -1 --format=%T` read is skipped."""
     if not repo_root.exists():
         raise MintRefusal(f"review-stamp: repo root does not exist: {repo_root}")
 
@@ -741,11 +744,16 @@ def mint(
             )
         raise MintRefusal(refusal)
 
-    try:
-        tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))
-    except _GitUnavailable as exc:
-        raise MintRefusal(f"review-stamp: could not read tree sha of {terminal_sha}: {exc}") from exc
-    terminal_tree_sha = tree_out.strip()
+    if not landed_here:
+        # A caller-held tree describes the commit the caller just landed, not a
+        # superseding or walked terminal commit.
+        terminal_tree_sha = None
+    if not terminal_tree_sha:
+        try:
+            tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))
+        except _GitUnavailable as exc:
+            raise MintRefusal(f"review-stamp: could not read tree sha of {terminal_sha}: {exc}") from exc
+        terminal_tree_sha = tree_out.strip()
 
     stamp: Dict[str, Any] = {
         "terminal_commit_sha": terminal_sha,
@@ -952,12 +960,24 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     observation = str(result.get("observation") or "").strip()
     if not observation:
         return {"status": "unchanged", "reason": f"judge result {rel} records no observation"}
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate, _register_writeback
+
+    try:
+        plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError:
+        return {"status": "unchanged", "reason": f"{plan_path} is outside {repo_root}; register gate cannot run"}
+    judged = {"criterion": dict(result)}
+    gap = _register_gate(repo_root, plan_rel, judged)
+    if gap is not None:
+        return {"status": "unchanged", "reason": f"judge result {rel}: {gap}"}
 
     # Only the schema's three keys: the plan schema is DoE-owned and closed, and the sidecar
     # record already carries when and at which head the judge ran.
     stamp["criterion"] = {"status": "met", "observation": observation, "sidecar": rel}
     _write_stamp(plan_path, split, stamp)
-    return {"status": "rejudged", "reason": f"criterion met per {rel}"}
+    out = {"status": "rejudged", "reason": f"criterion met per {rel}"}
+    out.update(_register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or "")))
+    return out
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

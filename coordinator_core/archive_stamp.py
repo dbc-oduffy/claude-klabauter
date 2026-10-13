@@ -2839,6 +2839,7 @@ def cs_stamp_plan_implemented(
     falsifier_output: Optional[str] = None,
     prose: Optional[str] = None,
     refuse_open_spine_rows: bool = False,
+    commit: bool = True,
 ) -> int:
     """Flips a plan's frontmatter status: to implemented via the native
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
@@ -2865,6 +2866,10 @@ def cs_stamp_plan_implemented(
     it off: it certifies landing from the dispatch ledger before the spine's
     own rows are rewritten, and workstream-complete gates on the same oracle
     upstream.
+
+    ``commit=False`` passes ``--no-commit``: every refusal still runs and the plan is
+    written, but the caller owns committing it; archival is skipped because it rides
+    on the commit.
     """
     if refuse_open_spine_rows:
         from coordinator_core.workstream_complete.directives_spine_worklist import (
@@ -2888,6 +2893,8 @@ def cs_stamp_plan_implemented(
     ):
         if value is not None:
             argv += [flag, value]
+    if not commit:
+        argv.append("--no-commit")
     return plan_status_transition.main(argv)
 
 

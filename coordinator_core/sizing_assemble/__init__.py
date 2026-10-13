@@ -307,6 +307,61 @@ def _cli_repo_root(sizing: Optional[str]) -> Path:
     return Path.cwd()
 
 
+def _derive_register_cli(
+    prog: str, write_path: str, scout_path: Optional[str], supersede: bool
+) -> int:
+    """`--derive-register`: record `derive_register`'s register on a sizing that already
+    embeds its PM turns (a sizing written before derivation existed, or one cut by hand)."""
+    import json
+    import sys
+
+    import yaml
+
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.sizing_record_register import _handler as record_register
+
+    root = _cli_repo_root(write_path)
+    target = Path(write_path) if Path(write_path).is_absolute() else root / write_path
+    try:
+        doc = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+        scout = yaml.safe_load(_read_path_or_stdin(scout_path)) if scout_path else None
+    except Exception as exc:  # noqa: BLE001
+        print(f"{prog}: cannot read {write_path} or its scout report: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    rows, unrelated, refs, dropped = derive_register(doc, scout if isinstance(scout, dict) else None)
+    if not rows:
+        print(f"{prog}: {write_path} carries no PM words to derive a register from", file=sys.stderr)
+        return EXIT_BUSINESS_FAIL
+    try:
+        sizing_rel = target.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        sizing_rel = f"state/sizings/{target.name}"
+    register: dict[str, Any] = {rr.SOURCES_KEY: [{"doc": sizing_rel, "ref": ref} for ref in refs]}
+    if unrelated:
+        register[rr.UNRELATED_TURNS_KEY] = unrelated
+    register[rr.ROWS_KEY] = rows
+    if dropped:
+        print(
+            f"{sizing_rel}: scout register row(s) {', '.join(dropped)} dropped: source_text is not "
+            "verbatim in any PM turn",
+            file=sys.stderr,
+        )
+    result = record_register(
+        {"sizing": write_path, "register": register, "supersede": supersede}, repo_root=root
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
+
+
+def _read_path_or_stdin(path: str) -> str:
+    """The text of `path`, or of stdin when `path` is `-`."""
+    if path == "-":
+        import sys
+
+        return sys.stdin.read()
+    return Path(path).read_text(encoding="utf-8")
+
+
 def _slug(text: str) -> str:
     out = []
     prev_dash = False
@@ -839,6 +894,27 @@ def dispositions(
     return {"served": served, "no_arm": no_arm}
 
 
+def pm_exit_question(
+    resized_tshirt: str, resolved_route: str, *, prompt_pending: bool
+) -> Optional[str]:
+    """The question the PM answers when a sizing halts for them; None when none is owed.
+    Lower-case lead on `pm-decision`, where it follows a framing clause in `next_move`.
+
+    `prompt_pending` is the `post_size_prompt_pending` detent. A `shape` route owes the
+    room-entry hand-back instead of a post-size question.
+    """
+    if resolved_route == "shape":
+        return _ROOM_ENTRY["shape"]
+    if not prompt_pending:
+        return None
+    return _post_size_question(resized_tshirt, resolved_route)
+
+
+def _post_size_question(resized_tshirt: str, resolved_route: str) -> str:
+    lead = "looks like a" if resolved_route == "pm-decision" else "Looks like a"
+    return f"{lead} {resized_tshirt}, shall we go with that or want to split it, cut it, what's up?"
+
+
 def route(
     *,
     appetite: Optional[str] = None,
@@ -1129,17 +1205,11 @@ def route(
 
     # (XXL plan's call — it is a vocabulary value in XL_EXIT_ENUM, not a
     if "post_size_prompt_pending" in detents:
+        question = _post_size_question(resized_tshirt, resolved_route)
         if resolved_route == "pm-decision":
-            next_move += (
-                f" Put that to the PM as ONE open ask, not two: looks like a "
-                f"{resized_tshirt}, shall we go with that or want to split it, cut it, "
-                "what's up?"
-            )
+            next_move += f" Put that to the PM as ONE open ask, not two: {question}"
         else:
-            next_move += (
-                f" Looks like a {resized_tshirt}, shall we go with that or want to split it, "
-                "cut it, what's up?"
-            )
+            next_move += f" {question}"
 
     # advisory). ADVISORY, warn-never-block (DR-277) — never withholds the
     if "xxl_unprobed" in detents:
@@ -1410,9 +1480,7 @@ def pm_clause_list(texts: list[tuple[str, str]]) -> list[dict[str, Any]]:
                 found.append(m.group(1))
         if len(found) < 2:
             continue
-        anchor_stem = "intent" if key == "I" else (
-            f"pm_verbatims turn {key[1:]}" if key.startswith("T") else f"pm_verbatims entry {key[1:]}"
-        )
+        anchor_stem = _anchor_stem(key)
         for k, clause in enumerate(found, 1):
             clauses.append(
                 {"id": f"{key}.{k}", "anchor": f"{anchor_stem}, clause {k}", "ref": anchor_stem,
@@ -1438,27 +1506,140 @@ def _pm_texts(doc: dict[str, Any]) -> list[tuple[str, str]]:
     return texts
 
 
-def _mint_clause_register(
-    text: str, clauses: list[dict[str, Any]], sizing_rel: str, now: Any
-) -> str:
-    """`text` with a `requirement_register` of one open `internal` row per clause, written
-    through `requirement_register.write_register_text`."""
+_ROW_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_UNRELATED_RE = re.compile(r"^\s*unrelated\b\s*[-—–:]*\s*(.*)$", re.IGNORECASE | re.DOTALL)
+
+
+def _anchor_stem(key: str) -> str:
+    if key == "I":
+        return "intent"
+    return f"pm_verbatims turn {key[1:]}" if key.startswith("T") else f"pm_verbatims entry {key[1:]}"
+
+
+def _scout_unrelated(accounting: Any) -> dict[int, str]:
+    """`{turn: reason}` for the turns a scout's `verbatim_accounting` marks `unrelated — <reason>`.
+    Accepts a `{turn: account}` mapping or a list of `{turn, ...}` entries whose `unrelated`
+    value, or any string value, carries the reason."""
+    entries: list[tuple[Any, Any]] = []
+    if isinstance(accounting, dict):
+        entries = list(accounting.items())
+    elif isinstance(accounting, list):
+        for e in accounting:
+            if isinstance(e, dict) and "turn" in e:
+                rest = {k: v for k, v in e.items() if k != "turn"}
+                value = rest.get("unrelated")
+                if isinstance(value, str):
+                    value = f"unrelated — {value}"
+                elif value is None:
+                    value = next((v for v in rest.values() if isinstance(v, str)), None)
+                entries.append((e["turn"], value))
+    out: dict[int, str] = {}
+    for turn, value in entries:
+        try:
+            turn = int(turn)
+        except (TypeError, ValueError):
+            continue
+        m = _UNRELATED_RE.match(value) if isinstance(value, str) else None
+        if m:
+            out[turn] = m.group(1).strip() or "unrelated (scout gave no reason)"
+    return out
+
+
+def derive_register(
+    doc: dict[str, Any], scout: Optional[dict[str, Any]] = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[str]]:
+    """The requirement register a sizing's PM words imply: `(rows, unrelated_turns, refs, dropped)`.
+
+    Every PM text (`_pm_texts`) ends covered in the `coverage_gaps` sense. In order:
+      - the scout's `register_rows` whose `source_text` is verbatim (whitespace-normalised) in
+        some PM text; one that is not is listed in `dropped` by id, never paraphrased in;
+      - the scout's `verbatim_accounting` `unrelated — <reason>` turns, for an embedded turn
+        no kept row covers;
+      - an uncovered text with two or more enumerated lines: one row per clause;
+      - any other uncovered text: one row per PM-worded segment between `<agent-message>`
+        blocks; a turn with none is `unrelated` (relayed agent message only).
+    Rows are `open`, unclaimed, `surface` the scout's when valid else `internal`. Pure."""
     from coordinator_core.ops import requirement_register as rr
 
-    rows = [
-        {
-            rr.ROW_ID: c["id"],
-            rr.ROW_TEXT: c["text"],
-            rr.ROW_ANCHOR: c["anchor"],
-            rr.ROW_SURFACE: "internal",
-            rr.ROW_STATUS: rr.STATUS_OPEN,
-            rr.ROW_CLAIMED_BY: [],
-        }
-        for c in clauses
-    ]
-    refs = list(dict.fromkeys(c["ref"] for c in clauses))
-    sources = [{"doc": sizing_rel, "ref": ref} for ref in refs]
-    return rr.write_register_text(text, {rr.SOURCES_KEY: sources, rr.ROWS_KEY: rows}, now)
+    texts = _pm_texts(doc)
+    normed = {key: rr._norm(text) for key, text in texts}
+    rows: list[dict[str, Any]] = []
+    refs: list[str] = []
+    dropped: list[str] = []
+    taken: set[str] = set()
+
+    def add(rid: str, source_text: str, key: str, anchor: str, surface: str = "internal") -> None:
+        base, k = rid, 1
+        while rid in taken:
+            k += 1
+            rid = f"{base}-{k}"
+        taken.add(rid)
+        rows.append({
+            rr.ROW_ID: rid, rr.ROW_TEXT: source_text, rr.ROW_ANCHOR: anchor,
+            rr.ROW_SURFACE: surface, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
+        })
+        ref = _anchor_stem(key)
+        if ref not in refs:
+            refs.append(ref)
+
+    def covered(key: str) -> bool:
+        return any(rr._norm(r[rr.ROW_TEXT]) in normed[key] for r in rows)
+
+    scout = scout if isinstance(scout, dict) else {}
+    for n, proposed in enumerate(scout.get("register_rows") or [], 1):
+        if not isinstance(proposed, dict):
+            continue
+        rid = str(proposed.get("id") or "").strip()
+        rid = rid if _ROW_ID_RE.match(rid) else f"S{n}"
+        source_text = str(proposed.get("source_text") or "").strip()
+        needle = rr._norm(source_text)
+        key = next((k for k, _ in texts if needle and needle in normed[k]), None)
+        if key is None:
+            dropped.append(rid)
+            continue
+        surface = proposed.get("surface")
+        add(rid, source_text, key, _anchor_stem(key),
+            surface if surface in rr.SURFACES else "internal")
+
+    unrelated: list[dict[str, Any]] = []
+    turn_keys = {int(k[1:]): k for k, _ in texts if k.startswith("T")}
+    for turn, reason in sorted(_scout_unrelated(scout.get("verbatim_accounting")).items()):
+        if turn in turn_keys and not covered(turn_keys[turn]):
+            unrelated.append({"turn": turn, "reason": reason})
+    waived = {e["turn"] for e in unrelated}
+
+    for key, text in texts:
+        if covered(key) or (key.startswith("T") and int(key[1:]) in waived):
+            continue
+        clauses = pm_clause_list([(key, text)])
+        if clauses:
+            for c in clauses:
+                add(c["id"], c["text"], key, c["anchor"])
+            continue
+        segments = [s.strip() for s in _AGENT_MESSAGE_RE.split(text or "") if s.strip()]
+        if not segments:
+            if key.startswith("T"):
+                unrelated.append({"turn": int(key[1:]), "reason": "relayed agent message only, no PM words"})
+            continue
+        for k, segment in enumerate(segments, 1):
+            add(key if len(segments) == 1 else f"{key}.p{k}", segment, key, _anchor_stem(key))
+    unrelated.sort(key=lambda e: e["turn"])
+    return rows, unrelated, refs, dropped
+
+
+def _mint_register(
+    text: str, rows: list[dict[str, Any]], unrelated: list[dict[str, Any]], refs: list[str],
+    sizing_rel: str, now: Any,
+) -> str:
+    """`text` with `derive_register`'s register written through
+    `requirement_register.write_register_text`."""
+    from coordinator_core.ops import requirement_register as rr
+
+    block: dict[str, Any] = {rr.SOURCES_KEY: [{"doc": sizing_rel, "ref": ref} for ref in refs]}
+    if unrelated:
+        block[rr.UNRELATED_TURNS_KEY] = unrelated
+    block[rr.ROWS_KEY] = rows
+    return rr.write_register_text(text, block, now)
 
 
 def write_back(
@@ -1477,6 +1658,7 @@ def write_back(
     verbatim_turns: Optional[tuple[int, int]] = None,
     intent_verbatim: bool = False,
     name: Optional[str] = None,
+    scout_register: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1494,6 +1676,8 @@ def write_back(
     `intent_verbatim=True` overwrites `intent` with the decision's intent byte-for-byte (never stripped) and sets
     `intent_source: pm-verbatim`. `name` (silently capped at 60 chars) becomes the real `name:` line,
     replacing the commented template line, unless the record already carries a `name`.
+    A first embed with no register on the record derives one (`derive_register`), seeded by
+    `scout_register` (the scout's report: `register_rows`, `verbatim_accounting`) when given.
     """
     import json
     import re
@@ -1549,6 +1733,7 @@ def write_back(
         ]
     embedded: list[dict[str, Any]] = []
     minted: list[str] = []
+    dropped: list[str] = []
     coverage: list[Any] = []
     try:
         sizing_rel = target.relative_to(root).as_posix()
@@ -1687,17 +1872,20 @@ def write_back(
         except Exception as exc:  # noqa: BLE001
             raise MutateAbort(f"post-mutation YAML parse error: {exc}") from exc
         if (embedded or intent_verbatim) and isinstance(new_doc, dict):
-            clauses = pm_clause_list(_pm_texts(new_doc))
             ruled = new_doc.get("pm_resolution")
             ruled = isinstance(ruled, dict) and REGISTER_KEY in ruled
-            if clauses and REGISTER_KEY not in new_doc and not ruled:
-                text = _mint_clause_register(text, clauses, sizing_rel, datetime.now(timezone.utc))
-                try:
-                    new_doc = yaml.safe_load(text) or {}
-                except Exception as exc:  # noqa: BLE001
-                    raise MutateAbort(f"post-mint YAML parse error: {exc}") from exc
-                if REGISTER_KEY in new_doc:
-                    minted[:] = [c["id"] for c in clauses]
+            if REGISTER_KEY not in new_doc and not ruled:
+                rows, unrelated, refs, dropped[:] = derive_register(new_doc, scout_register)
+                if rows:
+                    text = _mint_register(
+                        text, rows, unrelated, refs, sizing_rel, datetime.now(timezone.utc)
+                    )
+                    try:
+                        new_doc = yaml.safe_load(text) or {}
+                    except Exception as exc:  # noqa: BLE001
+                        raise MutateAbort(f"post-mint YAML parse error: {exc}") from exc
+                    if REGISTER_KEY in new_doc:
+                        minted[:] = [r["id"] for r in rows]
         errors = validate_frontmatter(new_doc, schema)
         if errors:
             raise MutateAbort(
@@ -1719,8 +1907,15 @@ def write_back(
 
     if minted:
         print(
-            f"minted {len(minted)} requirement_register rows ({', '.join(minted)}) on {sizing_rel}; "
-            f"edit: sizing-assemble --register <yaml> --supersede --write {sizing_rel}",
+            f"derived {len(minted)} requirement_register rows ({', '.join(minted)}) on {sizing_rel}; "
+            f"amend: sizing-assemble --register - --write {sizing_rel} (stdin overlay: rows by id, "
+            "drop: [ids], unrelated_turns)",
+            file=sys.stderr,
+        )
+    if dropped:
+        print(
+            f"{sizing_rel}: scout register row(s) {', '.join(dropped)} dropped: source_text is not "
+            "verbatim in any PM turn",
             file=sys.stderr,
         )
     register_coverage = None
@@ -1730,7 +1925,7 @@ def write_back(
         if gaps:
             print(
                 f"{sizing_rel}: PM turn(s) {', '.join(map(str, gaps))} not covered by any "
-                "requirement_register row; record: sizing-assemble --register <yaml> "
+                "requirement_register row; amend: sizing-assemble --register - "
                 f"--write {sizing_rel}",
                 file=sys.stderr,
             )
@@ -1930,7 +2125,13 @@ def _usage(prog: str, stream=None) -> int:
         "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml> "
         "| --pm-resolution <key> --pm-quote <str> "
         "[--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml> "
-        "| --register <yaml> [--supersede] --write <state/sizings/x.yaml>",
+        "[--no-plan-hand-off (write only; decision carries pm_exit_question, no obligation or acceptance fires)] "
+        "[--scout-register <scout report json|yaml, or - for stdin> (seeds the derived register)] "
+        "| --register <yaml, or - for stdin> [--supersede] --write <state/sizings/x.yaml> "
+        "(an overlay on the recorded register: rows merged by id, drop: [ids], unrelated_turns "
+        "by turn; --supersede replaces it whole) "
+        "| --derive-register [--scout-register <path|->] [--supersede] --write <state/sizings/x.yaml> "
+        "(records the register derived from the sizing's embedded PM turns)",
         file=stream,
     )
     return EXIT_USAGE
@@ -2057,10 +2258,13 @@ def main(argv: list[str]) -> int:
     interaction_mode_flag = None
     premise_evidence = None
     write_path = None
+    no_plan_hand_off = False
     deliverable_id = None
     xl_exit_pick = None
     pm_resolution_key = None
     register_path = None
+    scout_register_path = None
+    derive_register_flag = False
     supersede = False
     pm_quote = None
     decided_on = None
@@ -2162,6 +2366,12 @@ def main(argv: list[str]) -> int:
         elif tok == "--register" and i + 1 < len(argv):
             register_path = argv[i + 1]
             i += 2
+        elif tok == "--scout-register" and i + 1 < len(argv):
+            scout_register_path = argv[i + 1]
+            i += 2
+        elif tok == "--derive-register":
+            derive_register_flag = True
+            i += 1
         elif tok == "--supersede":
             supersede = True
             i += 1
@@ -2193,6 +2403,9 @@ def main(argv: list[str]) -> int:
             research_destination = argv[i + 1]
             i += 2
         elif tok == "--json":
+            i += 1
+        elif tok == "--no-plan-hand-off":
+            no_plan_hand_off = True
             i += 1
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
@@ -2237,6 +2450,15 @@ def main(argv: list[str]) -> int:
         intent_source = "pm-verbatim"
         intent_verbatim = True
 
+    if derive_register_flag:
+        if write_path is None or register_path is not None:
+            print(
+                f"{prog}: --derive-register takes --write <state/sizings/x.yaml> and no --register",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        return _derive_register_cli(prog, write_path, scout_register_path, supersede)
+
     if register_path is not None:
         if xl_exit_pick is not None or pm_resolution_key is not None:
             print(
@@ -2254,13 +2476,14 @@ def main(argv: list[str]) -> int:
         from coordinator_core.ops.sizing_record_register import _handler as record_register
 
         try:
-            register = load_register_yaml(Path(register_path).read_text(encoding="utf-8"))
+            register = load_register_yaml(_read_path_or_stdin(register_path))
         except Exception as exc:  # noqa: BLE001
             print(f"{prog}: cannot read register {register_path}: {exc}", file=sys.stderr)
             return EXIT_USAGE
 
         result = record_register(
-            {"sizing": write_path, "register": register, "supersede": supersede},
+            {"sizing": write_path, "register": register, "supersede": supersede,
+             "amend": not supersede},
             repo_root=_cli_repo_root(write_path),
         )
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -2384,6 +2607,22 @@ def main(argv: list[str]) -> int:
     if research_block is not None:
         _route_to_research(decision, write_path)
 
+    scout_register = None
+    if scout_register_path is not None:
+        if write_path is None:
+            print(f"{prog}: --scout-register requires --write <state/sizings/x.yaml>", file=sys.stderr)
+            return EXIT_USAGE
+        import yaml
+
+        try:
+            scout_register = yaml.safe_load(_read_path_or_stdin(scout_register_path))
+        except Exception as exc:  # noqa: BLE001
+            print(f"{prog}: cannot read scout report {scout_register_path}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        if not isinstance(scout_register, dict):
+            print(f"{prog}: scout report {scout_register_path} is not a mapping", file=sys.stderr)
+            return EXIT_USAGE
+
     if write_path is not None:
         try:
             decision["write"] = write_back(
@@ -2401,6 +2640,7 @@ def main(argv: list[str]) -> int:
                 verbatim_turns=verbatim_turns,
                 intent_verbatim=intent_verbatim,
                 name=name,
+                scout_register=scout_register,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)
@@ -2411,9 +2651,17 @@ def main(argv: list[str]) -> int:
             print(f"embedded {report['embedded']} pm_verbatims (turns {lo}-{hi})", file=sys.stderr)
         else:
             print("embedded 0 pm_verbatims", file=sys.stderr)
-        _open_routed_obligation(write_path)
+        if no_plan_hand_off:
+            decision["pm_exit_question"] = pm_exit_question(
+                decision["resolved_estimate"]["tshirt"],
+                decision["route"],
+                prompt_pending="post_size_prompt_pending" in decision["detents"],
+            )
+        else:
+            _open_routed_obligation(write_path)
         if (
-            research_block is None
+            not no_plan_hand_off
+            and research_block is None
             and decision.get("route") in ("plan", "spec-dispatch")
             and decision["resolved_estimate"]["tshirt"] != "XS"
             and sizing_acceptance_skipped(decision["route"], decision["resolved_estimate"]["tshirt"])

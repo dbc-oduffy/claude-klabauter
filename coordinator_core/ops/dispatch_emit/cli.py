@@ -107,6 +107,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
 )
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
 from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError, part_run_id
+from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
@@ -495,6 +496,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="research route: emit the research pipelines the sizing's research block shapes to; "
         "emit-only, exclusive of every other route selector. Takes --list and --flag to override "
         "a pipeline's derived inputs (e.g. --flag compare=true), plus --context and --scratch-dir",
+    )
+    parser.add_argument(
+        "--stop-after",
+        dest="stop_after",
+        choices=[STOP_AFTER_PLAN],
+        default=None,
+        help="ask route: end the emitted script at the plan wave (no stage/execute/review); "
+        "--ask/--sizing only",
     )
     parser.add_argument(
         "--research",
@@ -1079,6 +1088,13 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     is_ask_route = (args.ask is not None or bool(args.sizing)) and not is_research_route
 
+    if args.stop_after and not is_ask_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --stop-after is accepted only with --ask/--sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if args.writes and not is_ask_route:
         print(
             "emit-dispatch-workflow: ERROR — --writes is accepted only with --ask/--sizing",
@@ -1322,6 +1338,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["ask"] = args.ask if args.ask is not None else True
         if args.sizing:
             params["sizing_path"] = args.sizing
+        if args.stop_after:
+            params["stop_after"] = args.stop_after
         if args.writes:
             params["writes"] = list(args.writes)
         if args.baton:

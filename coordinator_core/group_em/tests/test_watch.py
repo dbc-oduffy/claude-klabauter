@@ -2328,3 +2328,22 @@ def test_a_missing_transcript_is_parked_with_waiting_on_unknown(tmp_path):
     line = _line_for(str(tmp_path / "absent.jsonl"))
     assert line.startswith("PARKED session=peer-1 ")
     assert 'waiting_on="unknown"' in line
+
+
+@pytest.mark.parametrize("said", [
+    "Done and committed. Nothing is waiting on you.",
+    "Landed it; I'm not blocked on anyone.",
+    "Shipped. There's no longer anything awaiting the PM.",
+])
+def test_a_negated_wait_names_no_wait(tmp_path, said):
+    line = _line_for(_transcript_ending_on(tmp_path, said))
+    assert line.startswith("PARKED session=peer-1 ")
+    assert 'waiting_on="none"' in line
+
+
+def test_a_real_wait_after_a_negated_one_still_counts(tmp_path):
+    line = _line_for(_transcript_ending_on(
+        tmp_path, "Nothing is waiting on you. Waiting on coordinator-content-repo-65 for a slot."
+    ))
+    assert line.startswith("WAITING session=peer-1 ")
+    assert 'waiting_on="Waiting on coordinator-content-repo-65' in line

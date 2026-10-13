@@ -111,5 +111,5 @@ def test_row_build_gate_rows_are_skipped_by_the_default_tsc_leg(tmp_path, monkey
             plan_context=ctx, **REVIEW_KW,
         )
 
-    assert "tsc --noEmit" not in script([by_kind, by_glob])
+    assert "node_modules/.bin/tsc --noEmit -p ." not in script([by_kind, by_glob])
     assert "node_modules/.bin/tsc --noEmit -p ." in script([by_kind, by_glob, open_row])

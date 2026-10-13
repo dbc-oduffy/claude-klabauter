@@ -25,6 +25,14 @@ def test_phase_order_and_names():
     assert (c.HALT_ROOM, c.HALT_TOUCHPOINT, c.HALT_REFUSAL) == ("room", "touchpoint", "refusal")
 
 
+def test_size_then_plan_names():
+    assert c.STOP_AFTER_PLAN == "plan"
+    assert c.SIZING_SCOUT_AGENT_TYPE == "coordinator:sizing-scout"
+    assert c.NO_PLAN_HAND_OFF_FLAG == "--no-plan-hand-off"
+    assert c.PM_EXIT_QUESTION_KEY == "pm_exit_question"
+    assert c.STOP_AFTER_PLAN in c.ASK_PHASES
+
+
 def test_marker_distinct_from_commit_request():
     assert c.ASK_MANIFEST_MARKER != commit_request.MARKER_PREFIX
     assert not c.ASK_MANIFEST_MARKER.startswith(commit_request.MARKER_PREFIX)

@@ -564,10 +564,10 @@ def test_all_clean_request_is_nothing_to_commit_without_error(repo):
     assert "error" not in out or out["committed"] is False
 
 
-# Three git processes via run_git: two for the commit, plus commit_v2's one batched
-# check-ignore over the paths new to HEAD (example-stats-repo b7d67aa385ac). A fourth means a
-# new spawn joined the hot path.
-_EXPECTED_SPAWNS = 3
+# One git process: the status snapshot terminal_commit hands commit_v2, which then
+# writes the commit in-process with no check-ignore or ls-tree read of its own. A
+# second means a new spawn joined the hot path.
+_EXPECTED_SPAWNS = 1
 
 
 def test_process_time_and_spawns_on_a_40_path_request(repo):
@@ -974,28 +974,12 @@ def test_a_met_criterion_on_the_last_open_row_flips_the_plan_implemented(repo):
         "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
         "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
     }
-    import subprocess as _subprocess
-
-    spawns = 0
-    real_init = _subprocess.Popen.__init__
-
-    def _counting_init(self, *a, **kw):
-        nonlocal spawns
-        spawns += 1
-        real_init(self, *a, **kw)
-
-    _subprocess.Popen.__init__ = _counting_init
-    try:
-        start = time.process_time()
-        out = _call(repo, {"script_path": script, "incomplete_chunks": [],
-                           "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
-        elapsed_ms = (time.process_time() - start) * 1000
-    finally:
-        _subprocess.Popen.__init__ = real_init
-    print(f"COMPOSED terminal_commit: {elapsed_ms:.0f}ms process, {spawns} spawns")
+    # The 500ms budget is pinned by the tree measure in
+    # coordinator_core/benchmarks/tests/test_terminal_commit_process_budget.py.
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [],
+                       "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
     assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
     assert out["plan_status"] == "implemented", out.get("plan_status_refusal")
-    assert elapsed_ms < 500, f"composed terminal_commit {elapsed_ms:.0f}ms exceeds the 500ms bar"
     committed = _show(repo, "HEAD:docs/plan.md")
     assert "status: implemented" in committed
     assert "falsifier_output: a.py exists at HEAD" in committed

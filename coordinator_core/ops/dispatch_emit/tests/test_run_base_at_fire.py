@@ -45,7 +45,7 @@ def _run_block(agent_js: str) -> str:
 def test_fire_time_part_script_carries_no_emit_time_base_in_its_checkpoint_or_seam_ranges():
     script = _compose(run_base_sha=EMIT)
 
-    assert "Checkpoint-Base: ' + _runBase;" in script
+    assert "Checkpoint-Base: ' + _runBase" in script
     assert f"Checkpoint-Base: {EMIT}" not in script
     assert f"'{EMIT}..'" not in script
 

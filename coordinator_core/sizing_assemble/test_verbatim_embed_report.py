@@ -165,12 +165,12 @@ def test_verbatim_turns_without_write_is_usage_error(capsys) -> None:
     assert sizing_assemble.main([*_ARGS, "--verbatim-turns", "0-1"]) == sizing_assemble.EXIT_USAGE
 
 
-def test_write_flags_uncovered_turns_on_stderr_and_in_result(repo, sid, capsys) -> None:
+def test_write_derives_a_register_covering_every_turn(repo, sid, capsys) -> None:
     _record(2, size=10)
     code, out, err = _run(_sizing(repo), capsys)
     assert code == 0
-    assert "PM turn(s) 0, 1 not covered" in err
+    assert "derived 2 requirement_register rows" in err and "not covered" not in err
     assert json.loads(out)["write"]["register_coverage"] == {
         "turns_total": 2,
-        "turns_uncovered": [0, 1],
+        "turns_uncovered": [],
     }

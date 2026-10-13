@@ -82,6 +82,7 @@ from coordinator_core.git.eol_declared import (
     repair_declared_eol_drift,
 )
 from functools import partial
+from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.git_state import read_tree_spine
@@ -705,8 +706,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        excluded from `commit_paths`'s staged-rollback check
                                        (`detect_rollback=True`), which otherwise raises
                                        `StagedRollbackRefused`, returned as a structured refusal.
+        ignored_untracked (list[str], optional) -- caller-read subset of `paths` that is gitignored and
+                                       untracked; when present no `check-ignore` runs.
     Returns:
-        {"committed": True, "sha": str, "staged_preferred": [str, ...],
+        {"committed": True, "sha": str, "tree": str|None (tree of the landed commit), "staged_preferred": [str, ...],
          "worktree_over_staged": [str, ...], "warnings": [str, ...],
          "guard_class_relay": {"transitions": [...], "skips": [...]}} on
         success -- `warnings` is non-empty exactly when
@@ -841,7 +844,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     raw_drop_ignored = params.get("drop_ignored", False)
     if not isinstance(raw_drop_ignored, bool):
         return _error("params.drop_ignored must be a boolean")
-    ignored = [p for p in _ignored_untracked(worktree_root, raw_paths) if p not in exempt]
+    supplied_ignored = params.get("ignored_untracked")
+    if supplied_ignored is None:
+        found_ignored = _ignored_untracked(worktree_root, raw_paths)
+    elif not isinstance(supplied_ignored, list) or not all(
+        isinstance(p, str) for p in supplied_ignored
+    ):
+        return _error("params.ignored_untracked must be a list of strings")
+    else:
+        supplied = {p.replace("\\", "/") for p in supplied_ignored}
+        found_ignored = [p for p in raw_paths if p.replace("\\", "/") in supplied]
+    ignored = [p for p in found_ignored if p not in exempt]
     dropped_ignored: list = []
     if ignored and raw_drop_ignored:
         dropped_ignored = ignored
@@ -1096,9 +1109,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reverts_sha=reverts_sha,
     )
 
+    landed = commit_meta(resolve_git_common_dir(worktree_root), outcome.sha)
     return {
         "committed": True,
         "sha": outcome.sha,
+        "tree": landed["tree"] if landed else None,
         "staged_preferred": list(outcome.staged_preferred),
         "worktree_over_staged": list(outcome.worktree_over_staged),
         "no_delta": list(outcome.no_delta),

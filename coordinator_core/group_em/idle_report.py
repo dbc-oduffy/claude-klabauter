@@ -225,6 +225,25 @@ _NAMED_REASON = re.compile(
     re.IGNORECASE,
 )
 
+#: A negator in the words just before a `_NAMED_REASON` hit, inside the same clause:
+#: "Nothing is waiting on you" and "I'm not blocked on X" name no wait.
+_NEGATED_LEAD = re.compile(
+    r"\b(?:no|not|nothing|nobody|no one|never|none|no longer|without)\b[\w' ,]{0,24}$|n't\s+(?:\w+\s+)?$",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK = re.compile(r"[.!?;:\n]")
+
+
+def named_reason(text: str) -> Optional[re.Match[str]]:
+    """The first `_NAMED_REASON` hit in `text` that its own clause does not negate."""
+    for match in _NAMED_REASON.finditer(text):
+        lead = text[: match.start()]
+        breaks = list(_CLAUSE_BREAK.finditer(lead))
+        clause = lead[breaks[-1].end():] if breaks else lead
+        if not _NEGATED_LEAD.search(clause):
+            return match
+    return None
+
 _COMPLETION_SKILLS = ("workstream-complete", "quick-wrap")
 _COMPLETION_ATTRIBUTION = re.compile(
     r'"attributionSkill"\s*:\s*"[^"]*(?:%s)"' % "|".join(_COMPLETION_SKILLS)
@@ -786,13 +805,13 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     last_said = said[-1][:LAST_SAID_CHARS] if said else None
     own_said = _assistant_text(raw_text, own_voice=True)
     named_move = next((line for line in reversed(own_said) if _NEXT_MOVE.search(line)), None)
-    named_reason = any(_NAMED_REASON.search(line) for line in said[-3:])
+    has_named_reason = any(named_reason(line) for line in said[-3:])
     answered, within_cooldown = _group_em_answer(group_em_log, group_em_session_id, session_id, now)
     if verdict == VERDICT_ESCALATE and not suppression_available:
         # Downgrade toward REPORTING. Nudging here would re-nudge whoever the
         # Group-EM already answered, which is the failure the offer log prevents.
         verdict, reason = VERDICT_UNKNOWN, REASON_SUPPRESSION_UNAVAILABLE
-    shape = _nudge_shape(verdict, bool(name), within_cooldown, named_move, named_reason,
+    shape = _nudge_shape(verdict, bool(name), within_cooldown, named_move, has_named_reason,
                         registry_absent)
     divergence, divergence_minutes = _divergence(age, mtime_age)
     exited = verdict == VERDICT_EXITED

@@ -487,7 +487,7 @@ def _waiting_on(session_id: str, cwd: str) -> tuple[str, bool]:
     if not readable:
         return "unknown", False
     said = idle_report._assistant_text(raw)
-    match = idle_report._NAMED_REASON.search(said[-1]) if said else None
+    match = idle_report.named_reason(said[-1]) if said else None
     if match is None:
         return "none", False
     phrase = said[-1][match.start():match.end() + _WAIT_WINDOW_CHARS]

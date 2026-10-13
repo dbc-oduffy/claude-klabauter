@@ -6,7 +6,8 @@ Signatures implemented in their own modules:
                   sizing_rel: str | None = None, writes: Sequence[str] = ()) -> StageManifest
   ask_compose.compose_ask_script(*, repo_root: str, prompt: str | None, sizing_rel: str | None,
                   run_id: str, session_id: str | None, baton: dict | None = None,
-                  accept_pending: bool = False, em_brief: EmBrief | None = None) -> str
+                  accept_pending: bool = False, em_brief: EmBrief | None = None,
+                  stop_after: str | None = None) -> str
                   (`baton` = {"path", "deliverable_id"}; the accept phase composes when
                   `accept_pending` or on a raw ask)
   ask_plan_blitz.wrap_stage(plan_blitz_text: str, *, agent_prefix_var: str | None = None)
@@ -23,6 +24,10 @@ from typing import Any
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
+STOP_AFTER_PLAN = "plan"
+SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
+NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
+PM_EXIT_QUESTION_KEY = "pm_exit_question"
 RUN_DIR_ROOT = "scratch/warp"
 ASK_MANIFEST_MARKER = "// coordinator:ask-run-manifest v1 "
 

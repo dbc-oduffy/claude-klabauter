@@ -131,3 +131,32 @@ def test_strip_data_heredoc_bodies_keeps_program_body_live():
     assert "open('x', 'w')" not in stripped
     assert stripped.startswith("cat > out.txt <<'EOF'")
     assert stripped.endswith("EOF")
+
+
+# A governed path built or iterated before the write: the by-name legs follow one binding
+# shape each, so these reached no leg. A program that names a governed surface and writes
+# through a sink not provably ungoverned denies.
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"import os\nd = '/r'\np = os.path.join(d, '{GOV}')\nopen(p, 'w').write('x')",
+        f"from pathlib import Path\nt = Path('/r') / '{GOV}'\nwith t.open('w') as f:\n    f.write('x')",
+        f"for n in ['{GOV}']:\n    open(n, mode='a').write('x')",
+    ],
+    ids=["os-path-join", "path-division-open", "loop-variable-mode-kwarg"],
+)
+def test_built_or_iterated_governed_path_written_through_denies(body):
+    assert guard.is_denied_bash_write(f"python3 - <<'PY'\n{body}\nPY", IDENTIFIERS)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"print(open('{GOV}').read()[:10])",
+        f"s = open('{GOV}').read()\nopen('scratch/out.txt', 'w').write(s)",
+        f"import sys\nout = sys.argv[0]\nprint('see the {GOV} file')\nopen(out, 'w').write('x')",
+    ],
+    ids=["read-only", "literal-ungoverned-sink", "prose-mention"],
+)
+def test_governed_read_or_prose_with_an_ungoverned_sink_allows(body):
+    assert not guard.is_denied_bash_write(f"python3 - <<'PY'\n{body}\nPY", IDENTIFIERS)

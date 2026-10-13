@@ -401,7 +401,7 @@ _CLOSE_OUT_PARTIAL_FIELD = "close_out_last_partial"
 class _Opts:
     __slots__ = (
         "verb", "plan", "by", "override_reason", "reason", "findings",
-        "falsifier_verdict", "falsifier_output", "prose",
+        "falsifier_verdict", "falsifier_output", "prose", "no_commit",
     )
 
     def __init__(
@@ -415,7 +415,9 @@ class _Opts:
         falsifier_verdict: Optional[str] = None,
         falsifier_output: Optional[str] = None,
         prose: Optional[str] = None,
+        no_commit: bool = False,
     ) -> None:
+        self.no_commit = no_commit
         self.falsifier_verdict = falsifier_verdict
         self.falsifier_output = falsifier_output
         self.prose = prose
@@ -505,6 +507,8 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.findings = argv[i]
+        elif a == "--no-commit":
+            opts.no_commit = True
         elif a in _EXIT_CRITERION_FLAGS:
             if i + 1 >= len(argv):
                 raise _CliError(f"flag requires a value: {a}")
@@ -1851,7 +1855,14 @@ def _stamp_implemented(opts: _Opts) -> int:
     # is safe to attempt; otherwise it names the reason for the operator-
     # facing skip diagnostic below.
     untracked_reason: Optional[str] = None
-    if worktree_root is not None:
+    # ``--no-commit``: the caller commits the plan; with ``relpath`` left None every
+    # commit, resume and archival branch below is skipped, and no git probe runs.
+    if worktree_root is not None and opts.no_commit:
+        print(
+            f"{_PROG}: {opts.plan} --no-commit: plan written to disk, commit left to the caller",
+            file=sys.stderr,
+        )
+    elif worktree_root is not None:
         relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
         if relpath_err is not None:
             print(
@@ -3639,6 +3650,14 @@ def main(argv: List[str]) -> int:
             f"{_PROG}: {opts.verb} does not accept --falsifier-verdict/"
             "--falsifier-output/--prose (they record exit_criterion_met for "
             "stamp-implemented only)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if opts.no_commit and opts.verb != "stamp-implemented":
+        print(
+            f"{_PROG}: {opts.verb} does not accept --no-commit "
+            "(only stamp-implemented can leave its write to a caller's commit)",
             file=sys.stderr,
         )
         return 1

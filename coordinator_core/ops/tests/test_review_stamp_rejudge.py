@@ -165,3 +165,61 @@ def test_emit_rejudge_fires_only_the_criterion_judge(tmp_path):
     emit_rejudge(repo_root=tmp_path, plan_path=str(p), out_path=str(out))
     script = out.read_text(encoding="utf-8")
     assert script.count("agent(") == 1 and "exit-criterion-judge" in script and '"rejudge": true' in script
+
+
+from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_register_cascade import (  # noqa: E402
+    _SIZING,
+    _row as _cascade_row,
+    _sizing_text,
+)
+
+_ROW = {"id": "r1", "claim": "this-plan", "status": "met", "wired": True, "surface": "ui", "observed_ref": "x.py::f"}
+
+
+def _register_bearing(tmp_path: Path, rows) -> Path:
+    """A not_met stamped plan claiming register row r1, and a met rejudge record carrying `rows`."""
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / _SIZING).write_text(_sizing_text([_cascade_row("r1", claimed=False)]), encoding="utf-8")
+    body = (
+        f"---\ntitle: T\nstatus: executing\nplan_id: {PLAN_ID}\nsizing_object: {_SIZING}\n"
+        f"register_claims:\n  sizing: {_SIZING}\n  rows: [r1]\nreview_stamp:\n"
+        "  terminal_commit_sha: abc\n  terminal_tree_sha: def\n"
+        "  criterion:\n    status: not_met\n    observation: o\n    sidecar: null\n"
+        f"  stamped_at: '{STAMPED_AT}'\n---\n\nBody.\n"
+    )
+    plan = _write(tmp_path, "p.md", body)
+    record = _judge(tmp_path, "met")
+    fm = yaml.safe_load(record.read_text(encoding="utf-8").split("---\n")[1])
+    if rows is not None:
+        fm["criterion"]["register_rows"] = rows
+    record.write_text("---\n" + yaml.safe_dump(fm) + "---\n", encoding="utf-8")
+    return plan
+
+
+def test_met_record_without_row_verdicts_does_not_close_a_register_bearing_plan(tmp_path):
+    p = _register_bearing(tmp_path, None)
+    before = p.read_text(encoding="utf-8")
+    result = m.rejudge(p, tmp_path)
+    assert result["status"] == "unchanged" and "register row r1" in result["reason"] and "not judged" in result["reason"]
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_met_record_with_passing_row_verdicts_closes_and_writes_the_rows_back(tmp_path):
+    p = _register_bearing(tmp_path, [_ROW])
+    result = m.rejudge(p, tmp_path)
+    assert result["status"] == "rejudged", result
+    assert _criterion(p)["status"] == "met"
+    assert result.get("register_sizing") == _SIZING
+    row = yaml.safe_load((tmp_path / _SIZING).read_text(encoding="utf-8"))["requirement_register"]["rows"][0]
+    assert row["status"] == "met"
+
+
+def test_rejudge_record_carries_the_judges_row_verdicts(tmp_path):
+    from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+
+    rel = rd.record_criterion_rejudge(
+        repo_root=tmp_path, plan_id=PLAN_ID, head_sha="abc",
+        criterion={"status": "met", "observation": "o", "register_rows": [_ROW, "junk"]},
+    )
+    fm = yaml.safe_load((tmp_path / rel).read_text(encoding="utf-8").split("---\n")[1])
+    assert fm["criterion"]["register_rows"] == [_ROW]

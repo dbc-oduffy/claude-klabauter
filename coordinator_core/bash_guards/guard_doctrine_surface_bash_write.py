@@ -938,6 +938,26 @@ def _body_sinks_are_ungoverned(body: str, identifiers_lower: Tuple[str, ...]) ->
     return not _BODY_ANY_WRITE_RE.search(body)
 
 
+def _has_stdin_program_unresolved_governed_write(
+    cmd: str, identifiers_lower: Tuple[str, ...]
+) -> bool:
+    """A stdin-program heredoc body that names a governed surface anywhere and writes
+    through any sink ``_body_sinks_are_ungoverned`` cannot clear.
+
+    The by-name legs (`_has_stdin_program_var_write`, `_has_stdin_program_argv_write`)
+    follow one binding shape each, so a path built (``os.path.join(d, <gov>)``,
+    ``Path(d) / <gov>``) or iterated (``for n in [<gov>]``) before ``open(x, 'w')``
+    escaped both. Inside one program a governed mention and an unanalysable write are
+    not provably unrelated, so the pair denies. Prose literals are blanked first, the
+    same carve-out point 3 honours."""
+    for body in _stdin_program_heredoc_bodies(_blank_prose_literal_mentions(cmd, identifiers_lower)):
+        if _mentions_governed_identifier(body, identifiers_lower) and not _body_sinks_are_ungoverned(
+            body, identifiers_lower
+        ):
+            return True
+    return False
+
+
 def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) -> str:
     """``cmd`` with every string literal in a QUOTED-delimiter stdin-program
     heredoc body that mentions a governed identifier AND carries whitespace
@@ -1635,6 +1655,9 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         return True
 
     if _has_stdin_program_argv_write(cmd, identifiers_lower):
+        return True
+
+    if _has_stdin_program_unresolved_governed_write(cmd, identifiers_lower):
         return True
 
     if _has_xargs_pipe_indirection(segments, identifiers_lower):

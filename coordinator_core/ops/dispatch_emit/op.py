@@ -724,6 +724,7 @@ _PARAM_FIELDS = (
     Field("context", "str_list"),
     Field("ask_brief", "str"),
     Field("ask_brief_file", "str"),
+    Field("stop_after", "str"),
     Field("ask_context", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
@@ -1587,6 +1588,7 @@ def _dispatch_emit(
             accept_pending=bool(ask_ctx.get("accept_pending")),
             preamble=preamble,
             em_brief=ask_ctx.get("em_brief"),
+            stop_after=params.get("stop_after"),
         )
         receipt_plan_path = None
     else:

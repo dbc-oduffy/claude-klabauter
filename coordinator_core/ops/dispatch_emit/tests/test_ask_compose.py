@@ -132,17 +132,11 @@ def test_prompt_text_is_escaped_into_the_script():
 
 def test_size_prompt_walks_the_agent_to_a_gate_passing_sizing():
     script = _compose()
-    size_line = next(ln for ln in script.splitlines() if "const _sized" in ln)
-    for needle in (
-        "sizing-assemble",
-        "coordinator-doc-new --type sizing-object",
-        "--exit-criterion",
-        "--interaction-mode",
-        "from `draft` to `sized`",
-        "`exit_criterion.accepted` null",
-        "`writes`",
-    ):
-        assert needle in size_line, needle
+    size_line = next(ln for ln in script.splitlines() if "const _scouted" in ln)
+    assert "`writes`" in size_line and "exit_criterion" in size_line
+    cmd_line = next(ln for ln in script.splitlines() if "const _assembleCmd" in ln)
+    for needle in ("sizing-assemble", "--exit-criterion", "--write", "--no-plan-hand-off"):
+        assert needle in cmd_line, needle
 
 
 def test_size_agent_must_return_a_footprint():
@@ -150,7 +144,7 @@ def test_size_agent_must_return_a_footprint():
     # one file, and the XS gate refused; the schema now requires it.
     from coordinator_core.ops.dispatch_emit import ask_compose
 
-    assert "writes" in ask_compose._SIZE_SCHEMA["required"]
+    assert "writes" in ask_compose._SCOUT_SCHEMA["required"]
 
 
 def test_return_carries_the_plan_routes_terminal_commit_next_action():
@@ -167,7 +161,7 @@ def test_return_carries_the_plan_routes_terminal_commit_next_action():
 
 def test_size_phase_schema_and_prompt_require_gated_rows():
     script = _compose()
-    size_stage = script.split("const _sized = await", 1)[1].split("_sizingRel = _sized", 1)[0]
+    size_stage = script.split("const _scouted = await", 1)[1].split("_writes = _scouted", 1)[0]
     assert '"gated"' in size_stage and '"owner_repo"' in size_stage
     assert "`gated`" in size_stage
     assert "gated: _gated" in script

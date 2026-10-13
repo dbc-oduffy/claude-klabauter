@@ -670,6 +670,7 @@ def _stamp_coded_commit(
     commit_v2, worktree_root: Path, repo_root: Path, source_rows: dict,
     sha: str, session_id: Optional[str], also_commit: tuple = (),
     noop_rows: Optional[dict] = None, checkpoint_rows: Optional[dict] = None,
+    snapshot: Optional[_Snapshot] = None, flip_plan: Optional[str] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -680,6 +681,11 @@ def _stamp_coded_commit(
     ``checkpoint_rows`` (``{checkpoint sha: {plan: {row id}}}``) are done rows the run's
     own checkpoint commits landed: they close ``coded`` at that checkpoint's sha. An edit that would make a schema-valid plan invalid
     is refused before any write; on any failure every plan edit is restored.
+    ``flip_plan`` names the plan whose ``implemented`` status is written to disk without
+    committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
+    the one commit below carries rows, minted stamp and status together; its reply
+    returns under ``_flip``. A commit that does not land restores the flip with the rows.
+    ``_committed`` names the paths the commit carried.
     Returns ``{"rows_coded", "coded_sha"}`` or ``{"coded_stamp_error"}``.
     """
     from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
@@ -722,16 +728,30 @@ def _stamp_coded_commit(
     # A plan `review_stamp.mint` just wrote rides this commit even when none of
     # its rows flipped (a re-fire over already-coded rows).
     paths = sorted(set(rows_coded) | set(also_commit))
-    # `git status` lists a path only when a commit over it can carry it: an
-    # untracked gitignored plan (a warp run spine) is absent, so never staged.
-    stageable = _changed_paths(worktree_root, paths) if paths else None
-    if stageable is not None:
-        paths = [p for p in paths if p in stageable]
+    flip_result: Optional[dict] = None
+    if flip_plan is not None and paths:
+        before = _read_rel(worktree_root, flip_plan)
+        flip_result = _stamp_plan_implemented(worktree_root, flip_plan, sha)
+        if flip_result.get("plan_status") == "implemented":
+            if before is not None:
+                originals.setdefault(flip_plan, before)
+            paths = sorted(set(paths) | {flip_plan})
+    # A path is stageable unless it is an untracked gitignored plan (a warp run
+    # spine), which is never staged; the snapshot answers that without a spawn.
+    ignored = set(snapshot.ignored_among(paths)) if snapshot is not None else set()
+    paths = [p for p in paths if p not in ignored]
+    uncovered = [p for p in paths if snapshot is None or not snapshot.covers(p)]
+    if uncovered:
+        stageable = _changed_paths(worktree_root, uncovered)
+        if stageable is not None:
+            paths = [p for p in paths if p not in uncovered or p in stageable]
     if not paths:
         return {"rows_coded": {}, "coded_sha": None}
     n = sum(len(v) for v in rows_coded.values())
     message = f"mark {n} rows coded ({sha[:7]})" if n else f"review stamp ({sha[:7]})"
     params: dict = {"paths": paths, "message": message}
+    if snapshot is not None and not uncovered:
+        params["ignored_untracked"] = []
     if session_id is not None:
         params["session_id"] = session_id
     try:
@@ -742,7 +762,9 @@ def _stamp_coded_commit(
         restore()
         detail = reply.get("error") if isinstance(reply, dict) else reply
         return {"coded_stamp_error": f"coded-stamp commit did not land: {detail!r}"}
-    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha")}
+    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": paths}
+    if flip_result is not None:
+        out["_flip"] = flip_result
     if reply.get("index_stale"):
         out["coded_index_stale"] = list(reply["index_stale"])
     return out
@@ -833,7 +855,8 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
 
 
 def _mint_review_stamp(
-    worktree_root: Path, plan_rel: Optional[str], sha: str, record_abs: Path, record: dict
+    worktree_root: Path, plan_rel: Optional[str], sha: str, record_abs: Path, record: dict,
+    tree: Optional[str] = None,
 ) -> dict:
     """Mint the plan's ``review_stamp`` against the commit this op just
     landed. A refusal is reported, never raised: the product commit stands."""
@@ -847,7 +870,7 @@ def _mint_review_stamp(
     try:
         mint(
             guarded, worktree_root, build_test_path=None, resolved=(sha, record_abs, record),
-            criterion_open_ok=True,
+            criterion_open_ok=True, terminal_tree_sha=tree,
         )
     except MintRefusal as exc:
         return {"review_stamp": "refused", "review_stamp_refusal": str(exc)}
@@ -878,10 +901,11 @@ def _falsifier_broken_tells(marks: object, plan_path: Optional[str]) -> Optional
 
 
 def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dict:
-    """Flip the plan to ``implemented`` when the review stamp it now carries
-    records a ``met`` criterion. The verdict is read off the plan on disk,
-    never a param, so only a minted stamp can discharge it. A refusal (open
-    spine rows, the goal gate) is reported; every commit before it stands."""
+    """Write the plan's ``implemented`` status to disk, uncommitted, when the
+    review stamp it now carries records a ``met`` criterion; the caller's commit
+    carries it. The verdict is read off the plan on disk, never a param, so only
+    a minted stamp can discharge it. A refusal (open spine rows, the goal gate)
+    is reported and writes nothing."""
     import contextlib
     import io
 
@@ -915,6 +939,7 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
             falsifier_output=observation[:_FALSIFIER_OUTPUT_MAX],
             prose=f"criterion met at {sha} per {source}",
             refuse_open_spine_rows=True,
+            commit=False,
         )
     if rc != 0:
         reason = err.getvalue().strip()[-600:]
@@ -957,7 +982,21 @@ def _peer_held(worktree_root: Path, session_id: Optional[str], paths: list) -> s
     return {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
 
 
-def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
+def _in_scope(path: str, request: CommitRequest) -> bool:
+    """Whether ``path`` matches one of ``_scope_pathspecs(request)``."""
+    parent = path.rpartition("/")[0]
+    for chunk in request.chunks:
+        if any(p.rpartition("/")[0] == parent for p in chunk.paths):
+            return True
+        if any(path.startswith(prefix.rstrip("/") + "/") for prefix in chunk.prefixes):
+            return True
+    return False
+
+
+def _undeclared_dirty(
+    worktree_root: Path, request: CommitRequest,
+    snapshot: Optional[_Snapshot] = None, landed: frozenset = frozenset(),
+) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
     The terminal commit lands only declared paths and own-report prefix
@@ -971,24 +1010,30 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     specs = _scope_pathspecs(request)
     if not specs:
         return {"undeclared_dirty": []}
-    result = run_git(
-        [
-            "-C", str(worktree_root), "--no-optional-locks", "status",
-            "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", *specs,
-        ],
-        binary=True,
-    )
-    if not result.ok:
-        return {"undeclared_dirty": None}
     declared = {p for c in request.chunks for p in c.paths}
-    dirty = sorted(
-        {
-            entry[3:].decode("utf-8", "surrogateescape")
-            for entry in result.stdout_bytes.split(b"\0")
-            if len(entry) > 3
-        }
-        - declared
-    )
+    if snapshot is not None:
+        # The snapshot predates the commits: what they landed is no longer dirty.
+        dirty = sorted(
+            {p for p in snapshot.changed if _in_scope(p, request)} - declared - set(landed)
+        )
+    else:
+        result = run_git(
+            [
+                "-C", str(worktree_root), "--no-optional-locks", "status",
+                "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", *specs,
+            ],
+            binary=True,
+        )
+        if not result.ok:
+            return {"undeclared_dirty": None}
+        dirty = sorted(
+            {
+                entry[3:].decode("utf-8", "surrogateescape")
+                for entry in result.stdout_bytes.split(b"\0")
+                if len(entry) > 3
+            }
+            - declared
+        )
     peer_held = _peer_held(worktree_root, request.session_id, dirty)
     dirty = [p for p in dirty if p not in peer_held]
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
@@ -1165,8 +1210,87 @@ def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
     }
 
 
+class _Snapshot:
+    """One scoped ``git status`` read of the worktree: ``changed`` (modified, added,
+    untracked, deleted or unmerged) and ``ignored`` (untracked and gitignored; an
+    ignored directory is one entry with a trailing ``/``). It answers only for paths
+    it ``covers``: a requested literal path, or a path at or under a requested root."""
+
+    __slots__ = ("changed", "ignored", "literals", "roots")
+
+    def __init__(self, changed: set, ignored: list, literals: set, roots: list) -> None:
+        self.changed = changed
+        self.ignored = ignored
+        self.literals = literals
+        self.roots = roots
+
+    def covers(self, path: str) -> bool:
+        return path in self.literals or any(path == r or path.startswith(r + "/") for r in self.roots)
+
+    def changed_among(self, specs: list) -> set:
+        bounds = [(s, s.rstrip("/") + "/") for s in specs]
+        return {p for p in self.changed if any(p == s or p.startswith(under) for s, under in bounds)}
+
+    def ignored_among(self, paths: list) -> list:
+        dirs = [e for e in self.ignored if e.endswith("/")]
+        files = set(self.ignored)
+        return [p for p in paths if p in files or any(p.startswith(d) for d in dirs)]
+
+
+def _worktree_snapshot(
+    worktree_root: Path, literals: list, roots: list, scope_specs: list
+) -> Optional[_Snapshot]:
+    """The run's one worktree read; ``None`` when git could not answer or nothing was asked."""
+    literals = list(dict.fromkeys(literals))
+    roots = [r.rstrip("/") for r in dict.fromkeys(roots)]
+    specs = [f":(literal){p}" for p in literals] + [f":(literal){r}/" for r in roots] + list(scope_specs)
+    if not specs:
+        return None
+    result = run_git(
+        [
+            "-C", str(worktree_root), "--no-optional-locks", "status",
+            "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all",
+            "--ignored=matching", "--", *specs,
+        ],
+        binary=True,
+    )
+    if not result.ok:
+        return None
+    changed: set = set()
+    ignored: list = []
+    for raw in result.stdout_bytes.split(b"\0"):
+        if len(raw) < 3:
+            continue
+        kind = raw[:1]
+        fields = {b"1": 8, b"u": 10, b"?": 1, b"!": 1}.get(kind)
+        if fields is None:
+            continue
+        path = raw.split(b" ", fields)[fields].decode("utf-8", "surrogateescape")
+        if kind == b"!":
+            ignored.append(path)
+        else:
+            changed.add(path)
+    return _Snapshot(changed, ignored, set(literals), roots)
+
+
+def _changed(snapshot: Optional[_Snapshot], worktree_root: Path, paths: list) -> Optional[set]:
+    """``_changed_paths`` answered from ``snapshot`` where it covers a path, by a spawn for the rest."""
+    if snapshot is None:
+        return _changed_paths(worktree_root, paths)
+    known = [p for p in paths if snapshot.covers(p)]
+    rest = [p for p in paths if not snapshot.covers(p)]
+    out = snapshot.changed_among(known)
+    if rest:
+        extra = _changed_paths(worktree_root, rest)
+        if extra is None:
+            return None
+        out |= extra
+    return out
+
+
 def _entangled_chunks(
-    worktree_root: Path, request: CommitRequest, stranded_ids: set, report_cache: dict
+    worktree_root: Path, request: CommitRequest, stranded_ids: set, report_cache: dict,
+    snapshot: Optional[_Snapshot] = None,
 ) -> dict:
     """Committable chunks whose ``.py`` files import a file of a stranded chunk, transitively.
 
@@ -1191,7 +1315,7 @@ def _entangled_chunks(
         for prefix in chunk.prefixes:
             prefix_roots.append((prefix.rstrip("/"), cid))
     specs = [p for p in declared if p.endswith(".py")] + [root for root, _ in prefix_roots]
-    changed = _changed_paths(worktree_root, specs)
+    changed = _changed(snapshot, worktree_root, specs)
     blocked_files: dict = {}
     if changed is None:
         blocked_files = {p: c for p, c in declared.items() if p.endswith(".py")}
@@ -1392,7 +1516,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if regraded:
         reply["regraded"] = regraded
     if scope:
-        reply.update(_undeclared_dirty(scope["root"], scope["request"]))
+        reply.update(
+            _undeclared_dirty(
+                scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ()))
+            )
+        )
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
     held = params.get("held") if isinstance(params, dict) else None
@@ -1670,6 +1798,34 @@ def _terminal_commit(
         except ValueError:
             bookkeeping_record_path = None
 
+    companions: list = []
+    if not anchor_only:
+        cited_sizing = _cited_sizing(worktree_root, request.plan_path)
+        if cited_sizing is not None:
+            companions.append(cited_sizing)
+        if request.plan_path:
+            from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+
+            evidence_rel = str(
+                PurePosixPath(request.plan_path).with_name(
+                    evidence_sidecar_path(Path(request.plan_path)).name
+                )
+            )
+            if (worktree_root / evidence_rel).is_file():
+                companions.append(evidence_rel)
+    plan_seam = (
+        str(PurePosixPath(request.plan_path).with_name(PurePosixPath(request.plan_path).stem + _SEAM_SIDECAR_SUFFIX))
+        if request.plan_path else None
+    )
+    snapshot = _worktree_snapshot(
+        worktree_root,
+        [p for c in request.chunks for p in c.paths]
+        + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
+        + companions,
+        [prefix for c in request.chunks for prefix in c.prefixes],
+        _scope_pathspecs(request),
+    )
+
     known_ids = {chunk.id for chunk in request.chunks}
     unsent_memos = _memo_rows_without_receipt(worktree_root, request)
     report_cache: dict = {}
@@ -1692,7 +1848,7 @@ def _terminal_commit(
     partial_chunks = _partial_chunks(worktree_root, request, incomplete_chunks, withheld_partial)
     partial_ids = {c.id for c in partial_chunks}
     entangled = _entangled_chunks(
-        worktree_root, request, incomplete_chunks - partial_ids, report_cache
+        worktree_root, request, incomplete_chunks - partial_ids, report_cache, snapshot
     )
     if entangled:
         incomplete_chunks = incomplete_chunks | set(entangled)
@@ -1742,19 +1898,9 @@ def _terminal_commit(
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     if not anchor_only:
-        cited_sizing = _cited_sizing(worktree_root, request.plan_path)
-        if cited_sizing is not None and cited_sizing not in all_paths:
-            all_paths.append(cited_sizing)
-        if request.plan_path:
-            from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
-
-            evidence_rel = str(
-                PurePosixPath(request.plan_path).with_name(
-                    evidence_sidecar_path(Path(request.plan_path)).name
-                )
-            )
-            if (worktree_root / evidence_rel).is_file() and evidence_rel not in all_paths:
-                all_paths.append(evidence_rel)
+        for companion in companions:
+            if companion not in all_paths:
+                all_paths.append(companion)
         for seam_rel in _seam_sidecars(
             worktree_root, request.plan_path, [c.id for c in done_chunks + partial_chunks]
         ):
@@ -1789,9 +1935,9 @@ def _terminal_commit(
     if not all_paths and not deleted_paths:
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    scope.update(root=worktree_root, request=request)
+    scope.update(root=worktree_root, request=request, snapshot=snapshot)
     final_paths_set = set(all_paths)
-    changed = _changed_paths(worktree_root, all_paths)
+    changed = _changed(snapshot, worktree_root, all_paths)
 
     def contributes(c) -> bool:
         def in_commit(p: str) -> bool:
@@ -1886,6 +2032,15 @@ def _terminal_commit(
         commit_params["declared_reverts"] = deleted_paths
     if session_id is not None:
         commit_params["session_id"] = session_id
+    if snapshot is not None:
+        # Receipts and the regenerated allowlist are new tracked-by-design files the
+        # snapshot predates; every other path must be covered or commit_v2 asks git itself.
+        fresh = {*receipt_paths, allowlist_path}
+        unread = [p for p in all_paths if p not in fresh and not snapshot.covers(p)]
+        if not unread:
+            commit_params["ignored_untracked"] = snapshot.ignored_among(
+                [p for p in all_paths if p not in fresh]
+            )
 
     try:
         reply = commit_v2(commit_params, repo_root)
@@ -1905,6 +2060,7 @@ def _terminal_commit(
     if reply.get("committed") and reply.get("sha"):
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
+        scope.setdefault("landed", set()).update(all_paths)
         no_delta = set(reply.get("no_delta") or [])
         coded_chunks = [
             c for c in contributing_chunks
@@ -1959,7 +2115,8 @@ def _terminal_commit(
         ):
             reply.update(
                 _mint_review_stamp(
-                    worktree_root, request.plan_path, str(reply["sha"]), record_abs, record
+                    worktree_root, request.plan_path, str(reply["sha"]), record_abs, record,
+                    tree=reply.get("tree"),
                 )
             )
         writeback = {} if anchor_only else _register_writeback(
@@ -1973,18 +2130,30 @@ def _terminal_commit(
                 register_sizing,
             ) if p
         )
+        broken_tells = _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path)
+        flips = bool(
+            request.plan_path
+            and reply.get("review_stamp") == "minted"
+            and broken_tells is None
+            and not register_failure
+            and not incomplete_chunks
+            and not unsent_memos
+        )
         reply.update(
             _stamp_coded_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
                 str(reply["sha"]), session_id,
                 also_commit=also_commit,
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
+                snapshot=snapshot,
+                flip_plan=request.plan_path if flips else None,
             )
         )
+        flipped = reply.pop("_flip", None)
+        scope["landed"].update(reply.pop("_committed", ()))
         coded_stale = reply.pop("coded_index_stale", [])
         if coded_stale:
             reply["index_stale"] = sorted(set(reply.get("index_stale") or []) | set(coded_stale))
-        broken_tells = _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path)
         if request.plan_path and reply.get("review_stamp") == "minted" and broken_tells is not None:
             reply["plan_status"] = "not-stamped"
             reply["plan_status_reason"] = (
@@ -1996,14 +2165,8 @@ def _terminal_commit(
         elif register_failure and reply.get("review_stamp") == "minted":
             reply["plan_status"] = "not-stamped"
             reply["plan_status_reason"] = register_failure
-        elif (
-            request.plan_path
-            and reply.get("review_stamp") == "minted"
-            and not incomplete_chunks
-            and not unsent_memos
-            and reply.get("coded_sha")
-        ):
-            reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
+        elif flips and reply.get("coded_sha") and flipped is not None:
+            reply.update(flipped)
         elif request.plan_path and reply.get("review_stamp") == "minted":
             reply["plan_status"] = "not-stamped"
             reply["plan_status_reason"] = (

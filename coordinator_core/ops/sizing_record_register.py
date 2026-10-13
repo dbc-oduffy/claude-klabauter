@@ -3,19 +3,25 @@ coordinator_core.ops.sizing_record_register — JSON-RPC "sizing.record_register
 
 Purpose: the writer for a sizing-object's `requirement_register` block taken from a
 caller-supplied `{sources, rows[, rollup]}` mapping (`sizing-assemble --register <yaml>`).
-`sizing_assemble.write_back` also writes a register, minted from the PM's enumerated clauses,
+`sizing_assemble.write_back` also writes a register, derived from the PM's verbatims,
 through the same `requirement_register.write_register_text`.
 
 What it writes: the register block only; `sources` and `rows` are kept as given and the
 rollup is recomputed, so an input rollup is never trusted. Every byte outside the block is kept.
 
 Re-record invariant:
-  - identical sources+rows on disk -> idempotent no-op (the rollup timestamp alone is not a change).
-  - different register, no supersede -> refused.
-  - different register, supersede    -> replaced; engine-written row state is discarded.
+  - identical sources+rows+unrelated_turns on disk -> idempotent no-op (the rollup timestamp
+    alone is not a change).
+  - amend -> the input is an overlay on the recorded register: rows merged by id (a given
+    field replaces the recorded one; a new id is appended, `status` defaulting to `open`,
+    `surface` to `internal`, `claimed_by` to []), `drop: [ids]` removes rows, `unrelated_turns`
+    merged by turn, new `sources` appended. With no register recorded the overlay is the
+    register, defaults filled. Engine-written state on fields the overlay does not name is kept.
+  - different register, no amend, no supersede -> refused.
+  - different register, supersede               -> replaced; engine-written row state is discarded.
 
-Negative-spec: does NOT infer rows, rulings or statuses, and does NOT git-commit, cascade or
-spawn a process.
+Negative-spec: does NOT infer rows, rulings or statuses beyond the amend defaults above, and
+does NOT git-commit, cascade or spawn a process.
 """
 
 from __future__ import annotations
@@ -43,16 +49,64 @@ _SIZING_SCHEMA_PATH: Path = (
 
 _PARAMS_HINT = (
     "params: sizing (required, path under the sizings home), register (required mapping "
-    "{sources, rows[, rollup]}), supersede"
+    "{sources, rows[, rollup]}; with amend an overlay {rows?, drop?, unrelated_turns?, sources?}), "
+    "supersede, amend"
 )
+
+_ROW_DEFAULTS = ((rr.ROW_STATUS, rr.STATUS_OPEN), (rr.ROW_SURFACE, "internal"))
+_DROP_KEY = "drop"
 
 
 def _err(msg: str) -> dict:
     return {"exit_code": 1, "applied": False, "error": msg, "message": msg}
 
 
-def _identity(sources, rows) -> dict:
-    return {"sources": sources, "rows": rows}
+def _identity(block) -> dict:
+    return {
+        "sources": block.get(rr.SOURCES_KEY),
+        "rows": block.get(rr.ROWS_KEY),
+        "unrelated_turns": block.get(rr.UNRELATED_TURNS_KEY) or [],
+    }
+
+
+def _overlay(recorded: Optional[dict], overlay: dict) -> dict:
+    """`overlay` applied to the `recorded` register block (None: nothing recorded), per the
+    module docstring's amend rule. Raises ValueError naming what the overlay cannot apply."""
+    base = recorded or {}
+    rows = [dict(r) for r in (base.get(rr.ROWS_KEY) or []) if isinstance(r, dict)]
+    known = {str(r.get(rr.ROW_ID)) for r in rows}
+    drop = [str(d) for d in (overlay.get(_DROP_KEY) or [])]
+    unknown = [d for d in drop if d not in known]
+    if unknown:
+        raise ValueError(f"drop names row(s) not on the register: {', '.join(unknown)}")
+    rows = [r for r in rows if str(r.get(rr.ROW_ID)) not in drop]
+    by_id = {str(r.get(rr.ROW_ID)): r for r in rows}
+    for given in overlay.get(rr.ROWS_KEY) or []:
+        rid = str(given.get(rr.ROW_ID) or "")
+        if not rid:
+            raise ValueError("an overlay row carries no id")
+        if rid in by_id:
+            by_id[rid].update(given)
+            continue
+        row = dict(given)
+        for key, default in _ROW_DEFAULTS:
+            row.setdefault(key, default)
+        row.setdefault(rr.ROW_CLAIMED_BY, [])
+        rows.append(row)
+        by_id[rid] = row
+    sources = list(base.get(rr.SOURCES_KEY) or [])
+    for src in overlay.get(rr.SOURCES_KEY) or []:
+        if src not in sources:
+            sources.append(src)
+    unrelated: dict = {}
+    for e in [*(base.get(rr.UNRELATED_TURNS_KEY) or []), *(overlay.get(rr.UNRELATED_TURNS_KEY) or [])]:
+        if isinstance(e, dict) and "turn" in e:
+            unrelated[e["turn"]] = e
+    out: dict = {rr.SOURCES_KEY: sources}
+    if unrelated:
+        out[rr.UNRELATED_TURNS_KEY] = [unrelated[t] for t in sorted(unrelated, key=str)]
+    out[rr.ROWS_KEY] = rows
+    return out
 
 
 def _coverage_refusal(doc: dict, gaps: list, problems: list) -> str:
@@ -78,23 +132,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         sizing    (str)     — path to the sizing-object under the sizings home. Required.
-        register  (mapping) — `{sources, rows[, rollup]}`. Required.
+        register  (mapping) — `{sources, rows[, rollup]}`, or with `amend` an overlay. Required.
         supersede (bool)    — replace a different register already on the sizing.
+        amend     (bool)    — apply `register` as an overlay on the recorded one; `supersede` wins.
 
     Returns: {exit_code, applied, message|error, rollup?}.
 
     Exit-code contract:
         exit_code 1 — a missing param; a non-mapping register; a sizing escaping the sizings
                       home or absent; duplicate row ids; a deferred/waived row without a
-                      ruling; a different register with `supersede` unset; schema validation
-                      failure; lock timeout.
+                      ruling; an overlay dropping an unknown row; a different register with
+                      neither `amend` nor `supersede`; schema validation failure; lock timeout.
         exit_code 0, applied True  — the register was written.
-        exit_code 0, applied False — identical sources and rows already recorded; no-op.
+        exit_code 0, applied False — the register on disk already matches; no-op.
     """
     sizing_raw = params.get("sizing")
     sizing_raw = sizing_raw.strip() if isinstance(sizing_raw, str) else ""
     register = params.get("register")
     supersede = bool(params.get("supersede"))
+    amend = bool(params.get("amend")) and not supersede
 
     if not sizing_raw:
         return _err(f"missing required param: sizing — {_PARAMS_HINT}")
@@ -103,6 +159,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(register, dict):
         return _err("register must be a mapping {sources, rows[, rollup]}")
     rows = register.get(rr.ROWS_KEY)
+    if amend and rows is None:
+        rows = []
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         return _err("register.rows must be a list of row mappings")
     if repo_root is None:
@@ -114,11 +172,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dupes = rr.duplicate_row_ids(rows)
     if dupes:
         return _err(f"duplicate row ids: {', '.join(dupes)}")
-    unruled = rr.unruled_rows(rows)
-    if unruled:
-        return _err(
-            f"a deferred/waived row needs ruling {{source, quote, ref, on}}: {', '.join(unruled)}"
-        )
 
     worktree = main_worktree_root(repo_root)
     p = Path(sizing_raw)
@@ -133,32 +186,43 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     now = datetime.now(timezone.utc)
     # locked_rmw reads universal-newline text, so the CRLF of the file is invisible to mutate.
     crlf = b"\r\n" in p.read_bytes()
-    state: dict = {"applied": False, "rollup": None}
+    state: dict = {"applied": False, "rollup": None, "rows": len(rows)}
 
     def mutate(old_text: str) -> str:
         try:
             current = yaml.safe_load(old_text) or {}
         except Exception as exc:  # noqa: BLE001
             raise MutateAbort(f"record_register: YAML parse error: {exc}") from exc
+        existing = rr.read_register(old_text)
+        wanted = register
+        if amend:
+            try:
+                wanted = _overlay(existing.raw if existing is not None else None, register)
+            except ValueError as exc:
+                raise MutateAbort(str(exc)) from exc
+        unruled = rr.unruled_rows(wanted[rr.ROWS_KEY])
+        if unruled:
+            raise MutateAbort(
+                f"a deferred/waived row needs ruling {{source, quote, ref, on}}: {', '.join(unruled)}"
+            )
+        state["rows"] = len(wanted[rr.ROWS_KEY])
         if isinstance(current, dict):
-            would_be = {**current, rr.REGISTER_KEY: register}
-            problems = rr.unrelated_turn_errors(current, register)
+            would_be = {**current, rr.REGISTER_KEY: wanted}
+            problems = rr.unrelated_turn_errors(current, wanted)
             gaps = rr.coverage_gaps(would_be)
             if gaps or problems:
                 raise MutateAbort(_coverage_refusal(current, gaps, problems))
-        existing = rr.read_register(old_text)
-        wanted = _identity(register.get("sources"), rows)
         if existing is not None:
-            if _identity(existing.raw.get("sources"), existing.rows) == wanted:
+            if _identity(existing.raw) == _identity(wanted):
                 state["rollup"] = existing.rollup
                 return old_text
-            if not supersede:
+            if not supersede and not amend:
                 raise MutateAbort(
                     f"refusing to record on {p}: a different requirement_register is present "
                     "— pass supersede (--supersede) to replace it; this discards engine-written "
                     "row state (wired, met_by, last_progress_at)"
                 )
-        text = rr.write_register_text(old_text, register, now)
+        text = rr.write_register_text(old_text, wanted, now)
         try:
             new_doc = yaml.safe_load(text) or {}
         except Exception as exc:  # noqa: BLE001
@@ -189,7 +253,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {
             "exit_code": 0,
             "applied": True,
-            "message": f"recorded requirement_register ({len(rows)} rows) on {sizing_raw}",
+            "message": f"recorded requirement_register ({state['rows']} rows) on {sizing_raw}",
             "rollup": state["rollup"],
         }
     return {
