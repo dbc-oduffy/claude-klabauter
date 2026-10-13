@@ -1,5 +1,5 @@
-"""`_cmd_round` refuses before staging anything when the source is not
-committed and pushed. Real gate (REAL_SOURCE_PREFLIGHT opts out of conftest's
+"""`_cmd_round` refuses before staging anything when the source HEAD is not
+pushed. Real gate (REAL_SOURCE_PREFLIGHT opts out of conftest's
 stub), real git source, local bare origin; tmp_path only."""
 from __future__ import annotations
 
@@ -61,16 +61,15 @@ def _run(monkeypatch, tmp_path, source: Path):
     return _mod._cmd_round(args), reached
 
 
-def test_dirty_source_refuses_before_the_round(monkeypatch, tmp_path, capsys):
+def test_unpushable_source_refuses_before_the_round(monkeypatch, tmp_path, capsys):
     source = _source_with_origin(tmp_path)
-    (source / "a.py").write_text("a = 2\n", encoding="utf-8")
+    _git(["checkout", "-q", "-b", "work/no-upstream"], source)
 
     rc, reached = _run(monkeypatch, tmp_path, source)
 
     assert rc == _mod._EXIT_FAIL
     assert reached == []
-    err = capsys.readouterr().err
-    assert "a.py" in err and "Commit first" in err
+    assert "has no upstream" in capsys.readouterr().err
 
 
 def test_pushed_source_reaches_the_round(monkeypatch, tmp_path):

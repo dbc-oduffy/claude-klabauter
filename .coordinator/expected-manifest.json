@@ -1567,7 +1567,7 @@
     "coordinator/bin/tests/test_percolate_round_revert_names_pending_removals.py": "049ca7ba866f745d2be9ef67544c8cefffaa8393",
     "coordinator/bin/tests/test_percolate_round_seed_names_nested_rename.py": "2f9ad0970c7d65ef0edbcad205e98df7b047031c",
     "coordinator/bin/tests/test_percolate_round_shebang_exec_bit.py": "8e79ca40d83767a3aa546e400dc9af72340986b1",
-    "coordinator/bin/tests/test_percolate_round_source_preflight_wiring.py": "f8578580ab8fc292aac98003099210bc3c294f6e",
+    "coordinator/bin/tests/test_percolate_round_source_preflight_wiring.py": "447799c01cea1b66e136cc4d52961c076637dc38",
     "coordinator/bin/tests/test_percolate_round_step_legs_do_not_spawn_interpreters.py": "0ae7d5cb1b783fb88c56b78468bf261ab2aadf23",
     "coordinator/bin/tests/test_placeholder_summaries_are_all_recognized.py": "3da4b9a4c2eb36a8afe02fe522004526e12d713d",
     "coordinator/bin/tests/test_plan_chain_run_cli.py": "ac760e010f478e52283c2d7e829c8fe830ac13c5",
@@ -2058,8 +2058,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "762f99b2df2188bf2ce8d8a73a2a68fb3c07cc0d",
-    "coordinator_core/_engine_stamp": "10dd2a01a70bf541d8e487bb90c460ec6569db72",
+    "coordinator_core/_engine_published_at": "af7120713f958864c0fcb9b10a1e7619c8529638",
+    "coordinator_core/_engine_stamp": "f4a14619a885c9c97f7fec3b33564cf1b3828bfe",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6844,7 +6844,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "d3c8d99ef0e798984487bc0452a33813210b923a",
-    "coordinator_core/warm/door/door.exe.provenance.json": "a9dcd49311ee096a4965c380909618a27ace81ba",
+    "coordinator_core/warm/door/door.exe.provenance.json": "013ca496ab3317a78257f026e0f310d30cdb1172",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -7482,5 +7482,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "ba33fb5eac6b38fcb23b5f996a52265ec0b8ce1a"
+  "source_head": "56deea9b45f5927b9dd68e0a6ac41a3b74340eca"
 }
