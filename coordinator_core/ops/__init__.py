@@ -156,6 +156,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
+    ("coordinator_core.ops.canvas_harvest", 'registers "canvas.harvest"'),
     ("coordinator_core.ops.memo_correct_note", 'registers "memo.correct_note"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
     ("coordinator_core.ops.handoff_stamp", 'registers "handoff.stamp"'),

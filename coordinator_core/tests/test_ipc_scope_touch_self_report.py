@@ -408,6 +408,120 @@ def test_declaration_list_over_cap_is_truncated_and_logged(tmp_path, monkeypatch
     )
 
 
+def _handler_declaring_with_bound(paths, bound):
+    def _h(params, ctx=None, repo_root=None):
+        return {
+            "ok": True,
+            _SCOPE_TOUCH_PATHS_KEY: list(paths),
+            ipc._SCOPE_TOUCH_MAX_PATHS_KEY: bound,
+        }
+
+    return _h
+
+
+def _write_files(repo, n, prefix="bound"):
+    paths = []
+    for i in range(n):
+        p = repo / f"{prefix}-{i}.txt"
+        p.write_text(str(i))
+        paths.append(str(p))
+    return paths
+
+
+def _session_env(monkeypatch, sid):
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+
+
+def test_default_cap_is_unchanged():
+    assert ipc._MAX_DECLARED_TOUCH_PATHS == 16
+
+
+def test_declared_bound_claims_every_path_without_truncation_warning(tmp_path, monkeypatch, caplog):
+    repo = _make_repo(tmp_path)
+    n = ipc._DECLARED_TOUCH_BOUND_CEILING - 5
+    assert n > ipc._MAX_DECLARED_TOUCH_PATHS
+    paths = _write_files(repo, n)
+    _session_env(monkeypatch, "sid-bound-all")
+    caplog.set_level(logging.INFO, logger="coordinator_core.ipc")
+
+    handler = _handler_declaring_with_bound(paths, ipc._DECLARED_TOUCH_BOUND_CEILING)
+    with _RegistryScope({"test.declare": handler}):
+        d = _dispatch("test.declare", {}, origin_worktree=repo)
+    assert "error" not in d
+
+    assert len(_touched_events(repo, "sid-bound-all")) == n
+    assert not any("exceeding the cap" in rec.message for rec in caplog.records)
+
+
+def test_bound_key_never_reaches_the_wire(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    paths = _write_files(repo, 1)
+    _session_env(monkeypatch, "sid-bound-wire")
+
+    handler = _handler_declaring_with_bound(paths, ipc._DECLARED_TOUCH_BOUND_CEILING)
+    with _RegistryScope({"test.declare": handler}):
+        d = _dispatch("test.declare", {}, origin_worktree=repo)
+    assert d["result"] == {"ok": True}
+
+    def lone_bound(params, ctx=None, repo_root=None):
+        return {"ok": True, ipc._SCOPE_TOUCH_MAX_PATHS_KEY: ipc._DECLARED_TOUCH_BOUND_CEILING}
+
+    with _RegistryScope({"test.lone": lone_bound}):
+        d = _dispatch("test.lone", {}, origin_worktree=repo)
+    assert d["result"] == {"ok": True}
+
+
+@pytest.mark.parametrize("kind", ["ceiling_plus_one", "zero", "true", "string"])
+def test_unusable_bound_records_the_default_cap_and_warns(tmp_path, monkeypatch, caplog, kind):
+    repo = _make_repo(tmp_path)
+    bound = {
+        "ceiling_plus_one": ipc._DECLARED_TOUCH_BOUND_CEILING + 1,
+        "zero": 0,
+        "true": True,
+        "string": "48",
+    }[kind]
+    paths = _write_files(repo, ipc._MAX_DECLARED_TOUCH_PATHS + 4)
+    sid = f"sid-bad-bound-{kind}"
+    _session_env(monkeypatch, sid)
+    caplog.set_level(logging.INFO, logger="coordinator_core.ipc")
+
+    with _RegistryScope({"test.declare": _handler_declaring_with_bound(paths, bound)}):
+        d = _dispatch("test.declare", {}, origin_worktree=repo)
+    assert "error" not in d
+
+    assert len(_touched_events(repo, sid)) == ipc._MAX_DECLARED_TOUCH_PATHS
+    assert any(
+        "unusable touch bound" in rec.message
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING
+    )
+
+
+def test_bounded_batch_takes_the_lock_once(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    n = ipc._DECLARED_TOUCH_BOUND_CEILING - 5
+    paths = _write_files(repo, n)
+    _session_env(monkeypatch, "sid-bound-lock")
+
+    real = ipc.held_lock
+    acquisitions = []
+
+    def counting(*args, **kwargs):
+        acquisitions.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ipc, "held_lock", counting)
+
+    handler = _handler_declaring_with_bound(paths, ipc._DECLARED_TOUCH_BOUND_CEILING)
+    with _RegistryScope({"test.declare": handler}):
+        _dispatch("test.declare", {}, origin_worktree=repo)
+
+    assert len(_touched_events(repo, "sid-bound-lock")) == n
+    assert len(acquisitions) == 1
+
+
 def test_real_queue_append_write_lands_in_compute_offer_safe_paths(tmp_path, monkeypatch):
     assert "queue.append" in _REGISTRY, "import guard: queue.append not registered"
     repo = _make_repo(tmp_path)

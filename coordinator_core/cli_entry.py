@@ -38,8 +38,9 @@ Negative-spec (RAG-bait):
     This module adds NO second recorder dialect. Recording is delegated to
     `ipc._record_self_reported_touches` verbatim, via the same
     `_scope_touch_paths` envelope the subprocess path builds, so path
-    normalization, cross-repo containment, the 16-path cap, and the fail-open
-    guarantee all have exactly one implementation.
+    normalization, cross-repo containment, the 16-path default cap (or the
+    caller-declared `max_paths` bound, at most `ipc._DECLARED_TOUCH_BOUND_CEILING`),
+    and the fail-open guarantee all have exactly one implementation.
 
     An op that declares nothing behaves exactly as it did before adoption. No
     op is required to adopt `declare_write`.
@@ -62,22 +63,28 @@ __all__ = ["run_op_main", "recording_declared_writes"]
 _log = logging.getLogger(__name__)
 
 
-def _record(declared: List[str], cwd: Optional[str]) -> None:
+def _record(declared: List[str], cwd: Optional[str], max_paths: Optional[int] = None) -> None:
     if not declared:
         return
     try:
         from coordinator_core.ipc import (  # noqa: PLC0415 — deferred: ipc is heavy
+            _SCOPE_TOUCH_MAX_PATHS_KEY,
             _SCOPE_TOUCH_PATHS_KEY,
             _record_self_reported_touches,
         )
 
-        _record_self_reported_touches({_SCOPE_TOUCH_PATHS_KEY: list(declared)}, cwd)
+        envelope = {_SCOPE_TOUCH_PATHS_KEY: list(declared)}
+        if max_paths is not None:
+            envelope[_SCOPE_TOUCH_MAX_PATHS_KEY] = max_paths
+        _record_self_reported_touches(envelope, cwd)
     except Exception:  # noqa: BLE001 — fail-open is the contract
         _log.debug("cli_entry: scope-touch recording failed; op result unaffected", exc_info=True)
 
 
 @contextlib.contextmanager
-def recording_declared_writes(*, cwd: Optional[str] = None) -> Iterator[List[str]]:
+def recording_declared_writes(
+    *, cwd: Optional[str] = None, max_paths: Optional[int] = None
+) -> Iterator[List[str]]:
     """Collect `declare_write()` calls made inside the `with` body and record
     them through the SAME `_record` path `run_op_main` uses — the one
     recorder, factored so both callers share it.
@@ -105,14 +112,32 @@ def recording_declared_writes(*, cwd: Optional[str] = None) -> Iterator[List[str
     Yields the (initially empty) list that fills with declared paths as the
     body runs; the caller does not need to read it, it exists so `_record`
     has something to hand to `ipc._record_self_reported_touches` on exit.
+
+    `max_paths` declares the bound of a multi-file batch: an int from 1 to
+    `ipc._DECLARED_TOUCH_BOUND_CEILING`, else ValueError on entry before the
+    body runs. None keeps the default cap and never imports ipc here.
     """
+    if max_paths is not None:
+        from coordinator_core.ipc import (  # noqa: PLC0415 — ceiling only when a bound is declared
+            _DECLARED_TOUCH_BOUND_CEILING,
+        )
+
+        if (
+            not isinstance(max_paths, int)
+            or isinstance(max_paths, bool)
+            or not 1 <= max_paths <= _DECLARED_TOUCH_BOUND_CEILING
+        ):
+            raise ValueError(
+                f"max_paths must be an int from 1 to {_DECLARED_TOUCH_BOUND_CEILING}, "
+                f"got {max_paths!r}"
+            )
     resolved_cwd = cwd if cwd is not None else os.getcwd()
     declared: List[str] = []
     try:
         with per_request_state(declared, isolated=False):
             yield declared
     finally:
-        _record(declared, resolved_cwd)
+        _record(declared, resolved_cwd, max_paths)
 
 
 def run_op_main(

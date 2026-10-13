@@ -157,6 +157,48 @@ def test_expired_root_sentinel_still_denies_root(scratch_repo):
     assert guard._sentinel_state(str(scratch_repo)) == "deny-root"
 
 
+def test_old_root_sentinel_is_unlinked_on_the_call_that_sees_it(scratch_repo):
+    root_file = scratch_repo / _SENTINEL_NAME
+    _fresh(root_file)
+    _age(root_file, 31 * 60)
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-root"
+    assert not root_file.exists()
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-absent"
+
+
+def test_root_sentinel_beside_valid_git_dir_sentinel_unlinks_then_allows(scratch_repo):
+    root_file = scratch_repo / _SENTINEL_NAME
+    _fresh(root_file)
+    _fresh(_gs(scratch_repo))
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-root"
+    assert not root_file.exists()
+    assert _gs(scratch_repo).exists()
+    assert guard._sentinel_state(str(scratch_repo)) == "allow"
+
+
+def test_root_sentinel_deny_says_it_removed_the_file(scratch_repo, monkeypatch):
+    monkeypatch.setattr(guard, "_git_root", lambda: str(scratch_repo))
+    monkeypatch.setattr(guard, "read_content_root", lambda: "")
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda p, r: True)
+    _fresh(scratch_repo / _SENTINEL_NAME)
+    payload = {
+        "tool_name": "Edit",
+        "session_id": "t",
+        "tool_input": {"file_path": str(scratch_repo / "CLAUDE.md")},
+    }
+    reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Removed a root-level approval file" in reason
+    assert "approvals live under the git dir" in reason
+    reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Removed" not in reason
+
+
+def test_undeletable_root_sentinel_keeps_the_not_an_approval_text(scratch_repo):
+    (scratch_repo / _SENTINEL_NAME).mkdir()
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-root-present"
+
+
 def test_gitdir_file_relative_pointer_resolves(tmp_path):
     root = tmp_path / "wt"
     root.mkdir()
@@ -258,7 +300,7 @@ def test_git_dir_sentinel_approves_a_doctrine_edit_and_root_one_does_not(
     )
     _fresh(scratch_repo / _SENTINEL_NAME)
     assert guard.check(payload) is not None
-    (scratch_repo / _SENTINEL_NAME).unlink()
+    assert not (scratch_repo / _SENTINEL_NAME).exists()
     _fresh(_gs(scratch_repo))
     assert not _denied(guard.check(payload))
 

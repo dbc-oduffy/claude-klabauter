@@ -211,9 +211,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # only (always allows), but the write disqualifies COMPUTE_ONLY under the five-question
     # test the same way hooks.postuse_advisory_dispatch's own durable state does.
     "hooks.flag_em_poll_in_flight": OpClass.MUTATING,
-    # hooks.submit_engine_ask — MUTATING: emits a warp run through dispatch.emit (script,
-    # receipt, run token, ask.md) and writes the run's submission record beside its briefs.
-    "hooks.submit_engine_ask": OpClass.MUTATING,
     # hooks.taskstop_launch_recorder — MUTATING: appends launch records under settings_home().
     "hooks.taskstop_launch_recorder": OpClass.MUTATING,
     # hooks.taskstop_reaper — MUTATING: kills orphaned launch trees and writes the reaper log
@@ -504,6 +501,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec backlink: pln-strang-09-memo-transition-op-s-fec3a1 § C1,
     #   docs/plans/2026-07-06-memo-transition-native-python-port.md (native-port cutover)
     "memo.transition": OpClass.MUTATING,
+    # canvas.harvest — MUTATING: writes the harvest record (harvest.json, frames/, threads/, SETTLED.md) under `out`.
+    "canvas.harvest": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # fleet.* DR-211 archival-writer sub-category — all three ops classified MUTATING
     # (DR-211 five-bound affirmed per handler code; DR-208 § 5 per-op affirmation below)

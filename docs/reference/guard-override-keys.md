@@ -316,8 +316,10 @@ Distinct from both, and not interchangeable with either:
 default on every profile); when on, it is read at the **hook process's own cwd repo
 root** — the approval file lives **under that repo's git dir**
 (`<git-dir>/.coordinator-doctrine-edit-approved`), never at the repo root, so no commit
-can carry an approval into a clone. A root-level file is refused, whatever its age or
-tracked state; a root file left over from before this change now refuses until removed.
+can carry an approval into a clone. A root-level file is never an approval: the guard unlinks it on the call that sees it
+and denies that call with a message saying it removed a root-level file; the next call
+reads the git-dir sentinel normally. If the unlink fails, the deny stays and the message
+names the file as not an approval.
 The PM creates it out of band:
 
 - bash: `touch "$(git rev-parse --git-dir)/.coordinator-doctrine-edit-approved"`

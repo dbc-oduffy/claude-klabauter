@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import sys
@@ -115,7 +114,7 @@ def test_run_op_main_records_declared_writes(monkeypatch):
 
     _install_fake_op(monkeypatch, "fake_op_decl", main)
     monkeypatch.setattr(
-        cli_entry, "_record", lambda declared, cwd: recorded.update(paths=declared, cwd=cwd)
+        cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.update(paths=declared, cwd=cwd)
     )
     cli_entry.run_op_main("fake_op_decl", [], cwd="/repo")
     assert recorded == {"paths": ["state/written.md"], "cwd": "/repo"}
@@ -129,7 +128,7 @@ def test_run_op_main_records_even_when_the_op_exits_nonzero(monkeypatch):
         return 1
 
     _install_fake_op(monkeypatch, "fake_op_fail", main)
-    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd: recorded.update(paths=declared))
+    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.update(paths=declared))
     assert cli_entry.run_op_main("fake_op_fail", []) == 1
     assert recorded["paths"] == ["state/partial.md"]
 
@@ -142,7 +141,7 @@ def test_run_op_main_records_even_when_the_op_raises(monkeypatch):
         raise RuntimeError("boom")
 
     _install_fake_op(monkeypatch, "fake_op_raise", main)
-    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd: recorded.update(paths=declared))
+    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.update(paths=declared))
     with pytest.raises(RuntimeError):
         cli_entry.run_op_main("fake_op_raise", [])
     assert recorded["paths"] == ["state/before-boom.md"]
@@ -187,7 +186,7 @@ def test_run_op_main_records_declared_writes_via_the_override_entrypoint(monkeyp
     module.main_install_all = main_install_all
     monkeypatch.setitem(sys.modules, "fake_op_decl_override", module)
     monkeypatch.setattr(
-        cli_entry, "_record", lambda declared, cwd: recorded.update(paths=declared, cwd=cwd)
+        cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.update(paths=declared, cwd=cwd)
     )
     cli_entry.run_op_main(
         "fake_op_decl_override", [], cwd="/repo", entrypoint="main_install_all"
@@ -212,7 +211,7 @@ def test_run_op_main_does_not_swallow_an_unimportable_module():
 def test_recording_declared_writes_records_on_clean_exit(monkeypatch):
     recorded = {}
     monkeypatch.setattr(
-        cli_entry, "_record", lambda declared, cwd: recorded.update(paths=declared, cwd=cwd)
+        cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.update(paths=declared, cwd=cwd)
     )
     with cli_entry.recording_declared_writes(cwd="/repo") as declared:
         declare_write("state/via-helper.md")
@@ -222,7 +221,7 @@ def test_recording_declared_writes_records_on_clean_exit(monkeypatch):
 
 def test_recording_declared_writes_records_on_an_exception_escaping_the_body(monkeypatch):
     recorded = {}
-    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd: recorded.update(paths=declared))
+    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.update(paths=declared))
     with pytest.raises(RuntimeError):
         with cli_entry.recording_declared_writes(cwd="/repo"):
             declare_write("state/before-helper-boom.md")
@@ -299,3 +298,73 @@ def test_ipc_merges_declare_write_into_the_self_report_key():
         "state/from-key.md",
         "state/from-call.md",
     ], "key-declared paths keep their order and precede call-declared ones; dupes dropped"
+
+
+def test_max_paths_over_the_ceiling_refuses_before_the_body_runs(monkeypatch, tmp_path):
+    from coordinator_core import ipc
+
+    called = {"n": 0}
+    monkeypatch.setattr(
+        cli_entry, "_record", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
+    )
+    target = tmp_path / "body-wrote-this.txt"
+    with pytest.raises(ValueError):
+        with cli_entry.recording_declared_writes(
+            cwd=str(tmp_path), max_paths=ipc._DECLARED_TOUCH_BOUND_CEILING + 1
+        ):
+            target.write_text("x")
+    assert not target.exists()
+    assert called["n"] == 0
+
+
+@pytest.mark.parametrize("bad", [0, True, "8", 1.5])
+def test_max_paths_not_an_int_in_range_refuses(bad):
+    with pytest.raises(ValueError):
+        with cli_entry.recording_declared_writes(max_paths=bad):
+            pass
+
+
+def test_max_paths_reaches_record_and_absence_reaches_it_as_none(monkeypatch):
+    from coordinator_core import ipc
+
+    seen = []
+    monkeypatch.setattr(
+        cli_entry, "_record", lambda declared, cwd, max_paths=None: seen.append(max_paths)
+    )
+    with cli_entry.recording_declared_writes(
+        cwd="/repo", max_paths=ipc._DECLARED_TOUCH_BOUND_CEILING
+    ):
+        declare_write("a.md")
+    with cli_entry.recording_declared_writes(cwd="/repo"):
+        declare_write("b.md")
+    assert seen == [ipc._DECLARED_TOUCH_BOUND_CEILING, None]
+
+
+@pytest.mark.spawns_process
+def test_bounded_batch_of_ceiling_minus_five_files_leaves_every_touch_event(monkeypatch, tmp_path):
+    import subprocess
+
+    from coordinator_core import ipc
+    from coordinator_core.session import claimed_write, touch_record
+    from coordinator_core.win_portability import no_console_passthrough_kwargs
+
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    (tmp_path / "README.md").write_text("x")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-declared-bound")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    n = ipc._DECLARED_TOUCH_BOUND_CEILING - 5
+    assert n > ipc._MAX_DECLARED_TOUCH_PATHS
+    with cli_entry.recording_declared_writes(
+        cwd=str(tmp_path), max_paths=ipc._DECLARED_TOUCH_BOUND_CEILING
+    ):
+        for i in range(n):
+            claimed_write.replace_bytes(tmp_path / f"f{i}.txt", b"x")
+
+    log = tmp_path / ".git" / "coordinator-sessions" / "sid-declared-bound" / "touch-record.jsonl"
+    events = [touch_record.decode_line(l) for l in touch_record.iter_complete_lines(log.read_bytes())]
+    assert len(events) == n

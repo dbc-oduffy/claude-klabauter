@@ -467,10 +467,12 @@ def _git_dir(repo_root: str) -> "str | None":
 
 
 def _sentinel_state(repo_root: "str | None") -> str:
-    """Returns "allow", "deny-absent", "deny-expired", or "deny-root".
+    """Returns "allow", "deny-absent", "deny-expired", "deny-root" or "deny-root-present".
 
     The approval lives under the git dir, which no commit can carry into a clone.
-    A file at `<root>/<sentinel>` is "deny-root", checked before the git-dir read.
+    A file at `<root>/<sentinel>` can never approve: it is unlinked on the call
+    that sees it, and that call is "deny-root"; the next call reads the git dir.
+    "deny-root-present" is the same refusal when the unlink failed.
 
     No repo root or git dir resolvable -> "deny-absent" (fail closed, per this
     guard's deliberate fail-closed posture -- see module docstring).
@@ -485,7 +487,12 @@ def _sentinel_state(repo_root: "str | None") -> str:
     git_dir = _git_dir(repo_root)
     if not git_dir:
         return "deny-absent"
-    if os.path.lexists(os.path.join(repo_root, _SENTINEL_NAME)):
+    root_file = os.path.join(repo_root, _SENTINEL_NAME)
+    if os.path.lexists(root_file):
+        try:
+            os.unlink(root_file)
+        except OSError:
+            return "deny-root-present"
         return "deny-root"
     sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
     try:
@@ -682,7 +689,7 @@ def _deny_reason(
     target: str,
     is_local_config: bool = False,
     payload: Optional[Dict[str, Any]] = None,
-    root_sentinel: bool = False,
+    root_sentinel: str = "",
 ) -> str:
     """Audience-gated render — see module docstring "Deny message".
 
@@ -724,7 +731,12 @@ def _deny_reason(
                 f" See {resolve_override_keys_doc_display()} for how "
                 "approval works."
             )
-            if root_sentinel:
+            if root_sentinel == "deny-root":
+                base += (
+                    " Removed a root-level approval file; "
+                    "approvals live under the git dir."
+                )
+            elif root_sentinel == "deny-root-present":
                 base += (
                     " A root-level approval file is not an approval; "
                     "approvals live under the git dir."
@@ -862,7 +874,8 @@ def pm_approval_fresh(
 ) -> bool:
     """True when the PM's approval sentinel exists under the git dir, is
     unexpired, and was given for the current PM turn; the session repo is
-    resolved from `cwd` when given. `payload=None` fails closed."""
+    resolved from `cwd` when given. `payload=None` fails closed. A root-level
+    approval file is unlinked by this call, which returns False once."""
     if payload is None:
         return False
     try:
@@ -1110,7 +1123,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 target_raw,
                 is_local_config=is_local_config,
                 payload=payload,
-                root_sentinel=state == "deny-root",
+                root_sentinel=state if state.startswith("deny-root") else "",
             ),
         }
     }

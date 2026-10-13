@@ -1594,7 +1594,18 @@ from coordinator_core.locked_write import LockTimeout, held_lock  # noqa: E402
 # contract was designed for (a single-write-primitive self-report, per the
 # module contract above) and should be revisited rather than raising the
 # cap. Excess entries are dropped (log-and-truncate), never silently.
+#
+# Invariant: 16 is the bound of a batch that declares none. A larger batch is
+# declared by its caller through `_SCOPE_TOUCH_MAX_PATHS_KEY`, never granted by
+# raising this number.
 _MAX_DECLARED_TOUCH_PATHS = 16
+
+#: Reserved result key a caller sets to the bound of its own multi-file batch;
+#: popped by `_record_self_reported_touches` and never on the wire.
+_SCOPE_TOUCH_MAX_PATHS_KEY = "_scope_touch_max_paths"
+
+#: Highest bound a batch may declare.
+_DECLARED_TOUCH_BOUND_CEILING = 48
 
 #: Sub-second, bounded acquire timeout for the ONE `touched.txt` batch lock
 #: `_record_self_reported_touches` takes per dispatch (C2,
@@ -1710,10 +1721,13 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
     Returns `result` unchanged (same object, mutated in place when the key
     was present) — never raises; never fails the op.
     """
-    if not isinstance(result, dict) or _SCOPE_TOUCH_PATHS_KEY not in result:
+    if not isinstance(result, dict):
         return result
 
     declared = result.pop(_SCOPE_TOUCH_PATHS_KEY, None)
+    declared_bound = result.pop(_SCOPE_TOUCH_MAX_PATHS_KEY, None)
+    if declared is None:
+        return result
     try:
         if not isinstance(declared, list):
             return result
@@ -1745,15 +1759,30 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         if not sid:
             return result
 
-        if len(declared) > _MAX_DECLARED_TOUCH_PATHS:
+        bound = _MAX_DECLARED_TOUCH_PATHS
+        if declared_bound is not None:
+            if (
+                isinstance(declared_bound, int)
+                and not isinstance(declared_bound, bool)
+                and 1 <= declared_bound <= _DECLARED_TOUCH_BOUND_CEILING
+            ):
+                bound = declared_bound
+            else:
+                _log().warning(
+                    "coordinator_core.ipc: session %r declared an unusable "
+                    "touch bound %r (need an int from 1 to %d) — the default "
+                    "cap of %d applies",
+                    sid, declared_bound, _DECLARED_TOUCH_BOUND_CEILING, bound,
+                )
+
+        if len(declared) > bound:
             _log().warning(
                 "coordinator_core.ipc: session %r declared %d touch paths, "
                 "exceeding the cap of %d — recording only the first %d, "
                 "dropping the remaining %d",
-                sid, len(declared), _MAX_DECLARED_TOUCH_PATHS,
-                _MAX_DECLARED_TOUCH_PATHS, len(declared) - _MAX_DECLARED_TOUCH_PATHS,
+                sid, len(declared), bound, bound, len(declared) - bound,
             )
-            declared = declared[:_MAX_DECLARED_TOUCH_PATHS]
+            declared = declared[:bound]
 
         caller_repo_root: Optional[str] = None
         if sid_cwd:

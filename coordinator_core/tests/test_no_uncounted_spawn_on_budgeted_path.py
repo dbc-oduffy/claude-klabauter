@@ -312,6 +312,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/op.py",
         ("_dispatch_emit",),
     ),
+    "canvas.harvest": (
+        "coordinator_core/ops/canvas_harvest.py",
+        ("_handler",),
+    ),
+    "workflow.revise": (
+        "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
+        ("_handler",),
+    ),
     "hooks.postuse_advisory_dispatch": (
         "coordinator_core/hooks/postuse_advisory_dispatch.py",
         ("_handler",),
@@ -6965,8 +6973,21 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "workflow.fire_status": 1,
     # Newly live ops measured at their reachable-site counts when first pinned.
     "ci.run_commenting_sweep": 1,
+    # close.background's legs run lazy imports and a detached launch the static walk does not
+    # resolve, so 0 is a reachability floor, not a spawn claim; its own 500ms job gate is the
+    # runtime bound.
+    "close.background": 0,
+    # The one capped `git log` in review_trail.unreceipted_range.unreceipted_ancestors.
+    "close.review": 1,
+    # `git status` (_worktree_paths) and one `git log <oldest>..HEAD` (_committed_since): real,
+    # constant at 2 however many records exist, skipped when no record carries a usable sha.
+    "testing.suite_runs": 2,
     "deliverable.cascade_terminal": 1,
-    "dispatch.terminal_commit": 5,
+    # Six reachable sites: five git/plumbing sites (archive_stamp._run_git, git_native._invoke and
+    # _hash_object_stdin_bytes, git/run.py::run_git, commit_signing) plus the one detached launch of
+    # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
+    # on it. The launch is a single site; a second one is a budget increase.
+    "dispatch.terminal_commit": 6,
     "docindex.emit": 1,
     "fleet.delete_superseded_decisions": 8,
     "fleet.prune_closed_bugs": 3,
