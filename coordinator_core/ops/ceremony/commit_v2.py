@@ -56,6 +56,7 @@ Negative-spec (hard-won, restated for this row):
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Optional, cast
@@ -1114,6 +1115,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         closes=closes,
         reverts_sha=reverts_sha,
     )
+
+    # Mark the repo for the next push sweep (DR-329: mark only, never push).
+    # `sys.modules` gate: a process that never loaded the cadence has no
+    # sweeper, and importing it here would charge a cold commit its whole
+    # import graph; the sweep's reflog-recency ordering covers that case.
+    cadence = sys.modules.get("coordinator_core.warm.push_cadence")
+    if cadence is not None:
+        cadence.note_commit(worktree_root)
 
     landed = commit_meta(resolve_git_common_dir(worktree_root), outcome.sha)
     return {

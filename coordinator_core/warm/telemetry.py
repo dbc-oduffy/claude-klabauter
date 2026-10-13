@@ -462,10 +462,14 @@ def record_sweep(
     failed: list,
     *,
     not_reached: Optional[list] = None,
+    backoff: Optional[dict] = None,
     engine_root: Optional[Path] = None,
 ) -> None:
     """Append one row naming the repos a sweep pushed, skipped and failed,
     and those its ceiling cut before it reached them (`not_reached`).
+    `backoff` maps each repo still inside a failure backoff to its consecutive
+    failed-sweep count (those repos also appear in `skipped`); the key is
+    omitted when empty.
 
     Best-effort: never raises, matching every other recorder here.
     """
@@ -477,6 +481,8 @@ def record_sweep(
         "failed": [str(p) for p in failed],
         "not_reached": [str(p) for p in (not_reached or [])],
     }
+    if backoff:
+        record["backoff"] = {str(p): n for p, n in backoff.items()}
     path = push_sweep_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

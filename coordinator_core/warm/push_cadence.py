@@ -159,6 +159,7 @@ __all__ = [
     "registry_sweep_repos",
     "note_foreign_delivery",
     "foreign_deliveries",
+    "note_commit",
     "reset_cadence_for_test",
 ]
 
@@ -234,6 +235,20 @@ _foreign_deliveries: "dict[tuple[Path, str], int]" = {}
 #: forever; every rejection is still logged for the push-failure detector.
 FOREIGN_PUSH_MAX_REJECTS = 3
 
+#: Repos `note_commit` flagged since their last sweep visit: a commit landed
+#: here, so the next sweep orders them ahead of every other repo. Marks only --
+#: the push still happens on the cadence (DR-329). Guarded by `_cadence_lock`.
+_due_repos: "set[Path]" = set()
+
+#: Per-repo push-failure backoff: `[consecutive_failed_sweeps, sweeps_left_to_skip]`.
+#: Without it a repo that fails every tick sorts first (it is always ahead and
+#: fresh) and spends the ceiling every tick. Guarded by `_cadence_lock`.
+_backoff: "dict[Path, list[int]]" = {}
+
+#: A repo that failed N consecutive sweeps is skipped for `2**(N-1)` sweeps
+#: (1, 2, 4, 8), capped here -- 8 ticks is ~80 minutes at the 600s cadence.
+BACKOFF_MAX_SKIP_SWEEPS = 8
+
 _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
 #: Headroom over the longest per-repo ladder deadline any repo can resolve to
 #: (`PUSH_CEILING_MAX_SECS`) -- a live long push is never mistaken for stale.
@@ -250,6 +265,8 @@ def reset_cadence_for_test() -> None:
         _last_sweep_monotonic = None
         _resume_repo = None
         _foreign_deliveries.clear()
+        _due_repos.clear()
+        _backoff.clear()
 
 
 def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
@@ -444,7 +461,7 @@ def _no_upstream_and_no_new_commits(root: Path, branch: str, sha: str) -> bool:
                 try:
                     if ref.read_text(encoding="utf-8").strip() == sha:
                         return True
-                except OSError:
+                except (OSError, ValueError):  # a non-ref file under refs/remotes
                     continue
     except OSError:
         pass
@@ -513,6 +530,68 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
         return "pushed" if "push" in outcome.acted else "skipped"
     finally:
         _release_sweep_lock(root)
+
+
+def note_commit(repo_root: Union[str, Path]) -> None:
+    """Flag `repo_root` as holding a fresh commit: the next sweep visits it
+    first and a failure backoff on it is lifted for that visit. Mark only --
+    never pushes (DR-329). Idempotent; cleared when the sweep visits the repo.
+    """
+    with _cadence_lock:
+        _due_repos.add(Path(repo_root))
+        entry = _backoff.get(Path(repo_root))
+        if entry is not None:
+            entry[1] = 0
+
+
+def _ref_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _sweep_priority(root: Path) -> tuple:
+    """Sort key putting repos with work first, newest commit first. Zero spawns:
+    HEAD and upstream shas are file reads, recency is the mtime of the branch
+    reflog (appended on every commit), falling back to the loose ref's mtime.
+    """
+    with _cadence_lock:
+        due = root in _due_repos
+    branch = head_branch(root)
+    sha = head_sha(root) if branch is not None else None
+    ahead = False
+    when = 0.0
+    if branch is not None and sha is not None:
+        ahead = _upstream_sha(root, branch) != sha and not _no_upstream_and_no_new_commits(
+            root, branch, sha
+        )
+        if ahead or due:
+            common_dir = resolve_git_common_dir(root)
+            when = _ref_mtime(common_dir / "logs" / "refs" / "heads" / branch) or _ref_mtime(
+                common_dir / "refs" / "heads" / branch
+            )
+    return (0 if due else 1, 0 if ahead else 1, -when)
+
+
+def _backed_off_now(root: Path) -> bool:
+    """True (consuming one skip) while `root` is inside its failure backoff."""
+    with _cadence_lock:
+        entry = _backoff.get(root)
+        if entry is None or entry[1] <= 0:
+            return False
+        entry[1] -= 1
+        return True
+
+
+def _note_sweep_result(root: Path, result: Optional[str]) -> None:
+    with _cadence_lock:
+        if result == "failed":
+            entry = _backoff.setdefault(root, [0, 0])
+            entry[0] += 1
+            entry[1] = min(2 ** (entry[0] - 1), BACKOFF_MAX_SKIP_SWEEPS)
+        else:
+            _backoff.pop(root, None)
 
 
 def note_foreign_delivery(repo_root: Union[str, Path], branch: str) -> None:
@@ -696,12 +775,18 @@ def sweep_repos(
     if resume in ordered:
         offset = ordered.index(resume)
         ordered = ordered[offset:] + ordered[:offset]
+    ordered.sort(key=_sweep_priority)
     cut: Optional[Path] = None
     pushed: list = []
     skipped: list = []
     failed: list = []
+    backed_off: list = []
     reached = len(ordered)
     for index, root in enumerate(ordered):
+        if _backed_off_now(root):
+            skipped.append(root)
+            backed_off.append(root)
+            continue
         if _nothing_outstanding(root):
             # Admission reserves a whole push ceiling; a clean repo must not
             # spend it, or the tail behind a few clean repos is never reached.
@@ -723,6 +808,9 @@ def sweep_repos(
             reached = index
             break
         result = _sweep_one(root)
+        with _cadence_lock:
+            _due_repos.discard(root)
+        _note_sweep_result(root, result)
         {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
         if extended:
             cut = ordered[index + 1] if index + 1 < len(ordered) else None
@@ -731,7 +819,11 @@ def sweep_repos(
     with _cadence_lock:
         _resume_repo = cut
     _sweep_foreign(deadline=deadline, clock=clock)
-    telemetry.record_sweep(pushed, skipped, failed, not_reached=ordered[reached:])
+    with _cadence_lock:
+        streaks = {root: _backoff[root][0] for root in backed_off if root in _backoff}
+    telemetry.record_sweep(
+        pushed, skipped, failed, not_reached=ordered[reached:], backoff=streaks
+    )
 
 
 def registry_sweep_repos(served: Iterable[Union[str, Path]]) -> list:

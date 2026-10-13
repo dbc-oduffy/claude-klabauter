@@ -7,6 +7,7 @@ directory are the only things faked.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -179,6 +180,9 @@ def test_each_sweep_appends_one_row_naming_pushed_and_failed(tmp_path, monkeypat
 def test_ceiling_cut_repos_are_not_reached(tmp_path, monkeypatch):
     first = _repo_ahead(tmp_path, "first")
     second = _repo_ahead(tmp_path, "second")
+    # The sweep visits the most recent commit first; pin that so `first` is it.
+    for repo, stamp in ((first, 1_700_000_100), (second, 1_700_000_000)):
+        os.utime(repo / ".git" / "logs" / "refs" / "heads" / "work" / "day", (stamp, stamp))
     ticks = iter([0.0, 0.0, 100.0])
     clock = lambda: next(ticks, 100.0)  # noqa: E731
 

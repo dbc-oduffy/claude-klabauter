@@ -31,3 +31,15 @@ def stamped_engine_env(monkeypatch) -> str:
         )
     monkeypatch.setenv(_ENGINE_ROOT_VAR, root)
     return root
+
+
+@pytest.fixture(autouse=True)
+def _stub_source_preflight(request, monkeypatch):
+    """The round's source-published gate runs real git and a real push; the
+    round tests fake the source dir. A module sets REAL_SOURCE_PREFLIGHT = True
+    to exercise the real gate."""
+    if getattr(request.module, "REAL_SOURCE_PREFLIGHT", False):
+        return
+    from coordinator_core.percolate import source_preflight
+
+    monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir: None)
