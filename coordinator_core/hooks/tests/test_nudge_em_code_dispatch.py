@@ -250,20 +250,20 @@ def test_sized_deny_even_xs(monkeypatch) -> None:
     out = op(_payload())
     assert _is_deny(out)
     assert "route through the warp run" in _reason(out)
-    assert "emit-dispatch-workflow --sizing" in _reason(out)
+    assert 'args: {"sizing": ' in _reason(out)
 
 
 def test_plan_routed_sizing_without_a_plan_names_the_one_fire(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, True))
     reason = _reason(op(_payload()))
-    assert "routed to a plan" in reason and "emit-dispatch-workflow --sizing" in reason
+    assert "routed to a plan" in reason and 'args: {"sizing": ' in reason
     assert "coordinator:executor" not in reason
 
 
 def test_unsized_deny_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
     reason = _reason(op(_payload()))
-    assert "emit-dispatch-workflow --ask" in reason and "express-lane" not in reason
+    assert 'name: "coordinator:engine-ask", args: {"ask": ' in reason and "express-lane" not in reason
 
 
 @pytest.mark.parametrize("route,plans,pending", [

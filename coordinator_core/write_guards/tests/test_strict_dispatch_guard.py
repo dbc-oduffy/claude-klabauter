@@ -113,7 +113,7 @@ def test_no_sizing_denies(monkeypatch, repo_root):
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "emit-dispatch-workflow --ask" in reason
+    assert 'args: {"ask": ' in reason
 
 
 def test_sized_xs_allows(monkeypatch, repo_root):
@@ -134,7 +134,7 @@ def test_sized_s_or_larger_denies(monkeypatch, repo_root, tshirt):
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "emit-dispatch-workflow --sizing" in reason
+    assert 'args: {"sizing": ' in reason
 
 
 def test_unparseable_tshirt_denies(monkeypatch, repo_root):

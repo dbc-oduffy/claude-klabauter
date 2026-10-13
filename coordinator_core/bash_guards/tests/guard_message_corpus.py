@@ -3646,6 +3646,7 @@ from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_una
 from coordinator_core.hooks import postuse_advisory_dispatch as _hook_postuse_advisory_dispatch
 from coordinator_core.hooks import example_retrieval_repo_detect as _hook_example_retrieval_repo_detect
 from coordinator_core.hooks import flag_em_poll_in_flight as _hook_flag_em_poll_in_flight
+from coordinator_core.hooks import submit_engine_ask as _hook_submit_engine_ask
 from coordinator_core.hooks import guard_terminal_review as _hook_guard_terminal_review
 from coordinator_core.hooks import preuse_search_dispatch as _hook_preuse_search_dispatch
 from coordinator_core.hooks import receiver_state_sensor as _hook_receiver_state_sensor
@@ -4080,6 +4081,74 @@ def _fire_flag_em_poll_in_flight() -> Optional[Dict[str, Any]]:
 
 def _fire_flag_em_poll_in_flight_control() -> Optional[Dict[str, Any]]:
     return _fire_flag_em_poll_in_flight_with(["Bash"], run_in_flight=True)
+
+
+def _fire_submit_engine_ask_with(
+    kind: str, run_live: bool = False, in_repo: bool = True, subagent: bool = False, args: Any = None
+) -> Optional[Dict[str, Any]]:
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sea-", dir=_neutral_scratch_parent()) as scratch:
+            root = Path(scratch) / "repo"
+            (root / ".git" / "objects").mkdir(parents=True)
+            (root / ".git" / "refs").mkdir()
+            (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            launch_dir = Path(scratch) / "launch"
+            launch_dir.mkdir()
+            mp.setattr(warp_live, "_launch_dirs", lambda tmpdir: [str(launch_dir)])
+            session_id = "sess-sea"
+            sizing_rel = "state/sizings/a.yaml"
+            if run_live:
+                run_token.mint(
+                    root, "ask-20261013T000000-abcdef", str(root / "run.workflow.mjs"),
+                    session_id=session_id, sizing_rel=sizing_rel,
+                )
+            cwd = str(root) if in_repo else str(Path(scratch) / "outside")
+            if not in_repo:
+                (Path(scratch) / "outside").mkdir()
+            if kind == "scout":
+                payload = {
+                    "tool_name": "Agent",
+                    "tool_input": {"prompt": "size", "subagent_type": "coordinator:sizing-scout"},
+                    "session_id": session_id,
+                    "cwd": cwd,
+                }
+                return _to_envelope_or_none(_hook_submit_engine_ask.sizing_scout_deny(payload))
+            payload = {
+                "tool_name": "Workflow",
+                "tool_input": {"name": "coordinator:engine-ask", "args": args if args is not None else {"sizing": sizing_rel}},
+                "session_id": session_id,
+                "cwd": cwd,
+            }
+            if subagent:
+                payload["agent_id"] = "a1"
+            return _to_envelope_or_none(_hook_submit_engine_ask.evaluate(payload))
+
+
+def _fire_submit_engine_ask_scout_live() -> Optional[Dict[str, Any]]:
+    return _fire_submit_engine_ask_with("scout", run_live=True)
+
+
+def _fire_submit_engine_ask_scout_idle() -> Optional[Dict[str, Any]]:
+    return _fire_submit_engine_ask_with("scout", run_live=False)
+
+
+def _fire_submit_engine_ask_sizing_in_flight() -> Optional[Dict[str, Any]]:
+    return _fire_submit_engine_ask_with("submit", run_live=True)
+
+
+def _fire_submit_engine_ask_neither() -> Optional[Dict[str, Any]]:
+    return _fire_submit_engine_ask_with("submit", args={})
+
+
+def _fire_submit_engine_ask_non_repo() -> Optional[Dict[str, Any]]:
+    return _fire_submit_engine_ask_with("submit", in_repo=False)
+
+
+def _fire_submit_engine_ask_subagent() -> Optional[Dict[str, Any]]:
+    return _fire_submit_engine_ask_with("submit", subagent=True)
 
 
 def _fire_guard_terminal_review_with(commit_path: str) -> Optional[Dict[str, Any]]:
@@ -5806,6 +5875,12 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow("flag_em_poll_in_flight", "fire-second-poll", True, _fire_flag_em_poll_in_flight),
     HookRow("flag_em_poll_in_flight", "control-intervening-tool", False, _fire_flag_em_poll_in_flight_control),
+    HookRow("submit_engine_ask", "fire-scout-while-run-live", True, _fire_submit_engine_ask_scout_live),
+    HookRow("submit_engine_ask", "fire-sizing-already-working", True, _fire_submit_engine_ask_sizing_in_flight),
+    HookRow("submit_engine_ask", "fire-neither-ask-nor-sizing", True, _fire_submit_engine_ask_neither),
+    HookRow("submit_engine_ask", "fire-non-repo", True, _fire_submit_engine_ask_non_repo),
+    HookRow("submit_engine_ask", "fire-subagent-submits", True, _fire_submit_engine_ask_subagent),
+    HookRow("submit_engine_ask", "control-scout-no-live-run", False, _fire_submit_engine_ask_scout_idle),
     HookRow("guard_terminal_review", "fire-unreviewed-code-commit", True, _fire_guard_terminal_review),
     HookRow("guard_terminal_review", "control-doc-only-commit", False, _fire_guard_terminal_review_control),
     HookRow("preuse_search_dispatch", "fire-first-grep", True, _fire_preuse_search_dispatch),

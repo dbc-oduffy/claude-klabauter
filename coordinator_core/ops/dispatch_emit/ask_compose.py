@@ -149,6 +149,19 @@ _GATE_SCHEMA = _obj(
         "resume_plan": {"type": ["string", "null"]},
     },
 )
+_RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
+
+
+def _ruling_schema(ruling_schema: dict) -> dict:
+    """A ruling agent's return: its ruling plus the gate reply of its own record call."""
+    return {
+        **ruling_schema,
+        "properties": {
+            **_GATE_SCHEMA["properties"],
+            **ruling_schema["properties"],
+            "recorded": _RECORDED_SCHEMA,
+        },
+    }
 _SCOUT_SCHEMA = _obj(
     ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"],
     {
@@ -180,7 +193,6 @@ _ACCEPT_SCHEMA = _obj(
         "statement": _STR,
     },
 )
-_ACCEPT_RESULT_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
 _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
@@ -731,23 +743,41 @@ def compose_ask_script(
         b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")
 
     b.append("  phase('gate');")
-    gate_payload = "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes" + (
-        ", baton: " + json.dumps(baton["path"]) if baton else ""
-    ) + " })"
+    def _gate_payload(record_js: str = "") -> str:
+        return (
+            "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes"
+            + (", baton: " + json.dumps(baton["path"]) if baton else "")
+            + (f", record: {record_js}" if record_js else "")
+            + " })"
+        )
+
     gate_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_GATE} '",
-        gate_payload,
-        "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan. Also read the sizing at ",
+        _gate_payload(),
+        "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan. "
+        "Also read the sizing at ",
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
     )
     gate_call = _agent(
-        gate_prompt, label="gate", phase="gate", agent_type=agent_type, schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT
+        gate_prompt, label="gate", phase="gate", agent_type=agent_type,
+        schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT,
     )
     b.append(
         f"  let _gate = {'_halted ? { arm: null, halt: null } : ' if not sizing_rel else ''}await {gate_call};"
     )
+
+    def _record_clause(record_js: str, fields: str) -> list[str]:
+        """The ruling agent's own record call; the engine refuses a gated ruling before it writes."""
+        return [
+            " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
+            + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
+            "recorded and (when present) resume_plan, beside your verdict, pmOnly and ruling. "
+            f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
+            _gate_payload(record_js),
+            "'` That command is the only way you write the sizing: never edit it by hand.",
+        ]
 
     if accept_pending or xl_possible:
         apm_prompt = _cat(
@@ -763,25 +793,15 @@ def compose_ask_script(
             "pmOnlyGround and pmOnly true ONLY when the matter is important AND urgent AND has no clear "
             "right answer, or needs such an external or irreversible action. Being unsure is not a "
             "ground. You stage and commit nothing." + _KEEP_THE_ASK.format(run_dir=run_dir) + ledger_clause,
+            *_record_clause(
+                "{ kind: 'exit_criterion', ruling_ref: _runId }",
+                "`apm_ruling` (your ruling, verbatim) and, only when you amended or authored a "
+                "statement, `statement` (that statement)",
+            ),
         )
         apm_call = _agent(
             apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ACCEPT_SCHEMA, agent_model="sonnet"
-        )
-        accept_payload = (
-            "js:JSON.stringify({ sizing: _sizingRel, apm_ruling: _apm.ruling, ruling_ref: _runId"
-            + ", ...(_apm.statement ? { statement: _apm.statement } : {}) })"
-        )
-        run_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            f"Run `{_INVOKE} sizing.accept_exit_criterion '",
-            accept_payload,
-            "'` and return ok true when it succeeds. If it replies `{\"error\": ...}` return ok false "
-            "and that message as error.",
-        )
-        run_call = _agent(
-            run_prompt, label="accept-record", phase="accept", agent_type=agent_type,
-            schema=_ACCEPT_RESULT_SCHEMA, effort=_MECHANICAL_EFFORT,
+            schema=_ruling_schema(_ACCEPT_SCHEMA), agent_model="sonnet"
         )
         xl_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -795,22 +815,17 @@ def compose_ask_script(
             "pmOnly true and pmOnlyGround ONLY when the job-to-be-done itself is unstated, or the work "
             "needs a merge, publish, push to main or cross-repo commit. Being unsure is not a ground. "
             "You stage and commit nothing." + _KEEP_THE_ASK.format(run_dir=run_dir) + ledger_clause,
+            *_record_clause(
+                "{ kind: 'xl_exit', ruling_ref: _runId }",
+                "`xl_exit` (your pick) and `apm_ruling` (your ruling, verbatim)",
+            ),
         )
         xl_call = _agent(
             xl_prompt, label="xl-exit", phase="xl-exit", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_XL_SCHEMA, agent_model=_XL_EXIT_MODEL, effort=_XL_EXIT_EFFORT,
+            schema=_ruling_schema(_XL_SCHEMA), agent_model=_XL_EXIT_MODEL, effort=_XL_EXIT_EFFORT,
         )
-        xl_record_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            f"Run `{_INVOKE} sizing.record_xl_exit '",
-            "js:JSON.stringify({ sizing: _sizingRel, xl_exit: _xl.pick, apm_ruling: _xl.ruling, ruling_ref: _runId })",
-            "'` and return ok true when its reply has exit_code 0. Otherwise return ok false and its "
-            "error as error.",
-        )
-        xl_record_call = _agent(
-            xl_record_prompt, label="xl-exit-record", phase="xl-exit", agent_type=agent_type,
-            schema=_ACCEPT_RESULT_SCHEMA, effort=_MECHANICAL_EFFORT,
-        )
+        # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
@@ -822,13 +837,10 @@ def compose_ask_script(
             "    let _apm = null;\n"
             f"    try {{ _apm = await {apm_call}; }} catch (_e) {{ _apm = null; }}\n"
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
-            "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling) {\n"
-            "      let _recorded = null;\n"
-            f"      try {{ _recorded = await {run_call}; }} catch (_e) {{ _recorded = null; }}\n"
-            "      if (_recorded && _recorded.ok === true) {\n"
-            f"        _gate = await {gate_call};\n"
-            "        _progressed = true;\n"
-            "      }\n"
+            "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
+            "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
+            f"      {take_gate % (('_apm',) * 4)}\n"
+            "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
             "      _gate = { ..._gate, halt: { ..._gate.halt, apm: { verdict: _apm.verdict, "
@@ -840,13 +852,10 @@ def compose_ask_script(
             f"    try {{ _xl = await {xl_call}; }} catch (_e) {{ _xl = null; }}\n"
             f"    const _xlGated = {irreversible}.test(_xl?.ruling ?? '');\n"
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
-            "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick)) {\n"
-            "      let _xr = null;\n"
-            f"      try {{ _xr = await {xl_record_call}; }} catch (_e) {{ _xr = null; }}\n"
-            "      if (_xr && _xr.ok === true) {\n"
-            f"        _gate = await {gate_call};\n"
-            "        _progressed = true;\n"
-            "      }\n"
+            "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick) "
+            "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
+            f"      {take_gate % (('_xl',) * 4)}\n"
+            "      _progressed = true;\n"
             "    }\n"
             f"    if (!_progressed && _xl) {{\n"
             "      _gate = { ..._gate, halt: { ..._gate.halt, apm: { verdict: _xl.verdict, pick: _xl.pick ?? null, "
@@ -971,7 +980,8 @@ def compose_ask_script(
         else:
             b.append(
                 f"    _halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to the roadmap arm, "
-                "which this script does not embed: re-fire emit-dispatch-workflow --ask --sizing ' + _sizingRel, "
+                "which this script does not embed: resubmit Workflow({name: \"coordinator:engine-ask\", "
+                "args: {sizing: \"' + _sizingRel + '\"}})', "
                 "sizing: _sizingRel, run_id: _runId };"
             )
         b.append("  }")

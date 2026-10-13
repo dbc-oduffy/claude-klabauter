@@ -67,7 +67,7 @@ def test_first_pytest_allowed_second_denied(repo) -> None:
     out = g.check(_bash(repo, "pytest b.py -q"))
     assert _denied(out)
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "emit-dispatch-workflow --sizing" in reason
+    assert '"coordinator:engine-ask", args: {"sizing": ' in reason
     assert "No self-escape" in reason and "honoured once." in reason
 
 

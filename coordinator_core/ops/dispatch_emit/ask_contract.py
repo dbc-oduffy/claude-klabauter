@@ -50,9 +50,13 @@ class GateVerdict:
     acceptance: dict | None = None
     # Plan path of an accepted, unfired sizing: the script stages it instead of authoring one.
     resume_plan: str | None = None
+    # Set only when the request carried `record`: {"ok": bool, "error"?: str}, the ruling's write.
+    recorded: dict | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
+        if self.recorded is not None:
+            out["recorded"] = self.recorded
         if self.acceptance is not None:
             out["acceptance"] = self.acceptance
         if self.resume_plan is not None:

@@ -1019,6 +1019,15 @@ def _refuse_from_sizing(msg: str) -> int:
     return EXIT_REFUSED
 
 
+def _live_run_for(repo_root: Path, sizing_rel: str) -> "str | None":
+    """The warp run already working this sizing, if one is live (`coordinator_core.warp_live`)."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_core.session.core import resolve_session_id
+    from coordinator_core.warp_live import live_run_for_sizing
+
+    return live_run_for_sizing(repo_root, sizing_rel, session_id=resolve_session_id() or None)
+
+
 _MINT_TSHIRTS = frozenset({"S", "M", "L", "XL", "XXL"})
 _FIRE_ROUTES = frozenset({"plan", "spec-dispatch"})
 
@@ -1244,6 +1253,12 @@ def _emit_single_from_sizing(
     sizing_path = repo_root / sizing_rel
     if not sizing_path.is_file():
         return _refuse_from_sizing(f"no sizing object at {sizing_path}")
+    live_run = _live_run_for(repo_root, sizing_rel)
+    if live_run:
+        return _refuse_from_sizing(
+            f"run {live_run} is already working {sizing_rel}; its completion is the one wake. "
+            "Nothing to fire."
+        )
     try:
         sizing = yaml.safe_load(sizing_path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:

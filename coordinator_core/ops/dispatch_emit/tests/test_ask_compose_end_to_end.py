@@ -27,10 +27,18 @@ def test_s_plan_author_is_opus_pinned_type_at_low_effort():
     assert "model: 'opus'" in opts and "effort: 'low'" in opts
 
 
-@pytest.mark.parametrize("label", ["gate", "stage", "accept-record"])
+@pytest.mark.parametrize("label", ["gate", "stage"])
 def test_mechanical_stages_run_sonnet_at_low_effort(label):
     opts = _agent_opts(_compose(), label)
     assert "model: 'sonnet'" in opts and "effort: 'low'" in opts
+
+
+def test_no_record_agent_is_composed():
+    script = _compose(roadmap_blitz_text=_RB_TEXT)
+    for text in ("accept-record", "xl-exit-record", "sizing.accept_exit_criterion", "sizing.record_xl_exit"):
+        assert text not in script
+    labels = re.findall(r"label: '([^']+)'", script)
+    assert "accept-record" not in labels and "xl-exit-record" not in labels
 
 
 def test_size_stays_on_the_cheap_executor():
@@ -68,7 +76,15 @@ def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
     assert "_gate.halt.apm_xl_exit === true" in loop
     opts = _agent_opts(script, "xl-exit")
     assert "agentType: 'coordinator:apm'" in opts and "model: 'opus'" in opts and "effort: 'low'" in opts
-    assert "sizing.record_xl_exit" in script and "apm_ruling: _xl.ruling" in script
+    xl = loop[loop.index("phase('xl-exit')") :]
+    assert "record: { kind: 'xl_exit', ruling_ref: _runId }" in xl
+    assert "`xl_exit` (your pick) and `apm_ruling` (your ruling, verbatim)" in xl
+    guard = xl[xl.index("if (_xl && _xl.verdict === 'ruled'") :]
+    guard = guard[: guard.index("{\n")]
+    for clause in ("_xl.pmOnly !== true", "!_xlGated", "_xl.recorded.ok === true"):
+        assert clause in guard
+    assert "label: 'gate'" not in loop and "_gate = await" not in loop
+    assert loop[: loop.index("if (!_progressed) break;")].count("await agent(") == 2
     assert "if (!_progressed) break;" in loop
 
 

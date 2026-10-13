@@ -35,8 +35,11 @@ def test_raw_ask_accept_phase_follows_gate():
     assert script.index("phase('gate')") < script.index("phase('accept')") < script.index("phase('plan')")
     section = _accept_section(script)
     assert "agentType: 'coordinator:apm'" in section
-    assert "sizing.accept_exit_criterion" in section and "apm_ruling" in section
-    assert "ruling_ref: _runId" in section
+    assert "record: { kind: 'exit_criterion', ruling_ref: _runId }" in section
+    assert "only when you amended or authored a statement, `statement`" in section
+    assert "sizing.accept_exit_criterion" not in section and "accept-record" not in section
+    assert "label: 'gate'" not in section and "_gate = await" not in section
+    assert section.count("await agent(") == 2 and "await agent(" in section.split("phase('xl-exit')")[0]
     assert "run_id" not in section
     assert "pm_quote" not in section
     assert "'accept'" in script.split("phases: [", 1)[1].split("]", 1)[0]
@@ -45,7 +48,13 @@ def test_raw_ask_accept_phase_follows_gate():
 def test_pm_only_or_failed_record_leaves_touchpoint_halt():
     script = _compose()
     section = _accept_section(script)
-    assert "_apm.verdict === 'ruled'" in section and "_recorded.ok === true" in section
+    guard = section[section.index("if (_apm && _apm.verdict === 'ruled'") :]
+    guard = guard[: guard.index("{\n")]
+    for clause in ("_apm.pmOnly !== true", "!_apmGated", "_apm.recorded.ok === true"):
+        assert clause in guard
+    assert section.split("phase('xl-exit')")[0].count("_progressed = true") == 1
+    assert "run nothing" in section
+    assert "You stage and commit nothing." in section
     assert "_halted = { halted: (_gate.halt && _gate.halt.kind)" in script
     assert "halt: { ..._gate.halt, apm:" in section
 

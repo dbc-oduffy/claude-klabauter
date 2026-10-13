@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -45,7 +46,10 @@ _PARAMS = (
     Field("sizing_path", "nonempty_str", required=True),
     Field("writes", "str_list"),
     Field("baton", "nonempty_str"),
+    Field("record", "dict"),
 )
+_RECORD_KINDS = ("exit_criterion", "xl_exit")
+_XL_PICKS = ("roadmap", "accept_multi_session")
 _DOC_NEW = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
@@ -182,19 +186,63 @@ def gate(
     )
 
 
+def _record_refusal(record: dict) -> Optional[str]:
+    """Why `record` is malformed, else None; checks shape only, the writers own the semantics."""
+    kind = record.get("kind")
+    if kind not in _RECORD_KINDS:
+        return f"dispatch.ask_gate params.record.kind must be one of {list(_RECORD_KINDS)}"
+    for name in ("apm_ruling", "ruling_ref"):
+        if not isinstance(record.get(name), str) or not record[name].strip():
+            return f"dispatch.ask_gate params.record.{name} must be a non-empty string"
+    statement = record.get("statement")
+    if statement is not None and (not isinstance(statement, str) or not statement.strip()):
+        return "dispatch.ask_gate params.record.statement must be a non-empty string"
+    if kind == "xl_exit" and record.get("xl_exit") not in _XL_PICKS:
+        return f"dispatch.ask_gate params.record.xl_exit must be one of {list(_XL_PICKS)}"
+    return None
+
+
+def _write_record(repo_root: Path, sizing_rel: str, record: dict) -> dict:
+    """Write the ruling through its kind's single writer; `{"ok": bool, "error"?: str}`."""
+    # Writer modules import lazily: they sit outside dispatch_emit and are needed only under `record`.
+    base = {"sizing": sizing_rel, "apm_ruling": record["apm_ruling"], "ruling_ref": record["ruling_ref"]}
+    if record["kind"] == "exit_criterion":
+        from coordinator_core.ops.sizing_accept_exit_criterion import _handler as writer
+
+        if record.get("statement"):
+            base["statement"] = record["statement"]
+    else:
+        from coordinator_core.ops.sizing_record_xl_exit import _handler as writer
+
+        base["xl_exit"] = record["xl_exit"]
+    reply = writer(base, repo_root)
+    if reply.get("exit_code") == 0:
+        return {"ok": True}
+    return {"ok": False, "error": str(reply.get("error") or reply.get("message") or "record refused")}
+
+
 @register_op("dispatch.ask_gate")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]), `baton` (str).
+    """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]), `baton` (str),
+    `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?).
 
-    Replies `GateVerdict.to_json()`; a malformed request replies `{"error": str}`.
+    With `record`, writes that ruling through its single writer, then gates the sizing as it stands and
+    adds `recorded` {ok, error?} to the reply; a refused write still returns the verdict. Replies
+    `GateVerdict.to_json()`; a malformed request replies `{"error": str}` and writes nothing.
     """
     if repo_root is None:
         return {"error": "dispatch.ask_gate requires repo_root"}
     refusal = validate_params("dispatch.ask_gate", params, _PARAMS)
     if refusal is not None:
         return refusal
+    record = params.get("record")
+    if record is not None:
+        refusal = _record_refusal(record)
+        if refusal is not None:
+            return {"error": refusal}
     sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
-    return gate(
-        main_worktree_root(Path(repo_root)), sizing_rel, writes=writes, baton=params.get("baton")
-    ).to_json()
+    root = main_worktree_root(Path(repo_root))
+    recorded = _write_record(root, sizing_rel, record) if record is not None else None
+    verdict = gate(root, sizing_rel, writes=writes, baton=params.get("baton"))
+    return (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
