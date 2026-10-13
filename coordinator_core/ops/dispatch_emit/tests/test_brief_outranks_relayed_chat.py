@@ -99,6 +99,20 @@ def test_bounded_direction_is_still_refused_when_wrong_on_the_merits():
     assert "wrong on the merits is still refused on the merits" in _BRIEF_PRECEDENCE_CLAUSE
 
 
+def test_both_row_heads_carry_the_live_pm_direction_clause_after_the_precedence_clause():
+    from coordinator_core.ops.dispatch_emit.emit import (
+        _LIVE_PM_DIRECTION_CLAUSE,
+        _ROW_PROMPT_HEAD,
+        _VERIFICATION_ROW_PROMPT_HEAD,
+    )
+
+    joined = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}"
+    assert _ROW_PROMPT_HEAD.startswith(joined)
+    assert _VERIFICATION_ROW_PROMPT_HEAD.startswith(joined)
+    assert "## PM direction" in _LIVE_PM_DIRECTION_CLAUSE
+    assert _row_prompt(_row()).startswith(joined)
+
+
 def test_an_unanswered_brief_is_incomplete_and_named():
     block = _run_row_helper_js()
     assert "_unansweredBriefs.push(id)" in block

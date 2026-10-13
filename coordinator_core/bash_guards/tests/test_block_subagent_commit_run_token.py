@@ -89,9 +89,11 @@ def test_params_without_script_path_are_denied_and_do_not_burn_the_token(repo):
     assert _check(_cmd(_params(token))) is None
 
 
-def test_admitted_token_admits_no_second_commit(repo):
+def test_guard_admit_leaves_the_token_for_the_op_which_consumes_it(repo):
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(_cmd(_params(token))) is None
+    assert run_token.admits(repo, "ask-1", token, _SCRIPT)
+    assert not run_token.admits(repo, "ask-1", token, _SCRIPT)
     assert _check(_cmd(_params(token))) is not None
 
 

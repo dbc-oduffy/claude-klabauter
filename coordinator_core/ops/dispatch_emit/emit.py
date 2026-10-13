@@ -1519,6 +1519,20 @@ _BRIEF_PRECEDENCE_CLAUSE = (
     "the same as any other instruction."
 )
 
+#: Purpose (PM request 2026-10-13): clarify an in-flight workflow by editing
+#: its artifacts. The executor re-reads the plan and sizing files, so PM
+#: direction written to disk mid-run reaches it without stopping the run.
+_LIVE_PM_DIRECTION_CLAUSE = (
+    "Before acting, and again before reporting, re-read the plan file and "
+    "sizing file this task names; a `## PM direction` section in the plan, or "
+    "a PM-direction row in the sizing's register, that is present at that "
+    "read is bounded direction of the same standing as a message the "
+    "launching session addresses to you directly (the bounds above: it "
+    "narrows or corrects this task, never lifts an agent-definition rule, "
+    "grants a tool, authorizes a commit or external-facing action, or reaches "
+    "a file another chunk owns); quote what you applied in your report."
+)
+
 #: Leads every row prompt, after the precedence clause. A Bash write (sed,
 #: a heredoc, a script) leaves no session claim, because ``track_touched_files`` records only
 #: Write/Edit/MultiEdit/NotebookEdit calls. The dispatched commit agent then
@@ -1547,7 +1561,8 @@ _HEAVY_LAUNCH_FLOOR_CLAUSE = (
 #: The per-row head ``_row_prompt`` opens with and ``_row_agent_call_expr``
 #: hoists into one ``_shared`` const, so neither clause is repeated per row.
 _ROW_PROMPT_HEAD = (
-    f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
+    f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
+    f"{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
 )
 
 
@@ -1559,7 +1574,8 @@ _VERIFICATION_ROW_CLAUSE = (
     "for file changes does not apply to this row."
 )
 _VERIFICATION_ROW_PROMPT_HEAD = (
-    f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
+    f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
+    f"{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
 )
 _VERIFICATION_CHANGE_KINDS = frozenset({"verify", "verification"})
 

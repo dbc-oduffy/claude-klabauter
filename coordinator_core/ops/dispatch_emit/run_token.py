@@ -89,30 +89,48 @@ def mint(
     return token
 
 
-def admits(repo_root: Path, run_id: object, token: object, script_path: object = None) -> bool:
-    """True once for a `token` matching the live record for `run_id` and its recorded script.
+def _live_record(repo_root: Path, run_id: object, token: object, script_path: object) -> Optional[Path]:
+    """The record path when `token` matches the live record for `run_id` and its recorded script.
 
-    A missing or mismatched `script_path`, or a record with no script, is refused. Success consumes
-    the record by renaming it to a unique claim name: of two racing admits only the rename winner
-    returns True. Verification precedes the claim, so a wrong token never burns a live record."""
+    A missing or mismatched `script_path`, or a record with no script, is refused."""
     if not isinstance(run_id, str) or not isinstance(token, str) or not TOKEN_RE.match(token):
-        return False
+        return None
     path = _record_path(repo_root, run_id)
     if path is None or not path.is_file():
-        return False
+        return None
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
+        return None
     if not isinstance(record, dict) or record.get("run_id") != run_id:
-        return False
+        return None
     minted = record.get("minted_at")
     if not isinstance(minted, (int, float)) or time.time() - minted > TTL_SECONDS:
-        return False
+        return None
     recorded_script = record.get("script_path")
     if not recorded_script or not isinstance(script_path, str) or script_path != recorded_script:
-        return False
-    if not hmac.compare_digest(str(record.get("sha256") or ""), _digest(token)):
+        return None
+    if not hmac.compare_digest(str(record.get("sha256") or ""), _digest(str(token))):
+        return None
+    return path
+
+
+def verifies(repo_root: Path, run_id: object, token: object, script_path: object = None) -> bool:
+    """`admits` without consuming: the commit guard's check ahead of the op that consumes.
+
+    Trap: the guard must never consume -- `dispatch.terminal_commit` admits the same token
+    moments later, and a record the guard burned refuses every in-run commit."""
+    return _live_record(repo_root, run_id, token, script_path) is not None
+
+
+def admits(repo_root: Path, run_id: object, token: object, script_path: object = None) -> bool:
+    """True once for a `token` matching the live record for `run_id` and its recorded script.
+
+    Success consumes the record by renaming it to a unique claim name: of two racing admits only
+    the rename winner returns True. Verification precedes the claim, so a wrong token never burns
+    a live record."""
+    path = _live_record(repo_root, run_id, token, script_path)
+    if path is None:
         return False
     claim = path.with_name(f"{path.name}.claim.{os.getpid()}.{secrets.token_hex(4)}")
     try:
