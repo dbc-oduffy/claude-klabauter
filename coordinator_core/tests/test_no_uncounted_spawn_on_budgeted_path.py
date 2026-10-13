@@ -330,6 +330,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/stop_dispatch.py",
         ("_handler",),
     ),
+    "hooks.workflow_stall_stop": (
+        "coordinator_core/hooks/stop_dispatch.py",
+        ("_workflow_stall_stop_op",),
+    ),
     "fleet.prune_emitted_output": (
         "coordinator_core/ops/fleet/prune_emitted.py",
         ("_handler",),
@@ -7026,11 +7030,11 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.gated_criteria_met": 4,
     # plan.narrow_criterion: locked_rmw commit via git_native, same site set as other plan writers.
     "plan.narrow_criterion": 4,
-    "review_mint.bookkeep_wave": 5,
-    # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site.
-    "review_mint.record_superseding_review": 5,
+    "review_mint.bookkeep_wave": 4,
+    # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site; 5 -> 4 by 7d1da49c7a.
+    "review_mint.record_superseding_review": 4,
     "review_stamp.check": 1,
-    "review_stamp.mint": 5,
+    "review_stamp.mint": 4,
     # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
     # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
     # shared `git/run.py::run_git` site, so the same physical call is now one site key for every

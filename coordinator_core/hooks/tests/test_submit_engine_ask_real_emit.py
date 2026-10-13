@@ -14,7 +14,7 @@ from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, RUN_DIR_ROOT, record_dir
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -104,7 +104,7 @@ def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch):
     _assert_rewrite(env)
     (run_dir,) = _run_dirs(repo)
     assert (run_dir / "submission.json").is_file()
-    assert (run_dir / ASK_TEXT_FILE).read_text(encoding="utf-8") == "add the widget"
+    assert (record_dir(repo, run_dir.name) / ASK_TEXT_FILE).read_text(encoding="utf-8") == "add the widget"
     assert len(spawns) == _budget("raw_ask_submission"), [s.argv for s in spawns]
     _all_git_run(spawns)
 
@@ -116,6 +116,8 @@ def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkey
     _assert_rewrite(env)
     (run_dir,) = _run_dirs(repo)
     assert (run_dir / "submission.json").is_file()
-    assert (run_dir / RELAYED_ASK_FILE).read_text(encoding="utf-8") == "RELAYED-MARK add the widget"
+    records = record_dir(repo, run_dir.name)
+    assert (records / RELAYED_ASK_FILE).read_text(encoding="utf-8") == "RELAYED-MARK add the widget"
+    assert not (records / ASK_TEXT_FILE).exists()
     assert not (run_dir / ASK_TEXT_FILE).exists()
     assert len(spawns) == _budget("raw_ask_submission"), [s.argv for s in spawns]

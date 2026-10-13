@@ -214,6 +214,34 @@ def test_met_record_with_passing_row_verdicts_closes_and_writes_the_rows_back(tm
     assert row["status"] == "met"
 
 
+def _met_stamped(tmp_path: Path, rows) -> Path:
+    p = _register_bearing(tmp_path, rows)
+    p.write_text(p.read_text(encoding="utf-8").replace("status: not_met", "status: met", 1), encoding="utf-8")
+    return p
+
+
+def _sizing_row(tmp_path: Path) -> dict:
+    return yaml.safe_load((tmp_path / _SIZING).read_text(encoding="utf-8"))["requirement_register"]["rows"][0]
+
+
+def test_met_stamp_with_newer_met_row_verdicts_refreshes_the_register_row(tmp_path):
+    p = _met_stamped(tmp_path, [_ROW])
+    assert _sizing_row(tmp_path)["status"] != "met"
+    before = p.read_text(encoding="utf-8")
+    result = m.rejudge(p, tmp_path)
+    assert result["status"] == "rejudged" and result.get("register_sizing") == _SIZING, result
+    assert _sizing_row(tmp_path)["status"] == "met"
+    assert p.read_text(encoding="utf-8") == before
+    assert m.rejudge(p, tmp_path) == {"status": "unchanged", "reason": "criterion already met"}
+
+
+def test_met_stamp_without_newer_row_verdicts_stays_unchanged(tmp_path):
+    p = _met_stamped(tmp_path, None)
+    sizing_before = (tmp_path / _SIZING).read_text(encoding="utf-8")
+    assert m.rejudge(p, tmp_path) == {"status": "unchanged", "reason": "criterion already met"}
+    assert (tmp_path / _SIZING).read_text(encoding="utf-8") == sizing_before
+
+
 _SPINE = """```yaml plan-tasks
 - id: A1
   title: a

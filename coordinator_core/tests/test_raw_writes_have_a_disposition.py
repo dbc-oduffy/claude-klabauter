@@ -342,6 +342,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/hooks/guard_manufactured_blocker.py': ('git-internal', 'per-session has-fired marker inside the session dir under <git-common-dir>/coordinator-sessions: _mark_fired_this_session'),
     'coordinator_core/ops/handoff_discharge_landed.py': ('git-internal', 'O_EXCL batch lock under the git common dir: _acquire_lock; the handoff stamp write itself goes through claimed_write.replace_text'),
     'coordinator_core/telemetry/traffic_manifest.py': ('in-repo-non-state', 'operator-named --out file for a generated traffic manifest; no state/ target'),
+    'coordinator_core/hooks/stop_dispatch.py': ('outside-repo', 'drive-root baseline tmp-then-replace under settings_home()/state/drive-root-baseline.json, outside every repo: _drive_baseline_path; the "rb" open is a transcript tail read'),
     'coordinator_core/hooks/preuse_sendmessage_dispatch.py': ('outside-repo', 'once-per-agent advised marker beside the harness transcript under <transcript>/subagents/workflows/<run>: _claim_once'),
     'coordinator_core/ops/migrate_completion_log_legacy.py': ('outside-repo', 'git --pathspec-from-file list under tempfile.mkstemp(), removed after the commit: _commit_moved'),
     'coordinator_core/hooks/flag_em_poll_in_flight.py':('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),

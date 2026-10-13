@@ -1184,6 +1184,27 @@ def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
     )
 
 
+def _refresh_register_rows(plan_path: Path, repo_root: Path, record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Write a newer met record's passing row verdicts back to the plan's register sizing for a
+    stamp whose criterion is already met. `None` when nothing was written."""
+    if record is None or record["criterion"].get("status") != "met":
+        return None
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate, _register_writeback
+
+    try:
+        plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError:
+        return None
+    judged = {"criterion": dict(record["criterion"])}
+    if _register_gate(repo_root, plan_rel, judged) is not None:
+        return None
+    written = _register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or ""))
+    if "register_sizing" not in written:
+        return None
+    rel = record["record_path"]
+    return {"status": "rejudged", "reason": f"register rows refreshed per {rel}", **written}
+
+
 def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     """Record a fresh, plan-bound `met` criterion verdict into the existing stamp's criterion
     block. The verdict is read only off an engine-written record under `state/delivery-verdicts/`
@@ -1205,13 +1226,19 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     if not plan_id:
         raise MintRefusal(f"review-stamp: {plan_path} carries no plan_id")
     criterion = stamp["criterion"]
-    if criterion.get("status") == "met":
-        return {"status": "unchanged", "reason": "criterion already met"}
+    already_met = criterion.get("status") == "met"
+    no_change = {"status": "unchanged", "reason": "criterion already met"}
     stamped_at = _instant(stamp.get("stamped_at"))
     if stamped_at is None:
+        if already_met:
+            return no_change
         raise MintRefusal("review-stamp: the stamp carries no parseable stamped_at")
 
     record = latest_criterion_record(repo_root, plan_id, stamped_at)
+    if already_met:
+        # A met criterion keeps its status; a newer met record's row verdicts still refresh the
+        # sizing register rows the stamp left partial.
+        return _refresh_register_rows(plan_path, repo_root, record) or no_change
     if record is None:
         return {
             "status": "unchanged",
