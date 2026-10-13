@@ -354,3 +354,39 @@ def test_payload_without_session_id_never_adopts_a_process_scoped_ledger(repo, m
     anon = {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "pytest tests -q"}}
     for _ in range(3):
         assert g.check(anon) is None
+
+
+def _stamp(repo, executor_epoch: int, commit_epoch: int | None) -> None:
+    d = repo / ".git" / "coordinator-sessions" / SID
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "dispatched-agents.txt").write_text(f"abcdef0123456789\tsonnet\tcoordinator:executor\t{executor_epoch}\n")
+    if commit_epoch is not None:
+        ev = d / "commit-scope-events.jsonl"
+        ev.write_text("{}\n")
+        os.utime(ev, (commit_epoch, commit_epoch))
+
+
+def test_executor_older_than_last_commit_does_not_arm(repo) -> None:
+    _stamp(repo, 1000, 2000)
+    for _ in range(3):
+        assert g.check(_bash(repo, "python -m pytest a.py")) is None
+
+
+def test_executor_newer_than_last_commit_still_arms(repo) -> None:
+    _stamp(repo, 3000, 2000)
+    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    assert _denied(g.check(_bash(repo, "pytest b.py -q")))
+
+
+def test_no_commit_signal_stays_armed(repo) -> None:
+    _stamp(repo, 1000, None)
+    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    assert _denied(g.check(_bash(repo, "pytest b.py -q")))
+
+
+def test_stale_counter_before_newest_arming_row_is_ignored(repo) -> None:
+    _stamp(repo, 1000, None)
+    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    counter = next((repo / ".git").rglob(g.COUNTER_NAME), None) or next(repo.parent.rglob(g.COUNTER_NAME))
+    os.utime(counter, (500, 500))
+    assert g.check(_bash(repo, "pytest b.py -q")) is None

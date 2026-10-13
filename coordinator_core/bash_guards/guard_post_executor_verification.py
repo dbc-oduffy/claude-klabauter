@@ -18,7 +18,9 @@ Executor signal: only for a payload carrying its own ``session_id`` (the host-pi
 id is shared by every session on a warm engine and never vouches for an executor); a ``coordinator:executor`` row in the session's
 ``dispatched-agents.txt`` -- one small file read, no spawn, no transcript. The
 file records dispatch, not arrival; a foreground dispatch has returned before
-the EM's next tool call, which is the case this targets.
+the EM's next tool call, which is the case this targets. Only rows with an epoch later than
+the session's last commit attempt arm (mtime of ``commit-scope-events.jsonl``, one stat); no
+such file means armed. A counter older than the newest arming row is ignored.
 
 Exempt: a scoped pytest (every target an explicit in-repo test file, node id, or directory
 under a ``tests/`` dir; a bare package dir is broad) in an
@@ -345,19 +347,41 @@ def _executor_type(value: str) -> bool:
     return folded == "executor"
 
 
-def executor_reported(payload: dict, session_id: str, repo_root: str) -> bool:
+def _last_commit_time(session_dir: Path) -> float:
+    """mtime of the session's ``commit-scope-events.jsonl`` (appended once per commit
+    attempt by the commit route); one stat, no spawn. 0.0 when absent."""
+    try:
+        return os.stat(session_dir / "commit-scope-events.jsonl").st_mtime
+    except OSError:
+        return 0.0
+
+
+def newest_arming_epoch(session_id: str, repo_root: str) -> Optional[float]:
+    """Epoch of the newest executor row dispatched after the session's last commit,
+    or None when nothing arms. A row with an unreadable epoch arms (0.0)."""
     from coordinator_core.lifecycle import git_common_dir
 
     try:
-        ledger = git_common_dir(Path(repo_root)) / "coordinator-sessions" / session_id / "dispatched-agents.txt"
-        with open(ledger, "r", encoding="utf-8", errors="replace") as fh:
+        sdir = git_common_dir(Path(repo_root)) / "coordinator-sessions" / session_id
+        committed = _last_commit_time(sdir)
+        newest: Optional[float] = None
+        with open(sdir / "dispatched-agents.txt", "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 cols = line.rstrip("\n").split("\t")
                 if len(cols) > 2 and _executor_type(cols[2]):
-                    return True
+                    try:
+                        epoch = float(cols[3])
+                    except (IndexError, ValueError):
+                        epoch = 0.0
+                    if epoch > committed or committed == 0.0 or epoch == 0.0:
+                        newest = epoch if newest is None else max(newest, epoch)
     except Exception:
-        return False
-    return False
+        return None
+    return newest
+
+
+def executor_reported(payload: dict, session_id: str, repo_root: str) -> bool:
+    return newest_arming_epoch(session_id, repo_root) is not None
 
 
 def _deny(event_sentinel: str) -> dict:
@@ -398,8 +422,8 @@ def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
     return _deny(str(sentinel_path(session_id)))
 
 
-def _bump_counter(repo_root: str, session_id: str) -> int:
-    """Return runs already counted this session, then record one more."""
+def _bump_counter(repo_root: str, session_id: str, armed_since: float = 0.0) -> int:
+    """Return runs already counted since the newest arming row, then record one more."""
     from coordinator_core.session.machinery_paths import share_dir
 
     d = share_dir(repo_root, session_id)
@@ -407,6 +431,8 @@ def _bump_counter(repo_root: str, session_id: str) -> int:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             prior = int(fh.read().strip() or "0")
+        if os.stat(path).st_mtime < armed_since:
+            prior = 0
     except (OSError, ValueError):
         prior = 0
     try:
@@ -442,7 +468,7 @@ def check(payload: dict) -> Optional[dict]:
         if session_workflow_run_ids(session_id):
             record_silent(GUARD_NAME, "scoped pytest after a workflow run: exempt")
             return None
-    if _bump_counter(repo_root, session_id) < 1:
+    if _bump_counter(repo_root, session_id, newest_arming_epoch(session_id, repo_root) or 0.0) < 1:
         return None
     from coordinator_core.hooks import dispatch_escape as nd
 
