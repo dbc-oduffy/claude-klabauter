@@ -214,6 +214,164 @@ def test_met_record_with_passing_row_verdicts_closes_and_writes_the_rows_back(tm
     assert row["status"] == "met"
 
 
+_SPINE = """```yaml plan-tasks
+- id: A1
+  title: a
+  change_kind: code-edit
+  surface: a.py
+  writes: [a.py]
+  disposition: {a1}
+- id: A2
+  title: b
+  change_kind: code-edit
+  surface: b.py
+  writes: [b.py]
+  disposition: {a2}
+{extra}```
+"""
+
+
+def _hand_worked(tmp_path: Path, *, a2: str = "coded", extra: str = "") -> tuple:
+    """A tmp repo with a stampless plan whose rows are coded and a committed HEAD; returns (plan, head)."""
+    from coordinator_core.ops.tests.test_plan_status_transition_goal_refusal import _head_sha, _run_git
+
+    _init_repo(tmp_path)
+    plan = tmp_path / "p.md"
+    plan.write_text(
+        f"---\ntitle: T\nstatus: executing\nplan_id: {PLAN_ID}\n---\n\n## Tasks\n\n"
+        + _SPINE.format(a1="coded", a2=a2, extra=extra),
+        encoding="utf-8",
+    )
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+    _run_git(["add", "."], tmp_path)
+    _run_git(["commit", "-q", "-m", "hand work"], tmp_path)
+    return plan, _head_sha(tmp_path)
+
+
+def _record(
+    tmp_path: Path, head: str, status: str = "met", observation: str = "judged", name: str = "r", base="base1"
+) -> Path:
+    path = Path(record_homes.home_dir(str(tmp_path), "delivery-verdicts")) / "2026-10" / f"{name}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = {"kind": "criterion-rejudge", "plan_id": PLAN_ID, "head_sha": head, "run_base_sha": base,
+          "recorded_at": "2026-10-02T00:00:00.000000Z",
+          "criterion": {"status": status, "observation": observation, "sidecar": None}}
+    path.write_text("---\n" + yaml.safe_dump(fm) + "---\n", encoding="utf-8")
+    return path
+
+
+def _mint(plan: Path, root: Path, **kw):
+    return m.mint(plan, root, build_test_path=kw.pop("build_test_path", None), **kw)
+
+
+def test_judge_only_mint_writes_the_pinned_stamp_and_check_accepts_it(tmp_path):
+    import json
+
+    plan, head = _hand_worked(tmp_path)
+    rec = _record(tmp_path, head)
+    stamp = _mint(plan, tmp_path)
+    rel = rec.relative_to(tmp_path).as_posix()
+    assert stamp["terminal_commit_sha"] == head and stamp["integration_sidecar"] == rel
+    assert stamp["run_base_sha"] == "base1"
+    assert stamp["criterion"] == {"status": "met", "observation": "judged", "sidecar": rel}
+    assert "delivery" not in stamp and "register" not in stamp
+    assert stamp["slices"] == 0 and stamp["fixes_applied"] is None and stamp["unresolved"] == []
+    assert stamp["brief_conformance"] == {"items": None, "met": None, "unmet": None}
+    assert stamp["build_test"] == {"verdict": "not_run", "ran": None, "failed": None, "sidecar": None}
+    schema_path = Path(m.__file__).resolve().parents[1] / "frontmatter" / "schemas" / "plan.schema.json"
+    full = json.loads(schema_path.read_text(encoding="utf-8"))
+    sub = {**full["properties"]["review_stamp"], "$defs": full.get("$defs", {})}
+    import jsonschema
+
+    jsonschema.validate(yaml.safe_load(plan.read_text(encoding="utf-8").split("---\n")[1])["review_stamp"], sub)
+    assert m.check(plan, tmp_path, supersession=True) is None
+
+
+@pytest.mark.parametrize(
+    "status,observation", [("not_met", "judged"), ("indeterminate", "judged"), ("met", "  ")]
+)
+def test_judge_only_mint_refuses_an_unmet_or_unobserved_record(tmp_path, status, observation):
+    plan, head = _hand_worked(tmp_path)
+    _record(tmp_path, head, status, observation)
+    before = plan.read_bytes()
+    with pytest.raises(m.MintRefusal):
+        _mint(plan, tmp_path)
+    assert plan.read_bytes() == before
+
+
+def test_judge_only_mint_omits_a_null_run_base(tmp_path):
+    plan, head = _hand_worked(tmp_path)
+    _record(tmp_path, head, base=None)
+    assert "run_base_sha" not in _mint(plan, tmp_path)
+
+
+def test_judge_only_mint_refuses_a_head_that_is_not_an_ancestor(tmp_path):
+    plan, _ = _hand_worked(tmp_path)
+    _record(tmp_path, "0" * 40)
+    before = plan.read_bytes()
+    with pytest.raises(m.MintRefusal, match="not HEAD or an ancestor"):
+        _mint(plan, tmp_path)
+    assert plan.read_bytes() == before
+
+
+def test_judge_only_mint_refuses_an_open_row(tmp_path):
+    plan, head = _hand_worked(tmp_path, a2="open")
+    _record(tmp_path, head)
+    before = plan.read_bytes()
+    with pytest.raises(m.MintRefusal, match="A2"):
+        _mint(plan, tmp_path)
+    assert plan.read_bytes() == before
+
+
+def test_judge_only_mint_admits_a_deferred_open_row(tmp_path):
+    plan, head = _hand_worked(tmp_path, a2="open")
+    plan.write_text(plan.read_text(encoding="utf-8").replace("  disposition: open", "  disposition: open\n  deferred: true"), encoding="utf-8")
+    _record(tmp_path, head)
+    assert _mint(plan, tmp_path)["criterion"]["status"] == "met"
+
+
+def test_judge_only_mint_refuses_a_register_gap(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    plan, head = _hand_worked(tmp_path)
+    _record(tmp_path, head)
+    monkeypatch.setattr(terminal_commit, "_register_gate", lambda *_a: "register row r1 not judged")
+    before = plan.read_bytes()
+    with pytest.raises(m.MintRefusal, match="register row r1"):
+        _mint(plan, tmp_path)
+    assert plan.read_bytes() == before
+
+
+def test_judge_only_mint_without_a_record_keeps_the_old_refusal_and_names_the_route(tmp_path):
+    plan, _ = _hand_worked(tmp_path)
+    with pytest.raises(m.MintRefusal) as exc:
+        _mint(plan, tmp_path)
+    text = str(exc.value)
+    assert text.startswith("review-stamp: no terminal commit found") and "--rejudge" in text
+
+
+def test_judge_only_branch_never_runs_for_a_plan_that_carries_a_stamp(tmp_path):
+    plan, head = _hand_worked(tmp_path)
+    _record(tmp_path, head)
+    plan.write_text(plan.read_text(encoding="utf-8").replace("status: executing\n", "status: executing\nreview_stamp:\n  terminal_commit_sha: abc\n", 1), encoding="utf-8")
+    with pytest.raises(m.MintRefusal, match="no terminal commit found"):
+        _mint(plan, tmp_path)
+
+
+def test_judge_only_mint_requires_a_passing_build_test(tmp_path):
+    plan, head = _hand_worked(tmp_path)
+    _record(tmp_path, head)
+    bt = tmp_path / "bt.md"
+    bt.write_text("---\nstatus: fail\ntest_verdict: fail\nrun: 3\nfailed: 1\n---\n", encoding="utf-8")
+    before = plan.read_bytes()
+    with pytest.raises(m.MintRefusal, match="not pass"):
+        _mint(plan, tmp_path, build_test_path=str(bt))
+    assert plan.read_bytes() == before
+    bt.write_text("---\nstatus: pass\ntest_verdict: pass\nrun: 3\nfailed: 0\n---\n", encoding="utf-8")
+    stamp = _mint(plan, tmp_path, build_test_path=str(bt))
+    assert stamp["build_test"]["verdict"] == "pass" and stamp["build_test"]["ran"] == 3
+
+
 def test_rejudge_record_carries_the_judges_row_verdicts(tmp_path):
     from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 

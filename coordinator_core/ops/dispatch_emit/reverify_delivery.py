@@ -771,12 +771,15 @@ def compose_rejudge_script(
     )
     if call is None:
         raise ReverifyRefused("rejudge: the review roster declares no criterion judge")
-    ident = {"rejudge": True, "plan_id": plan_id, "head_sha": head_sha, "plan_path": plan_path}
+    ident = {
+        "rejudge": True, "plan_id": plan_id, "head_sha": head_sha, "plan_path": plan_path,
+        "run_base_sha": run_base_sha,
+    }
     return (
         "// Runs inside the Workflow runner; a top-level `return` is legal there.\n"
         "export const meta = {\n"
         "  name: 'rejudge-criterion',\n"
-        "  description: 'Re-run only the criterion judge at HEAD over a stamped unmet criterion.',\n"
+        "  description: 'Run only the criterion judge at HEAD over the exit criterion of the plan.',\n"
         f"  phases: [{_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)}],\n"
         "};\n\n"
         f"  phase({_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)});\n"
@@ -811,10 +814,52 @@ def recorded_unmet_criterion(
     return {"status": status, "run_base_sha": prep.get("run_base_sha") if isinstance(prep, dict) else None}
 
 
+def _refuse_open_rows(plan_path: str) -> None:
+    """Raise unless every spine row is `coded` or deferred (spun off, backlogged, wont_do, voided)."""
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        NON_DISPATCHABLE_DISPOSITIONS,
+        SpineReadError,
+        load_rows_memo,
+        with_canonical_disposition,
+    )
+
+    try:
+        result = load_rows_memo(Path(plan_path).read_text(encoding="utf-8", errors="replace"))
+        rows = [with_canonical_disposition(r) for r in result.rows]
+    except (SpineReadError, OSError, AttributeError, TypeError) as exc:
+        raise ReverifyRefused(f"rejudge: {plan_path} task spine unreadable: {exc}") from exc
+    open_ids = [
+        str(r.get("id")) for r in rows
+        if isinstance(r, dict) and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
+    ]
+    if not rows or open_ids:
+        named = ", ".join(open_ids) if open_ids else "no spine rows"
+        raise ReverifyRefused(f"rejudge: {plan_path} has rows not coded: {named}")
+
+
+def _hand_worked_run_base(repo_root: Path, plan_path: str, fm: Any) -> Optional[str]:
+    """Where the plan's work started: its `execution_authorized_sha`, else the commit that
+    added the plan file (one git read); `None` when neither resolves."""
+    authorized = fm.get("execution_authorized_sha") if isinstance(fm, dict) else None
+    if authorized:
+        return str(authorized)
+    rel = _run_rel(repo_root, Path(plan_path).resolve())
+    # An untracked plan makes `git log` walk all history; the index lookup bounds that.
+    if run_git(["ls-files", "--error-unmatch", "--", rel], cwd=str(repo_root), timeout=30).returncode != 0:
+        return None
+    proc = run_git(
+        ["log", "--diff-filter=A", "--max-count=1", "--format=%H", "--", rel],
+        cwd=str(repo_root), timeout=30,
+    )
+    sha = proc.stdout.strip() if proc.returncode == 0 else ""
+    return sha or None
+
+
 def emit_rejudge(
     *, repo_root: Path, plan_path: str, out_path: str, agent_type_host: Optional[str] = None
 ) -> dict:
-    """Emit the judge-only script for a plan whose `review_stamp` records an unmet criterion."""
+    """Emit the judge-only script for a plan whose `review_stamp` records an unmet criterion,
+    whose delivery verdict records one, or that carries no `review_stamp` and has every row coded."""
     from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
     from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs, _write_emission_receipt
     from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
@@ -832,12 +877,16 @@ def emit_rejudge(
         run_base_sha = stamp.get("run_base_sha")
     else:
         recorded = recorded_unmet_criterion(repo_root, plan_id, plan_path)
-        if recorded is None:
+        if recorded is not None:
+            run_base_sha = recorded.get("run_base_sha")
+        elif stamp is None:
+            _refuse_open_rows(plan_path)
+            run_base_sha = _hand_worked_run_base(repo_root, plan_path, fm)
+        else:
             raise ReverifyRefused(
                 f"rejudge: {plan_path} carries no unmet review_stamp criterion and no recorded "
                 "delivery verdict with an unmet exit criterion to re-judge"
             )
-        run_base_sha = recorded.get("run_base_sha")
     fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     script = compose_rejudge_script(
         fragment=fragment,
@@ -855,7 +904,13 @@ def emit_rejudge(
 
 
 def record_criterion_rejudge(
-    *, repo_root: Path, plan_id: Optional[str], head_sha: str, criterion: Optional[dict], session_id: str = ""
+    *,
+    repo_root: Path,
+    plan_id: Optional[str],
+    head_sha: str,
+    criterion: Optional[dict],
+    session_id: str = "",
+    run_base_sha: Optional[str] = None,
 ) -> str:
     """Exclusive-create the `criterion-rejudge` record from the judge's returned `criterion`;
     returns its repo-relative path. Carries no delivery block, so delivery supersession
@@ -877,6 +932,7 @@ def record_criterion_rejudge(
         "plan_id": plan_id,
         "head_sha": judged_head,
         "emitted_head_sha": head_sha,
+        "run_base_sha": run_base_sha,
         "recorded_at": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "session_id": session_id,
         "criterion": {"status": status, "observation": criterion.get("observation"), "sidecar": None},
@@ -969,6 +1025,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 head_sha=ident["head_sha"],
                 criterion=result.get("criterion"),
                 session_id=args.session_id,
+                run_base_sha=ident.get("run_base_sha"),
             ))
             return 0
         if not args.run_record:

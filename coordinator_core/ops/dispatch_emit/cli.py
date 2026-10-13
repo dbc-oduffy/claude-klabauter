@@ -303,9 +303,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--rejudge",
         action="store_true",
         help="with --plan and --out: emit a script firing only the criterion judge at HEAD over the "
-        "plan's stamped unmet review_stamp criterion; record its result with "
+        "plan's stamped unmet review_stamp criterion, or, for a plan with no review_stamp and every "
+        "row coded, over its exit criterion; record its result with "
         "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record --result-json <task output>`, "
-        "then `review-stamp.py rejudge --plan <plan>`",
+        "then `review-stamp.py rejudge --plan <plan>` (unmet stamp) or `review-stamp.py mint --plan <plan>` (no stamp)",
     )
     parser.add_argument(
         "--mark-landed",

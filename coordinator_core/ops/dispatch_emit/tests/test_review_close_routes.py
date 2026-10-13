@@ -130,17 +130,78 @@ def test_rejudge_emits_from_a_recorded_unmet_delivery_verdict(tmp_path, monkeypa
     assert rd.recorded_unmet_criterion(repo, "x", str(plan)) == {"status": status, "run_base_sha": head}
 
 
-def test_rejudge_still_refuses_when_nothing_records_an_unmet_criterion(tmp_path, monkeypatch):
-    repo, head, record = _unmet_run(tmp_path, "met")
-    out = str(repo / "o.workflow.mjs")
-    monkeypatch.setattr(rd, "resolve_delivery_in_force", lambda *a, **k: (record, {"verdict": "PASS"}))
+_STAMP_MET = (
+    "review_stamp:\n  criterion: {status: met, observation: ok, sidecar: null}\n"
+)
+
+
+def _spined_plan(repo, rows, extra_fm=""):
+    """Rewrite the repo's plan with a task spine of `(id, disposition)` rows."""
+    plan = _plan(repo)
+    text = plan.read_text(encoding="utf-8")
+    head, _, rest = text.partition("\n---\n")
+    body = "".join(f"- id: {i}\n  title: t\n  writes: [a.py]\n  disposition: {d}\n" for i, d in rows)
+    plan.write_text(
+        f"{head}\n{extra_fm}---\n{rest}\n## Tasks\n\n```yaml plan-tasks\n{body}```\n", encoding="utf-8"
+    )
+    return plan
+
+
+def test_rejudge_refuses_a_met_stamp_with_nothing_recorded_unmet(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    plan = _spined_plan(repo, [("C1", "coded")], extra_fm=_STAMP_MET)
+    monkeypatch.setattr(rd, "resolve_delivery_in_force", lambda *a, **k: (None, None))
 
     with pytest.raises(rd.ReverifyRefused, match="no unmet review_stamp criterion"):
-        rd.emit_rejudge(repo_root=repo, plan_path=str(_plan(repo)), out_path=out)
+        rd.emit_rejudge(repo_root=repo, plan_path=str(plan), out_path=str(repo / "o.workflow.mjs"))
 
+
+def test_rejudge_emits_the_judge_only_script_for_an_unstamped_coded_plan(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    plan = _spined_plan(repo, [("C1", "coded"), ("C2", "done"), ("C3", "backlogged")])
+    head = _git(repo, "rev-parse", "HEAD")
     monkeypatch.setattr(rd, "resolve_delivery_in_force", lambda *a, **k: (None, None))
-    with pytest.raises(rd.ReverifyRefused):
-        rd.emit_rejudge(repo_root=repo, plan_path=str(_plan(repo)), out_path=out)
+    out = repo / "o.workflow.mjs"
+
+    rd.emit_rejudge(repo_root=repo, plan_path=str(plan), out_path=str(out))
+
+    script = out.read_text(encoding="utf-8")
+    assert script.count("agent(") == 1
+    assert '"rejudge": true' in script
+    assert f'"run_base_sha": "{head}"' in script
+
+
+def test_rejudge_run_base_prefers_execution_authorized_sha(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    plan = _spined_plan(repo, [("C1", "coded")], extra_fm="execution_authorized_sha: deadbeef\n")
+    monkeypatch.setattr(rd, "resolve_delivery_in_force", lambda *a, **k: (None, None))
+    out = repo / "o.workflow.mjs"
+
+    rd.emit_rejudge(repo_root=repo, plan_path=str(plan), out_path=str(out))
+
+    assert '"run_base_sha": "deadbeef"' in out.read_text(encoding="utf-8")
+
+
+def test_rejudge_refuses_an_unstamped_plan_with_an_open_row(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    plan = _spined_plan(repo, [("C1", "coded"), ("C2", "open"), ("C3", "open")])
+    monkeypatch.setattr(rd, "resolve_delivery_in_force", lambda *a, **k: (None, None))
+
+    with pytest.raises(rd.ReverifyRefused, match="C2, C3"):
+        rd.emit_rejudge(repo_root=repo, plan_path=str(plan), out_path=str(repo / "o.workflow.mjs"))
+
+
+def test_record_carries_the_run_base_of_the_emitted_script(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+
+    rel = rd.record_criterion_rejudge(
+        repo_root=repo, plan_id="pln-x", head_sha=head,
+        criterion={"status": "met", "observation": "o"}, run_base_sha="b" * 40,
+    )
+
+    fm = yaml.safe_load((repo / rel).read_text(encoding="utf-8").split("---\n")[1])
+    assert fm["run_base_sha"] == "b" * 40 and fm["head_sha"] == head
 
 
 def test_mint_refuses_not_met_until_a_met_rejudge_record_follows(tmp_path):

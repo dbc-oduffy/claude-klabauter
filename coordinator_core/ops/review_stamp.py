@@ -283,6 +283,130 @@ def _delivery_verdict(integration_data: Dict[str, Any]) -> Optional[str]:
     return delivery.get("verdict") if isinstance(delivery, dict) else None
 
 
+_NO_TERMINAL_COMMIT = "review-stamp: no terminal commit found"
+
+
+def _carries_stamp(fm_text: str) -> bool:
+    try:
+        data = yaml.safe_load(fm_text) or {}
+    except yaml.YAMLError:
+        return True
+    return isinstance(data, dict) and data.get("review_stamp") is not None
+
+
+def _not_coded_rows(plan_path: Path) -> List[str]:
+    """Ids of the non-deferred spine rows whose canonical disposition is neither `coded` nor a
+    resolved deferral (spun off, backlogged, wont_do, voided), matching the emit-side gate; empty for a
+    plan with no readable spine."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        NON_DISPATCHABLE_DISPOSITIONS,
+        load_rows_memo,
+        with_canonical_disposition,
+    )
+
+    located = load_rows_memo(plan_path.read_text(encoding="utf-8", errors="replace"))
+    if located.status is not LocateStatus.LOCATED:
+        return []
+    open_ids = []
+    for raw in map(with_canonical_disposition, located.rows):
+        if not isinstance(raw, dict) or raw.get("deferred") is True or raw.get("deferred_until"):
+            continue
+        if raw.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS:
+            open_ids.append(str(raw.get("id")))
+    return open_ids
+
+
+def _mint_judge_only(
+    plan_path: Path,
+    repo_root: Path,
+    split: Any,
+    plan_id: str,
+    build_test_path: Optional[str],
+    no_trailer: MintRefusal,
+) -> Dict[str, Any]:
+    """Mint the stamp of a plan no run record covers (hand-coded rows, a halted run finished by hand).
+
+    The only evidence is the newest `criterion-rejudge` record bound to the plan, which
+    `reverify_delivery record` writes from the judge's task output. Predicates, all required:
+    the record is `met` with an observation; it was judged at HEAD or an ancestor; every
+    non-deferred spine row is `coded`; the register gate passes; `--build-test`, when given, passes.
+    The stamp carries no `delivery` block: no delivery verifier ran. Reads nothing from a parameter."""
+    route = (
+        f"; for a hand-worked plan: emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} "
+        "--rejudge --out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+        "then mint again"
+    )
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.verdict_supersession import latest_criterion_record
+
+    record = latest_criterion_record(repo_root, plan_id, datetime.min.replace(tzinfo=timezone.utc))
+    if record is None:
+        raise MintRefusal(str(no_trailer) + route)
+    rel = record["record_path"]
+    criterion = record.get("criterion") if isinstance(record.get("criterion"), dict) else {}
+    status = criterion.get("status")
+    if status != "met":
+        raise MintRefusal(f"review-stamp: refusing to mint: newest judge result {rel} is {status}, not met")
+    observation = str(criterion.get("observation") or "").strip()
+    if not observation:
+        raise MintRefusal(f"review-stamp: refusing to mint: judge result {rel} records no observation")
+    head = str(record.get("head_sha") or "")
+    if not head:
+        raise MintRefusal(f"review-stamp: refusing to mint: judge result {rel} records no head_sha")
+    result = run_git(["merge-base", "--is-ancestor", head, "HEAD"], cwd=str(repo_root))
+    if result.timed_out or result.returncode != 0:
+        raise MintRefusal(
+            f"review-stamp: refusing to mint: judge result {rel} was judged at {head}, "
+            "which is not HEAD or an ancestor of it; re-judge at HEAD"
+        )
+    open_rows = _not_coded_rows(plan_path)
+    if open_rows:
+        raise MintRefusal(f"review-stamp: refusing to mint: spine rows not coded: {', '.join(open_rows)}")
+
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate
+
+    try:
+        plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError:
+        raise MintRefusal(f"review-stamp: {plan_path} is outside {repo_root}; register gate cannot run") from None
+    gap = _register_gate(repo_root, plan_rel, {"criterion": dict(criterion)})
+    if gap is not None:
+        raise MintRefusal(f"review-stamp: refusing to mint: judge result {rel}: {gap}")
+
+    build_test_data: Dict[str, Any] = {}
+    build_test_sidecar = None
+    if build_test_path:
+        loaded = _load_sidecar(Path(build_test_path))
+        if loaded is None:
+            raise MintRefusal(f"review-stamp: no build/test record at {build_test_path}")
+        if effective_test_verdict(loaded) != "pass":
+            raise MintRefusal(f"review-stamp: refusing to mint: build/test verdict at {build_test_path} is not pass")
+        build_test_data = loaded
+        build_test_sidecar = str(build_test_path).replace("\\", "/")
+    stamp = _assemble_stamp(
+        repo_root,
+        terminal_sha=head,
+        terminal_tree_sha=None,
+        run_base_sha=record.get("run_base_sha"),
+        integration_path=repo_root / rel,
+        integration_data={},
+        prep_data={},
+        slices=0,
+        delivery_verdict=None,
+        tests_status="pass" if build_test_path else "not_run",
+        build_test_data=build_test_data,
+        build_test_sidecar=build_test_sidecar,
+        criterion_block={"status": "met", "observation": observation, "sidecar": rel},
+        with_delivery=False,
+    )
+    if not stamp["run_base_sha"]:
+        del stamp["run_base_sha"]  # the schema types it a string; a record without one has none to state
+    _write_stamp(plan_path, split, stamp)
+    return stamp
+
+
 def _resolve_terminal_commit(
     repo_root: Path, plan_id: str, plan_path: Optional[Path] = None, *, repair: bool = False
 ):
@@ -377,7 +501,7 @@ def _resolve_terminal_commit(
     if repair and repair_candidate_sha is not None:
         return repair_candidate_sha, None, {}
     raise MintRefusal(
-        f"review-stamp: no terminal commit found within {_COMMIT_WALK_BOUND} commits carrying "
+        f"{_NO_TERMINAL_COMMIT} within {_COMMIT_WALK_BOUND} commits carrying "
         f"an Inline-Review trailer whose integration sidecar's plan_id equals {plan_id!r} "
         "(and, for a pre-fix None-trailer commit, no sidecar's lead_session_id matched the "
         "plan's own emit receipt session_id either)"
@@ -588,9 +712,14 @@ def mint(
     if resolved is not None:
         terminal_sha, integration_path, integration_data = resolved
     else:
-        terminal_sha, integration_path, integration_data = _resolve_terminal_commit(
-            repo_root, plan_id, plan_path, repair=repair
-        )
+        try:
+            terminal_sha, integration_path, integration_data = _resolve_terminal_commit(
+                repo_root, plan_id, plan_path, repair=repair
+            )
+        except MintRefusal as no_trailer:
+            if repair or not str(no_trailer).startswith(_NO_TERMINAL_COMMIT) or _carries_stamp(split.fm_text):
+                raise
+            return _mint_judge_only(plan_path, repo_root, split, plan_id, build_test_path, no_trailer)
 
     prep_data = integration_data.get("prep")
     if not isinstance(prep_data, dict):
@@ -808,9 +937,11 @@ def _assemble_stamp(
     build_test_data: Dict[str, Any],
     build_test_sidecar: Any,
     criterion_block: Optional[Dict[str, Any]],
+    with_delivery: bool = True,
 ) -> Dict[str, Any]:
     """The `review_stamp` mapping both `mint` and `mint_receipt` write: one home for its
     key set and order, so the plan stamp and the inventory receipt cannot drift.
+    `with_delivery=False` omits the `delivery` block (a judge-only stamp: no verifier ran).
     `criterion_block` is None for a receipt, which carries no criterion. Reads the terminal
     commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
     if not terminal_tree_sha:
@@ -849,6 +980,8 @@ def _assemble_stamp(
         },
         "stamped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if not with_delivery:
+        del stamp["delivery"]
     if criterion_block is not None:
         stamp["criterion"] = criterion_block
     return stamp
