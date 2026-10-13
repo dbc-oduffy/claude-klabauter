@@ -191,7 +191,17 @@ def test_opus_persona_judgment_or_ambiguous_brief_passes(
     assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt)) is None
 
 
-@pytest.mark.parametrize("persona", ["coordinator:plan-author", "coordinator:roadmap-planner"])
+@pytest.mark.parametrize(
+    "persona",
+    [
+        "coordinator:plan-author",
+        "coordinator:roadmap-planner",
+        "coordinator:apm",
+        "coordinator:vp-product",
+        "coordinator:blitz-em",
+        "coordinator:subtractive-adjudicator",
+    ],
+)
 def test_plan_authoring_persona_passes_an_amend_brief_with_execution_verbs(
     monkeypatch: pytest.MonkeyPatch, persona: str
 ) -> None:

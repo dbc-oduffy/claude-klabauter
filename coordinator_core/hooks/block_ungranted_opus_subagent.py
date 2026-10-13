@@ -202,9 +202,19 @@ _EXECUTION_RE = re.compile(
 )
 
 
-# Personas whose role is authoring a plan document: every brief to them is plan work,
-# whatever verbs it uses ("amend the plan: add two rows, fix the tier column").
-_PLAN_AUTHORING_PERSONAS = frozenset({"coordinator:plan-author", "coordinator:roadmap-planner"})
+# Personas whose role cannot be execution: plan authors, and the ruling/gating roles
+# that only ever return a verdict. Every brief to them is plan or review work, whatever
+# words it uses ("amend the plan: fix two rows"; "after the probe read, rule on tiers").
+_PLAN_AUTHORING_PERSONAS = frozenset(
+    {
+        "coordinator:plan-author",
+        "coordinator:roadmap-planner",
+        "coordinator:apm",
+        "coordinator:vp-product",
+        "coordinator:blitz-em",
+        "coordinator:subtractive-adjudicator",
+    }
+)
 
 
 def _is_execution_brief(tool_input: Dict[str, Any]) -> bool:
