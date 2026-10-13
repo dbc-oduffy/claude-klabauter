@@ -598,3 +598,131 @@ def test_wait_rejects_malformed_invocations(tmp_path, args):
     result = _run(args, env=_base_env(tmp_path))
     assert result.returncode == 2
     assert "--wait" in result.stderr
+
+
+_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+}
+
+
+def _make_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, **_GIT_ENV}
+    (repo / "tracked.py").write_text("x = 1\n")
+    for args in (["init", "-q"], ["add", "tracked.py"], ["commit", "-q", "-m", "init"]):
+        subprocess.run(
+            ["git", *args], cwd=repo, env=env, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    return repo
+
+
+def _run_in(repo: Path, args, *, env, stdout=subprocess.PIPE, timeout=60):
+    return subprocess.run(
+        [sys.executable, str(_WRAPPER)] + args,
+        cwd=str(repo), env=env, stdout=stdout, stderr=subprocess.PIPE,
+        timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+_RECORD_FIELDS = (
+    "schema", "repo_root", "collection", "command", "head_sha", "started_at", "ended_at",
+    "dirty_paths", "duration_s", "exit_code", "outcome", "serialized", "log",
+    "log_truncated", "failed_ids",
+)
+
+
+def test_two_consecutive_runs_leave_current_and_previous_records(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    (repo / "tracked.py").write_text("x = 2\n")
+    first = _run_in(repo, ["--collection", "unit", "--", sys.executable, "-c", "print('one')"], env=env)
+    second = _run_in(
+        repo, ["--collection", "unit", "--", sys.executable, "-c", "import sys; sys.exit(3)"], env=env
+    )
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 3, second.stderr
+    swallowed = (first.stderr + second.stderr).decode("utf-8", "replace")
+    assert "not written" not in swallowed, swallowed
+    rec = repo / ".coordinator-local" / "suite-runs" / "unit"
+    cur = json.loads((rec / "current.json").read_text())
+    prev = json.loads((rec / "previous.json").read_text())
+    for body in (cur, prev):
+        assert set(_RECORD_FIELDS) <= set(body)
+        assert len(body["head_sha"]) == 40
+        assert body["dirty_paths"] == ["tracked.py"]
+        assert body["collection"] == "unit"
+        assert body["serialized"] is True
+        assert body["log_truncated"] is False
+    assert (cur["outcome"], cur["exit_code"]) == ("fail", 3)
+    assert (prev["outcome"], prev["exit_code"]) == ("pass", 0)
+    assert (rec / "previous.log").read_bytes() == b"one\n"
+    assert not list(rec.glob("*.tmp"))
+
+
+def test_log_bytes_identical_with_wrapper_stdout_piped_or_file(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    child = (
+        "import sys, time\n"
+        "sys.stdout.write('out-a\\n'); sys.stdout.flush(); time.sleep(0.3)\n"
+        "sys.stderr.write('err-a\\n'); sys.stderr.flush(); time.sleep(0.3)\n"
+        "sys.stdout.write('out-b\\n')\n"
+    )
+    argv = ["--collection", "pipe", "--", sys.executable, "-c", child]
+    rec = repo / ".coordinator-local" / "suite-runs" / "pipe"
+
+    piped = _run_in(repo, argv, env=env)
+    assert piped.returncode == 0, piped.stderr
+    piped_log = (rec / "current.log").read_bytes()
+
+    out_file = tmp_path / "wrapper-stdout.txt"
+    with open(out_file, "wb") as handle:
+        redirected = _run_in(repo, argv, env=env, stdout=handle)
+    assert redirected.returncode == 0, redirected.stderr
+    file_log = (rec / "current.log").read_bytes()
+
+    assert piped_log == file_log
+    assert b"out-a\n" in piped_log and b"err-a\n" in piped_log and b"out-b\n" in piped_log
+    assert piped.stdout == out_file.read_bytes() == b"out-a\nout-b\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.fork double-fork orphan is POSIX-only")
+@pytest.mark.deliberate_wall_clock(
+    reason="a max-runtime kill plus a bounded tee join are wall-clock bounds by definition"
+)
+def test_grandchild_holding_the_pipe_does_not_hang_the_wrapper(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    gc_pid = tmp_path / "gc.pid"
+    # Double fork: the orphaned grandchild is no longer a descendant, so the
+    # process-tree kill misses it while it still holds the inherited pipe write ends.
+    child = (
+        "import os, sys, pathlib, time\n"
+        "if os.fork() == 0:\n"
+        "    if os.fork() == 0:\n"
+        "        pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+        "        time.sleep(15)\n"
+        "    os._exit(0)\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    result = _run_in(
+        repo,
+        ["--collection", "gc", "--max-runtime", "2", "--", sys.executable, "-c", child, str(gc_pid)],
+        env=env, timeout=45,
+    )
+    elapsed = time.monotonic() - started
+    assert result.returncode == 124, result.stderr
+    assert elapsed < 14
+    body = json.loads((repo / ".coordinator-local" / "suite-runs" / "gc" / "current.json").read_text())
+    assert body["outcome"] == "timeout"
+    assert body["log_truncated"] is True
+
+
+def test_collection_must_be_a_slug(tmp_path):
+    result = _run(["--collection", "Bad Name", "--", sys.executable, "-c", "pass"], env=_base_env(tmp_path))
+    assert result.returncode == 2
+    assert "--collection" in result.stderr

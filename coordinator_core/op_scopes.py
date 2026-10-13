@@ -738,6 +738,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "review_mint.record_superseding_review":    "common_dir",
     # test_verdict.record — MUTATING: writes only the caller's own worktree sidecar.
     "test_verdict.record":                      "common_dir",
+    # testing.suite_runs — COMPUTE_ONLY: reads the caller's own repo records.
+    "testing.suite_runs":                       "common_dir",
     "receipt.approve":                          "common_dir",
     "fanout.poll_scratch_dir":                  "none",
     "fanout.compose":                           "none",

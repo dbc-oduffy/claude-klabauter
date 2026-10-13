@@ -455,6 +455,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "review_mint.record_superseding_review"',
     ),
     ("coordinator_core.ops.verdict_record_op", 'registers "test_verdict.record"'),
+    ("coordinator_core.ops.suite_runs_op", 'registers "testing.suite_runs"'),
     ("coordinator_core.completion_receipts.approve", 'registers "receipt.approve"'),
     ("coordinator_core.ops.strategic_generate", 'registers "strategic.generate"'),
     ("coordinator_core.ops.strategic_emit", 'registers "strategic.emit"'),

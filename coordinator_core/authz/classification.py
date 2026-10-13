@@ -2335,6 +2335,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?      YES.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "test_verdict.record": OpClass.MUTATING,
+    # testing.suite_runs — COMPUTE_ONLY: reads the suite-run records and asks git what changed.
+    "testing.suite_runs": OpClass.COMPUTE_ONLY,
     # receipt.approve — MUTATING: appends a quoted superseding completion
     # receipt under the caller's worktree.
     # DR-208 five-question affirmation:

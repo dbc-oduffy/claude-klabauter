@@ -328,7 +328,9 @@ which calls `resolve_repo_root()` with no argument, and that resolver's own docs
 resolves against the process's current cwd. It is not sited "at a target repo's root";
 it is same-repo-only relative to wherever the hook process is running, and the
 protected-path set (`_protected_paths()`) is composed from that same cwd-resolved root.
-It is PM-created, time-boxed, and covers a multi-edit change inside its window. It does
+It is PM-created and covers every edit inside the PM turn it was touched for, never
+longer than 30 minutes. It disarms itself: at the next PM turn the guard deletes the
+sentinel, and a fresh touch re-arms. The EM never removes it. It does
 **not** clear a cross-repo write, and it is orthogonal to — never additive with — the
 `allow-xrepo-write-*` markers above: because the protected set is composed from the
 session's own root, this guard does not even fire on a peer repo's

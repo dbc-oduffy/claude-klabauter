@@ -344,6 +344,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "review_mint.bookkeep_wave":              "coordinator_core.ops.review_mint.wave_bookkeeping",
     "review_mint.record_superseding_review":  "coordinator_core.ops.review_mint.supersede",
     "test_verdict.record":                    "coordinator_core.ops.verdict_record_op",
+    "testing.suite_runs":                     "coordinator_core.ops.suite_runs_op",
     "receipt.approve":                        "coordinator_core.completion_receipts.approve",
     "strategic.generate":                     "coordinator_core.ops.strategic_generate",
     "strategic.emit":                         "coordinator_core.ops.strategic_emit",
