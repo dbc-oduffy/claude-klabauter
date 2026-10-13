@@ -118,6 +118,11 @@ from coordinator_core.engine_root import (
 from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import context_only, payload_of
+from coordinator_core.hooks.scratch_size_probe import (
+    SCRATCH_WARN_BYTES,
+    WALK_ENTRY_LIMIT,
+    read_scratch,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.timestamps import with_age
 
@@ -881,6 +886,37 @@ def _lightweight_branch(out: List[str], repo_root: Optional[str]) -> None:
     out.append("  Full orientation available on next fresh session start.\n")
 
 
+def _scratch_size(nbytes: int) -> str:
+    mb = nbytes / (1024 * 1024)
+    return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb:.1f} MB"
+
+
+def _scratch_size_banner(out: List[str], repo_root: Optional[str]) -> None:
+    """Warn when scratch is over SCRATCH_WARN_BYTES or its read hit a bound; silent otherwise."""
+    if not repo_root:
+        return
+    scratch = Path(repo_root) / "scratch"
+    state_scratch = Path(repo_root) / "state" / "scratch"
+    read = read_scratch([scratch, state_scratch])
+    if read.finished and read.bytes <= SCRATCH_WARN_BYTES:
+        return
+    params = json.dumps({"repo_root": str(repo_root), "cadence": "workday_complete", "apply": True})
+    remedy = (
+        f"{settings_home() / 'bin' / 'coordinator-invoke'} fleet.scratch_hygiene '{params}' "
+        f"(rerun until it deletes nothing more; to keep something, move it to "
+        f"{Path(repo_root) / 'scratch-hold'}/; this purges {scratch}/ only, "
+        f"{state_scratch}/ is cleared by hand)"
+    )
+    size = _scratch_size(read.bytes)
+    if read.finished:
+        head = f"Scratch is {size} (over 500 MB)"
+    elif read.over_entries:
+        head = f"Scratch holds over {WALK_ENTRY_LIMIT} entries ({size} read in the first {WALK_ENTRY_LIMIT})"
+    else:
+        head = f"Scratch read stopped at its time allowance: {read.entries} entries and {size} read"
+    out.append(f"── ⚠ {head} — resolve: {remedy} ──\n")
+
+
 @register_op("hooks.project_orientation")
 def _handler(params: dict, repo_root=None) -> dict:
     payload = payload_of(params)
@@ -944,6 +980,10 @@ def _handler(params: dict, repo_root=None) -> dict:
         pass
     try:
         _tier_currency_banner(out, env, session_repo_root)
+    except Exception:
+        pass
+    try:
+        _scratch_size_banner(out, session_repo_root)
     except Exception:
         pass
 

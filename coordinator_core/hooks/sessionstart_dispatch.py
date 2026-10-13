@@ -52,6 +52,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 from pathlib import Path
@@ -161,7 +162,7 @@ _LEGS = (
 
 
 def _leg_project_orientation(payload):
-    return _project_orientation_handler({"payload": payload})
+    return asyncio.to_thread(_project_orientation_handler, {"payload": payload})
 
 
 def _leg_guard_settings_integrity(payload):

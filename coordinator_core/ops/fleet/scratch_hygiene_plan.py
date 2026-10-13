@@ -1,16 +1,24 @@
 """Read-only purge planner for ``fleet.scratch_hygiene``: classify each top-level entry of
 ``<repo>/scratch`` and ``coordinator_temp_root(repo)`` into the contract's action set.
 
+``scratch/warp/`` is not an entry: each run's directory and its ``.workflow.mjs`` and
+``.workflow.mjs.emitted.json`` files are. An entry of an open run is ``skipped-live``
+(``open-run-close-job:<run_id>``) while its close-job record holds a ``queued`` leg inside
+the record's deadline or is not a valid record; with no record it is ``skipped-live``
+(``open-run-no-close-job:<name>``) until quiet for 7 days.
+
 Negative spec: never deletes, never follows a link, never spawns a process, never walks
 scratch-hold, ``_fleet`` or system Temp.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -22,6 +30,9 @@ from coordinator_core.temp_layout import coordinator_temp_root
 
 _DAY = 86400.0
 _PYTEST_DIRNAME = "pytest"
+_WARP_DIRNAME = "warp"
+_RUN_FILE_SUFFIXES = (".workflow.mjs.emitted.json", ".workflow.mjs")
+OPEN_RUN_NO_RECORD_QUIESCENCE_HOURS = 168
 
 
 def _norm(path: str | os.PathLike[str]) -> str:
@@ -172,6 +183,50 @@ else:
         return any(p.startswith(prefix) or p == prefix[:-1] for p in ctx.open_files())
 
 
+def _open_run_state(entry: str, repo_root: Path, now: float) -> Optional[tuple[str, str]]:
+    """For an entry directly under ``<repo>/scratch/warp``: ``("record", run_id)`` when its
+    close-job record marks the run open, ``("none", name)`` when no record exists, and None
+    for any other entry or a run whose legs all have an outcome.
+
+    ``run_close`` is imported here, not at module top, and only after the cheap directory
+    check: the dispatch_emit package pulls the ops tree into this fleet module.
+    """
+    if _norm(os.path.dirname(entry)) != _norm(repo_root / "scratch" / _WARP_DIRNAME):
+        return None
+    from coordinator_core.ops.dispatch_emit.run_close import STATUSES, close_job_path
+
+    name = os.path.basename(entry)
+    for suffix in _RUN_FILE_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    run_id = f"{name}.workflow"
+    try:
+        with open(repo_root / close_job_path(run_id), encoding="utf-8") as fh:
+            record = json.load(fh)
+    except FileNotFoundError:
+        return ("none", name)
+    except (OSError, ValueError):
+        return ("record", run_id)
+    legs = record.get("legs") if isinstance(record, dict) else None
+    if not isinstance(legs, dict):
+        return ("record", run_id)
+    unfinished = any(
+        not (isinstance(leg, dict) and leg.get("status") in STATUSES and leg.get("status") != "queued")
+        for leg in legs.values()
+    )
+    if not unfinished:
+        return None
+    try:
+        deadline = datetime.fromisoformat(str(record.get("deadline", "")))
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        late = datetime.fromtimestamp(now, timezone.utc) > deadline
+    except (ValueError, TypeError):
+        late = True
+    return None if late else ("record", run_id)
+
+
 def classify_entry(
     entry: str | os.PathLike[str],
     *,
@@ -215,16 +270,24 @@ def classify_entry(
     if hold_pending_marker(entry) is not None:
         return rec("skipped-hold-pending", reason="move-to-hold-marker")
 
+    open_run = _open_run_state(entry, repo_root, now)
+    if open_run is not None and open_run[0] == "record":
+        return rec("skipped-live", reason=f"open-run-close-job:{open_run[1]}")
+
     here = _norm(entry)
     for row in ctx.live_rows():
         cwd = _norm(row.cwd) if row.cwd else ""
         if cwd and (cwd == here or cwd.startswith(here + os.sep)):
             return rec("skipped-live", reason=f"live-session-cwd:{row.session_id}")
 
-    cutoff = now - quiescence_hours * 3600.0
+    no_record = open_run is not None and open_run[0] == "none"
+    hours = max(quiescence_hours, OPEN_RUN_NO_RECORD_QUIESCENCE_HOURS) if no_record else quiescence_hours
+    cutoff = now - hours * 3600.0
     w = _walk(entry, cutoff, deadline)
     if w.out_of_time:
         return rec("skipped-budget", reason="budget-exhausted")
+    if w.young and no_record:
+        return rec("skipped-live", w, reason=f"open-run-no-close-job:{open_run[1]}")
     if w.young:
         return rec("skipped-young", w, reason=f"written-within-{quiescence_hours:g}h")
 
@@ -252,14 +315,16 @@ def _entries(root: Path) -> list[str]:
 
 def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
     """Every top-level entry in ``<repo>/scratch`` and ``coordinator_temp_root(repo)``.
-    ``pytest/`` under the Temp root is not an entry: its per-run children are."""
+    ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
+    per-run children are."""
     repo_root = Path(repo_root)
-    paths = _entries(repo_root / "scratch")
-    for p in _entries(coordinator_temp_root(repo_root)):
-        if os.path.basename(p) == _PYTEST_DIRNAME and not _is_link(p) and os.path.isdir(p):
-            paths.extend(_entries(Path(p)))
-        else:
-            paths.append(p)
+    paths = []
+    for root, per_run in ((repo_root / "scratch", _WARP_DIRNAME), (coordinator_temp_root(repo_root), _PYTEST_DIRNAME)):
+        for p in _entries(root):
+            if os.path.basename(p) == per_run and not _is_link(p) and os.path.isdir(p):
+                paths.extend(_entries(Path(p)))
+            else:
+                paths.append(p)
     return paths
 
 

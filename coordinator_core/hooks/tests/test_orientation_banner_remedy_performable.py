@@ -57,6 +57,11 @@ def test_corpus_remedy_is_the_band_supplied_remount_command():
     assert 'refresh: {remount_command}' in _SRC
 
 
+def test_scratch_remedy_is_the_purge_op_from_settings_home():
+    assert "settings_home() / 'bin' / 'coordinator-invoke'" in _SRC
+    assert "fleet.scratch_hygiene" in _SRC
+
+
 def test_engine_resolution_banner_is_fix_free():
     out: list = []
     po._engine_resolution_banner(out)

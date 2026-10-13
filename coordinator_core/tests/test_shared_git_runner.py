@@ -826,7 +826,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/percolate-full-payload-proof.py",
         "coordinator/bin/percolate-push.py",
         "coordinator/bin/percolate-round.py",
-        "coordinator/bin/probe-prereq.py",
         "coordinator/bin/publish-allowlist-generate.py",
         "coordinator/bin/publish.py",
         "coordinator/bin/queue-closure-sweep.py",
@@ -861,9 +860,14 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/bash_guards/dispatch_checks.py",
         "coordinator_core/baton_assemble/__init__.py",
         "coordinator_core/baton_assemble/apply.py",
+        "coordinator_core/benchmarks/close_background_full_path.py",
+        "coordinator_core/benchmarks/close_review_full_path.py",
         "coordinator_core/benchmarks/harness.py",
         "coordinator_core/benchmarks/interleave.py",
         "coordinator_core/benchmarks/op_fixtures.py",
+        "coordinator_core/benchmarks/quick_wrap_brief_full_path.py",
+        "coordinator_core/benchmarks/terminal_commit_full_path.py",
+        "coordinator_core/benchmarks/workstream_complete_brief_full_path.py",
         "coordinator_core/cartography/file_index.py",
         "coordinator_core/cartography/tree.py",
         "coordinator_core/chain_attribution.py",
@@ -950,6 +954,9 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/session/safe_commit_offer.py",
         "coordinator_core/ops/staleness_git.py",
         "coordinator_core/ops/strategic/version_highlights.py",
+        "coordinator_core/ops/suite_runs_op.py",
+        "coordinator_core/review_trail/unreceipted_range.py",
+        "coordinator_core/testing/suite_run_reuse.py",
         "coordinator_core/ops/verify_arch_audit_atlas_refresh.py",
         "coordinator_core/ops/verify_fix_files_changed.py",
         "coordinator_core/ops/verify_orientation_cache_sync.py",
@@ -979,6 +986,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/workstream_complete/__init__.py",
         "coordinator_core/workstream_complete/directives_commit_tail.py",
         "coordinator_core/workstream_complete/directives_memo_lifecycle.py",
+        "coordinator_core/workstream_complete/session_history.py",
         "coordinator_core/workstream_complete/session_identity.py",
         "coordinator_core/write_guards/validate_frontmatter_schema_deny.py",
     }
@@ -1047,6 +1055,9 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/ops/run_shellcheck_sweep.py", "_GIT_TIMEOUT_SECONDS"),
         ("coordinator_core/ops/session/resolve_chain_terminal_disposition.py", "_GIT_TIMEOUT_SECONDS"),
         ("coordinator_core/ops/strategic/version_highlights.py", "_SUBPROCESS_TIMEOUT"),
+        ("coordinator_core/ops/suite_runs_op.py", "_GIT_TIMEOUT_S"),
+        ("coordinator_core/review_trail/unreceipted_range.py", "_GIT_TIMEOUT_SECS"),
+        ("coordinator_core/testing/suite_run_reuse.py", "GIT_STATUS_TIMEOUT_SECS"),
         ("coordinator_core/ops/verify_arch_audit_atlas_refresh.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/verify_orientation_cache_sync.py", "_SUBPROCESS_TIMEOUT_SECS"),
         ("coordinator_core/ops/workday_complete_backfill_scan.py", "_GIT_TIMEOUT"),
@@ -1061,6 +1072,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/workday_complete/cockpit_contract_freshness.py", "_LOCAL_GIT_TIMEOUT_SECONDS"),
         ("coordinator_core/workday_complete/cockpit_contract_freshness.py", "_LS_REMOTE_TIMEOUT_SECONDS"),
         ("coordinator_core/workstream_complete/__init__.py", "_REVIEW_SCALE_GIT_TIMEOUT"),
+        ("coordinator_core/workstream_complete/session_history.py", "_GIT_LOG_TIMEOUT_S"),
     }
 )
 
@@ -1070,8 +1082,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 184
-_PINNED_DIAL_CEILING = 68
+_PINNED_RUNNER_CEILING = 192
+_PINNED_DIAL_CEILING = 72
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across

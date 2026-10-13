@@ -36,7 +36,7 @@ def _text(params: dict, key: str) -> str | None:
 
 
 @register_op("canvas.harvest")
-async def _handler(params: dict, repo_root: Any = None) -> dict:
+def _handler(params: dict, repo_root: Any = None) -> dict:
     """Run one canvas harvest or probe; never raises for a named refusal."""
     params = params or {}
     mode = params.get("mode")

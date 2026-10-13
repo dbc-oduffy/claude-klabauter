@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -153,3 +155,128 @@ def test_no_subprocess_spawned(fx, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", boom)
     _plan(fx)
+
+
+# --- open-run skip -----------------------------------------------------------------------
+
+_FUTURE = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+_PAST = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    (tmp_path / "scratch" / "warp").mkdir(parents=True)
+    return tmp_path
+
+
+def _run(repo: Path, name: str, days: float = 10, record=None, raw: str | None = None) -> list[Path]:
+    warp = repo / "scratch" / "warp"
+    d = warp / name
+    d.mkdir()
+    (d / "f.txt").write_text("x")
+    paths = [d, warp / f"{name}.workflow.mjs", warp / f"{name}.workflow.mjs.emitted.json"]
+    for p in paths[1:]:
+        p.write_text("x")
+    for p in paths:
+        _backdate_to(p, days)
+    if record is not None or raw is not None:
+        rec = repo / ".coordinator-local" / "close-jobs" / f"{name}.workflow.json"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(raw if raw is not None else json.dumps(record))
+    return paths
+
+
+def _backdate_to(path: Path, days: float) -> None:
+    stamp = time.time() - days * 86400
+    stack = [path]
+    while stack:
+        p = stack.pop()
+        os.utime(p, (stamp, stamp))
+        if p.is_dir():
+            stack.extend(p / n for n in os.listdir(p))
+
+
+def _classify(repo: Path, p: Path) -> dict:
+    return plan.classify_entry(p, repo_root=repo, registry_dir=repo / "no-registry")
+
+
+def _record(deadline: str, *statuses: str) -> dict:
+    return {"deadline": deadline, "legs": {f"leg{i}": {"status": s} for i, s in enumerate(statuses)}}
+
+
+def test_warp_is_not_an_entry_but_its_children_are(repo):
+    paths = _run(repo, "a")
+    got = plan.purge_candidates(repo)
+    assert str(repo / "scratch" / "warp") not in got
+    assert all(str(p) in got for p in paths)
+
+
+def test_queued_leg_inside_deadline_holds_the_run(repo):
+    for p in _run(repo, "a", record=_record(_FUTURE, "queued", "ran")):
+        r = _classify(repo, p)
+        assert r["action"] == "skipped-live"
+        assert r["reason"] == "open-run-close-job:a.workflow"
+
+
+@pytest.mark.parametrize("deadline", [_PAST, "not-a-date"])
+def test_queued_leg_past_or_unparseable_deadline_is_finished(repo, deadline):
+    for p in _run(repo, "a", record=_record(deadline, "queued")):
+        assert _classify(repo, p)["action"] == "would-delete"
+
+
+def test_every_leg_with_an_outcome_is_finished_even_failed(repo):
+    for p in _run(repo, "a", record=_record(_FUTURE, "ran", "failed")):
+        assert _classify(repo, p)["action"] == "would-delete"
+
+
+def test_no_record_two_days_old_is_held(repo):
+    for p in _run(repo, "a", days=2):
+        r = _classify(repo, p)
+        assert r["action"] == "skipped-live"
+        assert r["reason"] == "open-run-no-close-job:a"
+
+
+def test_no_record_eight_days_old_is_deleted(repo):
+    for p in _run(repo, "a", days=8):
+        assert _classify(repo, p)["action"] == "would-delete"
+
+
+@pytest.mark.parametrize("kw", [{"raw": "{not json"}, {"record": {"deadline": _PAST}}, {"record": [1]}])
+def test_invalid_record_is_an_open_run(repo, kw):
+    for p in _run(repo, "a", **kw):
+        r = _classify(repo, p)
+        assert r["action"] == "skipped-live"
+        assert r["reason"] == "open-run-close-job:a.workflow"
+
+
+def test_stray_file_under_warp_follows_the_no_record_rule(repo):
+    stray = repo / "scratch" / "warp" / "stray.txt"
+    stray.write_text("x")
+    _backdate_to(stray, 2)
+    r = _classify(repo, stray)
+    assert (r["action"], r["reason"]) == ("skipped-live", "open-run-no-close-job:stray.txt")
+    _backdate_to(stray, 8)
+    assert _classify(repo, stray)["action"] == "would-delete"
+
+
+def test_apply_keeps_open_runs_and_removes_finished(repo):
+    from coordinator_core.ops.fleet.scratch_hygiene import run_hygiene
+
+    queued = _run(repo, "q", record=_record(_FUTURE, "queued"))
+    fresh = _run(repo, "n", days=2)
+    done = _run(repo, "d", record=_record(_FUTURE, "ran"))
+    run_hygiene({"repo_root": str(repo), "cadence": "workday_complete", "apply": True})
+    assert all(p.exists() for p in queued + fresh)
+    assert not any(p.exists() for p in done)
+
+
+def test_non_warp_entry_is_classified_as_before(repo):
+    f = repo / "scratch" / "old.txt"
+    f.write_text("x")
+    _backdate_to(f, 10)
+    assert _classify(repo, f)["action"] == "would-delete"
+    _backdate_to(f, 0.5)
+    assert _classify(repo, f)["action"] == "skipped-young"

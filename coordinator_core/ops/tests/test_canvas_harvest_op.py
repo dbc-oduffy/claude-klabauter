@@ -19,7 +19,7 @@ BOUND_KEY = ipc._SCOPE_TOUCH_MAX_PATHS_KEY
 
 
 def _call(params, repo_root=None):
-    return asyncio.run(op._handler(params, repo_root=repo_root))
+    return op._handler(params, repo_root=repo_root)
 
 
 def _ok_params(**extra):
