@@ -2950,6 +2950,7 @@ class TestReuseFreshDeferral:
         "with-suite-mutex --collection --reuse-fresh -- python -m pytest",
         "with-suite-mutex --max-runtime --reuse-fresh -- python -m pytest",
         "with-suite-mutex --reuse-fresh -- true && python -m pytest",
+        "with-suite-mutex --reuse-fresh -- pytest && with-suite-mutex -- pytest",
         "with-suite-mutex -- pytest",
         "pytest",
     ])

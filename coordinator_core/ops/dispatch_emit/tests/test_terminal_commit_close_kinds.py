@@ -151,7 +151,10 @@ def test_xs_run_on_a_minted_spine_has_no_governing_plan(base):
     _assert_whole_block(close, "xs-s-run")
     assert close["legs"]["plan-reconciliation"] == {"status": "not-applicable", "detail": "XS run: no plan governs"}
     assert "plan-reconciliation" not in close["outstanding"]
-    assert close["legs"]["review"]["status"] == "queued"
+    assert close["legs"]["review"] == {
+        "status": "failed", "detail": terminal_commit._NOT_LANDED,
+    }
+    assert "review" in close["outstanding"]
 
 
 def test_wave_fire_xs_lane_ask_route_request_with_baton_is_accepted(base):

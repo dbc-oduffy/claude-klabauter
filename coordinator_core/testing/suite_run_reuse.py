@@ -159,8 +159,11 @@ class Tee:
                 pass
             with self._lock:
                 if self._log is not None:
-                    self._log.write(chunk)
-                    self._log.flush()
+                    try:
+                        self._log.write(chunk)
+                        self._log.flush()
+                    except (OSError, ValueError):
+                        self._log = None  # keep draining so the child never blocks on a full pipe
 
     def finish(self) -> bool:
         """Join the pumps within ``TEE_JOIN_SECS``; True when all hit EOF. The

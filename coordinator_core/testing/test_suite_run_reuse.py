@@ -68,6 +68,45 @@ def test_line_formats():
     assert reuse.ran_line("c", SHA, "fail", "/l") == f"suite-run: ran c@{SHA} outcome=fail log=/l"
 
 
+def test_git_head_and_dirty_parses_porcelain_v2(monkeypatch):
+    out = (
+        f"# branch.oid {SHA}\n# branch.head main\n"
+        "1 .M N... 100644 100644 100644 aaa bbb dir/a.py\n"
+        "2 R. N... 100644 100644 100644 aaa bbb R100 new.py\told.py\n"
+        "u UU N... 100644 100644 100644 100644 a b c conflict.py\n"
+    )
+    monkeypatch.setattr(
+        reuse.subprocess, "run",
+        lambda *a, **k: reuse.subprocess.CompletedProcess(a, 0, stdout=out, stderr=""),
+    )
+    assert reuse._git_head_and_dirty("r") == (SHA, ["dir/a.py", "new.py", "conflict.py"])
+
+
+def test_git_head_and_dirty_git_failure(monkeypatch):
+    monkeypatch.setattr(
+        reuse.subprocess, "run",
+        lambda *a, **k: reuse.subprocess.CompletedProcess(a, 128, stdout="", stderr="x"),
+    )
+    assert reuse._git_head_and_dirty("r") == (None, [])
+
+
+@pytest.mark.spawns_process
+def test_tee_survives_log_write_failure(tmp_path):
+    import subprocess
+    import sys
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "print('x' * 200000)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, **no_console_creationflags(),
+    )
+    tee = reuse.Tee(proc, str(tmp_path / "t.log"))
+    tee._log.close()  # every later log write raises ValueError
+    assert proc.wait(timeout=20) == 0
+    assert tee.finish() is True
+
+
 def test_record_run_swallows_failure(tmp_path, capsys):
     reuse.record_run(str(tmp_path), "Bad Name", CMD, SHA, [], "t", 0.0, 0, "pass", True, None, False)
     assert "suite-run record not written:" in capsys.readouterr().err

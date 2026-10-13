@@ -1,7 +1,7 @@
 """Two-slot (current, previous) suite-run record per repo and named collection.
 
-Pure stdlib plus one lazy engine import (``session.core.pid_alive``), no git spawn. Layout: ``<repo>/.coordinator-local/suite-runs/<collection>/
-{current,previous}.{json,log}``. Writers are serialized by the suite mutex; every write is
+Pure stdlib plus one lazy engine import (``session.core.pid_alive``), no git spawn.
+Layout: ``<repo>/.coordinator-local/suite-runs/<collection>/{current,previous}.{json,log}``. Writers are serialized by the suite mutex; every write is
 temp + ``os.replace`` and ``current.*`` is never absent once written.
 """
 

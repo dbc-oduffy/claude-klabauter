@@ -65,6 +65,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -78,6 +79,20 @@ pytestmark = [
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_SCRIPT_DIR)
 _CLI = os.path.join(_BIN_DIR, "validate-fast-and-packageability.py")
+
+
+_REPO = ""
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_mutex_and_repo(tmp_path, monkeypatch):
+    """Mutex lock and suite-run records live under tmp_path; repo root is a tmp_path dir."""
+    home = tmp_path / "settings-home"
+    repo = tmp_path / "repo"
+    home.mkdir()
+    repo.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setattr(sys.modules[__name__], "_REPO", str(repo))
 
 
 def _load_cli_module():
@@ -106,13 +121,13 @@ def _run(args: list[str], env: dict | None = None, cwd: str | None = None) -> su
 class FastSubcommandTest(unittest.TestCase):
     def test_t1_skip_with_notice(self) -> None:
         env = {"COORDINATOR_FAST_TEST_CMD": ""}
-        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        proc = _run(["fast", "--repo-root", _REPO], env=env)
         self.assertIn("Validation: skipped", proc.stdout)
         self.assertEqual(proc.returncode, 0)
 
     def test_t2_config_malformed(self) -> None:
         env = {"COORDINATOR_FAST_TEST_CMD": r'echo \"hi'}
-        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        proc = _run(["fast", "--repo-root", _REPO], env=env)
         self.assertIn("Validation: config-malformed", proc.stdout)
         self.assertEqual(proc.returncode, 1)
 
@@ -121,19 +136,19 @@ class FastSubcommandTest(unittest.TestCase):
             "COORDINATOR_FAST_TEST_CMD": "python -m pytest",
             "PATH": "/nonexistent-empty-path-dir",
         }
-        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        proc = _run(["fast", "--repo-root", _REPO], env=env)
         self.assertIn("Validation: interp-missing", proc.stdout)
         self.assertEqual(proc.returncode, 1)
 
     def test_t4_resolved_command_passes(self) -> None:
         env = {"COORDINATOR_FAST_TEST_CMD": "true"}
-        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        proc = _run(["fast", "--repo-root", _REPO], env=env)
         self.assertIn("Validation: 0", proc.stdout)
         self.assertEqual(proc.returncode, 0)
 
     def test_t17_budget_line_emitted_on_stderr(self) -> None:
         env = {"COORDINATOR_FAST_TEST_CMD": "true"}
-        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        proc = _run(["fast", "--repo-root", _REPO], env=env)
         self.assertIn("Validation: 0", proc.stdout)
         self.assertEqual(proc.returncode, 0)
         self.assertIn("[validate-gate] self_process_ms=", proc.stderr)
@@ -142,7 +157,7 @@ class FastSubcommandTest(unittest.TestCase):
 
     def test_t5_resolved_command_fails(self) -> None:
         env = {"COORDINATOR_FAST_TEST_CMD": "exit 3"}
-        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        proc = _run(["fast", "--repo-root", _REPO], env=env)
         self.assertIn("Validation: tier-u-refused", proc.stdout)
         self.assertEqual(proc.returncode, 3)
 
@@ -179,7 +194,7 @@ class FastSubcommandTest(unittest.TestCase):
 
         mod._run_resolved_command = _fake_run_resolved_command
 
-        validation_result, exit_code = mod.run_fast("/tmp")
+        validation_result, exit_code = mod.run_fast(_REPO)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(validation_result, "0")
@@ -224,7 +239,7 @@ class FastSubcommandTest(unittest.TestCase):
 
         mod._run_resolved_command = _fake_run_resolved_command
 
-        validation_result, exit_code = mod.run_fast("/tmp")
+        validation_result, exit_code = mod.run_fast(_REPO)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(validation_result, "0")
@@ -270,7 +285,7 @@ class FastSubcommandTest(unittest.TestCase):
 
         mod._run_resolved_command = _fake_run_resolved_command
 
-        validation_result, exit_code = mod.run_fast("/tmp")
+        validation_result, exit_code = mod.run_fast(_REPO)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(captured_cmds), 1)
@@ -380,7 +395,7 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
 
             mod._run_resolved_command = _fake_run_resolved_command
 
-            validation_result, exit_code = mod.run_fast("/tmp")
+            validation_result, exit_code = mod.run_fast(_REPO)
 
             self.assertEqual((validation_result, exit_code), ("0", 0))
             self.assertEqual(len(observed_holder), 1)
@@ -406,7 +421,7 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
             try:
                 stderr_buf = io.StringIO()
                 with contextlib.redirect_stderr(stderr_buf):
-                    validation_result, exit_code = mod.run_fast("/tmp")
+                    validation_result, exit_code = mod.run_fast(_REPO)
             finally:
                 suite_mutex.release("other-owner")
 
@@ -414,6 +429,143 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
             self.assertEqual(ran, [True])
             self.assertIn("suite mutex held by other-owner", stderr_buf.getvalue())
             self.assertIn("proceeding unserialized", stderr_buf.getvalue())
+
+
+class SuiteRunReuseTest(unittest.TestCase):
+    """C5: a fresh full-fast record is reused ahead of the tier gate; only full runs record."""
+
+    def _setup(self, tmp_dir: str, diff_paths: list):
+        os.makedirs(os.path.join(tmp_dir, ".git"))
+        mod = _load_cli_module()
+
+        class _R:
+            stdout = "true\n"
+            returncode = 0
+
+        mod._resolver.resolve_fast_test_cmd = lambda repo_root: _R()
+        mod.compute_diff_scoped_paths = lambda repo_root: (diff_paths, True)
+        mod.append_test_paths = lambda cmd, paths: cmd + " " + " ".join(paths)
+        return mod
+
+    def test_fresh_record_hits_without_gate_or_spawn(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mod = self._setup(tmp_dir, [])
+            reuse = mod.suite_run_reuse.Reuse("fast", "abc", 3, "fail", None, "/x.log")
+            patcher = mock.patch.object(
+                mod.suite_run_reuse, "find_reusable", lambda root, coll, argv: reuse)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            spawned: list = []
+
+            def _no_gate(cmd, repo_root=None):
+                raise AssertionError("tier gate consulted on a reuse hit")
+
+            mod.enforce_tier_u_gate = _no_gate
+            mod._run_resolved_command = lambda *a, **k: spawned.append(a)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                result = mod.run_fast(tmp_dir)
+            self.assertEqual(result, ("3", 3))
+            self.assertEqual(spawned, [])
+            self.assertIn("suite-run: reused fast@abc outcome=fail log=/x.log", err.getvalue())
+
+    def test_miss_records_once_via_record_target(self) -> None:
+        import tempfile
+
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mod = self._setup(tmp_dir, [])
+            patcher = mock.patch.object(
+                mod.suite_run_reuse, "find_reusable", lambda root, coll, argv: None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+                proceed=True, refusal_message=None
+            )
+            calls: list = []
+            mod._run_resolved_command = lambda cmd, record=None: calls.append(record) or 0
+            os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
+            self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
+            self.assertEqual(mod.run_fast(tmp_dir), ("0", 0))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][1], "fast")
+            self.assertEqual(calls[0][0], mod.suite_run_record.repo_root_for(tmp_dir))
+
+    def test_diff_scoped_run_never_records_or_reuses(self) -> None:
+        import tempfile
+
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mod = self._setup(tmp_dir, ["tests/test_a.py"])
+
+            def _boom(*a, **k):
+                raise AssertionError("reuse consulted for a diff-scoped run")
+
+            patcher = mock.patch.object(mod.suite_run_reuse, "find_reusable", _boom)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+                proceed=True, refusal_message=None
+            )
+            seen: list = []
+            mod._run_resolved_command = lambda cmd, record=None: seen.append((cmd, record)) or 0
+            os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
+            self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
+            mod.run_fast(tmp_dir)
+            self.assertEqual(seen, [("true tests/test_a.py", None)])
+            self.assertFalse(os.path.exists(os.path.join(tmp_dir, "suite-runs", "fast")))
+
+    def test_no_tests_collected_fallback_records_full_run(self) -> None:
+        import tempfile
+
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mod = self._setup(tmp_dir, ["tests/test_a.py"])
+            patcher = mock.patch.object(
+                mod.suite_run_reuse, "find_reusable", lambda root, coll, argv: None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+                proceed=True, refusal_message=None
+            )
+            seen: list = []
+
+            def _run(cmd, record=None):
+                seen.append((cmd, record))
+                return mod.PYTEST_NO_TESTS_COLLECTED if record is None else 0
+
+            mod._run_resolved_command = _run
+            os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
+            self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
+            self.assertEqual(mod.run_fast(tmp_dir), ("0", 0))
+            self.assertIsNone(seen[0][1])
+            self.assertEqual(seen[1][0], "true")
+            self.assertEqual(seen[1][1][1], "fast")
+
+    def test_real_run_tees_and_writes_record(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            os.makedirs(os.path.join(tmp_dir, ".git"))
+            mod = _load_cli_module()
+            written: list = []
+            patcher = mock.patch.object(
+                mod.suite_run_reuse, "record_run", lambda *a: written.append(a))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            key = mod.suite_run_reuse.command_key(["true"])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = mod._run_resolved_command("true", record=(tmp_dir, "fast", key))
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(written), 1)
+            self.assertEqual(written[0][2], key)
+            self.assertEqual(written[0][8], "pass")
 
 
 class ProcessGroupTeardownTest(unittest.TestCase):

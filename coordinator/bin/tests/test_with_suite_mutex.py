@@ -726,3 +726,156 @@ def test_collection_must_be_a_slug(tmp_path):
     result = _run(["--collection", "Bad Name", "--", sys.executable, "-c", "pass"], env=_base_env(tmp_path))
     assert result.returncode == 2
     assert "--collection" in result.stderr
+
+
+_COUNTER_CHILD = (
+    "import sys, time\n"
+    "time.sleep(0.3)\n"
+    "open(sys.argv[1], 'a').write('x')\n"
+    "sys.exit(int(sys.argv[2]) if len(sys.argv) > 2 else 0)\n"
+)
+
+
+def _counter_setup(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    # A python stub is an unclassifiable runner footprint; declaring the repo's fast tier
+    # scoped lets the real gate pass it, so only the Tier-U shapes below are refused.
+    (repo / "coordinator.local.md").write_text("---\nfast_tier_shape: scoped\n---\n")
+    (repo / "child.py").write_text(_COUNTER_CHILD)
+    # Committed: an untracked source file makes every record non-fresh.
+    env = {**os.environ, **_GIT_ENV}
+    for args in (["add", "child.py", "coordinator.local.md"], ["commit", "-q", "-m", "stub"]):
+        subprocess.run(
+            ["git", *args], cwd=repo, env=env, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    counter = tmp_path / "counter.txt"
+    counter.write_text("")
+    return repo, [sys.executable, "child.py", str(counter)], counter
+
+
+def _current(repo: Path, collection: str = "reuse") -> Path:
+    return repo / ".coordinator-local" / "suite-runs" / collection / "current.json"
+
+
+def _reuse_args(cmd, collection: str = "reuse"):
+    return ["--collection", collection, "--reuse-fresh", "--", *cmd]
+
+
+def test_reuse_fresh_hit_spawns_nothing_and_leaves_record_untouched(tmp_path):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    env = _base_env(tmp_path / "home")
+    first = _run_in(repo, _reuse_args(cmd), env=env)
+    assert first.returncode == 0, first.stderr
+    assert counter.read_text() == "x"
+    assert b"suite-run: ran reuse@" in first.stderr
+    before = _current(repo).read_bytes()
+    second = _run_in(repo, _reuse_args(cmd), env=env)
+    assert second.returncode == 0, second.stderr
+    assert counter.read_text() == "x"
+    assert b"suite-run: reused reuse@" in second.stderr
+    assert b"outcome=pass" in second.stderr
+    assert _current(repo).read_bytes() == before
+
+
+def test_reuse_fresh_hit_on_a_failing_record_exits_with_its_code(tmp_path):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    env = _base_env(tmp_path / "home")
+    failing = [*cmd, "3"]
+    assert _run_in(repo, _reuse_args(failing), env=env).returncode == 3
+    again = _run_in(repo, _reuse_args(failing), env=env)
+    assert again.returncode == 3
+    assert counter.read_text() == "x"
+    assert b"outcome=fail" in again.stderr
+
+
+def test_reuse_fresh_command_mismatch_runs_once_and_rewrites_current(tmp_path):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    env = _base_env(tmp_path / "home")
+    assert _run_in(repo, _reuse_args(cmd), env=env).returncode == 0
+    started = json.loads(_current(repo).read_text())["started_at"]
+    time.sleep(1.1)
+    other = [*cmd, "0"]
+    result = _run_in(repo, _reuse_args(other), env=env)
+    assert result.returncode == 0, result.stderr
+    assert counter.read_text() == "xx"
+    body = json.loads(_current(repo).read_text())
+    assert body["started_at"] != started
+    assert body["command"][1:] == other[1:]
+
+
+def test_reuse_fresh_stale_record_runs_once(tmp_path):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    env = _base_env(tmp_path / "home")
+    assert _run_in(repo, _reuse_args(cmd), env=env).returncode == 0
+    (repo / "tracked.py").write_text("x = 99\n")
+    result = _run_in(repo, _reuse_args(cmd), env=env)
+    assert result.returncode == 0, result.stderr
+    assert counter.read_text() == "xx"
+    assert b"suite-run: ran" in result.stderr
+
+
+def test_reuse_fresh_gate_sees_quoted_argv_and_refuses_ungranted(tmp_path):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    env = _base_env(tmp_path / "home")
+    result = _run_in(
+        repo,
+        _reuse_args([sys.executable, "-m", "pytest", "-m", "not docs"]),
+        env=env,
+    )
+    assert result.returncode == 77, result.stderr
+    assert not _current(repo).exists()
+
+
+def _in_process_main(module, monkeypatch, repo: Path, args):
+    monkeypatch.chdir(repo)
+    return module.main(args)
+
+
+def test_reuse_fresh_gate_refusal_exits_77_without_spawning(tmp_path, monkeypatch):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    module = _load_wrapper_module()
+    seen = []
+
+    def refuse(text, **kwargs):
+        seen.append(text)
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        return TierUGateResult(proceed=False, refusal_message="refused-by-gate")
+
+    monkeypatch.setattr(module, "enforce_tier_u_gate", refuse)
+    assert _in_process_main(module, monkeypatch, repo, _reuse_args(cmd)) == 77
+    assert seen and seen[0].startswith(cmd[0])
+    assert counter.read_text() == ""
+
+
+def test_reuse_fresh_held_mutex_exits_75_with_wait_advice(tmp_path, monkeypatch, capfd):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module.suite_mutex, "holder", lambda *a, **k: {"owner": "peer"})
+    assert _in_process_main(module, monkeypatch, repo, _reuse_args(cmd)) == 75
+    assert "--wait" in capfd.readouterr().err
+    assert counter.read_text() == ""
+
+
+def test_reuse_fresh_lost_acquire_race_kills_the_unrun_child_and_exits_75(
+    tmp_path, monkeypatch
+):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module.suite_mutex, "holder", lambda *a, **k: None)
+    timeouts = []
+
+    def lose(owner, cmd_str, timeout=0.0, **kwargs):
+        timeouts.append(timeout)
+        return False
+
+    monkeypatch.setattr(module.suite_mutex, "acquire", lose)
+    assert _in_process_main(module, monkeypatch, repo, _reuse_args(cmd)) == 75
+    assert timeouts == [0.0]
+    time.sleep(0.6)
+    assert counter.read_text() == ""
+    assert not _current(repo).exists()

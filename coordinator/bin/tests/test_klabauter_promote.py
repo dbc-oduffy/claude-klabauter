@@ -599,3 +599,266 @@ def test_confirm_also_fast_forwards_the_local_main_branch(tmp_path, monkeypatch)
     rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
     assert rc == _mod._EXIT_OK
     assert ["git", "-C", dest, "fetch", ".", "candidate:main"] in spy.calls
+
+
+# --- promote_candidate against real git (bare origin, real clone) ----------
+
+import os
+
+
+def _g(cwd, *args, when=None):
+    """Run a real git command; `when` backdates author/committer (and so
+    reflog) timestamps by that many hours."""
+    env = dict(
+        os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull,
+    )
+    if when is not None:
+        stamp = (datetime.now(timezone.utc) - timedelta(hours=when)).replace(microsecond=0).isoformat()
+        env["GIT_COMMITTER_DATE"] = stamp
+        env["GIT_AUTHOR_DATE"] = stamp
+    r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, env=env,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert r.returncode == 0, (args, r.stderr)
+    return r.stdout.strip()
+
+
+class _Rig:
+    def __init__(self, base: Path):
+        base.mkdir(parents=True, exist_ok=True)
+        self.origin, self.dest, self.root = base / "origin.git", base / "dest", base / "root"
+        for p in (self.origin, self.dest, self.root):
+            p.mkdir()
+        _g(self.origin, "init", "--bare", "-b", "main")
+        _g(self.root, "init", "-b", "main")
+        (self.root / "f").write_text("x")
+        _g(self.root, "add", "f")
+        _g(self.root, "commit", "-m", "ship the thing")
+        self.src = _g(self.root, "rev-parse", "--short", "HEAD")
+        _g(self.dest, "init", "-b", "main")
+        _g(self.dest, "remote", "add", "origin", str(self.origin))
+        self.n = 0
+        self.base = self.commit(200, "base")
+        _g(self.dest, "push", "origin", "main", when=200)
+        _g(self.dest, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        _g(self.dest, "checkout", "-b", "candidate")
+
+    def commit(self, age, tag=None) -> str:
+        self.n += 1
+        (self.dest / f"{self.n}.txt").write_text(str(self.n))
+        _g(self.dest, "add", ".")
+        _g(self.dest, "commit", "-m", f"{tag or 'c%d' % self.n} [source-head {self.src}]", when=age)
+        return _g(self.dest, "rev-parse", "HEAD")
+
+    def push(self, age, force=False):
+        _g(self.dest, "push", *(["-f"] if force else []), "-u", "origin", "candidate", when=age)
+
+    def origin_ref(self, ref):
+        return _g(self.origin, "rev-parse", ref)
+
+    def promote(self, **kw):
+        kw.setdefault("confirm", True)
+        return _mod.promote_candidate(str(self.dest), "alpha", str(self.root), **kw)
+
+
+def _sub(cmd):
+    toks = list(cmd[3:])
+    while toks and toks[0] in ("-c", "--no-optional-locks"):
+        toks = toks[2:] if toks[0] == "-c" else toks[1:]
+    return toks[0]
+
+
+def _spy_git(monkeypatch, raise_on=None):
+    real = subprocess.run
+    calls = []
+
+    def spy(cmd, **kw):
+        calls.append((list(cmd), kw))
+        if raise_on and raise_on(list(cmd)):
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 1))
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    return calls
+
+
+def test_unattended_constants_and_symbols():
+    assert _mod._UNATTENDED_SOAK_FLOOR_SECONDS == 72 * 3600
+    assert _mod._CROSS_MACHINE_SOAK_FLOOR_SECONDS == 6 * 3600
+    for name in ("promote_candidate", "PromotionOutcome", "_select_soaked_candidate"):
+        assert hasattr(_mod, name)
+
+
+def test_git_stamps_reflog_entries_with_the_committer_date(tmp_path):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    gd = _g(rig.dest, "log", "-g", "-n", "1", "--date=iso-strict", "--format=%gd", "refs/remotes/origin/candidate")
+    seen = datetime.fromisoformat(gd[gd.index("{") + 1:-1])
+    assert (datetime.now(timezone.utc) - seen).total_seconds() > 79 * 3600
+
+
+def test_unattended_promotes_the_soaked_state_not_the_tip(tmp_path):
+    rig = _Rig(tmp_path)
+    p = rig.commit(80)
+    rig.push(80)
+    t = rig.commit(1)
+    rig.push(1)
+    out = rig.promote(unattended=True)
+    assert out.promoted and out.promoted_sha == p and not out.refusals
+    assert rig.origin_ref("refs/heads/main") == p
+    assert _g(rig.dest, "rev-parse", "main") == p
+    assert rig.origin_ref("refs/heads/candidate") == t
+
+
+def test_unattended_never_promotes_an_unpushed_intermediate(tmp_path):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.commit(80)
+    rig.push(1)
+    out = rig.promote(unattended=True)
+    assert not out.promoted and any("predicate 4" in r for r in out.refusals)
+    assert rig.origin_ref("refs/heads/main") == rig.base
+
+
+def test_unattended_nothing_soaked_is_one_predicate_4_refusal(tmp_path):
+    rig = _Rig(tmp_path)
+    rig.commit(1)
+    rig.push(1)
+    out = rig.promote(unattended=True)
+    assert not out.promoted and not out.nothing_to_promote
+    assert len(out.refusals) == 1 and "predicate 4" in out.refusals[0] and "72h" in out.refusals[0]
+    assert rig.origin_ref("refs/heads/main") == rig.base
+
+
+@pytest.mark.parametrize("younger_tip", [False, True])
+def test_unattended_nothing_to_promote_costs_three_spawns(tmp_path, monkeypatch, younger_tip):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    _g(rig.dest, "push", "origin", "candidate:main", when=80)
+    if younger_tip:
+        rig.commit(1)
+        rig.push(1)
+    calls = _spy_git(monkeypatch)
+    out = rig.promote(unattended=True)
+    assert not out.promoted and out.nothing_to_promote and not out.refusals
+    subs = [_sub(c) for c, _ in calls if c[0] == "git"]
+    assert subs == ["symbolic-ref", "log", "rev-list"]
+
+
+def test_unattended_non_fast_forward_refuses_predicate_3(tmp_path):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    _g(rig.dest, "checkout", "-b", "side", rig.base)
+    side = rig.commit(80, "side")
+    _g(rig.dest, "push", "origin", "side:main", when=80)
+    _g(rig.dest, "checkout", "candidate")
+    out = rig.promote(unattended=True)
+    assert not out.promoted and any("predicate 3" in r for r in out.refusals)
+    assert rig.origin_ref("refs/heads/main") == side
+
+
+def test_unattended_refuses_when_soaked_state_left_candidate(tmp_path):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    _g(rig.dest, "reset", "--hard", rig.base)
+    rig.push(1, force=True)
+    out = rig.promote(unattended=True)
+    assert not out.promoted and any("predicate 3" in r for r in out.refusals)
+    assert rig.origin_ref("refs/heads/main") == rig.base
+
+
+def test_the_rulings_boundary_unattended_refuses_manual_promotes_the_tip(tmp_path):
+    rig = _Rig(tmp_path)
+    tip = rig.commit(24)
+    rig.push(24)
+    out = rig.promote(unattended=True)
+    assert not out.promoted and any("predicate 4" in r for r in out.refusals)
+    manual = rig.promote(unattended=False)
+    assert manual.promoted and rig.origin_ref("refs/heads/main") == tip
+
+
+def _bar_spawns(base: Path, monkeypatch, unpromoted: int):
+    rig = _Rig(base)
+    rig.commit(80)
+    rig.push(80)
+    for _ in range(unpromoted - 1):
+        rig.commit(1)
+        rig.push(1)
+    calls = _spy_git(monkeypatch)
+    out = rig.promote(unattended=True, confirm=False)
+    assert not out.refusals
+    monkeypatch.undo()
+    return [_sub(c) for c, _ in calls if c[0] == "git"]
+
+
+def test_unattended_selection_is_bounded_by_unpromoted_commit_count(tmp_path, monkeypatch):
+    few = _bar_spawns(tmp_path / "a", monkeypatch, 1)
+    many = _bar_spawns(tmp_path / "b", monkeypatch, 25)
+    assert many.count("rev-list") == 1 and many.count("log") == few.count("log")
+    assert len(few) == len(many)
+
+
+def test_unattended_git_calls_are_bounded_and_non_interactive(tmp_path, monkeypatch):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    calls = _spy_git(monkeypatch)
+    out = rig.promote(unattended=True)
+    assert out.promoted
+    own = [(c, kw) for c, kw in calls if c[0] == "git" and _sub(c) in ("log", "rev-list", "merge-base", "push", "fetch")]
+    assert own and all("timeout" in kw for _, kw in own)
+    push = next(c for c, _ in own if _sub(c) == "push")
+    assert "-c" in push and "credential.interactive=never" in push
+
+
+def test_unattended_push_timeout_is_push_failed_not_a_raise(tmp_path, monkeypatch):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    _spy_git(monkeypatch, raise_on=lambda c: c[0] == "git" and _sub(c) == "push")
+    out = rig.promote(unattended=True)
+    assert out.push_failed and not out.promoted
+
+
+def test_unattended_selection_timeout_is_a_predicate_4_refusal(tmp_path, monkeypatch):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    _spy_git(monkeypatch, raise_on=lambda c: c[0] == "git" and "-g" in c)
+    out = rig.promote(unattended=True)
+    assert not out.promoted and any("predicate 4" in r for r in out.refusals)
+
+
+def test_unattended_with_pm_soak_override_raises_before_any_spawn(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    with pytest.raises(ValueError):
+        _mod.promote_candidate(
+            str(tmp_path), "alpha", str(tmp_path), confirm=True, unattended=True, pm_soak_override="x",
+        )
+
+
+def test_promote_candidate_prints_nothing_on_any_path(tmp_path, capsys):
+    manual = _Rig(tmp_path / "m")
+    manual.commit(24)
+    manual.push(24)
+    assert manual.promote(confirm=False).refusals == ()
+
+    waived = _Rig(tmp_path / "w")
+    waived.commit(0.1)
+    waived.push(0.1)
+    out = waived.promote(pm_soak_override="ship it")
+    assert out.promoted and "waived by PM ruling" in out.waiver_notice
+
+    un = _Rig(tmp_path / "u")
+    un.commit(80)
+    un.push(80)
+    assert un.promote(unattended=True).promoted
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err == ""

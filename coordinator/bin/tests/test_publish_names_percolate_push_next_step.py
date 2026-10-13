@@ -264,6 +264,20 @@ def test_clean_round_prints_the_exact_push_command_for_the_committed_repo(
     ]
 
 
+def test_no_commit_round_prints_neither_not_pushed_nor_next_step(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    _wire_common_fakes(monkeypatch, tmp_path)
+
+    publish.main([_ROW_NAMES[0], "--no-commit"])
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+
+    assert "not pushed" not in combined
+    assert "Next step:" not in combined
+
+
 @pytest.mark.parametrize("mode", ["failed", "dry-run"])
 def test_no_push_command_on_failure_or_dry_run(monkeypatch, tmp_path, capsys, mode):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))

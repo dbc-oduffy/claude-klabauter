@@ -97,3 +97,30 @@ def test_failed_ids_null_in_record(tmp_path):
     rec = srr.record_dir(tmp_path, "d")
     srr.write_run(rec, _fields(), None)
     assert srr.read_runs(rec)["current"]["failed_ids"] is None
+
+
+def test_crash_between_demote_steps_leaves_current_readable(tmp_path, monkeypatch):
+    rec = srr.record_dir(tmp_path, "default")
+    first = tmp_path / "run1.log"
+    first.write_text("run 1\n")
+    srr.write_run(rec, _fields(exit_code=1), first)
+
+    real_replace, demotes = srr.os.replace, []
+
+    def crash_on_json_demote(src, dst):
+        if str(dst).endswith("previous.json"):
+            demotes.append(dst)
+            raise OSError("simulated crash between demote steps")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(srr.os, "replace", crash_on_json_demote)
+    second = tmp_path / "run2.log"
+    second.write_text("run 2\n")
+    with pytest.raises(OSError):
+        srr.write_run(rec, _fields(exit_code=2), second)
+
+    assert demotes
+    assert (rec / "current.log").is_file() and (rec / "current.json").is_file()
+    current = srr.read_runs(rec)["current"]
+    assert current is not None and current["exit_code"] in (1, 2)
+    assert (rec / "current.log").read_text() in ("run 1\n", "run 2\n")
