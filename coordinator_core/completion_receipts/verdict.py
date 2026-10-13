@@ -12,30 +12,43 @@ from typing import Any, Optional
 
 _JUDGE_IDENTITY = "execute-review"
 
-#: The prep producer (coordinator-test-runner) may report the count only in its prose body, as
-#: `product_files: N`, `- product_files: N` or `**product_files:** N` at line start. A mid-line
-#: mention (a quoted launcher line, a divergence note) is not the report.
-_BODY_PRODUCT_FILES = re.compile(r"^[ \t]*(?:[-*][ \t]+)?\**product_files\**[ \t]*:\**[ \t]*(\d+)\b", re.MULTILINE)
+#: The prep producer (coordinator-test-runner) reports in prose: either a line-start
+#: `product_files: N` / `- product_files: N` / `**product_files:** N`, or a mid-line
+#: `product_files: N.` inside its `## Run Report` verdict sentence. A mid-line mention elsewhere
+#: (an Observations note quoting the launcher's stderr) is not the report.
+_RUN_REPORT_HEADING = re.compile(r"^##[ \t]+Run Report[ \t]*$", re.MULTILINE)
+_NEXT_H2 = re.compile(r"^##[ \t]", re.MULTILINE)
+
+
+def _run_report(text: str) -> str:
+    """The `## Run Report` section body, or ``""``."""
+    head = _RUN_REPORT_HEADING.search(text)
+    if head is None:
+        return ""
+    nxt = _NEXT_H2.search(text, head.end())
+    return text[head.end(): nxt.start() if nxt else len(text)]
+
+
+def _body_field(text: str, key: str, value: str) -> Optional[str]:
+    line_start = re.compile(
+        rf"^[ \t]*(?:[-*][ \t]+)?\**{key}\**[ \t]*:\**[ \t]*`?({value})\b", re.MULTILINE
+    )
+    match = line_start.search(text)
+    if match is None:
+        match = re.search(rf"\b{key}[ \t]*:[ \t]*`?({value})\b", _run_report(text))
+    return match.group(1) if match else None
 
 
 def body_product_files(text: str) -> Optional[int]:
-    """The first body-form `product_files` count in `text`, else None. Callers apply it only
-    when the frontmatter carries no `product_files` key: frontmatter wins."""
-    match = _BODY_PRODUCT_FILES.search(text)
-    return int(match.group(1)) if match else None
-
-
-#: `run_base_sha` in the same body forms as `product_files`; a sha token only, so a prose
-#: sentence after the key is not taken for one.
-_BODY_RUN_BASE_SHA = re.compile(
-    r"^[ \t]*(?:[-*][ \t]+)?\**run_base_sha\**[ \t]*:\**[ \t]*`?([0-9a-fA-F]{7,64})\b", re.MULTILINE
-)
+    """The body-form `product_files` count in `text`, else None. Callers apply it only when
+    the frontmatter carries no `product_files` key: frontmatter wins."""
+    found = _body_field(text, "product_files", r"\d+")
+    return int(found) if found is not None else None
 
 
 def body_run_base_sha(text: str) -> Optional[str]:
-    """The first body-form `run_base_sha` in `text`, else None; frontmatter wins like `product_files`."""
-    match = _BODY_RUN_BASE_SHA.search(text)
-    return match.group(1) if match else None
+    """The body-form `run_base_sha` in `text` (a sha token only), else None; frontmatter wins."""
+    return _body_field(text, "run_base_sha", r"[0-9a-fA-F]{7,64}")
 
 
 def with_body_prep_fields(data: dict, text: str) -> dict:

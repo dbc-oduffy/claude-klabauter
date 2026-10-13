@@ -389,6 +389,38 @@ def test_body_form_product_files_zero_is_refused(repo):
         _prep_call(root, s, REAL_PREP.format(count=0))
 
 
+#: The run-report form DoE's test-runner actually wrote (coordinator-content-repo 2026-10-13
+#: shape-defers-to-the-lobby prep): the count is mid-sentence in the verdict line, with a
+#: trailing period, and the only other mention is a backticked launcher quote.
+VERDICT_LINE_PREP = """---
+status: complete
+agent_type: coordinator:test-runner
+---
+
+## Observations
+
+- Frozen diff: `d.diff`; freeze stderr `product_files: 7`.
+
+## Run Report
+
+Verdict: single-reviewer-ok. whole_diff_path: `d.diff`. product_files: {count}. foreign_claims: [].
+
+## Exit interview
+"""
+
+
+def test_verdict_line_form_in_the_run_report_is_accepted(repo):
+    root, s = repo
+    assert _prep_call(root, s, VERDICT_LINE_PREP.format(count=2))["record_path"]
+
+
+def test_launcher_quote_outside_the_run_report_is_not_the_count(repo):
+    root, s = repo
+    text = VERDICT_LINE_PREP.format(count=2).replace("product_files: 2.", "no count.")
+    with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):
+        _prep_call(root, s, text)
+
+
 def test_frontmatter_product_files_wins_over_the_body(repo):
     root, s = repo
     text = REAL_PREP.format(count=5).replace("status: complete", "status: complete\nproduct_files: 0")
