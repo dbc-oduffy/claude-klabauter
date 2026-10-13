@@ -68,8 +68,8 @@ def remove_tree_no_follow(path: Path) -> None:
                 _unlink_file(child_path)
 
 
-def _contained_roots(repo_root: Path) -> tuple[Path, Path]:
-    return repo_root / "scratch", coordinator_temp_root(repo_root)
+def _contained_roots(repo_root: Path) -> tuple[Path, Path, Path]:
+    return repo_root / "scratch", repo_root / "state" / "scratch", coordinator_temp_root(repo_root)
 
 
 def _is_under(child: Path, root: Path) -> bool:

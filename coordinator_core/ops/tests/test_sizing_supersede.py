@@ -21,7 +21,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _NAME = "20261013-supersede.yaml"
 _NOTE = "refused run; live surface moved to the C1 plan"
 _COMMENT = "  # draft | sized | routed | shipped | declined | superseded"
-# Spawns for one applied call: measured on first run, equal to sizing.decline's.
+# Spawns for one applied call (in-process write path; sizing.decline's count is the same).
 _APPLIED_SPAWN_COUNT = 0
 
 
@@ -48,9 +48,7 @@ def _seed(repo: Path, body: str | None = None, *, status: str = "routed") -> Pat
 
 
 def _run(repo: Path, note: str = _NOTE, **over) -> dict:
-    params = {"sizing_path": _rel(repo), "note": note}
-    params.update(over)
-    params = {k: v for k, v in params.items() if v is not None}
+    params = {"sizing_path": _rel(repo), "note": note, **over}
     return sup_mod._handler(params, repo_root=repo / ".git")
 
 

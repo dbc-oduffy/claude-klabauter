@@ -1,8 +1,8 @@
 """dispatch.ask_stage: a plan or an XS sizing -> brief files, manifest.json and commit request.
 
-Everything lands under `RUN_DIR_ROOT/<run_id>/`: `briefs/<row>.md` (the plan route's row prompt),
-`commit-request.txt` (the `render_marker` line, empty when no row declares a path) and
-`manifest.json` (a `StageManifest`). In-process file writes only; no git, no subprocess, so the
+Working files land under `RUN_DIR_ROOT/<run_id>/`: `briefs/<row>.md` (the plan route's row prompt) and
+`commit-request.txt` (the `render_marker` line, empty when no row declares a path). Run records land
+under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest`). In-process file writes only; no git, no subprocess, so the
 op holds the 500ms bar. Trap: unlike `compose_script`, the per-row pathspec is not
 gitignore-filtered, because that filter spawns git.
 """
@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     ManifestRow,
     StageManifest,
+    record_dir,
 )
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
@@ -210,11 +211,15 @@ def stage(
     run_dir = contained_path(root / RUN_DIR_ROOT / run_id, [root / RUN_DIR_ROOT])
     if run_dir is None:
         raise AskStageError(f"run dir for {run_id!r} escapes {RUN_DIR_ROOT}")
+    try:
+        record = record_dir(root, run_id)
+    except ValueError as exc:
+        raise AskStageError(str(exc)) from exc
 
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
         spine_text, spine_path = mint_xs_spine(
-            sizing, sizing_rel=sizing_rel, writes=writes, out_dir=run_dir, gated=gated
+            sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated
         )
         _write(spine_path, spine_text)
         plan_path = spine_path
@@ -254,18 +259,18 @@ def stage(
 
     clauses = _discharge_clauses_for(plan_text, root, list(raw_by_id.values()))
 
-    ask_file = run_dir / ASK_TEXT_FILE
+    ask_file = record / ASK_TEXT_FILE
     ask_text = ask_file.read_text(encoding="utf-8") if ask_file.is_file() else None
     run_sizing = _run_sizing(root, sizing_rel or commit_sizing_rel, plan_text)
     pm_block = pm_intent_block(run_sizing, ask_text)
     if pm_block:
-        _write(run_dir / PM_INTENT_FILE, pm_block)
-    relayed_file = run_dir / RELAYED_ASK_FILE
+        _write(record / PM_INTENT_FILE, pm_block)
+    relayed_file = record / RELAYED_ASK_FILE
     relayed = relayed_ask_block(relayed_file.read_text(encoding="utf-8") if relayed_file.is_file() else None)
     intent = pm_block + ("\n" if pm_block and relayed else "") + relayed
-    if (run_dir / LEDGER_FILE).is_file():
+    if (record / LEDGER_FILE).is_file():
         # A raw ask's sizing is minted in-run: its PM words join the ledger the emit seeded.
-        seed_ledger(run_dir, run_id, pm_words(run_sizing), origin=ORIGIN_PM_VERBATIMS)
+        seed_ledger(record, run_id, pm_words(run_sizing), origin=ORIGIN_PM_VERBATIMS)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     manifest_rows: list[ManifestRow] = []
@@ -336,7 +341,7 @@ def stage(
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
     )
-    _write(run_dir / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
+    _write(record / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route

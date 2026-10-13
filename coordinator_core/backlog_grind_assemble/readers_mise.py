@@ -280,6 +280,7 @@ from coordinator_core.contract.decision_object.judgment import (
 )
 from coordinator_core.coverage import _resolve_numstat_row_path  # 2026-08-12: numstat rename-row resolution, shared with review_brightline_gate.py
 from coordinator_core import executor_return_contract
+from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
 from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
@@ -340,10 +341,10 @@ _MISE_VERIFIER_EVIDENCE_SOURCE = (
 #: run id), exactly as `[item-id]`/`[list]` are left for the dispatch-time
 #: consumer to fill in the constants above. Whoever actually dispatches a
 #: verifier for a concrete item substitutes its real id before writing.
-_MISE_VERIFIER_OUTPUT_PATH_TEMPLATE = "tasks/mise-verify/<item-id>.md"
+_MISE_VERIFIER_OUTPUT_PATH_TEMPLATE = evidence_rel("mise", "<run-id>", "<item-id>", "verify")
 
 _DONE_SUMMARY_CONSTRAINT_TEMPLATE = executor_return_contract.done_summary_constraint(
-    output_path_template="tasks/mise-done/[item-id].md",
+    output_path_template=evidence_rel("mise", "[run-id]", "[item-id]", "done"),
     extra_fields=(
         "changed-path list (from `git status --porcelain -- <footprint "
         "paths> | cut -c4-`)",

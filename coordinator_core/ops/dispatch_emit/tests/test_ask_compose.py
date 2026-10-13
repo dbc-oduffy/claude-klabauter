@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_REFUSAL,
     OP_ASK_GATE,
     OP_ASK_STAGE,
+    RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -103,7 +104,8 @@ def test_each_halt_assigns_before_the_guarded_stage_and_execute():
 
 def test_script_carries_manifest_marker_and_both_verbs():
     script = _compose()
-    assert f"\n{ASK_MANIFEST_MARKER}{RUN_DIR_ROOT}/{_RUN_ID}/manifest.json\n" in script
+    assert f"\n{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/{_RUN_ID}/manifest.json\n" in script
+    assert RUN_DIR_ROOT not in script.split(ASK_MANIFEST_MARKER)[1].split("\n")[0]
     assert OP_ASK_GATE in script and OP_ASK_STAGE in script
 
 

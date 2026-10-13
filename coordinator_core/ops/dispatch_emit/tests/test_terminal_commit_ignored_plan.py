@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -96,3 +97,20 @@ def test_tracked_receipt_is_committed_without_error(root):
     _git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "p"], root)
     out = _stamp_receipt(root, rel)
     assert "coded_stamp_error" not in out and out["coded_sha"] == "f" * 40
+
+
+def test_a_spine_under_the_record_root_is_staged_with_its_receipt(root):
+    rel = f"{RECORD_DIR_ROOT}/run/p.spine.md"
+    (root / rel).parent.mkdir(parents=True)
+    (root / rel).write_text(_PLAN, encoding="utf-8")
+    assert _stamp(root, rel) == [[rel]]
+    out = _stamp_receipt(root, rel)
+    assert "coded_stamp_error" not in out and out["coded_sha"] == "f" * 40
+
+
+def test_a_spine_still_under_scratch_loses_its_receipt_loudly(root):
+    rel = "scratch/warp/run/p.spine.md"
+    (root / rel).parent.mkdir(parents=True)
+    (root / rel).write_text(_PLAN, encoding="utf-8")
+    assert _stamp(root, rel) == []
+    assert rel in _stamp_receipt(root, rel)["coded_stamp_error"]

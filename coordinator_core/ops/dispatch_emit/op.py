@@ -253,6 +253,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     RELAYED_ASK_FILE,
     RUN_DIR_ROOT,
+    record_dir,
 )
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
@@ -1646,9 +1647,9 @@ def _dispatch_emit(
             ask_source=ask_ctx["ask_source"],
         )
         if ask_ctx["prompt"]:
-            # Verbatim, engine-written: the stage reads it into every brief; no agent copies it.
+            # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
             ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
-            ask_file = Path(ask_ctx["root"]) / RUN_DIR_ROOT / ask_ctx["run_id"] / ask_name
+            ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
             ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
         _seed_requirements_ledger(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))

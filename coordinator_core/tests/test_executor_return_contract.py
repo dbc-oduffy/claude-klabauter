@@ -102,7 +102,9 @@ def test_self_verify_constraint_splits_commit_and_deferred_verification_authorit
 
 def test_done_summary_constraint_reproduces_mise_bytes():
     rendered = done_summary_constraint(
-        output_path_template="tasks/mise-done/[item-id].md",
+        output_path_template=(
+            "state/queue-grind/mise/evidence/[run-id]/[item-id].done.md"
+        ),
         extra_fields=(
             "changed-path list (from `git status --porcelain -- "
             "<footprint paths> | cut -c4-`)",
@@ -121,7 +123,7 @@ def test_done_summary_constraint_reproduces_mise_bytes():
 def test_done_summary_constraint_reproduces_blitz_bytes():
     rendered = done_summary_constraint(
         output_path_template=(
-            "state/scratch/bug-blitz/[run-id]/[item-id].done.md"
+            "state/queue-grind/bug/evidence/[run-id]/[item-id].done.md"
         ),
         extra_fields=(
             "the changed-path list (`files`)",

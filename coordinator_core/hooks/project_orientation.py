@@ -904,8 +904,7 @@ def _scratch_size_banner(out: List[str], repo_root: Optional[str]) -> None:
     remedy = (
         f"{settings_home() / 'bin' / 'coordinator-invoke'} fleet.scratch_hygiene '{params}' "
         f"(rerun until it deletes nothing more; to keep something, move it to "
-        f"{Path(repo_root) / 'scratch-hold'}/; this purges {scratch}/ only, "
-        f"{state_scratch}/ is cleared by hand)"
+        f"{Path(repo_root) / 'scratch-hold'}/)"
     )
     size = _scratch_size(read.bytes)
     if read.finished:

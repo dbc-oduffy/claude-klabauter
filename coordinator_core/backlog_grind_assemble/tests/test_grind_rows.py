@@ -863,3 +863,67 @@ class TestArchiveDestinationIsTheMoversPath:
         assert (tmp_path / dest).is_file()
         printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
         assert Path(printed["new"]) == tmp_path / dest
+
+
+def test_evidence_rel_names_the_one_evidence_home():
+    assert (
+        grind_rows.evidence_rel("bug", "[run-id]", "<item-id>", "done")
+        == "state/queue-grind/bug/evidence/[run-id]/<item-id>.done.md"
+    )
+    assert grind_rows.evidence_rel("bug", "r1", "i1", "verify") == (
+        "state/queue-grind/bug/evidence/r1/i1.verify.md"
+    )
+
+
+class TestAppendEvidenceFileRefusal:
+    @staticmethod
+    def _argv(tmp_path, evidence):
+        return [
+            "append",
+            "--profile", "bug",
+            "--row-id", "bug-1",
+            "--digest", "abc123",
+            "--stage", "triage",
+            "--verdict", "confirmed",
+            "--outcome", "profile-declared",
+            "--evidence-file", evidence,
+            "--run-stamp", "2026-09-21T00:00:00Z",
+            "--repo-root", str(tmp_path),
+        ]
+
+    @pytest.mark.parametrize(
+        "evidence",
+        [
+            "state/scratch/x.md",
+            "state\\scratch\\x.md",
+            "scratch/x.md",
+            "a/scratch/b/x.md",
+            "../outside.md",
+            "/elsewhere/outside.md",
+            "C:\\elsewhere\\outside.md",  # abs-path-ok: refusal fixture for a Windows drive path
+        ],
+    )
+    def test_refused_without_writing(self, tmp_path, capsys, evidence):
+        assert grind_rows.main(self._argv(tmp_path, evidence)) == grind_rows.EXIT_USAGE
+        assert not (tmp_path / "state" / "queue-grind").exists()
+        assert "state/queue-grind/<profile>/evidence" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "evidence",
+        [
+            "state/queue-grind/bug/evidence/r1/i1.done.md",
+            "evidence.txt",
+            "scratchy/x.md",
+        ],
+    )
+    def test_admitted_relative_and_absolute(self, tmp_path, evidence):
+        assert grind_rows.main(self._argv(tmp_path, evidence)) == grind_rows.EXIT_OK
+        absolute = str(tmp_path / "state" / "queue-grind" / "bug" / "evidence" / "r1" / "i1.done.md")
+        assert grind_rows.main(self._argv(tmp_path, absolute)) == grind_rows.EXIT_OK
+        stored = (tmp_path / "state/queue-grind/bug/bug-1.jsonl").read_text(encoding="utf-8")
+        assert json.dumps(evidence)[1:-1] in stored
+
+
+def test_evidence_rel_rejects_unknown_kind():
+    with pytest.raises(ValueError):
+        grind_rows.evidence_rel("bug", "r1", "i1", "notes")

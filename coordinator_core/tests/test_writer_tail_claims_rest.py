@@ -6,15 +6,9 @@ One behavioural test per distinct (entry-path class x seam entry point) pair
 this batch migrated, driven through its real entry, asserting the claim
 lands. Every migration in this batch is the same entry-path class —
 "direct-call function body" (a plain Python call, no CLI/hook process
-boundary in between, matching C5's ``append_goal`` shape) — so the three
-tests below (one per seam entry point this batch used) cover all ten
-migrated modules' pairs:
+boundary in between, matching C5's ``append_goal`` shape) — so the two
+tests below cover the remaining pairs:
 
-  - ``append_claimed_line``: represented here by
-    ``backlog_grind_assemble.apply._append_backlog_note``. Same pair also
-    covers ``engine_provenance_counter.record_engine_provenance``,
-    ``group_em.send_pass._record_offer``/``record_offers``/``decline``, and
-    ``telemetry.cost_census._append_row``.
   - ``replace_text``: represented here by
     ``fact_contract_gate.engine_gap_ratchet.write_baseline``. Same pair also
     covers ``distill.wiki_log_migrate.migrate_wiki_log``,
@@ -25,8 +19,7 @@ migrated modules' pairs:
     ``roadmap.blitz_land.mint_replan_baton``.
 
 Watched RED with each represented seam call swapped back for the raw
-primitive it replaced (``_append_backlog_note``'s
-``log_path.open("a") + fh.write``, ``write_baseline``'s
+primitive it replaced (``write_baseline``'s
 ``baseline_path.write_text(...)``, ``mint_replan_baton``'s
 ``out.write_text(...)``) — none of those raw shapes call ``declare_write``,
 so the collected-declarations list below stays empty.
@@ -41,34 +34,10 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.backlog_grind_assemble import apply as backlog_grind_apply
 from coordinator_core.roadmap import blitz_land
 from coordinator_core.session import declared_writes
 
 pytestmark = [pytest.mark.cadence]
-
-
-def test_append_backlog_note_claims_through_the_seam(tmp_path):
-    """entry-path class: direct-call function body x seam entry point:
-    append_claimed_line. Drives ``_append_backlog_note`` (real entry) inside
-    a ``declared_writes.collecting()`` scope and asserts the append is
-    declared."""
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-
-    with declared_writes.collecting() as declared:
-        backlog_grind_apply._append_backlog_note(repo_root, "claim lands via the seam")
-
-    log_path = repo_root / backlog_grind_apply._NON_PASS_NOTE_LOG
-    assert log_path.exists()
-    assert "claim lands via the seam" in log_path.read_text(encoding="utf-8")
-
-    assert str(log_path) in declared, (
-        "backlog_grind_assemble.apply._append_backlog_note's write must be "
-        "declared through the seam (session/claimed_write.py::"
-        "append_claimed_line), not a raw open()+write that never calls "
-        "declare_write"
-    )
 
 
 def test_write_baseline_claims_through_the_seam(tmp_path):

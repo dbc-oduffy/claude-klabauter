@@ -7,7 +7,7 @@ from pathlib import Path, PurePath
 
 import yaml
 
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.session.record_homes import home_dir, record_path
 
@@ -100,6 +100,7 @@ def test_all_gated_plan_refuses_naming_every_gated_row(tmp_path):
     run_dir = tmp_path / RUN_DIR_ROOT / "r1"
     assert not (run_dir / "briefs").exists()
     assert not (run_dir / "manifest.json").exists()
+    assert not (tmp_path / RECORD_DIR_ROOT / "r1" / "manifest.json").exists()
 
 
 def test_pm_accepted_sizing_appends_clause_to_dependent_only(tmp_path):

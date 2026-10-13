@@ -18,14 +18,14 @@ does NOT paper over that divergence:
     code; verdict is one of `BUG_BLITZ_VERIFIER_ENUM`
     (`PASS` / `PATTERN-STILL-PRESENT` / `FOOTPRINT-VIOLATION` /
     `REGRESSION`); output lands at
-    `state/scratch/bug-blitz/{run-id}/{item-id}.verify.md`.
+    `state/queue-grind/bug/evidence/{run-id}/{item-id}.verify.md`.
   - **mise-en-place** (readiness-gated backlog items): evidence is the
     DONE summary plus the spec plus the item's still-uncommitted
     working-tree diff plus any deferred-verification note the executor
     left; verdict is one of `MISE_VERIFIER_ENUM`
     (`PASS` / `FOOTPRINT-VIOLATION` / `AC-MISS` /
     `VERIFICATION-CMD-FAILED` / `NEEDS-EM`); output lands at
-    `tasks/mise-verify/<item-id>.md`.
+    `state/queue-grind/mise/evidence/<run-id>/<item-id>.verify.md`.
 
 Only `PASS` and `FOOTPRINT-VIOLATION` are common to both sets — every other
 value is call-site-specific and would be meaningless at the other site
@@ -61,8 +61,8 @@ Negative-spec:
       this module — every function here returns a plain dict; dispatch and
       execution are entirely the caller's (`apply.py`, C4).
     - Do NOT hardcode either call site's `output_path` pattern here — both
-      `state/scratch/bug-blitz/{run-id}/{item-id}.verify.md` and
-      `tasks/mise-verify/<item-id>.md` are the CALLER's computed strings
+      `state/queue-grind/bug/evidence/{run-id}/{item-id}.verify.md` and
+      `state/queue-grind/mise/evidence/<run-id>/<item-id>.verify.md` are the CALLER's computed strings
       (the reader modules, C3a/C3b), passed straight through.
 """
 from __future__ import annotations
@@ -130,8 +130,8 @@ def build_haiku_verifier_dispatch(
         the two known sets or inventing a merged vocabulary is exactly
         what this function refuses to do.
       - `output_path`: the caller's own computed on-disk verdict path
-        (`state/scratch/bug-blitz/{run-id}/{item-id}.verify.md` or
-        `tasks/mise-verify/<item-id>.md`) — a plain string this module
+        (`state/queue-grind/bug/evidence/{run-id}/{item-id}.verify.md` or
+        `state/queue-grind/mise/evidence/<run-id>/<item-id>.verify.md`) — a plain string this module
         never parses or reshapes.
 
     `depends_on` is optional and, when supplied, is a single judgment-point

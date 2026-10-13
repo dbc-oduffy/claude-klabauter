@@ -172,7 +172,6 @@ from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
 )
-from coordinator_core.session.claimed_write import append_claimed_line
 from coordinator_core.session.grant_directive import (
     EXIT_OK,
     EXIT_USAGE,
@@ -328,18 +327,8 @@ def _dispatch_checkout_and_backlog_note(args: list[str], repo_root: Path) -> dic
     return {"cli": "checkout-and-backlog-note", "checked_out": list(paths)}
 
 
-_NON_PASS_NOTE_LOG = Path("state/scratch/backlog-grind/non-pass-notes.log")
-
-
-def _append_backlog_note(repo_root: Path, note: str) -> None:
-    log_path = _assert_in_repo_root(_NON_PASS_NOTE_LOG, repo_root)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    append_claimed_line(log_path, f"{note}\n".encode("utf-8"))
-
-
 def _non_pass_checkout(repo_root: Path, paths: list[str], note: str) -> dict[str, Any]:
     detail = _dispatch_checkout_and_backlog_note(["checkout", "--", *paths], repo_root)
-    _append_backlog_note(repo_root, note)
     detail["backlog_note"] = note
     return detail
 

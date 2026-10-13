@@ -58,6 +58,7 @@ from coordinator_core.contract.grind_vocab import (
     TSHIRT_SIZES,
 )
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
+from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 #: The two non-op agent types this module's composers dispatch under.
@@ -128,6 +129,22 @@ SHQ_JS = "const _shq = (s) => \"'\" + String(s).replace(/'/g, \"'\\\\''\") + \"'
 def _shq_literal(text: str) -> str:
     """One single-quoted shell token; spaces, backslashes and `'` survive."""
     return "'" + text.replace("'", "'\\''") + "'"
+
+
+_EVIDENCE_APPEND_NOTE = (
+    "Write that file before the command; if a stage already wrote it, append a "
+    "section headed with your stage name and never truncate it. "
+)
+
+
+def _evidence_path_parts(
+    profile: str, run_id_part: tuple[str, str], row_id_part: tuple[str, str], kind: str
+) -> list[tuple[str, str]]:
+    """Parts spelling the evidence path for ``--evidence-file``: the run id and
+    row id parts sit inside the ``evidence_rel`` template."""
+    head, rest = evidence_rel(profile, "\0", "\1", kind).split("\0")
+    mid, tail = rest.split("\1")
+    return [("lit", head), run_id_part, ("lit", mid), row_id_part, ("lit", tail)]
 
 
 def _shq_part(js_expr: str) -> tuple[str, str]:
@@ -246,7 +263,12 @@ def compose_triage_call(
             "each row, run `" + ASSEMBLE_CMD + " grind-row append --profile "
             f"{profile} --row-id <its row_id> --digest <its digest> --stage "
             "triage --verdict <its verdict> --outcome <its verdict> "
-            "--evidence-file <a file with your evidence> --run-stamp ",
+            "--evidence-file ",
+        ),
+        *_evidence_path_parts(profile, run_id_part, ("lit", "<its row_id>"), "verify"),
+        (
+            "lit",
+            ". " + _EVIDENCE_APPEND_NOTE + "Then pass --run-stamp ",
         ),
         run_id_part,
         ("lit", " --repo-root "),
@@ -330,8 +352,12 @@ def compose_refute_close_call(
         (
             "lit",
             f" --profile {profile} --row <its path> --digest "
-            "<its digest> --verdict refute-close --evidence-file <a file "
-            "with your evidence> --closed-by refute-close --run-stamp ",
+            "<its digest> --verdict refute-close --evidence-file ",
+        ),
+        *_evidence_path_parts(profile, run_id_part, ("lit", "<its row_id>"), "verify"),
+        (
+            "lit",
+            ". " + _EVIDENCE_APPEND_NOTE + "Then pass --closed-by refute-close --run-stamp ",
         ),
         run_id_part,
         ("lit", " --repo-root "),
@@ -450,8 +476,12 @@ def compose_resize_call(
             "`" + ASSEMBLE_CMD + " grind-row append --profile "
             f"{profile} --row-id <its row_id> --digest <its digest> --stage "
             "triage --verdict resize --outcome <the verdict named below "
-            "for your answer> --evidence-file <a file with your evidence> "
-            "--run-stamp ",
+            "for your answer> --evidence-file ",
+        ),
+        *_evidence_path_parts(profile, run_id_part, ("lit", "<its row_id>"), "verify"),
+        (
+            "lit",
+            ". " + _EVIDENCE_APPEND_NOTE + "Then pass --run-stamp ",
         ),
         run_id_part,
         ("lit", " --repo-root "),
@@ -582,11 +612,14 @@ def compose_fix_call(
     parts.append(("expr", row_path_js) if row_path_js else ("lit", "<row path>"))
     parts.append(("lit", " --digest "))
     parts.append(("expr", digest_js) if digest_js else ("lit", "<row digest>"))
+    fix_run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+    parts.append(("lit", " --verdict fix --evidence-file "))
+    parts.extend(_evidence_path_parts(profile, fix_run_id_part, row_id_part, "done"))
     parts.append((
         "lit",
-        " --verdict fix --evidence-file <a file with your evidence> --closed-by fix --run-stamp ",
+        ", written before the command; pass --closed-by fix --run-stamp ",
     ))
-    parts.append(("expr", run_id_js) if run_id_js else ("lit", "<run-id>"))
+    parts.append(fix_run_id_part)
     parts.append(("lit", " --repo-root "))
     parts.append(_shq_part(repo_root_js))
     parts.append((

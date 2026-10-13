@@ -108,6 +108,20 @@ def test_path_outside_roots_refused(fx):
     assert out[0]["action"] == "skipped-live" and out[0]["reason"].startswith("refused:")
 
 
+def test_state_scratch_entry_is_deleted_and_its_root_refused(fx):
+    root = fx.repo_root / "state" / "scratch"
+    victim = root / "old.txt"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("x")
+    recs = [
+        purge_record(REPO_NAME, victim, "would-delete", repo_root=fx.repo_root),
+        purge_record(REPO_NAME, root, "would-delete", repo_root=fx.repo_root),
+    ]
+    out = apply_purge(fx.repo_root, recs, recheck=_always_delete)
+    assert not victim.exists() and root.exists()
+    assert out[1]["reason"].startswith("refused:")
+
+
 def test_scratch_hold_and_root_refused(fx):
     recs = [
         purge_record(REPO_NAME, fx.hold_readme, "would-delete", repo_root=fx.repo_root),

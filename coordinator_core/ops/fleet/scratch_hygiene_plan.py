@@ -1,5 +1,6 @@
 """Read-only purge planner for ``fleet.scratch_hygiene``: classify each top-level entry of
-``<repo>/scratch`` and ``coordinator_temp_root(repo)`` into the contract's action set.
+``<repo>/scratch``, ``<repo>/state/scratch`` and ``coordinator_temp_root(repo)`` into the
+contract's action set. Nothing under ``state/queue-grind`` is ever a candidate.
 
 ``scratch/warp/`` is not an entry: each run's directory and its ``.workflow.mjs`` and
 ``.workflow.mjs.emitted.json`` files are. An entry of an open run is ``skipped-live``
@@ -314,12 +315,16 @@ def _entries(root: Path) -> list[str]:
 
 
 def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
-    """Every top-level entry in ``<repo>/scratch`` and ``coordinator_temp_root(repo)``.
+    """Every top-level entry in ``<repo>/scratch``, ``<repo>/state/scratch`` and ``coordinator_temp_root(repo)``.
     ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
     per-run children are."""
     repo_root = Path(repo_root)
     paths = []
-    for root, per_run in ((repo_root / "scratch", _WARP_DIRNAME), (coordinator_temp_root(repo_root), _PYTEST_DIRNAME)):
+    for root, per_run in (
+        (repo_root / "scratch", _WARP_DIRNAME),
+        (repo_root / "state" / "scratch", None),
+        (coordinator_temp_root(repo_root), _PYTEST_DIRNAME),
+    ):
         for p in _entries(root):
             if os.path.basename(p) == per_run and not _is_link(p) and os.path.isdir(p):
                 paths.extend(_entries(Path(p)))

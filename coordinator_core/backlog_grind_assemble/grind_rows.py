@@ -312,6 +312,35 @@ def _ledger_path(repo_root: Path, profile: str, row_id: str) -> Path:
     return Path(repo_root) / "state" / "queue-grind" / profile / f"{row_id}.jsonl"
 
 
+def evidence_rel(profile: str, run_id: str, item_id: str, kind: str) -> str:
+    """POSIX repo-relative `state/queue-grind/<profile>/evidence/<run_id>/<item_id>.<kind>.md`.
+
+    `kind` is `done` or `verify`. Segments are joined unchecked: callers pass
+    literals or dispatch-time placeholders; an agent-supplied path is checked
+    in `cmd_append`. Pure string work."""
+    if kind not in ("done", "verify"):
+        raise ValueError(f"grind-row: evidence kind must be 'done' or 'verify': {kind!r}")
+    return f"state/queue-grind/{profile}/evidence/{run_id}/{item_id}.{kind}.md"
+
+
+def _evidence_file_refusal(evidence_file: str, repo_root: Path) -> str | None:
+    """Refusal text for an `--evidence-file` outside `repo_root` or under a `scratch`
+    segment, else None. Pure path arithmetic; the file need not exist."""
+    home = "state/queue-grind/<profile>/evidence/<run-id>/<item-id>.done.md"
+    normalised = evidence_file.replace("\\", "/")
+    root = os.path.normpath(os.path.abspath(repo_root)).replace("\\", "/")
+    full = os.path.normpath(os.path.join(root, normalised)).replace("\\", "/")
+    # A Windows drive path is absolute on every host; join() does not see it as such on POSIX.
+    if len(normalised) > 1 and normalised[1] == ":" and normalised[0].isalpha():
+        full = os.path.normpath(normalised).replace("\\", "/")
+    rel = os.path.relpath(full, root).replace("\\", "/")
+    if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+        return f"--evidence-file is outside the repo; write it under {home}"
+    if "scratch" in rel.split("/"):
+        return f"--evidence-file is under a scratch directory; write it under {home}"
+    return None
+
+
 def cmd_append(rest: list[str]) -> int:
     flags = _parse_flags(
         rest,
@@ -332,6 +361,10 @@ def cmd_append(rest: list[str]) -> int:
             "usage: grind-row append --profile P --row-id R --digest D --stage S "
             "--verdict V --outcome O --evidence-file F --run-stamp T --repo-root D"
         )
+
+    refusal = _evidence_file_refusal(flags["evidence-file"], Path(flags["repo-root"]))
+    if refusal is not None:
+        return _usage(refusal)
 
     record = {
         "profile": flags["profile"],

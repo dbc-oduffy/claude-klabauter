@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
+    RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
     StageManifest,
 )
@@ -113,4 +114,32 @@ def test_marker_path_escaping_run_root_refuses(repo):
     manifest = _stage(repo, marker_path="elsewhere.txt")
     out = _call(repo, f"{ASK_MANIFEST_MARKER}{manifest}\n")
     assert out["committed"] is False
+    assert out["refused"] == "manifest-escapes-run-root"
+
+
+def test_manifest_under_the_record_root_is_admitted(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _stage(repo)
+    record_dir = repo / RECORD_DIR_ROOT / "run1"
+    record_dir.mkdir(parents=True)
+    (record_dir / "manifest.json").write_text(
+        (repo / RUN_DIR_ROOT / "run1" / "manifest.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    out = _call(repo, f"{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/run1/manifest.json\n")
+    assert out["committed"] is True, out
+
+
+def test_manifest_outside_both_roots_names_both_in_the_refusal(repo):
+    _stage(repo)
+    (repo / "scratch").mkdir(exist_ok=True)
+    (repo / "scratch" / "other.json").write_text("{}", encoding="utf-8")
+    out = _call(repo, f"{ASK_MANIFEST_MARKER}scratch/other.json\n")
+    assert out["refused"] == "manifest-escapes-run-root"
+    assert RECORD_DIR_ROOT in out["error"] and RUN_DIR_ROOT in out["error"]
+
+
+def test_marker_path_under_the_record_root_refuses(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    manifest = _stage(repo, marker_path=f"{RECORD_DIR_ROOT}/run1/commit-request.txt")
+    out = _call(repo, f"{ASK_MANIFEST_MARKER}{manifest}\n")
     assert out["refused"] == "manifest-escapes-run-root"

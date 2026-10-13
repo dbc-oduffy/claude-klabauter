@@ -1,7 +1,7 @@
 """workflow.revise: a warp `--ask` run's requirements ledger -- the PM's words, seeded at emit and
 grown by the EM's revisions while the run is in flight.
 
-`RUN_DIR_ROOT/<run_id>/requirements.jsonl` holds one JSON object per line and only ever grows; file
+`RECORD_DIR_ROOT/<run_id>/requirements.jsonl` holds one JSON object per line and only ever grows; file
 order is ledger order, so item ids (`R1`, `R2`, ...) are stable. A line is a `requirement`
 (`origin`: `pm_verbatims`, `ask`, `relayed` or `revision`; `relayed` is an EM's relay, a requirement
 that never supersedes a `pm_verbatims` item) or a `flag` (`all_of_pm_ask`; the last one wins).
@@ -23,8 +23,7 @@ from typing import Mapping, Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
-from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, record_dir
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 GENERATES = []
@@ -68,14 +67,11 @@ class Ledger:
 
 
 def run_dir(repo_root: Path, run_id: str) -> Path:
-    """The run's dir under `RUN_DIR_ROOT`; LedgerRefused on an unsafe id or an escape."""
-    if not isinstance(run_id, str) or not safe_id(run_id):
-        raise LedgerRefused(f"run_id {run_id!r} is not a single safe path segment")
-    root = Path(repo_root)
-    found = contained_path(root / RUN_DIR_ROOT / run_id, [root / RUN_DIR_ROOT])
-    if found is None:
-        raise LedgerRefused(f"run dir for {run_id!r} escapes {RUN_DIR_ROOT}")
-    return found
+    """The run's record directory (`ask_contract.record_dir`); LedgerRefused on an unsafe id or an escape."""
+    try:
+        return record_dir(Path(repo_root), run_id)
+    except ValueError as exc:
+        raise LedgerRefused(str(exc)) from exc
 
 
 def _now() -> str:
@@ -195,7 +191,7 @@ def revise(
         raise LedgerRefused(f"verbatim exceeds {VERBATIM_BYTE_CAP} bytes")
     dir_ = run_dir(repo_root, run_id)
     if not dir_.is_dir():
-        raise LedgerRefused(f"no run {run_id!r} under {RUN_DIR_ROOT}: emit it first")
+        raise LedgerRefused(f"no run {run_id!r} under {RECORD_DIR_ROOT}: emit it first")
     at = _now()
     entries: list[dict] = []
     if text:

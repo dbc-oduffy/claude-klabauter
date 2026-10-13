@@ -1605,7 +1605,8 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         "wave, after every item in the wave passes verification."
     )
     _MISE_DONE_SUMMARY = (
-        "Write a one-screen summary to `tasks/mise-done/[item-id].md` with: "
+        "Write a one-screen summary to "
+        "`state/queue-grind/mise/evidence/[run-id]/[item-id].done.md` with: "
         "status (DONE | BLOCKED | PARTIAL), changed-path list (from `git "
         "status --porcelain -- <footprint paths> | cut -c4-`), AC checklist "
         "(each criterion checked or note), footprint-scoped verification "
@@ -1613,8 +1614,8 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         "your footprint that you deferred to the EM, and any deviations from "
         "the spec. Do not include a commit SHA — your changes are still "
         "uncommitted when you write this summary. Reply EXACTLY "
-        "`<STATUS>: tasks/mise-done/[item-id].md`, where <STATUS> is the "
-        "status your summary records — `DONE`, `PARTIAL`, or `BLOCKED`."
+        "`<STATUS>: state/queue-grind/mise/evidence/[run-id]/[item-id].done.md`, "
+        "where <STATUS> is the status your summary records — `DONE`, `PARTIAL`, or `BLOCKED`."
     )
     _BLITZ_FOOTPRINT = (
         "You MUST NOT create or modify any file outside this footprint: "
@@ -1623,12 +1624,12 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
     )
     _BLITZ_DONE_SUMMARY = (
         "Write a one-screen summary to "
-        "`state/scratch/bug-blitz/[run-id]/[item-id].done.md` with: status "
+        "`state/queue-grind/bug/evidence/[run-id]/[item-id].done.md` with: status "
         "(DONE | BLOCKED | PARTIAL), the changed-path list (`files`), "
         "`before`/`after` snippets, the verification result you observed, and "
         "any deviations from the recommended fix. Do not include a commit "
         "SHA — your changes are still uncommitted when you write this "
-        "summary. Reply EXACTLY `<STATUS>: state/scratch/bug-blitz/[run-id]/"
+        "summary. Reply EXACTLY `<STATUS>: state/queue-grind/bug/evidence/[run-id]/"
         "[item-id].done.md`, where <STATUS> is the status your summary "
         "records — `DONE`, `PARTIAL`, or `BLOCKED`."
     )
@@ -1755,7 +1756,7 @@ class TestHaikuVerifierDispatchGuardRails:
             "id": "d-verifier-guard-test",
             "evidence_source": ["done-summary", "diff:files"],
             "enum_set": list(bga_verifier.BUG_BLITZ_VERIFIER_ENUM),
-            "output_path": "state/scratch/bug-blitz/run-1/item-1.verify.md",
+            "output_path": "state/queue-grind/bug/evidence/run-1/item-1.verify.md",
         }
         kwargs.update(overrides)
         return kwargs

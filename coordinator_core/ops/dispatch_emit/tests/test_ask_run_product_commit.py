@@ -14,7 +14,12 @@ from coordinator_core.completion_receipts import store
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RUN_DIR_ROOT, StageManifest
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_MANIFEST_MARKER,
+    RECORD_DIR_ROOT,
+    RUN_DIR_ROOT,
+    StageManifest,
+)
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -234,3 +239,62 @@ def test_doc_paths_without_doc_writes_are_all_dropped(repo):
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     out = _call(repo, doc_paths=["docs/delivery/run1.md"])
     assert out["committed"] is True and out["doc_paths_dropped"] == ["docs/delivery/run1.md"]
+
+
+def _spawns(monkeypatch) -> list:
+    seen: list = []
+    real_init = subprocess.Popen.__init__
+
+    def counting(self, *args, **kwargs):
+        seen.append(args[0] if args else kwargs.get("args"))
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", counting)
+    return seen
+
+
+def _into_record_dir(repo: Path) -> str:
+    """Re-home the fixture run's manifest and ledger under state/warp; the marker stays in scratch."""
+    rel = f"{RECORD_DIR_ROOT}/{RUN}"
+    manifest = StageManifest(
+        run_dir=rel, rows=(), review_declared_paths=(),
+        marker_path=f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt",
+    )
+    _write(repo, f"{rel}/manifest.json", json.dumps(manifest.to_json()))
+    _write(repo, f"{rel}/pm-intent.md", "intent\n")
+    for name in ("requirements.jsonl", "requirements.md"):
+        src = repo / RUN_DIR_ROOT / RUN / name
+        if src.is_file():
+            _write(repo, f"{rel}/{name}", src.read_text(encoding="utf-8"))
+            src.unlink()
+    _write(repo, "run.mjs", f"// emitted\n{ASK_MANIFEST_MARKER}{rel}/manifest.json\n")
+    return rel
+
+
+def test_ask_run_spawn_count_is_pinned(repo, monkeypatch):
+    seen = _spawns(monkeypatch)
+    out = _call(repo)
+    assert out["committed"] is True, out
+    assert len(seen) == 2
+
+
+def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatch):
+    rel = _into_record_dir(repo)
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/brief.md", "working file\n")
+    seen = _spawns(monkeypatch)
+    out = _call(repo)
+    assert out["committed"] is True, out
+    assert len(seen) <= 2
+    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
+    assert landed == {
+        "a.py", f"{rel}/manifest.json", f"{rel}/pm-intent.md",
+        f"{rel}/requirements.jsonl", f"{rel}/requirements.md",
+    }
+
+
+def test_a_scratch_run_dir_adds_nothing(repo):
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/pm-intent.md", "intent\n")
+    out = _call(repo)
+    assert out["committed"] is True, out
+    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
+    assert landed == {"a.py"}

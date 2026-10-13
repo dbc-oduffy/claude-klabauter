@@ -10,14 +10,14 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
 RUN = "ask-20261013T000000-abc123"
 
 
 @pytest.fixture
 def run(tmp_path):
-    d = tmp_path / RUN_DIR_ROOT / RUN
+    d = tmp_path / RECORD_DIR_ROOT / RUN
     d.mkdir(parents=True)
     (tmp_path / ".git").mkdir()
     rl.seed(d, RUN, ["build the op", "keep it under 500ms"], origin=rl.ORIGIN_PM_VERBATIMS, all_of_pm_ask=False)
@@ -44,7 +44,7 @@ def test_revise_appends_a_stamped_item_and_rewrites_the_view(run):
     root, d = run
     out = _revise(root, verbatim="also cover Windows paths")
     assert out["ok"] is True and out["item"] == "R3" and out["items"] == 3
-    assert out["ledger"] == f"{RUN_DIR_ROOT}/{RUN}/{rl.LEDGER_VIEW_FILE}"
+    assert out["ledger"] == f"{RECORD_DIR_ROOT}/{RUN}/{rl.LEDGER_VIEW_FILE}"
     line = json.loads((d / rl.LEDGER_FILE).read_text(encoding="utf-8").splitlines()[-1])
     assert line["origin"] == "revision" and line["at"].endswith("Z")
     view = (d / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")

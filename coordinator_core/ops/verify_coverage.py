@@ -589,6 +589,7 @@ def main(argv: List[str]) -> int:
             "handoffs",
             "plan-blitz",
             "mise-inventory",
+            "warp",
             "scratch",
             "recovery",
             "research-corpus",

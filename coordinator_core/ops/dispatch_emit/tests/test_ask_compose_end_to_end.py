@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _compose
 
 _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
@@ -133,7 +134,7 @@ def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
 
 def test_every_judgment_stage_reads_the_ledger_at_its_start():
     script = _compose()
-    view = "scratch/warp/run-1/requirements.md"
+    view = f"{RECORD_DIR_ROOT}/run-1/requirements.md"
     for label in ("size", "accept", "xl-exit", "plan", "ledger-check"):
         call = script[: script.index(f"label: '{label}'")]
         assert view in call[call.rindex("agent(") :], label
@@ -155,7 +156,9 @@ def test_at_l_and_up_verifier_judge_and_falsifier_compose_with_the_ledger_check(
 
 def test_reviewers_and_judge_read_the_pm_intent_and_apm_keeps_the_ask():
     script = _compose()
-    assert script.count("scratch/warp/run-1/pm-intent.md") >= 3
+    assert script.count(f"{RECORD_DIR_ROOT}/run-1/pm-intent.md") >= 3
+    assert "scratch/warp/run-1/pm-intent.md" not in script
+    assert "scratch/warp/run-1/briefs" in script
     for label in ("accept", "xl-exit"):
         call = script[script.index(f"label: '{label}'") - 3000 : script.index(f"label: '{label}'")]
         assert "Where they conflict, keep the ask and name the conflict in your ruling." in call

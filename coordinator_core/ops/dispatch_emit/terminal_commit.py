@@ -34,8 +34,11 @@ Negative-spec:
     plan (or minted spine) cites as ``sizing_object:``, which the ask arm
     rewrites mid-run. Never for an anchor-only run, never outside that dir.
   - A warp ask run (its script carries the ask-run-manifest marker) lands
-    PRODUCT ONLY: its declared writes plus docs output (``docs/delivery/``, a
-    wiki, a README, and the cited sizing's ``doc_consumers``/``ask_conflicts``). Its process records -- sizing, plan, review record,
+    PRODUCT plus its record directory: its declared writes, docs output
+    (``docs/delivery/``, a wiki, a README, and the cited sizing's
+    ``doc_consumers``/``ask_conflicts``), and the changed files in
+    ``state/warp/<run_id>/`` (nothing from an in-flight run's ``scratch/warp``
+    directory). Its other process records -- sizing, plan, review record,
     sidecars, completion receipts -- stay on disk (receipts under
     ``.coordinator-local/``) and are named by trailers instead
     (``Completion-Receipt``, ``Review``, ``Falsifier``, ``Resolves-Sizing``);
@@ -87,7 +90,12 @@ from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import gate_owed  # noqa: E402 -- sibling-package group
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    RECORD_DIR_ROOT,
+    RUN_DIR_ROOT,
+    SPINE_SUFFIX as _SPINE_SUFFIX,
+    StageManifest,
+)
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
     PREFIX_CLAIM_LABEL,
@@ -216,7 +224,6 @@ def _missing_run_outcome(params: object) -> Optional[dict]:
 
 
 _MINTED_SPINE_ORIGIN = "mise inventory record"
-_SPINE_SUFFIX = ".spine.md"
 
 
 def _read_rel(worktree_root: Path, rel: str) -> Optional[str]:
@@ -2411,11 +2418,13 @@ def _terminal_commit(
                     refused="both-markers",
                 )
             run_root = worktree_root / RUN_DIR_ROOT
-            manifest_abs = contained_path(worktree_root / manifest_rel, [run_root])
+            manifest_abs = contained_path(
+                worktree_root / manifest_rel, [worktree_root / RECORD_DIR_ROOT, run_root]
+            )
             if manifest_abs is None:
                 return _error(
                     f"ask-run-manifest path {manifest_rel!r} does not resolve under "
-                    f"{RUN_DIR_ROOT}",
+                    f"{RECORD_DIR_ROOT} or {RUN_DIR_ROOT}",
                     refused="manifest-escapes-run-root",
                 )
             try:
@@ -2447,8 +2456,17 @@ def _terminal_commit(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     anchor_only = not request.chunks
-    # An ask run commits product only; its process records stay on disk, named by trailers.
+    # An ask run commits product and its record directory; its working files stay on disk,
+    # named by trailers.
     product_only = ask_run_dir is not None
+    record_dir_rel: Optional[str] = None
+    if ask_run_dir is not None:
+        try:
+            rel = ask_run_dir.relative_to(worktree_root.resolve()).as_posix()
+        except ValueError:
+            rel = None
+        if rel is not None and (rel == RECORD_DIR_ROOT or rel.startswith(RECORD_DIR_ROOT + "/")):
+            record_dir_rel = rel
     # A review-only run closes no row: a row reopened since its emit must stay open.
     rows_untouched = anchor_only or request.review_only
     if close_ctx is not None:
@@ -2625,7 +2643,8 @@ def _terminal_commit(
         [p for c in request.chunks for p in c.paths]
         + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
         + companions,
-        [prefix for c in request.chunks for prefix in c.prefixes],
+        [prefix for c in request.chunks for prefix in c.prefixes]
+        + ([record_dir_rel] if record_dir_rel else []),
         _scope_pathspecs(request),
     )
 
@@ -2709,6 +2728,16 @@ def _terminal_commit(
 
     if bookkeeping_record_path is not None and not product_only and bookkeeping_record_path not in all_paths:
         all_paths.append(bookkeeping_record_path)
+
+    if record_dir_rel is not None and snapshot is not None:
+        record_dir_abs = worktree_root / record_dir_rel
+        if record_dir_abs.is_dir():
+            on_disk = sorted(
+                f"{record_dir_rel}/{child.name}" for child in record_dir_abs.iterdir() if child.is_file()
+            )
+            all_paths.extend(
+                p for p in on_disk if p in snapshot.changed and p not in all_paths
+            )
 
     # A sibling-checkout path never reaches the home commit (it would drop as
     # absent-at-HEAD); each sibling repo lands its own commit after the home one.

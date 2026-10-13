@@ -771,3 +771,18 @@ def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
     assert out.returncode == 0, out.stderr
     assert "--profile-dir 'C:\\a b\\profiles' " in out.stdout
     assert "--repo-root '/r o/it'\\''s'" in out.stdout
+
+
+def test_every_evidence_file_flag_names_its_evidence_path():
+    """AC10: no prompt leaves `--evidence-file` to a placeholder."""
+    fix = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"], profile="bug",
+    )
+    assert "--evidence-file ' + 'state/queue-grind/bug/evidence/' + '<run-id>' + '/' + 'row1' + '.done.md'" in fix
+    assert "<a file with your evidence>" not in fix
+    refute = grind_stages.compose_refute_close_call(
+        label="r", phase_title="R", profile="bug", run_id_js="RID",
+    )
+    assert "'state/queue-grind/bug/evidence/' + (RID) + '/' + '<its row_id>' + '.verify.md'" in refute
+    assert "<a file with your evidence>" not in refute
+    assert "never truncate" in refute

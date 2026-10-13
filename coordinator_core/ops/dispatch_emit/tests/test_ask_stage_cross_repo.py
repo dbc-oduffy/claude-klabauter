@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 
 PLAN_REL = "docs/plans/2026-10-02-xrepo.md"
@@ -37,3 +37,4 @@ def test_escaping_row_refused_before_anything_is_staged(tmp_path):
     run_dir = tmp_path / RUN_DIR_ROOT / "r1"
     assert not (run_dir / "briefs").exists()
     assert not (run_dir / "manifest.json").exists()
+    assert not (tmp_path / RECORD_DIR_ROOT / "r1").exists()

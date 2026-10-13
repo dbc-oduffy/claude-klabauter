@@ -523,7 +523,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--research",
         action="store_true",
-        help="with --ask PROMPT: the scouts express lane -- write the ask to <scratch>/ask.md and "
+        help="with --ask PROMPT: the scouts express lane -- write the ask to the run's record directory (state/warp/<run_id>/ask.md) and "
         "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
     )
     parser.add_argument(

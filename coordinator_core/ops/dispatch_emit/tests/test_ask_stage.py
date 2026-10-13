@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import emit
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, _handler, stage
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
@@ -80,9 +80,10 @@ def test_three_row_plan_yields_briefs_equal_to_the_plan_routes_prompts(repo):
 
 def test_manifest_round_trips_and_request_names_every_row(repo):
     m = stage(repo, run_id="r1", plan_rel=PLAN_REL)
-    on_disk = json.loads((repo / m.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    on_disk = json.loads((repo / RECORD_DIR_ROOT / "r1" / "manifest.json").read_text(encoding="utf-8"))
     assert StageManifest.from_json(on_disk) == m
     assert m.run_dir == f"{RUN_DIR_ROOT}/r1"
+    assert not (repo / m.run_dir / "manifest.json").exists()
     req = parse_marker((repo / m.marker_path).read_text(encoding="utf-8"))
     assert {c.id for c in req.chunks} == {"C1", "C2", "C3"}
     assert req.deliverable_id == "dlv-fixture-abc123"
@@ -100,7 +101,8 @@ def test_xs_sizing_yields_one_row_x1(repo):
     assert [r.id for r in m.rows] == ["X1"]
     assert m.rows[0].writes[0] == "pkg/a.py"
     assert (repo / m.rows[0].brief_path).is_file()
-    assert (repo / RUN_DIR_ROOT / "x1run" / "2026-10-01-xs-fixture.spine.md").is_file()
+    assert (repo / RECORD_DIR_ROOT / "x1run" / "2026-10-01-xs-fixture.spine.md").is_file()
+    assert not list((repo / RUN_DIR_ROOT / "x1run").glob("*.spine.md"))
 
 
 @pytest.mark.parametrize("run_id", ["..", "a/b", ""])
@@ -146,11 +148,11 @@ def test_xs_spine_and_manifest_carry_a_real_form_plan_id(repo):
     doc = {"intent": "Fix the thing", "exit_criterion": {"statement": "it works"}}
     (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
     m = stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
-    spine = repo / RUN_DIR_ROOT / "x1run" / "2026-10-01-xs-fixture.spine.md"
+    spine = repo / RECORD_DIR_ROOT / "x1run" / "2026-10-01-xs-fixture.spine.md"
     plan_id = read_fm_field_unquoted(split_frontmatter(spine.read_text(encoding="utf-8")).fm_text, "plan_id")
     assert re.fullmatch(r"pln-[a-z0-9-]+-[0-9a-f]{6}", plan_id)
     assert m.plan_id == plan_id
-    assert StageManifest.from_json(json.loads((repo / m.run_dir / "manifest.json").read_text())).plan_id == plan_id
+    assert StageManifest.from_json(json.loads((repo / RECORD_DIR_ROOT / "x1run" / "manifest.json").read_text())).plan_id == plan_id
 
 
 @pytest.mark.parametrize(

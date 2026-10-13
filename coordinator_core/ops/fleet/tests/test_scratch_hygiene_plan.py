@@ -280,3 +280,45 @@ def test_non_warp_entry_is_classified_as_before(repo):
     assert _classify(repo, f)["action"] == "would-delete"
     _backdate_to(f, 0.5)
     assert _classify(repo, f)["action"] == "skipped-young"
+
+
+def _plan_actions(repo: Path) -> dict[str, str]:
+    recs = plan.plan_purge(repo, registry_dir=repo / "no-registry")
+    return {r["path"]: r["action"] for r in recs}
+
+
+def test_state_scratch_entries_are_planned(repo):
+    old = repo / "state" / "scratch" / "old.txt"
+    old.parent.mkdir(parents=True)
+    old.write_text("x")
+    _backdate_to(old, 10)
+    assert str(old) in plan.purge_candidates(repo)
+    assert _classify(repo, old)["action"] == "would-delete"
+
+
+def test_open_run_entries_are_skipped_live_with_state_scratch_enabled(repo):
+    (repo / "state" / "scratch").mkdir(parents=True)
+    paths = _run(repo, "q", record=_record(_FUTURE, "queued"))
+    for p in paths:
+        r = _classify(repo, p)
+        assert (r["action"], r["reason"]) == ("skipped-live", "open-run-close-job:q.workflow")
+
+
+def test_state_scratch_entry_named_like_a_run_is_not_an_open_run(repo):
+    _run(repo, "q", record=_record(_FUTURE, "queued"))
+    twin = repo / "state" / "scratch" / "q"
+    twin.mkdir(parents=True)
+    (twin / "f.txt").write_text("x")
+    _backdate_to(twin, 10)
+    r = _classify(repo, twin)
+    assert r["action"] == "would-delete"
+
+
+def test_queue_grind_evidence_is_never_planned(repo):
+    ev = repo / "state" / "queue-grind" / "bug" / "evidence" / "r1"
+    ev.mkdir(parents=True)
+    (ev / "i1.done.md").write_text("x")
+    (repo / "state" / "queue-grind" / "bug" / "ledger.jsonl").write_text("x")
+    _backdate_to(repo / "state" / "queue-grind", 10)
+    (repo / "state" / "scratch").mkdir(parents=True)
+    assert not any("queue-grind" in p for p in _plan_actions(repo))

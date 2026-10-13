@@ -19,7 +19,11 @@ Signatures implemented in their own modules:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.session.record_homes import home_dir
 
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
@@ -40,6 +44,38 @@ ASK_SOURCE_PM, ASK_SOURCE_RELAYED = "pm", "relayed"
 ASK_SOURCES = (ASK_SOURCE_PM, ASK_SOURCE_RELAYED)
 RELAYED_ASK_HEADING = "## Relayed ask (not the PM's words)"
 ASK_MANIFEST_MARKER = "// coordinator:ask-run-manifest v1 "
+RECORD_DIR_ROOT = Path(home_dir(".", "warp")).as_posix()
+SPINE_SUFFIX = ".spine.md"
+#: Fixed record names a run's record directory holds, plus any `*SPINE_SUFFIX` file.
+RUN_RECORD_FILES = (
+    "requirements.jsonl",
+    "requirements.md",
+    "manifest.json",
+    ASK_TEXT_FILE,
+    PM_INTENT_FILE,
+    RELAYED_ASK_FILE,
+)
+
+
+def record_dir(repo_root: Path, run_id: str) -> Path:
+    """The run's record directory: `state/warp/<run_id>`, except an in-flight run whose record
+    file sits only under `scratch/warp/<run_id>`. Only a record file selects scratch, never the
+    directory's existence. Raises ValueError on an unsafe run_id or an escape."""
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        raise ValueError(f"run_id {run_id!r} is not a single safe path segment")
+    root = Path(repo_root)
+    state = contained_path(root / RECORD_DIR_ROOT / run_id, [root / RECORD_DIR_ROOT])
+    if state is None:
+        raise ValueError(f"record dir for {run_id!r} escapes {RECORD_DIR_ROOT}")
+    if state.is_dir():
+        return state
+    scratch = contained_path(root / RUN_DIR_ROOT / run_id, [root / RUN_DIR_ROOT])
+    if scratch is not None and scratch.is_dir():
+        if any((scratch / name).is_file() for name in RUN_RECORD_FILES) or any(
+            child.name.endswith(SPINE_SUFFIX) for child in scratch.iterdir()
+        ):
+            return scratch
+    return state
 
 
 @dataclass(frozen=True)

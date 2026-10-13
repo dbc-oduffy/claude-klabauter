@@ -320,7 +320,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/dispatch_emit/tests/test_writes_under_carry_through.py",
     "ops/dispatch_emit/tests/test_writes_under_gitignored_prefix.py",
     "ops/distill_apply_disposal.py",
-    "ops/distill_scope.py",
     "ops/docgen/tests/test_c6_conformance.py",
     "ops/docgen/tests/test_doc_render.py",
     "ops/docgen/tests/test_dr_corpus_ids_unique.py",

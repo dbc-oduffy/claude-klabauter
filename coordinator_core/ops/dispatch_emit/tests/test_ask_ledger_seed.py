@@ -10,7 +10,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import op
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RECORD_DIR_ROOT, RELAYED_ASK_FILE, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 
 _DRAFT = """schema: sizing-object
@@ -57,7 +57,7 @@ def _put(repo):
 
 
 def _ledgers(repo):
-    return sorted((repo / RUN_DIR_ROOT).glob(f"*/{rl.LEDGER_FILE}"))
+    return sorted((repo / RECORD_DIR_ROOT).glob(f"*/{rl.LEDGER_FILE}"))
 
 
 def test_raw_ask_seeds_the_ask_and_the_flag(repo, capsys):
@@ -135,8 +135,8 @@ def test_all_of_pm_ask_is_an_ask_route_flag(repo, capsys):
 def test_stage_folds_the_sizing_words_into_an_existing_ledger_only(repo):
     _put(repo)
     stage(repo, run_id="noledger", sizing_rel=REL, writes=["pkg/a.py"])
-    assert not (repo / RUN_DIR_ROOT / "noledger" / rl.LEDGER_FILE).exists()
-    run_dir = repo / RUN_DIR_ROOT / "ledgered"
+    assert not (repo / RECORD_DIR_ROOT / "noledger" / rl.LEDGER_FILE).exists()
+    run_dir = repo / RECORD_DIR_ROOT / "ledgered"
     rl.seed(run_dir, "ledgered", ["the raw ask"], origin=rl.ORIGIN_ASK)
     stage(repo, run_id="ledgered", sizing_rel=REL, writes=["pkg/a.py"])
     assert [i.text for i in rl.read_ledger(run_dir).items] == ["the raw ask", "make the seed verbatim"]

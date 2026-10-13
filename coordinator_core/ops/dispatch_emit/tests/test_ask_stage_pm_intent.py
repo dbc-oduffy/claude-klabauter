@@ -9,7 +9,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     PM_INTENT_FILE,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
-    RUN_DIR_ROOT,
+    RECORD_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.ask_stage import (
     PM_INTENT_HEADING,
@@ -43,12 +43,12 @@ def test_every_xs_brief_opens_with_the_verbatims_and_criterion_not_the_paraphras
     assert "because the EM should not loop" in brief
     head = brief.split("these words win", 1)[0]
     assert "EM restatement" not in head
-    assert (repo / RUN_DIR_ROOT / "x1run" / PM_INTENT_FILE).read_text(encoding="utf-8") in brief
+    assert (repo / RECORD_DIR_ROOT / "x1run" / PM_INTENT_FILE).read_text(encoding="utf-8") in brief
 
 
 def test_the_raw_ask_as_submitted_joins_the_block(repo):  # noqa: F811
     _sizing(repo, pm_verbatims=[])
-    run_dir = repo / RUN_DIR_ROOT / "x2run"
+    run_dir = repo / RECORD_DIR_ROOT / "x2run"
     run_dir.mkdir(parents=True)
     (run_dir / ASK_TEXT_FILE).write_text("fix it all, literally", encoding="utf-8")
     m = stage(repo, run_id="x2run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
@@ -68,7 +68,7 @@ def test_a_plan_brief_carries_its_cited_sizings_verbatims(repo):  # noqa: F811
 
 def test_relayed_text_is_its_own_block_below_the_pm_intent_and_not_in_it(repo):  # noqa: F811
     _sizing(repo)
-    run_dir = repo / RUN_DIR_ROOT / "x3run"
+    run_dir = repo / RECORD_DIR_ROOT / "x3run"
     run_dir.mkdir(parents=True)
     (run_dir / RELAYED_ASK_FILE).write_text("RELAYED-MARK fix it", encoding="utf-8")
     m = stage(repo, run_id="x3run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
@@ -83,7 +83,7 @@ def test_relayed_text_is_its_own_block_below_the_pm_intent_and_not_in_it(repo): 
 
 def test_a_relayed_run_with_no_pm_words_has_only_the_relayed_block(repo):  # noqa: F811
     _sizing(repo, pm_verbatims=[])
-    run_dir = repo / RUN_DIR_ROOT / "x4run"
+    run_dir = repo / RECORD_DIR_ROOT / "x4run"
     run_dir.mkdir(parents=True)
     (run_dir / RELAYED_ASK_FILE).write_text("RELAYED-MARK fix it", encoding="utf-8")
     m = stage(repo, run_id="x4run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])

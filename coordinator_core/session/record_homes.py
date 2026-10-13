@@ -130,6 +130,7 @@ HOMES = frozenset({
     "test-red",
     "tests",
     "warm",
+    "warp",
     "wave-maps",
     "week-changelog",
     "workstreams",

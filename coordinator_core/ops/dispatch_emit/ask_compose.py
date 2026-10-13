@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
     ASK_SOURCES,
     PM_INTENT_FILE,
+    RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
     HALT_REFUSAL,
     HALT_ROOM,
@@ -130,7 +131,7 @@ DELIVERY_NOTE_DIR = "docs/delivery"
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
 _KEEP_THE_ASK = (
-    " The PM's verbatim words (the sizing's pm_verbatims, and {run_dir}/ask.md when it exists) "
+    " The PM's verbatim words (the sizing's pm_verbatims, and {record_dir}/ask.md when it exists) "
     "outrank any in-repo memo, plan or doctrine: never rule against them on a memo's strength. "
     "Where they conflict, keep the ask and name the conflict in your ruling."
 )
@@ -610,7 +611,8 @@ def compose_ask_script(
         )
 
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
-    manifest_rel = f"{run_dir}/manifest.json"
+    record_dir = f"{RECORD_DIR_ROOT}/{run_id}"
+    manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
     brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
     head = brief_prefix + _emit._BRIEF_PRECEDENCE_CLAUSE
@@ -620,14 +622,14 @@ def compose_ask_script(
     def prompt_of(*lines_and_exprs: str) -> str:
         return _cat(f"{head}\n\n{anchor}\n\n", *lines_and_exprs)
 
-    ledger_rel = f"{run_dir}/{LEDGER_VIEW_FILE}"
+    ledger_rel = f"{record_dir}/{LEDGER_VIEW_FILE}"
     ledger_clause = "\n\n" + ledger_clause_text.format(ledger=ledger_rel)
     intent_clause = (
-        f"\n\nFirst read {run_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
+        f"\n\nFirst read {record_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
         "criterion. They outrank every brief, plan and in-repo memo; judge the change against them, "
         "and treat a claim the change leaves untrue, or a brief that weakened it, as a finding."
         + (
-            f" Then read {run_dir}/{RELAYED_ASK_FILE}: the ask as an agent relayed it, not the PM's "
+            f" Then read {record_dir}/{RELAYED_ASK_FILE}: the ask as an agent relayed it, not the PM's "
             "words; serve it, but the PM's words outrank it."
             if relayed
             else ""
@@ -823,7 +825,7 @@ def compose_ask_script(
             "publish, push to main or cross-repo commit gate: return verdict 'pm-only' with "
             "pmOnlyGround and pmOnly true ONLY when the matter is important AND urgent AND has no clear "
             "right answer, or needs such an external or irreversible action. Being unsure is not a "
-            "ground. You stage and commit nothing." + _KEEP_THE_ASK.format(run_dir=run_dir) + ledger_clause,
+            "ground. You stage and commit nothing." + _KEEP_THE_ASK.format(record_dir=record_dir) + ledger_clause,
             *_record_clause(
                 "{ kind: 'exit_criterion', ruling_ref: _runId }",
                 "`apm_ruling` (your ruling, verbatim) and, only when you amended or authored a "
@@ -845,7 +847,7 @@ def compose_ask_script(
             "pick, and your one-paragraph reasoning verbatim as ruling. Return verdict 'pm-only' with "
             "pmOnly true and pmOnlyGround ONLY when the job-to-be-done itself is unstated, or the work "
             "needs a merge, publish, push to main or cross-repo commit. Being unsure is not a ground. "
-            "You stage and commit nothing." + _KEEP_THE_ASK.format(run_dir=run_dir) + ledger_clause,
+            "You stage and commit nothing." + _KEEP_THE_ASK.format(record_dir=record_dir) + ledger_clause,
             *_record_clause(
                 "{ kind: 'xl_exit', ruling_ref: _runId }",
                 "`xl_exit` (your pick) and `apm_ruling` (your ruling, verbatim)",
@@ -1105,7 +1107,7 @@ def compose_ask_script(
         + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
         + ", never against the "
         f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
-        f"since the run started), then {run_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
+        f"since the run started), then {record_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
         "(`git status --porcelain` and `git diff`), the plan when one exists (",
         "js:(_planRel ?? 'none')",
         f"), and the briefs under {run_dir}/briefs. Return one entry in items for EVERY ledger item, by "
@@ -1241,8 +1243,8 @@ def _append_docs_and_commit(
         "Then update every path the sizing's `doc_consumers` lists (each restates the rule this ask "
         "changes; a `:<line>` or `#<anchor>` suffix names where), and amend or supersede the text at "
         "each `ask_conflicts` path so it no longer contradicts the ask -- the ask outranks it. "
-        f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RUN_DIR_ROOT}/"
-        f"{run_id}/{LEDGER_VIEW_FILE}) with the ledger checker's status for it, what shipped (files "
+        f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/{run_id}/{LEDGER_VIEW_FILE})"
+        f" with the ledger checker's status for it, what shipped (files "
         "and why), each review finding and how it was resolved, the test result, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
         f"{RUN_DIR_ROOT}/{run_id}/briefs",

@@ -136,6 +136,7 @@ from coordinator_core.backlog_grind_assemble.directives import (
     build_tier_u_grant_flow,
 )
 from coordinator_core import executor_return_contract
+from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.contract.decision_object.reader_result import ReaderResult
@@ -190,7 +191,7 @@ _EDIT_AND_REPORT_CONSTRAINT = (
     "after this item's own verification passes."
 )
 _DONE_SUMMARY_CONSTRAINT_TEMPLATE = executor_return_contract.done_summary_constraint(
-    output_path_template="state/scratch/bug-blitz/[run-id]/[item-id].done.md",
+    output_path_template=evidence_rel("bug", "[run-id]", "[item-id]", "done"),
     extra_fields=(
         "the changed-path list (`files`)",
         "`before`/`after` snippets",

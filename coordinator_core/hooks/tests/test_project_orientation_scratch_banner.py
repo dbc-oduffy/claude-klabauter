@@ -89,12 +89,14 @@ def test_time_stop_line(tmp_path, monkeypatch):
         ScratchRead(False, 1234, _MB5),
     ],
 )
-def test_lines_name_no_delete_command_and_both_roots(tmp_path, monkeypatch, read):
+def test_lines_name_no_delete_command_and_one_remedy(tmp_path, monkeypatch, read):
     line = _banner(tmp_path, read, monkeypatch)[0]
     for token in _FORBIDDEN:
         assert token not in line
-    assert f"{tmp_path / 'scratch'}/ only" in line
-    assert f"{tmp_path / 'state' / 'scratch'}/ is cleared by hand" in line
+    assert "cleared by hand" not in line
+    assert "only" not in line.split("resolve:", 1)[1]
+    assert f"{tmp_path / 'scratch-hold'}/" in line
+    assert line.count("fleet.scratch_hygiene") == 1
 
 
 def test_handler_carries_the_line(tmp_path, monkeypatch):
