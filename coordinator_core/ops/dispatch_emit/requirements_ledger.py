@@ -3,7 +3,8 @@ grown by the EM's revisions while the run is in flight.
 
 `RUN_DIR_ROOT/<run_id>/requirements.jsonl` holds one JSON object per line and only ever grows; file
 order is ledger order, so item ids (`R1`, `R2`, ...) are stable. A line is a `requirement`
-(`origin`: `pm_verbatims`, `ask` or `revision`) or a `flag` (`all_of_pm_ask`; the last one wins).
+(`origin`: `pm_verbatims`, `ask`, `relayed` or `revision`; `relayed` is an EM's relay, a requirement
+that never supersedes a `pm_verbatims` item) or a `flag` (`all_of_pm_ask`; the last one wins).
 `requirements.md` beside it is the view every stage prompt reads, rewritten from the JSONL on each
 write. File I/O only: no git, no subprocess, so the op holds the 500ms bar.
 
@@ -31,6 +32,7 @@ GENERATES = []
 LEDGER_FILE = "requirements.jsonl"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
+ORIGIN_RELAYED = "relayed"
 STATUSES = ("met", "not_met", "drifted", "superseded")
 VERBATIM_BYTE_CAP = 16 * 1024
 
@@ -134,8 +136,9 @@ def render(ledger: Ledger, run_id: str) -> str:
     lines = [
         f"# Requirements ledger -- run {run_id}",
         "",
-        "Every item is the PM's (an origin) or a revision the EM sent while the run was in flight, "
-        "in the order they arrived. A revision governs over an earlier item it changes.",
+        "Every item is the PM's (an origin), a relayed ask (origin `relayed`: an EM's relay, not the "
+        "PM's words; a `pm_verbatims` item outranks it) or a revision the EM sent while the run was "
+        "in flight, in the order they arrived. A revision governs over an earlier item it changes.",
         "",
         "All of the PM's ask is mandatory (all_of_pm_ask): " + ("yes" if ledger.all_of_pm_ask else "no"),
         "",

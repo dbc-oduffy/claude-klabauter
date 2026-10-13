@@ -108,7 +108,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
 from coordinator_core.ops.dispatch_emit.sibling_split import WidthOverCapError
 from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError, part_run_id
-from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES, STOP_AFTER_PLAN
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
@@ -511,6 +511,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ask route: end the emitted script at the plan wave (no stage/execute/review); "
         "--ask/--sizing only",
+    )
+    parser.add_argument(
+        "--ask-source",
+        dest="ask_source",
+        choices=list(ASK_SOURCES),
+        default=None,
+        help="ask route: 'relayed' marks the --ask text as an agent's relay, not the PM's words "
+        "(kept under its own heading, never the PM-intent block); default pm; --ask only",
     )
     parser.add_argument(
         "--research",
@@ -1218,6 +1226,13 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
+    if args.ask_source and not is_ask_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --ask-source is accepted only with --ask/--sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if args.writes and not is_ask_route:
         print(
             "emit-dispatch-workflow: ERROR — --writes is accepted only with --ask/--sizing",
@@ -1469,6 +1484,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["sizing_path"] = args.sizing
         if args.stop_after:
             params["stop_after"] = args.stop_after
+        if args.ask_source:
+            params["ask_source"] = args.ask_source
         if args.writes:
             params["writes"] = list(args.writes)
         if args.baton:

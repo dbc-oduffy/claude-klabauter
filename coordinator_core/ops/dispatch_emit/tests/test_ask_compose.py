@@ -62,6 +62,24 @@ def test_raw_ask_has_a_size_phase_and_a_sized_one_does_not(tmp_path, monkeypatch
     assert "state/sizings/x.yaml" in sized
 
 
+def test_a_relayed_compose_never_labels_the_ask_text_as_the_pms():
+    script = _compose(prompt="RELAYED-MARK do it", ask_source="relayed")
+    assert "Relayed ask (an agent" in script
+    assert "\\n\\nAsk:\\n" not in script
+    assert "relayed-ask.md" in script
+    assert "the relayed ask (an EM" in script
+    assert "every PM requirement for this run" not in script
+    assert "\\n\\nAsk:\\n" in _compose(prompt="RELAYED-MARK do it")
+
+
+def test_ask_source_is_refused_unless_pm_or_relayed_and_never_with_a_sizing(monkeypatch):
+    with pytest.raises(AskComposeRefused):
+        _compose(ask_source="em")
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
+    with pytest.raises(AskComposeRefused):
+        _compose(prompt=None, sizing_rel="state/sizings/x.yaml", ask_source="relayed")
+
+
 def test_exactly_one_of_prompt_or_sizing_is_required():
     with pytest.raises(AskComposeRefused):
         _compose(prompt=None, sizing_rel=None)

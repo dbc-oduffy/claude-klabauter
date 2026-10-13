@@ -201,23 +201,121 @@ def test_second_submission_of_a_live_sizing_is_denied(tmp_path):
     assert len(emit.calls) == 1
 
 
-def test_sizing_scout_from_the_main_loop_is_denied_naming_the_submission():
-    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:sizing-scout", "prompt": "size"}}
+def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra) -> dict:
+    tool_input = {"prompt": "size"}
+    if subagent_type is not None:
+        tool_input["subagent_type"] = subagent_type
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": tool_input,
+        "session_id": "sess-1",
+        "transcript_path": str(root / "transcript.jsonl"),
+        "cwd": str(root),
+    }
+    payload.update(extra)
+    return payload
+
+
+def test_sizing_scout_is_denied_only_while_a_run_is_live(tmp_path):
+    root = _repo(tmp_path)
+    payload = _scout_payload(root)
+    assert mod.sizing_scout_deny(payload) is None
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     out = mod.sizing_scout_deny(payload)
     assert _hso(out)["permissionDecision"] == "deny"
-    assert warp_fire.fire_command() in _hso(out)["permissionDecisionReason"]
-    assert mod.sizing_scout_deny({**payload, "agent_id": "a1"}) is None
-    other = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:executor"}}
-    assert mod.sizing_scout_deny(other) is None
+    assert "ask-20261013T000000-abcdef" in _hso(out)["permissionDecisionReason"]
+    assert warp_fire.fire_command() not in _hso(out)["permissionDecisionReason"]
+    padded = _scout_payload(root, " coordinator:sizing-scout ")
+    assert _hso(mod.sizing_scout_deny(padded))["permissionDecision"] == "deny"
+    assert mod.sizing_scout_deny(_scout_payload(root, session_id="other")) is None
 
 
-def test_agent_leg_carries_the_sizing_scout_deny():
+def test_a_scout_payload_with_an_agent_id_is_not_denied_with_a_run_live(tmp_path):
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+    assert mod.sizing_scout_deny(_scout_payload(root, agent_id="a1")) is None
+
+
+def test_a_non_scout_agent_payload_reads_no_launch_records(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+
+    def _boom(*a, **k):
+        raise AssertionError("launch-record dir listed")
+
+    monkeypatch.setattr(warp_live, "_launch_dirs", _boom)
+    assert mod.sizing_scout_deny(_scout_payload(root, "coordinator:executor")) is None
+    assert mod.sizing_scout_deny(_scout_payload(root, None)) is None
+
+
+def test_agent_leg_carries_the_sizing_scout_deny(tmp_path):
     from coordinator_core.hooks import block_unenumerated_agent_type
 
-    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:sizing-scout", "prompt": "x"}}
-    out = block_unenumerated_agent_type.check(payload)
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+    out = block_unenumerated_agent_type.check(_scout_payload(root))
     assert _hso(out)["permissionDecision"] == "deny"
-    assert "coordinator:engine-ask" in _hso(out)["permissionDecisionReason"]
+    assert "ask-20261013T000000-abcdef" in _hso(out)["permissionDecisionReason"]
+
+
+def test_engine_emitted_no_run_consumes_the_token(tmp_path):
+    root = _repo(tmp_path)
+
+    def emit(params, repo_root):
+        run_token.mint(repo_root, "ask-x", str(repo_root / "s.mjs"), session_id=params["session_id"],
+                       sizing_rel=None)
+        return {"ok": False, "run_id": "ask-x", "findings": "nothing to emit"}
+
+    out = mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert "The engine emitted no run" in _hso(out)["permissionDecisionReason"]
+    assert warp_live.live_run_for_session(root, "sess-1", tmpdir=str(tmp_path)) is None
+    record = run_token._record_path(root, "ask-x")
+    assert record is None or not record.exists()
+
+
+def test_non_repo_cwd_refusal_shows_the_repo_argument_shape(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a"}, cwd=str(outside)), emit=_Emit())
+    assert 'repo: "<absolute repo path>"' in _hso(out)["permissionDecisionReason"]
+
+
+def test_a_repo_argument_that_is_not_a_repo_is_refused_naming_it(tmp_path):
+    root = _repo(tmp_path)
+    bad = tmp_path / "not-a-repo"
+    bad.mkdir()
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "a", "repo": str(bad)}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert str(bad) in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == []
+
+
+def test_relayed_source_forwards_ask_source(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"ask": "a", "source": "relayed"}), emit=emit)
+    assert emit.calls[0][0]["ask_source"] == "relayed"
+    mod.evaluate(_payload(root, {"ask": "a", "source": "pm"}), emit=emit)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
+    assert "ask_source" not in emit.calls[1][0]
+    assert "ask_source" not in emit.calls[2][0]
+
+
+@pytest.mark.parametrize(
+    "args, needle",
+    [
+        ({"ask": "a", "source": "peer"}, "'peer'"),
+        ({"sizing": "state/sizings/a.yaml", "source": "relayed"}, "sizing submission carries none"),
+    ],
+)
+def test_a_bad_source_is_refused(tmp_path, args, needle):
+    emit = _Emit()
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert needle in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == []
 
 
 def test_op_door_answers_the_wrapped_payload(tmp_path, monkeypatch):
@@ -272,7 +370,7 @@ def test_an_unlaunched_emit_stops_counting_after_the_grace(tmp_path, monkeypatch
     assert warp_live.live_run_for_sizing(root, "state/sizings/a.yaml", tmpdir=str(scratch)) is None
 
 
-def test_a_raw_ask_run_owns_a_sizing_written_after_it_in_its_own_session(tmp_path):
+def test_a_raw_ask_run_owns_no_sizing_but_is_live_for_its_session(tmp_path):
     root = _repo(tmp_path)
     scratch = tmp_path / "tmp"
     scratch.mkdir()
@@ -281,9 +379,9 @@ def test_a_raw_ask_run_owns_a_sizing_written_after_it_in_its_own_session(tmp_pat
     sizing.parent.mkdir(parents=True)
     sizing.write_text("status: sized\n", encoding="utf-8")
     rel = "state/sizings/new.yaml"
-    assert warp_live.live_run_for_sizing(root, rel, session_id="sess-1", tmpdir=str(scratch))
-    assert warp_live.live_run_for_sizing(root, rel, session_id="other", tmpdir=str(scratch)) is None
-    assert warp_live.live_run_for_sizing(root, rel, tmpdir=str(scratch)) is None
+    assert warp_live.live_run_for_sizing(root, rel, session_id="sess-1", tmpdir=str(scratch)) is None
+    assert warp_live.live_run_for_session(root, "sess-1", tmpdir=str(scratch))
+    assert warp_live.live_run_for_session(root, "other", tmpdir=str(scratch)) is None
 
 
 def test_a_consumed_token_is_not_live(tmp_path):

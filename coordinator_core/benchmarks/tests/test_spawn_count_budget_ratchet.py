@@ -382,6 +382,20 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "hooks.submit_engine_ask": {
+        "sizing_submission": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-13 at the value it entered with: the submission runs the real dispatch.emit in process and starts no process."
+            ),
+        },
+        "raw_ask_submission": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-13 at the value it entered with: the raw-ask submission runs the real dispatch.emit in process and starts no process."
+            ),
+        },
+    },
     "hooks.stop_dispatch": {
         "terminal_review_session_walk": {
             "ceiling": 1,

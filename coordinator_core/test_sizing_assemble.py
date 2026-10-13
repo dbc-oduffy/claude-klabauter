@@ -2036,5 +2036,7 @@ def test_room_routes_print_no_fire():
 
 def test_express_lane_fires_the_ask_not_a_hand_dispatch():
     decision = sa.route(appetite="small", estimate={"tshirt": "XS"}, express_lane=True)
-    assert decision["fire"].startswith('emit-dispatch-workflow --ask "')
+    from coordinator_core import warp_fire
+
+    assert decision["fire"] == warp_fire.fire_command()
     assert "Dispatch directly" not in decision["next_move"]

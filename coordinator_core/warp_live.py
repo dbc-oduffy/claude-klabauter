@@ -2,17 +2,18 @@
 second entry to the same work read.
 
 A run is live while its run-token record (`ops.dispatch_emit.run_token`: minted at emit,
-consumed when the in-run commit lands, inert after `TTL_SECONDS`) is present AND the submitting
+consumed on admit (`run_token.admits`), inert after `TTL_SECONDS`) is present AND the submitting
 session's transcript carries no terminal task notification for the harness task that ran it. The
 token alone over-reports: a run that halts at a gate never commits, so its record outlives it.
 The task is found through the submission record this module writes beside the run's briefs and
 the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) capture
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
-A run names its sizing (`--sizing` submissions) or, for a raw ask, mints one in-run; a raw ask's
-run is taken to own a sizing written after the run was minted, in the same session only.
+A token owns a sizing only when its record names it; a raw ask's run is reachable through
+`live_run_for_session`. Launch records are read from the managed temp dir and the legacy
+top-level dir.
 
-Read-only except `record_submission`. No spawn. Every read failure answers "not live": a wrong
+Read-only except `record_submission` and the `managed_tempdir` mkdir on an unscoped lookup. No spawn. Every read failure answers "not live": a wrong
 "live" refuses a legitimate fire, a wrong "not live" costs at most a duplicate run.
 """
 
@@ -21,13 +22,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, Optional
 
 from coordinator_core.ops.dispatch_emit import run_token as _run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 SUBMISSION_FILE = "submission.json"
 
@@ -106,27 +107,39 @@ def _same_path(a: object, b: object) -> bool:
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
-def _launched_task_ids(session_id: str, script_path: str, tmpdir: str) -> list[str]:
+def _launch_dirs(tmpdir: Optional[str]) -> list[str]:
+    """An explicit `tmpdir` alone; otherwise the managed dir, then the legacy top-level dir."""
+    if tmpdir:
+        return [tmpdir]
+    managed = str(managed_tempdir())
+    legacy = str(legacy_top_level_path(""))
+    if os.path.normcase(os.path.normpath(legacy)) == os.path.normcase(os.path.normpath(managed)):
+        return [managed]
+    return [managed, legacy]
+
+
+def _launched_task_ids(session_id: str, script_path: str, dirs: list[str]) -> list[str]:
     """Harness task ids this session launched `script_path` under, newest record last."""
     if not _SAFE_ID_RE.match(session_id or ""):
         return []
     prefix = f"workflow-run-{session_id}-"
-    found: list[tuple[float, str]] = []
-    try:
-        names = os.listdir(tmpdir)
-    except OSError:
-        return []
-    for name in names:
-        if not (name.startswith(prefix) and name.endswith(".json")):
+    found: dict[str, float] = {}
+    for tmpdir in dirs:
+        try:
+            names = os.listdir(tmpdir)
+        except OSError:
             continue
-        task_id = name[len(prefix):-len(".json")]
-        if not _SAFE_ID_RE.match(task_id):
-            continue
-        record = _read_json(Path(tmpdir) / name)
-        if record and _same_path(record.get("scriptPath"), script_path):
-            fired = record.get("fired_at")
-            found.append((fired if isinstance(fired, (int, float)) else 0.0, task_id))
-    return [task_id for _, task_id in sorted(found)]
+        for name in names:
+            if not (name.startswith(prefix) and name.endswith(".json")):
+                continue
+            task_id = name[len(prefix):-len(".json")]
+            if not _SAFE_ID_RE.match(task_id):
+                continue
+            record = _read_json(Path(tmpdir) / name)
+            if record and _same_path(record.get("scriptPath"), script_path):
+                fired = record.get("fired_at")
+                found[task_id] = fired if isinstance(fired, (int, float)) else 0.0
+    return [task_id for task_id, _ in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
 
 
 def _tail(path: str) -> str:
@@ -147,18 +160,31 @@ def _task_ended(transcript_tail: str, task_id: str) -> bool:
 
 
 def _run_ended(
-    session_id: object, script_path: object, transcript_path: object, minted_at: float, tmpdir: str
+    session_id: object, script_path: object, transcript_path: object, minted_at: float, dirs: list[str]
 ) -> bool:
     """True once the harness reported the run's task terminal, or its launch never happened."""
     if not isinstance(session_id, str) or not isinstance(script_path, str):
         return False
-    task_ids = _launched_task_ids(session_id, script_path, tmpdir)
+    task_ids = _launched_task_ids(session_id, script_path, dirs)
     if not task_ids:
         return time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS
     if not isinstance(transcript_path, str) or not transcript_path:
         return False
     tail = _tail(transcript_path)
     return bool(tail) and _task_ended(tail, task_ids[-1])
+
+
+def _record_live(
+    root: Path, record: dict, session_id: Optional[str], transcript_path: Optional[str], dirs: list[str]
+) -> bool:
+    run_id = record["run_id"]
+    submission = _read_json(_submission_path(root, run_id)) or {}
+    run_session = submission.get("session_id") or record.get("session_id")
+    transcript = submission.get("transcript_path") or (
+        transcript_path if run_session and run_session == session_id else None
+    )
+    script = submission.get("script_path") or record.get("script_path")
+    return not _run_ended(run_session, script, transcript, float(record["minted_at"]), dirs)
 
 
 def live_run_for_sizing(
@@ -169,42 +195,39 @@ def live_run_for_sizing(
     transcript_path: Optional[str] = None,
     tmpdir: Optional[str] = None,
 ) -> Optional[str]:
-    """The run id of a live run working `sizing_rel`, else None.
+    """The run id of a live run whose token names `sizing_rel`, else None.
 
-    `session_id`/`transcript_path` are the asking session's: they attribute a raw ask's in-run
-    sizing, and stand in for a run emitted without a submission record (a CLI emit) when that
-    run is this session's own."""
+    `session_id`/`transcript_path` are the asking session's: they stand in for a run emitted
+    without a submission record (a CLI emit) when that run is this session's own."""
     root = Path(repo_root)
-    rel = (sizing_rel or "").replace("\\", "/")
+    rel = _run_token.normalize_sizing_rel(root, sizing_rel)
     if not rel:
         return None
-    try:
-        sizing_mtime: Optional[float] = (root / rel).stat().st_mtime
-    except OSError:
-        sizing_mtime = None
-    scratch = tmpdir or tempfile.gettempdir()
+    dirs = _launch_dirs(tmpdir)
     for record in _token_records(root):
         named = record.get("sizing_rel")
-        minted = float(record["minted_at"])
-        if named is not None:
-            owns = str(named).replace("\\", "/") == rel
-        else:
-            owns = (
-                bool(session_id)
-                and record.get("session_id") == session_id
-                and sizing_mtime is not None
-                and sizing_mtime >= minted
-            )
-        if not owns:
+        if not isinstance(named, str) or _run_token.normalize_sizing_rel(root, named) != rel:
             continue
-        run_id = record["run_id"]
-        submission = _read_json(_submission_path(root, run_id)) or {}
-        run_session = submission.get("session_id") or record.get("session_id")
-        transcript = submission.get("transcript_path") or (
-            transcript_path if run_session and run_session == session_id else None
-        )
-        script = submission.get("script_path") or record.get("script_path")
-        if _run_ended(run_session, script, transcript, minted, scratch):
+        if _record_live(root, record, session_id, transcript_path, dirs):
+            return record["run_id"]
+    return None
+
+
+def live_run_for_session(
+    repo_root: Path,
+    session_id: Optional[str],
+    *,
+    transcript_path: Optional[str] = None,
+    tmpdir: Optional[str] = None,
+) -> Optional[str]:
+    """The run id of a live run whose token names `session_id`, sizing-bound or raw ask."""
+    if not session_id:
+        return None
+    root = Path(repo_root)
+    dirs = _launch_dirs(tmpdir)
+    for record in _token_records(root):
+        if record.get("session_id") != session_id:
             continue
-        return run_id
+        if _record_live(root, record, session_id, transcript_path, dirs):
+            return record["run_id"]
     return None

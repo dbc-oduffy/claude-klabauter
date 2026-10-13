@@ -113,6 +113,66 @@ def _agent_payload(subagent_type: str, name: str = "", prompt: str = "do the thi
     return {"tool_name": "Agent", "tool_input": tool_input}
 
 
+_SCOUT_WARN = {
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "additionalContext": "scout-warn-text",
+    }
+}
+
+
+def _scout_at_warn(monkeypatch: pytest.MonkeyPatch, roster: "set[str]") -> None:
+    import coordinator_core.hooks.submit_engine_ask as ask_mod
+
+    monkeypatch.setattr(ask_mod, "sizing_scout_deny", lambda payload: _SCOUT_WARN)
+    monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: (roster, None))
+    _patch_opus_gate_noop(monkeypatch)
+
+
+def test_a_warned_scout_dispatch_of_an_unrostered_shape_is_still_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _scout_at_warn(monkeypatch, {"general-purpose"})
+    out = mod.check(_agent_payload("coordinator:sizing-scout"))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "not on the enumerated roster" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_warned_scout_dispatch_of_an_opus_ungranted_shape_is_still_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _scout_at_warn(monkeypatch, {"coordinator:sizing-scout"})
+    import coordinator_core.hooks.enforce_agent_model_pin as pin_mod
+
+    monkeypatch.setattr(pin_mod, "check", lambda payload: None)
+    deny_env = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                       "permissionDecisionReason": "opus not granted"}}
+    monkeypatch.setattr(opus_gate_mod, "check", lambda payload: deny_env)
+    out = mod.check(_agent_payload("coordinator:sizing-scout"))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert out["hookSpecificOutput"]["permissionDecisionReason"] == "opus not granted"
+
+
+def test_a_warned_scout_text_survives_when_the_later_legs_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    _scout_at_warn(monkeypatch, {"coordinator:sizing-scout"})
+    import coordinator_core.hooks.enforce_agent_model_pin as pin_mod
+
+    monkeypatch.setattr(pin_mod, "check", lambda payload: None)
+    out = mod.check(_agent_payload("coordinator:sizing-scout"))
+    assert out["hookSpecificOutput"]["additionalContext"] == "scout-warn-text"
+
+
+def test_a_scout_deny_is_returned_before_the_roster_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    import coordinator_core.hooks.submit_engine_ask as ask_mod
+
+    scout_deny = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                         "permissionDecisionReason": "run live"}}
+    monkeypatch.setattr(ask_mod, "sizing_scout_deny", lambda payload: scout_deny)
+    monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: pytest.fail("roster read"))
+    assert mod.check(_agent_payload("coordinator:sizing-scout")) is scout_deny
+
+
 def test_resolve_roster_unions_all_three_sources(content_root: Path, plugin_home: Path) -> None:
     roster, reason = mod.resolve_roster(content_root=str(content_root), home=str(plugin_home))
     assert reason is None

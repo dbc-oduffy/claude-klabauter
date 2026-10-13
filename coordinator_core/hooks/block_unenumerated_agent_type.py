@@ -931,10 +931,33 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # it is the engine call DoE's PreToolUse(Agent) fan-in already makes.
     from coordinator_core.hooks.submit_engine_ask import sizing_scout_deny
 
-    scout_deny = sizing_scout_deny(payload)
-    if scout_deny is not None:
-        return scout_deny
+    scout = sizing_scout_deny(payload)
+    if scout is None:
+        return _gate_legs(payload, tool_input, subagent_type)
+    if scout.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+        return scout
+    return _with_context(_gate_legs(payload, tool_input, subagent_type), scout)
 
+
+def _with_context(result: Optional[Dict[str, Any]], carried: Dict[str, Any]) -> Dict[str, Any]:
+    """`result` with the warn-level `carried` advisory's text kept: appended to an allow's own
+    context, or returned alone when the later legs said nothing. A later deny stands as is."""
+    if result is None:
+        return carried
+    hso = result.get("hookSpecificOutput")
+    if not isinstance(hso, dict) or hso.get("permissionDecision") == "deny":
+        return result
+    text = carried.get("hookSpecificOutput", {}).get("additionalContext")
+    if text:
+        existing = hso.get("additionalContext")
+        hso["additionalContext"] = f"{existing}\n{text}" if existing else text
+    return result
+
+
+def _gate_legs(
+    payload: Dict[str, Any], tool_input: Dict[str, Any], subagent_type: str
+) -> Optional[Dict[str, Any]]:
+    """Override marker, roster, model-pin and opus legs."""
     prompt = tool_input.get("prompt")
     prompt_text = prompt if isinstance(prompt, str) else ""
     if prompt_text and _has_override_marker(prompt_text):

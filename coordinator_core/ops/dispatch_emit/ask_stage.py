@@ -22,6 +22,8 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     PM_INTENT_FILE,
+    RELAYED_ASK_FILE,
+    RELAYED_ASK_HEADING,
     RUN_DIR_ROOT,
     ManifestRow,
     StageManifest,
@@ -79,7 +81,7 @@ _PARAMS = (
     Field("session_id", "str"),
 )
 
-__all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block"]
+__all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "relayed_ask_block"]
 
 PM_INTENT_HEADING = "## PM intent (verbatim)"
 
@@ -108,6 +110,22 @@ def pm_intent_block(sizing: Optional[Mapping], ask_text: Optional[str]) -> str:
         "than these words or against them, these words win: keep the ask and name the conflict in "
         "your report."
     )
+    return "\n".join(lines) + "\n"
+
+
+def relayed_ask_block(relayed_text: Optional[str]) -> str:
+    """The brief's relayed-ask section, below the PM-intent block and never inside it: an EM's
+    relay of the ask, stated as not the PM's words. Empty when nothing was relayed."""
+    if not relayed_text or not relayed_text.strip():
+        return ""
+    lines = [RELAYED_ASK_HEADING, ""]
+    for ln in relayed_text.strip().splitlines():
+        lines.append("> " + ln if ln else ">")
+    lines.extend([
+        "",
+        "An agent relayed this ask; it is not the PM's own wording. Serve it, and where the PM's "
+        "verbatim words above (or in the sizing) read differently, the PM's words outrank it.",
+    ])
     return "\n".join(lines) + "\n"
 
 
@@ -239,9 +257,12 @@ def stage(
     ask_file = run_dir / ASK_TEXT_FILE
     ask_text = ask_file.read_text(encoding="utf-8") if ask_file.is_file() else None
     run_sizing = _run_sizing(root, sizing_rel or commit_sizing_rel, plan_text)
-    intent = pm_intent_block(run_sizing, ask_text)
-    if intent:
-        _write(run_dir / PM_INTENT_FILE, intent)
+    pm_block = pm_intent_block(run_sizing, ask_text)
+    if pm_block:
+        _write(run_dir / PM_INTENT_FILE, pm_block)
+    relayed_file = run_dir / RELAYED_ASK_FILE
+    relayed = relayed_ask_block(relayed_file.read_text(encoding="utf-8") if relayed_file.is_file() else None)
+    intent = pm_block + ("\n" if pm_block and relayed else "") + relayed
     if (run_dir / LEDGER_FILE).is_file():
         # A raw ask's sizing is minted in-run: its PM words join the ledger the emit seeded.
         seed_ledger(run_dir, run_id, pm_words(run_sizing), origin=ORIGIN_PM_VERBATIMS)

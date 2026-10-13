@@ -21,7 +21,10 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
+    ASK_SOURCE_RELAYED,
+    ASK_SOURCES,
     PM_INTENT_FILE,
+    RELAYED_ASK_FILE,
     HALT_REFUSAL,
     HALT_ROOM,
     HALT_TOUCHPOINT,
@@ -260,6 +263,14 @@ _LEDGER_CLAUSE = (
     "plan and in-repo memo; a later revision governs over an earlier item it changes. Carry every "
     "item into what you hand on."
 )
+#: `_LEDGER_CLAUSE` for a relayed ask: the ledger's ask item is an EM's relay, not the PM's words.
+_RELAYED_LEDGER_CLAUSE = _LEDGER_CLAUSE.replace(
+    "every PM requirement for this run in arrival order: the PM's own words and each revision the "
+    "EM sent",
+    "every requirement for this run in arrival order: the PM's own words when the sizing records "
+    "any, the relayed ask (an EM's relay, not the PM's words; the PM's verbatim words outrank it) "
+    "and each revision the EM sent",
+)
 _MANIFEST_SCHEMA = _obj(
     ["run_dir", "rows", "review_declared_paths", "marker_path"],
     {
@@ -497,8 +508,12 @@ def compose_ask_script(
     em_brief: Optional[EmBrief] = None,
     stop_after: Optional[str] = None,
     in_run_commit: bool = False,
+    ask_source: str = "pm",
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
+
+    `ask_source="relayed"` marks `prompt` as an EM's relay: every prompt that would call the ask
+    the PM's words names it a relayed ask instead, and the run reads `relayed-ask.md`, not `ask.md`.
 
     The review roster and stage schemas load from DoE when not injected; `wrap_stage` and
     `plan_blitz_text` default to `ask_plan_blitz.wrap_stage` over the resolved plugin asset, which
@@ -527,6 +542,12 @@ def compose_ask_script(
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
+    if ask_source not in ASK_SOURCES:
+        raise AskComposeRefused(f"ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
+    relayed = ask_source == ASK_SOURCE_RELAYED
+    if relayed and sizing_rel:
+        raise AskComposeRefused("a relayed ask is a raw prompt; a sizing carries no relayed text")
+    ledger_clause_text = _RELAYED_LEDGER_CLAUSE if relayed else _LEDGER_CLAUSE
     if stop_after not in (None, STOP_AFTER_PLAN):
         raise AskComposeRefused(f"stop_after takes {STOP_AFTER_PLAN!r} or nothing, got {stop_after!r}")
 
@@ -600,11 +621,17 @@ def compose_ask_script(
         return _cat(f"{head}\n\n{anchor}\n\n", *lines_and_exprs)
 
     ledger_rel = f"{run_dir}/{LEDGER_VIEW_FILE}"
-    ledger_clause = "\n\n" + _LEDGER_CLAUSE.format(ledger=ledger_rel)
+    ledger_clause = "\n\n" + ledger_clause_text.format(ledger=ledger_rel)
     intent_clause = (
         f"\n\nFirst read {run_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
         "criterion. They outrank every brief, plan and in-repo memo; judge the change against them, "
         "and treat a claim the change leaves untrue, or a brief that weakened it, as a finding."
+        + (
+            f" Then read {run_dir}/{RELAYED_ASK_FILE}: the ask as an agent relayed it, not the PM's "
+            "words; serve it, but the PM's words outrank it."
+            if relayed
+            else ""
+        )
     ) + ledger_clause
     review_head = head + intent_clause + session_tail
     run_base_sha = head_sha(repo_root) or ""
@@ -655,7 +682,7 @@ def compose_ask_script(
     if em_brief:
         b.append(f"  {brief_decl_js(em_brief)}")
         b.append("  const _askAgent = agent;")
-    b.append(f"  const {_LEDGER_PREFIX_VAR} = {_lit(_LEDGER_CLAUSE.format(ledger=ledger_rel) + chr(10) * 2)};")
+    b.append(f"  const {_LEDGER_PREFIX_VAR} = {_lit(ledger_clause_text.format(ledger=ledger_rel) + chr(10) * 2)};")
     if blitz_fn:
         b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief)))
     runner_js = _row_runner_js()
@@ -689,7 +716,11 @@ def compose_ask_script(
             "external gate (title, owner_repo, requires): never fold one into `writes` and never omit "
             "one."
             + ledger_clause
-            + "\n\nAsk:\n"
+            + (
+                "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
+                if relayed
+                else "\n\nAsk:\n"
+            )
             + (prompt or "")
         )
         b.append(
@@ -1070,7 +1101,9 @@ def compose_ask_script(
     ledger_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: ledger-check\n\nRead-only: edit, stage and commit nothing. You are the run's final "
-        "checker: judge the result against every requirement the PM has on record, never against the "
+        "checker: judge the result against every requirement "
+        + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
+        + ", never against the "
         f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
         f"since the run started), then {run_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
         "(`git status --porcelain` and `git diff`), the plan when one exists (",

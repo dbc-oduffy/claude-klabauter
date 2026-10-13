@@ -142,6 +142,17 @@ def test_judge_refuses_unknown_and_duplicate_ids_and_a_shapeless_verdict(run):
     assert not rl.judge(ledger, None)["pass"]
 
 
+def test_a_relayed_item_is_a_requirement_and_never_supersedes_a_pm_verbatim(run):
+    _root, d = run
+    rl.seed(d, RUN, ["relayed words"], origin=rl.ORIGIN_RELAYED)
+    ledger = rl.read_ledger(d)
+    assert ledger.items[-1].origin == "relayed"
+    assert "relayed" in (d / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
+    assert not rl.judge(ledger, _verdict(("R1", "met"), ("R2", "met"), ("R3", "not_met")))["pass"]
+    out = rl.judge(ledger, _verdict(("R1", "superseded", {"superseded_by": "R3"}), ("R2", "met"), ("R3", "met")))
+    assert not out["pass"] and out["failures"][0]["id"] == "R1"
+
+
 def test_a_torn_tail_line_does_not_lose_the_ledger(run):
     _root, d = run
     with (d / rl.LEDGER_FILE).open("a", encoding="utf-8") as fh:

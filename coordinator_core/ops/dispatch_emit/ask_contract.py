@@ -7,7 +7,7 @@ Signatures implemented in their own modules:
   ask_compose.compose_ask_script(*, repo_root: str, prompt: str | None, sizing_rel: str | None,
                   run_id: str, session_id: str | None, baton: dict | None = None,
                   accept_pending: bool = False, em_brief: EmBrief | None = None,
-                  stop_after: str | None = None) -> str
+                  stop_after: str | None = None, ask_source: str = "pm") -> str
                   (`baton` = {"path", "deliverable_id"}; the accept phase composes when
                   `accept_pending` or on a raw ask)
   ask_plan_blitz.wrap_stage(plan_blitz_text: str, *, agent_prefix_var: str | None = None)
@@ -33,6 +33,12 @@ RUN_DIR_ROOT = "scratch/warp"
 #: intent every executor brief carries and every reviewer, judge and docs prompt reads first.
 ASK_TEXT_FILE = "ask.md"
 PM_INTENT_FILE = "pm-intent.md"
+#: A relayed ask (an EM's relay, not the PM's words) lives here and never in `ask.md`, so `ask.md`
+#: holds PM words or does not exist.
+RELAYED_ASK_FILE = "relayed-ask.md"
+ASK_SOURCE_PM, ASK_SOURCE_RELAYED = "pm", "relayed"
+ASK_SOURCES = (ASK_SOURCE_PM, ASK_SOURCE_RELAYED)
+RELAYED_ASK_HEADING = "## Relayed ask (not the PM's words)"
 ASK_MANIFEST_MARKER = "// coordinator:ask-run-manifest v1 "
 
 

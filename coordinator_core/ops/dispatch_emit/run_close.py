@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 RUN_BOUND_LEGS: tuple[str, ...] = (
     "review",
@@ -211,14 +211,20 @@ def write_close_job(
     review_receipt: Optional[str] = None,
     run_base_sha: Optional[str] = None,
     terminal_sha: Optional[str] = None,
+    criterion: Optional[Mapping[str, Any]] = None,
+    falsifier_broken: Optional[Sequence[str]] = None,
 ) -> str:
     """Write the record in one atomic write; return its repo-relative path.
 
     Beyond the queued legs and deadline it carries the session attribution
     ``session_run_closes`` reads and the inline legs *settled* at write time. *review_receipt*
     is the repo-relative path whose ``review_stamp`` proves the review; the two shas are the
-    run's range endpoints, full 40-hex or ``None``.
+    run's range endpoints, full 40-hex or ``None``. *criterion* is the judge's verdict as
+    returned (not a leg detail, so not path-checked); *falsifier_broken* is the fired tells,
+    an empty list meaning BROKEN with none named.
     """
+    _check_criterion(criterion)
+    _check_falsifier_broken(falsifier_broken)
     for name, sha in (("run_base_sha", run_base_sha), ("terminal_sha", terminal_sha)):
         if sha is not None and not _FULL_SHA.match(sha):
             raise ValueError(f"{name} is not a full 40-hex sha: {sha!r}")
@@ -252,9 +258,93 @@ def write_close_job(
             "review_receipt": review_receipt,
             "run_base_sha": run_base_sha,
             "terminal_sha": terminal_sha,
+            "criterion": None if criterion is None else dict(criterion),
+            "falsifier_broken": None if falsifier_broken is None else list(falsifier_broken),
         },
     )
     return close_job_path(run_id)
+
+
+UNCHANGED: Any = object()
+
+
+def _check_criterion(criterion: Any) -> None:
+    if criterion is not None and not isinstance(criterion, Mapping):
+        raise ValueError(f"criterion is not a mapping: {type(criterion).__name__}")
+
+
+def _check_falsifier_broken(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, (list, tuple)) or not all(isinstance(i, str) for i in value):
+        raise ValueError("falsifier_broken is not a list of str")
+
+
+def amend_close_job(
+    root: Path,
+    run_id: str,
+    *,
+    criterion: Optional[Mapping[str, Any]] = None,
+    falsifier_broken: Any = UNCHANGED,
+    review_receipt: Optional[str] = None,
+    settled: Optional[Mapping[str, LegResult]] = None,
+    queue: Iterable[str] = (),
+    deadline: Optional[datetime] = None,
+) -> None:
+    """Change only the given fields of an existing record, in one atomic write.
+
+    ``falsifier_broken=None`` writes null (mark read, not BROKEN); ``UNCHANGED`` leaves the
+    key as it was, absent included. *queue* sets each named run-bound leg ``queued`` and
+    requires *deadline*; legs still ``queued`` past the old deadline are written ``failed``
+    before it is replaced.
+    """
+    _check_criterion(criterion)
+    if falsifier_broken is not UNCHANGED:
+        _check_falsifier_broken(falsifier_broken)
+    if review_receipt is not None:
+        check_path_hygiene(review_receipt)
+    queued = list(queue)
+    if queued and deadline is None:
+        raise ValueError("queue requires deadline")
+    for leg in queued:
+        if leg not in RUN_BOUND_LEGS:
+            raise ValueError(f"not a run-bound leg: {leg!r}")
+    settled_dict: dict[str, dict[str, str]] = {}
+    for leg, result in (settled or {}).items():
+        if leg not in RUN_BOUND_LEGS:
+            raise ValueError(f"not a run-bound leg: {leg!r}")
+        if leg in queued:
+            raise ValueError(f"leg both queued and settled: {leg!r}")
+        settled_dict[leg] = result.to_dict()
+    record = _load(root, run_id)
+    if record is None:
+        raise FileNotFoundError(close_job_path(run_id))
+    for leg in settled_dict:
+        if leg in record["legs"]:
+            raise ValueError(f"leg both queued and settled: {leg!r}")
+    if criterion is not None:
+        record["criterion"] = dict(criterion)
+    if falsifier_broken is not UNCHANGED:
+        record["falsifier_broken"] = None if falsifier_broken is None else list(falsifier_broken)
+    if review_receipt is not None:
+        record["review_receipt"] = review_receipt
+    if settled_dict:
+        merged = record.get("settled")
+        record["settled"] = {**(merged if isinstance(merged, dict) else {}), **settled_dict}
+    if deadline is not None:
+        try:
+            old = datetime.fromisoformat(str(record.get("deadline", "")))
+            now = datetime.now(old.tzinfo)
+        except ValueError:
+            now = datetime.now(deadline.tzinfo)
+        for leg, result in _resolve(record, run_id, now).items():
+            entry = record["legs"][leg]
+            if result.status == "failed" and isinstance(entry, dict) and entry.get("status") == "queued":
+                record["legs"][leg] = result.to_dict()
+        record["deadline"] = deadline.isoformat()
+    for leg in queued:
+        record["legs"][leg] = {"status": "queued", "detail": ""}
+    _write_atomic(_job_file(root, run_id), record)
 
 
 def _load(root: Path, run_id: str) -> Optional[dict[str, Any]]:

@@ -1208,9 +1208,15 @@ def op(payload: dict) -> dict | None:
         route = obj["route"]
 
         # A warp run never appears in `dispatched-agents.txt`; its run token is the in-flight record.
-        from coordinator_core.ops.dispatch_emit.run_token import run_owns_sizing
+        from coordinator_core.warp_live import live_run_for_sizing
 
-        if run_owns_sizing(Path(repo_root), raw_session_id, rel_path):
+        transcript = payload.get("transcript_path")
+        if live_run_for_sizing(
+            Path(repo_root),
+            rel_path,
+            session_id=raw_session_id,
+            transcript_path=transcript if isinstance(transcript, str) else None,
+        ):
             return None
 
         if _room_invoked(payload, raw_session_id, repo_root, route):

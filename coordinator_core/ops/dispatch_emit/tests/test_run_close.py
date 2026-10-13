@@ -391,3 +391,96 @@ def test_render_unreceipted_truncated_form():
     assert "range truncated at 500 commits" in text
     assert shas[-1][:12] in text and shas[0][:12] in text
     assert "truncated" in rc.render_unreceipted([], truncated=True, cap=200)
+
+
+def _rec(tmp_path, run_id="r1"):
+    return json.loads((tmp_path / rc.close_job_path(run_id)).read_text(encoding="utf-8"))
+
+
+def test_criterion_and_falsifier_round_trip(tmp_path):
+    crit = {"verdict": "met", "evidence": "see /abs/path ok"}
+    rc.write_close_job(tmp_path, "r1", [], T0, criterion=crit, falsifier_broken=[])
+    rec = _rec(tmp_path)
+    assert rec["criterion"] == crit and rec["falsifier_broken"] == []
+    rc.write_close_job(tmp_path, "r2", [], T0, falsifier_broken=["a", "b"])
+    assert _rec(tmp_path, "r2")["falsifier_broken"] == ["a", "b"]
+
+
+def test_absent_arguments_write_null(tmp_path):
+    rc.write_close_job(tmp_path, "r1", [], T0)
+    rec = _rec(tmp_path)
+    assert rec["criterion"] is None and rec["falsifier_broken"] is None
+
+
+@pytest.mark.parametrize("kw", [{"criterion": "met"}, {"falsifier_broken": "x"}, {"falsifier_broken": [1]}])
+def test_bad_criterion_or_falsifier_refused(tmp_path, kw):
+    with pytest.raises(ValueError):
+        rc.write_close_job(tmp_path, "r1", [], T0, **kw)
+    with pytest.raises(ValueError):
+        rc.amend_close_job(tmp_path, "r1", **kw)
+
+
+def test_amend_changes_one_field_only(tmp_path):
+    rc.write_close_job(tmp_path, "r1", ["post-close"], T0, plan_rel="p.md", session_id="s")
+    before = _rec(tmp_path)
+    rc.amend_close_job(tmp_path, "r1", criterion={"verdict": "met"})
+    after = _rec(tmp_path)
+    assert after.pop("criterion") == {"verdict": "met"}
+    before.pop("criterion")
+    assert after == before
+
+
+def test_amend_falsifier_none_vs_unchanged(tmp_path):
+    rc.write_close_job(tmp_path, "r1", [], T0)
+    path = tmp_path / rc.close_job_path("r1")
+    rec = _rec(tmp_path)
+    del rec["falsifier_broken"]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    rc.amend_close_job(tmp_path, "r1", criterion={"v": 1})
+    assert "falsifier_broken" not in _rec(tmp_path)
+    rc.amend_close_job(tmp_path, "r1", falsifier_broken=None)
+    assert _rec(tmp_path)["falsifier_broken"] is None
+    rc.amend_close_job(tmp_path, "r1", falsifier_broken=["t"])
+    assert _rec(tmp_path)["falsifier_broken"] == ["t"]
+
+
+def test_amend_absent_record_raises(tmp_path):
+    with pytest.raises(FileNotFoundError, match="r9"):
+        rc.amend_close_job(tmp_path, "r9", criterion={})
+
+
+def test_amend_settled_and_receipt(tmp_path):
+    rc.write_close_job(tmp_path, "r1", ["post-close"], T0)
+    rc.amend_close_job(
+        tmp_path, "r1", review_receipt="a/b.md", settled={"review": LegResult("ran", "ok")}
+    )
+    rec = _rec(tmp_path)
+    assert rec["review_receipt"] == "a/b.md" and rec["settled"]["review"]["status"] == "ran"
+    with pytest.raises(ValueError):
+        rc.amend_close_job(tmp_path, "r1", settled={"post-close": LegResult("ran")})
+    with pytest.raises(ValueError):
+        rc.amend_close_job(tmp_path, "r1", review_receipt="/abs/x")
+    with pytest.raises(ValueError):
+        rc.amend_close_job(tmp_path, "r1", settled={"nope": LegResult("ran")})
+
+
+def test_amend_queue_requires_deadline(tmp_path):
+    rc.write_close_job(tmp_path, "r1", [], T0)
+    with pytest.raises(ValueError):
+        rc.amend_close_job(tmp_path, "r1", queue=["lessons"])
+    with pytest.raises(ValueError):
+        rc.amend_close_job(
+            tmp_path, "r1", queue=["lessons"], deadline=T0, settled={"lessons": LegResult("ran")}
+        )
+
+
+def test_amend_queue_fails_stale_queued_and_queues_named(tmp_path):
+    past = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    rc.write_close_job(tmp_path, "r1", ["baton-drain"], past)
+    new = datetime(2999, 1, 1, tzinfo=timezone.utc)
+    rc.amend_close_job(tmp_path, "r1", queue=["lessons"], deadline=new)
+    legs = _rec(tmp_path)["legs"]
+    assert legs["baton-drain"]["status"] == "failed"
+    assert "job not finished by" in legs["baton-drain"]["detail"]
+    assert legs["lessons"] == {"status": "queued", "detail": ""}
+    assert _rec(tmp_path)["deadline"] == new.isoformat()

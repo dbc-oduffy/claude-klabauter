@@ -40,9 +40,5 @@ def fire_command(sizing_rel: Optional[str] = None) -> str:
 
 
 def fire_step(sizing_rel: Optional[str] = None) -> str:
-    """One sentence: make the submit call, once; the engine fires the run from it."""
-    return (
-        f"Next step, the only one: call `{fire_command(sizing_rel)}`, once. That call is the "
-        "PM's opt-in and the engine fires the run from it: it sizes, plans, executes, reviews "
-        "and commits; its completion is your one wake."
-    )
+    """One sentence: make the submit call, once."""
+    return f"Next step, the only one: call `{fire_command(sizing_rel)}`, once."

@@ -1,4 +1,4 @@
-"""run_token: mint, admit, consume, and which sizings an in-flight run owns."""
+"""run_token: mint, admit, consume, and sizing path normalising."""
 
 from __future__ import annotations
 
@@ -15,20 +15,14 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def test_run_owns_only_the_sizing_its_record_names(tmp_path):
+def test_normalize_sizing_rel_spellings_agree(tmp_path):
     repo = _repo(tmp_path)
-    run_token.mint(repo, "ask-1", "a.mjs", session_id="s1", sizing_rel="state/sizings/mine.yaml")
-    (repo / "state" / "sizings" / "other.yaml").write_text("x", encoding="utf-8")
-    assert run_token.run_owns_sizing(repo, "s1", "state/sizings/mine.yaml")
-    assert not run_token.run_owns_sizing(repo, "s1", "state/sizings/other.yaml")
-    assert not run_token.run_owns_sizing(repo, "s2", "state/sizings/mine.yaml")
-
-
-def test_run_without_a_named_sizing_owns_none(tmp_path):
-    repo = _repo(tmp_path)
-    run_token.mint(repo, "ask-1", "a.mjs", session_id="s1")
-    (repo / "state" / "sizings" / "new.yaml").write_text("x", encoding="utf-8")
-    assert not run_token.run_owns_sizing(repo, "s1", "state/sizings/new.yaml")
+    want = "state/sizings/mine.yaml"
+    assert run_token.normalize_sizing_rel(repo, want) == want
+    assert run_token.normalize_sizing_rel(repo, "./" + want) == want
+    assert run_token.normalize_sizing_rel(repo, "state\\sizings\\mine.yaml") == want
+    assert run_token.normalize_sizing_rel(repo, str(repo / want)) == want
+    assert run_token.normalize_sizing_rel(repo, "") == ""
 
 
 def test_admits_only_the_minted_token_once(tmp_path):

@@ -246,7 +246,15 @@ from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_SOURCE_PM,
+    ASK_SOURCE_RELAYED,
+    ASK_SOURCES,
+    ASK_TEXT_FILE,
+    RELAYED_ASK_FILE,
+    RUN_DIR_ROOT,
+)
+from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
 from coordinator_core.ops.dispatch_emit.grind_admission import NOT_ADMITTED_EXTRA_KEY
@@ -525,7 +533,8 @@ def _seed_requirements_ledger(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
             words = []
     ledger.seed(run_dir, ask_ctx["run_id"], words, origin=ledger.ORIGIN_PM_VERBATIMS, all_of_pm_ask=all_of_pm_ask)
     if ask_ctx.get("prompt"):
-        ledger.seed(run_dir, ask_ctx["run_id"], [ask_ctx["prompt"]], origin=ledger.ORIGIN_ASK)
+        origin = ledger.ORIGIN_RELAYED if ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED else ledger.ORIGIN_ASK
+        ledger.seed(run_dir, ask_ctx["run_id"], [ask_ctx["prompt"]], origin=origin)
 
 
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
@@ -747,6 +756,7 @@ _PARAM_FIELDS = (
     Field("ask_brief", "str"),
     Field("ask_brief_file", "str"),
     Field("stop_after", "str"),
+    Field("ask_source", "str"),
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
     Field("hold_rows", "str_list"),
@@ -925,7 +935,7 @@ def _research_route_setup(
     questions = [str(q) for q in lists.get("questions") or ()]
     if from_sizing:
         root = _sizing_root(params, repo_root, str(from_sizing))
-        brief_rel = _sizing_rel(root, str(from_sizing))
+        brief_rel = normalize_sizing_rel(root, str(from_sizing))
         research = load_sizing(root, brief_rel).get("research")
         if not isinstance(research, dict) or not research:
             raise PipelineEmitRefused([f"sizing {brief_rel} has no research block; set one with sizing-assemble --research-class"])
@@ -1270,10 +1280,15 @@ def _dispatch_emit(
             )
         if not sizing_path and not (isinstance(ask, str) and ask):
             raise ValueError("dispatch.emit ask requires a prompt string or sizing_path")
+        ask_source = params.get("ask_source") or ASK_SOURCE_PM
+        if ask_source not in ASK_SOURCES:
+            raise ValueError(f"dispatch.emit ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
+        if ask_source == ASK_SOURCE_RELAYED and sizing_path:
+            raise ValueError("dispatch.emit ask_source 'relayed' marks a raw ask's text; sizing_path carries none")
         sizing_rel: Optional[str] = None
         if sizing_path:
             ask_root = _sizing_root(params, repo_root, str(sizing_path))
-            sizing_rel = _sizing_rel(ask_root, str(sizing_path))
+            sizing_rel = normalize_sizing_rel(ask_root, str(sizing_path))
             ask_baton = _read_baton_ids(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
@@ -1292,7 +1307,10 @@ def _dispatch_emit(
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         prompt = ask if isinstance(ask, str) and ask else None
-        ask_ctx = {"root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id}
+        ask_ctx = {
+            "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
+            "ask_source": ask_source,
+        }
         if ask_baton is not None:
             ask_ctx["baton"] = ask_baton
         from coordinator_core.ops.dispatch_emit import ask_brief as _ask_brief
@@ -1625,12 +1643,12 @@ def _dispatch_emit(
             em_brief=ask_ctx.get("em_brief"),
             stop_after=params.get("stop_after"),
             in_run_commit=ask_run_token is not None,
+            ask_source=ask_ctx["ask_source"],
         )
         if ask_ctx["prompt"]:
             # Verbatim, engine-written: the stage reads it into every brief; no agent copies it.
-            from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE
-
-            ask_file = Path(ask_ctx["root"]) / RUN_DIR_ROOT / ask_ctx["run_id"] / ASK_TEXT_FILE
+            ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
+            ask_file = Path(ask_ctx["root"]) / RUN_DIR_ROOT / ask_ctx["run_id"] / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
             ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
         _seed_requirements_ledger(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
@@ -2448,16 +2466,3 @@ def _sizing_root(params: dict, repo_root: Optional[Path], sizing_path: str) -> P
             "pass target_root"
         )
     return found
-
-
-def _sizing_rel(root: Path, sizing_path: str) -> str:
-    """``sizing_path`` as a root-relative forward-slash path; a path outside
-    ``root`` is returned as given and refused by ``load_sizing`` containment."""
-    p = Path(sizing_path)
-    if p.is_absolute():
-        try:
-            return p.resolve().relative_to(Path(root).resolve()).as_posix()
-        except ValueError:
-            return sizing_path
-    return p.as_posix()
-

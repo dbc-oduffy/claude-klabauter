@@ -2,13 +2,32 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit import op
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+
+_DRAFT = """schema: sizing-object
+intent: "Ship the thing"
+estimate:
+  tshirt: XS
+  provisional: true
+route: dispatch
+detents: []
+fork: null
+xl_exit: null
+status: draft
+premise:
+  provenance: unrecorded
+  evidence: PLACEHOLDER - cite the evidence
+deliverable_id: null
+"""
 
 REL = "state/sizings/2026-10-01-seed.yaml"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
@@ -56,6 +75,57 @@ def test_ask_sizing_seeds_the_pm_verbatims(repo, capsys):
     (path,) = _ledgers(repo)
     ledger = rl.read_ledger(path.parent)
     assert [i.text for i in ledger.items] == ["make the seed verbatim"] and ledger.all_of_pm_ask is False
+
+
+def test_relayed_ask_is_seeded_relayed_and_written_beside_no_ask_md(repo, capsys):
+    assert cli.main(["--ask", "RELAYED-MARK add a thing", "--ask-source", "relayed", "--repo-root", str(repo)]) == 0
+    (path,) = _ledgers(repo)
+    ledger = rl.read_ledger(path.parent)
+    assert [(i.text, i.origin) for i in ledger.items] == [("RELAYED-MARK add a thing", "relayed")]
+    assert (path.parent / RELAYED_ASK_FILE).read_text(encoding="utf-8") == "RELAYED-MARK add a thing"
+    assert not (path.parent / ASK_TEXT_FILE).exists()
+
+
+def test_an_unmarked_ask_still_writes_ask_md(repo, capsys):
+    assert cli.main(["--ask", "add a thing", "--repo-root", str(repo)]) == 0
+    (path,) = _ledgers(repo)
+    assert (path.parent / ASK_TEXT_FILE).is_file() and not (path.parent / RELAYED_ASK_FILE).exists()
+
+
+def test_ask_source_is_refused_off_the_ask_route_and_beside_a_sizing(repo, capsys):
+    assert cli.main(["--plan", "docs/plans/x.md", "--ask-source", "relayed", "--repo-root", str(repo)]) == cli.EXIT_USAGE
+    _put(repo)
+    with pytest.raises(ValueError, match="relayed"):
+        op._dispatch_emit({"ask": True, "sizing_path": REL, "ask_source": "relayed"}, repo_root=repo)
+    with pytest.raises(ValueError, match="ask_source"):
+        op._dispatch_emit({"ask": "x", "ask_source": "em"}, repo_root=repo)
+
+
+def test_a_relayed_runs_sizing_takes_pm_verbatims_only_from_the_pm_turn_log(tmp_path, monkeypatch, capsys):
+    import coordinator_core.ops.baton_pm_turns as pm_turns
+    import coordinator_core.sizing_assemble as sizing_assemble
+    from coordinator_core.session import record_homes
+    from coordinator_core.session_baton import store
+
+    (tmp_path / ".git").mkdir()
+    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    sdir = tmp_path / ".git" / "coordinator-sessions" / "sid-rl"
+    sdir.mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-rl")
+    pm_turns.append_turn("the PM said this", session_id="sid-rl")
+    path = Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-13-relay.yaml"))
+    path.write_text(_DRAFT, encoding="utf-8")
+    code = sizing_assemble.main([
+        "--tshirt", "M", "--intent", "RELAYED-MARK do it", "--premise-provenance", "read",
+        "--premise-evidence", "read it", "--no-plan-hand-off", "--write", str(path),
+    ])
+    capsys.readouterr()
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert code == 0
+    assert [v["text"] for v in doc["pm_verbatims"]] == ["the PM said this"]
+    assert doc.get("intent_source") != "pm-verbatim"
+    assert "RELAYED-MARK" not in "".join(v["text"] for v in doc["pm_verbatims"])
 
 
 def test_all_of_pm_ask_is_an_ask_route_flag(repo, capsys):

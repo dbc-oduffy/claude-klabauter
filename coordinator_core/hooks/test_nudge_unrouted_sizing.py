@@ -1164,11 +1164,18 @@ def test_live_warp_run_on_a_different_sizing_still_fires(repo):
     assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is not None
 
 
-def test_another_sessions_or_consumed_run_still_fires(repo):
+def test_consumed_run_still_fires(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    rel, transcript = _incident(repo, "sess-warp")
+    run_token.mint(repo, "warp-x-2", "scratch/warp/y.mjs", session_id="sess-warp", sizing_rel=rel)
+    run_token.consume(repo, "warp-x-2")
+    assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is not None
+
+
+def test_a_run_naming_the_sizing_from_another_session_suppresses(repo):
     from coordinator_core.ops.dispatch_emit import run_token
 
     rel, transcript = _incident(repo, "sess-warp")
     run_token.mint(repo, "warp-x-1", "scratch/warp/x.mjs", session_id="sess-other", sizing_rel=rel)
-    run_token.mint(repo, "warp-x-2", "scratch/warp/y.mjs", session_id="sess-warp", sizing_rel=rel)
-    run_token.consume(repo, "warp-x-2")
-    assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is not None
+    assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is None

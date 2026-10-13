@@ -68,7 +68,7 @@ def mint(
 ) -> str:
     """Write the run's record and return the token. Raises ValueError when no git dir resolves.
 
-    `session_id` and `sizing_rel` let `run_owns_sizing` tell an in-flight run's sizing from an
+    `session_id` and `sizing_rel` let `warp_live` tell an in-flight run's sizing from an
     abandoned one. Minting again for the same `run_id` overwrites the record (re-mint on retry)."""
     if not isinstance(script_path, str) or not script_path:
         raise ValueError("run token: script_path is required")
@@ -154,29 +154,19 @@ def consume(repo_root: Path, run_id: str) -> None:
             pass
 
 
-def run_owns_sizing(repo_root: Path, session_id: str, sizing_rel: str) -> bool:
-    """True when a live, unconsumed run this session emitted names exactly `sizing_rel` in its
-    record. Reads only the token dir."""
-    common = _common_dir(repo_root)
-    if common is None or not session_id:
-        return False
-    directory = common / _DIR
-    if not directory.is_dir():
-        return False
-    now = time.time()
-    for path in directory.glob("*.json"):
+def normalize_sizing_rel(repo_root: Path, sizing_path: str) -> str:
+    """`sizing_path` as a repo-relative forward-slash path: absolute, `./`-prefixed and
+    backslash spellings name the same sizing. A path outside the repo is returned in posix form."""
+    text = (sizing_path or "").replace("\\", "/")
+    if not text:
+        return ""
+    p = Path(text)
+    if p.is_absolute():
         try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(record, dict) or record.get("session_id") != session_id:
-            continue
-        minted = record.get("minted_at")
-        if not isinstance(minted, (int, float)) or now - minted > TTL_SECONDS:
-            continue
-        if record.get("sizing_rel") == sizing_rel:
-            return True
-    return False
+            return p.resolve().relative_to(Path(repo_root).resolve()).as_posix()
+        except (ValueError, OSError):
+            return text
+    return os.path.normpath(text).replace("\\", "/")
 
 
 def token_params_from_command(raw_cmd: str) -> Optional[dict]:
