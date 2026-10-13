@@ -637,6 +637,10 @@ _JUDGE_PREAMBLE = (
     "`claim` this-plan for a row this plan claims; `status` met only when the work is done, "
     "`wired` true only when a user-reachable entry point on the row's surface invokes it, and "
     "`observed_ref` naming that entry point. "
+    "When `status` is met, also return `completion_summary` (at most three sentences: what "
+    "shipped, why it matters, what the EM must still do), optional `lesson_candidates` (each "
+    "{title, body, change_kind, target_wiki}, only for a lesson this run demonstrated), and "
+    "`authored_by: terminal-judge`; omit all three when `status` is not met. "
     "A clause you cannot observe because this run's guard denies the leg (a Playwright/e2e "
     "suite, say) is not met on assertion: report it indeterminate and name the door "
     "`coordinator-invoke criterion_evidence.record '{\"plan_path\":..., \"clause\":..., "
@@ -703,6 +707,23 @@ def _widen_judge_schema(schema_literal: str) -> str:
             },
         },
     )
+    # DoE's terminal-judge-result shape (coordinator-content-repo e2cba4ba2a); filled in only for an older
+    # plugin whose schema predates it, so the judge's fields are never a schema reject.
+    _lesson_props = ("title", "body", "change_kind", "target_wiki")
+    properties.setdefault("completion_summary", {"type": "string", "maxLength": 600})
+    properties.setdefault(
+        "lesson_candidates",
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(_lesson_props),
+                "properties": {k: {"type": "string"} for k in _lesson_props},
+            },
+        },
+    )
+    properties.setdefault("authored_by", {"type": "string", "enum": ["terminal-judge"]})
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
     )

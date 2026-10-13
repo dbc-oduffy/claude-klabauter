@@ -377,6 +377,36 @@ def test_judge_prompt_asks_for_the_boolean_comparison():
     assert "differs_from_baseline" in call and "baseline_output" in call
 
 
+def test_judge_prompt_and_schema_carry_completion_summary_and_lesson_candidates():
+    call = _compose_judge({**_STAGE_SCHEMAS, "judge-result": {"type": "object"}})
+    assert "`completion_summary`" in call and "`lesson_candidates`" in call
+    assert "authored_by: terminal-judge" in call
+    props = _emitted_schema(call)["properties"]
+    assert props["completion_summary"] == {"type": "string", "maxLength": 600}
+    assert props["authored_by"] == {"type": "string", "enum": ["terminal-judge"]}
+    item = props["lesson_candidates"]["items"]
+    assert set(item["required"]) == {"title", "body", "change_kind", "target_wiki"}
+    assert item["additionalProperties"] is False
+
+
+def test_judge_schema_keeps_doe_s_own_completion_fields_when_present():
+    doe = {"type": "string", "maxLength": 600, "description": "DoE's"}
+    doe_lessons = {"type": "array", "items": {"type": "object"}, "description": "DoE's"}
+    doe_author = {"type": "string", "enum": ["terminal-judge"], "description": "DoE's"}
+    judge = {
+        "type": "object",
+        "properties": {
+            "completion_summary": doe,
+            "lesson_candidates": doe_lessons,
+            "authored_by": doe_author,
+        },
+    }
+    props = _emitted_schema(_compose_judge({**_STAGE_SCHEMAS, "judge-result": judge}))["properties"]
+    assert props["completion_summary"] == doe
+    assert props["lesson_candidates"] == doe_lessons
+    assert props["authored_by"] == doe_author
+
+
 def test_every_review_phase_call_degrades_to_null_not_a_throw():
     blocks = dict(_compose()[1])
     for title in ("Review prep", "Review wave", "Review integration"):
