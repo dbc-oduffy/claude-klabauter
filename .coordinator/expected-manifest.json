@@ -2056,8 +2056,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "ef4d9a4a12eb8c8bd180ca78daf1c2f6541bd850",
-    "coordinator_core/_engine_stamp": "b96ad48ac49abb4dccf86c188387c375f5591024",
+    "coordinator_core/_engine_published_at": "6c26641e86453f66e2cc52d1a7c8e3f0fac2767a",
+    "coordinator_core/_engine_stamp": "072b1f9d10e9b6e309921f71d764cca7cd611c4a",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5160,7 +5160,7 @@
     "coordinator_core/ops/shim_usage_census.py": "f8cf0eb89e0c0356e82201d56ee8131534bd1cfc",
     "coordinator_core/ops/signoff_digest.py": "616ddaeac932cefc7bee3fa510433c4a9ba6017b",
     "coordinator_core/ops/signoff_provenance.py": "bab5c3d5465f9978287f5b65149a2e8569428d79",
-    "coordinator_core/ops/sizing_accept_exit_criterion.py": "d02333c649d4f156863966d4e9de6ef4f80de095",
+    "coordinator_core/ops/sizing_accept_exit_criterion.py": "01dd7a33617ab3b53f153712eac475e3a82bb0c2",
     "coordinator_core/ops/sizing_acceptance.py": "684a78c43f92ffa2cceeb9e51ff0f4b1c4d89ba2",
     "coordinator_core/ops/sizing_decline.py": "c2163a333c93e399525b9ccb83432a998a4e4faa",
     "coordinator_core/ops/sizing_discharge_surfaced.py": "1607f526d4fec8b7004826fd7e3e4731274d46d0",
@@ -5686,7 +5686,7 @@
     "coordinator_core/ops/tests/test_shim_usage_census.py": "478604b9fb29ff5cb9f34f8fa1f5402786681e54",
     "coordinator_core/ops/tests/test_signoff_digest.py": "8fcc448634bd776cfe53a623e3bf21e6b6399821",
     "coordinator_core/ops/tests/test_signoff_provenance.py": "5ca837e49ce86f518fdc657877f0199a4fc8071e",
-    "coordinator_core/ops/tests/test_sizing_accept_exit_criterion.py": "6e525d951160a02b294c197e53a0281baed71187",
+    "coordinator_core/ops/tests/test_sizing_accept_exit_criterion.py": "975becd200a50245079df3d22427b4a49bc4d819",
     "coordinator_core/ops/tests/test_sizing_acceptance.py": "1781df5e6782360a280de2e586985a4e6cd61b69",
     "coordinator_core/ops/tests/test_sizing_citation_archive_fallback.py": "97ea62bb38cc536ee0dc1f5cf64d70964f723564",
     "coordinator_core/ops/tests/test_sizing_decline.py": "1977d00bc1b72929461f4ae50e967d5d6a816cc9",
@@ -7457,5 +7457,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "fcee802a48bf334d466e2e7b4bccd9f01b55f71a"
+  "source_head": "98159d745be54e8fd09e31b7912aadbf33836fa0"
 }

@@ -54,12 +54,12 @@ def _init_repo(repo: Path) -> None:
     _git(repo, "commit", "-m", "init")
 
 
-def _sizing_body(*, exit_criterion: str = "") -> str:
+def _sizing_body(*, exit_criterion: str = "", tshirt: str = "M") -> str:
     lines = [
         "schema: sizing-object",
         "intent: Test intent, verbatim.",
         "estimate:",
-        "  tshirt: M",
+        f"  tshirt: {tshirt}",
         "  provisional: true",
         "route: plan",
         "detents: []",
@@ -189,7 +189,7 @@ def test_other_fields_are_byte_identical(tmp_path):
 def test_a_missing_pm_quote_is_refused(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
-    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED, tshirt="XL")
     before = sizing.read_text(encoding="utf-8")
 
     result = _run(_base(pm_quote=""), repo)
@@ -397,10 +397,10 @@ def _doc(sizing: Path) -> dict:
     return yaml.safe_load(sizing.read_text(encoding="utf-8"))
 
 
-def _setup(tmp_path, body: str):
+def _setup(tmp_path, body: str, tshirt: str = "M"):
     repo = tmp_path / "repo"
     _init_repo(repo)
-    return repo, _seed_sizing(repo, exit_criterion=body)
+    return repo, _seed_sizing(repo, exit_criterion=body, tshirt=tshirt)
 
 
 def test_apm_ruling_on_a_ceo_sizing_writes_the_apm_shape(tmp_path):
@@ -412,14 +412,14 @@ def test_apm_ruling_on_a_ceo_sizing_writes_the_apm_shape(tmp_path):
     assert accepted["mode"] == "ceo" and "pm_quote" not in accepted
 
 
-def test_apm_ruling_on_a_hands_on_sizing_is_refused_naming_hands_on(tmp_path):
-    repo, _ = _setup(tmp_path, _PROPOSED)
+def test_apm_ruling_on_a_hands_on_xl_sizing_is_refused_naming_hands_on(tmp_path):
+    repo, _ = _setup(tmp_path, _PROPOSED, tshirt="XL")
     result = _run(_apm(), repo)
     assert result["exit_code"] == 1 and "hands-on" in result["error"]
 
 
 def test_apm_ruling_mode_param_cannot_override_a_recorded_hands_on_mode(tmp_path):
-    repo, sizing = _setup(tmp_path, "interaction_mode: hands-on\n" + _PROPOSED)
+    repo, sizing = _setup(tmp_path, "interaction_mode: hands-on\n" + _PROPOSED, tshirt="XL")
     before = sizing.read_text(encoding="utf-8")
     result = _run(_apm(mode="ceo"), repo)
     assert result["exit_code"] == 1 and "hands-on" in result["error"]
@@ -427,7 +427,7 @@ def test_apm_ruling_mode_param_cannot_override_a_recorded_hands_on_mode(tmp_path
 
 
 def test_both_or_neither_words_is_refused(tmp_path):
-    repo, _ = _setup(tmp_path, _CEO)
+    repo, _ = _setup(tmp_path, _CEO, tshirt="XL")
     assert _run(_apm(pm_quote="q"), repo)["exit_code"] == 1
     assert _run({"sizing": "state/sizings/20260101-a.yaml"}, repo)["exit_code"] == 1
 
@@ -549,3 +549,30 @@ def test_a_different_ruling_never_repairs_a_legacy_acceptance_silently(tmp_path)
     result = _run(_apm(apm_ruling="Ruled otherwise.", mode="ceo"), repo)
     assert result["exit_code"] == 1 and "already carries" in result["error"], result
 
+
+
+@pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L"])
+def test_hands_on_apm_ruling_at_xs_to_l_records_the_statement_only(tmp_path, tshirt):
+    repo, sizing = _setup(tmp_path, _PROPOSED, tshirt=tshirt)
+    result = _run(_apm(statement="A new bar."), repo)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    ec = _doc(sizing)["exit_criterion"]
+    assert ec["statement"] == "A new bar." and ec["accepted"] is None
+
+
+def test_no_words_at_s_records_the_statement_only_and_is_idempotent(tmp_path):
+    repo, sizing = _setup(tmp_path, "", tshirt="S")
+    params = {"sizing": "state/sizings/20260101-a.yaml", "statement": "Fresh bar."}
+    result = _run(params, repo)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    ec = _doc(sizing)["exit_criterion"]
+    assert ec["statement"] == "Fresh bar." and ec["accepted"] is None
+    assert _run(params, repo)["applied"] is False
+
+
+def test_no_words_at_xl_is_refused_and_leaves_the_file_untouched(tmp_path):
+    repo, sizing = _setup(tmp_path, _PROPOSED, tshirt="XL")
+    before = sizing.read_bytes()
+    result = _run({"sizing": "state/sizings/20260101-a.yaml"}, repo)
+    assert result["exit_code"] == 1 and "pm_quote or apm_ruling" in result["error"]
+    assert sizing.read_bytes() == before

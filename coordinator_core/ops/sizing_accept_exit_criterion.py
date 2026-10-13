@@ -75,6 +75,7 @@ from coordinator_core.ops.sizing_acceptance import (
     SOURCE_PM,
     acceptance_source,
     acceptance_words,
+    sizing_acceptance_skipped,
 )
 from coordinator_core.session.job_mode_env import INTERACTION_MODES
 
@@ -106,8 +107,9 @@ def _render_exit_criterion(mapping: dict) -> str:
 
 
 _PARAMS_HINT = (
-    "params: sizing (required, path under state/sizings/), exactly one of pm_quote / "
-    "apm_ruling (required; apm_ruling also needs ruling_ref), statement, mode, supersede"
+    "params: sizing (required, path under state/sizings/), at most one of pm_quote / "
+    "apm_ruling (one is required unless the route is plan/dispatch at XS-L; apm_ruling also "
+    "needs ruling_ref), statement, mode, supersede"
 )
 
 
@@ -179,11 +181,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     if pm_quote and apm_ruling:
         return _err(f"pass exactly one of pm_quote / apm_ruling, not both; {_PARAMS_HINT}")
-    if not pm_quote and not apm_ruling:
-        return _err(
-            "missing required param: pm_quote or apm_ruling — the PM's or the APM's "
-            f"verbatim words; this op never composes or infers either; {_PARAMS_HINT}"
-        )
     if apm_ruling and not ruling_ref:
         return _err(
             "missing required param: ruling_ref — an apm_ruling names the run id or "
@@ -264,6 +261,28 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             raise MutateAbort(f"refusing to accept on {p}: {refusal}")
 
         eff_mode = mode or str(doc.get("interaction_mode") or "") or "hands-on"
+        estimate = doc.get("estimate") if isinstance(doc.get("estimate"), dict) else {}
+        engine_discharged = sizing_acceptance_skipped(doc.get("route"), estimate.get("tshirt"))
+        # XS-L on a plan/dispatch route: nobody is asked, so an APM ruling outside pm/ceo mode
+        # is recorded as the statement alone, like no words at all.
+        statement_only = not pm_quote and (
+            not apm_ruling or (engine_discharged and eff_mode not in APM_ADMISSIBLE_MODES)
+        )
+        if statement_only:
+            if not engine_discharged:
+                raise MutateAbort(
+                    f"refusing to accept on {p}: pass pm_quote or apm_ruling — the PM's or the "
+                    "APM's verbatim words; this op never composes or infers either"
+                )
+            # `accepted` stays null for the fire's engine-size-rule receipt.
+            _state["statement_only"] = True
+            if new_statement == existing_statement:
+                return old_text
+            rendered = _render_exit_criterion(
+                {"statement": new_statement, "accepted": existing.get("accepted"),
+                 **_click_paths(existing)}
+            )
+            return _finish(write_fm_nested_field(old_text, "exit_criterion", rendered))
         existing_source = acceptance_source(existing_accepted)
         if existing_source == SOURCE_ENGINE:
             # The engine's skip record is no acceptance: a PM or APM one replaces it outright.
@@ -381,7 +400,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(f"accept_exit_criterion: {type(exc).__name__}: {exc}")
 
     if _state["applied"]:
-        what = "APM ruling accepting" if apm_ruling else "PM acceptance of"
+        what = (
+            "statement of (no acceptance is asked at this size)" if _state.get("statement_only")
+            else "APM ruling accepting" if apm_ruling
+            else "PM acceptance of"
+        )
         return {
             "exit_code": 0,
             "applied": True,
