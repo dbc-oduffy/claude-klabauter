@@ -4399,6 +4399,8 @@ def _terminal_commit_marker(
     expected_branch: Optional[str] = None,
     row_prefixes: dict[str, tuple[str, ...]],
     review_only: bool = False,
+    review_open_rows: Sequence[str] = (),
+    run_base_sha: Optional[str] = None,
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
     (``commit_request.render_marker``) recording what this run promises
@@ -4433,6 +4435,8 @@ def _terminal_commit_marker(
             plan_path=plan_path,
             expected_branch=expected_branch,
             review_only=review_only,
+            review_open_rows=tuple(review_open_rows),
+            review_run_base=run_base_sha if review_only else None,
         )
     )
     if marker is None:
@@ -4507,6 +4511,7 @@ def compose_script(
     predecessor_state: Optional[str] = None,
     precredited_rows: Optional[Sequence[str]] = None,
     review_only: bool = False,
+    review_open_rows: Sequence[str] = (),
     box_terms: Sequence[str] = (),
     held_rows: Sequence[tuple[str, str]] = (),
     slot_rows: Sequence[str] = (),
@@ -4941,6 +4946,8 @@ def compose_script(
         expected_branch=expected_branch,
         row_prefixes=row_prefixes,
         review_only=review_only,
+        review_open_rows=review_open_rows,
+        run_base_sha=run_base_sha,
     )
     if marker is not None:
         # Unindented: commit_request.parse_marker matches on line-start
@@ -6007,6 +6014,10 @@ def emit_script(
         ),
         precredited_rows=precredited_rows,
         review_only=review_only,
+        review_open_rows=[
+            r.id for r in rows
+            if review_only and (raw_by_id.get(r.id, {}).get("disposition") or "open") == "open"
+        ],
         carried_gate_owed=carried_owed_gates,
         held_rows=held_rows,
         slot_rows=slot_rows,

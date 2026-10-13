@@ -666,6 +666,110 @@ def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: O
     return out
 
 
+# Commits a review-only run walks back from the terminal sha to reach its run base.
+_REVIEW_WALK_CAP = 500
+
+
+def _open_row_ids(worktree_root: Path, plan_rel: str) -> set:
+    """Ids of the plan spine rows whose disposition is ``open`` on disk now."""
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.execute_plan_assemble.row_spans import _row_disposition
+
+    text = _read_rel(worktree_root, plan_rel)
+    if text is None:
+        return set()
+    located = locate_fenced_block(text.replace("\r\n", "\n"))
+    if located.status != LocateStatus.LOCATED:
+        return set()
+    try:
+        rows = yaml.safe_load(located.body) or []
+    except yaml.YAMLError:
+        return set()
+    if not isinstance(rows, list):
+        return set()
+    return {
+        str(r.get("id")) for r in rows
+        if isinstance(r, dict) and _row_disposition(r) == "open"
+    }
+
+
+def _review_only_coding(
+    worktree_root: Path, terminal_sha: str, request: CommitRequest, inline_review: dict,
+) -> tuple:
+    """``({sha: {plan: {row id}}}, [row ids with no delta])`` for a review-only run.
+
+    A review row is coded only when the marker recorded it ``open`` at emit, it is still
+    ``open`` on disk, the inline review and judge passed, and some commit in
+    ``run_base..terminal_sha`` changes a blob in its writes; it closes at the newest such
+    commit. An open row no commit touched is reported, never closed. The walk is
+    in-process (zero spawns) along first parents; a run base it never reaches (past the
+    walk cap, on a merged-in branch, rewritten away) attributes nothing, and every
+    still-open reviewed row then lands in the no-delta list.
+    """
+    if (
+        not request.review_open_rows
+        or not request.review_run_base
+        or _reviewed_files_if_passed(inline_review) is None
+    ):
+        return {}, []
+    criterion = inline_review.get("criterion")
+    if isinstance(criterion, dict) and criterion.get("status") == "not_met":
+        return {}, []
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import _blob_at_commit
+
+    common_dir = resolve_git_common_dir(worktree_root)
+    base = request.review_run_base
+    delta: list = []  # newest first: (sha, parent)
+    sha = terminal_sha
+    reached = False
+    for _ in range(_REVIEW_WALK_CAP):
+        if sha.startswith(base):
+            reached = True
+            break
+        meta = commit_meta(common_dir, sha)
+        if meta is None or not meta.get("parents"):
+            break
+        delta.append((sha, meta["parents"][0]))
+        sha = meta["parents"][0]
+    if not reached:
+        delta = []
+
+    open_now: dict = {}
+    coded: dict = {}
+    no_delta: list = []
+    wanted = set(request.review_open_rows)
+    for chunk in request.chunks:
+        if chunk.id not in wanted:
+            continue
+        by_plan = _source_rows_by_plan(worktree_root, request.plan_path, [chunk.id])
+        live = {
+            plan_rel: ids for plan_rel, ids in by_plan.items()
+            if ids & open_now.setdefault(plan_rel, _open_row_ids(worktree_root, plan_rel))
+        }
+        if not live:
+            continue
+        hit = next(
+            (
+                csha for csha, parent in delta
+                if any(
+                    _blob_at_commit(common_dir, csha, p) != _blob_at_commit(common_dir, parent, p)
+                    for p in chunk.paths
+                )
+            ),
+            None,
+        )
+        if hit is None:
+            no_delta.append(chunk.id)
+            continue
+        for plan_rel, ids in live.items():
+            coded.setdefault(hit, {}).setdefault(plan_rel, set()).update(ids)
+    return coded, no_delta
+
+
 def _stamp_coded_commit(
     commit_v2, worktree_root: Path, repo_root: Path, source_rows: dict,
     sha: str, session_id: Optional[str], also_commit: tuple = (),
@@ -2324,6 +2428,15 @@ def _terminal_commit(
         for chunk_id, csha in checkpoint_of.items():
             for plan_rel, ids in _source_rows_by_plan(worktree_root, request.plan_path, [chunk_id]).items():
                 checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
+        if request.review_only and not anchor_only:
+            review_coded, review_no_delta = _review_only_coding(
+                worktree_root, str(reply["sha"]), request, inline_review
+            )
+            for csha, by_plan in review_coded.items():
+                for plan_rel, ids in by_plan.items():
+                    checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
+            if review_no_delta:
+                reply["review_uncoded_no_delta"] = review_no_delta
         noop_rows = (
             {} if rows_untouched
             else _source_rows_by_plan(

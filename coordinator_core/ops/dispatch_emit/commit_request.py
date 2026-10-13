@@ -133,6 +133,10 @@ class CommitRequest:
     # A review-only run reviews a landed delta and executes no row: its terminal commit leaves
     # every row disposition as it stands.
     review_only: bool = False
+    # Review rows that were ``open`` at emit, and the run base their delta is measured from. A
+    # marker without them codes no row.
+    review_open_rows: tuple = ()
+    review_run_base: Optional[str] = None
 
 
 def _chunk_to_dict(chunk: ChunkCommit) -> dict:
@@ -199,6 +203,9 @@ def render_marker(req: CommitRequest) -> Optional[str]:
     }
     if req.review_only:
         payload["review_only"] = True
+        if req.review_open_rows and req.review_run_base:
+            payload["review_open_rows"] = sorted(req.review_open_rows)
+            payload["review_run_base"] = req.review_run_base
     body = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return f"{MARKER_PREFIX}{body}"
 
@@ -220,6 +227,12 @@ def parse_manifest_marker(script_text: str) -> Optional[str]:
     if not path:
         raise MalformedCommitRequestError("ask-run-manifest marker names no path")
     return path
+
+
+def _open_rows_from(value) -> tuple:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        return ()
+    return tuple(value)
 
 
 def parse_marker(script_text: str) -> Optional[CommitRequest]:
@@ -262,6 +275,10 @@ def parse_marker(script_text: str) -> Optional[CommitRequest]:
             expected_branch=payload.get("expected_branch"),
             version=payload["version"],
             review_only=payload.get("review_only") is True,
+            review_open_rows=_open_rows_from(payload.get("review_open_rows")),
+            review_run_base=(
+                payload["review_run_base"] if isinstance(payload.get("review_run_base"), str) else None
+            ),
         )
     except (KeyError, TypeError) as exc:
         raise MalformedCommitRequestError(
