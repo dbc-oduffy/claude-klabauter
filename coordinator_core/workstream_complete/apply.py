@@ -902,6 +902,49 @@ def _decided_nature(decisions: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _entry_title_collision(entry: Path, decided_title: Any, placeholder: str) -> Optional[str]:
+    """An error when `entry` already carries an authored title that differs from
+    the close's decided title: the CLI stood down onto another close's entry,
+    and filling would be a silent no-op that drops this close's title/prose."""
+    wanted = str(decided_title or "").strip()
+    if not wanted:
+        return None
+    try:
+        from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+
+        fm = parse_frontmatter(entry.read_text(encoding="utf-8")).get("frontmatter") or {}
+    except OSError:
+        return None
+    current = str(fm.get("title") or "").strip()
+    if not current or placeholder in current or current == wanted:
+        return None
+    return (
+        f"completion entry collision: {entry.name} already carries title {current!r}, "
+        f"not this close's {wanted!r}; set decisions.governing_plan_slug to the closing "
+        "plan's own slug so the entry is keyed on it"
+    )
+
+
+def _rekey_complete_entry_args(args: "list[str]", decisions: dict[str, Any]) -> "list[str]":
+    """`args` with `--governing-plan-slug` set to the stem of
+    `decisions["governing_plan_path"]` (the closing plan), so the entry's chain
+    key and filename follow the plan being closed, not a chain-wide slug that an
+    earlier close on the same chain already holds."""
+    plan_path = decisions.get("governing_plan_path")
+    if not plan_path:
+        return args
+    stem = Path(str(plan_path)).stem
+    if not stem:
+        return args
+    out = list(args)
+    if "--governing-plan-slug" in out:
+        i = out.index("--governing-plan-slug")
+        if i + 1 < len(out):
+            out[i + 1] = stem
+            return out
+    return [*out, "--governing-plan-slug", stem]
+
+
 def _fill_completion_entry_surfaces(
     repo_root: Optional[Path], stdout: str, decisions: dict[str, Any], review_notes_section: str = ""
 ) -> Optional[str]:
@@ -920,10 +963,14 @@ def _fill_completion_entry_surfaces(
     if not entry.is_file():
         return None
     from coordinator_core.ops.ceremony.completion_entry import (
+        PLACEHOLDER_TITLE,
         AuthoredSurfaceMissing,
         fill_authored_surfaces,
     )
 
+    collision = _entry_title_collision(entry, decisions.get("title"), PLACEHOLDER_TITLE)
+    if collision is not None:
+        return collision
     try:
         fill_authored_surfaces(
             repo_root,
@@ -1247,6 +1294,9 @@ def _execute_directives(
                 }
             )
             continue
+
+        if directive["id"] == _COMPLETE_ENTRY_DIRECTIVE_ID:
+            resolved_args = _rekey_complete_entry_args(resolved_args, decisions)
 
         started = time.monotonic()
         try:
@@ -1573,6 +1623,9 @@ def _run_close_commit_tail(
         close_candidates = directives_commit_tail.resolve_close_stamp_candidates(
             worktree_root, sid, decisions
         )
+        dropped_dispositions = directives_commit_tail.dropped_disposition_diagnostics(
+            worktree_root, sid, decisions
+        )
         close_backups: dict[str, str] = {}
         if close_candidates:
             close_outcome, close_backups = directives_commit_tail.apply_close_stamps(
@@ -1612,7 +1665,13 @@ def _run_close_commit_tail(
             "skipped": f"close-commit:no-{missing}",
             "diagnostics": [
                 f"close commit not attempted: no {missing} resolved; "
-                "commit-message authoring is the caller's, never guessed here"
+                "commit-message authoring is the caller's, never guessed here",
+                *directives_commit_tail.dropped_disposition_diagnostics(
+                    worktree_root,
+                    sid,
+                    decisions,
+                    skipped_reason=f"close commit not attempted (missing decisions.{missing})",
+                ),
             ],
         }
     try:
@@ -1677,7 +1736,7 @@ def _run_close_commit_tail(
         "stamped": list(landed),
         "reverted": list(reverted),
         "skipped": list(ship_outcome.skipped_paths),
-        "diagnostics": list(ship_outcome.diagnostics),
+        "diagnostics": [*ship_outcome.diagnostics, *dropped_dispositions],
     }
     # Reported on its own key rather than folded into `ship_stamp`: a
     # disposal is not a ship, and a reader counting shipped batons must not
@@ -1768,7 +1827,7 @@ def _run_completion_entry_fold(
     path and the sha are in hand.
 
     Placed AFTER `_run_close_commit_tail` and BEFORE
-    `_run_push_outstanding_tail`, and gated -- unlike either of those -- on
+    `_push_cadence_report`, and gated -- unlike either of those -- on
     that commit having actually landed: without a sha there is nothing to
     fold, and folding a sha the ceremony failed to produce would write a
     commits list naming a commit that does not exist. Running before the push
@@ -1790,20 +1849,23 @@ def _run_completion_entry_fold(
     return fold_completion_entry_commit(Path(worktree_root), entry_path, committed_sha)
 
 
-def _run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> dict[str, Any]:
-    """Invokes `directives_commit_tail.run_push_outstanding_tail` at the
-    seam `_run_close_commit_tail`'s own docstring implicitly leaves open --
-    `run_close_commit` never pushes (`push_mode=PUSH_MODE_NEVER`, hard
-    constraints 5/6), so a push is "its own separate, later step" (that
-    function's own docstring). This IS that later step (C4b, 2026-08-25).
+def _push_cadence_report() -> dict[str, Any]:
+    """The close's push leg: publishing belongs to the warm engine's push
+    cadence (DR-329, `warm.push_cadence`), never to an inline network call.
 
-    Called unconditionally, immediately after `_run_close_commit_tail`,
-    regardless of that step's own outcome -- a prior round's already-
-    committed, still-unpushed work must still be pushed even when THIS
-    round's own commit attempt failed or found nothing to commit; mirrors
-    `_run_close_commit_tail`'s own "called unconditionally" placement
-    rationale in `apply()` below."""
-    return directives_commit_tail.run_push_outstanding_tail(worktree_root)
+    `push_outstanding` carries a 120s retry ceiling, above the 30s warm
+    dispatch backstop (`ipc.DISPATCH_TIMEOUT_SECS`), and a measured 2.1-2.5s
+    of network round trip inside one apply. A prior round's committed,
+    still-unpushed work is swept by the same cadence, so skipping the call
+    loses nothing. `cadence-pending` is the success vocabulary
+    (`compute_push_landed_gate`)."""
+    return {
+        "push_status": "cadence-pending",
+        "acted": [],
+        "skipped": [],
+        "failed": [],
+        "unconfirmed": [],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2118,8 +2180,7 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # placement, so a still-outstanding push from an earlier round
             # is not left behind by a session whose own commit attempt found
             # nothing new to commit.
-            push_report = _run_push_outstanding_tail(worktree_root)
-            report["push"] = push_report
+            report["push"] = _push_cadence_report()
 
             # Only a close that completed and whose commit step ran clean has a
             # committed tree for these to act on. A halted, partial or failed
@@ -2148,8 +2209,8 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # means this pass mutated some of what it set out to mutate and not
             # the rest -- a statement about THIS session's writes. A push
             # publishes commits that are already durably landed, including
-            # earlier rounds' (see `_run_push_outstanding_tail`'s own
-            # "a prior round's already-committed, still-unpushed work"), so its
+            # earlier rounds' (the warm push cadence sweeps
+            # a prior round's already-committed, still-unpushed work), so its
             # failure leaves this pass's mutations exactly as complete as they
             # were. It is a publication outcome, not a mutation outcome, and it
             # is separately owned: `push.outstanding` carries its own retry

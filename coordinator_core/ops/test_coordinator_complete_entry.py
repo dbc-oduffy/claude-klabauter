@@ -271,7 +271,7 @@ class TestWritePath:
         )
         assert rc == 0
         entry_path = out.strip()
-        assert "2026-07-06-my-plan-abcdef.md" in entry_path
+        assert entry_path.endswith("-my-plan-abcdef.md") and "2026-07-06" not in entry_path
         text = Path(entry_path).read_text(encoding="utf-8")
         assert 'chain: "2026-07-06-my-plan"' in text
 
@@ -406,7 +406,7 @@ class TestIdempotencyGuard:
         )
         assert rc == 0
         # A NEW entry was written (legacy/ hit does not stand down the run).
-        assert "2026-07-06-my-plan-abcdef.md" in out.strip()
+        assert out.strip().endswith("-my-plan-abcdef.md") and "2026-07-06" not in out.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -1273,6 +1273,47 @@ class TestQueryRecordsExistingPath:
 
         monkeypatch.setattr(m, "query_records", _raise)
         assert m._query_records_existing_path(str(repo), "2026-07-06-my-plan") is None
+
+
+class TestIdempotencyGuardSkipsTheFrontmatterParse:
+    """The records-query parses every completion entry (~0.45s at 600
+    entries); the guard pays it only when the slug is mentioned yet the
+    exact-literal scan missed."""
+
+    def _guard(self, tmp_path, monkeypatch, body):
+        repo = _make_repo(tmp_path)
+        completed = repo / "archive" / "completed" / "2026-07"
+        completed.mkdir(parents=True)
+        (completed / "2026-07-01-x-abc123.md").write_text(body, encoding="utf-8")
+        calls = []
+        real = m._query_records_existing_path
+        monkeypatch.setattr(
+            m, "_query_records_existing_path",
+            lambda r, s: calls.append(s) or real(r, s),
+        )
+        result = m._idempotency_guard(str(repo), str(repo / "archive" / "completed"), "2026-07-06-my-plan")
+        return result, calls
+
+    def test_absent_slug_never_runs_the_records_query(self, tmp_path, monkeypatch):
+        result, calls = self._guard(
+            tmp_path, monkeypatch, '---\ntitle: "t"\nchain: "other"\n---\n'
+        )
+        assert result == (None, None)
+        assert calls == []
+
+    def test_exact_literal_hit_stands_down_without_the_query(self, tmp_path, monkeypatch):
+        result, calls = self._guard(
+            tmp_path, monkeypatch, '---\ntitle: "t"\nchain: "2026-07-06-my-plan"\n---\n'
+        )
+        assert result[1] == "stand-down"
+        assert calls == []
+
+    def test_unquoted_chain_value_still_found_via_the_query(self, tmp_path, monkeypatch):
+        result, calls = self._guard(
+            tmp_path, monkeypatch, "---\ntitle: t\nnature: infra\nchain: 2026-07-06-my-plan\n---\n"
+        )
+        assert calls == ["2026-07-06-my-plan"]
+        assert result[0] is not None
 
 
 class TestNativeSingleSessionLoe:

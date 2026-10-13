@@ -2598,8 +2598,7 @@ def _capture_fold(monkeypatch: pytest.MonkeyPatch, calls: list) -> None:
         lambda root, entry_path, sha, **kw: calls.append((entry_path, sha))
         or {"acted": [entry_path], "skipped": [], "failed": []},
     )
-    monkeypatch.setattr(ws_apply, "_run_push_outstanding_tail", lambda root: {})
-
+    
 
 def test_execute_directives_surfaces_the_completion_entry_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -2611,8 +2610,7 @@ def test_execute_directives_surfaces_the_completion_entry_path(
     anything after it is prose."""
     _brief_with_complete_entry(monkeypatch, f"{_ENTRY_REL}\nResidue: some prose\n")
     monkeypatch.setattr(ws_apply, "_run_close_commit_tail", lambda *a, **kw: None)
-    monkeypatch.setattr(ws_apply, "_run_push_outstanding_tail", lambda root: {})
-
+    
     _, report = ws_apply.apply(decisions={})
 
     assert report["completion_entry_path"] == _ENTRY_REL
@@ -2687,8 +2685,7 @@ def _apply_with_entry_and_stubbed_tail(
     monkeypatch.setattr(
         post_commit_tail, "fold_completion_entry_commit", lambda *a, **k: {"acted": []}
     )
-    monkeypatch.setattr(ws_apply, "_run_push_outstanding_tail", lambda r: {})
-
+    
     def entry_main(argv: list[str]) -> int:
         print(entry_stdout)
         return 0
@@ -3334,9 +3331,6 @@ def _apply_with_stubbed_tail(
     )
     monkeypatch.setattr(ws_apply, "_run_completion_entry_fold", lambda *a, **k: None)
     monkeypatch.setattr(ws_apply, "_check_completion_entry_landed", lambda *a, **k: None)
-    monkeypatch.setattr(
-        ws_apply, "_run_push_outstanding_tail", lambda *a, **k: calls.append("push") or {}
-    )
     monkeypatch.setattr(ws_apply, "_run_post_close_directives", fake_post_close)
     monkeypatch.setattr(
         ws_apply.directives_commit_tail, "_release_committed_path_claims",
@@ -3347,14 +3341,14 @@ def _apply_with_stubbed_tail(
     return calls, report
 
 
-def test_apply_runs_held_back_directives_after_the_commit_and_push(
+def test_apply_runs_held_back_directives_after_the_commit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     calls, report = _apply_with_stubbed_tail(
         monkeypatch, tmp_path, {"attempted": True, "commit_failed": False}
     )
 
-    assert calls == ["main:d_a", "commit", "push", "post_close:d-ceremony-reindex", "release"]
+    assert calls == ["main:d_a", "commit", "post_close:d-ceremony-reindex", "release"]
     assert report["post_close"] == [{"id": "d-ceremony-reindex", "exit_code": 0}]
 
 
@@ -3367,7 +3361,7 @@ def test_apply_skips_post_close_when_no_commit_landed_clean(
 ) -> None:
     calls, report = _apply_with_stubbed_tail(monkeypatch, tmp_path, close_commit_report)
 
-    assert calls == ["main:d_a", "commit", "push"]
+    assert calls == ["main:d_a", "commit"]
     assert "post_close" not in report
 
 
@@ -3434,3 +3428,19 @@ def test_fill_completion_entry_surfaces_appends_review_notes_section_once(
     assert "- rename the helper -> applied: renamed" in text
     assert "- b.py -> backlogged: later (q-1)" in text
     assert text.startswith("---\ntitle: t\n---\n")
+
+
+def test_push_leg_is_cadence_pending_and_never_touches_the_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The close publishes via the warm push cadence; it must not import or
+    call `push_outstanding` (120s ceiling vs the 30s dispatch backstop)."""
+    import coordinator_core.ops.push_outstanding as po
+
+    def boom(*a, **k):
+        raise AssertionError("apply must not push inline")
+
+    monkeypatch.setattr(po, "push_outstanding", boom)
+    report = ws_apply._push_cadence_report()
+    assert report["push_status"] == "cadence-pending"
+    assert report["failed"] == [] and report["acted"] == []

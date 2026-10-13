@@ -2928,3 +2928,35 @@ def test_pnpm_test_package_script_keeps_its_verdict(pnpm_fast_cmd):
 def test_pm_exec_without_a_runner_is_not_peeled():
     assert guard._strip_command_prefix(["pnpm", "exec"]) == ["pnpm", "exec"]
     assert guard._strip_command_prefix(["pnpm", "test"]) == ["pnpm", "test"]
+
+
+class TestReuseFreshDeferral:
+    """A ``--reuse-fresh`` with-suite-mutex segment skips the grant and mutex
+    legs; every other shape keeps them."""
+
+    @pytest.mark.parametrize("command", [
+        "with-suite-mutex --reuse-fresh -- pytest",
+        "with-suite-mutex --owner-label x --reuse-fresh -- python -m pytest",
+        "with-suite-mutex --collection fast --reuse-fresh --max-runtime 5 -- pytest",
+        "cd . && with-suite-mutex --reuse-fresh -- pytest",
+        "FOO=1 with-suite-mutex --reuse-fresh -- pytest",
+    ])
+    def test_allows_without_grant_or_free_mutex(self, grant_repo, held_mutex, command):
+        assert guard.check(_payload(command, grant_repo)) is None
+
+    @pytest.mark.parametrize("command", [
+        "with-suite-mutex -- pytest --reuse-fresh",
+        "with-suite-mutex --owner-label --reuse-fresh -- python -m pytest",
+        "with-suite-mutex --collection --reuse-fresh -- python -m pytest",
+        "with-suite-mutex --max-runtime --reuse-fresh -- python -m pytest",
+        "with-suite-mutex --reuse-fresh -- true && python -m pytest",
+        "with-suite-mutex -- pytest",
+        "pytest",
+    ])
+    def test_denies_when_flag_absent_misplaced_or_decoyed(self, grant_repo, free_mutex, command):
+        assert guard.check(_payload(command, grant_repo)) is not None
+
+    def test_subagent_still_denied(self, grant_repo, free_mutex):
+        out = guard.check(_payload(
+            "with-suite-mutex --reuse-fresh -- pytest", grant_repo, agent_id=_AGENT_ID))
+        assert out is not None

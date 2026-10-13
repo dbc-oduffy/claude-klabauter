@@ -136,3 +136,16 @@ def test_all_missing_stages_listed(tmp_path):
     assert not isinstance(exc.value, ShareStageMissing)
     for stage in ("delivery", "tests", "reviewer"):
         assert f"no {stage} sidecar" in str(exc.value)
+
+
+def test_prep_with_run_base_sha_and_product_files_only_in_the_body_is_assembled(tmp_path):
+    """The real test-runner prep reports both in prose; frontmatter-only matching stranded it."""
+    _share(tmp_path, status="complete", test_verdict="pass", run=1, failed=0)
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
+    (share / "coordinator-test-runner.p1.md").write_text(
+        f"---\nagent_type: coordinator:test-runner\ntarget_plan: {PLAN}\nstatus: open\n---\n\n"
+        "## Run Report\n\n**run_base_sha:** abc1234\n**product_files:** 2\n",
+        encoding="utf-8",
+    )
+    res = _assemble(tmp_path)
+    assert res["used"]["prep"] == [".coordinator-local/subagent-share/sess-1/coordinator-test-runner.p1.md"]

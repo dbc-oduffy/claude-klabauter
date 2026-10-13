@@ -71,3 +71,28 @@ def test_tracked_plan_is_still_staged(root):
     _git(["add", "."], root)
     _git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "p"], root)
     assert _stamp(root, rel) == [[rel]]
+
+
+def _stamp_receipt(root: Path, rel: str) -> dict:
+    return terminal_commit._stamp_coded_commit(
+        lambda params, repo_root: {"committed": True, "sha": "f" * 40},
+        root, root, {rel: {"C3"}}, "a" * 40, None, also_commit=(rel,), receipt=rel,
+    )
+
+
+def test_ignored_receipt_is_a_loud_coded_stamp_error(root):
+    rel = "scratch/warp/run/p.spine.md"
+    (root / rel).parent.mkdir(parents=True)
+    (root / rel).write_text(_PLAN, encoding="utf-8")
+    out = _stamp_receipt(root, rel)
+    assert rel in out["coded_stamp_error"]
+
+
+def test_tracked_receipt_is_committed_without_error(root):
+    rel = "docs/plan.md"
+    (root / rel).parent.mkdir()
+    (root / rel).write_text(_PLAN, encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "p"], root)
+    out = _stamp_receipt(root, rel)
+    assert "coded_stamp_error" not in out and out["coded_sha"] == "f" * 40

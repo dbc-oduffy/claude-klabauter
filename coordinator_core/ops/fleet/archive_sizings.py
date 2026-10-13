@@ -115,7 +115,7 @@ import logging
 import re
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
@@ -308,7 +308,13 @@ def _build_citer_index(worktree_root: Path) -> Dict[str, List[Path]]:
         if not root.is_dir():
             continue
         for candidate in sorted(root.rglob("*.md")):
-            if not candidate.is_file():
+            try:
+                raw = candidate.read_bytes()
+            except OSError:
+                continue
+            # Byte prefilter: the YAML parse below is ~100x the cost of this
+            # substring test, and almost no record cites a sizing.
+            if b"sizing_object" not in raw:
                 continue
             cited = parse_frontmatter_field(candidate, "sizing_object")
             if not cited:
@@ -318,10 +324,26 @@ def _build_citer_index(worktree_root: Path) -> Dict[str, List[Path]]:
     return index
 
 
+class _LazyCiterIndex:
+    """`_build_citer_index`'s result, built on first lookup.
+
+    Only a roadmap-exit sizing consults the index, so a sweep whose terminal
+    candidates are all non-roadmap never walks the citer corpus at all."""
+
+    def __init__(self, worktree_root: Path) -> None:
+        self._root = worktree_root
+        self._index: Optional[Dict[str, List[Path]]] = None
+
+    def get(self, key: str, default: List[Path]) -> List[Path]:
+        if self._index is None:
+            self._index = _build_citer_index(self._root)
+        return self._index.get(key, default)
+
+
 def _find_sizing_citers(
     worktree_root: Path,
     sizing_relpath: str,
-    citer_index: Optional[Dict[str, List[Path]]] = None,
+    citer_index: Optional[Any] = None,
 ) -> List[Path]:
     """Every stub/plan under `_CITER_SEARCH_SUBDIRS` whose `sizing_object:`
     names this sizing, matched by basename (the FK is archive-agnostic by
@@ -342,7 +364,7 @@ def _roadmap_stubs_refusal_reason(
     worktree_root: Path,
     sizing_path: Path,
     sizing_relpath: str,
-    citer_index: Optional[Dict[str, List[Path]]] = None,
+    citer_index: Optional[Any] = None,
 ) -> Optional[str]:
     """Refuse a roadmap-exit sizing until every stub/plan citing it is terminal.
 
@@ -479,7 +501,7 @@ async def _handle_preview(
     scan_skipped: Optional[List[dict]] = None,
 ) -> dict:
     candidates: List[dict] = []
-    citer_index = _build_citer_index(worktree_root)
+    citer_index = _LazyCiterIndex(worktree_root)
 
     for path in sorted(sizings_dir.glob("*.yaml")):
         status = parse_frontmatter_status(path)
@@ -603,7 +625,7 @@ async def _handle_act(
         dirty = _dirty_sizing_relpaths(worktree_root, [cid for cid, _p in classified])
 
     candidate_moves: Dict[str, Move] = {}
-    citer_index = _build_citer_index(worktree_root) if classified else {}
+    citer_index = _LazyCiterIndex(worktree_root)
 
     for cid, sizing_path in classified:
         if cid in dirty:

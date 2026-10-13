@@ -28,6 +28,21 @@ def test_two_writes_leave_current_and_previous(tmp_path):
         assert runs[slot]["schema"] == srr.SCHEMA
     assert (rec / "current.log").read_text() == "run 2\n"
     assert (rec / "previous.log").read_text() == "run 1\n"
+    assert runs["current"]["log"] == "current.log"
+    assert runs["previous"]["log"] == "previous.log"
+
+
+def test_write_run_sweeps_only_dead_writer_tmp_logs(tmp_path, monkeypatch):
+    from coordinator_core.session import core
+
+    monkeypatch.setattr(core, "pid_alive", lambda pid: pid == 222)
+    rec = srr.record_dir(tmp_path, "default")
+    rec.mkdir(parents=True)
+    dead, live, junk = rec / "run-111.log.tmp", rec / "run-222.log.tmp", rec / "run-x.log.tmp"
+    for p in (dead, live, junk):
+        p.write_text("x")
+    srr.write_run(rec, _fields(), None)
+    assert not dead.exists() and live.exists() and junk.exists()
 
 
 def test_missing_field_raises_before_rotation(tmp_path):

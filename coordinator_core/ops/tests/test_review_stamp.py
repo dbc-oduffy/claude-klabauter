@@ -1181,3 +1181,56 @@ def test_content_change_still_blocks_late_delta(tmp_path):
     (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
     _commit(repo, "real change")
     assert "later commit" in m.check(plan_path, repo, supersession=True)
+
+
+def test_repair_discovers_a_prep_whose_product_files_is_only_in_the_body(tmp_path):
+    share = tmp_path / "share"
+    share.mkdir()
+    (share / "wave.md").write_text("---\nagent_type: coordinator:code-reviewer\n---\n", encoding="utf-8")
+    prep = share / "coordinator-test-runner.a1.md"
+    prep.write_text(
+        "---\nstatus: complete\nagent_type: coordinator:test-runner\n---\n\n"
+        "## Run Report\n\n**product_files:** 2\n",
+        encoding="utf-8",
+    )
+    assert m._repair_discover_prep_sidecar(share) == prep
+    assert m._load_sidecar(prep, prep=True)["product_files"] == 2
+    assert "product_files" not in m._load_sidecar(prep)
+
+
+def test_repair_ignores_a_sidecar_with_no_product_files_anywhere(tmp_path):
+    (tmp_path / "t.md").write_text(
+        "---\nagent_type: coordinator:test-runner\n---\nnote: `product_files: 3` mid-line\n", encoding="utf-8"
+    )
+    assert m._repair_discover_prep_sidecar(tmp_path) is None
+
+
+_BODY_PREP = (
+    "---\nstatus: complete\nagent_type: coordinator:test-runner\n---\n\n"
+    "## Run Report\n\n**run_base_sha:** `abc1234def`\n**product_files:** 2\n"
+)
+
+
+def test_load_sidecar_prep_lifts_a_body_form_run_base_sha(tmp_path):
+    prep = tmp_path / "prep.md"
+    prep.write_text(_BODY_PREP, encoding="utf-8")
+    data = m._load_sidecar(prep, prep=True)
+    assert data["run_base_sha"] == "abc1234def"
+    assert data["product_files"] == 2
+    assert "run_base_sha" not in m._load_sidecar(prep)
+
+
+def test_frontmatter_run_base_sha_wins_over_the_body(tmp_path):
+    prep = tmp_path / "prep.md"
+    prep.write_text(_BODY_PREP.replace("status: complete", "status: complete\nrun_base_sha: fff0000"), encoding="utf-8")
+    assert m._load_sidecar(prep, prep=True)["run_base_sha"] == "fff0000"
+
+
+def test_midline_or_non_sha_run_base_sha_is_not_the_report(tmp_path):
+    prep = tmp_path / "prep.md"
+    prep.write_text(
+        "---\nagent_type: coordinator:test-runner\n---\n"
+        "note: `run_base_sha: abc1234` quoted\nrun_base_sha: HEAD\n",
+        encoding="utf-8",
+    )
+    assert "run_base_sha" not in m._load_sidecar(prep, prep=True)

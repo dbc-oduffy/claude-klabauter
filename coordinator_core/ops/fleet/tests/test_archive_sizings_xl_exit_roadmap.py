@@ -236,3 +236,44 @@ def test_preview_excludes_roadmap_exit_still_open_and_reports_scan_skipped(tmp_p
     assert len(scan_skipped) == 1
     assert scan_skipped[0]["id"] == cid
     assert "roadmap-stubs-not-terminal" in scan_skipped[0]["reason"]
+
+
+def test_citer_corpus_is_not_walked_unless_a_roadmap_exit_asks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The citer walk is the sweep's dominant cost (every plan and handoff
+    read); only a roadmap-exit sizing needs it."""
+    worktree = tmp_path / "repo"
+    _write_sizing(worktree, "2026-01-15-plain.yaml", _TERMINAL_BODY.format(title="y"))
+    _write_plan(worktree, "docs/plans/p.md", "approved", "state/sizings/other.yaml")
+
+    def boom(_root):
+        raise AssertionError("citer corpus walked for a non-roadmap sweep")
+
+    monkeypatch.setattr(archive_sizings, "_build_citer_index", boom)
+    preview_result, _ = _preview(worktree)
+
+    assert [c["id"] for c in preview_result["candidates"]] == [
+        "state/sizings/2026-01-15-plain.yaml"
+    ]
+
+
+def test_citer_index_prefilter_skips_files_that_never_name_sizing_object(
+    tmp_path: Path, monkeypatch
+) -> None:
+    worktree = tmp_path / "repo"
+    plans = worktree / "docs" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "no-cite.md").write_text("---\nstatus: approved\n---\n", encoding="utf-8")
+    _write_plan(worktree, "docs/plans/cites.md", "approved", "state/sizings/x.yaml")
+
+    parsed: list = []
+    real = archive_sizings.parse_frontmatter_field
+    monkeypatch.setattr(
+        archive_sizings, "parse_frontmatter_field",
+        lambda p, k: parsed.append(Path(p).name) or real(p, k),
+    )
+    index = archive_sizings._build_citer_index(worktree)
+
+    assert parsed == ["cites.md"]
+    assert list(index) == ["x.yaml"]

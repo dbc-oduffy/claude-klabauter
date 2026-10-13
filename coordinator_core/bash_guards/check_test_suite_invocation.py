@@ -153,7 +153,11 @@ machine-wide (leg 0.5):
      command still waits its turn if another run already holds the lock).
      A cloud-box basis (``suite_authority.cloud_box_basis``) discharges the
      grant leg only; the wrapper and mutex legs still bind a cloud EM. A
-     subagent invoking ``validate-fast-and-packageability`` or
+     Exception: a command whose every suite-shaped segment is a
+     ``with-suite-mutex`` carrying ``--reuse-fresh`` as a flag skips the
+     grant, wrapper and mutex legs entirely (``_command_is_reuse_fresh_wrapped``);
+     the wrapper's own miss path enforces the tier-U gate and refuses while held.
+     A subagent invoking ``validate-fast-and-packageability`` or
      ``workday-complete-step1-validate`` is denied on identity.
 
   3. MUTEX leg (layer 6, fail-OPEN) -- a suite-shaped command is denied while
@@ -976,8 +980,8 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
             continue
         if base in _WITH_SUITE_MUTEX_BASENAMES:
             i += 1
-            if i < n and tokens[i] == "--":
-                i += 1
+            if "--" in tokens[i:]:
+                i = tokens.index("--", i) + 1
             continue
         if base in _PM_EXEC_SUBCOMMANDS:
             if i + 2 < n and tokens[i + 1] in _PM_EXEC_SUBCOMMANDS[base]:
@@ -2099,6 +2103,71 @@ def _command_wrapped_in_suite_mutex(
     return False
 
 
+_MUTEX_VALUE_FLAGS = frozenset({"--owner-label", "--collection", "--max-runtime"})
+
+
+def _mutex_flags_include_reuse_fresh(flag_tokens: Sequence[str]) -> bool:
+    """Walk the wrapper's own flags as ``with-suite-mutex``'s ``_parse_args`` does.
+
+    A space-separated ``--owner-label``/``--collection``/``--max-runtime``
+    consumes the next token as its value, so a ``--reuse-fresh`` in value
+    position is not the flag.
+    """
+    i = 0
+    n = len(flag_tokens)
+    while i < n:
+        tok = flag_tokens[i]
+        if tok == "--reuse-fresh":
+            return True
+        i += 2 if tok in _MUTEX_VALUE_FLAGS else 1
+    return False
+
+
+def _command_is_reuse_fresh_wrapped(
+    cmd: str,
+    dialect: Optional[_Dialect],
+    testpaths: Sequence[str],
+    cwd: Optional[str],
+    configured: Sequence["ConfiguredCmd"],
+) -> bool:
+    """True only when every suite-shaped segment is a ``with-suite-mutex``
+    invocation carrying ``--reuse-fresh`` as a flag (before its first ``--``).
+
+    Such a segment is deferred past the grant and mutex legs: the wrapper's
+    miss path enforces the tier-U gate and refuses while the mutex is held.
+    Fails CLOSED on a chained decoy, a flag after ``--``, or a flag consumed
+    as another flag's value.
+    """
+    stripped_segments: List[List[str]] = []
+    reuse_flags: List[bool] = []
+    for raw_argv in _segment_argvs(cmd, dialect):
+        idx = 0
+        n = len(raw_argv)
+        while idx < n and _ENV_ASSIGN_RE.match(raw_argv[idx]):
+            idx += 1
+        reuse = False
+        if idx < n and _base(raw_argv[idx]).lower() in _WITH_SUITE_MUTEX_BASENAMES:
+            rest = list(raw_argv[idx + 1:])
+            flags = rest[: rest.index("--")] if "--" in rest else rest
+            reuse = _mutex_flags_include_reuse_fresh(flags)
+        stripped = _strip_command_prefix(raw_argv)
+        if not stripped:
+            continue
+        stripped_segments.append(stripped)
+        reuse_flags.append(reuse)
+
+    suite_flags = [
+        _classify_tokens(seg, testpaths, cwd) is not None
+        or _matches_configured_cmd([seg], configured) is not None
+        for seg in stripped_segments
+    ]
+    if any(suite_flags):
+        return all(r for r, s in zip(reuse_flags, suite_flags) if s)
+    if stripped_segments and _matches_configured_cmd(stripped_segments, configured) is not None:
+        return all(reuse_flags)
+    return False
+
+
 def _deny_reason_wrapper_required(
     detected: str, cmd_safe: str, cloud_box: bool = False
 ) -> str:
@@ -3124,6 +3193,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if dialect is _Dialect.POWERSHELL and segments_argv
         else cmd
     )
+    if _command_is_reuse_fresh_wrapped(cmd, dialect, testpaths, cwd, configured):
+        return None
+
     matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
     collect_only = any(_is_pytest_collect_only_segment(argv) for argv in segments_argv)
     if matched_tiers & {"U", "F"} and not collect_only:

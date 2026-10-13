@@ -1047,6 +1047,7 @@ def _stamp_coded_commit(
     sha: str, session_id: Optional[str], also_commit: tuple = (),
     noop_rows: Optional[dict] = None, checkpoint_rows: Optional[dict] = None,
     snapshot: Optional[_Snapshot] = None, flip_plan: Optional[str] = None,
+    receipt: Optional[str] = None,
     trailers: tuple = (), commit: bool = True,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
@@ -1064,6 +1065,9 @@ def _stamp_coded_commit(
     returns under ``_flip``. A commit that does not land restores the flip with the rows.
     ``commit=False`` (an ask run, whose plan is a process record) leaves the stamps on disk and
     lands nothing. ``_committed`` names the paths the commit carried.
+    ``receipt`` names the file holding the run's minted ``review_stamp``. When it is gitignored
+    (a minted XS spine) the commit cannot carry it and the receipt dies with the scratch dir, so
+    the reply adds ``coded_stamp_error`` beside the rest of the commit's result.
     Returns ``{"rows_coded", "coded_sha"}`` or ``{"coded_stamp_error"}``.
     """
     from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
@@ -1125,8 +1129,13 @@ def _stamp_coded_commit(
         stageable = _changed_paths(worktree_root, uncovered)
         if stageable is not None:
             paths = [p for p in paths if p not in uncovered or p in stageable]
+    lost_receipt = (
+        {"coded_stamp_error": f"{receipt}: review receipt is untracked and gitignored, so no commit "
+         "can carry it; the run is unreceipted"}
+        if receipt is not None and receipt not in paths else {}
+    )
     if not paths:
-        return {"rows_coded": {}, "coded_sha": None}
+        return {"rows_coded": {}, "coded_sha": None, **lost_receipt}
     n = sum(len(v) for v in rows_coded.values())
     message = f"mark {n} rows coded ({sha[:7]})" if n else f"review stamp ({sha[:7]})"
     if trailers:
@@ -1144,7 +1153,7 @@ def _stamp_coded_commit(
         restore()
         detail = reply.get("error") if isinstance(reply, dict) else reply
         return {"coded_stamp_error": f"coded-stamp commit did not land: {detail!r}"}
-    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": paths}
+    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": paths, **lost_receipt}
     if flip_result is not None:
         out["_flip"] = flip_result
     if reply.get("index_stale"):
@@ -2944,6 +2953,7 @@ def _terminal_commit(
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
                 snapshot=snapshot,
                 flip_plan=request.plan_path if flips else None,
+                receipt=request.plan_path if reply.get("review_stamp") == "minted" else None,
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=not product_only,
             )

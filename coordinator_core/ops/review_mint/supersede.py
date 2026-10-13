@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
-from coordinator_core.completion_receipts.verdict import _count
+from coordinator_core.completion_receipts.verdict import _count, body_product_files
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -129,13 +129,15 @@ def _refuse_empty_prep(repo_root: Path, prep_sidecar: Optional[str]) -> None:
         path = repo_root / path
     if not path.is_file():
         return
-    split = split_frontmatter(path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n"))
+    text = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    split = split_frontmatter(text)
     try:
         fm = (yaml.safe_load(split.fm_text) or {}) if split is not None else {}
     except yaml.YAMLError:
         fm = {}
     fm = fm if isinstance(fm, dict) else {}
-    if max(_count(fm.get("slice_files")), _count(fm.get("product_files"))) == 0:
+    product_files = fm["product_files"] if "product_files" in fm else body_product_files(text)
+    if max(_count(fm.get("slice_files")), _count(product_files)) == 0:
         raise SupersedeRefused(
             f"prep sidecar {prep_sidecar} records no product_files: the review covers zero files; "
             "restamp the prep with product_files (count or list) for the reviewed range"

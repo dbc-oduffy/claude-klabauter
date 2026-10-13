@@ -766,10 +766,9 @@ def fold_completion_entry_commit(
     remaining wire.
 
     Defaults to `PUSH_MODE_NEVER` because that is what the close ceremony
-    needs: it runs its own `push.outstanding` tail immediately afterwards
-    (`apply._run_push_outstanding_tail`), which publishes this commit along
-    with everything else the pass landed. Passing `PUSH_MODE_SYNC` here would
-    buy a second push of the same work.
+    needs: publishing is the warm engine's push cadence (DR-329), never an
+    inline network call from the close. Passing `PUSH_MODE_SYNC` here would
+    put a remote round trip on the close path.
 
     Soft-fail and idempotency are `_run_completion_entry_fold`'s own
     contract, unchanged and not re-implemented here — a `{acted, skipped,

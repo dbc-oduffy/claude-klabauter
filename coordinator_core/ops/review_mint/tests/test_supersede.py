@@ -347,3 +347,50 @@ def test_hand_supplied_prep_with_product_files_is_accepted(repo):
         wave_sidecar_paths=[], prep_sidecar="prep.md", stage_returns=None, session_id="sess-1",
     )
     assert res["record_path"]
+
+
+#: Shape of the real coordinator-test-runner prep sidecar: no product_files or
+#: whole_diff_sidecars in frontmatter; the count sits in the prose body.
+REAL_PREP = """---
+status: complete
+test_verdict: not_run
+agent_type: coordinator:test-runner
+lead_session_id: sess-1
+---
+
+## Observations
+
+- Freeze: launcher stderr: `product_files: 24`, `freeze written but not committed`.
+
+## Run Report
+
+**Verdict:** review.partition_slices = PARTITION-MANDATORY
+**product_files:** {count}
+**foreign_claims:** []
+"""
+
+
+def _prep_call(root, s, text):
+    (root / "prep.md").write_text(text, encoding="utf-8")
+    return record_superseding_review(
+        repo_root=root, plan=PLAN, commit_range={"base": s[0], "head": s[2]},
+        wave_sidecar_paths=[], prep_sidecar="prep.md", stage_returns=None, session_id="sess-1",
+    )
+
+
+def test_prep_with_product_files_only_in_the_body_is_accepted(repo):
+    root, s = repo
+    assert _prep_call(root, s, REAL_PREP.format(count=2))["record_path"]
+
+
+def test_body_form_product_files_zero_is_refused(repo):
+    root, s = repo
+    with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):
+        _prep_call(root, s, REAL_PREP.format(count=0))
+
+
+def test_frontmatter_product_files_wins_over_the_body(repo):
+    root, s = repo
+    text = REAL_PREP.format(count=5).replace("status: complete", "status: complete\nproduct_files: 0")
+    with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):
+        _prep_call(root, s, text)

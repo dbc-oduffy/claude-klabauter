@@ -92,9 +92,11 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.completion_receipts.verdict import (
+    with_body_prep_fields,
     effective_test_verdict,
     mint_refusal,
     superseding_delivery,
+    test_verdict_of,
 )
 from coordinator_core.session.claimed_write import replace_text
 
@@ -206,7 +208,9 @@ def product_files(diff_path: Path) -> List[str]:
     return files
 
 
-def _load_sidecar(path: Path) -> Optional[Dict[str, Any]]:
+def _load_sidecar(path: Path, *, prep: bool = False) -> Optional[Dict[str, Any]]:
+    """Frontmatter of the sidecar. `prep=True` also lifts a body-form `product_files` count and
+    `run_base_sha` into the mapping when the frontmatter has none (the test-runner writes it in prose)."""
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
@@ -217,7 +221,9 @@ def _load_sidecar(path: Path) -> Optional[Dict[str, Any]]:
         data = yaml.safe_load(split.fm_text) or {}
     except yaml.YAMLError:
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    return with_body_prep_fields(data, text) if prep else data
 
 
 def _find_sidecar_by_stem(repo_root: Path, stem: str, session_id: Optional[str] = None) -> Optional[Path]:
@@ -266,7 +272,7 @@ def _reviewed_file_count(repo_root: Path, integration_data: Dict[str, Any]) -> O
     prep = integration_data.get("prep")
     if not isinstance(prep, dict):
         prep_rel = integration_data.get("prep_sidecar")
-        prep = _load_sidecar(repo_root / prep_rel) if prep_rel else None
+        prep = _load_sidecar(repo_root / prep_rel, prep=True) if prep_rel else None
     if not isinstance(prep, dict):
         return None
     return _count(prep.get("product_files"))
@@ -391,6 +397,10 @@ def _repair_discover_prep_sidecar(share_dir: Path) -> Optional[Path]:
         data = _load_sidecar(path)
         if data and all(field in data for field in _PREP_SHAPE_FIELDS):
             return path
+        # The test-runner's real prep carries product_files in its body and no whole_diff_sidecars.
+        if data is not None and "product_files" not in data and "review" not in str(data.get("agent_type") or ""):
+            if _load_sidecar(path, prep=True).get("product_files") is not None:
+                return path
     return None
 
 
@@ -605,7 +615,7 @@ def mint(
                     f"see {integration_path}"
                 )
         prep_path = repo_root / prep_rel
-        prep_data = _load_sidecar(prep_path)
+        prep_data = _load_sidecar(prep_path, prep=True)
         if prep_data is None:
             raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
 
@@ -874,7 +884,7 @@ def mint_receipt(
     prep_data = integration_data.get("prep")
     if not isinstance(prep_data, dict):
         prep_rel = integration_data.get("prep_sidecar")
-        prep_data = _load_sidecar(repo_root / prep_rel) if prep_rel else None
+        prep_data = _load_sidecar(repo_root / prep_rel, prep=True) if prep_rel else None
         if prep_data is None:
             raise MintRefusal(f"review-stamp: refusing to mint a receipt: no prep record for {integration_path}")
     frozen_claims = prep_data.get("foreign_claims")

@@ -30,7 +30,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from coordinator_core.completion_receipts.verdict import test_verdict_of
+from coordinator_core.completion_receipts.verdict import test_verdict_of, with_body_prep_fields
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.review_mint.wave_bookkeeping import (
     _DELIVERY_SUFFIX,
@@ -230,7 +230,14 @@ def assemble_from_share(
 
     reverify = _reverify_record(repo_root, share, plan_id, head)
 
-    prep = _newest([(p, fm) for p, fm in bound if "run_base_sha" in fm and _int_or_none(fm.get("product_files")) is not None])
+    prep_cands = []
+    for p, fm in bound:
+        # The test-runner writes run_base_sha / product_files in prose; frontmatter wins.
+        if not ("run_base_sha" in fm and "product_files" in fm):
+            fm = with_body_prep_fields(fm, _load_sidecar_text(p) or "")
+        if "run_base_sha" in fm and _int_or_none(fm.get("product_files")) is not None:
+            prep_cands.append((p, fm))
+    prep = _newest(prep_cands)
     if prep is None:
         raise missing("prep", "no plan-scoped sidecar carries run_base_sha and product_files")
 

@@ -7,9 +7,50 @@ the terminal commit exists.
 
 from __future__ import annotations
 
-from typing import Any
+import re
+from typing import Any, Optional
 
 _JUDGE_IDENTITY = "execute-review"
+
+#: The prep producer (coordinator-test-runner) may report the count only in its prose body, as
+#: `product_files: N`, `- product_files: N` or `**product_files:** N` at line start. A mid-line
+#: mention (a quoted launcher line, a divergence note) is not the report.
+_BODY_PRODUCT_FILES = re.compile(r"^[ \t]*(?:[-*][ \t]+)?\**product_files\**[ \t]*:\**[ \t]*(\d+)\b", re.MULTILINE)
+
+
+def body_product_files(text: str) -> Optional[int]:
+    """The first body-form `product_files` count in `text`, else None. Callers apply it only
+    when the frontmatter carries no `product_files` key: frontmatter wins."""
+    match = _BODY_PRODUCT_FILES.search(text)
+    return int(match.group(1)) if match else None
+
+
+#: `run_base_sha` in the same body forms as `product_files`; a sha token only, so a prose
+#: sentence after the key is not taken for one.
+_BODY_RUN_BASE_SHA = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?\**run_base_sha\**[ \t]*:\**[ \t]*`?([0-9a-fA-F]{7,64})\b", re.MULTILINE
+)
+
+
+def body_run_base_sha(text: str) -> Optional[str]:
+    """The first body-form `run_base_sha` in `text`, else None; frontmatter wins like `product_files`."""
+    match = _BODY_RUN_BASE_SHA.search(text)
+    return match.group(1) if match else None
+
+
+def with_body_prep_fields(data: dict, text: str) -> dict:
+    """`data` (a prep sidecar's frontmatter) with `product_files` and `run_base_sha` lifted from
+    the prose body for each key the frontmatter lacks. The test-runner writes both in prose."""
+    lifted = dict(data)
+    if "product_files" not in lifted:
+        count = body_product_files(text)
+        if count is not None:
+            lifted["product_files"] = count
+    if "run_base_sha" not in lifted:
+        sha = body_run_base_sha(text)
+        if sha is not None:
+            lifted["run_base_sha"] = sha
+    return lifted
 
 
 def _count(value: Any) -> int:

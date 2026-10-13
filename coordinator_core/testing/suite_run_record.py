@@ -1,6 +1,6 @@
 """Two-slot (current, previous) suite-run record per repo and named collection.
 
-Pure stdlib, no git spawn. Layout: ``<repo>/.coordinator-local/suite-runs/<collection>/
+Pure stdlib plus one lazy engine import (``session.core.pid_alive``), no git spawn. Layout: ``<repo>/.coordinator-local/suite-runs/<collection>/
 {current,previous}.{json,log}``. Writers are serialized by the suite mutex; every write is
 temp + ``os.replace`` and ``current.*`` is never absent once written.
 """
@@ -127,18 +127,44 @@ def write_run(rec_dir: str | os.PathLike, fields: dict, log_path: str | os.PathL
     for ext, staged in (("log", tmp_log), ("json", tmp_json)):
         _demote_current(rec, ext)
         os.replace(staged, rec / f"current.{ext}")
+    _sweep_orphan_tmp_logs(rec)
     return rec / "current.json"
+
+
+def _sweep_orphan_tmp_logs(rec: Path) -> None:
+    """Unlink ``run-<pid>.log.tmp`` files whose writer pid is dead; skip unparseable names."""
+    from coordinator_core.session.core import pid_alive
+
+    for tmp in rec.glob("run-*.log.tmp"):
+        pid = tmp.name[len("run-"):-len(".log.tmp")]
+        if not pid.isdigit():
+            continue
+        try:
+            if not pid_alive(int(pid)):
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _demote_current(rec: Path, ext: str) -> None:
     """Make ``previous.<ext>`` a copy of ``current.<ext>`` while leaving current in place, so a
-    crash never leaves the slot empty."""
+    crash never leaves the slot empty. The json copy names ``previous.log`` in its ``log``
+    field; it is never a hard link, which would share current's field."""
     cur, prev = rec / f"current.{ext}", rec / f"previous.{ext}"
     if not cur.exists():
         prev.unlink(missing_ok=True)
         return
     staged = rec / f"previous.{ext}.tmp"
     staged.unlink(missing_ok=True)
+    if ext == "json":
+        try:
+            body = json.loads(cur.read_text(encoding="utf-8"))
+            body["log"] = "previous.log"
+            staged.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError):
+            shutil.copy2(cur, staged)
+        os.replace(staged, prev)
+        return
     try:
         os.link(cur, staged)
     except OSError:

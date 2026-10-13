@@ -154,6 +154,59 @@ def test_xs_run_on_a_minted_spine_has_no_governing_plan(base):
     assert close["legs"]["review"]["status"] == "queued"
 
 
+def test_wave_fire_xs_lane_ask_route_request_with_baton_is_accepted(base):
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import XS_ROW_ID, mint_xs_spine, xs_spine_plan_id
+
+    repo, script = base
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    stem = "2026-10-13-xs-lane"
+    sizing_rel = f"state/sizings/{stem}.yaml"
+    (repo / sizing_rel).parent.mkdir(parents=True)
+    (repo / sizing_rel).write_text("deliverable_id: dlv-xs-lane\n", encoding="utf-8")
+    sizing = {
+        "intent": "xs lane",
+        "deliverable_id": "dlv-xs-lane",
+        "exit_criterion": {"statement": "a.py exists"},
+    }
+    run_dir = repo / "scratch" / "warp" / "run-xs"
+    run_dir.mkdir(parents=True)
+    spine_text, spine_path = mint_xs_spine(sizing, sizing_rel=sizing_rel, writes=["a.py"], out_dir=run_dir)
+    spine_path.write_text(spine_text, encoding="utf-8")
+    spine_rel = spine_path.relative_to(repo).as_posix()
+    plan_id = xs_spine_plan_id(stem)
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id=XS_ROW_ID, title="xs lane", paths=("a.py",)),
+            ChunkCommit(id="sizing", title="sizing record", paths=(sizing_rel,)),
+        ),
+        deliverable_id="dlv-xs-lane",
+        repo_root=repo.as_posix(),
+        plan_path=spine_rel,
+    )
+    (repo / script).write_text("// emitted script\n" + render_marker(request) + "\n", encoding="utf-8")
+    inline_review = copy.deepcopy(driver.INLINE_REVIEW)
+    inline_review["plan_id"] = plan_id
+    inline_review["integration_stem"] = f"{plan_id}.review-wave-bookkeeping"
+
+    out = terminal_commit._handler(
+        {
+            "incomplete_chunks": [],
+            "script_path": script,
+            "session_id": driver.SESSION_ID,
+            "inline_review": inline_review,
+            "held": [],
+        },
+        repo_root=repo / ".git",
+    )
+
+    close = out["close"]
+    _assert_whole_block(close, "xs-s-run")
+    assert close["legs"]["plan-reconciliation"]["status"] == "not-applicable"
+    assert "error" not in out, out
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_s_spec_dispatch_plan_with_a_deferred_row_is_not_held_to_the_harvest(base, newline):
     repo, script = base

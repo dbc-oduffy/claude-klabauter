@@ -7,8 +7,8 @@ computed-skill engine.
 Purpose: this module's live surface is the CLOSE/COMMIT tail itself, not a
 `directives[]`-builder family — the close/commit tail proper is
 `run_close_commit` / `run_close_commit_and_release_claims` (the two
-governing-plan and per-path claim releases wired into the latter) /
-`run_push_outstanding_tail`. Everything else here (`resolve_known_
+governing-plan and per-path claim releases wired into the latter).
+Everything else here (`resolve_known_
 concurrent_paths` and its `_committed_paths_for_sids`/`chunked_show_
 numstat_blocks` support, `compute_push_landed_gate`) is read-only fan-in
 these callers consume: peer-exclusion pathspec resolution and push-landed
@@ -123,8 +123,7 @@ Negative-spec:
       degrades to an empty/partial result. Do not "simplify" this retry
       away, and do not widen it into a general-purpose retry wrapper reused
       elsewhere in this module.
-    - `run_push_outstanding_tail` never issues `git push` itself, and
-      neither does `compute_push_landed_gate` (read-only: `git log`/`git
+    - `compute_push_landed_gate` never issues `git push` (read-only: `git log`/`git
       branch -r --contains` only) — the SAME split `run_close_commit`'s own
       docstring names ("A caller wanting a push does so as its own
       separate, later step").
@@ -1177,7 +1176,7 @@ def run_close_commit(
     so no push was ever attempted from here); `commit_paths` has no push
     concept at all, so the constraint is now structural rather than an
     argument value. A caller wanting a push does so as its own separate,
-    later step (`run_push_outstanding_tail`); this function never pushes.
+    later step (the warm engine's push cadence); this function never pushes.
 
     Every keyword argument here is a caller-supplied, already-decided value:
     `subject`/`prose`/`deleted_paths`/`kept_entries`/`trailers` compose the
@@ -1803,6 +1802,51 @@ def resolve_close_stamp_candidates(
     return candidates
 
 
+def dropped_disposition_diagnostics(
+    worktree_root: "Union[Path, str]",
+    session_id: Optional[str],
+    decisions: "dict[str, Any]",
+    *,
+    skipped_reason: Optional[str] = None,
+) -> "list[str]":
+    """One diagnostic per `decisions["handoff_dispositions"]` entry that neither
+    `resolve_ship_stamp_candidates` nor `resolve_close_stamp_candidates` selects,
+    naming the first reason it was dropped. `skipped_reason` short-circuits the
+    per-entry checks when the whole tail was not attempted (no subject / sid)."""
+    dispositions = decisions.get(_KEY_HANDOFF_DISPOSITIONS) or {}
+    if not isinstance(dispositions, dict) or not dispositions:
+        return []
+    if skipped_reason:
+        return [
+            f"handoff_dispositions[{name}] dropped: {skipped_reason}" for name in dispositions
+        ]
+    selected = {
+        Path(rel).name
+        for rel, *_rest in (
+            *resolve_ship_stamp_candidates(worktree_root, session_id, decisions),
+            *resolve_close_stamp_candidates(worktree_root, session_id, decisions),
+        )
+    }
+    held = set(_held_handoff_basenames(worktree_root, session_id)) if session_id else set()
+    root = Path(worktree_root)
+    out: "list[str]" = []
+    for name, entry in dispositions.items():
+        if name in selected:
+            continue
+        if not isinstance(entry, dict):
+            reason = "entry is not an object"
+        elif name not in held:
+            reason = "no handoff claim held by this session"
+        elif not (root / "state" / "handoffs" / name).is_file():
+            reason = "not active under state/handoffs"
+        elif entry.get("disposition") == _HANDOFF_DISPOSITION_SHIPPED and not entry.get("shipped_in"):
+            reason = "disposition shipped carries no shipped_in"
+        else:
+            reason = f"unrecognized disposition {entry.get('disposition')!r}"
+        out.append(f"handoff_dispositions[{name}] dropped: {reason}")
+    return out
+
+
 def _release_handoff_claim(worktree_root: "Union[Path, str]", basename: str) -> None:
     """Releases this session's own `handoff-claims/<basename>` ledger entry —
     self-release only (`session.claims.release_artifact` resolves holder
@@ -1967,69 +2011,6 @@ def revert_close_stamps(
             replace_text(root / relpath, original)
         except OSError:
             pass
-
-
-# ---------------------------------------------------------------------------
-# Step 3.35 — d-push-outstanding — wires push_outstanding() (C4b, 2026-08-25,
-# docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md)
-# ---------------------------------------------------------------------------
-
-
-def run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> Dict[str, Any]:
-    """The "separate, later step" `run_close_commit`'s own docstring names
-    ("A caller wanting a push does so as its own separate, later step; this
-    function never pushes") -- `run_close_commit` calls `commit_paths` (C3),
-    which has no push leg at all (hard constraints 5/6's old
-    `push_mode=PUSH_MODE_NEVER` binding is now structural, not an argument
-    value), and nothing else in this module's Step 3 push-confirmation tree
-    issues `git push` either (`compute_push_landed_gate`'s own docstring:
-    "Never issues `git push` itself"). This function is that missing
-    producer, wired to `coordinator_core.ops.push_outstanding.
-    push_outstanding` -- the SAME primitive the C4-registered `push.
-    outstanding` op exposes to the four DoE-owned cadence surfaces (see that
-    module's own docstring); this call reaches it in-process, since both
-    caller and callee live in this repo.
-
-    Lazily imports (mirrors `run_close_commit`'s own lazy import of
-    `commit_pipeline` immediately above -- this module is on the assemble
-    hot path and `commit_pipeline`/`push_outstanding` pull in the op-registry
-    side effects of the full commit-gate stack with them).
-
-    Best-effort: any exception raised while resolving or pushing is folded
-    into the returned dict as `push_status: "push-failed"` rather than
-    propagating -- a push failure must never crash the close sequence past
-    the point where claim release has already run (`run_close_commit_and_
-    release_claims`'s own `finally`), the same fail-safe direction
-    `_release_committed_path_claims`/`_release_governing_plan_claim` take
-    for the sibling best-effort releases in this module.
-
-    Returns a flattened dict -- `push_status` (the canonical `commit_
-    pipeline.derive_push_status` vocabulary), `acted`, `skipped`, `failed`,
-    `unconfirmed` -- the same shape the `push.outstanding` op handler
-    returns to ITS callers, so a report reader sees one vocabulary
-    regardless of which caller reached this primitive.
-    """
-    from coordinator_core.ops.ceremony.push import derive_push_status
-    from coordinator_core.ops.push_outstanding import push_outstanding
-
-    try:
-        outcome = push_outstanding(worktree_root)
-    except Exception as exc:  # noqa: BLE001 - best-effort, never crash the close sequence
-        return {
-            "push_status": "push-failed",
-            "acted": [],
-            "skipped": [],
-            "failed": [f"push_outstanding raised: {exc}"],
-            "unconfirmed": [],
-        }
-
-    return {
-        "push_status": derive_push_status(outcome),
-        "acted": list(outcome.acted),
-        "skipped": list(outcome.skipped),
-        "failed": list(outcome.failed),
-        "unconfirmed": list(outcome.unconfirmed),
-    }
 
 
 # ---------------------------------------------------------------------------

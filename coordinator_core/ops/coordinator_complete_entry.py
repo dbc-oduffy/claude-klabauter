@@ -315,7 +315,10 @@ def resolve_entry_path(
     yyyymmdd = today.strftime("%Y-%m-%d")
     sid6 = sid[-6:]
     if chain_slug:
-        entry_filename = f"{yyyymmdd}-{chain_slug}-{sid6}.md"
+        # Plan slugs already lead with their own date; a second date prefix
+        # doubles it in the filename.
+        bare = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", chain_slug)
+        entry_filename = f"{yyyymmdd}-{bare}-{sid6}.md"
     else:
         entry_filename = f"{yyyymmdd}-adhoc-{sid6}.md"
     return os.path.join(repo_root, "archive", "completed", yyyymm, entry_filename)
@@ -736,9 +739,20 @@ def _query_records_existing_path(repo_root: str, chain_slug: str) -> Optional[st
 
 def _grep_scan_existing_path(completed_dir: str, chain_slug: str) -> Optional[str]:
     """Step 2.6.3a — BSD-portable literal-match scan (maxdepth 2, excludes legacy/)."""
+    return _scan_completed(completed_dir, chain_slug)[0]
+
+
+def _scan_completed(completed_dir: str, chain_slug: str) -> "tuple[Optional[str], bool]":
+    """One pass over the completion entries: (exact `chain: "<slug>"` hit, slug mentioned anywhere).
+
+    `mentioned` is the cheap necessary condition for a records-query match: a
+    record whose parsed `chain` equals the slug carries the slug as bytes, so
+    a pass that saw no mention proves the 600-record frontmatter parse would
+    find nothing."""
     if not os.path.isdir(completed_dir):
-        return None
+        return None, False
     needle = f'chain: "{chain_slug}"'
+    mentioned = False
     # maxdepth 2 equivalent: completed_dir/*.md and completed_dir/*/*.md
     candidates: List[str] = []
     try:
@@ -757,7 +771,7 @@ def _grep_scan_existing_path(completed_dir: str, chain_slug: str) -> Optional[st
                     continue
     except OSError:
         print(f"skip: _grep_scan_existing_path: for name in sorted(os.listdir(completed_dir)): failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
+        return None, False
 
     for f in candidates:
         if "/legacy/" in f.replace(os.sep, "/"):
@@ -769,8 +783,10 @@ def _grep_scan_existing_path(completed_dir: str, chain_slug: str) -> Optional[st
             print(f"skip: _grep_scan_existing_path: with open(f, \"r\", encoding=\"utf-8\", errors=\"replace\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
             continue
         if needle in text:
-            return f
-    return None
+            return f, True
+        if chain_slug in text:
+            mentioned = True
+    return None, mentioned
 
 
 def _idempotency_guard(repo_root: str, completed_dir: str, chain_slug: str):
@@ -778,8 +794,15 @@ def _idempotency_guard(repo_root: str, completed_dir: str, chain_slug: str):
     if not chain_slug or not os.path.isdir(completed_dir):
         return None, None
 
-    existing_path = _grep_scan_existing_path(completed_dir, chain_slug)
-    qr_out = _query_records_existing_path(repo_root, chain_slug)
+    existing_path, mentioned = _scan_completed(completed_dir, chain_slug)
+    # The records-query parses every completion entry's frontmatter; it can
+    # only add a hit when the exact-literal scan missed AND some entry names
+    # the slug at all.
+    qr_out = (
+        _query_records_existing_path(repo_root, chain_slug)
+        if mentioned and not existing_path
+        else None
+    )
     found_existing = bool(existing_path) or bool(qr_out)
 
     if not found_existing:
