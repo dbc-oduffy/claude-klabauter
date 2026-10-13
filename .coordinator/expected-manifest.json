@@ -2061,8 +2061,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "174a3e04ddd992b639e4f2e226e5b7f1cf581d43",
-    "coordinator_core/_engine_stamp": "73b508cee985287240e183e8107b1c6e317b04b2",
+    "coordinator_core/_engine_published_at": "3433dfba967f3422a9efcca3c7bde8d5c26589ad",
+    "coordinator_core/_engine_stamp": "f417dbaa5f0aac805969895b2404b7e3dcc83cb0",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4173,7 +4173,7 @@
     "coordinator_core/ops/dispatch_emit/ask_stage.py": "4b498c017e61c4786b9f29265d261b931947788d",
     "coordinator_core/ops/dispatch_emit/chatty.py": "b02a96b78faa7e2f4f81bbd92231f001e8fe36a6",
     "coordinator_core/ops/dispatch_emit/cli.py": "7057a62d0d14ccc86440406eaa9a0f5bab663602",
-    "coordinator_core/ops/dispatch_emit/close_without_script.py": "babd508e8910a7592bcc518c9f210ef832d178d9",
+    "coordinator_core/ops/dispatch_emit/close_without_script.py": "036b053c8ef6ededc6e9dbb1ddf7f3dabb867db3",
     "coordinator_core/ops/dispatch_emit/cloud_spawn_brief.py": "aaeb10a599c5847969407f00b7341ed6bf54839f",
     "coordinator_core/ops/dispatch_emit/commit_request.py": "e795e6a8df09cbbbda2f6477b8c487f0abbf6831",
     "coordinator_core/ops/dispatch_emit/completion_receipt.py": "1a586ed320b39b63966f8c40392915e1fd9f3b01",
@@ -4309,7 +4309,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_cli_pipeline.py": "47280077a9e82565d515e37de1a82c9ff7258f22",
     "coordinator_core/ops/dispatch_emit/tests/test_cli_research_route.py": "4ee11acb318b16240a640cd23b92ea271f3dc9a5",
     "coordinator_core/ops/dispatch_emit/tests/test_cli_reverify_delivery_empty.py": "0e6ca4c44e6319da84d467c01782e503b15f2c75",
-    "coordinator_core/ops/dispatch_emit/tests/test_close_without_script.py": "6be893bad36cf8a79a10a85da0c7901d1de8e220",
+    "coordinator_core/ops/dispatch_emit/tests/test_close_without_script.py": "950289460ee59e54d920fc43e71156fb280a6d5b",
     "coordinator_core/ops/dispatch_emit/tests/test_cloud_spawn_brief.py": "d209c5333b617825e40b44c88e8c87c1ff65246b",
     "coordinator_core/ops/dispatch_emit/tests/test_commit_request.py": "e06c47bd5feba7eec2a1b8b44911f3e07984e687",
     "coordinator_core/ops/dispatch_emit/tests/test_completion_receipt_builder.py": "2209a78b994de6421f78a0d08da0832fcd028422",
@@ -6312,7 +6312,7 @@
     "coordinator_core/shipped_in_tokens.py": "9c7036425f1faa20608a702d0772709130466025",
     "coordinator_core/sibling_fact.py": "054998d3109899ae6395ec7de888e4c0c60db6f3",
     "coordinator_core/sidecar_reap.py": "1dfba25fc894957840d30577cfaba893c7e6baef",
-    "coordinator_core/sizing_assemble/__init__.py": "7318b0dc98e64dfa447d916a057bce9cd679bd29",
+    "coordinator_core/sizing_assemble/__init__.py": "522afc95b14f2be89d3fc0f0cdb85dc982a7fa99",
     "coordinator_core/sizing_assemble/conftest.py": "ab822d514a6b7a317b8f57b820137277745f12d0",
     "coordinator_core/sizing_assemble/test_clause_register_refusal.py": "7b6f260eaa600b89773f4e3e1b34ae08a3f5dc04",
     "coordinator_core/sizing_assemble/test_intent_turn.py": "596f06d058617ddb3f959db582c1faa25b940a25",
@@ -7532,5 +7532,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "3f71585500149b88b905f56be039c9a264c31bbd"
+  "source_head": "506ecabcb96c84219b14d2cfaa21f9224d5e1321"
 }

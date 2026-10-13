@@ -249,11 +249,46 @@ def test_task_output_verdict_lands_in_the_record_before_the_legs(env):
     assert again["verdict_source"] == "close-job"
 
 
-@pytest.mark.parametrize("shape", ["other-run", "unreadable", "no-script"])
+def _close_job_output(env, run_id=None) -> str:
+    """A ``close_job``-kind task output: ``{run_id, close}`` params and no ``script_path``."""
+    path = env.task_output()
+    data = json.loads(open(path, encoding="utf-8").read())
+    params = data["next_action"]["params"]
+    del params["script_path"]
+    if run_id is not None:
+        params["run_id"] = run_id
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    return path
+
+
+def test_close_job_task_output_binds_by_run_id(env):
+    env.set_record(criterion=copy.deepcopy(MET), falsifier_broken=run_close.UNCHANGED)
+
+    out = env.call(task_output_path=_close_job_output(env, RUN))
+
+    assert out["plan_status"] == "implemented" and "refused" not in out
+    assert env.record()["falsifier_broken"] is None
+
+
+def test_legacy_record_with_a_recorded_met_rejudge_reads_as_never_marked(env):
+    env.set_record(criterion=copy.deepcopy(MET), falsifier_broken=run_close.UNCHANGED)
+    _rejudge_record(env, {"status": "met", "observation": "now true"})
+
+    out = env.call()
+
+    assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented"
+    assert env.plan()["status"] == "implemented"
+    assert env.record()["falsifier_broken"] is None
+
+
+@pytest.mark.parametrize("shape", ["other-run", "unreadable", "no-script", "close-job-other-run"])
 def test_task_output_not_bound_to_the_run_refuses(env, shape):
     env.new_record()
     if shape == "unreadable":
         path = str(env.repo.parent / "absent.json")
+    elif shape == "close-job-other-run":
+        path = _close_job_output(env, "another-run")
     else:
         path = env.task_output()
         data = json.loads(open(path, encoding="utf-8").read())

@@ -2165,7 +2165,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-target <source>=<ref> ...]\n"
         "    [--research-question <text> ...]\n"
         "    [--research-destination repo|local-only]\n"
-        "    [--write <state/sizings/x.yaml> [--verbatim-turns A-B]]\n"
+        "    [--write <state/sizings/x.yaml> [--verbatim-turns A-B | --no-verbatims]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block)\n"
         "or: --xl-exit shape|roadmap|accept_multi_session --pm-quote <str>\n"
         "    [--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>\n"

@@ -47,7 +47,8 @@ def _bare_stem(text: Any) -> bool:
 
 
 def _digest(task_output_path: Optional[str], run_id: str) -> Optional[dict]:
-    """The supplied task output's ``next_action.params``, bound to this run by its script stem."""
+    """The supplied task output's ``next_action.params``, bound to this run by its script stem,
+    or by ``run_id`` when it names no script (a ``close_job``-kind action)."""
     if not task_output_path:
         return None
     from coordinator_core.ops.dispatch_emit.terminal_commit import _params_from_task_output
@@ -62,11 +63,14 @@ def _digest(task_output_path: Optional[str], run_id: str) -> Optional[dict]:
     script = found.get("script_path")
     stem = PurePosixPath(script.replace("\\", "/")).stem if isinstance(script, str) and script else None
     if stem is None:
-        raise CloseRefusal(
-            "task-output-run-mismatch",
-            f"{task_output_path!r} names no script_path, so it is not bound to run {run_id!r}. "
-            "Pass the run's own task-output file, or omit task_output_path.",
-        )
+        bound = found.get("run_id")
+        if not isinstance(bound, str) or not bound:
+            raise CloseRefusal(
+                "task-output-run-mismatch",
+                f"{task_output_path!r} names no script_path or run_id, so it is not bound to run {run_id!r}. "
+                "Pass the run's own task-output file, or omit task_output_path.",
+            )
+        stem = bound
     if stem != run_id:
         raise CloseRefusal(
             "task-output-run-mismatch",
@@ -100,7 +104,9 @@ def read_verdict(
 
     The first source with a judged status wins: the close-job record, the review record (only
     when it belongs to this plan), the supplied task output. An unmet verdict is replaced by a
-    recorded ``met`` re-judge. Nothing is defaulted.
+    recorded ``met`` re-judge. A record with no ``falsifier_broken`` key (written before the key
+    existed) reads as never marked only when such a re-judge governs the plan; otherwise the
+    mark stays unknown.
     """
     digest = _digest(task_output_path, run_id)
     inline = digest.get("inline_review") if digest else None
@@ -122,10 +128,9 @@ def read_verdict(
             "Pass task_output_path=<the run's task-output file>.",
         )
     rejudged_by = None
-    if criterion["status"] != "met":
-        replaced = _rejudge(repo_root, plan_id, review)
-        if replaced is not None:
-            criterion, rejudged_by = replaced
+    replaced = _rejudge(repo_root, plan_id, review)
+    if criterion["status"] != "met" and replaced is not None:
+        criterion, rejudged_by = replaced
     if "falsifier_broken" in record:
         marked = record["falsifier_broken"]
         known, falsifier = True, (list(marked) if isinstance(marked, list) else None)
@@ -133,6 +138,8 @@ def read_verdict(
         from coordinator_core.ops.dispatch_emit.terminal_commit import _falsifier_broken_tells
 
         known, falsifier = True, _falsifier_broken_tells(digest.get("falsifier_broken"), plan_path)
+    elif replaced is not None:
+        known, falsifier = True, None
     else:
         known, falsifier = False, None
     return Verdict(criterion, source, rejudged_by, known, falsifier)
