@@ -72,11 +72,12 @@ def test_plan_run_reply_carries_every_leg(env):
     out = _fire(env)
 
     close = out["close"]
-    assert close["applies"] is True and close["run_id"] == "run"
+    assert close["applies"] is True and close["run_id"] == "run" and close["kind"] == "plan-run"
     assert set(close["legs"]) == set(run_close.RUN_BOUND_LEGS) | set(run_close.SESSION_BOUND_LEGS)
     assert len(close["legs"]) == 11
     assert {leg["status"] for leg in close["legs"].values()} <= CONTRACT
-    for leg in ("review", "plan-reconciliation", "lessons", "completion-entry", "baton-ship"):
+    assert close["legs"]["review"]["status"] == "queued"
+    for leg in ("plan-reconciliation", "lessons", "completion-entry", "baton-ship"):
         assert close["legs"][leg]["status"] == "ran", (leg, close["legs"][leg])
     assert close["outstanding"] == []
     assert close["completion_entry"] and close["completion_entry"].startswith("archive/completed/")
@@ -89,11 +90,27 @@ def test_queued_legs_name_a_job_record_that_exists(env):
     close = _fire(env)["close"]
 
     queued = [leg for leg, r in close["legs"].items() if r["status"] == "queued"]
-    assert sorted(queued) == ["baton-drain", "orientation-refresh", "post-close"]
+    assert sorted(queued) == ["baton-drain", "orientation-refresh", "post-close", "review"]
     record = env["repo"] / run_close.close_job_path("run")
     assert json.loads(record.read_text(encoding="utf-8"))["legs"].keys() == set(queued)
     assert all(run_close.close_job_path("run") in close["legs"][leg]["detail"] for leg in queued)
     assert close["legs"]["memo-lifecycle"]["status"] == "not-applicable"
+
+
+def test_record_carries_attribution_and_settled_inline_legs(env):
+    out = _fire(env)
+
+    record = json.loads((env["repo"] / run_close.close_job_path("run")).read_text(encoding="utf-8"))
+    assert record["session_id"] == driver.SESSION_ID
+    assert record["plan_rel"] == driver.PLAN_REL
+    assert "source_memo" in record
+    assert record["claimed_batons"] == [driver.BATON_REL]
+    assert record["review_receipt"] == driver.PLAN_REL
+    assert record["run_base_sha"] == "a" * 40
+    assert record["terminal_sha"] == out["sha"]
+    assert record["completion_entry"] == out["close"]["completion_entry"]
+    assert set(record["settled"]) == {"completion-entry", "baton-ship"}
+    assert {v["status"] for v in record["settled"].values()} == {"ran"}
 
 
 def test_inline_legs_ride_the_coded_stamp_commit(env):
@@ -153,7 +170,7 @@ def test_commit_that_does_not_land_leaves_no_inline_file(env, monkeypatch):
     assert _entries(env["repo"]) == [] and baton.read_text(encoding="utf-8") == before
     assert list(env["outbox"].glob("*.yaml")) == []
     assert not (env["repo"] / run_close.close_job_path("run")).exists()
-    for leg in ("completion-entry", "baton-ship", "lessons", "baton-drain", "orientation-refresh", "post-close"):
+    for leg in ("completion-entry", "baton-ship", "lessons", "baton-drain", "orientation-refresh", "post-close", "review"):
         assert close["legs"][leg] == {"status": "failed", "detail": "coded-stamp commit did not land"}, leg
     assert set(close["outstanding"]) >= {"completion-entry", "baton-ship", "lessons"}
 
@@ -163,7 +180,7 @@ def test_job_that_does_not_start_reports_its_legs_failed(env, monkeypatch):
 
     close = _fire(env)["close"]
 
-    for leg in ("baton-drain", "orientation-refresh", "post-close"):
+    for leg in ("baton-drain", "orientation-refresh", "post-close", "review"):
         assert close["legs"][leg] == {"status": "failed", "detail": "close job did not start"}
     assert "post-close" in close["outstanding"]
 
@@ -199,7 +216,7 @@ def test_refusal_before_a_request_carries_no_close(env):
 def test_background_legs_match_the_job(env):
     from coordinator_core.ops.ceremony import close_background
 
-    assert terminal_commit._BACKGROUND_LEGS == close_background.BACKGROUND_LEGS
+    assert terminal_commit._BACKGROUND_LEGS == ("review", *close_background.BACKGROUND_LEGS)
 
 
 def test_no_leg_detail_names_a_machine_path(env):

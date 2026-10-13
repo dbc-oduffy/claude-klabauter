@@ -77,14 +77,14 @@ silent-inherit hole this module exists to close. Mirrors
 `enforce_agent_model_pin`'s own fail-closed stance on pin-resolution
 failure, applied to the parent-model question instead of the pin question.
 
-INHERITED IS REWRITTEN, NOT DENIED (PM ask, 2026-09-22). When the tier
-resolved at rung 3 is gated (or unresolved, per the fail-closed rule
-above), the dispatch is rewritten to `model: "sonnet"` via `updatedInput`
-and proceeds, with one advisory line. No one chose that tier, so there is no
-decision to gate. A deny here was always answered by an identical re-send
-with `model: "sonnet"` added. Rungs 1 and 2 still DENY: an explicit gated
-`model` param, or a gated non-`opus` frontmatter pin, is a choice the PM
-gates, and it must never be quietly downgraded.
+GATED RUNGS 1 AND 3 ARE REWRITTEN, NOT DENIED (PM asks, 2026-09-22 for
+rung 3, 2026-10-13 for rung 1). A gated tier resolved from an explicit
+`model` param or by inheritance is rewritten to `model: "sonnet"` via
+`updatedInput` and proceeds, with one advisory line. A deny at the default
+guard level degraded to an advisory and the Opus dispatch ran anyway; a
+rewrite cannot degrade. Rung 2 -- a gated non-`opus` frontmatter pin -- is a
+human-authored declaration, so it hard-denies at every guard level rather
+than being quietly overridden.
 
 PERSONA EXEMPTION -- UNCONDITIONAL ON THE TYPE'S OWN PIN, NOT ON WHAT WAS
 PASSED. If `resolve_model_pins()` shows this `subagent_type`'s own
@@ -154,7 +154,6 @@ from coordinator_core.hooks.block_unenumerated_agent_type import (
     resolve_subagent_type,
 )
 from coordinator_core.hooks.enforce_agent_model_pin import _clean_str
-from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.transcript_tail import resolve_last_assistant_model
 
 GUARD_NAME = "block-ungranted-opus-subagent"
@@ -169,8 +168,8 @@ _FORK_TYPE = "fork"
 
 _GATED_TIER_TOKENS = ("opus", "fable")
 
-#: What a gated INHERITED dispatch is rewritten to -- see module docstring
-#: "INHERITED IS REWRITTEN, NOT DENIED".
+#: What a gated rung-1 or rung-3 dispatch is rewritten to -- see module
+#: docstring "GATED RUNGS 1 AND 3 ARE REWRITTEN, NOT DENIED".
 _INHERITED_REWRITE_MODEL = "sonnet"
 
 def _is_gated_tier(model_id: Optional[str]) -> bool:
@@ -246,19 +245,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not gated:
         return None
 
-    if effective_model is None:
+    if passed_model is not None or effective_model is None:
+        source = "requested" if passed_model is not None else "inherited"
         return rewrite_input(
             "PreToolUse",
             {**tool_input, "model": _INHERITED_REWRITE_MODEL},
             f"MODEL SWITCHED: {subagent_type!r} runs as {_INHERITED_REWRITE_MODEL}, not "
-            f"the inherited {resolved_model!r} -- {_INHERITED_REWRITE_MODEL} fits most "
+            f"the {source} {resolved_model!r} -- {_INHERITED_REWRITE_MODEL} fits most "
             f"agent work. For Opus-grade judgment, dispatch a named persona.",
         )
 
-    return apply_guard_level(
-        GUARD_NAME,
-        deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note)),
-    )
+    return deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note))
 
 
 def main() -> int:

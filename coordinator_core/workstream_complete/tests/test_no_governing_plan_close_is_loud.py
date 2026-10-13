@@ -32,7 +32,7 @@ def _gate() -> wsc.SessionShapeGate:
 
 def _brief(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, decisions: dict) -> dict:
     gate = _gate()
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: gate)
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: gate)
     return wsc.brief(decisions=decisions, repo_root=tmp_path)
 
 

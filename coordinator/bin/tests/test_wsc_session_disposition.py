@@ -260,7 +260,9 @@ class TestPrimaryScan(unittest.TestCase):
             handoffs = repo / "state" / "handoffs"
             handoffs.mkdir(parents=True)
             for name in states:
-                (handoffs / name).write_text("---\nkind: session-handoff\n---\nbody\n")
+                (handoffs / name).write_text(
+                    f"---\nkind: session-handoff\nclaimed_by: {states[name].holder}\n---\nbody\n"
+                )
 
             def _fake(path, **_kwargs):
                 return states[Path(path).name]
@@ -310,6 +312,24 @@ class TestPrimaryScan(unittest.TestCase):
         self.assertEqual(result.adopted, ["state/handoffs/b-mine.md"])
         self.assertEqual(result.mirror_conflicts, ["state/handoffs/a-peer-baton.md"])
 
+    def test_a_file_that_cannot_name_the_session_is_never_resolved(self):
+        import tempfile
+        import unittest.mock as mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "state" / "handoffs").mkdir(parents=True)
+            (repo / "state" / "handoffs" / "peer.md").write_text("---\nclaimed_by: sid-peer\n---\n")
+            seen = []
+
+            def _spy(path, **_kwargs):
+                seen.append(Path(path).name)
+                return self._state(None, None)
+
+            with mock.patch.object(wsc, "resolve_claim_state", _spy):
+                self.assertEqual(wsc.primary_consumed_handoff_paths(repo, "sid-me"), [])
+            self.assertEqual(seen, [])
+
     def test_conflicted_candidate_is_absent_from_the_legacy_scalar_readers(self):
         import tempfile
         import unittest.mock as mock
@@ -317,7 +337,7 @@ class TestPrimaryScan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             (repo / "state" / "handoffs").mkdir(parents=True)
-            (repo / "state" / "handoffs" / "peer-baton.md").write_text("---\n---\n")
+            (repo / "state" / "handoffs" / "peer-baton.md").write_text("---\nclaimed_by: sid-me\n---\n")
             with mock.patch.object(
                 wsc, "resolve_claim_state", lambda p, **k: self._state("sid-me", "sid-peer")
             ):
@@ -2198,6 +2218,172 @@ class TestDeliverableIdJoinPreferredOverScopePath(unittest.TestCase):
                 repo, "sid-no-dlv-join", [(str(baton), "dead-sid")], diagnostics
             )
             self.assertIsNone(outcome)
+
+
+class TestInjectedSessionHistory(unittest.TestCase):
+    """Detectors handed a SessionHistory answer as their spawning form does and spawn nothing."""
+
+    @staticmethod
+    def _history(repo: Path, sid: str, floor: str):
+        from coordinator_core.workstream_complete import session_history
+
+        with unittest.mock.patch.object(session_history, "_resolve_floor", return_value=(floor, "")):
+            return session_history.read_session_history(repo, sid)
+
+    @staticmethod
+    def _floor(repo: Path) -> str:
+        return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    @staticmethod
+    def _no_spawn():
+        def _boom(*args, **kwargs):
+            raise AssertionError("a handed history must not spawn")
+
+        return unittest.mock.patch.multiple(
+            subprocess, run=_boom, Popen=_boom, check_output=_boom
+        )
+
+    @staticmethod
+    def _unresolved(sid: str):
+        from coordinator_core.workstream_complete.session_history import SessionHistory
+
+        return SessionHistory(sid, None, None, (), False, "floor-missing")
+
+    def _ship_handoff(self, repo: Path, name: str, sid: str, subject: str = "archive handoff") -> None:
+        archive_dir = repo / "archive" / "handoffs"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        (archive_dir / name).write_text("---\nclaimed_by: " + sid + "\npredecessor: some-sha\n---\nbody\n")
+        _git(repo, "add", f"archive/handoffs/{name}")
+        _commit_with_session_trailer(repo, sid, subject)
+
+    def test_detector_b_matches_spawning_form_and_spawns_nothing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            floor = self._floor(repo)
+            self._ship_handoff(repo, "2026-07-02_real.md", "sid-b")
+            self._ship_handoff(repo, "2026-07-01_swept.md", "sid-b", "fleet: archive 1 completed handoff(s)")
+            self._ship_handoff(repo, "2026-07-03_peer.md", "sid-peer")
+
+            old_notes: list[str] = []
+            old = wsc.detector_b_shipped_by_me(repo, "sid-b", wsc.git_merge_base(repo), old_notes)
+            history = self._history(repo, "sid-b", floor)
+            new_notes: list[str] = []
+            with self._no_spawn():
+                new = wsc.detector_b_shipped_by_me(repo, "sid-b", None, new_notes, history=history)
+
+            self.assertEqual(new, old)
+            self.assertEqual(new, "archive/handoffs/2026-07-02_real.md")
+            self.assertEqual(len(new_notes), len(old_notes))
+            self.assertEqual(len(new_notes), 1)
+
+    def test_all_committed_paths_matches_spawning_form_and_spawns_nothing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            floor = self._floor(repo)
+            for name, sid in (("a.py", "sid-c"), ("p.py", "sid-peer"), ("b.py", "sid-c")):
+                (repo / name).write_text("x\n")
+                _git(repo, "add", name)
+                _commit_with_session_trailer(repo, sid, f"add {name}")
+
+            old = wsc.all_committed_paths(repo, "sid-c", wsc.git_merge_base(repo))
+            history = self._history(repo, "sid-c", floor)
+            with self._no_spawn():
+                new = wsc.all_committed_paths(repo, "sid-c", None, history=history)
+
+            self.assertEqual(sorted(new), sorted(old))
+            self.assertEqual(sorted(new), ["a.py", "b.py"])
+
+    def test_resolve_disposition_matches_spawning_form_and_spawns_nothing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            floor = self._floor(repo)
+            self._ship_handoff(repo, "2026-07-02_real.md", "sid-r")
+
+            old = wsc.resolve_disposition(repo, "sid-r")
+            history = self._history(repo, "sid-r", floor)
+            with self._no_spawn():
+                new = wsc.resolve_disposition(repo, "sid-r", history=history)
+
+            self.assertEqual(tuple(new)[:2], tuple(old)[:2])
+            self.assertEqual(new.disposition, "predecessor-consumed")
+
+    def test_detector_c_matches_spawning_form_and_spawns_nothing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            floor = self._floor(repo)
+            touched = repo / "coordinator" / "bin" / "widget.py"
+            touched.parent.mkdir(parents=True)
+            touched.write_text("# widget\n")
+            _git(repo, "add", "coordinator/bin/widget.py")
+            _commit_with_session_trailer(repo, "sid-crashy", "touch widget")
+            stale = repo / "state" / "handoffs" / "2026-07-01_dead.md"
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text("predecessor: none\nscope:\n  - coordinator/bin/widget.py\n")
+            fake_cli = repo / "fake-session-claim-cli"
+            fake_cli.write_text("#!/bin/sh\nexit 0\n")
+
+            with unittest.mock.patch.object(
+                wsc, "list_stale_claim_handoffs", return_value=([(str(stale), "dead-sid")], 0)
+            ):
+                old = wsc.detector_c(repo, "sid-crashy", wsc.git_merge_base(repo), fake_cli, [])
+                history = self._history(repo, "sid-crashy", floor)
+                with self._no_spawn():
+                    new = wsc.detector_c(repo, "sid-crashy", None, None, [], history=history)
+
+            self.assertEqual(tuple(new), tuple(old))
+            self.assertEqual(new[1], "crash-recovery")
+            self.assertEqual(new.match_facts, old.match_facts)
+
+    def test_detector_c_liveness_never_falls_back_to_the_cli_spawn(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            history = self._history(repo, "sid-x", self._floor(repo))
+            real_import = __import__
+
+            def _no_engine(name, *a, **kw):
+                if name == "coordinator_core.session.stale_claims":
+                    raise ImportError(name)
+                return real_import(name, *a, **kw)
+
+            diagnostics: list[str] = []
+            with unittest.mock.patch("builtins.__import__", _no_engine), self._no_spawn():
+                outcome = wsc.detector_c(repo, "sid-x", None, None, diagnostics, history=history)
+
+            self.assertEqual(outcome[1], "indeterminate")
+            self.assertTrue(any("INDETERMINATE" in d for d in diagnostics))
+
+    def test_unresolved_history_degrades_and_never_spawns(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _commit_with_session_trailer(repo, "sid-u", "plain commit")
+            history = self._unresolved("sid-u")
+            diagnostics: list[str] = []
+            with self._no_spawn():
+                self.assertIsNone(
+                    wsc.detector_b_shipped_by_me(repo, "sid-u", None, diagnostics, history=history)
+                )
+                self.assertEqual(wsc.all_committed_paths(repo, "sid-u", None, history=history), [])
+                with unittest.mock.patch.object(
+                    wsc, "list_stale_claim_handoffs", return_value=([("p", "dead")], 0)
+                ):
+                    outcome = wsc.detector_c(repo, "sid-u", None, None, diagnostics, history=history)
+                resolution = wsc.resolve_disposition(repo, "sid-u", history=history)
+
+            self.assertEqual(outcome[1], "indeterminate")
+            self.assertEqual(resolution.disposition, "single-session")
+            self.assertTrue(any("session history unresolved" in d for d in resolution.diagnostics))
 
 
 if __name__ == "__main__":

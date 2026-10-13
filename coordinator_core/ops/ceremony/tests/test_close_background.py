@@ -13,6 +13,8 @@ from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 
+pytestmark = pytest.mark.spawns_process
+
 RUN = "run-1"
 
 
@@ -79,7 +81,7 @@ def test_only_legs_listed_queued_in_the_record_run(tmp_path):
 
 
 def test_budget_spent_records_the_remaining_legs_failed_not_run(tmp_path):
-    _queue(tmp_path)
+    _queue(tmp_path, legs=("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close"))
     clock = iter([0.0, 10.0, 500.0, 500.0, 500.0])
     ran = []
     runners = {name: (lambda ctx, n=name: (ran.append(n), LegResult("ran"))[1]) for name in cb.BACKGROUND_LEGS}
@@ -186,3 +188,58 @@ def test_op_is_registered_mutating_fire_and_forget_common_dir():
     assert OP_CLASSIFICATION["close.background"] is OpClass.MUTATING
     assert OP_COMPLETION_EVIDENCE["close.background"] is EvidenceClass.FIRE_AND_FORGET
     assert OP_SCOPES["close.background"] == "common_dir"
+
+
+def test_background_ledger_is_the_four_legs_without_review():
+    assert cb.BACKGROUND_LEGS == ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
+    assert "review" not in cb.DEFAULT_RUNNERS
+
+
+def _stub_launchers(monkeypatch):
+    class Stub:
+        @staticmethod
+        def refresh(root, timeout):
+            return None
+
+        @staticmethod
+        def run(ceremony, root):
+            return None
+
+    monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
+
+
+def test_post_close_launches_close_review_when_the_record_queues_review(tmp_path, monkeypatch):
+    _stub_launchers(monkeypatch)
+    _queue(tmp_path, legs=("review", "post-close"))
+    spawned = []
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.detached_spawn.spawn_detached",
+        lambda repo_root, script, args=None, env_extra=None: (spawned.append((script, list(args))), True)[1],
+    )
+    result = cb._post_close(_ctx(tmp_path, batons=("state/handoffs/h1.md",)))
+    assert len(spawned) == 1
+    script, args = spawned[0]
+    assert script.replace("\\", "/").endswith("ops/ceremony/close_review.py")
+    assert args[0] == RUN and args[1:3] == ["--root", str(tmp_path)]
+    assert json.loads(args[4]) == {"claimed_batons": ["state/handoffs/h1.md"]}
+    assert "close.review" in result.detail
+
+
+def test_post_close_does_not_launch_close_review_when_review_is_not_queued(tmp_path, monkeypatch):
+    _stub_launchers(monkeypatch)
+    _queue(tmp_path, legs=("post-close",))
+    spawned = []
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.detached_spawn.spawn_detached",
+        lambda *a, **k: spawned.append(a) or True,
+    )
+    cb._post_close(_ctx(tmp_path))
+    assert spawned == []
+
+
+def test_post_close_names_a_close_review_that_did_not_start(tmp_path, monkeypatch):
+    _stub_launchers(monkeypatch)
+    _queue(tmp_path, legs=("review", "post-close"))
+    monkeypatch.setattr("coordinator_core.ops.ceremony.detached_spawn.spawn_detached", lambda *a, **k: False)
+    assert "close.review not started" in cb._post_close(_ctx(tmp_path)).detail
+

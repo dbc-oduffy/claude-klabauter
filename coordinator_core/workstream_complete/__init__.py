@@ -251,6 +251,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -272,9 +273,6 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
-from coordinator_core.ops.session_commits import (
-    resolve_session_commits as _resolve_session_commits_primitive,
-)
 from coordinator_core.ops.review_brightline_gate import classify_surface
 from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
 from coordinator_core.ops.review_brightline_gate import _is_prose_bearing_path  # 2026-08-20: code_loc stops counting prose, same predicate as the brightline gate's mandate arms
@@ -286,7 +284,6 @@ from coordinator_core.coverage import (  # 2026-08-12: numstat rename-row resolu
     _resolve_numstat_row_path,
 )
 from coordinator_core.ops.review_brightline_gate import _PLANNING_LOC_WEIGHT  # review finding P2: same de-weight, same constant
-from coordinator_core.ops.review_brightline_gate import _untrailered_shas_in_range as _gate_untrailered_shas_in_range  # review finding: dedup with the gate's own census
 
 from coordinator_core.contract.decision_object.envelope import build_envelope, emit
 from coordinator_core.contract.decision_object.judgment import (
@@ -327,6 +324,9 @@ from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete import directives_session_hygiene
 from coordinator_core.workstream_complete import directives_spine_worklist
 from coordinator_core.workstream_complete import judgments as _judgments
+from coordinator_core.workstream_complete import review_scale_inputs as _review_scale_inputs
+from coordinator_core.workstream_complete import run_close_gate as _run_close_gate
+from coordinator_core.workstream_complete import session_history as _session_history
 
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
@@ -871,10 +871,36 @@ def _handoff_engagement_gap(
     )
 
 
-def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
+def _resolve_session_identity(mod: ModuleType, repo_root: Path) -> tuple[str, Optional[dict[str, Any]]]:
+    """`(sid, sid_source)` from the bin module's resolver; `sid` is "" when nothing named the session.
+
+    An env/ContextVar read: no spawn, no disk. `brief` calls it ahead of the history walk because the
+    walk is keyed on the sid; the gate calls it again for the provenance record it emits.
+    """
+    # The mirror of the bin script's own engine-copy degrade: that module is
+    # loaded BY PATH from whichever tree `claude_klabauter_bin` resolves to, so it can
+    # be OLDER than this engine just as easily as newer. `getattr` in both
+    # directions, matching how `detection` is read below.
+    with_source = getattr(mod, "resolve_session_id_with_source", None)
+    if with_source is None:
+        return mod.resolve_session_id(repo_root), None
+    resolved = with_source(repo_root)
+    return resolved.session_id, {
+        "source": resolved.source,
+        "warm": resolved.warm,
+        "pid": resolved.pid,
+    }
+
+
+def compute_session_shape_gate(
+    repo_root: Path, history: "Optional[_session_history.SessionHistory]" = None
+) -> SessionShapeGate:
     """Steps 0 of `/workstream-complete`: resolve this session's id and
     chain-terminal-vs-single-session disposition via the ported detector
     chain in `wsc-session-disposition.py`, folded into one gate fact.
+
+    `history` is the session's own `head_at_start..HEAD` window, read once by `brief`; with it the
+    detector chain spawns nothing. Without it the chain walks git as it always has.
 
     Raises `SessionIdentityUnresolved` when the resolver cannot name the
     calling session — the in-process twin of `_cmd_resolve`'s
@@ -886,22 +912,7 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     `single-session` and reads downstream as a clean close.
     """
     mod = _load_session_disposition_module()
-    # The mirror of the bin script's own engine-copy degrade: that module is
-    # loaded BY PATH from whichever tree `claude_klabauter_bin` resolves to, so it can
-    # be OLDER than this engine just as easily as newer. `getattr` in both
-    # directions, matching how `detection` is read below.
-    with_source = getattr(mod, "resolve_session_id_with_source", None)
-    if with_source is None:
-        sid = mod.resolve_session_id(repo_root)
-        sid_source = None
-    else:
-        resolved = with_source(repo_root)
-        sid = resolved.session_id
-        sid_source = {
-            "source": resolved.source,
-            "warm": resolved.warm,
-            "pid": resolved.pid,
-        }
+    sid, sid_source = _resolve_session_identity(mod, repo_root)
     if not sid:
         raise SessionIdentityUnresolved(
             "/workstream-complete cannot identify the calling session, so it will not "
@@ -914,7 +925,13 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
             "CLAUDE_CODE_SESSION_ID resolved. Re-run through the cold door, or set "
             "COORDINATOR_SESSION_ID to this session's own id."
         )
-    resolution = mod.resolve_disposition(repo_root, sid)
+    # The bin module is loaded by path and can predate the `history` kwarg (same skew as above).
+    accepts_history = "history" in inspect.signature(mod.resolve_disposition).parameters
+    resolution = (
+        mod.resolve_disposition(repo_root, sid, history=history)
+        if history is not None and accepts_history
+        else mod.resolve_disposition(repo_root, sid)
+    )
     disposition, consumed_handoff, diagnostics, consumed_handoff_paths = resolution
     detection = dict(getattr(resolution, "detection", None) or {})
     if consumed_handoff and _detector_c_attribution_is_uncorroborated(detection):
@@ -1626,7 +1643,7 @@ def build_directives(
     decisions: dict[str, Any],
     repo_root: Path,
     governing_plan: Optional[directives_lessons_plan.GoverningPlan] = None,
-    session_start_time: Any = None,
+    history: "Optional[_session_history.SessionHistory]" = None,
     partition_mandatory: bool = False,
 ) -> list[dict[str, Any]]:
     """Assembles the FULL mechanical directive spine — Convert #2's
@@ -1644,17 +1661,13 @@ def build_directives(
     second time per `brief()` call for a value that cannot differ, since
     both call sites pass identical arguments.
 
-    `session_start_time` (2026-08-08, docs/plans/2026-08-08-the-second-
-    close-re-measures-the-first-c.md): same "resolved once by the caller,
-    threaded through" pattern as `governing_plan` — `brief()` already
-    resolves it via `directives_memo_lifecycle.resolve_session_start_time`
-    for `_measure_session_review_scale_inputs`, so this parameter reuses
-    that SAME resolution rather than re-deriving it a second time. Used
-    ONLY to floor the mid-chain review-brightline-gate directive's range at
-    this session's own last-reviewed sha (`_resolve_review_brightline_
-    floor_kwargs` below) — `None` (every existing caller, including every
-    test that constructs `build_directives` directly) reproduces today's
-    exact `["--session-id", sid]` call, unchanged.
+    `history` (the session's `head_at_start..HEAD` window, read once by
+    `brief()`): same "resolved once by the caller, threaded through"
+    pattern as `governing_plan`. Floors the mid-chain review-brightline-gate
+    directive's range at this session's own last-reviewed sha
+    (`_resolve_review_brightline_floor_kwargs` below) and names the ship
+    stamp's sha. `None`, or an unresolved history, reproduces the plain
+    `["--session-id", sid]` call and no ship sha.
 
     `partition_mandatory` (D, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-
     wsc-review-trail-skips-silently.md): `brief()`'s own resolved
@@ -1784,7 +1797,7 @@ def build_directives(
     directives.extend(
         directives_memo_lifecycle.build_consumed_handoff_ship_directives(
             _consumed_ship_paths,
-            sha=_newest_owned_sha(repo_root, gate.sid) if _consumed_ship_paths else None,
+            sha=_newest_owned_sha(history) if _consumed_ship_paths else None,
         )
     )
     deletion_blocks_check_directive = build_deletion_blocks_check_directive(
@@ -1827,7 +1840,7 @@ def build_directives(
     # (state/kill-ledger.md K-007, 2026-08-19, PM ruling), so a chain
     # terminal falls back to the cheap session-scoped gate rather than to
     # no gate at all.
-    floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, session_start_time)
+    floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, history)
     if floor_kwargs is not None:
         review_brightline_gate_directive = directives_review.build_review_brightline_gate_directive(
             gate.sid, repo_root=repo_root, **floor_kwargs
@@ -4190,10 +4203,8 @@ def _narration_and_next_move(
 # docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md, C5).
 # Follows `backlog_grind_assemble.readers_mise`'s shipped shape (that
 # module's `_run_git_read_only`/`_measure_range`) rather than inventing a
-# new one — see `_measure_session_review_scale_inputs`'s own docstring for
-# why the base-resolution differs (session-start-time-anchored here, vs.
-# mise's named `start_sha` run record). This helper lives here, never in
-# `directives_review.py`, which carries a no-subprocess negative-spec.
+# new one. This helper lives here, never in `directives_review.py`, which
+# carries a no-subprocess negative-spec.
 # ---------------------------------------------------------------------------
 
 _REVIEW_SCALE_GIT_TIMEOUT = 15
@@ -4235,306 +4246,18 @@ def _run_git_read_only(
     return proc.stdout or ""
 
 
-#: Max SHAs per batched `git log --no-walk` trailer call — mirrors
-#: `coverage._TRAILER_LOOKUP_CHUNK`'s own reasoning (a 40-hex sha plus a
-#: separator is a few bytes; 300 per chunk leaves ample headroom under the
-#: Windows ~32K command-line ceiling).
-_SPINE_TRAILER_CHUNK = 300
-
-
-def _batch_resolve_commit_refs(root: Path, refs: list[str]) -> dict[str, str]:
-    """`{ref: full_commit_sha}` for every ref that resolves to a commit, in
-    ONE `git cat-file --batch-check` spawn instead of one `git rev-parse
-    --verify <ref>^{commit}` per ref.
-
-    `--batch-check` emits exactly one output line per input line, IN ORDER,
-    including for a ref it cannot resolve (`<input> missing` /
-    `<input> ambiguous`), so positional zip is safe. Peeling is done in the
-    input itself (`<ref>^{commit}`) — the same syntax the per-ref
-    `rev-parse --verify` used — and a row whose `%(objecttype)` is not
-    `commit` is dropped, which is exactly the set `rev-parse --verify
-    <ref>^{commit}` failed on.
-
-    NEGATIVE-SPEC: a ref carrying whitespace is dropped without being sent.
-    Git refnames forbid whitespace, so such a value is a hand-written
-    `disposition_ref` typo that `rev-parse --verify` already failed on —
-    and sending it would desynchronise the line-per-line zip this batching
-    depends on. Returns `{}` (never a partial map) on a spawn failure: the
-    caller's per-ref path treated an unresolvable ref as "skip this row",
-    which is the same disposition every ref gets here."""
-    if not refs:
-        return {}
-    ordered = [ref for ref in dict.fromkeys(refs) if not any(c.isspace() for c in ref)]
-    if not ordered:
-        return {}
-    out = _run_git_read_only(
-        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
-        root,
-        stdin_text="".join(f"{ref}^{{commit}}\n" for ref in ordered),
-    )
-    if out is None:
-        return {}
-    resolved: dict[str, str] = {}
-    for ref, line in zip(ordered, out.splitlines()):
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] == "commit":
-            resolved[ref] = parts[0]
-    return resolved
-
-
-def _batch_session_id_trailers(
-    root: Path, shas: list[str], key: str = "Session-Id"
-) -> dict[str, str]:
-    """`{sha: value}` for every sha carrying its own `key` trailer
-    (default `Session-Id`), via batched `git log --no-walk` over BARE SHA positionals
-    instead of one `git log -1` per sha.
-
-    Bare shas have no exclusion semantics, so batching them cannot silently
-    drop a commit the way combining `A..B` ranges into one `git log` would
-    (git applies exclusions GLOBALLY across ranges). `--no-walk` keeps the
-    output to the named commits rather than their whole ancestry.
-
-    NEGATIVE-SPEC: NOT `coverage._bulk_trailer_lookup`, whose argv carries
-    `--no-merges`. A merge commit dropped from that map reads here as
-    "untrailered", which would silently reclassify a peer-owned merge from
-    `conflicting` to `recovered` — the opposite of the attribution this
-    caller exists to preserve. A chunk that fails is absent from the map,
-    the same disposition the per-sha call's `None` produced."""
-    if not shas:
-        return {}
-    ordered = list(dict.fromkeys(shas))
-    trailers: dict[str, str] = {}
-    for i in range(0, len(ordered), _SPINE_TRAILER_CHUNK):
-        chunk = ordered[i : i + _SPINE_TRAILER_CHUNK]
-        out = _run_git_read_only(
-            [
-                "log",
-                "--no-walk",
-                f"--format=%H%x1f%(trailers:key={key},valueonly)",
-                *chunk,
-            ],
-            root,
-        )
-        if out is None:
-            continue
-        for line in out.splitlines():
-            if "\x1f" not in line:
-                continue
-            sha, _sep, trailer = line.partition("\x1f")
-            sha, trailer = sha.strip(), trailer.strip()
-            if sha and trailer:
-                trailers[sha] = trailer
-    return trailers
-
-
-def _resolve_base_sha_after_session_start(
-    root: Path, since_iso: str
-) -> tuple[Optional[list[str]], Optional[str]]:
-    """Base-sha resolution sub-step (Review: code-reviewer P3, 2026-08-08)
-    — the `git log --since=<since_iso> --format=%H --reverse` then `git
-    rev-parse <first-sha>~1` pipeline, now serving `_resolve_session_start_
-    sha` alone.
-
-    NEGATIVE-SPEC: this is a TIME window over the current branch, so on a
-    shared worktree its `shas` include every concurrent peer's commits.
-    `_measure_session_review_scale_inputs` was its second caller and no
-    longer is — it attributes commits by `Session-Id` trailer instead (see
-    `_session_owned_shas`). Do not re-point any session-scoped measurement
-    at this helper.
-
-    Returns `(shas, base)`: `shas` is `None` on a `git log` failure, else
-    the ordered list of commit shas at/after `since_iso` on the current
-    branch (possibly empty). `base` is the resolved parent-of-earliest-
-    commit sha, or `None` when `shas` is empty/`None`/`git rev-parse`
-    failed — deliberately NOT defaulted to `"HEAD"` or any other fallback
-    here, since the two callers disagree on what an empty/failed
-    resolution should fall back to (see each caller's own docstring)."""
-    commits_out = _run_git_read_only(["log", f"--since={since_iso}", "--format=%H", "--reverse"], root)
-    if commits_out is None:
-        return None, None
-    shas = [line.strip() for line in commits_out.splitlines() if line.strip()]
-    if not shas:
-        return shas, None
-    base_out = _run_git_read_only(["rev-parse", f"{shas[0]}~1"], root)
-    if base_out is None:
-        return shas, None
-    return shas, base_out.strip()
-
-
-def _map_window_covers_session(
-    window_start: "Optional[list[str]]", session_start_time: Any
-) -> bool:
-    """True only when the trailer map's `--since=` window provably contains
-    this session's entire commit history.
-
-    The proof is one comparison and no spawn: a session that STARTED at or
-    after the window opened cannot have committed before it, so every commit
-    it owns is inside the map. Anything else -- an older session, an
-    unresolvable window, an unresolvable/absent session start, a value that
-    will not parse -- returns False and sends the caller to the authoritative
-    walk.
-
-    FALSE IS THE SAFE ANSWER AND IS ALWAYS AVAILABLE. This gate exists to keep
-    a spawn, never to decide correctness: a wrong True silently truncates
-    review scope (see the call site), while a wrong False costs one `git log`.
-    Every ambiguous case therefore resolves False, and no exception from
-    parsing is allowed to propagate as a truthy result.
-    """
-    if not window_start or session_start_time is None:
-        return False
-    from datetime import datetime, timezone
-
-    def _parse(value: Any) -> "Optional[datetime]":
-        if isinstance(value, datetime):
-            dt = value
-        elif isinstance(value, str):
-            try:
-                dt = datetime.fromisoformat(value)
-            except ValueError:
-                return None
-        else:
-            return None
-        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-
-    opened = _parse(window_start[0])
-    started = _parse(session_start_time)
-    if opened is None or started is None:
-        return False
-    return started >= opened
-
-
-def _newest_owned_sha(root: Path, session_id: Optional[str]) -> Optional[str]:
-    """Newest commit this session authored, by `Session-Id` trailer; None when it has none or
-    attribution fails.
+def _newest_owned_sha(history: "Optional[_session_history.SessionHistory]") -> Optional[str]:
+    """Newest non-merge commit this session authored, from its history window; None when it has
+    none or the history is unresolved.
 
     TRAP: never HEAD. On a shared branch HEAD is routinely a peer's commit, and a ship stamp
     naming it attributes the deliverable to work this session never did. None lets
     `ship-handoff` derive the sha from the baton's own scope instead.
     """
-    shas = _session_owned_shas(root, session_id) if session_id else None
+    if history is None or not history.resolved:
+        return None
+    shas = [c.sha for c in history.own if not c.is_merge]
     return shas[-1] if shas else None
-
-
-def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
-    """This session's OWN commits, oldest-first, selected by `Session-Id`
-    commit trailer rather than by time window.
-
-    MERGE COMMITS ARE EXCLUDED (`no_merges=True` on the spawning `resolve_
-    session_commits` call) even when a merge carries this session's own
-    `Session-Id` trailer (the prepare-commit-msg hook stamps a merge the
-    session performs same as any other commit it authors). This function's
-    ONLY two callers, both in `_measure_session_review_scale_inputs`'s own
-    call chain, sum `added`/`deleted`/commit-count/surfaces over the
-    returned shas for a REVIEW-SCALE measurement — a `git show --numstat`
-    of a non-fast-forward merge collapses against its first parent only,
-    i.e. every file the OTHER (merged-in) branch touched, none of it this
-    session's authored work. Measured specimen: a 10-commit session set
-    whose merge of origin/main alone contributed 5624 of a reported 7884
-    code_loc, one of 10 `commit_slices` sending a reviewer at 5624 lines of
-    already-merged peer work. This is exclusively a MEASUREMENT selector —
-    `resolve_session_commits`'s `no_merges` default (`False`) is what every
-    ATTRIBUTION caller of that shared primitive (`handoff_close_origin_
-    stub`, `branch_resolution`, `quick_wrap_assemble`, `baton_assemble`)
-    keeps unchanged, since dropping a session-performed merge from an
-    attribution walk would make it wrongly look untouched. See that
-    primitive's own `no_merges` param docstring for the full split.
-
-    NEGATIVE SPEC -- THERE IS NO TRAILER-MAP FAST PATH HERE, AND ONE MUST NOT
-    BE ADDED. This function once took an optional `trailer_map`
-    (`directives_commit_tail.resolve_known_concurrent_paths`'s
-    `trailer_map_out`) and read its answer off that already-in-hand map to
-    save one `git log` spawn. Both the helper and the parameter are gone; the
-    saving was never collectable, for two independent reasons:
-
-      - COMPLETENESS. That map is built over `--since=<earliest LIVE PEER
-        start>` -- a window bounded by OTHER sessions' start times, unrelated
-        to when this session first committed. It can answer truthfully about
-        the window and silently about everything before it, and because it
-        did answer, no fallback fires. Measured live on session 8bb305c5: 6
-        owned commits, the map reported the 3 most recent, and the 3 it
-        dropped carried the code. `commit_slices` IS the review scope, so a
-        truncated sha list does not surface as a smaller number -- it
-        surfaces as a partitioned review that claims full coverage while the
-        dropped commits go unreviewed and unnamed.
-      - MERGES. That map is built `include_merges=True` for its own
-        attribution purpose, which `ops.session_commits ::
-        _batch_session_id_trailers` REQUIRES (a merge missing from the
-        trailer map reclassifies a peer-owned merge from `conflicting` to
-        `recovered`) -- so the producer cannot be narrowed. A `{sha:
-        trailer}` map carries no parent information, so a measurement caller
-        cannot reproduce this function's own `no_merges=True` off it without
-        the very spawn the fast path existed to avoid.
-
-    Both properties are pinned: `test_no_trailer_map_fast_path_on_the_review_
-    scale_path` asserts the helper and the parameter are both absent, and
-    `test_review_scope_resolution_does_not_take_the_trailer_map_fast_path`
-    reads this module's source at the `precomputed_session_shas` call site.
-
-    Return contract, stated precisely because the two zero-shaped outcomes
-    here are NOT the same fact and a caller must not conflate them:
-      - `None` — UNRESOLVABLE: any git failure (`resolve_session_commits`
-        raising `ValueError`/`RuntimeError`) or an absent `session_id`. The
-        measurement did not run to completion; nothing is known.
-      - `[]` — a CONFIRMED zero: the full-history trailer walk ran to
-        completion and matched no commits. This is a real, trustworthy
-        answer (not a window-bounded guess — see the `trailer_map` leg's
-        own docstring for the ONE path that legitimately cannot make this
-        distinction and returns `None` instead of `[]` for that reason),
-        and every caller below already branches on `is None` before ever
-        reading the list, so a confirmed `[]` is never misread as failure.
-    Never returns `[]` for the UNRESOLVABLE case -- that is the one
-    conflation this contract forbids, and the reason a caller must check
-    `is None`, never truthiness, before trusting an empty result as "this
-    session committed nothing".
-
-    Trailer attribution, not `--since`, is the only sound selector on a
-    shared branch: this repo's load norm puts a dozen-plus concurrent EMs on
-    one worktree (`docs/wiki/machine-load-norm.md`), so a time window over
-    the current branch sweeps every peer that happened to commit during this
-    session — measured live at 17 commits for one session's 1. It also drops
-    this measurement's dependence on `resolve_session_start_time` being
-    accurate, which it is not required to be: a start time resolving LATER
-    than the session's own earliest commit silently excluded that commit
-    before.
-
-    DELIBERATELY UNANCHORED at the end. The sibling selector in
-    `review_brightline_gate._compute_session_oracle_single` reads
-    `--grep=^Session-Id: <sid>$`, and that trailing `$` silently drops any
-    commit whose `Session-Id` line is not the message's final line —
-    verified live: a commit carrying `Session-Id` followed by
-    `Co-Authored-By`/`Commit-Token` did not match the anchored form and did
-    match this one, while its message bytes were clean (no CR, no trailing
-    space). That is an UNDER-count, the direction that quietly shrinks a
-    review scale, so the anchor is not restored here. A same-prefix collision
-    is not a real risk against fixed-length UUID session ids.
-
-    KNOWN over-match, accepted: `git log --grep` matches per line of the FULL
-    commit message, not the trailer block, so a body line quoting another
-    session's trailer verbatim also matches. Over-inclusion is the safe
-    direction for this function's callers.
-
-    C5 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5): derived
-    from `ops.session_commits :: resolve_session_commits` — the same ONE
-    `git log --numstat` primitive `branch_resolution.py`'s sibling walks
-    were migrated onto, using its unanchored `^Session-Id: <sid>` form
-    (this function's own pre-existing anchoring, unchanged — see the
-    primitive's module docstring for why unanchored was chosen for every
-    caller). This also closes the anchored/unanchored split against
-    `review_brightline_gate._compute_session_oracle_single`, which reads
-    this same primitive.
-
-    Every caller (`quick_wrap_assemble`, `baton_assemble`,
-    `handoff_close_origin_stub`, `branch_resolution`, and the review-scale
-    path in this module) takes this one authoritative walk."""
-    if not session_id:
-        return None
-    try:
-        commits = _resolve_session_commits_primitive(
-            root, session_id, sha_only=True, no_merges=True
-        )
-    except (ValueError, RuntimeError):
-        return None
-    return [c["sha"] for c in commits]
 
 
 #: C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
@@ -4558,7 +4281,7 @@ def _added_paths_from_numstat_blocks(blocks: "dict[str, str]") -> "Optional[froz
     `_session_created_paths`'s dedicated `git log --diff-filter=A --since=
     <start> --name-only` spawn. Trailer attribution is also strictly SAFER
     than that spawn's `--since` time window (see this module's own
-    `_session_owned_shas` docstring on why a window sweeps every peer
+    `session_history` docstring on why a window sweeps every peer
     committing in the same interval) — this is a like-for-like or better
     replacement, never a weaker one, whenever it can actually answer the
     question.
@@ -4750,45 +4473,6 @@ def _accumulate_code_loc_numstat(text: str) -> int:
     return total
 
 
-_COMMIT_MARKER_LINE_RE = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _split_per_commit_numstat(text: str, shas: list[str]) -> dict[str, str]:
-    """Splits ``text`` -- the output of a SINGLE `git show --numstat
-    --format=%H <shas>` call -- into one numstat block per commit, keyed by
-    sha. `%H` (rather than the empty `--format=` this module used before
-    A, docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md
-    C-followup) puts a bare-sha marker line at the head of each commit's
-    block; `git show` verified live to preserve the caller's own `shas`
-    order rather than re-sorting.
-
-    NO SECOND GIT SPAWN: this is a pure text split over the SAME stdout
-    `_measure_session_review_scale_inputs`'s committed leg already fetches
-    for `gross_loc`/`code_loc` — changing the format string from `""` to
-    `"%H"` does not add a spawn, and `_accumulate_numstat`/
-    `_accumulate_code_loc_numstat`'s numstat-row regex already ignores any
-    line that fails to match `added\\tdeleted\\tpath`, so the marker lines
-    this format now injects are silently skipped by both accumulators —
-    their totals are unaffected by this change.
-
-    `shas` bounds which marker lines are treated as commit boundaries
-    (membership-checked against the caller's own known-good set) rather
-    than trusting `_COMMIT_MARKER_LINE_RE` alone — a numstat PATH could
-    theoretically also be exactly 40 lowercase hex characters, however
-    unlikely; the membership check makes that ambiguity moot."""
-    known = set(shas)
-    blocks: dict[str, list[str]] = {}
-    current: Optional[str] = None
-    for line in text.splitlines():
-        if _COMMIT_MARKER_LINE_RE.match(line) and line in known:
-            current = line
-            blocks[current] = []
-            continue
-        if current is not None:
-            blocks[current].append(line)
-    return {sha: "\n".join(lines) for sha, lines in blocks.items()}
-
-
 def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], list[str]]]:
     """Partitions `paths` into (tracked, untracked). `git diff` is blind to
     untracked files, so an unpartitioned diff silently scores a session whose
@@ -4801,7 +4485,7 @@ def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], li
     failed listing under that fallback silently scored the untracked share of
     `paths` at zero LOC while this function still returned a real
     `(list, list)` pair, exactly the too-low-triple-standing-in-for-a-failure
-    shape `_measure_session_review_scale_inputs` forbids. The caller must
+    shape `review_scale_inputs.measure_review_scale_inputs` forbids. The caller must
     treat `None` here the same as any other measurement failure."""
     if not paths:
         return [], []
@@ -4878,7 +4562,7 @@ def _expand_untracked(
     compound against ONE bound rather than each getting a fresh one. When it
     is exhausted the walk stops early and returns what it found; the caller
     detects the shortfall off the counter and fails toward MORE review (see
-    `_measure_session_review_scale_inputs`).
+    `review_scale_inputs.measure_review_scale_inputs`).
 
     Negative-spec: a directory must never reach `_count_lines`. Opening one
     raises `OSError` (`IsADirectoryError` on POSIX, `PermissionError` on
@@ -4886,7 +4570,7 @@ def _expand_untracked(
     four-tuple to unresolved, so one peer's untracked scratch directory in the
     dirty set silently erases this session's own brightline and pushes the
     verdict toward reviewing LESS. That is the precise failure direction
-    `_measure_session_review_scale_inputs`'s own negative-spec forbids.
+    `review_scale_inputs.measure_review_scale_inputs`'s own negative-spec forbids.
     Observed live 2026-08-19 on a strang-03 close, against a peer's
     `state/dispatch-briefs/<brief>/`."""
     target = root / rel_path
@@ -4913,361 +4597,63 @@ def _expand_untracked(
 _REVIEW_BRIGHTLINE_DIRECTIVE_ID = "d-run-review-brightline-gate"
 
 
-def _untrailered_shas_in_range(root: Path, range_: str) -> Optional[list[str]]:
-    """Non-merge commits in `range_` whose message carries no `Session-Id:`
-    line — thin wrapper over `review_brightline_gate._untrailered_shas_in_range`
-    (the shared one-spawn `--invert-grep` census; review finding: this module
-    used to keep its own copy), adapting `root: Path` to that helper's `cwd`
-    param.
+def _census_window(
+    directives: list[dict[str, Any]], history: "_session_history.SessionHistory"
+) -> tuple[str, frozenset[str]]:
+    """`(range, shas)` the attribution census covers: the `review-brightline-gate` directive's
+    trailing `<floor>..<tip>` argv element when one was resolved, else the session's whole window.
 
-    `None` on any git failure (an absent `origin/main` included): a transport
-    failure is not evidence of a gap, and this census only ever withholds a
-    permissive verdict — the sibling gate degrades the same way."""
-    return _gate_untrailered_shas_in_range(range_, str(root))
-
-
-def _brightline_census_range(directives: list[dict[str, Any]]) -> str:
-    """The range the `review-brightline-gate` directive walks: its trailing
-    `<floor>..<tip>` argv element when one was resolved, else the gate's own
-    default, `merge-base(origin/main, HEAD)..HEAD` — the same commit set as
-    `origin/main..HEAD`, spelled so it costs no `merge-base` spawn, ONLY when
-    `HEAD` is a descendant of `origin/main` (the ordinary EM-branch shape,
-    ff-able with no divergent history). A rebase or divergence makes the two
-    ranges differ."""
+    The floor of a resolved element is a window commit (or the window's own floor), so the shas are
+    the window commits after it. A floor outside the window cannot be placed, so the whole window is
+    covered: wider, the direction that withholds a permissive verdict.
+    """
+    whole = f"{history.floor}..{history.head}"
+    every = frozenset(c.sha for c in history.window)
     for directive in directives:
-        if directive.get("id") == _REVIEW_BRIGHTLINE_DIRECTIVE_ID:
-            args = directive.get("args") or []
-            if len(args) == 3:
-                return str(args[2])
-    return "origin/main..HEAD"
+        if directive.get("id") != _REVIEW_BRIGHTLINE_DIRECTIVE_ID:
+            continue
+        args = directive.get("args") or []
+        if len(args) != 3:
+            break
+        floor_sha = str(args[2]).split("..", 1)[0]
+        shas = [c.sha for c in history.window]
+        if floor_sha in shas:
+            return str(args[2]), frozenset(shas[shas.index(floor_sha) + 1 :])
+        break
+    return whole, every
 
 
-def _dispatched_chunk_shas_missing_from_slices(
-    root: Path,
-    governing_plan,
-    slice_shas: "set[str]",
-) -> "tuple[list[dict[str, str]], list[dict[str, str]]]":
-    """Plan-spine chunk commits this session's workstream delivered that
-    `Session-Id` attribution did not reach.
+def _coded_chunk_refs(governing_plan) -> "tuple[list[tuple[str, str]], str]":
+    """`([(chunk_id, disposition_ref)], plan_deliverable_id)` for the governing plan's `coded` rows.
 
-    THE DEFECT THIS CLOSES. `_session_owned_shas` selects by `Session-Id`
-    trailer, which is the only sound peer-exclusion selector on a shared
-    branch (see its own docstring). But the trailer names the COMMITTER, and
-    a chunk committed by a git-commit-agent dispatched inside a background
-    Workflow is committed by that agent's own process: `commit_trailers.
-    _resolve_session_id` omits rather than guesses, so the commit lands with
-    NO trailer at all and drops out of the measurement silently. Measured
-    2026-08-31: `ed344842186b` (C3, 5 files, 309 insertions -- the largest
-    chunk of its workstream) was absent from `commit_slices` while the
-    EM-committed `1f5dc47b9a` minutes earlier on the same branch was present.
-    The gate still reported `resolved: true, partition_mandatory: true` over
-    the narrowed set, which is worse than refusing: the close reads fully
-    reviewed while the biggest diff reached no reviewer, and "slice, never
-    narrow" cannot defend against a narrowing nobody is told about.
-
-    The plan's own `## Tasks` spine is the authority the trailer is not. A
-    `disposition: coded` row's `disposition_ref` is this session's recorded
-    statement that the named sha delivered that chunk, so a resolved row
-    whose sha is missing from the slices is a measurement gap, not a peer's
-    commit.
-
-    Returns `(recoverable, conflicting)`.
-
-    - `recoverable` -- missing shas that exist and carry NO `Session-Id`
-      trailer. Unattributed is exactly the dispatched-committer signature,
-      and folding them in widens review scope, which is the safe direction.
-    - `conflicting` -- missing shas carrying a DIFFERENT session's trailer
-      and no `Deliverable-Id` trailer equal to the governing plan's (that
-      match is `recoverable`: the deliverable is the unit of review).
-      Never folded in: `disposition_ref` is hand-written and the
-      anti-self-attestation gate cannot catch a row pointing at a peer's
-      commit, so this is surfaced for a human rather than swept into scope
-      (and a foreign trailer inside a `--sha-range` is refused downstream
-      anyway).
-
-    A sha that does not resolve against this repo is skipped by both arms --
-    a typo in a hand-written `disposition_ref` is a plan defect, and the
-    spine worklist gate is what reports it.
+    The plan's `## Tasks` spine is the authority the `Session-Id` trailer is not: a chunk committed by
+    a dispatched commit agent lands with no trailer, and a `coded` row's `disposition_ref` is this
+    session's recorded statement that the sha delivered the chunk. `review_scale_inputs` matches the
+    refs against the session window. Disk reads only; `([], "")` when the plan is absent or its spine
+    cannot be located.
     """
     if governing_plan is None:
-        return [], []
+        return [], ""
     try:
         source = Path(governing_plan.path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError, AttributeError, TypeError):
-        return [], []
+        return [], ""
     result = load_rows(source)
     if result.status is not LocateStatus.LOCATED:
-        return [], []
-
-    recoverable: list[dict[str, str]] = []
-    conflicting: list[dict[str, str]] = []
-
-    # Three passes, TWO spawns, whatever the spine's length: gather the
-    # coded rows, resolve every `disposition_ref` in ONE `cat-file
-    # --batch-check`, then read every surviving sha's `Session-Id` trailer
-    # in ONE `git log --no-walk`. The per-row `rev-parse` + `git log -1`
-    # pair this replaces cost two processes per coded chunk, and process
-    # creation is the cost here, not the query.
+        return [], ""
     coded: list[tuple[str, str]] = []
     for row in result.rows:
         if str(row.get("disposition") or "").strip() != "coded":
             continue
         ref = str(row.get("disposition_ref") or "").strip()
         chunk_id = str(row.get("id") or "").strip()
-        if not ref or not chunk_id:
-            continue
-        coded.append((chunk_id, ref))
+        if ref and chunk_id:
+            coded.append((chunk_id, ref))
     if not coded:
-        return [], []
-
-    resolved_by_ref = _batch_resolve_commit_refs(root, [ref for _chunk, ref in coded])
-    candidates: list[tuple[str, str]] = []
-    for chunk_id, ref in coded:
-        full = resolved_by_ref.get(ref)
-        if not full or full in slice_shas:
-            continue
-        candidates.append((chunk_id, full))
-    if not candidates:
-        return [], []
-
-    owner_by_sha = _batch_session_id_trailers(root, [sha for _chunk, sha in candidates])
-    # A foreign Session-Id names who typed the commit; an exact Deliverable-Id
-    # match to the governing plan names what it delivered, and overrides it.
+        return [], ""
     from coordinator_core.ops.dispatch_emit.commit_request import plan_deliverable_id
 
-    plan_dlv = plan_deliverable_id(source)
-    delivered_by_plan: set[str] = set()
-    if plan_dlv and owner_by_sha:
-        dlv_by_sha = _batch_session_id_trailers(
-            root, list(owner_by_sha), key="Deliverable-Id"
-        )
-        delivered_by_plan = {sha for sha, dlv in dlv_by_sha.items() if dlv == plan_dlv}
-    for chunk_id, full in candidates:
-        owner = "" if full in delivered_by_plan else owner_by_sha.get(full, "")
-        entry = {"chunk": chunk_id, "sha": full}
-        if owner:
-            entry["committed_by"] = owner
-            conflicting.append(entry)
-        else:
-            recoverable.append(entry)
-    return recoverable, conflicting
-
-
-def _measure_session_review_scale_inputs(
-    root: Path,
-    session_start_time: Any,
-    session_id: str = "",
-    uncommitted_paths: Optional[list[str]] = None,
-    commit_slices_out: Optional[list[dict[str, Any]]] = None,
-    precomputed_session_shas: Optional[list[str]] = None,
-    shared_numstat_blocks: Optional[dict[str, str]] = None,
-) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
-    """Measures `(gross_loc, code_loc, commit_count, surface_count)` — the
-    four disk-derivable row-4 brightline inputs `decide_review_scale` reads
-    — over THIS session's own change set. Any element is `None` when
-    genuinely unresolvable (no `session_id`, no git, an unreadable range) —
-    never a zeroed quadruple standing in for a failed measurement, which
-    would read as a resolved, trivially-small diff and move the verdict
-    toward reviewing LESS (the same failure direction
-    `backlog_grind_assemble.readers_mise._measure_range`'s own docstring
-    guards against; this function mirrors its shape). A `(0, 0, 0, 0)`
-    returned after a SUCCESSFUL measurement is a different thing and is
-    honest: the session genuinely owns no commits and no dirty files.
-
-    `code_loc` (C5, 2026-08-11) is `gross_loc`'s noise-excluded sibling —
-    computed from the SAME already-fetched `git show`/`git diff --numstat`
-    text via `_accumulate_code_loc_numstat`, never a second git spawn. This
-    is the single production reachability point for `code_loc`: no other
-    caller in this module measures it, and `decide_review_scale`'s row 4
-    now reads it (C2) rather than `gross_loc`.
-
-    Both halves are session-scoped, because Step 6's review-scale question
-    is asked BEFORE the commit tail lands (formerly `d-run-wsc-tail`,
-    removed in the ceremony.wsc_tail kill, 2026-08-23) and a measurement
-    over landed commits alone would undercount the normal uncommitted close:
-
-    - COMMITTED work is summed over `_session_owned_shas` via `git show
-      --numstat`, per-commit. A `base..HEAD` range is wrong here for the
-      same reason a time window is: on a shared branch it spans every peer
-      commit interleaved between base and HEAD.
-    - An untracked path that is a DIRECTORY is expanded to the files beneath
-      it (`_expand_untracked`) before any line counting: `git status
-      --porcelain` reports a wholly-untracked directory as one entry, and
-      counting that entry as if it were a file collapses the whole
-      measurement to unresolved.
-    - UNCOMMITTED work is `git diff --numstat HEAD` restricted to the paths
-      `directives_memo_lifecycle.classify_session_authored_files` marks
-      session-authored (itself fed the Step 3.0 case-(b) exclusion set from
-      `directives_commit_tail.resolve_known_concurrent_paths`). Unrestricted,
-      this leg measured the entire shared dirty tree — 1775 LOC across 5
-      surfaces of live peers' in-flight files attributed to a session whose
-      real diff was 96 lines (bug `2026-08-10-workstream-complete-measures-
-      review-scal-a52c3f9d55d2`).
-
-    NEGATIVE-SPEC: never widen either leg back to a branch-scoped range or an
-    unrestricted worktree diff. A brightline computed over work this session
-    did not author does not merely over-review — it invites an EM to record a
-    review attestation covering another session's changes, which is the one
-    outcome the review trail exists to prevent.
-
-    `surface_count` reuses `review_brightline_gate.classify_surface` — the
-    same bucketing the `review-brightline-gate` CLI this verdict names.
-
-    ``commit_slices_out`` (A, docs/plans/2026-08-08-the-engine-asks-for-
-    facts-it-already-holds.md C-followup): when not ``None``, appended
-    IN PLACE with one ``{"sha": ..., "sha_range": "<sha>~1..<sha>", "diff_
-    loc": <int>}`` dict per session-owned commit, oldest-first, derived
-    from `_split_per_commit_numstat` over the SAME `git show` text this
-    function already fetches for `gross_loc`/`code_loc` (no second spawn).
-    This is a SIDE CHANNEL, not a return value — the four-tuple return
-    stays byte-identical so every existing caller/test is unaffected.
-    `precomputed_session_shas`/`shared_numstat_blocks` (C1, spawn-collapse
-    dispatch brief `.../C1.md`): when the caller already resolved this
-    session's own shas AND already spawned the union `show --numstat`
-    covering them (via `directives_commit_tail.resolve_known_concurrent_
-    paths`'s own `extra_shas`/`extra_numstat_out`), it hands both back here
-    instead of letting this function re-derive `shas` (a second `_session_
-    owned_shas` spawn) and re-fetch the committed-leg numstat text (a
-    second `git show --numstat`, spawn #6 pre-C1) — the whole point of the
-    collapse. `shared_numstat_blocks` is `{sha: numstat_text}`, the same
-    per-sha shape `_split_per_commit_numstat` used to derive from a single
-    combined blob; supplying it directly skips that split step too. Either
-    kwarg absent (the pre-C1 default) reproduces this function's original
-    behaviour exactly — its own `_session_owned_shas` call and its own
-    `git show --numstat` spawn, unchanged.
-
-    Left untouched (never appended to) when `shas` is `None`
-    (unresolvable) or the committed-leg `git show` itself fails — a caller
-    must read `commit_count is None` off this function's own return, not
-    an empty `commit_slices_out`, to tell "unresolvable" apart from
-    "resolved, zero commits" (mirrors the four-tuple's own None-vs-zero
-    contract). Uncommitted work is DELIBERATELY never appended here — it
-    has no sha and so cannot become a `sha_range` slice; a caller that
-    needs to know uncommitted work contributed LOC not covered by any
-    slice compares its own `code_loc` against the sum of `diff_loc` across
-    the appended entries."""
-    shas = precomputed_session_shas if precomputed_session_shas is not None else _session_owned_shas(root, session_id)
-    if shas is None:
-        return None, None, None, None
-    commit_count = len(shas)
-
-    gross_loc = 0
-    code_loc = 0
-    surfaces: set[str] = set()
-
-    if shas:
-        if shared_numstat_blocks is not None:
-            # C1: the caller already spawned the union `show --numstat`
-            # (via `directives_commit_tail.resolve_known_concurrent_paths`'s
-            # `extra_shas`/`extra_numstat_out`) and handed back this
-            # session's own slice of it pre-partitioned by sha -- no second
-            # spawn, no re-split needed (`per_sha_text` IS the per-sha shape
-            # `_split_per_commit_numstat` would otherwise derive).
-            per_sha_text = shared_numstat_blocks
-            committed = "\n".join(per_sha_text.get(sha, "") for sha in shas)
-        else:
-            # `--format=%H` (not the empty `--format=` this call used before A)
-            # -- puts a marker line at each commit's head so `_split_per_commit_
-            # numstat` can attribute LOC per commit from this SAME spawn; see
-            # that helper's own docstring for why the accumulators below are
-            # unaffected by the format change.
-            committed = _run_git_read_only(["show", "--numstat", "--format=%H", *shas], root)
-            if committed is None:
-                return None, None, None, None
-            per_sha_text = _split_per_commit_numstat(committed, shas)
-        gross_loc += _accumulate_numstat(committed, surfaces)
-        code_loc += _accumulate_code_loc_numstat(committed)
-        if commit_slices_out is not None:
-            for sha in shas:
-                # Item 36 (IBMDT-C13): per-commit reviewable SURFACE count,
-                # not just diff_loc -- a commit can carry a binary reviewable
-                # row (`_accumulate_numstat`'s own contract: 0 LOC, still a
-                # touched surface) or, at the other extreme, touch nothing
-                # but `state/` bookkeeping paths (`_is_ceremony_exhaust_path`/
-                # `_is_noise_path`, both already excluded by `_reviewable_row`)
-                # and so contribute a genuinely empty reviewable surface set
-                # even when its raw numstat is non-trivial. `zero_diff_
-                # commit_count`'s caller (`__init__.py`'s review-scale
-                # assembly, below) reads this alongside `diff_loc` so a
-                # bookkeeping-only commit is excluded from the commit
-                # brightline the same way a zero-LOC one already is.
-                _sha_surfaces: set[str] = set()
-                _accumulate_numstat(per_sha_text.get(sha, ""), _sha_surfaces)
-                commit_slices_out.append(
-                    {
-                        "sha": sha,
-                        # `~1`, never `^`: these slices are consumed by passing
-                        # them back as `--sha-range` argv to the trail-write CLI,
-                        # and cmd.exe eats a literal `^` in argv on Windows --
-                        # collapsing `<sha>^..<sha>` to `<sha>..<sha>`, an empty
-                        # range the op rejects with a bare `ValueError` that names
-                        # neither the caret nor the shell. The two spellings are
-                        # equivalent to git; only one survives the documented
-                        # consumer path on a first-class platform.
-                        "sha_range": f"{sha}~1..{sha}",
-                        "diff_loc": _accumulate_code_loc_numstat(per_sha_text.get(sha, "")),
-                        "reviewable_surface_count": len(_sha_surfaces),
-                    }
-                )
-
-    if uncommitted_paths is None:
-        uncommitted_paths = [
-            row["path"]
-            for row in directives_memo_lifecycle.classify_session_authored_files(
-                root,
-                session_start_time,
-                known_concurrent_paths=directives_commit_tail.resolve_known_concurrent_paths(
-                    root, session_id
-                ),
-            )
-            if row.get("session_authored")
-        ]
-
-    split = _split_tracked(root, uncommitted_paths)
-    if split is None:
-        return None, None, None, None
-    tracked, untracked = split
-    if tracked:
-        # `_split_tracked` returns
-        # `tracked` built from the caller's original, unnormalized paths
-        # (backslash-containing on Windows) -- normalizing it only for its
-        # OWN internal `ls-files` pathspec, not for the caller. Feeding that
-        # raw list into this second `git diff --numstat` pathspec reproduces
-        # the exact defect this fix was meant to close, one call site
-        # downstream. Normalize here, the same way `_split_tracked`
-        # normalizes before its own `ls-files` call.
-        normalized_tracked = [p.replace("\\", "/") for p in tracked]
-        dirty = _run_git_read_only(
-            ["diff", "--numstat", "HEAD", "--", *normalized_tracked], root
-        )
-        if dirty is None:
-            return None, None, None, None
-        gross_loc += _accumulate_numstat(dirty, surfaces)
-        code_loc += _accumulate_code_loc_numstat(dirty)
-    walk_budget = [_UNTRACKED_WALK_BUDGET]
-    for rel_path in untracked:
-        members = _expand_untracked(root, rel_path, budget=walk_budget)
-        if members is None:
-            return None, None, None, None
-        for member in members:
-            added = _count_lines(root / member)
-            if added is None:
-                return None, None, None, None
-            gross_loc += added
-            if _reviewable_row(member):
-                code_loc += added
-                surfaces.add(classify_surface(member))
-    if walk_budget[0] <= 0:
-        # An untracked tree too large to enumerate exactly IS a big diff, so
-        # the exhausted budget resolves the brightline rather than defeating
-        # it: the counted LOC is a floor, and it is raised to the row-4
-        # threshold so `decide_review_scale` trips instead of reading the
-        # truncation as a small diff. Returning `None` here would restore the
-        # exact fails-toward-less-review collapse this walk exists to remove.
-        gross_loc = max(gross_loc, directives_review._BRIGHTLINE_LOC)
-        code_loc = max(code_loc, directives_review._BRIGHTLINE_LOC)
-
-    return gross_loc, code_loc, commit_count, len(surfaces)
+    return coded, plan_deliverable_id(source) or ""
 
 
 # ---------------------------------------------------------------------------
@@ -5277,32 +4663,9 @@ def _measure_session_review_scale_inputs(
 # build_review_brightline_gate_directive`'s four dormant kwargs (landed
 # 2026-08-08 as a builder-side capability with no caller; this is that
 # caller). Lives here, not in `directives_review.py`, for the same reason
-# `_run_git_read_only`/`_measure_session_review_scale_inputs` do: that
-# module carries a no-subprocess, no-trail-record-fetch negative-spec.
+# `_run_git_read_only` does: that module carries a no-subprocess,
+# no-trail-record-fetch negative-spec.
 # ---------------------------------------------------------------------------
-
-
-def _git_is_ancestor(root: Path, ancestor_sha: str, descendant_sha: str) -> bool:
-    """True iff `ancestor_sha` is an ancestor of (or identical to)
-    `descendant_sha`, via `git merge-base --is-ancestor` under `root`.
-    Mirrors `wsc-coverage-gate-runner.py::_git_is_ancestor` in shape —
-    duplicated rather than imported, matching this module's own
-    `_run_git_read_only` precedent of not reaching into `coordinator/bin/`.
-    Any subprocess failure (including a non-zero "not an ancestor" exit)
-    resolves to `False`: this predicate must never trust a floor it could
-    not positively confirm."""
-    try:
-        proc = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=_REVIEW_SCALE_GIT_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
 
 
 def _session_own_range_from_disk(root: Optional[Path], sid: Optional[str]) -> Optional[str]:
@@ -5320,8 +4683,8 @@ def _session_own_range_from_disk(root: Optional[Path], sid: Optional[str]) -> Op
     - The floor is `.git/coordinator-sessions/<sid>/head_at_start`, written
       at session start, a concrete 40-hex sha.
     - The tip is the literal token `HEAD`, which `git log <sha>..HEAD`
-      resolves itself. Calling `_resolve_head_sha` here to get a concrete sha
-      would buy a `rev-parse` this range does not need.
+      resolves itself; a concrete sha would buy a `rev-parse` this range
+      does not need.
 
     Returns `None` -- and the advisory then stays silent, per D2 -- on any
     missing/unreadable file or malformed sha. Never raises, never spawns."""
@@ -5345,85 +4708,6 @@ def _is_concrete_sha_str(value: str) -> bool:
     if len(value) != 40:
         return False
     return all(c in "0123456789abcdefABCDEF" for c in value)
-
-
-def _resolve_head_sha(root: Path) -> Optional[str]:
-    """Resolve `HEAD` to its current concrete full sha via `git rev-parse`,
-    for `_resolve_review_brightline_floor_kwargs`'s `chain_tip_sha` — see
-    that function's own docstring for why this call exists and what it
-    trades away. Mirrors `_git_is_ancestor`'s subprocess shape (same
-    timeout, same `CREATE_NO_WINDOW` Windows-popup guard) — duplicated
-    rather than composed into a shared helper, matching this module's own
-    `_run_git_read_only`/`_git_is_ancestor` precedent of small, independent
-    git-subprocess call sites rather than a shared abstraction.
-
-    Returns `None` on ANY failure (detached-HEAD edge case that still
-    resolves fine in practice, a missing git binary, a non-repo root, a
-    timeout, non-zero exit, or empty/malformed stdout) — never raises, and
-    never fabricates a sha. The caller degrades to the literal `"HEAD"`
-    string on a `None` here (a memo miss, not a build-path failure) — see
-    `_resolve_review_brightline_floor_kwargs`'s own docstring for that
-    contract."""
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=_REVIEW_SCALE_GIT_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    sha = proc.stdout.strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
-        return None
-    return sha
-
-
-def _resolve_session_start_sha(root: Path, session_start_time: Any) -> Optional[str]:
-    """This session's own `session_start_sha` fallback for `resolve_mid_
-    chain_review_scope` — the same base-commit resolution idiom as
-    `_measure_session_review_scale_inputs` above (this session's first
-    commit at/after `session_start_time`, or that commit's parent when it
-    exists), now sharing that sub-step's actual implementation via
-    `_resolve_base_sha_after_session_start` (Review: code-reviewer P3,
-    2026-08-08) rather than duplicating the git-log/rev-parse pipeline a
-    second time — only the surrounding tuple/None-handling stays separate
-    per caller, since `_measure_session_review_scale_inputs` returns a
-    different (three-element) tuple shape and defaults `base` to `"HEAD"`
-    on zero commits, which this function must never do (see below). `None`
-    on any unresolvable step (`session_start_time` absent, a `git` failure,
-    OR — Review: code-reviewer (P2 #2) — zero commits landed since session
-    start)
-    — never a guessed sha, and never the literal `"HEAD"` token: that value
-    used to be returned here and could flow through to
-    `resolve_mid_chain_review_scope`'s own `session_start_sha` fallback,
-    which the caller (`_resolve_review_brightline_floor_kwargs`) then hands
-    to the gate builder as a real floor — emitting a well-formed but EMPTY
-    `HEAD..HEAD` range instead of the caller's byte-identical no-range
-    fallback. Returning `None` here instead makes
-    `_resolve_review_brightline_floor_kwargs` bail out via its own
-    `if session_start_sha is None: return None`, which is the safe,
-    already-tested no-range path."""
-    if session_start_time is None:
-        return None
-    since_iso = session_start_time.astimezone(timezone.utc).isoformat()
-    shas, resolved_base = _resolve_base_sha_after_session_start(root, since_iso)
-    if shas is None:
-        return None
-    if not shas:
-        # Returning the literal "HEAD" here
-        # propagated into `resolve_mid_chain_review_scope`'s fallback and
-        # could emit an empty `HEAD..HEAD` range instead of the caller's
-        # byte-identical no-range fallback. `None` makes
-        # `_resolve_review_brightline_floor_kwargs` bail out (its own
-        # `if session_start_sha is None: return None`), so the caller emits
-        # today's plain `["--session-id", sid]` call — the safe direction.
-        return None
-    return resolved_base
 
 
 def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[str]:
@@ -5509,8 +4793,12 @@ def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[s
     return [str(Path(fullpath)) for _basename, fullpath in entries]
 
 
+#: Shortest abbreviated sha a trail record's tip is matched by; shorter is ambiguous.
+_MIN_CHAIN_TIP_LEN = 7
+
+
 def _resolve_review_brightline_floor_kwargs(
-    root: Path, sid: str, session_start_time: Any
+    root: Path, sid: str, history: "Optional[_session_history.SessionHistory]"
 ) -> Optional[dict[str, Any]]:
     """Builder-supply for `directives_review.build_review_brightline_gate_
     directive`'s four dormant kwargs: this session's own prior review-trail
@@ -5519,10 +4807,13 @@ def _resolve_review_brightline_floor_kwargs(
     fixes — a session that closes twice had its second close scored over
     both).
 
+    The session floor is `history.floor` (its `head_at_start`), the tip is `history.head`, and a
+    trail record's tip is on the chain when it is a commit of the history window: no spawn.
+
     Returns `None` on the ordinary single-close path (AC2 — MUST stay
     byte-identical; this is nearly every close) and on ANY resolution
-    failure — no `session_start_time`, an unreadable trail-record store, a
-    `git` failure resolving `session_start_sha` — never a guessed floor.
+    failure — no history, an unresolved or empty window, an unreadable
+    trail-record store — never a guessed floor.
     The caller falls back to today's plain `session_id`-only call in every
     `None` case. Zero own trail records is itself the byte-identical AC2
     path, not a failure — both reach `None` the same way, deliberately: a
@@ -5545,7 +4836,7 @@ def _resolve_review_brightline_floor_kwargs(
     and `archive/review-trail/` unconditionally (2,778 files at ~0.07s when
     first measured; 4,337 files at ~420-430ms by 2026-08-21 — a 6x cost rise
     for 56% corpus growth, unexplained but no longer relevant once the scan
-    is filtered) on every mid-chain close where `session_start_time`
+    is filtered) on every mid-chain close where a session start
     resolved, filtering by `session_id` only AFTER the load. Now filters at
     the `os.scandir` name level FIRST, via `_list_review_trail_paths_for_
     root(root, sid_short=sid[:8])` — `coordinator_core.ops.review_trail_
@@ -5586,52 +4877,15 @@ def _resolve_review_brightline_floor_kwargs(
     an omitted record and one re-keyed to `sha_range_head=None` are
     indistinguishable to that loop.
 
-    `chain_tip_sha` (mid-chain gate memo fix, 2026-08-11 — see
-    `directives_review.record_gate_verdict_if_passed`'s own KEY-STALENESS
-    restriction paragraph): FORMERLY the literal string `"HEAD"`,
-    unconditionally, on the reasoning that a live symbolic tip keeps the
-    emitted range current through the gate's own later read. That reasoning
-    is still correct for the RANGE the gate walks — but it also meant the
-    resolved argv's tip half was NEVER a concrete sha, so
-    `record_gate_verdict_if_passed`'s `_is_concrete_sha` check never passed
-    for the floor-resolved path, and the whole gate-verdict memo this
-    module's own "Gate verdict memo" machinery exists to serve NEVER HIT on
-    this path — the floor-resolution machinery ran, paid its own git-spawn
-    cost, and built a directive whose memo could never fire.
+    `chain_tip_sha` is `history.head`, always a concrete sha: the gate-verdict memo
+    (`directives_review.record_gate_verdict_if_passed`) only keys a concrete tip. The range is
+    anchored to the HEAD read when `brief()` built the window, not the HEAD at the gate CLI's later
+    run; a commit landing between the two is outside this pass's walk and inside the next close's.
 
-    Now resolves `HEAD` to a CONCRETE, frozen sha via `_resolve_head_sha`
-    — LAZILY, only here, at the point the floor path is actually confirmed
-    taken (this session has own trail records AND a resolvable
-    `session_start_sha`) — never at this function's own entry, and never
-    unconditionally: `brief()` calls this on every mid-chain preview
-    (including every read-only `brief()` call a caller makes before ever
-    reaching `apply()`), so an unconditional git spawn here would tax the
-    read-only preview path this whole module's docstring holds to an
-    invocation budget. `_resolve_head_sha` failing (detached HEAD in a
-    shape that still errors, a git failure, a non-repo root) degrades to
-    the PRE-FIX literal `"HEAD"` string — never raises into the build path,
-    never fabricates a sha — which reproduces today's exact behavior for
-    that one resolution failure (a memo miss, not a build-path failure; see
-    that helper's own docstring).
-
-    Freezing the tip here is a DELIBERATE, DOCUMENTED behavior change, not
-    an accidental narrowing: the range the gate walks is now anchored to
-    whatever commit was HEAD at `brief()`/`build_directives()` BUILD time,
-    not whatever HEAD happens to be when the gate CLI itself later runs.
-    Those two differ whenever a commit lands between build and dispatch —
-    on this fleet's shared, highly concurrent branches that is a real,
-    not theoretical, gap. This is the INTENDED trade the mid-chain gate
-    memo needs to ever hit at all (a symbolic tip can never be memoized,
-    per `_is_concrete_sha`'s design) — a frozen anchor may omit a
-    just-landed commit from THIS pass's brightline walk, but that commit is
-    still covered by the SESSION's own trailer-scoped diff on the gate's
-    OWN default range if this floor path is never reached again, and by a
-    later close's own re-resolution otherwise. Not silently stumbled into:
-    flagged here, at the one call site that changed, for the next reader
-    who wonders why this differs from the read-at-gate-run-time default the
-    non-floored two-element argv shape (`["--session-id", sid]`) still
-    uses unchanged."""
-    if session_start_time is None:
+    A trail record's tip is on the chain when it is the window's floor or one of its commits
+    (matched by prefix, the spelling a record carries). A tip outside the window is not on this
+    session's chain, so it contributes no floor and the range stays wider."""
+    if history is None or not history.resolved or not history.window:
         return None
     paths = _list_review_trail_paths_for_root(root, sid_short=sid[:8])
     own_records: list[dict[str, Any]] = []
@@ -5646,27 +4900,25 @@ def _resolve_review_brightline_floor_kwargs(
     if not own_records:
         return None
 
-    session_start_sha = _resolve_session_start_sha(root, session_start_time)
-    if session_start_sha is None:
-        return None
-
     trail_records: list[dict[str, Any]] = []
     for record in own_records:
         tip, _reason = directives_review.resolve_trail_range_tip(record)
         if tip is not None:
             trail_records.append({"sha_range_head": tip})
 
-    # Lazy, floor-path-only resolution (see this function's own
-    # `chain_tip_sha` docstring paragraph above) — reached only once every
-    # earlier bail-out (`session_start_time is None`, no own trail records,
-    # unresolvable `session_start_sha`) has already NOT fired.
-    chain_tip_sha = _resolve_head_sha(root) or "HEAD"
+    on_chain = (history.floor, *(c.sha for c in history.window))
+    head = history.head
+
+    def _tip_on_chain(tip: str, chain_tip: str) -> bool:
+        return chain_tip == head and len(tip) >= _MIN_CHAIN_TIP_LEN and any(
+            sha.startswith(tip) for sha in on_chain
+        )
 
     return {
         "trail_records": trail_records,
-        "chain_tip_sha": chain_tip_sha,
-        "is_ancestor": lambda a, b: _git_is_ancestor(root, a, b),
-        "session_start_sha": session_start_sha,
+        "chain_tip_sha": head,
+        "is_ancestor": _tip_on_chain,
+        "session_start_sha": history.floor,
     }
 
 
@@ -5709,7 +4961,19 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     if root is None:
         raise TransportFailure("could not resolve a git worktree root")
 
-    gate = compute_session_shape_gate(root)
+    # The one history walk of this brief, keyed on the sid and floored at the session's own
+    # `head_at_start`: the session-shape gate, the review scale, the ship stamp and the mid-chain
+    # floor all read it. An unnamed session reads no history here; the gate refuses it by name,
+    # and a substituted gate's sid is read afterwards.
+    _sid, _ = _resolve_session_identity(_load_session_disposition_module(), root)
+    history = _session_history.read_session_history(root, _sid) if _sid else None
+    gate = (
+        compute_session_shape_gate(root, history=history)
+        if history is not None
+        else compute_session_shape_gate(root)
+    )
+    if history is None or history.sid != gate.sid:
+        history = _session_history.read_session_history(root, gate.sid)
 
     # C2 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
     # the C1 foreign-repo gate needs `gate.sid`, itself resolved from THIS
@@ -5737,13 +5001,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     governing_plan, governing_plan_source = directives_lessons_plan.resolve_governing_plan_with_source(
         root, decisions, handoff_governing_plan_field, handoff_deliverable_id, gate.sid
     )
-    # Resolved once, here, and threaded into BOTH `build_directives` (the
-    # mid-chain review-brightline-gate floor, 2026-08-08) and
-    # `_measure_session_review_scale_inputs` below — see `build_directives`'s
-    # own `session_start_time` docstring for why this replaces a second,
-    # later resolution of the same fact.
-    session_start_time = directives_memo_lifecycle.resolve_session_start_time(root, gate.sid)
-
     # AC1/AC2/AC4 — the seven row-4/5/6 inputs are caller-supplied `decisions`
     # facts, never assembler-computed (brief() is read-only and budgeted; see
     # this plan's Anti-scope on git subprocess calls). Absent means
@@ -5755,7 +5012,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # AC6/AC9 (2026-08-08-the-engine-asks-for-facts-it-already-holds, C5):
     # `gross_loc`/`commit_count`/`surface_count` are the three disk-
     # derivable row-4 brightline inputs — see
-    # `_measure_session_review_scale_inputs`. Backfilled ONLY when the
+    # `review_scale_inputs.measure_review_scale_inputs`. Backfilled ONLY when the
     # caller left them unresolved (`decisions.get(...)` already returning
     # `None`, the exact sentinel `decide_review_scale` reads as "not yet
     # resolved") — a caller-supplied value always wins. `code_loc` stays a
@@ -5764,20 +5021,11 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # `code_loc=None`: row 3 short-circuits on `executor_dispatched is
     # True` before `code_loc` is ever consulted, and computing a
     # code-vs-noise LOC split would be a NEW predicate this chunk does not
-    # own. `session_start_time` was already resolved once above (now also
-    # threaded into `build_directives` for the review-brightline-gate
-    # floor) and is reused here rather than re-resolved a second time.
-    # A caller-supplied `stage_paths` is the EM's own reviewed-and-narrowed
+    # own. A caller-supplied `stage_paths` is the EM's own reviewed-and-narrowed
     # set of this session's uncommitted files (jp-stage-paths-missing), so it
     # outranks re-deriving the same thing from the session-authored
     # predicate — which cannot see a MODIFIED pre-existing file at all.
     #
-    # Classified ONCE here and threaded to both consumers (the measurement
-    # below, and the `jp-stage-paths-missing` candidate set further down):
-    # `classify_session_authored_files` spawns one `git log` per dirty path,
-    # and on this repo's shared worktree the dirty set routinely runs to
-    # dozens of files, so a second caller doubles this op's whole spawn
-    # budget against its end-to-end invocation budget.
     # `stage_paths: []` is an ANSWER ("this session has no uncommitted
     # files"), not an absent one — distinguished by `is None`, never by
     # truthiness. Collapsing the two costs one `git log` spawn per dirty
@@ -5848,54 +5096,35 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # diff and argues for reviewing LESS, the one direction a missing
     # measurement may never argue for. `jp-review-scale` fires instead and
     # says the inputs are unresolved out loud.
-    precomputed_session_shas: Optional[list[str]] = None
-    if measurement_paths is not None:
-        precomputed_session_shas = _session_owned_shas(root, gate.sid)
-
-    # A (docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md
-    # C-followup, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-
-    # trail-skips-silently.md): trail-ready per-commit slices, collected as
-    # a side channel of the SAME measurement call below (no second git
-    # spawn) — see `_measure_session_review_scale_inputs`'s own
-    # `commit_slices_out` docstring paragraph. `None` (never `[]`) means
-    # "unresolvable", read off `measured_commit_count is None` below, since
-    # this list stays empty either way until that distinction is known.
-    review_scale_commit_slices: list[dict[str, Any]] = []
-    # CALL 1 DOES NOT ASK AT ALL -- it does not merely pass empty inputs.
-    # `_measure_session_review_scale_inputs` carries its OWN fallback for an
-    # absent `uncommitted_paths` (its `if uncommitted_paths is None:` branch),
-    # which rebuilds the same guess from `classify_session_authored_files` +
-    # `resolve_known_concurrent_paths` internally. Handing it `None` therefore
-    # does not retire the guess: it relocates it one frame down AND drops the
-    # shared-numstat reuse the caller used to supply, which measured as a
-    # REGRESSION from 4 to 6 git spawns -- caught by
-    # `test_gate_path_spawn_budget.py`, which is why that file asserts a
-    # process count rather than trusting a call site to have been removed.
     #
-    # So the call is gated, not merely fed. The quadruple stays `None` on
-    # call 1 -- never zeros; see the negative-spec above.
+    # CALL 1 DOES NOT ASK AT ALL: the measurement is gated on `measurement_paths`, not fed empty
+    # inputs. The quadruple stays `None` on call 1 -- never zeros; see the negative-spec above.
+    #
+    # Trail-ready per-commit slices (`commit_slices`) and the attribution gap come out of the same
+    # measurement; `None` (never `[]`) in `measured_commit_count` means "unresolvable", since the
+    # slice list is empty either way until that distinction is known.
+    measured: Optional[_review_scale_inputs.ReviewScaleInputs] = None
+    review_scale_commit_slices: list[dict[str, Any]] = []
     measured_gross_loc: Optional[int] = None
     measured_code_loc: Optional[int] = None
     measured_commit_count: Optional[int] = None
     measured_surface_count: Optional[int] = None
     if measurement_paths is not None:
+        chunk_refs, plan_dlv = _coded_chunk_refs(governing_plan)
+        measured = _review_scale_inputs.measure_review_scale_inputs(
+            root,
+            history,
+            measurement_paths,
+            chunk_refs=chunk_refs,
+            plan_deliverable_id=plan_dlv,
+        )
         (
             measured_gross_loc,
             measured_code_loc,
             measured_commit_count,
             measured_surface_count,
-        ) = _measure_session_review_scale_inputs(
-            root,
-            session_start_time,
-            gate.sid,
-            uncommitted_paths=measurement_paths,
-            commit_slices_out=review_scale_commit_slices,
-            precomputed_session_shas=precomputed_session_shas,
-            # `own_numstat_blocks` died with the call-1 guess that produced it.
-            # `None` is this parameter's documented "spawn as before" value and
-            # is correct on call 2, where the caller has named its own paths.
-            shared_numstat_blocks=None,
-        )
+        ) = measured.quadruple
+        review_scale_commit_slices = measured.commit_slices
 
     resolved_gross_loc = decisions.get("gross_loc")
     if resolved_gross_loc is None:
@@ -5903,7 +5132,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # C7 (2026-08-12, docs/plans/2026-08-12-review-mandate-guides-the-split.md):
     # `commit_count_scope` is resolved ONLY on the override path (a caller
     # supplied `decisions["commit_count"]` directly) — never on the measured
-    # path, where `_measure_session_review_scale_inputs` already guarantees
+    # path, where `measure_review_scale_inputs` already guarantees
     # session-scoping and a scope note would be redundant noise on every
     # ordinary close. `"unspecified"` (not `None`) when the override is
     # supplied with no accompanying `decisions["commit_count_scope"]` — the
@@ -5920,7 +5149,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         resolved_commit_count_scope = None
     else:
         # ACKNOWLEDGED AND DELIBERATE (review-integrator, 2026-08-12): this
-        # value is RECORDED, never VERIFIED against `_session_owned_shas` —
+        # value is RECORDED, never VERIFIED against the session's own commits —
         # the override still wins unconditionally regardless of what (or
         # whether) a scope is supplied. An inaccurate `commit_count_scope`
         # (dishonest, stale, or careless copy-paste) reproduces the original
@@ -5952,75 +5181,31 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # only-em-discretion.md, item 3): the count of this session's own commits
     # carrying a zero-line reviewable diff — `baton-assemble apply` scaffolds
     # and prose-only commits, both of which present nothing to a reviewer.
-    # Read off the slices `_measure_session_review_scale_inputs` already
-    # produced from the same `git show` text (no extra spawn). Left `None`
-    # when the measurement itself was unresolvable (`measured_commit_count is
-    # None` — the slices list stays empty either way, so it cannot be read as
-    # "resolved, zero") and when the caller overrode `commit_count`, since the
-    # slices then describe a different population than the override does.
-    # ATTRIBUTION GAP -- fold in chunk commits the `Session-Id` selector could
-    # not see, BEFORE the brightline is decided. A workflow-dispatched commit
-    # agent commits under its own process, so its commits carry no trailer and
-    # vanish from `review_scale_commit_slices`; deciding the scale over that
+    # Read off the measurement's slices. Left `None` when the measurement
+    # itself was unresolvable (`measured_commit_count is None` — the slices
+    # list stays empty either way, so it cannot be read as "resolved, zero")
+    # and when the caller overrode `commit_count`, since the slices then
+    # describe a different population than the override does.
+    #
+    # ATTRIBUTION GAP -- chunk commits the `Session-Id` selector could not see
+    # are folded in by the measurement itself, BEFORE the brightline is
+    # decided. A workflow-dispatched commit agent commits under its own
+    # process, so its commits carry no trailer; deciding the scale over the
     # narrowed set is how a close reports `resolved: true` across a scope
-    # missing its largest diff. See `_dispatched_chunk_shas_missing_from_
-    # slices` for the measured case. Recoverable (untrailered) shas join the
-    # measurement so the brightline counts the real workstream; conflicting
-    # (foreign-trailered) ones never do, and are surfaced on the payload
-    # instead.
-    review_scale_attribution_gap: dict[str, Any] = {"recovered": [], "conflicting": []}
-    if measured_commit_count is not None:
-        _recoverable, _conflicting = _dispatched_chunk_shas_missing_from_slices(
-            root, governing_plan, {s["sha"] for s in review_scale_commit_slices}
-        )
-        review_scale_attribution_gap = {
-            "recovered": _recoverable,
-            "conflicting": _conflicting,
-        }
-        # ONE `git show --raw --numstat` across every recovered sha, through
-        # the same producer the session-LOC and peer-paths consumers already
-        # share, instead of one `git show` per recovered commit. `--raw` rows
-        # begin with `:` and are skipped by both accumulators' numstat-row
-        # regex, so the composed format is a superset of what the per-sha
-        # `--numstat` call returned, not a different reading of it.
-        _recovered_blocks = directives_commit_tail.chunked_show_numstat_blocks(
-            root, [_e["sha"] for _e in _recoverable]
-        ) or {}
-        for _entry in _recoverable:
-            _numstat = _recovered_blocks.get(_entry["sha"])
-            if _numstat is None:
-                continue
-            _surfaces: set[str] = set()
-            measured_gross_loc = (measured_gross_loc or 0) + _accumulate_numstat(_numstat, _surfaces)
-            _entry_code_loc = _accumulate_code_loc_numstat(_numstat)
-            measured_code_loc = (measured_code_loc or 0) + _entry_code_loc
-            measured_commit_count += 1
-            review_scale_commit_slices.append(
-                {
-                    "sha": _entry["sha"],
-                    "sha_range": f"{_entry['sha']}~1..{_entry['sha']}",
-                    "diff_loc": _entry_code_loc,
-                    "reviewable_surface_count": len(_surfaces),
-                    "attributed_via": f"plan-spine {_entry['chunk']} (no Session-Id trailer)",
-                }
-            )
-        if _recoverable:
-            review_scale_commit_slices.sort(key=lambda s: s["sha"] not in {e["sha"] for e in _recoverable})
+    # missing its largest diff. Recoverable (untrailered) shas join the
+    # measurement; conflicting (foreign-trailered) ones never do, and are
+    # surfaced on the payload instead.
+    review_scale_attribution_gap: dict[str, Any] = (
+        measured.attribution_gap if measured is not None else {"recovered": [], "conflicting": []}
+    )
 
     # Item 36 (IBMDT-C13): a commit whose touched paths are ALL under
     # `state/` bookkeeping directories, or otherwise carry zero reviewable
-    # surface (`reviewable_surface_count == 0` -- see the per-sha slice
-    # builder above), is excluded from the commit brightline the same as a
-    # genuine zero-LOC commit already was. `.get(..., 0)` treats a slice
-    # that never got this field populated (none exist today; defensive only)
-    # as having a surface, never as bookkeeping-eligible by omission.
+    # surface, is excluded from the commit brightline the same as a genuine
+    # zero-LOC commit already was.
     zero_diff_commit_count: Optional[int] = None
     if measured_commit_count is not None and decisions.get("commit_count") is None:
-        zero_diff_commit_count = sum(
-            1
-            for _slice in review_scale_commit_slices
-            if _slice["diff_loc"] == 0 or _slice.get("reviewable_surface_count", 1) == 0
-        )
+        zero_diff_commit_count = measured.zero_diff_commit_count
 
     review_scale_decision = directives_review.decide_review_scale(
         gross_loc=resolved_gross_loc,
@@ -6033,6 +5218,15 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         chain_disposition=gate.disposition,
         commit_count_scope=resolved_commit_count_scope,
     )
+    # A measurement that ran against an unresolved history names the history's reason: the
+    # missing input is the session's `head_at_start`, never a value the caller can supply.
+    if measurement_paths is not None and not history.resolved and not review_scale_decision.resolved:
+        review_scale_decision = review_scale_decision._replace(
+            reason=(
+                f"{review_scale_decision.reason} [session history unresolved: {history.reason}; "
+                "the committed leg needs this session's head_at_start]"
+            )
+        )
 
     # D (same spec backlink as A above): `directives = build_directives(...)`
     # could not run any earlier than this point — it needs the RESOLVED
@@ -6045,7 +5239,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         decisions,
         root,
         governing_plan=governing_plan,
-        session_start_time=session_start_time,
+        history=history,
         partition_mandatory=bool(review_scale_decision.partition_mandatory),
     )
 
@@ -6059,11 +5253,9 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         and measured_commit_count is not None
         and decisions.get("commit_count") is None
     ):
-        census_range = _brightline_census_range(directives)
-        untrailered = _untrailered_shas_in_range(root, census_range)
-        if untrailered is not None:
-            recovered_shas = {e["sha"] for e in review_scale_attribution_gap["recovered"]}
-            unattributed = [sha for sha in untrailered if sha not in recovered_shas]
+        census_range, census_shas = _census_window(directives, history)
+        if measured.unattributed_shas is not None:
+            unattributed = [sha for sha in measured.unattributed_shas if sha in census_shas]
             review_scale_attribution = {
                 "range": census_range,
                 "attributed_commits": len(review_scale_commit_slices),
@@ -6320,7 +5512,17 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
                 build_spec_dispatch_plan_unreconciled_judgment_point(_unreconciled_plan)
             )
 
-    _asked_judgment_points, _reported_judgment_points = partition_reportable(judgment_points, directives)
+    run_close_payload = _run_close_gate.compute_run_close_gate(
+        root,
+        gate.sid,
+        directives,
+        governing_plan_rel=governing_plan.rel if governing_plan else None,
+        since=_run_close_gate.session_birth_floor(root, gate.sid) if gate.sid else None,
+    )
+
+    _asked_judgment_points, _reported_judgment_points = partition_reportable(
+        judgment_points, _run_close_gate.undischarged(directives)
+    )
     # `partition_reportable` classifies by directive-membership alone, with
     # no opinion on `recommendation` presence -- an untrusted-gate point
     # (`recommendation=None`, e.g. `jp-session-shape` and `jp-review-scale`'s
@@ -6396,7 +5598,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # payload, additive to `review_scale_decision._asdict()` — never a
     # replacement key, and never emitted when the underlying measurement
     # was unresolvable (`measured_commit_count is None`; see
-    # `_measure_session_review_scale_inputs`'s own None-vs-zero contract).
+    # `measure_review_scale_inputs`'s own None-vs-zero contract).
     # A resolved-but-empty list (session owns zero commits) IS emitted —
     # that is an honest answer, not a failure. `scope_kind` is deliberately
     # NOT set here: this helper cannot tell a plan-file-only commit from a
@@ -6514,6 +5716,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "review_scale": review_scale_payload,
             "repo_identity": repo_identity_gate,
             "completion_verdict": completion_verdict_payload,
+            "run_close": run_close_payload,
             "plugin_cli_reachability": _plugin_cli_payload,
         },
         directives=directives,

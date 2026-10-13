@@ -13,7 +13,7 @@ Spec backlink: `_expand_untracked`'s own docstring — an untracked DIRECTORY
 must never reach `_count_lines`, which opens its argument as a file, converts
 the resulting `OSError` to `None`, and collapses the whole review-scale
 four-tuple to unresolved. That failure direction (less review, not more) is
-what `_measure_session_review_scale_inputs`'s negative-spec forbids.
+what `review_scale_inputs.measure_review_scale_inputs`'s negative-spec forbids.
 """
 
 from __future__ import annotations

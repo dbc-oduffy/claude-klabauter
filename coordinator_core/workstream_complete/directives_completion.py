@@ -211,6 +211,8 @@ _KEY_GOVERNING_PLAN_PATH = "governing_plan_path"
 #: The completion entry's authored title, written into the entry
 #: `d-complete-entry` scaffolds by `apply._fill_completion_entry_surfaces`.
 _KEY_TITLE = "title"
+#: One written decision per review note; the close commit refuses until each note has one.
+_KEY_REVIEW_NOTE_DECISIONS = "review_note_decisions"
 
 FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_GOVERNING_PLAN_SLUG,
@@ -220,6 +222,7 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_FOLD_DESC,
     _KEY_GOVERNING_PLAN_PATH,
     _KEY_TITLE,
+    _KEY_REVIEW_NOTE_DECISIONS,
 )
 
 #: `status:` values a run-report sidecar's frontmatter carries that mark it
@@ -543,7 +546,7 @@ def build_directives(
 # before the close can commit.
 # ---------------------------------------------------------------------------
 
-REVIEW_NOTE_DECISIONS_KEY = "review_note_decisions"
+REVIEW_NOTE_DECISIONS_KEY = _KEY_REVIEW_NOTE_DECISIONS
 _REVIEW_NOTE_VERDICTS = frozenset({"applied", "rejected", "backlogged"})
 
 

@@ -202,7 +202,7 @@ def _all_emittable_directive_clis(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         for governing_plan_slug in (False, True):
             for review_present in (False, True):
                 for lesson_reachable in (False, True):
-                    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, gate=gate: gate)
+                    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None, gate=gate: gate)
                     monkeypatch.setattr(
                         wsc,
                         "_lesson_capture_reachable",

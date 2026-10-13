@@ -1,20 +1,11 @@
-"""test_gate_path_spawn_budget — AC1's own standing gate for `workstream_
-complete.brief()`'s git-spawn budget, closed here for the first time: no
-spawn-count assertion existed anywhere in `coordinator_core/workstream_
-complete/` before this file (C4, docs/plans/2026-08-26-the-gate-paths-six-
-spawns-collapse-to-four.md § C4). AC1 was previously an OBSERVED number
-(measured live: 6 -> 5 after C1, still 5 after C2's net-zero reorder),
-never an asserted one -- this file is what turns it into a red-on-regress
-gate rather than a claim a future change can silently invalidate.
+"""test_gate_path_spawn_budget — the standing gate for `workstream_
+complete.brief()`'s process budget: git spawns counted, never observed.
 
-Spec backlink: docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-
-to-four.md, chunk C4. C4 folded this session's own commit shas into the
-SAME `show --numstat` union `resolve_known_concurrent_paths` already
-spawns for peer attribution (`directives_commit_tail._committed_paths_
-for_sids`'s new `this_session_id`/`own_session_numstat_out` pair), closing
-the circular dependency C2's reorder introduced without reintroducing a
-per-item spawn. AC1 is THIS file's bar: `brief()` at most 4 git spawns for
-a live call, asserted by process count, not eyeballed off a comment.
+`brief()` reads one `SessionHistory` (one `git log`, floored at the session's
+`head_at_start`) and threads it to the session-shape gate, the review scale,
+the ship stamp and the mid-chain floor. The unpatched-gate test below drives a
+live call and asserts at most 2 git spawns, at most 1 history walk and no
+non-git process; with `head_at_start` absent it asserts zero walks.
 
 Counts GIT spawns specifically (argv[0] basename `git`/`git.exe`), not
 every subprocess `brief()` might reach -- an unrelated non-git spawn on
@@ -27,10 +18,9 @@ internally, so patching both would double-count every spawn issued via
 therefore the only vantage point that counts each real process exactly
 once regardless of which calling idiom a given module uses.
 
-ASSERTS THE BUDGET, NOT THE ARGV (per this chunk's own brief): no
-assertion here pins an exact command string. A later change that costs no
-spawn (a new flag, a reordered arg) must not turn this file red -- only a
-NEW spawn crossing the 4-call ceiling should.
+ASSERTS THE BUDGET, NOT THE ARGV: no assertion here pins an exact command
+string. A later change that costs no spawn (a new flag, a reordered arg) must
+not turn this file red -- only a NEW spawn crossing the ceiling should.
 
 Run: python3 -m pytest coordinator_core/workstream_complete/test_gate_path_spawn_budget.py -q
 
@@ -39,10 +29,8 @@ Negative-spec:
       judgment/decision `brief()` returns -- `test_workstream_complete.py`
       already owns that surface. This file owns exactly one property: git
       process count.
-    - Does NOT reintroduce a per-item spawn to hit the budget, and does
-      NOT stub out `_committed_paths_for_sids`/`resolve_known_concurrent_
-      paths` to fake a low count -- the whole point is a LIVE call through
-      the real spawn-collapse path this chunk landed.
+    - Does NOT stub out the history reader or the session-shape gate in the
+      budget test to fake a low count -- the whole point is a LIVE call.
 """
 
 from __future__ import annotations
@@ -111,7 +99,7 @@ def _patch_gate_with_sid(monkeypatch: pytest.MonkeyPatch, sid: str) -> None:
     monkeypatch.setattr(
         wsc,
         "compute_session_shape_gate",
-        lambda root: wsc.SessionShapeGate(
+        lambda root, history=None: wsc.SessionShapeGate(
             sid=sid,
             disposition="single-session",
             consumed_handoff="",
@@ -122,62 +110,91 @@ def _patch_gate_with_sid(monkeypatch: pytest.MonkeyPatch, sid: str) -> None:
     )
 
 
-def test_brief_git_spawn_budget_is_at_most_four(repo, monkeypatch):
-    """AC1: one live `brief()` call, git spawns counted (not observed),
-    ceiling asserted at 4 -- see this file's own module docstring for the
-    row's own accounting of what those 4 spawns are (#1 trailer map, one
-    merged numstat, #3 diff-filter=A, #4 status).
+def _wrap_popen_for_all_spawns(monkeypatch: pytest.MonkeyPatch) -> "list[list[str]]":
+    calls: "list[list[str]]" = []
+    real_init = subprocess.Popen.__init__
 
-    Seeds this session's own `.git/coordinator-sessions/<sid>/` claim dir
-    (`directives_memo_lifecycle.resolve_session_start_time`'s FIRST rung,
-    read via a bare `stat()`, zero git spawns) so this test exercises the
-    production fast path every real session actually takes -- a session
-    without a claim dir falls through that function's own 5-candidate
-    `merge-base`/`log` ladder (`@{upstream}`, `origin/main`, `origin/
-    master`, `main`, `master`), which is orthogonal pre-existing cost this
-    row's brief does not touch and does not license re-measuring here.
+    def _fake_init(self, args, *a, **kw):
+        argv = args if isinstance(args, (list, tuple)) else [args]
+        calls.append([str(x) for x in argv])
+        return real_init(self, args, *a, **kw)
 
-    C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
-    § C5, Defect 1): the fixture MUST reach the optimised path, or this
-    assertion passes for the wrong reason -- against a `tmp_path` fixture
-    with no peer session and no session-owned commits,
-    `resolve_known_concurrent_paths` short-circuits before spawning at all
-    and `_session_owned_shas` never reaches `resolve_session_commits`, so
-    NONE of C1/C2/C4's spawn-collapse code is on the asserted path. Seeded
-    here: one PEER session claim dir with a commit carrying ITS OWN
-    `Session-Id:` trailer (so the bulk trailer walk + peer numstat spawn
-    actually run), and two commits carrying THIS session's own sid (so
-    `_session_owned_shas`/the committed-LOC leg have real data to fold)."""
-    sid = "22222222-2222-2222-2222-222222222222"
-    peer_sid = "33333333-3333-3333-3333-333333333333"
+    monkeypatch.setattr(subprocess.Popen, "__init__", _fake_init)
+    return calls
+
+
+def _is_git(argv: "list[str]") -> bool:
+    return bool(argv) and Path(argv[0]).name in ("git", "git.exe")
+
+
+def _seed_session_with_peer(repo: Path, sid: str, peer_sid: str, *, with_floor: bool) -> None:
+    """Own + peer commits with trailers; `head_at_start` is the seed commit when `with_floor`."""
     claim_dir = repo / ".git" / "coordinator-sessions" / sid
     claim_dir.mkdir(parents=True)
-    peer_claim_dir = repo / ".git" / "coordinator-sessions" / peer_sid
-    peer_claim_dir.mkdir(parents=True)
+    (repo / ".git" / "coordinator-sessions" / peer_sid).mkdir(parents=True)
+    if with_floor:
+        (claim_dir / "head_at_start").write_text(
+            _git("rev-parse", "HEAD", cwd=repo).stdout.strip(), encoding="utf-8"
+        )
 
-    def _commit_with_trailer(filename: str, content: str, committing_sid: str) -> str:
+    def _commit_with_trailer(filename: str, content: str, committing_sid: str) -> None:
         (repo / filename).write_text(content, encoding="utf-8")
         _git("add", filename, cwd=repo)
-        _git(
-            "commit", "-qm", f"work\n\nSession-Id: {committing_sid}", cwd=repo
-        )
-        return _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+        _git("commit", "-qm", f"work\n\nSession-Id: {committing_sid}", cwd=repo)
 
     _commit_with_trailer("peer-file.txt", "peer\n", peer_sid)
     _commit_with_trailer("own-file-1.txt", "own1\n", sid)
     _commit_with_trailer("own-file-2.txt", "own2\n", sid)
-
     (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
 
-    _patch_gate_with_sid(monkeypatch, sid)
-    calls = _wrap_popen_for_git_spawn_count(monkeypatch)
 
-    wsc.brief(decisions={}, repo_root=repo)
+_UNPATCHED_SID = "22222222-2222-2222-2222-222222222222"
 
-    assert len(calls) <= 4, (
-        f"expected at most 4 git spawns from one brief() call, got "
-        f"{len(calls)}: {calls}"
-    )
+
+def _name_the_session(monkeypatch: pytest.MonkeyPatch, sid: str) -> None:
+    for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+
+def test_brief_with_the_gate_unpatched_spawns_at_most_two_git_and_walks_once(repo, monkeypatch):
+    """One live `brief()` call, session-shape gate NOT patched: at most 2 git spawns, at most
+    1 history walk (`git log` with the reader's record separator), no non-git process.
+
+    The fixture reaches the reader: `head_at_start` is the seed commit and the window holds a
+    peer commit and two own commits, so the walk really runs and the gate, the review scale and
+    the ship stamp all read that one result."""
+    sid, peer_sid = _UNPATCHED_SID, "33333333-3333-3333-3333-333333333333"
+    _seed_session_with_peer(repo, sid, peer_sid, with_floor=True)
+    _name_the_session(monkeypatch, sid)
+    calls = _wrap_popen_for_all_spawns(monkeypatch)
+
+    envelope = wsc.brief(decisions={}, repo_root=repo)
+
+    assert envelope["gates"]["session_shape"]["disposition"], "the real gate must have run"
+    git_calls = [c for c in calls if _is_git(c)]
+    other = [c for c in calls if not _is_git(c)]
+    walks = [c for c in git_calls if "log" in c]
+    assert len(git_calls) <= 2, f"expected at most 2 git spawns, got {len(git_calls)}: {git_calls}"
+    assert len(walks) == 1, f"expected exactly 1 history walk (the reader ran, once), got {len(walks)}: {walks}"
+    assert other == [], f"a non-git process on the brief path: {other}"
+
+
+def test_brief_with_no_head_at_start_walks_nothing_and_names_the_floor(repo, monkeypatch):
+    """No `head_at_start`: the reader walks nothing (there is no full-history fallback), and
+    the review scale is unresolved with the missing floor in its reason."""
+    sid, peer_sid = _UNPATCHED_SID, "33333333-3333-3333-3333-333333333333"
+    _seed_session_with_peer(repo, sid, peer_sid, with_floor=False)
+    _name_the_session(monkeypatch, sid)
+    calls = _wrap_popen_for_all_spawns(monkeypatch)
+
+    envelope = wsc.brief(decisions={"stage_paths": []}, repo_root=repo)
+
+    walks = [c for c in calls if _is_git(c) and "log" in c]
+    assert walks == [], f"an absent floor must not walk history: {walks}"
+    review_scale = envelope["gates"]["review_scale"]
+    assert review_scale["resolved"] is False
+    assert "floor" in review_scale["reason"], review_scale["reason"]
 
 
 def test_brief_call_one_builds_no_review_scope_and_so_cannot_truncate_one(repo, monkeypatch):

@@ -61,7 +61,7 @@ def _lesson_decisions() -> dict[str, Any]:
 
 
 def _patch_reachable(monkeypatch: pytest.MonkeyPatch, reachable: bool) -> None:
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _gate())
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _gate())
     monkeypatch.setattr(wsc, "_lesson_capture_reachable", lambda: reachable)
 
 

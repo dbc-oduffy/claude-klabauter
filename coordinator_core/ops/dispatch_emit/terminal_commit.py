@@ -205,6 +205,38 @@ def _read_rel(worktree_root: Path, rel: str) -> Optional[str]:
         return None
 
 
+_XS_SPINE_ORIGIN = "sizing object"
+_KIND_FIELD = re.compile(r"^(derived_from|scope_mode)[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
+
+
+def _close_kind(plan_text: Optional[str]) -> tuple[str, bool]:
+    """``(close kind, plan_governs)`` read off the run's plan path frontmatter.
+
+    A minted inventory spine is ``mise-run``; a minted XS spine (``derived_from: sizing object``)
+    is ``xs-s-run`` with no governing plan; an S ``scope_mode: spec-dispatch`` plan is ``xs-s-run``
+    with one. Anything else, or no readable plan, is ``plan-run``. Values are matched after
+    dropping a trailing `` # comment`` and quotes; the text is LF-normalised first.
+    """
+    if plan_text is None:
+        return "plan-run", True
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    split = split_frontmatter(plan_text.replace("\r\n", "\n"))
+    if split is None:
+        return "plan-run", True
+    fields: dict = {}
+    for name, raw in _KIND_FIELD.findall(split.fm_text):
+        fields.setdefault(name, re.sub(r"[ \t]+#.*$", "", raw).strip().strip("\"'"))
+    origin = fields.get("derived_from")
+    if origin == _MINTED_SPINE_ORIGIN:
+        return "mise-run", False
+    if origin == _XS_SPINE_ORIGIN:
+        return "xs-s-run", False
+    if fields.get("scope_mode") == "spec-dispatch":
+        return "xs-s-run", True
+    return "plan-run", True
+
+
 def _cited_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional[str]:
     """Worktree-relative path of the sizing the run's plan or minted spine cites
     as ``sizing_object:``, when it is an existing file under ``state/sizings/``.
@@ -393,6 +425,45 @@ def _spine_row_ids(plan_text: str) -> Optional[set]:
     return {str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id")}
 
 
+def _inventory_record_rel(worktree_root: Path, spine_rel: str) -> Optional[tuple]:
+    """``(inventory record rel, its text)`` for a minted spine, else None. A part spine
+    (``-pN``) falls back to the unsplit record."""
+    if not spine_rel.endswith(_SPINE_SUFFIX):
+        return None
+    stem = spine_rel[: -len(_SPINE_SUFFIX)]
+    inventory_rel = stem + ".md"
+    text = _read_rel(worktree_root, inventory_rel)
+    if text is None and re.search(r"-p\d+$", stem):
+        inventory_rel = re.sub(r"-p\d+$", "", stem) + ".md"
+        text = _read_rel(worktree_root, inventory_rel)
+    return None if text is None else (inventory_rel, text)
+
+
+def _mint_mise_receipt(
+    worktree_root: Path, spine_rel: str, sha: str, record_abs: Path, record: dict,
+    tree: Optional[str] = None,
+) -> dict:
+    """Mint the receipt onto the mise inventory record behind ``spine_rel``. Returns
+    ``{"review_receipt": rel}`` on success, ``{"review_stamp": "refused", ...}`` on a refusal,
+    ``{}`` when no record resolves. The product commit stands either way."""
+    found = _inventory_record_rel(worktree_root, spine_rel)
+    if found is None:
+        return {}
+    inventory_rel = found[0]
+    guarded = contained_path(worktree_root / inventory_rel, [worktree_root])
+    if guarded is None:
+        return {}
+    from coordinator_core.ops.review_stamp import MintRefusal, mint_receipt
+
+    try:
+        mint_receipt(guarded, worktree_root, resolved=(sha, record_abs, record), terminal_tree_sha=tree)
+    except MintRefusal as exc:
+        return {"review_stamp": "refused", "review_stamp_refusal": str(exc)}
+    except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
+        return {"review_stamp": "refused", "review_stamp_refusal": repr(exc)}
+    return {"review_receipt": inventory_rel}
+
+
 def _source_rows_by_plan(
     worktree_root: Path, plan_path: Optional[str], chunk_ids: list
 ) -> dict:
@@ -428,16 +499,10 @@ def _source_rows_by_plan(
     if origin != _MINTED_SPINE_ORIGIN:
         return {plan_path: set(chunk_ids)}
 
-    if not plan_path.endswith(_SPINE_SUFFIX):
+    found = _inventory_record_rel(worktree_root, plan_path)
+    if found is None:
         return {}
-    stem = plan_path[: -len(_SPINE_SUFFIX)]
-    inventory_rel = stem + ".md"
-    inventory_text = _read_rel(worktree_root, inventory_rel)
-    if inventory_text is None and re.search(r"-p\d+$", stem):
-        inventory_rel = re.sub(r"-p\d+$", "", stem) + ".md"
-        inventory_text = _read_rel(worktree_root, inventory_rel)
-    if inventory_text is None:
-        return {}
+    inventory_rel, inventory_text = found
     try:
         table = parse_chunk_table(inventory_text.replace("\r\n", "\n"))
     except InventoryMintError:
@@ -1534,7 +1599,7 @@ def _regenerate_landing_allowlist(worktree_root: Path, paths: list) -> Optional[
 #: driver points it at a no-op so the gate measures the launch, not the job's own work.
 CLOSE_JOB_SCRIPT: Optional[str] = None
 _CLOSE_JOB_WINDOW_MINUTES = 5
-_BACKGROUND_LEGS = ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
+_BACKGROUND_LEGS = ("review", "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
 _PATH_WITHHELD = "detail withheld: names a non-repo-relative path"
 _NOT_LANDED = "coded-stamp commit did not land"
 
@@ -1592,6 +1657,7 @@ def _pay_inline_legs(
     from coordinator_core.ops.dispatch_emit.run_close_completion import completion_entry_leg
 
     run_id, legs = ctx["run_id"], ctx["legs"]
+    ctx["session_id"] = session_id
     criterion = ctx["inline_review"].get("criterion")
     criterion = criterion if isinstance(criterion, dict) else None
     try:
@@ -1657,14 +1723,29 @@ def _background_legs(worktree_root: Path, ctx: dict) -> dict:
     for leg in _BACKGROUND_LEGS:
         if leg == "baton-drain" and not batons:
             legs[leg] = _leg("not-applicable", "run claims no baton")
+        elif leg == "review" and not ctx.get("review_receipt"):
+            continue
+        elif leg in ctx["presets"]:
+            legs[leg] = ctx["presets"][leg]
         elif leg == "memo-lifecycle" and not memo:
             legs[leg] = _leg("not-applicable", "plan names no source memo")
         else:
             queue.append(leg)
     deadline = datetime.now().astimezone() + timedelta(minutes=_CLOSE_JOB_WINDOW_MINUTES)
     try:
-        write_close_job(worktree_root, run_id, queue, deadline)
-    except OSError as exc:
+        write_close_job(
+            worktree_root, run_id, queue, deadline,
+            session_id=ctx.get("session_id"),
+            plan_rel=ctx["plan_rel"],
+            source_memo=memo,
+            claimed_batons=batons,
+            completion_entry=ctx.get("completion_entry"),
+            settled={leg: ctx["legs"][leg] for leg in ("completion-entry", "baton-ship") if leg in ctx["legs"]},
+            review_receipt=ctx.get("review_receipt"),
+            run_base_sha=ctx.get("run_base_sha"),
+            terminal_sha=ctx.get("terminal_sha"),
+        )
+    except (OSError, ValueError) as exc:
         legs.update({leg: _leg("failed", f"close job record not written: {type(exc).__name__}") for leg in queue})
         return legs
     if not _launch_close_job(worktree_root, run_id, batons, memo):
@@ -1717,27 +1798,31 @@ def _close_block(ctx: dict, reply: dict) -> dict:
         else:
             why = "leg did not run"
         stamp = reply.get("review_stamp")
-        if stamp == "minted":
-            legs["review"] = _leg("ran", "review stamp minted")
-        elif stamp == "refused":
-            legs["review"] = _leg("failed", str(reply.get("review_stamp_refusal") or "review stamp refused")[:200])
-        else:
-            legs["review"] = _leg("failed", f"no review stamp: {why}")
+        if "review" not in legs:
+            if stamp == "refused":
+                legs["review"] = _leg("failed", str(reply.get("review_stamp_refusal") or "review stamp refused")[:200])
+            else:
+                legs["review"] = _leg("failed", f"no review stamp: {why}")
         status = reply.get("plan_status")
-        if status == "implemented":
-            deferred = _deferred_rows(ctx["root"], ctx["plan_rel"])
+        if "plan-reconciliation" not in ctx["presets"] and status == "implemented":
+            deferred = (
+                [] if ctx["kind"] == "xs-s-run" else _deferred_rows(ctx["root"], ctx["plan_rel"])
+            )
             legs["plan-reconciliation"] = (
                 _leg("failed", "deferred rows unharvested: " + ", ".join(deferred))
                 if deferred
                 else _leg("ran", "plan implemented")
             )
+        elif "plan-reconciliation" in ctx["presets"]:
+            pass  # the preset is applied below
         elif status:
             legs["plan-reconciliation"] = _leg("failed", str(reply.get("plan_status_reason") or status)[:200])
         else:
             legs["plan-reconciliation"] = _leg("failed", f"plan not reconciled: {why}")
         for leg in RUN_BOUND_LEGS:
             legs.setdefault(leg, _leg("failed", why))
-    return build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"])
+        legs.update(ctx["presets"])
+    return build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"])
 
 
 @register_op("dispatch.terminal_commit")
@@ -1791,6 +1876,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``index_stale`` lists committed paths whose index entry could not be
     spliced to the landed blob (``[]`` when every entry equals it); a
     non-empty list means the run is not clean.
+    ``review_receipt`` (a mise run only) is the inventory record carrying the minted receipt;
+    a refused receipt reports ``review_stamp: refused`` instead.
     ``review_stamp`` (``minted``/``refused``) reports the stamp, and on a
     minted stamp with no incomplete chunk ``plan_status`` reports the
     ``implemented`` flip (``implemented``/``refused``/``not-stamped``; every
@@ -1997,14 +2084,23 @@ def _terminal_commit(
     # A review-only run closes no row: a row reopened since its emit must stay open.
     rows_untouched = anchor_only or request.review_only
     if close_ctx is not None:
+        applies = bool(request.plan_path) and not rows_untouched
+        kind, plan_governs = (
+            _close_kind(_read_rel(worktree_root, request.plan_path)) if applies else ("plan-run", True)
+        )
+        from coordinator_core.ops.dispatch_emit.run_close import kind_presets
+
+        presets = kind_presets(kind, plan_governs=plan_governs)
         close_ctx.update(
             root=worktree_root,
             run_id=PurePosixPath(script_path_raw.replace("\\", "/")).stem,
-            applies=bool(request.plan_path) and not rows_untouched,
+            applies=applies,
             plan_rel=request.plan_path,
             inline_review=inline_review if isinstance(inline_review, dict) else {},
-            legs={},
+            legs=dict(presets),
             completion_entry=None,
+            kind=kind,
+            presets=presets,
         )
 
     # Review at close is deterministic (PM ruling 2026-10-01): a run whose
@@ -2472,13 +2568,34 @@ def _terminal_commit(
         )
         register_sizing = writeback.pop("register_sizing", None)
         reply.update(writeback)
+        if (
+            record_abs is not None and record is not None and not anchor_only
+            and source_rows and request.plan_path not in source_rows
+            and request.plan_path.endswith(_SPINE_SUFFIX)
+        ):
+            reply.update(
+                _mint_mise_receipt(
+                    worktree_root, request.plan_path, str(reply["sha"]), record_abs, record,
+                    tree=reply.get("tree"),
+                )
+            )
         also_commit = tuple(
             p for p in (
                 request.plan_path if reply.get("review_stamp") == "minted" else None,
+                reply.get("review_receipt"),
                 register_sizing,
             ) if p
         )
         paying_close = close_ctx is not None and close_ctx["applies"]
+        if close_ctx is not None:
+            prep = inline_review.get("prep")
+            base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+            close_ctx.update(
+                review_receipt=reply.get("review_receipt")
+                or (request.plan_path if reply.get("review_stamp") == "minted" else None),
+                run_base_sha=base if isinstance(base, str) else None,
+                terminal_sha=str(reply["sha"]),
+            )
         if paying_close:
             also_commit += tuple(
                 _pay_inline_legs(worktree_root, close_ctx, str(reply["sha"]), session_id, snapshot)

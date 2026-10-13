@@ -53,9 +53,8 @@ def _patch_dirty_paths_git(monkeypatch, returncode: int, stdout: str = "", stder
     (`docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`):
     `git_native.status_porcelain`, imported function-local inside `_dirty_paths`
     itself, so patching `session_facts._git_run` no longer reaches it — that seam
-    is still correct for every OTHER sub-read this module makes (`_novel_loc_split`,
-    `session_commit_count_attributed`), which are unaffected by this chunk and keep
-    using `branch_resolution._git_run` directly.
+    is still correct for the sub-read `session_commit_count_attributed` makes, which is
+    unaffected and keeps using `branch_resolution._git_run` directly.
 
     Used for every test exercising `_dirty_paths` itself, directly or through one
     of its three callers (`session_governing_plan`, `session_terminal_sizings`,
@@ -384,96 +383,66 @@ def test_pickup_kind_source_string_resolves_to_a_symbol_that_exists(tmp_path: Pa
 
 # ---------------------------------------------------------------------------
 # session_diff_brightline (Fact 3) — DR-323's lift of
-# quick_wrap_assemble._read_diff / _novel_loc_split. The named fail-open under test:
-# the old call site folded a degraded commit-count read into `commit_count = 0`,
-# indistinguishable from a genuinely zero-commit session.
+# quick_wrap_assemble._read_diff. The named fail-open under test: an unresolved
+# SessionHistory must degrade the fact, never read as a zero-commit session.
 # ---------------------------------------------------------------------------
 
 _SID_DIFF = "sess-c3-diff-brightline-test-001"
 
 
-def _fake_split(**overrides) -> dict:
-    base = {
-        "degraded": False,
-        "gross_loc": 15,
-        "doc_only_loc": 3,
-        "relocated_files": 0,
-        "novel_loc": 12,
-        "novel_commit_count": 1,
-    }
-    base.update(overrides)
-    return base
+def _commit(n: int, *files, sids=(_SID_DIFF,)):
+    """A `SessionCommit` carrying `files` as (path, added, deleted) triples."""
+    from coordinator_core.workstream_complete.session_history import FileChange, SessionCommit
 
-
-def test_diff_brightline_degrades_when_commit_count_record_is_degraded(tmp_path, monkeypatch):
-    """The fail-open this chunk retires: a degraded `session_commit_count_attributed`
-    read must propagate as a degraded FACT, never fold into `commit_count: 0` inside an
-    otherwise-computed record."""
-    monkeypatch.setattr(
-        session_facts,
-        "session_commit_count_attributed",
-        lambda worktree_root, sid: {"degraded": True, "evidence": "git log failed: boom"},
+    return SessionCommit(
+        sha=f"{n:040x}",
+        parents=(f"{n - 1:040x}",),
+        committer_epoch=1_000 + n,
+        committed_at="",
+        subject=f"commit {n}",
+        session_ids=tuple(sids),
+        deliverable_id="",
+        files=tuple(FileChange(p, "M", a, d) for p, a, d in files),
     )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
+
+
+def _history(*commits, resolved=True, reason=""):
+    from coordinator_core.workstream_complete.session_history import SessionHistory
+
+    if not resolved:
+        return SessionHistory(_SID_DIFF, None, None, (), False, reason)
+    return SessionHistory(
+        _SID_DIFF, f"{0:040x}", commits[-1].sha if commits else f"{0:040x}", tuple(commits), True, ""
+    )
+
+
+def _two_file_history():
+    return _history(
+        _commit(1, ("coordinator_core/foo.py", 10, 2)),
+        _commit(2, ("docs/readme.md", 3, 0)),
+        _commit(3),
+    )
+
+
+def test_diff_brightline_degrades_when_history_is_unresolved(tmp_path):
+    """An unresolved window is never an empty one: the fact degrades with the reader's
+    reason, never a computed zero-commit record."""
+    record = session_facts.session_diff_brightline(
+        tmp_path, tmp_path / ".git", _SID_DIFF, _history(resolved=False, reason="floor-missing")
+    )
 
     assert record["degraded"] is True
-    assert record["evidence"] == "git log failed: boom"
+    assert "floor-missing" in record["evidence"]
     assert record["source"] == session_facts._SOURCE_SESSION_DIFF_BRIGHTLINE
     assert "value" not in record
     assert set(record) == {"degraded", "evidence", "source"}
 
 
-def test_diff_brightline_degrades_when_novel_loc_split_git_call_fails(tmp_path, monkeypatch):
-    """`_novel_loc_split`'s own `git log --numstat` call is a git-backed sub-read this
-    chunk owns — its failure must degrade the fact too, not silently zero the split."""
-    monkeypatch.setattr(
-        session_facts,
-        "session_commit_count_attributed",
-        lambda worktree_root, sid: {"degraded": False, "value": 0},
+def test_loc_split_computes_the_gross_doc_only_novel_split():
+    result = session_facts._loc_split(
+        [_commit(1, ("coordinator_core/foo.py", 10, 2), ("docs/readme.md", 3, 0))]
     )
-    monkeypatch.setattr(
-        session_facts,
-        "_novel_loc_split",
-        lambda worktree_root, sid: {"degraded": True, "evidence": "numstat call failed: boom"},
-    )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
-
-    assert record["degraded"] is True
-    assert record["evidence"] == "numstat call failed: boom"
-    assert record["source"] == session_facts._SOURCE_SESSION_DIFF_BRIGHTLINE
-    assert "value" not in record
-    assert set(record) == {"degraded", "evidence", "source"}
-
-
-def test_novel_loc_split_degrades_when_the_underlying_git_log_fails(tmp_path, monkeypatch):
-    """Direct coverage of the private helper's own posture: `branch_resolution._git_run`
-    (never `quick_wrap_assemble._git_out`, which swallows failure into `""`)."""
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="fatal: not a git repository"),
-    )
-    result = session_facts._novel_loc_split(tmp_path, _SID_DIFF)
-    assert result["degraded"] is True
-    assert "128" in result["evidence"] or "not a git repository" in result["evidence"]
-
-
-def test_novel_loc_split_computes_the_gross_doc_only_novel_split(tmp_path, monkeypatch):
-    """Direct coverage of the parsing logic moved wholesale from
-    `quick_wrap_assemble._novel_loc_split` — unchanged behaviour, new posture."""
-    numstat_out = (
-        "@@QWA-COMMIT@@ abc123\n"
-        "10\t2\tcoordinator_core/foo.py\n"
-        "3\t0\tdocs/readme.md\n"
-    )
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=numstat_out),
-    )
-    result = session_facts._novel_loc_split(tmp_path, _SID_DIFF)
     assert result == {
-        "degraded": False,
         "gross_loc": 15,
         "doc_only_loc": 3,
         "relocated_files": 0,
@@ -482,36 +451,45 @@ def test_novel_loc_split_computes_the_gross_doc_only_novel_split(tmp_path, monke
     }
 
 
-def _stub_diff_brightline_composition(monkeypatch, *, method, commit_count=3, split=None):
-    monkeypatch.setattr(
-        session_facts,
-        "session_commit_count_attributed",
-        lambda worktree_root, sid: {"degraded": False, "value": commit_count},
+def test_loc_split_skips_binary_rows_and_counts_zero_change_rows_as_relocated():
+    import dataclasses
+
+    from coordinator_core.workstream_complete.session_history import FileChange
+
+    binary = dataclasses.replace(_commit(1), files=(FileChange("bin/a.dat", "A", None, None),))
+    result = session_facts._loc_split(
+        [
+            binary,
+            _commit(2, ("coordinator_core/y.py", 0, 0)),
+            _commit(3, ("state/sizings/s.yaml", 2, 0)),
+        ]
     )
-    monkeypatch.setattr(
-        session_facts,
-        "_novel_loc_split",
-        lambda worktree_root, sid: split or _fake_split(),
-    )
+    assert result == {
+        "gross_loc": 2,
+        "doc_only_loc": 2,
+        "relocated_files": 1,
+        "novel_loc": 0,
+        "novel_commit_count": 0,
+    }
+
+
+def _stub_scoping(monkeypatch, *, method):
     monkeypatch.setattr(
         session_facts,
         "analyze_session_scoping",
-        lambda worktree_root, common_dir, sid: branch_resolution.ScopingVerdict(
-            method=method, foreign_count=0, contiguous=True, candidate_range=""
+        lambda worktree_root, common_dir, sid, known_scope_paths=None, history=None: (
+            branch_resolution.ScopingVerdict(
+                method=method, foreign_count=0, contiguous=True, candidate_range=""
+            )
         ),
-    )
-    monkeypatch.setattr(
-        session_facts,
-        "_session_touched_paths",
-        lambda worktree_root, sid: ["coordinator_core/foo.py", "docs/readme.md"],
     )
 
 
 def test_diff_brightline_computed_shape_is_exactly_the_dr319_key_set(tmp_path, monkeypatch):
-    _stub_diff_brightline_composition(
-        monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER
+    _stub_scoping(monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER)
+    record = session_facts.session_diff_brightline(
+        tmp_path, tmp_path / ".git", _SID_DIFF, _two_file_history()
     )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
 
     assert set(record) == {"degraded", "value", "source", "collision"}
     assert record["degraded"] is False
@@ -524,7 +502,7 @@ def test_diff_brightline_computed_shape_is_exactly_the_dr319_key_set(tmp_path, m
         "commit_count": 3,
         "surface_count": 2,
         "novel_surface_count": 1,
-        "touched_paths": ["coordinator_core/foo.py", "docs/readme.md"],
+        "touched_paths": ["docs/readme.md", "coordinator_core/foo.py"],
         "gross_loc": 15,
         "doc_only_loc": 3,
         "relocated_files": 0,
@@ -546,10 +524,10 @@ def test_diff_brightline_trustworthy_is_false_only_on_ambiguous_scoping_and_degr
     """KEEP `trustworthy` DISTINCT FROM `degraded`: an ambiguous scoping method is a
     data-quality signal about the trailer, not a probe failure. The record is still
     computed, still carries real counts."""
-    _stub_diff_brightline_composition(
-        monkeypatch, method=branch_resolution.SCOPING_METHOD_AMBIGUOUS
+    _stub_scoping(monkeypatch, method=branch_resolution.SCOPING_METHOD_AMBIGUOUS)
+    record = session_facts.session_diff_brightline(
+        tmp_path, tmp_path / ".git", _SID_DIFF, _two_file_history()
     )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
 
     assert record["degraded"] is False
     assert record["value"]["trustworthy"] is False
@@ -560,10 +538,10 @@ def test_diff_brightline_collision_is_always_none_no_peer_mutable_surface(tmp_pa
     """DR-323 § (b): trailer attribution is per-sid, so no peer mutation can change
     what this fact reports for a given sid — `collision` is `None`, never omitted,
     never coerced to `False`."""
-    _stub_diff_brightline_composition(
-        monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER
+    _stub_scoping(monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER)
+    record = session_facts.session_diff_brightline(
+        tmp_path, tmp_path / ".git", _SID_DIFF, _two_file_history()
     )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
 
     assert "collision" in record
     assert record["collision"] is None
@@ -571,16 +549,14 @@ def test_diff_brightline_collision_is_always_none_no_peer_mutable_surface(tmp_pa
 
 
 def test_diff_brightline_breached_reflects_brightline_thresholds(tmp_path, monkeypatch):
-    over_threshold_split = _fake_split(
-        novel_loc=branch_resolution._BRIGHTLINE_LOC,
-        novel_commit_count=branch_resolution._BRIGHTLINE_COMMITS,
+    _stub_scoping(monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER)
+    over = _history(
+        *[
+            _commit(n, (f"coordinator_core/m{n}.py", branch_resolution._BRIGHTLINE_LOC, 0))
+            for n in range(1, branch_resolution._BRIGHTLINE_COMMITS + 1)
+        ]
     )
-    _stub_diff_brightline_composition(
-        monkeypatch,
-        method=branch_resolution.SCOPING_METHOD_TRAILER,
-        split=over_threshold_split,
-    )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
+    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF, over)
 
     assert record["value"]["breached"] == ["novel_commit_count", "novel_loc"]
     assert record["value"]["under_brightline"] is False
@@ -589,38 +565,27 @@ def test_diff_brightline_breached_reflects_brightline_thresholds(tmp_path, monke
 def test_diff_brightline_carries_no_verdict_field_on_either_shape(tmp_path, monkeypatch):
     forbidden = {"verdict", "recommendation", "disposition", "action"}
 
-    _stub_diff_brightline_composition(
-        monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER
+    _stub_scoping(monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER)
+    computed = session_facts.session_diff_brightline(
+        tmp_path, tmp_path / ".git", _SID_DIFF, _two_file_history()
     )
-    computed = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
     assert forbidden.isdisjoint(computed)
     assert forbidden.isdisjoint(computed["value"])
 
-    monkeypatch.setattr(
-        session_facts,
-        "session_commit_count_attributed",
-        lambda worktree_root, sid: {"degraded": True, "evidence": "boom"},
+    degraded = session_facts.session_diff_brightline(
+        tmp_path, tmp_path / ".git", _SID_DIFF, _history(resolved=False, reason="boom")
     )
-    degraded = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
     assert forbidden.isdisjoint(degraded)
-
-
-def test_diff_brightline_degraded_shape_is_exactly_the_dr319_key_set(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        session_facts,
-        "session_commit_count_attributed",
-        lambda worktree_root, sid: {"degraded": True, "evidence": "boom"},
-    )
-    record = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
-    assert set(record) == {"degraded", "evidence", "source"}
 
 
 def test_diff_brightline_source_string_resolves_to_a_symbol_that_exists(tmp_path):
     """AC4 / AC9: the backing-source string names a producer symbol that actually
     exists in this repo — DR-323 § (b)'s table description for Fact 3."""
+    from coordinator_core.workstream_complete import session_history
+
     module_path, _, symbol = session_facts._SOURCE_SESSION_DIFF_BRIGHTLINE.partition("::")
-    assert module_path == "coordinator_core/ops/ceremony/branch_resolution.py"
-    assert hasattr(branch_resolution, symbol)
+    assert module_path == "coordinator_core/workstream_complete/session_history.py"
+    assert hasattr(session_history, symbol)
 
 
 # ---------------------------------------------------------------------------
@@ -1495,18 +1460,15 @@ class TestPerFactRequiredFieldDeclaration:
         _assert_dr319_degraded_record(degraded)
 
     def test_session_diff_brightline_satisfies_declaration(self, tmp_path, monkeypatch):
-        _stub_diff_brightline_composition(
-            monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER
+        _stub_scoping(monkeypatch, method=branch_resolution.SCOPING_METHOD_TRAILER)
+        computed = session_facts.session_diff_brightline(
+            tmp_path, tmp_path / ".git", _SID_DIFF, _two_file_history()
         )
-        computed = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
         _assert_dr319_computed_record("session_diff_brightline", computed)
 
-        monkeypatch.setattr(
-            session_facts,
-            "session_commit_count_attributed",
-            lambda worktree_root, sid: {"degraded": True, "evidence": "boom"},
+        degraded = session_facts.session_diff_brightline(
+            tmp_path, tmp_path / ".git", _SID_DIFF, _history(resolved=False, reason="boom")
         )
-        degraded = session_facts.session_diff_brightline(tmp_path, tmp_path / ".git", _SID_DIFF)
         _assert_dr319_degraded_record(degraded)
 
     def test_session_terminal_sizings_satisfies_declaration(self, tmp_path: Path, monkeypatch):

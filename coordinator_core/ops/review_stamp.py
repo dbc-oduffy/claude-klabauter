@@ -43,6 +43,10 @@ against the reviewed tree.
          no prep sidecar or zero wave sidecars are discoverable.
     A run whose sidecar already carries `prep_sidecar` is unaffected by
     `--repair` -- it takes the normal path even with the flag set.
+  - `mint_receipt(record_path, repo_root, resolved=...)`: the same stamp, assembled
+    by the same `_assemble_stamp`, written onto a mise inventory record (`run_id`
+    frontmatter, never the spine). No criterion block, no trailer-walk or repair
+    path: `resolved` is required.
   - `check(plan_path, repo_root, supersession=...)`: returns `None` when the
     existing stamp is still valid, or a one-line refusal string. Tree
     equality and ancestry are always checked; the supersession check (a
@@ -648,11 +652,9 @@ def mint(
             integration_data = {**integration_data, "criterion": {**verdict, "sidecar": rejudged["record_path"]}}
     delivery_verdict = delivery_data.get("verdict")
 
-    fixes_applied = integration_data.get("fixes_applied")
     slices = integration_data.get("slices")
     if not isinstance(slices, int) or isinstance(slices, bool):
         slices = _count(prep_data.get("slices"))
-    brief_conformance = integration_data.get("brief_conformance") or {}
 
     build_test_data: Optional[Dict[str, Any]]
     if build_test_path:
@@ -748,6 +750,55 @@ def mint(
         # A caller-held tree describes the commit the caller just landed, not a
         # superseding or walked terminal commit.
         terminal_tree_sha = None
+    criterion_block = None
+    if isinstance(criterion, dict) and criterion_status:
+        criterion_block = {
+            "status": "not_run" if narrowing_receipt else "met" if attestation_receipt else criterion_status,
+            "observation": narrowing_receipt or attestation_receipt or criterion.get("observation"),
+            "sidecar": criterion.get("sidecar"),
+        }
+    stamp = _assemble_stamp(
+        repo_root,
+        terminal_sha=terminal_sha,
+        terminal_tree_sha=terminal_tree_sha,
+        run_base_sha=run_base_sha,
+        integration_path=integration_path,
+        integration_data=integration_data,
+        prep_data=prep_data,
+        slices=slices,
+        delivery_verdict=delivery_verdict,
+        tests_status=tests_status,
+        build_test_data=build_test_data,
+        build_test_sidecar=build_test_sidecar,
+        criterion_block=criterion_block,
+    )
+    if superseding_record is not None:
+        stamp["superseding_record"] = stamp["integration_sidecar"]
+
+    _write_stamp(plan_path, split, stamp)
+    return stamp
+
+
+def _assemble_stamp(
+    repo_root: Path,
+    *,
+    terminal_sha: str,
+    terminal_tree_sha: Optional[str],
+    run_base_sha: Any,
+    integration_path: Path,
+    integration_data: Dict[str, Any],
+    prep_data: Dict[str, Any],
+    slices: int,
+    delivery_verdict: Any,
+    tests_status: str,
+    build_test_data: Dict[str, Any],
+    build_test_sidecar: Any,
+    criterion_block: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """The `review_stamp` mapping both `mint` and `mint_receipt` write: one home for its
+    key set and order, so the plan stamp and the inventory receipt cannot drift.
+    `criterion_block` is None for a receipt, which carries no criterion. Reads the terminal
+    commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
     if not terminal_tree_sha:
         try:
             tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))
@@ -755,13 +806,16 @@ def mint(
             raise MintRefusal(f"review-stamp: could not read tree sha of {terminal_sha}: {exc}") from exc
         terminal_tree_sha = tree_out.strip()
 
+    from datetime import datetime, timezone
+
+    brief_conformance = integration_data.get("brief_conformance") or {}
     stamp: Dict[str, Any] = {
         "terminal_commit_sha": terminal_sha,
         "terminal_tree_sha": terminal_tree_sha,
         "run_base_sha": run_base_sha,
         "integration_sidecar": str(integration_path.relative_to(repo_root)).replace("\\", "/"),
         "slices": slices,
-        "fixes_applied": fixes_applied,
+        "fixes_applied": integration_data.get("fixes_applied"),
         "em_may_think_differently": integration_data.get("em_may_think_differently") or [],
         "unresolved": [],
         "brief_conformance": {
@@ -779,21 +833,86 @@ def mint(
             "failed": build_test_data.get("failed"),
             "sidecar": build_test_sidecar,
         },
-        "stamped_at": None,
+        "stamped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    if superseding_record is not None:
-        stamp["superseding_record"] = stamp["integration_sidecar"]
-    if isinstance(criterion, dict) and criterion_status:
-        stamp["criterion"] = {
-            "status": "not_run" if narrowing_receipt else "met" if attestation_receipt else criterion_status,
-            "observation": narrowing_receipt or attestation_receipt or criterion.get("observation"),
-            "sidecar": criterion.get("sidecar"),
-        }
-    from datetime import datetime, timezone
+    if criterion_block is not None:
+        stamp["criterion"] = criterion_block
+    return stamp
 
-    stamp["stamped_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    _write_stamp(plan_path, split, stamp)
+def mint_receipt(
+    record_path: Path,
+    repo_root: Path,
+    *,
+    resolved: Optional[tuple] = None,
+    terminal_tree_sha: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Write `review_stamp:` onto a mise inventory record (frontmatter `run_id`, no
+    `plan_id`). `resolved` is `(terminal_sha, integration_path, integration_data)` from the
+    caller that just landed the terminal commit; it is required, since an inventory record
+    has no `plan_id` to join a trailer walk on. Raises `MintRefusal` and writes nothing on a
+    missing `run_id`, missing `resolved`, a non-PASS delivery, or any `mint_refusal`
+    condition. The stamp has no criterion block and is never written onto the spine."""
+    if not repo_root.exists():
+        raise MintRefusal(f"review-stamp: repo root does not exist: {repo_root}")
+    _, split = _read_plan_frontmatter(record_path)
+    if not read_fm_field_unquoted(split.fm_text, "run_id"):
+        raise MintRefusal(f"review-stamp: refusing to mint: {record_path} carries no run_id")
+    if resolved is None:
+        raise MintRefusal(
+            "review-stamp: refusing to mint a receipt without a resolved terminal commit "
+            "(an inventory record carries no plan_id to walk trailers by)"
+        )
+    terminal_sha, integration_path, integration_data = resolved
+    if integration_path is None:
+        raise MintRefusal("review-stamp: refusing to mint a receipt: resolved carries no integration sidecar")
+
+    prep_data = integration_data.get("prep")
+    if not isinstance(prep_data, dict):
+        prep_rel = integration_data.get("prep_sidecar")
+        prep_data = _load_sidecar(repo_root / prep_rel) if prep_rel else None
+        if prep_data is None:
+            raise MintRefusal(f"review-stamp: refusing to mint a receipt: no prep record for {integration_path}")
+    frozen_claims = prep_data.get("foreign_claims")
+    if isinstance(frozen_claims, list) and frozen_claims:
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import live_held_claims
+
+        prep_data = {**prep_data, "foreign_claims": live_held_claims(repo_root, frozen_claims)}
+
+    from coordinator_core.ops.dispatch_emit.reverify_delivery import load_delivery
+
+    delivery_data = load_delivery(repo_root, integration_data, prep_data) or {}
+    delivery_verdict = delivery_data.get("verdict")
+
+    build_test_data = integration_data.get("tests")
+    if not isinstance(build_test_data, dict):
+        raise MintRefusal("review-stamp: refusing to mint a receipt: no build/test record on the run record")
+    tests_status = test_verdict_of(build_test_data)
+    refusal = mint_refusal(
+        {**integration_data, "delivery": delivery_data}, prep_data, build_test_data, criterion_open_ok=True
+    )
+    if refusal is not None:
+        raise MintRefusal(refusal)
+
+    slices = integration_data.get("slices")
+    if not isinstance(slices, int) or isinstance(slices, bool):
+        slices = _count(prep_data.get("slices"))
+    stamp = _assemble_stamp(
+        repo_root,
+        terminal_sha=terminal_sha,
+        terminal_tree_sha=terminal_tree_sha,
+        run_base_sha=prep_data.get("run_base_sha"),
+        integration_path=integration_path,
+        integration_data=integration_data,
+        prep_data=prep_data,
+        slices=slices,
+        delivery_verdict=delivery_verdict,
+        tests_status=tests_status,
+        build_test_data=build_test_data,
+        build_test_sidecar=build_test_data.get("sidecar"),
+        criterion_block=None,
+    )
+    _write_stamp(record_path, split, stamp)
     return stamp
 
 

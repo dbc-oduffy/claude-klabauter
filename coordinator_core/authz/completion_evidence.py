@@ -55,6 +55,7 @@ OP_COMPLETION_EVIDENCE: "types.MappingProxyType[str, EvidenceClass]" = types.Map
     {
         "push.outstanding": EvidenceClass.FIRE_AND_FORGET,
         "close.background": EvidenceClass.FIRE_AND_FORGET,
+        "close.review": EvidenceClass.FIRE_AND_FORGET,
         "app_session.launch": EvidenceClass.FIRE_AND_FORGET,
         "app_session.teardown": EvidenceClass.FIRE_AND_FORGET,
     }

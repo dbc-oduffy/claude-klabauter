@@ -99,10 +99,8 @@ from coordinator_core.ops.ceremony.branch_resolution import (
     _BRIGHTLINE_LOC,
     _BRIGHTLINE_SURFACES,
     SCOPING_METHOD_AMBIGUOUS,
-    _git_run,
     _read_session_shape,
     _session_surface_count,
-    _session_touched_paths,
     analyze_session_scoping,
     session_commit_count_attributed,
 )
@@ -184,23 +182,15 @@ _SOURCE_SESSION_TERMINAL_SIZINGS = (
     "coordinator_core/session/session_facts.py::session_terminal_sizings"
 )
 
-#: Same convention, for Fact 3's producer. Points at `session_commit_count_attributed`
-#: specifically — DR-323 § (b)'s table names this fact's backing source as "trailer-
-#: attributed to this sid (`git log --grep=Session-Id: <sid>`)", which is exactly that
-#: function's own call, and it is the ONE sub-read whose degraded state this composed
-#: fact propagates verbatim (module docstring below, "WHY `session_diff_brightline`
-#: DEGRADES"). The other sub-reads composed into this fact (`_novel_loc_split`'s own
-#: `git log --numstat`, `_session_touched_paths`, `analyze_session_scoping`) are
-#: reported under the same source string rather than a second field — DR-319 § (b)
-#: declares one backing-source string per served fact, not one per sub-read.
+#: Fact 3's producer: the session-history reader whose window every sub-read of this
+#: fact (counts, novel-LOC split, touched paths, scoping) is derived from.
 _SOURCE_SESSION_DIFF_BRIGHTLINE = (
-    "coordinator_core/ops/ceremony/branch_resolution.py::session_commit_count_attributed"
+    "coordinator_core/workstream_complete/session_history.py::read_session_history"
 )
 
 #: Local re-declarations of `quick_wrap_assemble`'s doc-only carve-out: the facade
-#: must not depend on `quick_wrap_assemble` — that dependency runs the other
-#: direction post-C7 (DR-323 § (a), coexistence-then-cut). `_novel_loc_split` and the surface
-#: carve-out both need them, and the facade must not import from `quick_wrap_assemble`.
+#: must not depend on `quick_wrap_assemble`. The novel-LOC split and the surface
+#: carve-out both need them.
 _DOC_ONLY_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown", ".rst", ".txt"})
 _DOC_ONLY_PREFIXES: tuple[str, ...] = (
     "docs/",
@@ -488,6 +478,7 @@ def session_governing_plan(
     common_dir: Path,
     sid: str,
     invocation_id: Optional[str] = None,
+    dirty: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Serve the plan THIS session holds a claim on (`fl-core-02` Fact 2; DR-323's
     lift of `quick_wrap_assemble._read_governing_plan`) — the lift only, no
@@ -579,6 +570,10 @@ def session_governing_plan(
     already carry) — a scan that cannot tell dirty from clean has no basis to
     report a collision state on the plan it did find.
 
+    `dirty` (optional): a `_dirty_paths` record the caller already holds; the collision check
+    reads it instead of spawning `git status`. A degraded record degrades this fact exactly as a
+    failed spawn would.
+
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
     `_timed_fact`'s own docstring above. `invocation_id` (additive, optional,
     default `None`) is threaded straight through to `record_fact_span` — see
@@ -586,13 +581,13 @@ def session_governing_plan(
     """
     return _timed_fact(
         "session_governing_plan", worktree_root, sid,
-        _session_governing_plan_impl, worktree_root, common_dir, sid,
+        _session_governing_plan_impl, worktree_root, common_dir, sid, dirty,
         invocation_id=invocation_id,
     )
 
 
 def _session_governing_plan_impl(
-    worktree_root: Path, common_dir: Path, sid: str
+    worktree_root: Path, common_dir: Path, sid: str, dirty: Optional[dict[str, Any]] = None
 ) -> dict[str, Any]:
     """Untimed body of `session_governing_plan` — see that function's
     docstring for the full contract; this exists only so `_timed_fact` can
@@ -646,7 +641,7 @@ def _session_governing_plan_impl(
     if plan_path is None:
         collision = False
     else:
-        dirty_result = _dirty_paths(worktree_root)
+        dirty_result = dirty if dirty is not None else _dirty_paths(worktree_root)
         if dirty_result["degraded"]:
             return {
                 "degraded": True,
@@ -672,7 +667,7 @@ def _session_governing_plan_impl(
 
 # ---------------------------------------------------------------------------
 # session_diff_brightline (fl-core-02 C3) — lift of
-# quick_wrap_assemble._read_diff / _novel_loc_split.
+# quick_wrap_assemble._read_diff, read off an injected SessionHistory.
 # ---------------------------------------------------------------------------
 
 
@@ -714,73 +709,33 @@ def _classify_path(path: str) -> str:
     return "code"
 
 
-def _novel_loc_split(worktree_root: Path, sid: str) -> dict[str, Any]:
-    """Split this session's changes into gross / doc-only / relocated / novel, for both
-    lines AND commits. One `git log --numstat -M` pass, not three.
+def _loc_split(own: Sequence[Any]) -> dict[str, Any]:
+    """Split the session's own commits into gross / doc-only / relocated / novel, for both
+    lines AND commits, from each commit's `files`. Pure.
 
-    Moved wholesale from `quick_wrap_assemble/__init__.py :: _novel_loc_split`
-    (fl-core-02 C3) — the parsing logic (`-M`'s "moved unmodified" carve-out,
-    `novel_loc = gross_loc - doc_only_loc` floored at 0, `novel_commit_count` applying
-    the same doc-only carve-out to the commit axis) is unchanged; only the git-failure
-    posture changed, per this chunk's job.
-
-    NOT ITSELF A DR-319 RECORD — a private sub-read `session_diff_brightline` folds
-    into its own DR-319 shape. Uses `branch_resolution._git_run` (returncode-checked),
-    never `quick_wrap_assemble._git_out` (swallows a git failure into `""`
-    indistinguishable from a genuinely-empty diff — the exact fail-open posture this
-    lift retires): `{"degraded": False, **counts}` on success,
-    `{"degraded": True, "evidence": <str>}` when the underlying `git log` call fails.
+    Binary rows (`added is None`) are skipped; a zero-change row counts as relocated;
+    `novel_loc = gross_loc - doc_only_loc` floored at 0; `novel_commit_count` counts commits
+    with at least one changed non-doc file.
     """
-    result = _git_run(
-        [
-            "log",
-            "--numstat",
-            "-M",
-            "--format=@@QWA-COMMIT@@ %H",
-            f"--grep=Session-Id: {sid}",
-        ],
-        worktree_root,
-    )
-    if result.returncode != 0:
-        return {
-            "degraded": True,
-            "evidence": (
-                f"git log --numstat -M --grep=Session-Id: {sid} failed: returncode="
-                f"{result.returncode!r} stderr={result.stderr.strip()!r}"
-            ),
-        }
-
-    marker = "@@QWA-COMMIT@@ "
     gross = 0
     doc_only = 0
     relocated = 0
     novel_commits: set[str] = set()
-    current_sha = ""
-    for line in result.stdout.splitlines():
-        if line.startswith(marker):
-            current_sha = line[len(marker) :].strip()
-            continue
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        added_raw, deleted_raw, path = parts[0], parts[1], parts[2]
-        if added_raw == "-" or deleted_raw == "-":
-            continue
-        try:
-            changed = int(added_raw) + int(deleted_raw)
-        except ValueError:
-            continue
-        gross += changed
-        if changed == 0:
-            relocated += 1
-            continue
-        if _classify_path(path) == "doc":
-            doc_only += changed
-        elif current_sha:
-            novel_commits.add(current_sha)
+    for commit in own:
+        for change in commit.files:
+            if change.added is None or change.deleted is None:
+                continue
+            changed = change.added + change.deleted
+            gross += changed
+            if changed == 0:
+                relocated += 1
+                continue
+            if _classify_path(change.path) == "doc":
+                doc_only += changed
+            else:
+                novel_commits.add(commit.sha)
     novel = max(0, gross - doc_only)
     return {
-        "degraded": False,
         "gross_loc": gross,
         "doc_only_loc": doc_only,
         "relocated_files": relocated,
@@ -789,18 +744,68 @@ def _novel_loc_split(worktree_root: Path, sid: str) -> dict[str, Any]:
     }
 
 
+def _novel_loc_split(own: Sequence[Any]) -> dict[str, Any]:
+    """`_loc_split`'s `novel_loc` and `novel_commit_count` for a window whose doc-only commits
+    carry no line counts: only code files contribute to either, so both stay exact. Gross,
+    doc-only and relocated counts are None.
+    """
+    novel = 0
+    novel_commits: set[str] = set()
+    for commit in own:
+        for change in commit.files:
+            if change.added is None or change.deleted is None:
+                continue
+            changed = change.added + change.deleted
+            if changed and _classify_path(change.path) == "code":
+                novel += changed
+                novel_commits.add(commit.sha)
+    return {
+        "gross_loc": None,
+        "doc_only_loc": None,
+        "relocated_files": None,
+        "novel_loc": novel,
+        "novel_commit_count": len(novel_commits),
+    }
+
+
+def raw_brightline_breaches(history: Any) -> list[str]:
+    """Brightline axes already breached on a raw-only (`numstat=False`) resolved `history`.
+
+    Counts commits and surfaces only, no line counts. `novel_commit_count` is an upper bound
+    here: a commit whose only code changes carry zero lines (pure rename, mode change, empty
+    file) counts, so the verdict can only err toward breached. `novel_surface_count` is exact.
+    """
+    own = history.own
+    novel_commits = sum(
+        1 for c in own if any(_classify_path(f.path) == "code" for f in c.files)
+    )
+    novel_touched = [
+        f.path for c in reversed(own) for f in c.files if _classify_path(f.path) == "code"
+    ]
+    over = {
+        "novel_commit_count": novel_commits >= _BRIGHTLINE_COMMITS,
+        "novel_surface_count": _session_surface_count(novel_touched) >= _BRIGHTLINE_SURFACES,
+    }
+    return sorted(k for k, v in over.items() if v)
+
+
 def session_diff_brightline(
     worktree_root: Path,
     common_dir: Path,
     sid: str,
+    history: Any,
     invocation_id: Optional[str] = None,
+    loc_skipped: str = "",
+    doc_loc_skipped: str = "",
 ) -> dict[str, Any]:
     """Serve the session-scoped diff brightline (`fl-core-02` Fact 3; DR-323's lift of
-    `quick_wrap_assemble._read_diff` / `_novel_loc_split`).
+    `quick_wrap_assemble._read_diff`), read off `history`: a `SessionHistory`
+    (`workstream_complete.session_history.read_session_history`) the caller reads once.
+    Spawns nothing.
 
-    Composes `analyze_session_scoping`'s `ScopingVerdict`, `_session_touched_paths`,
-    `_session_surface_count`, `session_commit_count_attributed`, and this module's own
-    `_novel_loc_split` (the one genuinely new piece, moved wholesale above).
+    Composes `analyze_session_scoping(..., history=history)`'s `ScopingVerdict`,
+    `_session_surface_count`, and this module's `_loc_split`; commit count is `len(history.own)`
+    and touched paths are `history.own`'s file destinations, newest commit first.
     `_BRIGHTLINE_LOC`/`_BRIGHTLINE_COMMITS`/`_BRIGHTLINE_SURFACES` stay imported from
     `branch_resolution`, never restated, for the same reason `quick_wrap_assemble`'s own
     import comment states: so the review-partition verdict and this brightline cannot
@@ -811,30 +816,15 @@ def session_diff_brightline(
                     "collision": None}
       - degraded:  {"degraded": True, "evidence": <str>, "source": <str>}
 
-    WHY THIS FACT DEGRADES, AND ON WHAT (the fail-open this chunk retires): the OLD
-    `_read_diff` called `session_commit_count_attributed` — already converted to
-    DR-319's degraded-with-evidence shape by `session_magnitude_attributed`'s own
-    producer — and then discarded the distinction: `commit_count = record["value"] if
-    not record["degraded"] else 0`. A degraded probe and a genuinely zero-commit
-    session both read as `commit_count: 0` at every downstream call site. This function
-    propagates `session_commit_count_attributed`'s degraded state as a degraded FACT
-    instead: if that sub-read is degraded, `session_diff_brightline` is degraded,
-    full stop, before any of the other sub-reads run. The other git-backed sub-read
-    this function OWNS — `_novel_loc_split`'s `git log --numstat` call — gets the same
-    treatment for the same reason (see that function's own docstring): a fact that
-    cannot compute its novel-LOC/commit split has no basis to report a brightline
-    verdict either.
+    WHY THIS FACT DEGRADES, AND ON WHAT: an unresolved `history` (`history.resolved` is
+    False: no head_at_start floor, git failure, floor not an ancestor) returns the degraded
+    record with `history.reason` in `evidence`, before any sub-read runs. An unresolved
+    window is never an empty one, so a zero-commit session and an unreadable window cannot
+    read alike. There is no walking fallback.
 
-    `_session_touched_paths` and `analyze_session_scoping`'s internal `git log` calls
-    are NOT converted here — both are existing producers with their own fail-open
-    posture (`_session_touched_paths` returns `[]` on any git failure;
-    `analyze_session_scoping`'s pipeline never raises, by its own docstring's design)
-    that this chunk does not own and does not silently inherit past acknowledging it:
-    a touched-paths read that failed reports the same `[]` as a session that touched
-    nothing, so `surface_count`/`novel_surface_count`/`touched_paths` in a computed
-    record carry this same known limit forward, undisturbed by this lift. Converging
-    those producers' own posture is out of this chunk's scope (DR-323 names C3 as the
-    diff-brightline lift, not a `_session_touched_paths` rewrite).
+    `touched_paths` carries each file's destination path; a rename is its new path, not
+    `git log --numstat`'s brace spelling, so `surface_count` no longer counts `{docs` as a
+    surface.
 
     THREE INDEPENDENT AXES TRAVEL ON THIS FACT — KEPT DISTINCT, STATED HERE SO THE
     NEXT READER DOES NOT REDISCOVER IT:
@@ -884,42 +874,49 @@ def session_diff_brightline(
     """
     return _timed_fact(
         "session_diff_brightline", worktree_root, sid,
-        _session_diff_brightline_impl, worktree_root, common_dir, sid,
+        _session_diff_brightline_impl, worktree_root, common_dir, sid, history, loc_skipped,
+        doc_loc_skipped,
         invocation_id=invocation_id,
     )
 
 
 def _session_diff_brightline_impl(
-    worktree_root: Path, common_dir: Path, sid: str
+    worktree_root: Path, common_dir: Path, sid: str, history: Any,
+    loc_skipped: str = "", doc_loc_skipped: str = "",
 ) -> dict[str, Any]:
     """Untimed body of `session_diff_brightline` — see that function's
     docstring for the full contract; this exists only so `_timed_fact` can
     wrap the call without altering what is returned."""
-    commit_count_record = session_commit_count_attributed(worktree_root, sid)
-    if commit_count_record["degraded"]:
+    if not history.resolved:
         return {
             "degraded": True,
-            "evidence": commit_count_record["evidence"],
+            "evidence": f"session history unresolved: {history.reason}",
             "source": _SOURCE_SESSION_DIFF_BRIGHTLINE,
         }
 
-    split = _novel_loc_split(worktree_root, sid)
-    if split["degraded"]:
-        return {
-            "degraded": True,
-            "evidence": split["evidence"],
-            "source": _SOURCE_SESSION_DIFF_BRIGHTLINE,
+    own = history.own
+    if loc_skipped:
+        split = {
+            "gross_loc": None,
+            "doc_only_loc": None,
+            "relocated_files": None,
+            "novel_loc": None,
+            "novel_commit_count": sum(
+                1 for c in own if any(_classify_path(f.path) == "code" for f in c.files)
+            ),
         }
-    split = {k: v for k, v in split.items() if k != "degraded"}
-
-    verdict = analyze_session_scoping(worktree_root, common_dir, sid)
-    touched = _session_touched_paths(worktree_root, sid)
+    elif doc_loc_skipped:
+        split = _novel_loc_split(own)
+    else:
+        split = _loc_split(own)
+    verdict = analyze_session_scoping(worktree_root, common_dir, sid, history=history)
+    touched = [change.path for commit in reversed(own) for change in commit.files]
     surface_count = _session_surface_count(touched)
     novel_touched = [p for p in touched if _classify_path(p) == "code"]
     novel_surface_count = _session_surface_count(novel_touched)
 
     over = {
-        "novel_loc": split["novel_loc"] >= _BRIGHTLINE_LOC,
+        "novel_loc": split["novel_loc"] is not None and split["novel_loc"] >= _BRIGHTLINE_LOC,
         "novel_commit_count": split["novel_commit_count"] >= _BRIGHTLINE_COMMITS,
         "novel_surface_count": novel_surface_count >= _BRIGHTLINE_SURFACES,
     }
@@ -930,7 +927,7 @@ def _session_diff_brightline_impl(
         "scoping_method": verdict.method,
         "trustworthy": trustworthy,
         "sha_range": verdict.candidate_range or None,
-        "commit_count": commit_count_record["value"],
+        "commit_count": len(own),
         "surface_count": surface_count,
         "novel_surface_count": novel_surface_count,
         "touched_paths": touched,
@@ -941,8 +938,12 @@ def _session_diff_brightline_impl(
             "novel_surface_count": _BRIGHTLINE_SURFACES,
         },
         "breached": breached,
-        "under_brightline": not breached,
+        "under_brightline": not breached and not loc_skipped,
     }
+    if loc_skipped:
+        value["loc_skipped"] = loc_skipped
+    if doc_loc_skipped:
+        value["doc_loc_skipped"] = doc_loc_skipped
 
     return {
         "degraded": False,
@@ -1083,7 +1084,9 @@ def _dirty_paths(
 
 
 def session_terminal_sizings(
-    worktree_root: Path, invocation_id: Optional[str] = None
+    worktree_root: Path,
+    invocation_id: Optional[str] = None,
+    dirty: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Serve the terminal sizing-object scan (`fl-core-02` Fact 4; DR-323's lift of
     `quick_wrap_assemble._read_terminal_sizings` / `_dirty_paths`) —
@@ -1134,7 +1137,7 @@ def session_terminal_sizings(
     scan could not run, evidence names the glob call and what raised; (3)
     `_dirty_paths`'s own `git status` call fails — DEGRADED, propagated verbatim
     (same "propagate the sub-read's degraded state as a degraded FACT" discipline
-    `session_diff_brightline` already carries for `session_commit_count_attributed`),
+    `session_diff_brightline` carries for an unresolved `SessionHistory`),
     because a scan that cannot tell dirty from clean has no basis to report
     terminal-sizing records as movable-or-not at all. Case (1) and case (2)/(3) no
     longer share a return value — a scan that ran clean and found nothing is no
@@ -1144,6 +1147,9 @@ def session_terminal_sizings(
     `state/sizings/` is a shared surface with live peer edits, so a collision mode
     genuinely exists, unlike Facts 1/3 above.
 
+    `dirty` (optional): a `_dirty_paths` record the caller already holds, read instead of
+    spawning `git status`; a degraded record degrades this fact as a failed spawn would.
+
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
     `_timed_fact`'s own docstring above. This fact takes no `sid`, so the
     row's `sid` field is `None`. `invocation_id` (additive, optional, default
@@ -1152,12 +1158,14 @@ def session_terminal_sizings(
     """
     return _timed_fact(
         "session_terminal_sizings", worktree_root, None,
-        _session_terminal_sizings_impl, worktree_root,
+        _session_terminal_sizings_impl, worktree_root, dirty,
         invocation_id=invocation_id,
     )
 
 
-def _session_terminal_sizings_impl(worktree_root: Path) -> dict[str, Any]:
+def _session_terminal_sizings_impl(
+    worktree_root: Path, dirty_record: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Untimed body of `session_terminal_sizings` — see that function's
     docstring for the full contract; this exists only so `_timed_fact` can
     wrap the call without altering what is returned."""
@@ -1181,7 +1189,7 @@ def _session_terminal_sizings_impl(worktree_root: Path) -> dict[str, Any]:
             "source": _SOURCE_SESSION_TERMINAL_SIZINGS,
         }
 
-    dirty_result = _dirty_paths(worktree_root)
+    dirty_result = dirty_record if dirty_record is not None else _dirty_paths(worktree_root)
     if dirty_result["degraded"]:
         return {
             "degraded": True,
@@ -1287,7 +1295,9 @@ def _scan_fold_sidecar_roots(worktree_root: Path) -> dict[str, Any]:
 
 
 def session_fold_sidecars(
-    worktree_root: Path, invocation_id: Optional[str] = None
+    worktree_root: Path,
+    invocation_id: Optional[str] = None,
+    dirty: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Serve fold-execution-record sidecar presence (`fl-core-02` Fact 5;
     DR-323's lift of `quick_wrap_assemble._read_fold_sidecars`) — a directory
@@ -1337,15 +1347,17 @@ def session_fold_sidecars(
     a fresh `_dirty_paths` read when it does run, not shared with
     `session_terminal_sizings`'s own call — each served fact owns its own
     sub-reads (module precedent:
-    `session_diff_brightline` calls `session_commit_count_attributed`
-    independently of `session_magnitude_attributed` rather than sharing a
-    cached result across facts).
+    `session_magnitude_attributed` and the other facts each read their own
+    sub-reads rather than sharing a cached result across facts).
 
     `_dirty_paths`'s own `git status` failure propagates as a degraded FACT
     (same "propagate the sub-read's degraded state" discipline
     `session_diff_brightline` and `session_terminal_sizings` already carry) —
     a scan that cannot tell dirty from clean has no basis to report a
     collision state on the sidecars it did find.
+
+    `dirty` (optional): a `_dirty_paths` record the caller already holds, read instead of
+    spawning `git status`; a degraded record degrades this fact as a failed spawn would.
 
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
     `_timed_fact`'s own docstring above. This fact takes no `sid`, so the
@@ -1355,12 +1367,14 @@ def session_fold_sidecars(
     """
     return _timed_fact(
         "session_fold_sidecars", worktree_root, None,
-        _session_fold_sidecars_impl, worktree_root,
+        _session_fold_sidecars_impl, worktree_root, dirty,
         invocation_id=invocation_id,
     )
 
 
-def _session_fold_sidecars_impl(worktree_root: Path) -> dict[str, Any]:
+def _session_fold_sidecars_impl(
+    worktree_root: Path, dirty_record: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Untimed body of `session_fold_sidecars` — see that function's
     docstring for the full contract; this exists only so `_timed_fact` can
     wrap the call without altering what is returned."""
@@ -1380,7 +1394,7 @@ def _session_fold_sidecars_impl(worktree_root: Path) -> dict[str, Any]:
     if not found:
         collision = False
     else:
-        dirty_result = _dirty_paths(worktree_root)
+        dirty_result = dirty_record if dirty_record is not None else _dirty_paths(worktree_root)
         if dirty_result["degraded"]:
             return {
                 "degraded": True,

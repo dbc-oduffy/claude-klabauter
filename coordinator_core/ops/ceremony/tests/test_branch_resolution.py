@@ -1212,3 +1212,155 @@ def test_ordinary_root_has_no_install_clone_finding(tmp_path, monkeypatch):
     monkeypatch.setattr("coordinator_core.repo_standing.is_install_clone", lambda _p: False)
     monkeypatch.setattr(br, "_trailer_reliable", lambda *a, **k: True)
     assert br.analyze_session_scoping(tmp_path, tmp_path, "sid-x").finding is None
+
+
+_OLD_DATE = "2019-12-01T00:00:00Z"
+
+
+def _redate_init(root: Path) -> None:
+    import os as _os
+
+    env = dict(_os.environ, GIT_AUTHOR_DATE=_OLD_DATE, GIT_COMMITTER_DATE=_OLD_DATE)
+    subprocess.run(
+        ["git", "commit", "--amend", "--no-edit", "--allow-empty"],
+        cwd=str(root), capture_output=True, check=True, env=env, **no_console_creationflags(),
+    )
+
+
+def _history_after(git_repo, sid: str, floor: str):
+    from coordinator_core.workstream_complete.session_history import read_session_history
+
+    sdir = git_repo.common_dir / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "head_at_start").write_text(floor + "\n", encoding="utf-8")
+    return read_session_history(git_repo.root, sid)
+
+
+def _scoping_scenario_trailer(git_repo, sid):
+    for n in (1, 2):
+        (git_repo.root / f"f{n}.txt").write_text("x\n", encoding="utf-8")
+        _commit(git_repo.root, f"work\n\nSession-Id: {sid}", date=f"2020-06-0{n}T00:00:00Z")
+    return None
+
+
+def _scoping_scenario_trailerless_clean(git_repo, sid):
+    (git_repo.root / "scoped.txt").write_text("s\n", encoding="utf-8")
+    _commit(git_repo.root, "trailerless", date="2020-06-01T00:00:00Z")
+    return frozenset({"scoped.txt"})
+
+
+def _scoping_scenario_interleaved(git_repo, sid):
+    paths = ["coordinator_core/x1.py", "coordinator_core/x2.py"]
+    day = 1
+    for mine, theirs in zip(paths, ["state/y1.md", "state/y2.md"]):
+        for rel, label in ((mine, "session"), (theirs, "foreign")):
+            p = git_repo.root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(label + "\n", encoding="utf-8")
+            _commit(git_repo.root, f"{label} {rel}", date=f"2020-06-{day:02d}T00:00:00Z")
+            day += 1
+    return frozenset(paths)
+
+
+def _scoping_scenario_partial_trailer(git_repo, sid):
+    (git_repo.root / "own.txt").write_text("o\n", encoding="utf-8")
+    _commit(git_repo.root, f"own\n\nSession-Id: {sid}", date="2020-06-01T00:00:00Z")
+    (git_repo.root / "theirs.txt").write_text("t\n", encoding="utf-8")
+    _commit(git_repo.root, f"theirs\n\nSession-Id: other-{sid}", date="2020-06-02T00:00:00Z")
+    return None
+
+
+def _scoping_scenario_foreign_only(git_repo, sid):
+    for n in (1, 2):
+        (git_repo.root / f"p{n}.txt").write_text("p\n", encoding="utf-8")
+        _commit(git_repo.root, f"peer\n\nSession-Id: peer-{sid}", date=f"2020-06-0{n}T00:00:00Z")
+    return None
+
+
+def _scoping_scenario_no_commits(git_repo, sid):
+    return None
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        _scoping_scenario_trailer,
+        _scoping_scenario_trailerless_clean,
+        _scoping_scenario_interleaved,
+        _scoping_scenario_partial_trailer,
+        _scoping_scenario_foreign_only,
+        _scoping_scenario_no_commits,
+    ],
+)
+def test_analyze_session_scoping_on_history_equals_the_spawning_verdict(git_repo, scenario):
+    """The window form returns the spawning form's method, foreign_count, contiguity and range
+    start; the range ends in the concrete head where the spawning form ends in `HEAD`."""
+    sid = "sess-hist-parity-" + scenario.__name__
+    _redate_init(git_repo.root)
+    floor = _head_sha(git_repo.root)
+    git_repo.seed_started_at(sid, "2020-01-01T00:00:00Z")
+    known = scenario(git_repo, sid)
+    history = _history_after(git_repo, sid, floor)
+    assert history.resolved
+
+    spawned = analyze_session_scoping(git_repo.root, git_repo.common_dir, sid, known)
+    windowed = analyze_session_scoping(
+        git_repo.root, git_repo.common_dir, sid, known, history=history
+    )
+
+    assert (windowed.method, windowed.foreign_count, windowed.contiguous) == (
+        spawned.method, spawned.foreign_count, spawned.contiguous,
+    )
+    if spawned.candidate_range:
+        assert spawned.candidate_range.endswith("^..HEAD")
+        assert windowed.candidate_range == (
+            spawned.candidate_range[: -len("HEAD")] + _head_sha(git_repo.root)
+        )
+    else:
+        assert windowed.candidate_range == ""
+
+
+def test_analyze_session_scoping_on_history_spawns_nothing(git_repo, monkeypatch):
+    sid = "sess-hist-nospawn"
+    _redate_init(git_repo.root)
+    floor = _head_sha(git_repo.root)
+    git_repo.seed_started_at(sid, "2020-01-01T00:00:00Z")
+    _scoping_scenario_foreign_only(git_repo, sid)
+    history = _history_after(git_repo, sid, floor)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    verdict = analyze_session_scoping(git_repo.root, git_repo.common_dir, sid, history=history)
+    assert verdict.method == SCOPING_METHOD_AMBIGUOUS
+    assert verdict.foreign_count == 2
+
+
+def test_analyze_session_scoping_on_unresolved_history_is_ambiguous_with_the_reason(git_repo):
+    from coordinator_core.workstream_complete.session_history import SessionHistory
+
+    sid = "sess-hist-unresolved"
+    git_repo.seed_started_at(sid, "2020-01-01T00:00:00Z")
+    verdict = analyze_session_scoping(
+        git_repo.root, git_repo.common_dir, sid,
+        history=SessionHistory(sid, None, None, (), False, "floor-missing"),
+    )
+    assert verdict.method == SCOPING_METHOD_AMBIGUOUS
+    assert verdict.candidate_range == ""
+    assert any("floor-missing" in w for w in verdict.warnings)
+
+
+def test_trailerless_window_older_than_started_at_is_reliable_on_history(git_repo):
+    """HEAD at or before started_at has not moved: no own commit stays reliable."""
+    sid = "sess-hist-not-moved"
+    _redate_init(git_repo.root)
+    floor = _head_sha(git_repo.root)
+    git_repo.seed_started_at(sid, "2020-01-01T00:00:00Z")
+    (git_repo.root / "old.txt").write_text("o\n", encoding="utf-8")
+    _commit(git_repo.root, "old trailerless", date="2019-12-15T00:00:00Z")
+    history = _history_after(git_repo, sid, floor)
+
+    spawned = analyze_session_scoping(git_repo.root, git_repo.common_dir, sid)
+    windowed = analyze_session_scoping(git_repo.root, git_repo.common_dir, sid, history=history)
+    assert windowed.method == spawned.method == SCOPING_METHOD_TRAILER

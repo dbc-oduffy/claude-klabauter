@@ -2235,6 +2235,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?      YES.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "close.background": OpClass.MUTATING,
+    # close.review — MUTATING: pays a run's queued review leg off the critical path
+    # (ops/ceremony/close_review.py); it rewrites the run's close-job record, as close.background does.
+    # DR-208: writes state (YES), rag store (No), opens a file for write (YES), shared state (YES),
+    # persistent cross-process state (YES).
+    "close.review": OpClass.MUTATING,
     # dispatch.ask_gate — MUTATING: decides an arm for a sizing; at an M+ arm with no halt it
     # mints the baton record in-process (ops/dispatch_emit/ask_gate.py). Every other verdict
     # is a read.

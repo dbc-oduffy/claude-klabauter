@@ -37,7 +37,7 @@ def _plan(tmp_path, *, scope_mode="spec-dispatch", status="draft"):
 
 def _setup(monkeypatch, tmp_path, **plan_kwargs):
     _plan(tmp_path, **plan_kwargs)
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _gate())
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _gate())
     monkeypatch.setattr(
         claimed_plan, "list_held_plan_claims", lambda cwd=None: [(_REL, "2026-10-01T00:00:00Z")]
     )

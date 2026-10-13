@@ -4,10 +4,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.workstream_complete import session_history
 from coordinator_core.ops import review_brightline_gate
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 
@@ -131,18 +131,34 @@ def _head_sha(cwd: Path) -> str:
     return out.stdout.strip()
 
 
-def test_session_start_time_omitted_reproduces_todays_call(tmp_path):
-    """Every EXISTING caller (including every pre-existing test in
-    `test_workstream_complete.py`) omits `session_start_time` — must
-    reproduce today's exact two-element argv with zero new I/O."""
+def _start_session(root: Path) -> str:
+    """Record HEAD as the session's `head_at_start`: the floor the history window walks from."""
+    floor = _head_sha(root)
+    claim = root / ".git" / "coordinator-sessions" / _SID
+    claim.mkdir(parents=True, exist_ok=True)
+    (claim / "head_at_start").write_text(floor, encoding="utf-8")
+    return floor
+
+
+def _history(root: Path):
+    return session_history.read_session_history(root, _SID)
+
+
+def _directives(root: Path, history=None):
+    return wsc.build_directives(_gate(), {}, root, history=history)
+
+
+def test_history_omitted_reproduces_todays_call(tmp_path):
+    """A caller that passes no history gets today's exact two-element argv with zero new I/O."""
     directives = wsc.build_directives(_gate(), {}, tmp_path)
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID]
 
 
 def test_no_prior_trail_record_emits_byte_identical_argv(monkeypatch, tmp_path):
     _init_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    _start_session(tmp_path)
+    _commit(tmp_path, "session commit", filename="a1.py", content="a=1\n")
+    directives = _directives(tmp_path, _history(tmp_path))
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID]
 
 
@@ -161,6 +177,7 @@ def test_peer_session_record_never_floors_this_session(monkeypatch, tmp_path):
     that — passing for the wrong reason.
     """
     _init_repo(tmp_path)
+    _start_session(tmp_path)
     first_sha = _commit(tmp_path, "close 1", filename="a1.py", content="a=1\n")
     _write_trail_record(
         tmp_path,
@@ -173,39 +190,40 @@ def test_peer_session_record_never_floors_this_session(monkeypatch, tmp_path):
         "peer" in p for p in wsc._list_review_trail_paths_for_root(tmp_path, sid_short=_SID[:8])
     ), "peer record must survive the name filter so the session_id field check is what excludes it"
 
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directives = _directives(tmp_path, _history(tmp_path))
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID]
 
 
-def test_unresolvable_session_start_sha_falls_back_to_todays_call(monkeypatch, tmp_path):
-    _write_trail_record(tmp_path, "2026-08-08-rec.json", _SID, "aaaaaaa^..aaaaaaa")
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+def test_unresolved_history_falls_back_to_todays_call(monkeypatch, tmp_path):
+    """No `head_at_start` means no window, and no window means no floor: never a guessed one."""
+    _init_repo(tmp_path)
+    first_sha = _commit(tmp_path, "close 1", filename="a1.py", content="a=1\n")
+    _write_trail_record(tmp_path, "2026-08-08-rec.json", _SID, f"{first_sha}^..{first_sha}")
+    history = _history(tmp_path)
+    assert history.resolved is False
+    directives = _directives(tmp_path, history)
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID]
 
 
 def test_prior_own_record_floors_the_range(monkeypatch, tmp_path):
-    """2026-08-11: `chain_tip_sha` is now resolved to a CONCRETE sha
-    (`_resolve_head_sha`), not the literal `"HEAD"` string — see
+    """`chain_tip_sha` is a CONCRETE sha, never the literal `"HEAD"` string — see
     `_resolve_review_brightline_floor_kwargs`'s own `chain_tip_sha`
-    docstring paragraph. The tip half of the emitted range is this repo's
-    real current HEAD sha at build time."""
+    docstring paragraph. The tip half of the emitted range is the history's `head`."""
     _init_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _start_session(tmp_path)
     first_sha = _commit(tmp_path, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
     second_sha = _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
     assert second_sha == _head_sha(tmp_path)
 
     _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
 
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directives = _directives(tmp_path, _history(tmp_path))
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..{second_sha}"]
 
 
 def test_two_trail_records_floors_at_the_last_not_the_first(monkeypatch, tmp_path):
     _init_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _start_session(tmp_path)
     close1_sha = _commit(tmp_path, "close 1 commit", filename="a1.py", content="a=1\n")
     close2_sha = _commit(tmp_path, "close 2 commit", filename="a2.py", content="a=2\n")
     close3_sha = _commit(tmp_path, "close 3 commit (under test)", filename="a3.py", content="a=3\n")
@@ -214,21 +232,19 @@ def test_two_trail_records_floors_at_the_last_not_the_first(monkeypatch, tmp_pat
     _write_trail_record(tmp_path, "2026-08-08-000001-rec1.json", _SID, f"{close1_sha}^..{close1_sha}")
     _write_trail_record(tmp_path, "2026-08-08-000002-rec2.json", _SID, f"{close2_sha}^..{close2_sha}")
 
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directives = _directives(tmp_path, _history(tmp_path))
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{close2_sha}..{close3_sha}"]
 
 
 def test_untrustworthy_record_tip_omitted_falls_back_to_session_start_sha(monkeypatch, tmp_path):
     _init_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
-    _commit(tmp_path, "session commit", filename="a1.py", content="a=1\n")
+    floor = _start_session(tmp_path)
+    head = _commit(tmp_path, "session commit", filename="a1.py", content="a=1\n")
     _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, "aaaaaaa..HEAD")
 
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directives = _directives(tmp_path, _history(tmp_path))
     args = _brightline_directive(directives)["args"]
-    assert args[:2] == ["--session-id", _SID]
-    assert len(args) == 3
-    assert args[2] != "HEAD..HEAD"
+    assert args == ["--session-id", _SID, f"{floor}..{head}"]
 
 
 def test_root_honoured_even_when_cwd_differs(monkeypatch, tmp_path):
@@ -243,7 +259,7 @@ def test_root_honoured_even_when_cwd_differs(monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _start_session(repo)
     first_sha = _commit(repo, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
     _commit(repo, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
     _write_trail_record(repo, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
@@ -254,16 +270,18 @@ def test_root_honoured_even_when_cwd_differs(monkeypatch, tmp_path):
     monkeypatch.chdir(other_cwd)
 
     repo_head_sha = _head_sha(repo)
-    directives = wsc.build_directives(_gate(), {}, repo, session_start_time=session_start_time)
+    directives = _directives(repo, _history(repo))
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..{repo_head_sha}"]
 
 
 def test_own_records_present_zero_commits_since_start_falls_back_to_todays_call(tmp_path):
     _init_repo(tmp_path)
+    _start_session(tmp_path)
     _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, "aaaaaaa^..aaaaaaa")
-    session_start_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    history = _history(tmp_path)
+    assert history.resolved and history.window == ()
+    directives = _directives(tmp_path, history)
     args = _brightline_directive(directives)["args"]
     assert args == ["--session-id", _SID]
     assert "HEAD..HEAD" not in args
@@ -308,56 +326,38 @@ def test_caller_floor_with_zero_trailer_matches_still_retries_session_floor(monk
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_head_sha_returns_concrete_sha_for_a_real_repo(tmp_path):
+def test_record_tip_outside_the_window_contributes_no_floor(tmp_path):
+    """A trail record whose tip is not a commit of this session's window is not on its chain:
+    the range falls back to the session's own floor, never to the record's tip."""
     _init_repo(tmp_path)
-    sha = _commit(tmp_path, "a commit", filename="a1.py", content="a=1\n")
-    assert wsc._resolve_head_sha(tmp_path) == sha
+    foreign_tip = _commit(tmp_path, "before the session", filename="a0.py", content="a=0\n")
+    _start_session(tmp_path)
+    _commit(tmp_path, "session commit\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
+    _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"aaaaaaa^..{'a' * 40}")
 
-
-def test_resolve_head_sha_degrades_to_none_on_a_non_repo(tmp_path):
-    assert wsc._resolve_head_sha(tmp_path) is None
-
-
-def test_resolve_head_sha_degrades_to_none_on_subprocess_failure(monkeypatch, tmp_path):
-    class _FakeCompletedProcess:
-        returncode = 1
-        stdout = ""
-
-    monkeypatch.setattr(
-        wsc.subprocess, "run", lambda *a, **k: _FakeCompletedProcess()
-    )
-    assert wsc._resolve_head_sha(tmp_path) is None
-
-
-def test_floor_path_falls_back_to_literal_head_when_tip_resolution_fails(monkeypatch, tmp_path):
-    _init_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
-    first_sha = _commit(tmp_path, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
-    _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
-    _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
-
-    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: None)
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
-    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{first_sha}..HEAD"]
+    history = _history(tmp_path)
+    assert foreign_tip not in {c.sha for c in history.window}
+    directives = _directives(tmp_path, history)
+    assert _brightline_directive(directives)["args"] == ["--session-id", _SID, f"{history.floor}..{history.head}"]
 
 
 def test_floor_resolved_concrete_tip_hits_the_gate_memo_on_a_second_pass(tmp_path):
     from coordinator_core.workstream_complete import directives_review
 
     _init_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _start_session(tmp_path)
     first_sha = _commit(tmp_path, "first close\n\nSession-Id: %s" % _SID, filename="a1.py", content="a=1\n")
     second_sha = _commit(tmp_path, "second close\n\nSession-Id: %s" % _SID, filename="a2.py", content="a=2\n")
     _write_trail_record(tmp_path, "2026-08-08-000001-rec.json", _SID, f"{first_sha}^..{first_sha}")
 
-    directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
-    directive = _brightline_directive(directives)
+    directives = _directives(tmp_path, _history(tmp_path))
+    directive =_brightline_directive(directives)
     assert directive["args"] == ["--session-id", _SID, f"{first_sha}..{second_sha}"]
     assert directive["already_satisfied"] is False
 
     directives_review.record_gate_verdict_if_passed(tmp_path, directive, exit_code=0, stdout="")
 
-    directives_2 = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
+    directives_2 = _directives(tmp_path, _history(tmp_path))
     directive_2 = _brightline_directive(directives_2)
     assert directive_2["args"] == directive["args"]
     assert directive_2["already_satisfied"] is True

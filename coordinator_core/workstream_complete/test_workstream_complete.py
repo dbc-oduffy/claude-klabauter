@@ -93,7 +93,7 @@ def _gate(
 
 
 def _patch_gate(monkeypatch: pytest.MonkeyPatch, gate: wsc.SessionShapeGate) -> None:
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: gate)
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: gate)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +221,7 @@ def test_directives_only_name_known_real_clis_and_never_invoke_them(monkeypatch,
         # later must not silently widen it.
         assert set(directive.keys()) - {
             "best_effort", "advisory", "_gate_memo_key_parts", "after_close_commit",
+            "discharged_by",
         } == {
             "id",
             "cli",
@@ -694,8 +695,8 @@ def test_review_scale_judgment_point_does_not_fire_on_a_fully_resolved_row_1_or_
 # `gates.review_scale.commit_slices` / `.uncommitted_code_loc` -- end-to-end
 # through `brief()` (A, docs/plans/2026-08-08-the-engine-asks-for-facts-it-
 # already-holds.md C-followup). Direct producer coverage
-# (`_measure_session_review_scale_inputs`'s `commit_slices_out` side
-# channel, per-commit ordering/shape, the interleaved-foreign-commit case)
+# (`review_scale_inputs.measure_review_scale_inputs`'s `commit_slices`,
+# per-commit ordering/shape, the interleaved-foreign-commit case)
 # lives in test_directives_review_scale.py; this section pins only the
 # envelope-emission contract `brief()` itself owns: presence/absence of the
 # key, and `uncommitted_code_loc`'s arithmetic.
@@ -719,6 +720,7 @@ def _init_repo_with_session_commit(root: Path) -> str:
     (root / "a.py").write_text("x = 1\n", encoding="utf-8")
     _git_slice(["add", "a.py"], root)
     _git_slice(["commit", "-q", "-m", "init"], root)
+    _write_session_floor(root, _SESSION_ID_FOR_SLICES)
 
     (root / "b.py").write_text("y = 1\ny2 = 2\n", encoding="utf-8")
     _git_slice(["add", "b.py"], root)
@@ -767,6 +769,7 @@ def test_brief_emits_uncommitted_code_loc_with_zero_commits_and_dirty_files(monk
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     _git_slice(["add", "a.py"], tmp_path)
     _git_slice(["commit", "-q", "-m", "init"], tmp_path)
+    _write_session_floor(tmp_path, _SESSION_ID_FOR_SLICES)
 
     (tmp_path / "dirty.py").write_text("z = 1\nz2 = 2\nz3 = 3\n", encoding="utf-8")
 
@@ -791,7 +794,7 @@ def test_brief_emits_uncommitted_code_loc_with_zero_commits_and_dirty_files(monk
 def test_brief_omits_commit_slices_key_when_measurement_unresolvable(monkeypatch, tmp_path):
     """(3) The unresolvable case OMITS the key entirely -- never present-
     but-empty. `tmp_path` here is deliberately NOT a git repository, so
-    `_session_owned_shas`'s `git log` spawn fails and the whole four-tuple
+    the session's history cannot be read and the whole four-tuple
     resolves to `None`."""
     gate = wsc.SessionShapeGate(
         sid=_SESSION_ID_FOR_SLICES,
@@ -3117,7 +3120,20 @@ def test_no_claim_plan_directive_when_no_governing_plan_resolved(monkeypatch, tm
 # ---------------------------------------------------------------------------
 
 
-def _init_git_repo(root: Path) -> None:
+def _write_session_floor(root: Path, sid: str) -> str:
+    """Record HEAD as `sid`'s `head_at_start`, the floor `read_session_history` walks from."""
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    claim = root / ".git" / "coordinator-sessions" / sid
+    claim.mkdir(parents=True, exist_ok=True)
+    (claim / "head_at_start").write_text(head, encoding="utf-8")
+    return head
+
+
+def _init_git_repo(root: Path, floor_for: "str | None" = None) -> None:
+    """Seeded repo; `floor_for` names the session whose `head_at_start` is the seed commit."""
     import subprocess
 
     subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
@@ -3126,6 +3142,8 @@ def _init_git_repo(root: Path) -> None:
     (root / "README.md").write_text("seed\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=root, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    if floor_for is not None:
+        _write_session_floor(root, floor_for)
 
 
 def _commit_with_session_trailer(root: Path, name: str, sid: str) -> None:
@@ -5259,7 +5277,7 @@ def test_brief_repo_identity_mismatch_refuses_when_repo_root_is_cwd_derived(monk
     _wsc_patch_pid_env(monkeypatch, 9001)
     _wsc_patch_stable_pid_alive(monkeypatch)
 
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _wsc_gate_with_sid(sid))
     # `root` came from `resolve_repo_root()`'s cwd default -- never pass
     # `repo_root` here, per the gate's cwd-derived-only contract.
     monkeypatch.setattr(wsc, "resolve_repo_root", lambda start=None: repo_root)
@@ -5277,7 +5295,7 @@ def test_brief_repo_identity_unresolved_does_not_refuse_and_records_verdict(monk
     _wsc_patch_pid_env(monkeypatch, 9002, hit=False)
 
     sid = "sess-wsc-unresolved"
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _wsc_gate_with_sid(sid))
     monkeypatch.setattr(wsc, "resolve_repo_root", lambda start=None: repo_root)
 
     decision_object = wsc.brief(decisions={})
@@ -5294,7 +5312,7 @@ def test_brief_repo_identity_match_records_verdict(monkeypatch, tmp_path):
     _wsc_patch_pid_env(monkeypatch, 9003)
     _wsc_patch_stable_pid_alive(monkeypatch)
 
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _wsc_gate_with_sid(sid))
     monkeypatch.setattr(wsc, "resolve_repo_root", lambda start=None: repo_root)
 
     decision_object = wsc.brief(decisions={})
@@ -5315,7 +5333,7 @@ def test_brief_explicit_repo_root_never_refused_but_records_informational_verdic
     _wsc_patch_pid_env(monkeypatch, 9004)
     _wsc_patch_stable_pid_alive(monkeypatch)
 
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: _wsc_gate_with_sid(sid))
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _wsc_gate_with_sid(sid))
 
     decision_object = wsc.brief(decisions={}, repo_root=repo_root)
     assert decision_object["gates"]["repo_identity"]["verdict"] == "MISMATCH"
@@ -5533,28 +5551,30 @@ def test_real_review_trail_corpus_quarantine_count_unchanged_by_execution_basis_
 #       or a `---` section marker, breaking git's trailer-block detection —
 #       confirmed via `git interpret-trailers --parse` against several
 #       examples), never a body line quoting a DIFFERENT session's trailer.
-#       No genuine cross-session over-match was found. No fix lands for (b);
-#       `_session_owned_shas` and its documented KNOWN-over-match posture are
-#       untouched, per this chunk's own instruction not to fix a candidate
-#       that did not reproduce. The interleaved-peer regression test below
-#       is therefore a CONFIRMATION of the already-correct measured path
-#       (`_session_owned_shas` is trailer-scoped and peer-immune today), not
-#       a fix — it guards the measured path against a future regression
-#       while the actual reported defect (a) is what the fix above closes.
+#       No genuine cross-session over-match was found. No fix lands for (b).
+#       The interleaved-peer regression test below is therefore a
+#       CONFIRMATION of the already-correct measured path (the session
+#       history's `own` is trailer-scoped and peer-immune), not a fix.
 # ---------------------------------------------------------------------------
 
 
-def test_measure_session_review_scale_inputs_commit_count_ignores_interleaved_peer_commits(tmp_path):
+def _measure_own(root: Path, sid: str, stage_paths: "list[str] | None" = None):
+    from coordinator_core.workstream_complete import review_scale_inputs, session_history
+
+    history = session_history.read_session_history(root, sid)
+    return history, review_scale_inputs.measure_review_scale_inputs(root, history, stage_paths or [])
+
+
+def test_review_scale_commit_count_ignores_interleaved_peer_commits(tmp_path):
     """AC13: on a shared branch where a peer commits BETWEEN this session's
-    own commits, `_measure_session_review_scale_inputs`'s `commit_count`
-    must equal the count of commits THIS session actually authored
-    (`Session-Id` trailer match via `_session_owned_shas`), never the length
-    of the commit range spanning both sessions. Also demonstrates the
-    "idle box" half of AC13: the same own-work commit count is measured
-    whether or not peers interleaved commits into the range."""
+    own commits, the measured `commit_count` must equal the count of commits
+    THIS session actually authored (`Session-Id` trailer match in the history
+    window), never the length of the commit range spanning both sessions. Also
+    demonstrates the "idle box" half of AC13: the same own-work commit count
+    is measured whether or not peers interleaved commits into the range."""
     own_sid = "11111111-1111-1111-1111-111111111111"
     peer_sid = "22222222-2222-2222-2222-222222222222"
-    _init_git_repo(tmp_path)
+    _init_git_repo(tmp_path, floor_for=own_sid)
 
     # Interleaved: own, peer, own, peer, peer, own -- 3 own commits, 3 peer,
     # on one shared branch (this repo's actual load norm).
@@ -5565,25 +5585,21 @@ def test_measure_session_review_scale_inputs_commit_count_ignores_interleaved_pe
     _commit_with_session_trailer(tmp_path, "peer-3.md", peer_sid)
     _commit_with_session_trailer(tmp_path, "own-3.md", own_sid)
 
-    _, _, commit_count, _ = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time=None, session_id=own_sid, uncommitted_paths=[]
-    )
-    assert commit_count == 3, (
-        f"expected the session-owned count (3), got {commit_count} -- a range-length "
+    _, measured = _measure_own(tmp_path, own_sid)
+    assert measured.commit_count == 3, (
+        f"expected the session-owned count (3), got {measured.commit_count} -- a range-length "
         "measurement would report 6 (every non-seed commit on the branch)"
     )
 
     idle_root = tmp_path / "idle"
     idle_root.mkdir()
-    _init_git_repo(idle_root)
+    _init_git_repo(idle_root, floor_for=own_sid)
     _commit_with_session_trailer(idle_root, "own-1.md", own_sid)
     _commit_with_session_trailer(idle_root, "own-2.md", own_sid)
     _commit_with_session_trailer(idle_root, "own-3.md", own_sid)
 
-    _, _, idle_commit_count, _ = wsc._measure_session_review_scale_inputs(
-        idle_root, session_start_time=None, session_id=own_sid, uncommitted_paths=[]
-    )
-    assert idle_commit_count == commit_count == 3, (
+    _, idle = _measure_own(idle_root, own_sid)
+    assert idle.commit_count == measured.commit_count == 3, (
         "a session whose peers commit concurrently on the same branch must get the same "
         "commit_count it would get on an idle box"
     )
@@ -5593,7 +5609,7 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
     """AC14: ceremony self-consistency, one-directional. No commit the
     review-trail write guard's `trailer_foreign_shas` would flag as
     AFFIRMATIVELY foreign to this session (a `Session-Id` trailer naming a
-    DIFFERENT session) is among the shas `_session_owned_shas` credits
+    DIFFERENT session) is among the commits the session history credits
     toward the brightline mandate's `commits=` arm. Reuses AC13's
     interleaved-peer synthetic repo (own/peer/own/peer/peer/own) rather than
     authoring a second fixture.
@@ -5601,9 +5617,9 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
     Deliberately NOT an equivalence assertion. The two mechanisms have
     opposite polarity on an UNTRAILERED commit: `trailer_foreign_shas` is
     exclusion-based (an untrailered commit has no affirmatively-foreign
-    trailer, so it stays credited/"not foreign"), while `_session_owned_shas`
-    is inclusion-based (an untrailered commit never matches
-    `--grep=^Session-Id: <sid>`, so it is never counted as owned either) --
+    trailer, so it stays credited/"not foreign"), while the history's `own`
+    is inclusion-based (an untrailered commit carries no `Session-Id:` line,
+    so it is never counted as owned either) --
     they disagree by construction there, and this fixture's own commits are
     ALL trailered (own or peer), so no untrailered case appears here. An
     untrailered commit is deliberately OUTSIDE this AC's agreement set: it is
@@ -5613,7 +5629,7 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
 
     own_sid = "11111111-1111-1111-1111-111111111111"
     peer_sid = "22222222-2222-2222-2222-222222222222"
-    _init_git_repo(tmp_path)
+    _init_git_repo(tmp_path, floor_for=own_sid)
 
     _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
     _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
@@ -5638,8 +5654,9 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
     # stays outside this set -- exclusion-based polarity, per docstring.
     assert len(foreign_shas) == 3
 
-    owned_shas = wsc._session_owned_shas(tmp_path, own_sid)
-    assert owned_shas is not None and len(owned_shas) == 3
+    history, measured = _measure_own(tmp_path, own_sid)
+    owned_shas = [c.sha for c in history.own]
+    assert len(owned_shas) == 3 and measured.commit_count == 3
 
     # The one-directional AC14 relation: flagged-affirmatively-foreign
     # implies not-counted toward the commits= arm. Never asserted the
@@ -5649,15 +5666,15 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
         assert sha not in owned_shas, (
             f"{sha} was flagged affirmatively foreign by the review-trail write "
             "guard's trailer_foreign_shas, yet was also credited toward the "
-            "commits= arm by _session_owned_shas -- AC14 violated"
+            "commits= arm by the session history -- AC14 violated"
         )
 
 
-def test_session_owned_shas_excludes_merge_commit_even_with_own_trailer(tmp_path):
+def test_review_scale_measurement_excludes_merge_commit_even_with_own_trailer(tmp_path):
     """A merge commit stamped with THIS session's `Session-Id` trailer (the
     prepare-commit-msg hook stamps a merge the session performs same as any
-    other commit it authors) must not appear in `_session_owned_shas`'s
-    result. `git show --numstat` on a non-fast-forward merge collapses
+    other commit it authors) must not reach the review-scale measurement.
+    `git show --numstat` on a non-fast-forward merge collapses
     against its first parent only -- every file the OTHER (merged-in)
     branch touched, none of it this session's authored work -- so counting
     the merge sha as session-owned is the same inflation
@@ -5665,10 +5682,14 @@ def test_session_owned_shas_excludes_merge_commit_even_with_own_trailer(tmp_path
     (commit a1751f39), reproduced here against `workstream_complete`'s own
     independent measurement path.
 
+    The reader keeps the merge with both parents (attribution needs it); the
+    measurement drops it via `parents` -- the MERGES half of the retired
+    trailer-map pin.
+
     Real `--no-ff` merge of a divergent branch, per that fix's own test
     shape (`test_session_id_merge_commit_does_not_count_merged_in_work`)."""
     own_sid = "33333333-3333-3333-3333-333333333333"
-    _init_git_repo(tmp_path)
+    _init_git_repo(tmp_path, floor_for=own_sid)
     base_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, text=True,
         **no_console_creationflags(),
@@ -5691,23 +5712,21 @@ def test_session_owned_shas_excludes_merge_commit_even_with_own_trailer(tmp_path
         cwd=tmp_path, check=True, **no_console_passthrough_kwargs(),
     )
 
-    owned_shas = wsc._session_owned_shas(tmp_path, own_sid)
-    assert owned_shas is not None and len(owned_shas) == 1, (
+    history, measured = _measure_own(tmp_path, own_sid)
+    merges = [c for c in history.own if c.is_merge]
+    assert len(merges) == 1 and len(merges[0].parents) == 2, (
+        "the reader must keep a session-performed merge, with both parents, in `own`"
+    )
+    owned_shas = [c.sha for c in history.own if not c.is_merge]
+    assert len(owned_shas) == 1, (
         f"expected only the non-merge own commit, got {owned_shas} -- the merge "
         "carries this session's own trailer and must still be excluded"
     )
 
-    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time=None, session_id=own_sid, uncommitted_paths=[]
-    )
-    assert commit_count == 1, f"merge inflated commit_count to {commit_count}"
-    assert code_loc == 1, f"merge's merged-in LOC leaked into code_loc: {code_loc}"
+    assert measured.commit_count == 1, f"merge inflated commit_count to {measured.commit_count}"
+    assert measured.code_loc == 1, f"merge's merged-in LOC leaked into code_loc: {measured.code_loc}"
 
-    slices: list[dict[str, Any]] = []
-    wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time=None, session_id=own_sid, uncommitted_paths=[],
-        commit_slices_out=slices,
-    )
+    slices = measured.commit_slices
     assert len(slices) == 1, f"expected exactly one non-merge commit_slice, got {slices}"
     assert slices[0]["diff_loc"] == 1
 
@@ -5725,6 +5744,7 @@ def test_session_owned_shas_excludes_merge_commit_even_with_own_trailer(tmp_path
         **no_console_creationflags(),
     ).stdout.strip()
     assert merge_sha not in owned_shas
+    assert merge_sha in {c.sha for c in history.own}
     assert merge_sha in attributed_shas, (
         "the merge must still be attributable to this session via the "
         "shared primitive's default (attribution) behaviour -- this fix "
@@ -5732,66 +5752,83 @@ def test_session_owned_shas_excludes_merge_commit_even_with_own_trailer(tmp_path
     )
 
 
-def test_no_trailer_map_fast_path_on_the_review_scale_path():
-    """The trailer-map fast path is DELETED, not merely unwired, and this
-    pins its absence at the API surface.
+def test_no_walk_without_a_floor_on_the_review_scale_path(tmp_path):
+    """The COMPLETENESS half of the retired trailer-map pin, re-pointed at the reader.
 
-    `_session_owned_shas_from_map` read this session's shas off
-    `directives_commit_tail.resolve_known_concurrent_paths`'s
-    `trailer_map_out` to save one `git log` spawn. It was never reached by a
-    production caller, and could not be, for two independent reasons kept in
-    `_session_owned_shas`'s own negative spec: that map's window is bounded
-    by PEER start times (so it truncates silently -- measured on session
-    8bb305c5, 6 owned commits, 3 reported, the 3 dropped carrying the code),
-    and it is built `include_merges=True` because
-    `ops.session_commits :: _batch_session_id_trailers` requires that, while
-    a `{sha: trailer}` map carries no parent information and so cannot
-    reproduce `no_merges=True` without the spawn it was meant to save.
-
-    Asserted as absence of the helper AND of the parameter, because either
-    one surviving is an invitation to re-wire it."""
+    A session whose `head_at_start` is absent has no bounded window, and the
+    brief does NOT fall back to a full-history walk: the history reads
+    unresolved with the floor's reason, spawning nothing, and the review scale
+    inherits the unresolved quadruple (`None`, never zeros). The deleted
+    helpers stay deleted: either one surviving is an invitation to re-wire a
+    walk that is bounded by other sessions' start times and truncates silently
+    (measured on session 8bb305c5: 6 owned commits, 3 reported, the 3 dropped
+    carrying the code)."""
     import inspect
 
-    assert not hasattr(wsc, "_session_owned_shas_from_map"), (
-        "the trailer-map fast path is back -- see `_session_owned_shas`'s "
-        "negative spec for the two reasons its answer cannot be trusted for "
-        "a review-scale measurement"
-    )
-    params = inspect.signature(wsc._session_owned_shas).parameters
-    assert list(params) == ["root", "session_id"], (
-        "`_session_owned_shas` grew a parameter: if it is a trailer map "
-        f"again, the truncation and merge defects come with it ({list(params)})"
-    )
+    from coordinator_core.workstream_complete import review_scale_inputs, session_history
 
+    for gone in ("_session_owned_shas", "_session_owned_shas_from_map", "_measure_session_review_scale_inputs"):
+        assert not hasattr(wsc, gone), f"`{gone}` is back: the brief reads one bounded SessionHistory"
+    assert list(inspect.signature(session_history.read_session_history).parameters) == ["root", "sid"]
 
-def test_session_owned_shas_confirmed_zero_is_not_none(tmp_path):
-    """`_session_owned_shas`'s own docstring: a CONFIRMED zero-match (the
-    full-history trailer walk ran and matched nothing) is `[]`, distinct
-    from the UNRESOLVABLE case (`None`) -- a caller must branch on `is
-    None`, never truthiness. This pins the distinction directly rather
-    than only via callers that already happen to check `is None` first
-    (`_measure_session_review_scale_inputs`'s own `if shas is None: return
-    None, None, None, None` a few hundred lines up)."""
-    unmatched_sid = "99999999-9999-9999-9999-999999999999"
-    committed_sid = "11111111-1111-1111-1111-111111111111"
+    sid = "11111111-1111-1111-1111-111111111111"
     _init_git_repo(tmp_path)
-    _commit_with_session_trailer(tmp_path, "own-1.md", committed_sid)
+    _commit_with_session_trailer(tmp_path, "own-1.md", sid)
+    claim = tmp_path / ".git" / "coordinator-sessions" / sid
+    claim.mkdir(parents=True)
 
-    confirmed_zero = wsc._session_owned_shas(tmp_path, unmatched_sid)
-    assert confirmed_zero == [], (
-        "a real repo with commits, none carrying this session's trailer, "
-        "is a CONFIRMED zero -- must be [], never None"
-    )
-    assert confirmed_zero is not None
+    spawned: list[object] = []
+    real_init = subprocess.Popen.__init__
 
-    unresolvable = wsc._session_owned_shas(tmp_path / "does-not-exist", committed_sid)
-    assert unresolvable is None, (
-        "a git failure (no such worktree) must be None, never [] -- "
-        "conflating the two is exactly the defect this contract forbids"
-    )
+    def _counting_init(self, *args, **kwargs):
+        spawned.append(args[0] if args else kwargs.get("args"))
+        real_init(self, *args, **kwargs)
 
-    no_session_id = wsc._session_owned_shas(tmp_path, "")
-    assert no_session_id is None
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(subprocess.Popen, "__init__", _counting_init)
+        history = session_history.read_session_history(tmp_path, sid)
+        measured = review_scale_inputs.measure_review_scale_inputs(tmp_path, history, [])
+
+    assert history.resolved is False and history.reason == "floor-missing"
+    assert history.window == ()
+    assert measured.quadruple == (None, None, None, None)
+    assert spawned == [], f"an absent floor must not walk anything: {spawned}"
+
+
+def test_history_window_holds_every_own_commit_regardless_of_peer_start_times(tmp_path):
+    """A peer whose claim dir is created AFTER this session's first commits must not
+    truncate the window: the floor is this session's own `head_at_start`."""
+    own_sid = "11111111-1111-1111-1111-111111111111"
+    peer_sid = "22222222-2222-2222-2222-222222222222"
+    _init_git_repo(tmp_path, floor_for=own_sid)
+    _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
+    _commit_with_session_trailer(tmp_path, "own-2.md", own_sid)
+    (tmp_path / ".git" / "coordinator-sessions" / peer_sid).mkdir(parents=True)
+    _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "own-3.md", own_sid)
+
+    history, measured = _measure_own(tmp_path, own_sid)
+
+    assert history.resolved and len(history.own) == 3 and measured.commit_count == 3
+
+
+def test_empty_history_is_a_confirmed_zero_not_unresolved(tmp_path):
+    """`resolved` separates "this session committed nothing" (floor == head) from "could not tell"."""
+    from coordinator_core.workstream_complete import session_history
+
+    sid = "11111111-1111-1111-1111-111111111111"
+    _init_git_repo(tmp_path, floor_for=sid)
+
+    confirmed_zero = session_history.read_session_history(tmp_path, sid)
+    assert confirmed_zero.resolved is True and confirmed_zero.own == ()
+    _, measured = _measure_own(tmp_path, sid)
+    assert measured.quadruple == (0, 0, 0, 0)
+
+    unknown_sid = session_history.read_session_history(tmp_path, "99999999-9999-9999-9999-999999999999")
+    assert unknown_sid.resolved is False and unknown_sid.own == ()
+
+    no_session_id = session_history.read_session_history(tmp_path, "")
+    assert no_session_id.resolved is False
 
 
 def test_commit_count_override_wins_unconditionally_and_records_supplied_scope(monkeypatch, tmp_path):
@@ -5834,7 +5871,7 @@ def test_commit_count_measured_path_carries_no_scope_clause(monkeypatch, tmp_pat
     session's own trailer-scoped measurement resolved `commit_count`, never
     a caller override."""
     own_sid = "testsid123"  # matches `_gate()`'s fixed sid
-    _init_git_repo(tmp_path)
+    _init_git_repo(tmp_path, floor_for=own_sid)
     # CODE-BEARING fixture, deliberately not `.md`. 507721c79 (2026-08-20) made a
     # doc-only close resolve to EM discretion: when `code_loc` resolves to 0, row 4's
     # commit-count and surface-count arms are suppressed by design. A `.md` fixture
@@ -6472,27 +6509,21 @@ def test_review_scope_resolution_does_not_take_the_trailer_map_fast_path():
     8bb305c5 -- 6 owned commits, the map reported the 3 most recent, and the
     3 it dropped were the ones carrying the code.
 
-    Asserted against the source of the review-scale branch rather than by
-    running it, because reproducing the failure needs a repo whose commits
-    straddle a live peer's start time -- a condition this suite cannot
-    manufacture without wall-clock coupling. The assertion is narrow: the
-    one call that feeds `precomputed_session_shas` on this path must not
-    pass `trailer_map`. Peer attribution's own use of the map is untouched.
-    """
+    Re-pointed at the reader: the review scope is the history window floored
+    at the session's own `head_at_start`, so a peer's start time cannot
+    truncate it (pinned behaviourally by
+    `test_history_window_holds_every_own_commit_regardless_of_peer_start_times`),
+    and the brief takes no trailer map anywhere on that path."""
     import inspect
 
     src = inspect.getsource(wsc)
-    marker = "precomputed_session_shas = _session_owned_shas("
-    assert marker in src, "review-scale sha resolution moved -- retarget this guard"
-    for line in src.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(marker):
-            assert "trailer_map" not in stripped, (
-                "review scope took the trailer-map fast path again: that map's "
-                "window is bounded by peer start times, so a session whose "
-                "commits predate it is silently truncated and the partitioned "
-                "review under-covers without saying so"
-            )
+    assert "read_session_history(" in src, "the brief no longer reads the session history -- retarget this guard"
+    assert "trailer_map" not in inspect.getsource(wsc.brief), (
+        "review scope took the trailer-map fast path again: that map's "
+        "window is bounded by peer start times, so a session whose "
+        "commits predate it is silently truncated and the partitioned "
+        "review under-covers without saying so"
+    )
 
 
 def test_existing_pinboard_line_returns_none_when_cache_file_absent(tmp_path):

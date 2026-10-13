@@ -173,8 +173,21 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
     return LegResult("ran", _scrub(f"source memo {name} resolved"))
 
 
+def _launch_close_review(ctx: JobContext) -> bool:
+    """Detach ``close_review.py`` for this run; False when the spawn failed."""
+    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+
+    engine = Path(__file__).resolve().parents[3]
+    params = json.dumps({"claimed_batons": list(ctx.claimed_batons)})
+    return spawn_detached(
+        str(engine), str(Path(__file__).with_name("close_review.py")),
+        [ctx.run_id, "--root", str(ctx.root), "--params", params],
+    )
+
+
 def _post_close(ctx: JobContext) -> LegResult:
-    """Fire the structural-index and scip launchers; ``baton-chain-closure`` is reported, not run."""
+    """Fire the structural-index and scip launchers and the detached ``close.review`` job;
+    ``baton-chain-closure`` is reported, not run."""
     launched: list[str] = []
     problems: list[str] = []
     for label, call in (
@@ -186,6 +199,14 @@ def _post_close(ctx: JobContext) -> LegResult:
             launched.append(label)
         except Exception as exc:  # one launcher's failure never stops the other
             problems.append(f"{label} {type(exc).__name__}")
+    try:
+        if _queued_legs(ctx.root, ctx.run_id, ("review",)):
+            if _launch_close_review(ctx):
+                launched.append("close.review")
+            else:
+                problems.append("close.review not started")
+    except Exception as exc:  # the review leg then reads failed at the deadline
+        problems.append(f"close.review {type(exc).__name__}")
     detail = f"{_CHAIN_CLOSURE_NOTE}; launched: {', '.join(launched) or 'none'}"
     if problems:
         detail += f"; launcher failed: {', '.join(problems)}"
@@ -208,14 +229,14 @@ def _now_for(deadline_text: str) -> datetime:
         return aware
 
 
-def _queued_legs(root: Path, run_id: str) -> list[str]:
+def _queued_legs(root: Path, run_id: str, legs: Sequence[str] = BACKGROUND_LEGS) -> list[str]:
     """Legs the record still lists ``queued`` and whose deadline has not passed, in ledger order."""
     try:
         record = json.loads((root / run_close.close_job_path(run_id)).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise FileNotFoundError(run_close.close_job_path(run_id)) from exc
     resolved = run_close.read_close_job(root, run_id, _now_for(str(record.get("deadline", ""))))
-    return [leg for leg in BACKGROUND_LEGS if leg in resolved and resolved[leg].status == "queued"]
+    return [leg for leg in legs if leg in resolved and resolved[leg].status == "queued"]
 
 
 def run_background(

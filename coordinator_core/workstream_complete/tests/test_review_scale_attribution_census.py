@@ -37,12 +37,13 @@ def repo(tmp_path, monkeypatch):
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "Test")
     seed = _commit(root, "seed.txt")
-    _git(root, "update-ref", "refs/remotes/origin/main", seed)
-    (root / ".git" / "coordinator-sessions" / _SID).mkdir(parents=True)
+    claim = root / ".git" / "coordinator-sessions" / _SID
+    claim.mkdir(parents=True)
+    (claim / "head_at_start").write_text(seed, encoding="utf-8")
     monkeypatch.setattr(
         wsc,
         "compute_session_shape_gate",
-        lambda _root: wsc.SessionShapeGate(
+        lambda _root, history=None: wsc.SessionShapeGate(
             sid=_SID,
             disposition=wsc_disposition.SINGLE_SESSION,
             consumed_handoff="",
@@ -60,15 +61,16 @@ def _review_scale(root: Path, decisions: dict) -> dict:
 
 
 def test_untrailered_commit_in_range_withholds_the_permissive_scale(repo):
+    seed = _git(repo, "rev-parse", "HEAD")
     _commit(repo, "own.py", f"Session-Id: {_SID}")
-    _commit(repo, "dispatched.py")
+    head = _commit(repo, "dispatched.py")
 
     scale = _review_scale(repo, {"stage_paths": []})
 
     assert scale["resolved"] is False
     assert scale["partition_mandatory"] is None
     assert scale["attribution"] == {
-        "range": "origin/main..HEAD",
+        "range": f"{seed}..{head}",
         "attributed_commits": 1,
         "unattributed_commits": 1,
     }
@@ -105,12 +107,14 @@ def test_hand_measured_override_is_not_second_guessed(repo):
     assert "attribution" not in scale
 
 
-def test_absent_origin_main_leaves_the_measurement_as_it_was(repo):
-    _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
+def test_absent_head_at_start_leaves_the_scale_unresolved_with_no_census(repo):
+    """No floor, no window: the census has nothing to cover and the scale never reads as resolved."""
+    (repo / ".git" / "coordinator-sessions" / _SID / "head_at_start").unlink()
     _commit(repo, "own.py", f"Session-Id: {_SID}")
     _commit(repo, "dispatched.py")
 
     scale = _review_scale(repo, {"stage_paths": []})
 
-    assert scale["resolved"] is True
+    assert scale["resolved"] is False
+    assert "floor" in scale["reason"]
     assert "attribution" not in scale

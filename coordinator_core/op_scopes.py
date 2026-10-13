@@ -718,6 +718,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.terminal_commit":                 "common_dir",
     # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
     "close.background":                         "common_dir",
+    # close.review — MUTATING: pays the run's queued review leg; the caller's own worktree.
+    "close.review":                             "common_dir",
     # dispatch.ask_gate / dispatch.ask_stage — keyed like dispatch.terminal_commit: the caller's own worktree.
     "dispatch.ask_gate":                        "common_dir",
     "dispatch.ask_stage":                       "common_dir",

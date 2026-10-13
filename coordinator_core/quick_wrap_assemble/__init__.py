@@ -113,6 +113,7 @@ import asyncio
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -145,7 +146,7 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.session.safe_commit_offer import commit_session_offer_async
-from coordinator_core.ops.session_commits import resolve_session_commits
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import session_facts
 from coordinator_core.quick_wrap_assemble.divergence import (
@@ -215,10 +216,7 @@ def _resolve_session(worktree_root: Path | None = None) -> tuple[Path, Path, str
             raise RuntimeError("no enclosing git worktree")
         worktree_root = Path(top)
 
-    common = _git_out(["rev-parse", "--git-common-dir"], worktree_root).strip()
-    common_dir = Path(common) if common else worktree_root / ".git"
-    if not common_dir.is_absolute():
-        common_dir = (worktree_root / common_dir).resolve()
+    common_dir = resolve_git_common_dir(worktree_root)
 
     from coordinator_core.ops.session_context import resolve_current_session_id
 
@@ -404,7 +402,7 @@ def _closed_diff_uncommitted(evidence: str) -> dict[str, Any]:
     return closed
 
 
-def _uncommitted_at_gate(root: Path) -> str | None:
+def _uncommitted_at_gate(root: Path, dirty: dict[str, Any] | None = None) -> str | None:
     """Why condition 2's commit-scoped counts cannot describe this session yet, or
     `None` once they can.
 
@@ -425,7 +423,7 @@ def _uncommitted_at_gate(root: Path) -> str | None:
         _compute_dirty_tree_attribution,
     )
 
-    attribution = _compute_dirty_tree_attribution(root)
+    attribution = _compute_dirty_tree_attribution(root, dirty=dirty)
     if attribution["degraded"]:
         return f"attribution probe degraded — {attribution['evidence']}"
     mine = attribution["mine"]
@@ -724,6 +722,9 @@ def _entry_test(
                 f"{diff.get('commit_count')}, novel_surfaces="
                 f"{diff.get('novel_surface_count')} of {diff.get('surface_count')}, "
                 f"scoping={diff.get('scoping_method')}"
+                + "".join(
+                    f", {diff[k]}" for k in ("loc_skipped", "doc_loc_skipped") if diff.get(k)
+                )
             ),
             "breached": diff.get("breached", []),
             "route_on_fail": "scoped review, then wrap (stays in quick-wrap)",
@@ -827,6 +828,54 @@ def _directives() -> list[dict[str, Any]]:
     d5["id"] = "d5"
     directives.append(d5)
     return directives
+
+
+#: Run-bound leg that pays each quick-wrap directive; a plan-run close that ran the leg
+#: discharges the directive. The close ledger's free-prose `discharged_by` is a different surface.
+_DIRECTIVE_LEGS = {
+    "d3": "orientation-refresh",
+    "d4": "baton-drain",
+    "d5": "baton-drain",
+}
+
+
+def _session_birth_floor(common_dir: Path, sid: str) -> float | None:
+    """Session claim dir birth time (epoch seconds), or `None` when the platform has none."""
+    from coordinator_core.ops.dispatch_emit.run_close import dir_birth_time
+
+    return dir_birth_time(common_dir / "coordinator-sessions" / sid)
+
+
+def _run_close_gate(
+    root: Path, common_dir: Path, sid: str, directives: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Stamp `discharged_by` on `directives` and return `gates.run_close`.
+
+    Never raises: a reader failure leaves every directive undischarged and reports
+    `verdict: indeterminate`.
+    """
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    try:
+        closes, unreadable = run_close.session_closes(
+            root, sid, datetime.now().astimezone(), _session_birth_floor(common_dir, sid)
+        )
+        run_less = closes[0] if closes and closes[0].run_id.endswith(".md") else None
+        payload = run_close.discharge(
+            directives, lambda d: _DIRECTIVE_LEGS.get(str(d.get("id"))), closes,
+            unreadable=unreadable,
+        )
+        payload["close_id"] = run_less.run_id if run_less is not None else None
+    except Exception as exc:  # noqa: BLE001 — must never block brief()'s own computation
+        for directive in directives:
+            directive[run_close.DISCHARGED_BY_KEY] = None
+        payload = {
+            "applies": False, "run_ids": [], "outstanding": [], "discharged": {},
+            "verdict": "indeterminate",
+            "reason": f"run-close read raised {type(exc).__name__}: {exc}",
+            "close_id": None,
+        }
+    return payload
 
 
 def _judgment_points(
@@ -1351,6 +1400,60 @@ def _skipped_commit_report(sid: str) -> dict[str, Any]:
     }
 
 
+def _history_with_numstat(root: Path, history: Any) -> tuple[Any, str, str]:
+    """(history, loc_skipped, doc_loc_skipped): own commits touching a code file get line counts
+    from one `git log --no-walk`; doc-only own commits are not diffed (their blobs are the cost
+    and no brightline axis reads them), which `doc_loc_skipped` names. A failed spawn returns the
+    raw history with `loc_skipped`. Binary rows stay None, as in the full walk."""
+    import dataclasses
+
+    from coordinator_core.workstream_complete.session_history import FileChange
+
+    own = history.own
+    code = [
+        c for c in own if any(session_facts._classify_path(f.path) == "code" for f in c.files)
+    ]
+    doc_note = (
+        "gross_loc/doc_only_loc not computed: doc-only commits not diffed"
+        if len(code) < len([c for c in own if c.files])
+        else ""
+    )
+    if not code:
+        return history, "", doc_note
+    try:
+        proc = subprocess.run(
+            ["git", "--no-optional-locks", "-c", "core.quotepath=false", "log", "--no-walk=unsorted",
+             "--stdin", "--numstat", "-M", "--format=%x1e%H"],
+            input="".join(f"{c.sha}\n" for c in code), cwd=str(root), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=15,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return history, "loc not computed: numstat spawn failed", ""
+    if proc.returncode != 0:
+        return history, f"loc not computed: numstat exit {proc.returncode}", ""
+
+    counts: dict[str, list[tuple[int | None, int | None]]] = {}
+    for chunk in proc.stdout.replace("\r\n", "\n").split("\x1e")[1:]:
+        sha, _, body = chunk.partition("\n")
+        rows: list[tuple[int | None, int | None]] = []
+        for line in body.split("\n"):
+            if line and line[0] in "0123456789-" and line.count("\t") >= 2:
+                a, d, _ = line.split("\t", 2)
+                rows.append((None if a == "-" else int(a), None if d == "-" else int(d)))
+        counts[sha.strip()] = rows
+
+    by_sha = {}
+    for c in code:
+        rows = counts.get(c.sha, [])
+        by_sha[c.sha] = dataclasses.replace(c, files=tuple(
+            FileChange(f.path, f.status, *(rows[i] if i < len(rows) else (None, None)))
+            for i, f in enumerate(c.files)
+        ))
+    window = tuple(by_sha.get(c.sha, c) for c in history.window)
+    return dataclasses.replace(history, window=window), "", doc_note
+
+
 def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[str, Any]:
     """Compute `/quick-wrap`'s decision object. READ-ONLY unless `commit=True`, C5's
     named carve-out (`_run_close_commit`, see module docstring "CALLER-OPT-IN" section)
@@ -1378,21 +1481,33 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
     """
     root, common_dir, sid = _resolve_session(worktree_root)
     invocation_id = new_correlation_id()
+    from coordinator_core.workstream_complete.session_history import read_session_history
+
+    history = read_session_history(root, sid, numstat=False)
+    loc_skipped = doc_loc_skipped = ""
+    if history.resolved:
+        raw_breaches = session_facts.raw_brightline_breaches(history)
+        if raw_breaches:
+            loc_skipped = "loc not computed: already over brightline on " + ", ".join(raw_breaches)
+        else:
+            history, loc_skipped, doc_loc_skipped = _history_with_numstat(root, history)
+    dirty = session_facts._dirty_paths(root)
 
     pickup_kind_record = session_facts.session_pickup_kind(
         root, common_dir, sid, invocation_id=invocation_id
     )
     governing_plan_record = session_facts.session_governing_plan(
-        root, common_dir, sid, invocation_id=invocation_id
+        root, common_dir, sid, dirty=dirty, invocation_id=invocation_id
     )
     diff_record = session_facts.session_diff_brightline(
-        root, common_dir, sid, invocation_id=invocation_id
+        root, common_dir, sid, history, invocation_id=invocation_id, loc_skipped=loc_skipped,
+        doc_loc_skipped=doc_loc_skipped,
     )
     sizings_record = session_facts.session_terminal_sizings(
-        root, invocation_id=invocation_id
+        root, dirty=dirty, invocation_id=invocation_id
     )
     fold_record = session_facts.session_fold_sidecars(
-        root, invocation_id=invocation_id
+        root, dirty=dirty, invocation_id=invocation_id
     )
 
     pickup_kind = (
@@ -1407,7 +1522,7 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
     )
     diff = diff_record["value"] if not diff_record["degraded"] else _closed_diff()
     if not diff_record["degraded"]:
-        uncommitted = _uncommitted_at_gate(root)
+        uncommitted = _uncommitted_at_gate(root, dirty)
         if uncommitted is not None:
             diff = _closed_diff_uncommitted(uncommitted)
     sizings = (
@@ -1531,6 +1646,9 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
                 )
             )
 
+    directives = _directives()
+    run_close_gate = _run_close_gate(root, common_dir, sid, directives)
+
     envelope = build_envelope(
         artifact={"session_id": sid, "worktree_root": str(root), "ceremony": "quick-wrap"},
         preflight={},
@@ -1538,21 +1656,22 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
             "close_gate": close_gate,
             "entry_test": entry_test,
             "commit_outcome": commit_outcome,
+            "run_close": run_close_gate,
         },
-        directives=_directives(),
+        directives=directives,
         judgment_points=judgment_points,
         decisions={"close_ledger": close_ledger},
         narration=narration,
         next_move=entry_test["route"],
     )
-    _print_commits_into_baton(root, sid)
+    _print_commits_into_baton(root, sid, history)
     return dict(_emit(envelope))
 
 
-def _print_commits_into_baton(root: Path, sid: str) -> None:
+def _print_commits_into_baton(root: Path, sid: str, history: Any) -> None:
     """C5 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5, part
-    b): resolve this session's attributed commit shas via C4's
-    ``session.commits`` primitive and merge them into the session's baton
+    b): merge this session's attributed commit shas (``history.own``, the
+    brief's single floor..head read) into the session's baton
     record (``session_baton.store.merge_baton`` — dedup-extends, never
     replaces).
 
@@ -1570,11 +1689,7 @@ def _print_commits_into_baton(root: Path, sid: str) -> None:
     """
     if not sid:
         return
-    try:
-        commits = resolve_session_commits(root, sid)
-    except (ValueError, RuntimeError):
-        return
-    shas = [c["sha"] for c in commits]
+    shas = [c.sha for c in history.own]
     if not shas:
         return
     try:

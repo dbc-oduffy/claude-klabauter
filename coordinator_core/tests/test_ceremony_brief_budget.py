@@ -484,7 +484,7 @@ def test_wsc_brief_stays_under_frozen_high_water(tmp_path, monkeypatch):
         consumed_handoff_paths=(),
         detection={},
     )
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: gate)
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: gate)
 
     result, open_count, process_time_ms = _measure_brief(
         lambda: wsc.brief(decisions={}, repo_root=tmp_path)

@@ -42,6 +42,7 @@ import pytest
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, SINGLE_SESSION
 from coordinator_core.workstream_complete import directives_commit_tail
+from coordinator_core.workstream_complete.session_history import SessionCommit, SessionHistory
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -64,7 +65,7 @@ def _gate(
 
 
 def _patch_gate(monkeypatch: pytest.MonkeyPatch, gate: wsc.SessionShapeGate) -> None:
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: gate)
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: gate)
 
 
 def _write_ac_handoff(tmp_path: Path, rel_path: str, body: str) -> None:
@@ -303,24 +304,51 @@ def test_emitted_path_argument_contains_no_backslash(tmp_path):
     assert "\\" not in entry["args"][-1]
 
 
-def test_ship_sha_is_the_sessions_newest_own_commit_never_head(tmp_path, monkeypatch):
+def _commit(sha: str, sid: str, parents: tuple[str, ...] = ("0" * 40,)) -> SessionCommit:
+    return SessionCommit(sha, parents, 0, "2026-10-13T00:00:00+00:00", "s", (sid,), "", ())
+
+
+def _history(gate: wsc.SessionShapeGate, *commits: SessionCommit, resolved: bool = True) -> SessionHistory:
+    window = commits if resolved else ()
+    return SessionHistory(
+        gate.sid, "0" * 40, "peerhead", window, resolved, "" if resolved else "floor-missing"
+    )
+
+
+def test_ship_sha_is_the_sessions_newest_own_commit_never_head(tmp_path):
     _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
     gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
-    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: "peerhead")
-    monkeypatch.setattr(wsc, "_session_owned_shas", lambda root, sid: ["older", "newest"])
+    history = _history(
+        gate, _commit("older", gate.sid), _commit("newest", gate.sid), _commit("peerhead", "peer-sid")
+    )
 
-    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path))
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
 
     assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--sha", "newest"]
 
 
-@pytest.mark.parametrize("owned", [None, []])
-def test_ship_sha_is_omitted_when_the_session_owns_no_commit(tmp_path, monkeypatch, owned):
+def test_ship_sha_skips_a_merge_the_session_performed(tmp_path):
     _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
     gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
-    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: "peerhead")
-    monkeypatch.setattr(wsc, "_session_owned_shas", lambda root, sid: owned)
+    history = _history(
+        gate, _commit("work", gate.sid), _commit("merge", gate.sid, parents=("a" * 40, "b" * 40))
+    )
 
-    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path))
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
+
+    assert entry["args"][-2:] == ["--sha", "work"]
+
+
+@pytest.mark.parametrize("kind", ["no-history", "unresolved", "no-own-commit"])
+def test_ship_sha_is_omitted_when_the_session_owns_no_commit(tmp_path, kind):
+    _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
+    history = {
+        "no-history": None,
+        "unresolved": _history(gate, resolved=False),
+        "no-own-commit": _history(gate, _commit("peerhead", "peer-sid")),
+    }[kind]
+
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
 
     assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md"]

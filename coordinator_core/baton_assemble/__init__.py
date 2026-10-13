@@ -1132,7 +1132,9 @@ def _normalize_repo_relative_path(path: str) -> str:
     return path.strip().replace("\\", "/")
 
 
-def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
+def _compute_dirty_tree_attribution(
+    root: Path, *, dirty: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Disk-derived case-c attribution probe: partitions the current dirty
     set into `mine` (this session's own edits, per its live touch-record
     claims -- `coordinator_core.session.touch_record.project_live_claims`,
@@ -1152,7 +1154,12 @@ def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
     `degraded=True`; collapsing a probe FAILURE into `mine=[]` would
     silently resolve `d1` with no ask at all, which is the exact failure
     mode this module must never introduce (a failure to compute must never
-    silently resolve `d1`)."""
+    silently resolve `d1`).
+
+    `dirty` (optional) is a `session_facts._dirty_paths` record read once by
+    the caller; given one, this probe spawns no `git status` and a degraded
+    record maps to the degraded shape carrying the record's evidence. Absent,
+    the probe reads the tree itself."""
     session_id = _resolve_current_session_id()
     if not session_id:
         return {
@@ -1189,6 +1196,26 @@ def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
     touched = {
         _normalize_repo_relative_path(path) for path in projection.claims
     }
+
+    if dirty is not None:
+        if dirty["degraded"]:
+            return {
+                "degraded": True,
+                "evidence": (
+                    "dirty-tree attribution probe: dirty-tree record degraded "
+                    f"({dirty['evidence']}) -- falling back to an unconditional ask."
+                ),
+            }
+        injected = {
+            _normalize_repo_relative_path(path)
+            for path in dirty["value"]["paths"]
+            if path.strip()
+        }
+        return {
+            "degraded": False,
+            "mine": sorted(injected & touched),
+            "residue_count": len(injected - touched),
+        }
 
     try:
         # `--untracked-files=all` (not the bare `--porcelain` default) --
@@ -1228,14 +1255,14 @@ def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
             ),
         }
 
-    dirty = {
+    spawned_dirty = {
         _normalize_repo_relative_path(path)
         for _xy, path in parse_porcelain_paths(result.stdout)
         if path.strip()
     }
 
-    mine = sorted(dirty & touched)
-    residue_count = len(dirty - touched)
+    mine = sorted(spawned_dirty & touched)
+    residue_count = len(spawned_dirty - touched)
     return {"degraded": False, "mine": mine, "residue_count": residue_count}
 
 

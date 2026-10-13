@@ -38,8 +38,17 @@ from typing import Any
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.workstream_complete.session_history import SessionCommit, SessionHistory
 
 _SID = "4839fcc4-7544-4ca6-bb5f-2cf0977e4620"
+_FLOOR = "c" * 40
+_HEAD = "d" * 40
+
+
+def _history() -> SessionHistory:
+    """A resolved one-commit window, so the floor path is reached without a repo."""
+    commit = SessionCommit(_HEAD, (_FLOOR,), 0, "2026-08-21T00:00:00+00:00", "s", (_SID,), "", ())
+    return SessionHistory(_SID, _FLOOR, _HEAD, (commit,), True, "")
 _SID_SHORT = _SID[:8]
 _FOREIGN_SID = "deadbeef-0000-0000-0000-000000000000"
 
@@ -142,8 +151,7 @@ def test_floor_kwargs_open_count_bounded_by_own_records_not_corpus_size(monkeypa
     _write_record(live_dir, f"2026-08-21-000001-{_SID_SHORT}.json", sha_range="aaaaaaa^..aaaaaaa")
     _write_record(live_dir, f"2026-08-21-000002-{_SID_SHORT}.json", sha_range="bbbbbbb^..bbbbbbb")
 
-    monkeypatch.setattr(wsc, "_resolve_session_start_sha", lambda root, t: "cccccccccccccccccccccccccccccccccccccccc")
-    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: "dddddddddddddddddddddddddddddddddddddddd")
+    history = _history()
 
     real_open = builtins.open
     opened_paths: list[str] = []
@@ -156,12 +164,13 @@ def test_floor_kwargs_open_count_bounded_by_own_records_not_corpus_size(monkeypa
 
     monkeypatch.setattr(builtins, "open", _counting_open)
 
-    result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, session_start_time=object())
+    result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, history)
 
     assert len(opened_paths) == 2
     assert all(_SID_SHORT in p for p in opened_paths)
     assert result is not None
-    assert result["session_start_sha"] == "cccccccccccccccccccccccccccccccccccccccc"
+    assert result["session_start_sha"] == _FLOOR
+    assert result["chain_tip_sha"] == _HEAD
 
 
 @pytest.mark.spawns_process
@@ -182,10 +191,7 @@ def test_floor_kwargs_short_id_collision_still_filtered_by_field_after_open(monk
         live_dir, f"2026-08-21-000002-{_SID_SHORT}.json", session_id=collider_full_sid, sha_range="bbbbbbb^..bbbbbbb"
     )
 
-    monkeypatch.setattr(wsc, "_resolve_session_start_sha", lambda root, t: "cccccccccccccccccccccccccccccccccccccccc")
-    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: "dddddddddddddddddddddddddddddddddddddddd")
-
-    result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, session_start_time=object())
+    result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, _history())
 
     assert result is not None
     tips = [r["sha_range_head"] for r in result["trail_records"]]
@@ -199,6 +205,6 @@ def test_floor_kwargs_zero_own_records_among_decoys_returns_none(monkeypatch, tm
     for i in range(50):
         _write_record(live_dir, _decoy_filename(i), session_id=_FOREIGN_SID)
 
-    result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, session_start_time=object())
+    result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, _history())
 
     assert result is None

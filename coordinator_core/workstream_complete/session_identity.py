@@ -60,9 +60,12 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import FrozenSet, Tuple, Union
+from typing import TYPE_CHECKING, FrozenSet, Tuple, Union
 
 from coordinator_core.win_portability import no_console_creationflags
+
+if TYPE_CHECKING:
+    from coordinator_core.workstream_complete.session_history import SessionHistory
 
 #: Record/field separators for the batched `git log` call below -- ASCII
 #: unit/record-separator bytes, matching `coverage.py`'s own
@@ -111,7 +114,66 @@ def _resolve_deliverable_id(trailer_value: str, body: str) -> Tuple[str, str]:
     return "", "absent"
 
 
-def session_deliverable_ids(repo_root: StrPath, session_id: str) -> SessionDeliverableIdentity:
+def _deliverable_ids_from_history(
+    session_id: str, history: "SessionHistory"
+) -> SessionDeliverableIdentity:
+    """Same answer as the full-history walk, read from the injected window: no spawn.
+
+    An unresolved history is `ok=False`, the walk's own failure shape, never a walk.
+    """
+    if not history.resolved:
+        return SessionDeliverableIdentity(
+            session_id=session_id,
+            ok=False,
+            reason=f"session history unresolved: {history.reason}",
+            commits=(),
+            deliverable_ids=frozenset(),
+        )
+    commits = tuple(
+        CommitDeliverableIdentity(
+            sha=c.sha,
+            deliverable_id=c.deliverable_id,
+            source="history" if c.deliverable_id else "absent",
+        )
+        for c in history.own
+        if not c.is_merge
+    )
+    return _summarise(session_id, commits)
+
+
+def _summarise(
+    session_id: str, commits: Tuple[CommitDeliverableIdentity, ...]
+) -> SessionDeliverableIdentity:
+    deliverable_ids = frozenset(c.deliverable_id for c in commits if c.deliverable_id)
+
+    if not commits:
+        reason = f"no commits reachable from HEAD carry a Session-Id trailer equal to {session_id!r}"
+    elif not deliverable_ids:
+        reason = f"{len(commits)} commit(s) matched session_id, but none carry a resolvable Deliverable-Id"
+    elif len(deliverable_ids) == 1:
+        reason = f"{len(commits)} commit(s) matched session_id, resolved 1 Deliverable-Id"
+    else:
+        reason = (
+            f"{len(commits)} commit(s) matched session_id, resolved "
+            f"{len(deliverable_ids)} CONFLICTING Deliverable-Id values"
+        )
+
+    return SessionDeliverableIdentity(
+        session_id=session_id,
+        ok=True,
+        reason=reason,
+        commits=commits,
+        deliverable_ids=deliverable_ids,
+    )
+
+
+def session_deliverable_ids(
+    repo_root: StrPath,
+    session_id: str,
+    *,
+    history: "SessionHistory | None" = None,
+) -> SessionDeliverableIdentity:
+    """With `history`, answered from `history.own` and spawns nothing; without, walks HEAD."""
     if not session_id:
         return SessionDeliverableIdentity(
             session_id=session_id,
@@ -120,6 +182,9 @@ def session_deliverable_ids(repo_root: StrPath, session_id: str) -> SessionDeliv
             commits=(),
             deliverable_ids=frozenset(),
         )
+
+    if history is not None:
+        return _deliverable_ids_from_history(session_id, history)
 
     try:
         proc = subprocess.run(
@@ -180,24 +245,4 @@ def session_deliverable_ids(repo_root: StrPath, session_id: str) -> SessionDeliv
         deliverable_id, source = _resolve_deliverable_id(trailer_value, body)
         commits.append(CommitDeliverableIdentity(sha=sha, deliverable_id=deliverable_id, source=source))
 
-    deliverable_ids = frozenset(c.deliverable_id for c in commits if c.deliverable_id)
-
-    if not commits:
-        reason = f"no commits reachable from HEAD carry a Session-Id trailer equal to {session_id!r}"
-    elif not deliverable_ids:
-        reason = f"{len(commits)} commit(s) matched session_id, but none carry a resolvable Deliverable-Id"
-    elif len(deliverable_ids) == 1:
-        reason = f"{len(commits)} commit(s) matched session_id, resolved 1 Deliverable-Id"
-    else:
-        reason = (
-            f"{len(commits)} commit(s) matched session_id, resolved "
-            f"{len(deliverable_ids)} CONFLICTING Deliverable-Id values"
-        )
-
-    return SessionDeliverableIdentity(
-        session_id=session_id,
-        ok=True,
-        reason=reason,
-        commits=tuple(commits),
-        deliverable_ids=deliverable_ids,
-    )
+    return _summarise(session_id, tuple(commits))

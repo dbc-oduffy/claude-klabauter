@@ -80,7 +80,7 @@ def _gate(disposition: str = "single-session", **overrides) -> wsc.SessionShapeG
 
 
 def _patch_gate(monkeypatch: pytest.MonkeyPatch, gate: wsc.SessionShapeGate) -> None:
-    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root: gate)
+    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: gate)
 
 
 def _write_clean_plan(tmp_path: Path, slug: str, status: str = "draft") -> None:

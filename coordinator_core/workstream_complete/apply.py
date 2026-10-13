@@ -241,7 +241,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
@@ -292,6 +292,7 @@ from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
 from coordinator_core.workstream_complete import judgments as _judgments
+from coordinator_core.ops.dispatch_emit.run_close import DISCHARGED_BY_KEY, close_job_path
 from coordinator_core.contract.apply_base import assert_dispatchable
 from coordinator_core.contract.apply_base import judgment_points_by_id as _judgment_points_by_id
 
@@ -940,6 +941,46 @@ def _fill_completion_entry_surfaces(
     return None
 
 
+def _discharged_entry_path(
+    directive: dict[str, Any], resolve_root: "Callable[[], Optional[Path]]"
+) -> str:
+    """The completion entry a discharged `d-complete-entry` stands on, or `""`.
+
+    A run-less close is keyed on its entry's path, so `discharged_by` is that path. A
+    plan-run close is keyed on its run id; the entry is read from that run's close-job
+    record. An unresolvable entry yields `""`, which fails a dependant's
+    `{d-complete-entry.entry_path}` token loud rather than letting it dispatch blind."""
+    by = str(directive[DISCHARGED_BY_KEY])
+    if by.endswith(".md"):
+        return by
+    repo_root = resolve_root()
+    if repo_root is None:
+        return ""
+    try:
+        record = json.loads((Path(repo_root) / close_job_path(by)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    entry = record.get("completion_entry") if isinstance(record, dict) else None
+    return entry if isinstance(entry, str) else ""
+
+
+def _undischarged_ship_dispositions(
+    decisions: dict[str, Any], discharged: dict[str, str]
+) -> dict[str, Any]:
+    """`decisions` without the `handoff_dispositions` of batons a run already shipped
+    (`d-ship-consumed-handoff:<basename>` discharged), so the close tail never
+    re-stamps their `shipped_in`. Returns `decisions` itself when nothing is dropped."""
+    prefix = "d-ship-consumed-handoff:"
+    shipped = {did[len(prefix):] for did in discharged if did.startswith(prefix)}
+    dispositions = decisions.get("handoff_dispositions")
+    if not shipped or not isinstance(dispositions, dict):
+        return decisions
+    return {
+        **decisions,
+        "handoff_dispositions": {k: v for k, v in dispositions.items() if k not in shipped},
+    }
+
+
 def _run_post_close_directives(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Dispatches the directives held back for after the close commit (those
     carrying `AFTER_CLOSE_COMMIT_KEY`), in list order, each through the same
@@ -953,6 +994,10 @@ def _run_post_close_directives(directives: list[dict[str, Any]]) -> list[dict[st
     results: list[dict[str, Any]] = []
     for directive in directives:
         record: dict[str, Any] = {"id": directive["id"]}
+        if directive.get(DISCHARGED_BY_KEY):
+            record[DISCHARGED_BY_KEY] = directive[DISCHARGED_BY_KEY]
+            results.append(record)
+            continue
         try:
             outcome = _dispatch_directive(directive)
         except (Exception, SystemExit) as exc:  # noqa: BLE001 - best-effort by contract; a CLI can `sys.exit` at import
@@ -1109,6 +1154,7 @@ def _execute_directives(
     degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
+    discharged: dict[str, str] = {}
     _resolved_repo_root: list[Optional[Path]] = [repo_root]
     _repo_root_resolved: list[bool] = [repo_root is not None]
 
@@ -1135,7 +1181,7 @@ def _execute_directives(
             # a live member of this run's list and dispatches the moment its
             # gate resolves, so an un-admitted verb there is a structurally
             # invalid list, which is exactly what this pre-pass exists to catch.
-            if directive.get("already_satisfied"):
+            if directive.get("already_satisfied") or directive.get(DISCHARGED_BY_KEY):
                 continue
             _resolve_cli(directive["cli"])
     except UnrecognizedDirective as exc:
@@ -1169,6 +1215,15 @@ def _execute_directives(
             # instead of falsely reporting "did not land" — see module
             # docstring, deviation 3.
             stdout_by_id[directive["id"]] = ""
+            continue
+
+        if directive.get(DISCHARGED_BY_KEY):
+            discharged[directive["id"]] = directive[DISCHARGED_BY_KEY]
+            stdout_by_id[directive["id"]] = (
+                _discharged_entry_path(directive, _lazy_repo_root)
+                if directive["id"] == _COMPLETE_ENTRY_DIRECTIVE_ID
+                else ""
+            )
             continue
 
         try:
@@ -1265,6 +1320,7 @@ def _execute_directives(
         "failed": failed,
         "degraded": degraded,
         "results": results,
+        "discharged": discharged,
     }
 
     # The one `stdout_by_id` value that outlives this function. `apply()`'s
@@ -2018,7 +2074,7 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 report["waiver_receipt_error"] = waiver_errors[0]
             close_commit_report = _run_close_commit_tail(
                 worktree_root,
-                effective_decisions,
+                _undischarged_ship_dispositions(effective_decisions, report.get("discharged") or {}),
                 sid,
                 completion_entry_path,
                 extra_stage_paths=[waiver_receipt] if waiver_receipt else (),

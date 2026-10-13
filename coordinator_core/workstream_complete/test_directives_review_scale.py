@@ -2,7 +2,7 @@
 `coordinator_core.workstream_complete.directives_review.decide_review_scale`
 (the diff-shape row-selection table, SKILL.md:413-426), plus (below,
 `# --- C5 ---`) the C5 disk-measurement wiring
-(`coordinator_core.workstream_complete._measure_session_review_scale_inputs`
+(`coordinator_core.workstream_complete.review_scale_inputs.measure_review_scale_inputs`
 / `brief()`'s backfill of `gross_loc`/`commit_count`/`surface_count`).
 
 Spec backlink: pln-chain-end-review-scale-wire-de-23a81a,
@@ -445,6 +445,40 @@ def _init_git_repo(root: Path) -> None:
     )
 
 
+def _measure(root, session_id, stage_paths, slices=None):
+    """Seed `session_id`'s head_at_start at the repo's root commit, read the window, measure."""
+    from coordinator_core.workstream_complete import review_scale_inputs, session_history
+
+    if session_id:
+        floor = subprocess.run(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            cwd=str(root), check=True, capture_output=True, text=True, **_NO_CONSOLE,
+        ).stdout.split()[0]
+        claim = Path(root) / ".git" / "coordinator-sessions" / session_id
+        claim.mkdir(parents=True, exist_ok=True)
+        (claim / "head_at_start").write_text(floor + "\n", encoding="utf-8")
+    history = session_history.read_session_history(Path(root), session_id)
+    result = review_scale_inputs.measure_review_scale_inputs(Path(root), history, stage_paths)
+    if slices is not None:
+        slices.extend(result.commit_slices)
+    return result.quadruple
+
+
+def _session_authored_paths(root, session_start_time):
+    """The stage_paths `brief()` derives for the caller: session-authored files net of known-concurrent peers."""
+    from coordinator_core.workstream_complete import directives_commit_tail, directives_memo_lifecycle
+
+    return [
+        row["path"]
+        for row in directives_memo_lifecycle.classify_session_authored_files(
+            root,
+            session_start_time,
+            known_concurrent_paths=directives_commit_tail.resolve_known_concurrent_paths(root, _SESSION_ID),
+        )
+        if row.get("session_authored")
+    ]
+
+
 def test_measure_session_review_scale_inputs_resolves_over_uncommitted_diff(tmp_path):
     """(1) A resolved range produces resolved measurements that carry
     `decide_review_scale` to a resolved, non-`jp-review-scale`-firing
@@ -453,9 +487,7 @@ def test_measure_session_review_scale_inputs_resolves_over_uncommitted_diff(tmp_
     (tmp_path / "new_work.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    gross_loc, code_loc, commit_count, surface_count = _measure(tmp_path, _SESSION_ID, ["new_work.py"])
     assert commit_count == 0
     assert gross_loc is not None and gross_loc > 0
     assert surface_count == 1
@@ -480,9 +512,7 @@ def test_measure_session_review_scale_inputs_none_when_session_id_unresolved():
     reason — never a default verdict, never a silent single-reviewer
     fallthrough, and above all never the whole shared worktree scored as
     this session's own diff."""
-    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        Path("."), None, ""
-    )
+    gross_loc, code_loc, commit_count, surface_count = _measure(Path("."), "", [])
     assert (gross_loc, code_loc, commit_count, surface_count) == (None, None, None, None)
 
     decision = decide_review_scale(
@@ -532,9 +562,7 @@ def test_measure_session_review_scale_inputs_counts_committed_and_uncommitted_to
         # `classify_session_authored_files` derivation — that heuristic is
         # itself under test elsewhere, and letting this assertion depend on
         # it couples `gross_loc == 2` to a module this test does not guard.
-        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-            root, session_start_time, _SESSION_ID, uncommitted_paths=["c.py"]
-        )
+        gross_loc, code_loc, commit_count, surface_count = _measure(root, _SESSION_ID, ["c.py"])
         assert commit_count == 1
         assert gross_loc == 2
         assert code_loc == 2
@@ -564,16 +592,12 @@ def test_measure_session_review_scale_inputs_excludes_peer_work_on_a_shared_work
         _run_git(["add", "mine.py"], str(root))
         _commit_as(root, "my commit", _SESSION_ID)
 
-        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-            root, session_start_time, _SESSION_ID, uncommitted_paths=[]
-        )
+        gross_loc, code_loc, commit_count, surface_count = _measure(root, _SESSION_ID, [])
         assert commit_count == 1
         assert gross_loc == 1
         assert code_loc == 1
 
-        peer_loc, peer_code_loc, peer_commits, _ = wsc._measure_session_review_scale_inputs(
-            root, session_start_time, _PEER_SESSION_ID, uncommitted_paths=[]
-        )
+        peer_loc, peer_code_loc, peer_commits, _ = _measure(root, _PEER_SESSION_ID, [])
         assert peer_commits == 1
         assert peer_loc == 40
         assert peer_code_loc == 40
@@ -634,12 +658,7 @@ def test_measure_session_review_scale_inputs_counts_backslash_tracked_modified_f
         _commit_as(root, "add tracked", _SESSION_ID)
         (root / "sub" / "tracked.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
 
-        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-            root,
-            session_start_time,
-            _SESSION_ID,
-            uncommitted_paths=["sub\\tracked.py"],
-        )
+        gross_loc, code_loc, commit_count, surface_count = _measure(root, _SESSION_ID, ["sub\\tracked.py"])
         assert gross_loc == 2
         assert code_loc == 2
         assert commit_count == 1
@@ -675,12 +694,7 @@ def test_measure_session_review_scale_inputs_expands_untracked_directory():
         (brief_dir / "one.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
         (brief_dir / "two.py").write_text("c = 3\n", encoding="utf-8")
 
-        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-            root,
-            session_start_time,
-            _SESSION_ID,
-            uncommitted_paths=["briefs/a-peer-brief/"],
-        )
+        gross_loc, code_loc, commit_count, surface_count = _measure(root, _SESSION_ID, ["briefs/a-peer-brief/"])
 
         assert (gross_loc, code_loc, commit_count, surface_count) != (None, None, None, None), (
             "an untracked directory collapsed the whole measurement to unresolved"
@@ -722,14 +736,7 @@ def test_measure_session_review_scale_inputs_exhausted_walk_budget_trips_brightl
         original_budget = wsc._UNTRACKED_WALK_BUDGET
         wsc._UNTRACKED_WALK_BUDGET = 3
         try:
-            gross_loc, code_loc, _commit_count, _surface_count = (
-                wsc._measure_session_review_scale_inputs(
-                    root,
-                    session_start_time,
-                    _SESSION_ID,
-                    uncommitted_paths=["big/"],
-                )
-            )
+            gross_loc, code_loc, _commit_count, _surface_count = _measure(root, _SESSION_ID, ["big/"])
         finally:
             wsc._UNTRACKED_WALK_BUDGET = original_budget
 
@@ -769,23 +776,14 @@ def test_measure_session_review_scale_inputs_propagates_none_on_split_tracked_gi
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _init_git_repo(root)
-        session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+        (root / "present.py").write_text("x = 1\n", encoding="utf-8")
 
-        real_run_git_read_only = wsc._run_git_read_only
-
-        def _fail_ls_files(args, cwd):
-            if args and args[0] == "ls-files":
-                return None
-            return real_run_git_read_only(args, cwd)
-
-        original = wsc._run_git_read_only
-        wsc._run_git_read_only = _fail_ls_files
+        original = wsc._split_tracked
+        wsc._split_tracked = lambda _root, _paths: None
         try:
-            result = wsc._measure_session_review_scale_inputs(
-                root, session_start_time, _SESSION_ID, uncommitted_paths=["ghost.py"]
-            )
+            result = _measure(root, _SESSION_ID, ["present.py"])
         finally:
-            wsc._run_git_read_only = original
+            wsc._split_tracked = original
 
         assert result == (None, None, None, None)
 
@@ -803,9 +801,7 @@ def test_measure_session_review_scale_inputs_propagates_none_on_unreadable_untra
         _init_git_repo(root)
         session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-        result = wsc._measure_session_review_scale_inputs(
-            root, session_start_time, _SESSION_ID, uncommitted_paths=["missing_untracked.py"]
-        )
+        result = _measure(root, _SESSION_ID, ["missing_untracked.py"])
         assert result == (None, None, None, None)
 
 
@@ -824,7 +820,7 @@ def test_measure_session_review_scale_inputs_no_owned_commits_and_none_session_s
         root = Path(tmp)
         _init_git_repo(root)
 
-        result = wsc._measure_session_review_scale_inputs(root, None, _SESSION_ID)
+        result = _measure(root, _SESSION_ID, [])
         assert result == (0, 0, 0, 0)
 
 
@@ -1181,9 +1177,7 @@ def test_commit_slices_out_shape_and_ordering_two_commits(tmp_path):
     ).stdout.strip()
 
     slices: list = []
-    result = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
-    )
+    result = _measure(tmp_path, _SESSION_ID, [], slices)
     assert result[2] == 2  # commit_count
 
     assert [s["sha"] for s in slices] == [c1, c2]
@@ -1225,9 +1219,7 @@ def test_commit_slices_out_excludes_interleaved_foreign_commit(tmp_path):
     ).stdout.strip()
 
     slices: list = []
-    result = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
-    )
+    result = _measure(tmp_path, _SESSION_ID, [], slices)
     assert result[2] == 2  # commit_count -- the foreign commit is not this session's
 
     shas_seen = {s["sha"] for s in slices}
@@ -1277,9 +1269,7 @@ def test_commit_slices_out_carries_reviewable_surface_count(tmp_path):
     ).stdout.strip()
 
     slices: list = []
-    result = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
-    )
+    result = _measure(tmp_path, _SESSION_ID, [], slices)
     assert result[2] == 3  # commit_count: one code commit, two bookkeeping
 
     by_sha = {s["sha"]: s for s in slices}
@@ -1295,7 +1285,7 @@ def test_commit_slices_out_untouched_when_shas_unresolvable():
     None` to distinguish "unresolvable" from "resolved, zero commits", not
     an empty list on its own (both leave the list empty)."""
     slices: list = [{"sentinel": "must not be cleared or appended past"}]
-    result = wsc._measure_session_review_scale_inputs(Path("."), None, "", commit_slices_out=slices)
+    result = _measure(Path("."), "", [], slices)
     assert result == (None, None, None, None)
     # Untouched: the pre-seeded sentinel is neither cleared nor added to.
     assert slices == [{"sentinel": "must not be cleared or appended past"}]
@@ -1308,19 +1298,17 @@ def test_commit_slices_out_empty_list_on_resolved_zero_commits(tmp_path):
     (never `None`)."""
     _init_git_repo(tmp_path)
     slices: list = []
-    result = wsc._measure_session_review_scale_inputs(tmp_path, None, _SESSION_ID, commit_slices_out=slices)
+    result = _measure(tmp_path, _SESSION_ID, [], slices)
     assert result == (0, 0, 0, 0)
     assert slices == []
 
 
 def test_format_h_change_is_non_regressive_and_still_one_spawn(tmp_path, monkeypatch):
-    """(5) The `--format=` -> `--format=%H` change must not alter
+    """(5) Reading the slices as a side output must not alter
     `gross_loc`/`code_loc`/`commit_count`/`surface_count`, and the committed
-    leg must still be exactly ONE git spawn (the marker lines injected by
-    `%H` are silently skipped by the numstat-row accumulators, per
-    `_split_per_commit_numstat`'s own docstring)."""
+    leg spawns nothing through `_run_git_read_only` (the window was read
+    once, by the history reader)."""
     _init_git_repo(tmp_path)
-    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
     (tmp_path / "b.py").write_text("x = 1\n", encoding="utf-8")
     _run_git(["add", "b.py"], str(tmp_path))
@@ -1329,72 +1317,24 @@ def test_format_h_change_is_non_regressive_and_still_one_spawn(tmp_path, monkeyp
     _run_git(["add", "c.py"], str(tmp_path))
     _commit_as(tmp_path, "second session commit", _SESSION_ID)
 
-    show_calls = []
+    git_calls = []
     real_run_git_read_only = wsc._run_git_read_only
 
-    def _counting(args, cwd):
-        if args and args[0] == "show":
-            show_calls.append(args)
-        return real_run_git_read_only(args, cwd)
+    def _counting(args, cwd, stdin_text=None):
+        git_calls.append(args)
+        return real_run_git_read_only(args, cwd, stdin_text)
 
     monkeypatch.setattr(wsc, "_run_git_read_only", _counting)
 
-    without_side_channel = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[]
-    )
-    assert len(show_calls) == 1
-    assert "--format=%H" in show_calls[0]
+    without_side_channel = _measure(tmp_path, _SESSION_ID, [])
+    assert git_calls == []
 
     slices: list = []
-    with_side_channel = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
-    )
+    with_side_channel = _measure(tmp_path, _SESSION_ID, [], slices)
 
     assert with_side_channel == without_side_channel
     assert with_side_channel == (3, 3, 2, 1)
     assert len(slices) == 2
-
-
-# ---------------------------------------------------------------------------
-# `_split_per_commit_numstat` -- direct unit coverage of the pure text
-# splitter itself (independent of the module `commit_slices_out` wiring
-# above).
-# ---------------------------------------------------------------------------
-
-
-def test_split_per_commit_numstat_direct():
-    text = "\n".join([
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "1\t0\tfoo.py",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "2\t1\tbar.py",
-        "3\t0\tbaz.py",
-    ])
-    result = wsc._split_per_commit_numstat(
-        text, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
-    )
-    assert set(result.keys()) == {
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    }
-    assert "1\t0\tfoo.py" in result["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    assert "2\t1\tbar.py" in result["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
-    assert "3\t0\tbaz.py" in result["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
-    assert "foo.py" not in result["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
-
-
-def test_split_per_commit_numstat_ignores_marker_line_not_in_known_shas():
-    """A 40-hex-char numstat PATH (however unlikely) is not mistaken for a
-    commit boundary unless it is a member of the caller's own known `shas`
-    set."""
-    fake_path_line = "a" * 40
-    text = "\n".join([
-        "cccccccccccccccccccccccccccccccccccccccc",
-        f"1\t0\t{fake_path_line}",
-    ])
-    result = wsc._split_per_commit_numstat(text, ["cccccccccccccccccccccccccccccccccccccccc"])
-    assert list(result.keys()) == ["cccccccccccccccccccccccccccccccccccccccc"]
-    assert fake_path_line in result["cccccccccccccccccccccccccccccccccccccccc"]
 
 
 def test_measure_session_review_scale_inputs_excludes_touch_claimed_peer_dirty_file():
@@ -1430,8 +1370,8 @@ def test_measure_session_review_scale_inputs_excludes_touch_claimed_peer_dirty_f
         _session_core.init(_PEER_SESSION_ID, cwd=str(root))
         _session_scope.touch(_PEER_SESSION_ID, "peer_unclaimed.py", cwd=str(root))
 
-        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-            root, session_start_time, _SESSION_ID, uncommitted_paths=None
+        gross_loc, code_loc, commit_count, surface_count = _measure(
+            root, _SESSION_ID, _session_authored_paths(root, session_start_time)
         )
 
         assert commit_count == 1
@@ -1462,8 +1402,8 @@ def test_measure_session_review_scale_inputs_still_misattributes_untouch_claimed
         peer_lines = "\n".join(f"p{i} = {i}" for i in range(30)) + "\n"
         (root / "peer_unclaimed.py").write_text(peer_lines, encoding="utf-8")
 
-        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-            root, session_start_time, _SESSION_ID, uncommitted_paths=None
+        gross_loc, code_loc, commit_count, surface_count = _measure(
+            root, _SESSION_ID, _session_authored_paths(root, session_start_time)
         )
 
         assert commit_count == 1
@@ -1632,9 +1572,7 @@ def test_measure_surface_count_excludes_prose_and_ceremony_bookkeeping(tmp_path)
     _commit_as(tmp_path, "code plus ceremony exhaust", _SESSION_ID)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    gross_loc, code_loc, commit_count, surface_count = _measure(tmp_path, _SESSION_ID, [])
 
     assert commit_count == 1
     # The prose rows are still in the raw sum — `gross_loc`'s contract is
@@ -1657,9 +1595,7 @@ def test_ceremony_only_close_resolves_zero_surfaces(tmp_path):
     _commit_as(tmp_path, "bookkeeping only", _SESSION_ID)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    gross_loc, code_loc, commit_count, surface_count = _measure(tmp_path, _SESSION_ID, [])
 
     assert surface_count == 0
     assert code_loc == 0
@@ -1684,9 +1620,7 @@ def test_untracked_prose_contributes_loc_but_not_a_surface(tmp_path):
     (tmp_path / "handoff.md").write_text("x\n" * 20, encoding="utf-8")
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    gross_loc, code_loc, _commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    gross_loc, code_loc, _commit_count, surface_count = _measure(tmp_path, _SESSION_ID, ["handoff.md"])
 
     assert gross_loc == 20
     assert code_loc == 0
@@ -1707,9 +1641,7 @@ def test_code_bearing_close_still_counts_its_own_surfaces(tmp_path):
     _commit_as(tmp_path, "four real surfaces plus prose", _SESSION_ID)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    _gross_loc, _code_loc, _commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    _gross_loc, _code_loc, _commit_count, surface_count = _measure(tmp_path, _SESSION_ID, [])
 
     # python, js, config, test — the `doctrine` bucket is gone, the four
     # code-bearing ones are not.
@@ -1734,9 +1666,7 @@ def test_json_ceremony_receipt_is_not_reviewable_code(tmp_path):
     _commit_as(tmp_path, "prose fix plus a json receipt", _SESSION_ID)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    gross_loc, code_loc, commit_count, surface_count = _measure(tmp_path, _SESSION_ID, [])
 
     assert gross_loc is not None and gross_loc > 30
     assert code_loc == 0
@@ -1767,9 +1697,7 @@ def test_session_authored_directories_stay_reviewable(tmp_path):
     _commit_as(tmp_path, "authored work product", _SESSION_ID)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    _gross_loc, code_loc, _commit_count, surface_count = wsc._measure_session_review_scale_inputs(
-        tmp_path, session_start_time, _SESSION_ID
-    )
+    _gross_loc, code_loc, _commit_count, surface_count = _measure(tmp_path, _SESSION_ID, [])
 
     assert code_loc > 0
     assert surface_count == 1

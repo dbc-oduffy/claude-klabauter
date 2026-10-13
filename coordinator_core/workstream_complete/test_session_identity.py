@@ -138,3 +138,75 @@ def test_git_failure_reports_ok_false(tmp_path):
     result = session_identity.session_deliverable_ids(not_a_repo, "sid-1")
     assert result.ok is False
     assert result.deliverable_ids == frozenset()
+
+
+def _history_for(repo, sid, floor, monkeypatch):
+    from coordinator_core.workstream_complete import session_history
+
+    monkeypatch.setattr(session_history, "_resolve_floor", lambda root, s: (floor, ""))
+    return session_history.read_session_history(repo, sid)
+
+
+def _forbid_spawn(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("a handed history must not spawn")
+
+    monkeypatch.setattr(session_identity.subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+
+
+def test_injected_history_matches_walk_and_spawns_nothing(repo, monkeypatch):
+    floor = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    _commit_with_message(
+        repo, "a.txt", "a\n", "chunk A\n\nSession-Id: sid-1\nDeliverable-Id: dlv-alpha\n"
+    )
+    _commit_with_message(
+        repo, "p.txt", "p\n", "peer\n\nSession-Id: sid-peer\nDeliverable-Id: dlv-peer\n"
+    )
+    _commit_with_message(
+        repo, "g.txt", "g\n", "chunk G\n\nDeliverable-Id: dlv-gamma\n\nSession-Id: sid-1\n"
+    )
+    walked = session_identity.session_deliverable_ids(repo, "sid-1")
+    history = _history_for(repo, "sid-1", floor, monkeypatch)
+    assert history.resolved
+
+    _forbid_spawn(monkeypatch)
+    injected = session_identity.session_deliverable_ids(repo, "sid-1", history=history)
+
+    assert injected.ok and walked.ok
+    assert injected.deliverable_ids == walked.deliverable_ids == frozenset({"dlv-alpha", "dlv-gamma"})
+    assert {(c.sha, c.deliverable_id) for c in injected.commits} == {
+        (c.sha, c.deliverable_id) for c in walked.commits
+    }
+    assert injected.reason == walked.reason
+
+
+def test_injected_history_excludes_merges(repo, monkeypatch):
+    from coordinator_core.workstream_complete.session_history import (
+        SessionCommit,
+        SessionHistory,
+    )
+
+    def _commit(sha, parents):
+        return SessionCommit(sha, parents, 0, "", "s", ("sid-1",), "dlv-x", ())
+
+    history = SessionHistory(
+        "sid-1", "f", "h", (_commit("a" * 40, ("f",)), _commit("b" * 40, ("a" * 40, "c" * 40))), True, ""
+    )
+    result = session_identity.session_deliverable_ids(repo, "sid-1", history=history)
+    assert [c.sha for c in result.commits] == ["a" * 40]
+
+
+def test_unresolved_history_is_degraded_not_a_walk(repo, monkeypatch):
+    from coordinator_core.workstream_complete.session_history import SessionHistory
+
+    _commit_with_message(
+        repo, "a.txt", "a\n", "chunk A\n\nSession-Id: sid-1\nDeliverable-Id: dlv-alpha\n"
+    )
+    _forbid_spawn(monkeypatch)
+    history = SessionHistory("sid-1", None, None, (), False, "floor-missing")
+    result = session_identity.session_deliverable_ids(repo, "sid-1", history=history)
+    assert result.ok is False
+    assert result.reason.endswith("floor-missing")
+    assert result.deliverable_ids == frozenset()
+    assert result.commits == ()

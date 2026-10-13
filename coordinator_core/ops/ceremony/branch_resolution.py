@@ -71,9 +71,12 @@ from coordinator_core.win_portability import no_console_creationflags
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from functools import lru_cache
+
+if TYPE_CHECKING:
+    from coordinator_core.workstream_complete.session_history import SessionHistory
 
 from coordinator_core import session_attribution
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS
@@ -938,11 +941,71 @@ def _range_is_contiguous_suffix(
     )
 
 
+def _started_epoch(started_at: str | None) -> float | None:
+    """`started_at` as epoch seconds; None when absent or unparseable."""
+    if started_at is None:
+        return None
+    try:
+        return datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _trailer_reliable_from_history(history: "SessionHistory", started_epoch: float | None) -> bool:
+    """`_trailer_reliable` on a resolved window, no spawn.
+
+    Unreliable only when the session has no own commit and HEAD (`window[-1]`) is newer than
+    `started_epoch`. An empty window means HEAD has not moved.
+    """
+    if history.own or started_epoch is None or not history.window:
+        return True
+    return not history.window[-1].committer_epoch > started_epoch
+
+
+def _candidate_range_from_history(history: "SessionHistory", started_epoch: float | None) -> str:
+    """`<first window sha>^..<head>`; "" when `started_at` is unusable or the window is empty."""
+    if started_epoch is None or not history.window:
+        return ""
+    return f"{history.window[0].sha}^..{history.head}"
+
+
+def _foreign_shas_in_window(
+    history: "SessionHistory", known_scope_paths: frozenset[str]
+) -> list[str]:
+    """Window commits not attributable to the session (oldest first).
+
+    A commit naming sessions without this one is foreign; a trailerless commit is foreign unless
+    it touches a known-scope path.
+    """
+    foreign: list[str] = []
+    for commit in history.window:
+        if commit.session_ids:
+            if history.sid not in commit.session_ids:
+                foreign.append(commit.sha)
+        elif not any(f.path in known_scope_paths for f in commit.files):
+            foreign.append(commit.sha)
+    return foreign
+
+
+def _window_is_contiguous_suffix(history: "SessionHistory", foreign_shas: list[str]) -> bool:
+    """True iff foreign commits form only the leading run of the oldest-first window."""
+    foreign = set(foreign_shas)
+    leading_run_ended = False
+    for commit in history.window:
+        is_foreign = commit.sha in foreign
+        if not leading_run_ended:
+            leading_run_ended = not is_foreign
+        elif is_foreign:
+            return False
+    return True
+
+
 def analyze_session_scoping(
     worktree_root: Path,
     common_dir: Path,
     sid: str,
     known_scope_paths: frozenset[str] | None = None,
+    history: "SessionHistory | None" = None,
 ) -> ScopingVerdict:
     """Run the full C1 scoping-analysis pipeline and return a ScopingVerdict.
 
@@ -973,6 +1036,10 @@ def analyze_session_scoping(
     into the returned `ScopingVerdict.warnings` (Review: code-reviewer F1) —
     see that field's docstring for why a caller must not treat a non-empty
     list as an ordinary computed result.
+
+    `history` (a `SessionHistory`): all four steps read the window and spawn nothing. The range
+    is `<window[0].sha>^..<head>` (a concrete head, not the literal `HEAD`); an unresolved history
+    yields an ambiguous verdict with the reason in `warnings`.
     """
     if known_scope_paths is None:
         known_scope_paths = frozenset()
@@ -990,6 +1057,39 @@ def analyze_session_scoping(
 
     warnings: list[str] = []
     started_at = _read_started_at(common_dir, sid)
+
+    if history is not None:
+        if not history.resolved:
+            return ScopingVerdict(
+                method=SCOPING_METHOD_AMBIGUOUS,
+                foreign_count=0,
+                contiguous=False,
+                candidate_range="",
+                warnings=[f"session history unresolved: {history.reason}"],
+            )
+        started_epoch = _started_epoch(started_at)
+        candidate_range = _candidate_range_from_history(history, started_epoch)
+        if _trailer_reliable_from_history(history, started_epoch):
+            return ScopingVerdict(
+                method=SCOPING_METHOD_TRAILER,
+                foreign_count=0,
+                contiguous=True,
+                candidate_range=candidate_range,
+            )
+        foreign_shas = _foreign_shas_in_window(history, known_scope_paths)
+        contiguous = _window_is_contiguous_suffix(history, foreign_shas)
+        method = (
+            SCOPING_METHOD_STARTED_AT_RANGE
+            if candidate_range and not foreign_shas and contiguous
+            else SCOPING_METHOD_AMBIGUOUS
+        )
+        return ScopingVerdict(
+            method=method,
+            foreign_count=len(foreign_shas),
+            contiguous=contiguous,
+            candidate_range=candidate_range,
+        )
+
     candidate_range = _started_at_candidate_range(worktree_root, started_at, warnings=warnings)
 
     if _trailer_reliable(worktree_root, sid, started_at, warnings=warnings):

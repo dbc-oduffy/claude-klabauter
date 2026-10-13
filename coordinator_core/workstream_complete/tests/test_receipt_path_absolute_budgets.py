@@ -96,7 +96,7 @@ _CLOSE_LEG_DRIVER = (
     "    consumed_handoff_paths=(),\n"
     "    detection={},\n"
     ")\n"
-    "wsc.compute_session_shape_gate = lambda root: gate\n"
+    "wsc.compute_session_shape_gate = lambda root, history=None: gate\n"
     "wsc.brief(decisions={}, repo_root=d)\n"
 )
 
@@ -138,10 +138,15 @@ def test_close_leg_process_tree_stays_under_400ms_with_zero_spawns(tmp_path: Pat
         f"(k={result['k']}, wall_ms={result['wall_ms']} for context only)."
     )
 
-    spawn_count = max(0, round(result["procs_per_call"]) - 1)
+    # The job object also counts what the OS attaches to a bare interpreter (a console host on
+    # Windows), so the census floor is a no-op interpreter's count on this box, never a literal 1.
+    floor = round(
+        batched_process_time_ms([sys.executable, "-c", "pass"], k=3, cwd=_REPO_ROOT)["procs_per_call"]
+    )
+    spawn_count = max(0, round(result["procs_per_call"]) - floor)
     assert spawn_count <= CLOSE_LEG_SPAWN_CENSUS_CEILING, (
-        f"brief() issued {spawn_count} Python-issued spawn(s) beyond the root "
-        f"interpreter (procs_per_call={result['procs_per_call']!r}), exceeding "
+        f"brief() issued {spawn_count} Python-issued spawn(s) beyond a bare "
+        f"interpreter's {floor} (procs_per_call={result['procs_per_call']!r}), exceeding "
         f"the absolute {CLOSE_LEG_SPAWN_CENSUS_CEILING} ceiling. This census "
         "is job-object process count, not an argv[0]=='git' filter, so it "
         "catches a non-git spawn `test_gate_path_spawn_budget.py` never sees."

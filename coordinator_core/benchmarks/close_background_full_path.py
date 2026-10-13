@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.win_portability import no_console_creationflags
 
 RUN_ID = "bench-run"
@@ -93,6 +94,7 @@ def _run_job(repo: Path) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    declare_benchmark_origin()
     args = [a for a in argv if not a.startswith("--")]
     unknown = [a for a in argv if a.startswith("--") and a != "--setup-only"]
     if len(args) != 1 or unknown:

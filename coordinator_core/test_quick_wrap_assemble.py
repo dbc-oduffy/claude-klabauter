@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from coordinator_core import quick_wrap_assemble as qwa
+from coordinator_core.workstream_complete.session_history import SessionHistory
 
 _SID = "11111111-2222-3333-4444-555555555555"
 
@@ -98,7 +99,14 @@ def _stub_facts_all_computed(monkeypatch, repo: Path) -> None:
     # skeleton, not a repo, so an unstubbed call would read as degraded and fail c2
     # closed in every test here. Stubbed to "committed and clean", the state these
     # brief()-level tests model.
-    monkeypatch.setattr(qwa, "_uncommitted_at_gate", lambda root: None)
+    monkeypatch.setattr(qwa, "_uncommitted_at_gate", lambda root, dirty=None: None)
+    monkeypatch.setattr(
+        qwa.session_facts, "_dirty_paths", lambda *a, **k: _computed_record({"paths": []})
+    )
+    monkeypatch.setattr(
+        "coordinator_core.workstream_complete.session_history.read_session_history",
+        lambda root, sid, **k: SessionHistory(sid, None, None, (), False, "test-stub"),
+    )
     monkeypatch.setattr(
         qwa.session_facts,
         "session_pickup_kind",
@@ -774,7 +782,7 @@ def test_uncommitted_work_at_gate_fails_condition_two_instead_of_passing_on_zero
     monkeypatch.setattr(
         qwa,
         "_uncommitted_at_gate",
-        lambda root: "2 uncommitted path(s) claimed by this session: a.py, b.py",
+        lambda root, dirty=None: "2 uncommitted path(s) claimed by this session: a.py, b.py",
     )
 
     envelope = qwa.brief()
@@ -801,14 +809,14 @@ def test_uncommitted_probe_reads_this_sessions_paths_and_ignores_peer_residue(mo
     monkeypatch.setattr(
         baton_assemble,
         "_compute_dirty_tree_attribution",
-        lambda root: {"degraded": False, "mine": [], "residue_count": 7},
+        lambda root, dirty=None: {"degraded": False, "mine": [], "residue_count": 7},
     )
     assert qwa._uncommitted_at_gate(Path("/nowhere")) is None
 
     monkeypatch.setattr(
         baton_assemble,
         "_compute_dirty_tree_attribution",
-        lambda root: {
+        lambda root, dirty=None: {
             "degraded": False,
             "mine": ["state/handoffs/x.md", "coordinator_core/y.py"],
             "residue_count": 7,
@@ -828,7 +836,7 @@ def test_a_degraded_attribution_probe_fails_condition_two_closed(monkeypatch):
     monkeypatch.setattr(
         baton_assemble,
         "_compute_dirty_tree_attribution",
-        lambda root: {"degraded": True, "evidence": "no resolvable session id"},
+        lambda root, dirty=None: {"degraded": True, "evidence": "no resolvable session id"},
     )
 
     evidence = qwa._uncommitted_at_gate(Path("/nowhere"))
