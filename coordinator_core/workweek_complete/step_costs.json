@@ -39,7 +39,6 @@
     "merge_d4_pr_body": {"process_ms_min": 187.5, "process_ms_median": 195.3, "spawns": 4, "samples": 5, "cost_class": "engine", "basis": "measured: --commit-range origin/main..HEAD cold tree k=2 x5, rc 0"},
     "merge_d5_portability_sweep": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read: CLI has never existed; the directive lands already_satisfied"},
     "merge_d6_illegal_paths": {"process_ms_min": 296.9, "process_ms_median": 312.5, "spawns": 6, "samples": 5, "cost_class": "engine", "basis": "measured: same CLI and args as d_step5_7_illegal_path_backstop"},
-    "merge_d7_flip_tags": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read: deferred narrated no-op, runs after the merge"},
     "merge_d8_orphan_branch_sweep": {"process_ms_min": 1546.9, "process_ms_median": 1562.5, "spawns": 75, "samples": 5, "cost_class": "over-bar", "basis": "measured: cold tree k=1 x5, rc 0; warm .exe forwarder 15.6ms (resident CPU not in that tree)"},
     "merge_d_grant_handback": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read: deferred narrated no-op"},
     "body_step3_referential_integrity": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read: DoE body step with no directive; folded into lint-frontmatter by the body text, not run separately"},

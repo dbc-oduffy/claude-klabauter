@@ -499,8 +499,8 @@ async def _run_origin_stub_close(
 OP_COMPLETION_ENTRY_FOLD = "completion.commit_ledger_fold"
 
 #: The two allowed roots a caller-supplied entry path may resolve under —
-#: mirrors `completion_ops._flip_to_released_handler`'s own dual-root
-#: allow-list (`docs/plans/` / `archive/completed/`). A path escaping both
+#: mirrors `completion_ops._append_session_handler`'s containment
+#: (`docs/plans/`) widened to `archive/completed/`. A path escaping both
 #: is refused rather than written, even though this leg is soft-fail —
 #: writing outside these roots is never the status-quo-ante residue a
 #: soft-fail is supposed to preserve.
@@ -513,8 +513,8 @@ _FOLD_ALLOWED_ROOT_SUFFIXES: tuple[tuple[str, ...], ...] = (
 def _resolve_fold_entry_path(worktree_root: Path, entry_path: str) -> Optional[Path]:
     """Resolve and contain a caller-supplied completion-entry path against
     this worktree's `docs/plans/` and `archive/completed/` roots -- the
-    same two roots `completion.flip_to_released` already confines its own
-    writes to. Returns `None` (never raises) on an empty path, an
+    same two roots `completion.stamp_releases` confines its own writes to.
+    Returns `None` (never raises) on an empty path, an
     unresolvable path, or one that escapes both roots -- the caller treats
     that as a clean skip, not a failure to diagnose.
     """
@@ -538,7 +538,7 @@ def _apply_commit_fold(content: str, sha: str) -> tuple[str, bool]:
     Reuses `completion_ops`'s own `commits:` shape regexes/parsing (never a
     second, drifting parser) — mirrors `_parse_existing_commits`'s exact
     flow/block/any-other-shape discrimination so this write agrees with
-    what `completion.flip_to_released` will later read back.
+    what `completion.stamp_releases` will later read back.
 
     Returns ``(content, False)`` unchanged when ``sha`` is already present
     (idempotent no-op — the caller never fires a commit for a no-op).

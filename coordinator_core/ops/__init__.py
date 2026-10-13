@@ -368,7 +368,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.cruft_sweep", ""),
     (
         "coordinator_core.ops.completion_ops",
-        'registers "completion.flip_to_released", "plan.append_session" (strang-10 B, DR-216)',
+        'registers "plan.append_session" (strang-10 B, DR-216)',
+    ),
+    (
+        "coordinator_core.ops.release_stamp",
+        'registers "completion.stamp_releases" (DR-216)',
     ),
     (
         "coordinator_core.ops.review_freeze_diff",

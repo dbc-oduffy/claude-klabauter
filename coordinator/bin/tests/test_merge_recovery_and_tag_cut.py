@@ -456,3 +456,136 @@ def test_clone_merge_conflict_keeps_the_clone_and_touches_nothing(tmp_path: Path
     assert "CLONE=" in out
     assert _head_sha(work, "main") == before
     assert list((work / "scratch").glob("clone-merge-*"))
+
+
+class _StampArgs:
+    def __init__(self, repo_root: Path, tag: str = "v1.0.0", report: bool = False) -> None:
+        self.repo_root = str(repo_root)
+        self.report = report
+        self.tag = tag
+        self.fetch_ref = "main"
+        self.merge_ref = None
+        self.must_contain = None
+        self.pr = None
+
+
+def _fake_stamp(calls: list, result: dict | None = None):
+    def stamp_releases(root, *, tag_prefix="", report=False):
+        calls.append({"root": Path(root), "tag_prefix": tag_prefix, "report": report})
+        return result if result is not None else {
+            "report": report,
+            "tags_considered": 1,
+            "stamped": [
+                {"path": "archive/completed/2026-10/a.md", "released_in": "v1.0.0",
+                 "released_at": "2026-10-13", "released_sha": "abc"}
+            ],
+            "unreleased": {"count": 2, "paths": []},
+            "skipped": [],
+        }
+    return stamp_releases
+
+
+def _patch_stamp(monkeypatch, fn) -> None:
+    from coordinator_core.ops import release_stamp
+    monkeypatch.setattr(release_stamp, "stamp_releases", fn)
+
+
+def _refuse(*_a, **_k):
+    from coordinator_core.ops.release_stamp.model import StampError
+    raise StampError("git-failed", "boom")
+
+
+def test_stamp_releases_prints_lines_and_exits_zero(tmp_path, monkeypatch, capsys) -> None:
+    calls: list = []
+    _patch_stamp(monkeypatch, _fake_stamp(calls))
+    assert _mod.main(["stamp-releases", "--repo-root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "archive/completed/2026-10/a.md: released_in=v1.0.0",
+        "RELEASE_STAMPED=1",
+        "RELEASE_UNRELEASED=2",
+    ]
+    assert calls[0]["report"] is False
+
+
+def test_stamp_releases_report_passes_report_and_prints_would_stamp(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    calls: list = []
+    _patch_stamp(monkeypatch, _fake_stamp(calls))
+    assert _mod.main(["stamp-releases", "--report", "--repo-root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert calls[0]["report"] is True
+    assert "RELEASE_WOULD_STAMP=1" in out and "RELEASE_STAMPED" not in out
+
+
+def test_stamp_releases_refusal_is_one_stderr_line_exit_one(tmp_path, monkeypatch, capsys) -> None:
+    _patch_stamp(monkeypatch, _refuse)
+    assert _mod.main(["stamp-releases", "--repo-root", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        "merge-recovery-and-tag-cut: stamp-releases: git-failed: boom"
+    ]
+
+
+def test_stamp_prefix_comes_from_coordinator_local_md(tmp_path, monkeypatch) -> None:
+    (tmp_path / "coordinator.local.md").write_text("---\ntag_prefix: doe-\n---\n", encoding="utf-8")
+    calls: list = []
+    _patch_stamp(monkeypatch, _fake_stamp(calls))
+    _mod._stamp(tmp_path, False)
+    assert calls[0]["tag_prefix"] == "doe-"
+
+
+def test_cut_tag_stamps_once_after_a_cut_and_after_a_skip(tmp_path, monkeypatch, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    calls: list = []
+    _patch_stamp(monkeypatch, _fake_stamp(calls))
+    assert _mod.cmd_cut_tag(_StampArgs(work)) == 0
+    first = capsys.readouterr().out.splitlines()
+    assert first[0].startswith("MERGE_SHA=") and first[1] == "TAG_CUT=v1.0.0"
+    assert first[-3:] == [
+        "archive/completed/2026-10/a.md: released_in=v1.0.0",
+        "RELEASE_STAMPED=1",
+        "RELEASE_UNRELEASED=2",
+    ]
+    assert len(calls) == 1
+    assert _mod.cmd_cut_tag(_StampArgs(work)) == 0
+    assert "TAG_SKIPPED=v1.0.0" in capsys.readouterr().out
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("quoted", [False, True])
+def test_cut_tag_stamp_refusal_after_cut_returns_zero(
+    tmp_path, monkeypatch, capsys, quoted: bool
+) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    if quoted:
+        (work / "coordinator.local.md").write_text(
+            '---\ntag_prefix: "doe-"\n---\n', encoding="utf-8"
+        )
+    else:
+        _patch_stamp(monkeypatch, _refuse)
+    tag = "v1.0.0"
+    assert _mod.cmd_cut_tag(_StampArgs(work, tag=tag)) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert f"TAG_CUT={tag}" in out
+    reason = "bad-params" if quoted else "git-failed"
+    assert out[-1] == (
+        f"RELEASE_STAMP_FAILED={reason}: rerun merge-recovery-and-tag-cut stamp-releases"
+    )
+
+
+def test_cut_tag_then_stamp_on_a_real_repo(tmp_path, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    entry = work / "archive" / "completed" / "2026-10" / "a.md"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("---\nstatus: pending-release\n---\nbody\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=work)
+    _git(["commit", "-m", "entry"], cwd=work)
+    _git(["push", "origin", "main"], cwd=work)
+    assert _mod.cmd_cut_tag(_StampArgs(work)) == 0
+    out = capsys.readouterr().out
+    assert "archive/completed/2026-10/a.md: released_in=v1.0.0" in out
+    assert "RELEASE_STAMPED=1" in out
+    text = entry.read_text(encoding="utf-8")
+    assert "status: released" in text and "released_in: v1.0.0" in text

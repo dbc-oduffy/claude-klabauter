@@ -372,14 +372,6 @@
     },
     {
       "module": "coordinator_core/merge_assemble/__init__.py",
-      "directive_id": "d7",
-      "cli": "merge-release-notes-derive",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/merge_assemble/__init__.py",
       "directive_id": "d8",
       "cli": "orphan-branch-sweep",
       "unresolved": true,

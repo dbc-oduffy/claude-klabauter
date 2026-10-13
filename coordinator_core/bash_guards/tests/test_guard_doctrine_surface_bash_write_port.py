@@ -174,3 +174,71 @@ def test_the_bare_capture_regression_is_real() -> None:
     assert guard._has_indirection_marker(segment) is True
     assert guard._is_assignment_captured_substitution_read_shape(segment, IDENTIFIERS) is True
     assert guard.is_denied_bash_write(segment, IDENTIFIERS) is False
+
+
+# --- Sanctioned sizing writer with shell punctuation in quoted operands ---
+
+SIZING_IDS = guard._SIZING_RECORD_IDENTIFIERS
+_SIZING_BASE = "sizing-assemble --write state/sizings/2026-10-13-x.yaml"
+_FIFA_OPERANDS = (
+    r" --intent 'it'\''s a `fix`'"
+    r" --premise-evidence 'see `<foo>` and a | b'"
+)
+
+
+def test_sizing_writer_with_quoted_punctuation_is_admitted() -> None:
+    cmd = _SIZING_BASE + _FIFA_OPERANDS
+    assert guard.is_denied_bash_write(cmd, SIZING_IDS) is False
+
+
+def test_sizing_writer_with_a_real_redirect_into_sizings_still_denies() -> None:
+    cmd = _SIZING_BASE + _FIFA_OPERANDS + " > state/sizings/y.yaml"
+    assert guard.is_denied_bash_write(cmd, SIZING_IDS) is True
+
+
+def test_sizing_writer_with_a_live_substitution_outside_quotes_still_denies() -> None:
+    cmd = _SIZING_BASE + " --intent $(tee state/sizings/y.yaml)" + _FIFA_OPERANDS
+    assert guard.is_denied_bash_write(cmd, SIZING_IDS) is True
+    cmd = _SIZING_BASE + ' --intent "a `tee state/sizings/y.yaml`"'
+    assert guard.is_denied_bash_write(cmd, SIZING_IDS) is True
+
+
+def test_escaped_apostrophe_does_not_split_a_quoted_pipe() -> None:
+    cmd = r"echo 'it'\''s a | b'"
+    assert guard._split_top_level_segments(cmd) == [cmd]
+
+
+def test_backslash_escaped_separator_outside_quotes_does_not_split() -> None:
+    segments = guard._split_top_level_segments(r"find . -exec rm {} \; ; echo x")
+    assert len(segments) == 2
+    assert r"\;" in segments[0]
+
+
+# --- Single-quote backslash is literal; index-only reset is not a content mutation ---
+
+
+def test_single_quoted_trailing_backslash_closes_the_span() -> None:
+    cmd = r"sizing-assemble --intent 'x\' ; tee state/sizings/a.yaml"
+    assert len(guard._split_top_level_segments(cmd)) == 2
+    assert guard.is_denied_bash_write(cmd, SIZING_IDS) is True
+
+
+def test_double_quoted_escaped_quote_does_not_split() -> None:
+    cmd = r'echo "a \" ; b"'
+    assert guard._split_top_level_segments(cmd) == [cmd]
+
+
+def test_index_only_reset_of_a_governed_path_is_admitted() -> None:
+    cmd = "git reset -q HEAD -- state/sizings/2026-10-13-x.yaml"
+    assert guard.is_denied_bash_write(cmd, SIZING_IDS) is False
+
+
+def test_reset_hard_of_a_governed_path_still_denies() -> None:
+    for flag in ("--hard", "--merge", "--keep"):
+        cmd = f"git reset {flag} HEAD -- state/sizings/2026-10-13-x.yaml"
+        assert guard.is_denied_bash_write(cmd, SIZING_IDS) is True
+
+
+def test_checkout_and_restore_of_a_governed_path_still_deny() -> None:
+    assert guard.is_denied_bash_write("git checkout -- state/sizings/a.yaml", SIZING_IDS) is True
+    assert guard.is_denied_bash_write("git restore state/sizings/a.yaml", SIZING_IDS) is True

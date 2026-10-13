@@ -344,14 +344,10 @@ Negative-spec (hard-won):
                                         caller-supplied docs/plans/<plan>.md
         - plan.append_session:          in-place append of a session record inside the
                                         caller-supplied docs/plans/<plan>.md
-        - completion.flip_to_released:  in-place flip of release fields on one named
-                                        archive/completed/**/*.md entry (admitted into D1 by
-                                        DR-216's 2026-08-06 amendment — it had been writing
-                                        under this carve-out's bounds without appearing in
-                                        any D1 enumeration, so it held no admitting record;
-                                        AMENDED by EM under the execution authorization of
-                                        docs/plans/2026-08-06-writer-side-commit-ownership-
-                                        lock-gap.md — PM counter-signature pending)
+        - completion.stamp_releases:    in-place stamp of release fields on every pending
+                                        archive/completed/**/*.md entry with the earliest
+                                        version tag whose tree held it; also called in process
+                                        by release.cut_tag and release.cut_tag_and_publish
         - review_trail.write:           additive-create into state/review-trail/
         D2 bounds: per-record idempotent, git-reversible, content-additive in-place only
         (two named rewrite exceptions: F11's `commits: []` inline-empty-list-to-populated-form

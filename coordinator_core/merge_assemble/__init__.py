@@ -3,7 +3,7 @@
 over the existing merge CLIs `merging-to-main/SKILL.md` currently hand-
 sequences (`merge-recovery-and-tag-cut` resolve-tag-prefix/cut-tag,
 `merge-gate-and-pr` pr-body, `check-no-illegal-paths`,
-`merge-release-notes-derive` flip-tags, `orphan-branch-sweep`, plus the node
+`orphan-branch-sweep`, plus the node
 ceremony hard-gate) alongside the computed decision fields this module
 derives itself: `branch_state` (the clean/needs-recovery/diverged
 trichotomy), a version-bump PROPOSAL, and a `gate_verdicts` scaffold `apply()`
@@ -407,7 +407,7 @@ def build_judgment_points(
                 "compute_version_bump_proposal) — the PM/EM confirms the "
                 "final released number, overrides it outright, or declines to "
                 "cut a tag this merge via this judgment point's own decisions "
-                "entry; a decline leaves d2 (and transitively d7) blocked, "
+                "entry; a decline leaves d2 blocked, "
                 "exactly as an unanswered point does, but reports itself under "
                 "declined_judgment_points rather than unresolved_judgment_points"
             ),
@@ -555,22 +555,6 @@ def build_directives(
     `gates["portability_sweep"] = "unavailable"`, distinct from both
     `"passed"` and `"failed"`.
 
-    **`d7` is a deferred narrated no-op, never an apply-time dispatch.**
-    `merge-release-notes-derive flip-tags` takes four required positionals
-    (`release_tag_cut merge_sha merge_date entry_paths...`); three of them
-    are facts about a merge commit that does not exist yet — `apply()` runs
-    at SKILL.md Step 3, before the PR is created, and the flip is Step 10.
-    Dispatching it here spent every run on `exited 2` (argparse usage
-    error) and, because the failure is a raised handler, returned
-    `APPLY_EXIT_PARTIAL_MUTATION` and abandoned `d8`/`d_grant_handback` —
-    the same argument-underfill shape as the D4 defect above, one directive
-    later. It therefore lands `already_satisfied` with a `skipped_reason`
-    naming the post-merge invocation, the same narrated-no-op shape `d0`
-    and `d5` use. `depends_on: ["d2"]` is retained: it is the true ordering
-    edge, and `apply_base.execute_directives` now propagates a
-    judgment-block through it rather than firing a dependent whose
-    dependency never landed.
-
     **`d_grant_handback` is a deferred narrated no-op, never an apply-time
     dispatch.** The grant exists to authorize the pre-merge project suite
     and the Step 6 re-validation, both agent Bash runs that happen AFTER
@@ -657,21 +641,6 @@ def build_directives(
             "args": [],
             "depends_on": None,
             "already_satisfied": False,
-        },
-        {
-            "id": "d7",
-            "cli": "merge-release-notes-derive",
-            "args": ["flip-tags", cut_tag],
-            "depends_on": ["d2"],
-            "already_satisfied": True,
-            "skipped_reason": (
-                "completion-log tag flip is a POST-merge step (SKILL.md Step 10) — "
-                "`merge-release-notes-derive flip-tags` requires the merge SHA, merge "
-                "date, and entry paths, none of which exist at apply time, which runs "
-                "before the PR is even created. Run it directly once the merge commit "
-                "exists: `merge-release-notes-derive flip-tags "
-                f"{cut_tag} <merge_sha> <merge_date> <entry_paths...>`"
-            ),
         },
         {
             "id": "d8",

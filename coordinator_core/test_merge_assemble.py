@@ -183,7 +183,6 @@ class TestBrief:
             "merge-gate-and-pr",
             "portability-sweep",
             "check-no-illegal-paths",
-            "merge-release-notes-derive",
             "orphan-branch-sweep",
             "tier-u-grant",
         }

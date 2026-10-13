@@ -2034,45 +2034,29 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md
     "changelog.upsert_reviewed": OpClass.MUTATING,
-    # completion.flip_to_released — MUTATING: in-place flip of release fields on a
-    # caller-supplied archive/completed/**/*.md entry. Locked read-modify-write
-    # (coordinator_core.locked_write.locked_rmw) + atomic os.replace, locking per DR-216's
-    # 2026-08-06 D2(vi) amendment — this op has the widest read-to-write gap of the module's
-    # three writers (four git subprocesses), so the locking requirement binds it hardest.
-    # Admitted into DR-216 D1 by the 2026-08-06 amendment: it had been writing under this
-    # carve-out's bounds without ever appearing in D1's enumeration, so it previously held no
-    # admitting record. Its absence here was the matching gap — classify() fails closed, so the
-    # op was registered and dispatchable but DENIED at every classification checkpoint.
-    # AMENDED by EM under the execution authorization of
-    # docs/plans/2026-08-06-writer-side-commit-ownership-lock-gap.md — PM counter-signature
-    # pending.
-    # DR-208 five-question affirmation (citing ops/completion_ops.py):
+    # completion.stamp_releases — MUTATING: stamps every pending-release entry under
+    # archive/completed/** with the earliest version tag whose tree held it. Per-entry
+    # locked read-modify-write (locked_rmw) + atomic replace. Also called in process by
+    # release.cut_tag and release.cut_tag_and_publish after a successful cut.
+    # DR-208 five-question affirmation (citing ops/release_stamp/):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      completion_ops.py:_flip_one_entry — locked read-modify-write sets released_* fields
-    #      on the caller-supplied completion entry.
+    #      writer.stamp_entry sets status and released_* on each pending entry.
     #   2. Writes into rag's relational store?                                 No.
-    #      Writes only the named archive/completed/**/*.md entry. Dual-write ban satisfied.
     #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      tempfile.mkstemp + os.replace atomically renames onto the entry path.
+    #      locked_rmw writes a temp file and os.replace's it onto the entry.
     #   4. Mutates shared mutable state outside its own module?                YES.
-    #      archive/completed/ entries are coordinator substrate read by the EM and the
-    #      review/release pipeline.
+    #      archive/completed/ entries are read by the EM and the release pipeline.
     #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The flipped entry is read by subsequent sessions and by release-notes derivation.
     # DR-216 D2 five-bound affirmed (completion in-place-mutation sub-category):
-    #   D2(i) (per-record idempotent): "already released (idempotent no-op)"; an entry already
-    #         released with DIFFERENT fields is refused rather than re-flipped, so a second
-    #         invocation never clobbers a divergent prior release.
-    #   D2(ii) (git-reversible): additive field flip; git checkout -- <entry> recovers.
-    #   D2(iii) (content-additive): _apply_flip_fields sets release fields; no reorder or delete.
-    #   D2(iv) (confined noun): archive/completed/**, already within D2(iv)'s extension for
-    #          completion.reconcile_commits — this admits no new noun.
-    #   D2(v) (no git commit): handler writes the entry only; commit responsibility stays with
-    #         the caller, per completion_ops.py's own module docstring.
+    #   D2(i) per-record idempotent: only status pending-release is written; a released
+    #         entry is never rewritten.
+    #   D2(ii) git-reversible: git checkout -- <entry> recovers.
+    #   D2(iii) content-additive in place: status replaced, released_* set; nothing else moves.
+    #   D2(iv) confined noun: archive/completed/**.
+    #   D2(v) no git commit: files are written and declared; the caller commits.
     # Authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md
-    #            § D1 (2026-08-06 amendment) and § D2
-    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "completion.flip_to_released": OpClass.MUTATING,
+    #            § D1 (2026-10-13 amendment) and § D2
+    "completion.stamp_releases": OpClass.MUTATING,
     # plan.append_session — MUTATING: in-place append of a session-tracking entry to the
     # agent_sessions: YAML list of a caller-supplied docs/plans/<plan>.md. Locked
     # read-modify-write (coordinator_core.locked_write.locked_rmw) + atomic os.replace,
@@ -2243,16 +2227,19 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # persistent cross-process state (YES).
     "close.review": OpClass.MUTATING,
     # dispatch.ask_gate — MUTATING: decides an arm for a sizing; at an M+ arm with no halt it
-    # mints the baton record in-process (ops/dispatch_emit/ask_gate.py). Every other verdict
-    # is a read.
+    # mints the baton record in-process (ops/dispatch_emit/ask_gate.py). Given a `record`
+    # member it first writes that APM ruling to the sizing in-process through
+    # sizing.accept_exit_criterion / sizing.record_xl_exit's handlers (exit_criterion.accepted
+    # or xl_exit + pm_resolution). Every other verdict is a read.
     # DR-208 five-question affirmation (citing dispatch.ask_gate handler):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Only the M+ no-halt path: mint_baton_from_sizing writes one baton doc.
+    #      The M+ no-halt path (mint_baton_from_sizing writes one baton doc) and a `record`
+    #      request (the sizing file, via the sizing.* writers).
     #   2. Writes into rag's relational store?                                 No.
     #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      The baton doc, at M+ only; halts and XS/S arms open nothing for write.
+    #      The baton doc at M+ and the sizing under `record`; other requests open nothing for write.
     #   4. Mutates shared mutable state outside its own module?                YES.
-    #      The baton is a state record other sessions read.
+    #      The baton and the sizing are state records other sessions read.
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      The baton persists on disk.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
@@ -4275,6 +4262,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   release.cut_tag / release.cut_tag_and_publish — ops/release_tagging.py:
     #     `_cut_tag` creates a git tag (write); `_cut_tag_and_publish` additionally
     #     calls `_publish_release` (`gh release create`), an external write.
+    #     Each also stamps archive/completed/** entries through
+    #     completion.stamp_releases's writer (`_stamp_after_cut`).
     #   repo.clone_and_register — ops/repo_bootstrap.py
     #     `clone_and_register_sibling_repo`: clones a repo to disk AND calls
     #     `_machine_local_set` (writes the machine-local registry) — two

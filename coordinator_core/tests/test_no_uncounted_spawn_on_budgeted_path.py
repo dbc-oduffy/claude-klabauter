@@ -2455,6 +2455,9 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "review.reachability": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
+    "completion.stamp_releases": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
+    ),
     "review.snapshot_diff_and_head": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -2517,6 +2520,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.partition_slices": ("coordinator_core/ops/review_partition_slices.py", "_handler"),
     "review.reachability": ("coordinator_core/ops/review_reachability.py", "_handler"),
+    "completion.stamp_releases": ("coordinator_core/ops/release_stamp/__init__.py", "_stamp_releases_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session_ledger.aggregate_chain_loe": (
@@ -2619,9 +2623,10 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # 58 -> 59 (2026-10-08): new op `review.reachability` reaches `git/run.py::run_git`: +1.
     # 59 -> 60 (2026-10-08): new op `research.close` reaches `git/run.py::run_git` (CRLF blob fallback): +1.
     # 60 -> 59 (2026-10-12): `orientation.regenerate_cache` no longer reaches `repo_root.py::_spawn_rev_parse`.
-    assert total_pairs == 59, (
+    # 59 -> 60 (2026-10-13): new op `completion.stamp_releases` reaches `git/run.py::run_git`: +1.
+    assert total_pairs == 60, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -2911,7 +2916,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "ceremony.update_docs_scan": ("coordinator_core/ops/ceremony/update_docs_scan.py", "_ceremony_update_docs_scan"),
     "changelog.compute_day_fields": ("coordinator_core/ops/changelog_ops.py", "_compute_day_fields_handler"),
     "changelog.inject_anchor": ("coordinator_core/ops/changelog_ops.py", "_inject_anchor_handler"),
-    "completion.flip_to_released": ("coordinator_core/ops/completion_ops.py", "_flip_to_released_handler"),
     "crossrepo.closure_status": ("coordinator_core/ops/crossrepo_closure_status.py", "_handler"),
     "cruft_sweep.run": ("coordinator_core/ops/cruft_sweep.py", "_run_handler"),
     "deliverable.cascade_terminal": ("coordinator_core/ops/cascade_terminal_op.py", "_handler"),
@@ -2986,7 +2990,6 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "changelog.inject_anchor": (
         ("coordinator_core/ops/workday_complete_backfill_scan.py", "_run_git", "git", 0),
     ),
-    "completion.flip_to_released": (),
     "crossrepo.closure_status": (
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
@@ -3125,7 +3128,7 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
     assert total_pairs == 34, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
+        "34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -5666,10 +5669,9 @@ _NAMED_ARGV0_DISPOSITIONS_B: dict[tuple[str, str, str, int], str] = {
         "2026-08-23 exempt -- one batched `git cat-file --batch-check` "
         "call replacing a per-sha `git rev-parse --verify` loop (this "
         "function's own docstring, C9 spawn-amplification fix); "
-        "`completion.flip_to_released` and `completion.reconcile_commits` "
-        "(both C2a-widened, measured-empty rows) neither call this "
-        "function directly from their own handler bodies -- not on either "
-        "handler's reachable set."
+        "`completion.reconcile_commits` (a C2a-widened, measured-empty "
+        "row) does not call this function directly from its own handler "
+        "body -- not on its reachable set."
     ),
     (
         "coordinator_core/ops/cruft_sweep.py",
@@ -6822,7 +6824,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # paying for Perforce — it does not.
     "push.outstanding": 6,
     "plan.suggest_completion_steps": 3,
-    "release.cut_tag_and_publish": 3,
+    # 3 -> 4, 2026-10-13: the post-cut stamp reaches `git/run.py::run_git` (tag read).
+    "release.cut_tag_and_publish": 4,
     # 3 -> 4, 2026-09-06: same `_existing_origin_url` site as
     # `install.clone_idempotent` above, reached through the shared helper.
     "repo.clone_and_register": 4,
@@ -6843,7 +6846,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
     "commit.anchors": 2,
-    "completion.flip_to_released": 1,
+    "completion.stamp_releases": 1,
     "fleet.record_history": 2,
     "git_branch.compute_descendant_tip": 2,
     "git_branch.detect_unpushed_commits": 2,
@@ -6857,7 +6860,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "install.probe_windows_terminal_presence": 2,
     "plan.propagate": 3,
     "plugin_health.forwarder_drift": 1,
-    "release.cut_tag": 2,
+    # 2 -> 3, 2026-10-13: the post-cut stamp reaches `git/run.py::run_git` (tag read).
+    "release.cut_tag": 3,
     # Lowered 2 -> 1 2026-10-02: 8e979f0826 swapped the legacy root resolver for read_content_root.
     "repo_setup.copy_console_subprocess_tripwire": 1,
     "session.guard_settings_integrity": 2,

@@ -1,13 +1,13 @@
 """
 coordinator_core.merge_assemble.tests.test_apply_op_dispatch — C6 coverage
-proving the plan's discriminator on merge_assemble's eight-entry table, the
+proving the plan's discriminator on merge_assemble's seven-entry table, the
 largest of the three C6 tables.
 
-Purpose: measured this chunk, none of merge's eight `_CLI_DISPATCH` entries
+Purpose: measured this chunk, none of merge's seven `_CLI_DISPATCH` entries
 (`node-ceremony-gate`, `merge-recovery-and-tag-cut`, `merge-gate-and-pr`,
-`portability-sweep`, `check-no-illegal-paths`, `merge-release-notes-derive`,
+`portability-sweep`, `check-no-illegal-paths`,
 `orphan-branch-sweep`, `tier-u-grant`) resolve to a registered op, so all
-eight stay `cli`-named and `ASSEMBLER_DISPATCHABLE` gains no
+seven stay `cli`-named and `ASSEMBLER_DISPATCHABLE` gains no
 `"merge_assemble"` entry from this chunk — see the decision comment above
 `_CLI_DISPATCH` in `merge_assemble/apply.py`. `orphan-branch-sweep` is the
 one name closest to a registered surface (its own bin script composes four
@@ -42,7 +42,6 @@ _MERGE_CLI_VERBS = (
     "merge-gate-and-pr",
     "portability-sweep",
     "check-no-illegal-paths",
-    "merge-release-notes-derive",
     "orphan-branch-sweep",
     "tier-u-grant",
 )
@@ -98,10 +97,6 @@ class TestC2InProcessConvergence:
 
     _REPO_ROOT_ARG_HANDLERS = {
         ma_apply._dispatch_merge_gate_and_pr: ("merge-gate-and-pr", ["pr-body"]),
-        ma_apply._dispatch_merge_release_notes_derive: (
-            "merge-release-notes-derive",
-            ["flip-tags", "v1.2.3", "abc", "2026-01-01", "entry.md"],
-        ),
         ma_apply._dispatch_orphan_branch_sweep: ("orphan-branch-sweep", ["--format", "text"]),
     }
 

@@ -50,7 +50,16 @@ Subcommands (argv[1] selects):
       commit). Refuses (exit 1) when origin already has TAG at another
       commit; never force-moves a tag.
       Prints `MERGE_SHA=<sha>` and either `TAG_CUT=<tag>` or
-      `TAG_SKIPPED=<tag>` to stdout.
+      `TAG_SKIPPED=<tag>` to stdout. Then stamps pending completion entries
+      (as `stamp-releases`, below), cut or skipped; a stamp refusal prints
+      `RELEASE_STAMP_FAILED=<reason>: ...` and still exits 0.
+
+  stamp-releases [--report] [--repo-root PATH]
+      Stamps every pending-release entry under archive/completed with the
+      earliest tag (prefix from coordinator.local.md) whose tree held it.
+      Prints `<path>: released_in=<tag>` per entry, then `RELEASE_STAMPED=<n>`
+      (`RELEASE_WOULD_STAMP=<n>` with --report, which writes nothing), then
+      `RELEASE_UNRELEASED=<n>`. A refusal is one stderr line, exit 1.
 
   publish-gh-release TAG --repo OWNER/REPO --notes-file PATH
       GH-release variant only (Mode B): un-drafts an existing release for
@@ -72,9 +81,11 @@ Subcommands (argv[1] selects):
       Prints `MERGE_SHA=<sha>`.
 
 Negative-spec:
-  - Does NOT read coordinator.local.md itself for `cut-tag`/`publish-gh-release`
-    — `resolve-tag-prefix` is a separate, explicit step; callers compose the
-    full tag string (`<prefix>vX.Y.Z`) before calling `cut-tag`.
+  - Does NOT read coordinator.local.md for the tag cut itself, nor for
+    `publish-gh-release` — `resolve-tag-prefix` is a separate, explicit step;
+    callers compose the full tag string (`<prefix>vX.Y.Z`) before calling
+    `cut-tag`. Only the post-cut stamp reads it, for the prefix of the tags it
+    considers.
   - Does NOT run `gh release` from `cut-tag` — the two are separate
     subcommands so a Mode-A (git-tag-only) caller never touches `gh`.
   - Does NOT default `--merge-ref` resolution to unpeeled `git rev-parse
@@ -498,6 +509,61 @@ def cmd_cut_tag(args: argparse.Namespace) -> int:
     )
     print(f"MERGE_SHA={merge_sha}")
     print(f"TAG_CUT={args.tag}" if cut else f"TAG_SKIPPED={args.tag}")
+    result = _stamp(repo_root, False)
+    if "error" in result:
+        print(
+            f"RELEASE_STAMP_FAILED={result['reason']}: "
+            "rerun merge-recovery-and-tag-cut stamp-releases"
+        )
+    else:
+        _print_stamp(result)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# stamp-releases
+# ---------------------------------------------------------------------------
+
+def _stamp(repo_root: Path, report: bool) -> dict:
+    """Stamp (or, with `report`, list) pending completion entries; never exits the process.
+
+    Returns the engine result, or `{"error", "reason"}` on a refusal.
+    """
+    try:
+        config = repo_root / "coordinator.local.md"
+        prefix = resolve_tag_prefix(config) if config.is_file() else ""
+    except SystemExit:
+        return {"error": "tag_prefix must be unquoted", "reason": "bad-params"}
+    _require_engine_on_path()
+    from coordinator_core.cli_entry import recording_declared_writes
+    from coordinator_core.ops import release_stamp
+    from coordinator_core.ops.release_stamp.model import StampError
+
+    try:
+        with recording_declared_writes(cwd=str(repo_root)):
+            return release_stamp.stamp_releases(repo_root, tag_prefix=prefix, report=report)
+    except StampError as exc:
+        return {"error": exc.detail, "reason": exc.reason}
+
+
+def _print_stamp(result: dict) -> None:
+    for record in result["stamped"]:
+        print(f"{record['path']}: released_in={record['released_in']}")
+    key = "RELEASE_WOULD_STAMP" if result["report"] else "RELEASE_STAMPED"
+    print(f"{key}={len(result['stamped'])}")
+    print(f"RELEASE_UNRELEASED={result['unreleased']['count']}")
+
+
+def cmd_stamp_releases(args: argparse.Namespace) -> int:
+    repo_root = Path(args.repo_root) if args.repo_root else Path.cwd()
+    result = _stamp(repo_root, args.report)
+    if "error" in result:
+        print(
+            f"merge-recovery-and-tag-cut: stamp-releases: {result['reason']}: {result['error']}",
+            file=sys.stderr,
+        )
+        return 1
+    _print_stamp(result)
     return 0
 
 
@@ -660,6 +726,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_cut.add_argument("--must-contain", default=None)
     p_cut.add_argument("--pr", default=None)
     p_cut.set_defaults(func=cmd_cut_tag)
+
+    p_stamp = sub.add_parser(
+        "stamp-releases",
+        help="stamp pending-release completion entries with the tag that first held them",
+    )
+    p_stamp.add_argument("--report", action="store_true")
+    p_stamp.add_argument("--repo-root", default=None)
+    p_stamp.set_defaults(func=cmd_stamp_releases)
 
     p_plan = sub.add_parser(
         "plan-tag",

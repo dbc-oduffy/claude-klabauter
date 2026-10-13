@@ -7825,7 +7825,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/measure-listener-availability.py`
 - `coordinator/bin/merge-assemble.py`
 - `coordinator/bin/merge-gate-and-pr.py`
-- `coordinator/bin/merge-release-notes-derive.py`
 - `coordinator/bin/mise-prep-run.py`
 - `coordinator/bin/new-project-scaffold.py`
 - `coordinator/bin/normalize-consumed-frontmatter.py`

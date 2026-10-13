@@ -78,11 +78,17 @@ loud with `gh`'s own stderr, never silently skipped.
 Op contract (C0a manifest):
     release.cut_tag
     params: {repo_root: str, merge_sha: str, tag_prefix: str}
-    -> {tag: str, created: bool, already_at_sha: bool, pushed: bool}
+    -> {tag: str, created: bool, already_at_sha: bool, pushed: bool,
+        release_stamps: {stamped: int, unreleased: int} | {error: str}}
 
     release.cut_tag_and_publish
     params: {repo_root: str, merge_sha: str, tag_prefix: str, release_notes: str}
-    -> {tag: str, tag_pushed: bool, release_created: bool, release_url: str | null}
+    -> {tag: str, tag_pushed: bool, release_created: bool, release_url: str | null,
+        release_stamps: {stamped: int, unreleased: int} | {error: str}}
+
+    `release_stamps` is the post-cut `completion.stamp_releases` run (never raises; a
+    StampError lands under `error`). In cut_tag_and_publish it runs after the tag push and
+    before the release publish.
 
     scope: common_dir (tag refs + the published release object are
     repo-wide, shared across every linked worktree of the same repo).
@@ -95,6 +101,7 @@ Fence source: coordinator/skills/merging-to-main/SKILL.md:251 (coordinator-conte
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
@@ -239,8 +246,26 @@ def _publish_release(tag: str, repo_root: Path, release_notes: str) -> tuple[boo
                 pass
 
 
+def _stamp_after_cut(repo_root: Union[str, Path], tag: str) -> dict:
+    """Stamp pending-release entries after a cut; counts, or `{"error"}`. Never raises.
+
+    The tag prefix is the full tag minus its trailing `v<int>.<int>.<int>`.
+    """
+    from coordinator_core.ops.release_stamp import stamp_releases
+    from coordinator_core.ops.release_stamp.model import StampError
+
+    prefix = re.sub(r"v\d+\.\d+\.\d+$", "", tag)
+    try:
+        res = stamp_releases(Path(repo_root), tag_prefix=prefix)
+    except StampError as exc:
+        return {"error": f"{exc.reason}: {exc.detail}"}
+    return {"stamped": len(res["stamped"]), "unreleased": res["unreleased"]["count"]}
+
+
 def cut_tag(repo_root: Union[str, Path], merge_sha: str, tag_prefix: str) -> dict:
-    return _cut_tag(repo_root, merge_sha, tag_prefix)
+    result = _cut_tag(repo_root, merge_sha, tag_prefix)
+    result["release_stamps"] = _stamp_after_cut(repo_root, tag_prefix)
+    return result
 
 
 def cut_tag_and_publish(
@@ -252,6 +277,7 @@ def cut_tag_and_publish(
     tag = tag_prefix
     tag_result = _cut_tag(repo_root, merge_sha, tag)
     root = Path(repo_root)
+    release_stamps = _stamp_after_cut(root, tag)
 
     release_created, release_url = _publish_release(tag, root, release_notes)
 
@@ -260,6 +286,7 @@ def cut_tag_and_publish(
         "tag_pushed": tag_result["pushed"] or tag_result["already_at_sha"],
         "release_created": release_created,
         "release_url": release_url,
+        "release_stamps": release_stamps,
     }
 
 
@@ -268,7 +295,7 @@ async def _cut_tag_handler(params: dict, repo_root: Optional[Path] = None) -> di
     """JSON-RPC `release.cut_tag` handler.
 
     params: {repo_root: str, merge_sha: str, tag_prefix: str}
-    -> {tag: str, created: bool, already_at_sha: bool, pushed: bool}
+    -> {tag: str, created: bool, already_at_sha: bool, pushed: bool, release_stamps: dict}
 
     `repo_root` in params is this op's contractual target (common_dir
     scope: tag refs are shared across every linked worktree); it takes
@@ -287,7 +314,8 @@ async def _cut_tag_and_publish_handler(params: dict, repo_root: Optional[Path] =
     """JSON-RPC `release.cut_tag_and_publish` handler.
 
     params: {repo_root: str, merge_sha: str, tag_prefix: str, release_notes: str}
-    -> {tag: str, tag_pushed: bool, release_created: bool, release_url: str | null}
+    -> {tag: str, tag_pushed: bool, release_created: bool, release_url: str | null,
+        release_stamps: dict}
 
     `repo_root` in params is this op's contractual target (common_dir
     scope); it takes precedence over the IPC-injected `repo_root`.

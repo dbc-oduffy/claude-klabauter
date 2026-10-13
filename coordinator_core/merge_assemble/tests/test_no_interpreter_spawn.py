@@ -56,7 +56,6 @@ _CONVERGED_HANDLER_NAMES = (
     "_dispatch_merge_gate_and_pr",
     "_dispatch_portability_sweep",
     "_dispatch_check_no_illegal_paths",
-    "_dispatch_merge_release_notes_derive",
     "_dispatch_orphan_branch_sweep",
     "_dispatch_tier_u_grant",
 )

@@ -11,7 +11,7 @@ module supplies only its own closed `_CLI_DISPATCH` table (one handler per
 existing merge CLI the brief names) and the node-ceremony hard-gate's
 `--force` bypass.
 
-Seven of the eight verbs dispatch IN-PROCESS through `coordinator_core.
+Six of the seven verbs dispatch IN-PROCESS through `coordinator_core.
 ceremony_common.cli_dispatch` — module load + cached reuse + `main()`
 invocation, no interpreter spawn, ever. Each takes its repo root as an
 explicit argument (`--repo-root`, or the positional `check-no-illegal-paths`
@@ -281,17 +281,6 @@ def _dispatch_check_no_illegal_paths(args: list[str], repo_root: Path) -> dict[s
     )
 
 
-def _dispatch_merge_release_notes_derive(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d7` — IN-PROCESS. `--repo-root` is appended so the call, which never
-    chdirs, runs its `git` children in `repo_root` and resolves the relative
-    completion-log entry paths in `args` against it."""
-    return _dispatch_in_process(
-        "merge-release-notes-derive",
-        "merge-release-notes-derive",
-        [*args, "--repo-root", str(repo_root)],
-    )
-
-
 def _dispatch_orphan_branch_sweep(args: list[str], repo_root: Path) -> dict[str, Any]:
     """`d8` — IN-PROCESS. `coordinator/bin/orphan-branch-sweep.py`'s
     zero-arg `main()` trampoline reads the spliced `sys.argv` and forwards to
@@ -415,11 +404,11 @@ _COMPENSATORS: dict[str, Any] = {
 #: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
 #: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
 #: live against `coordinator_core.authz.registration_quad._live_registry()`
-#: this chunk: NONE of merge's eight verbs (`node-ceremony-gate`,
+#: this chunk: NONE of merge's seven verbs (`node-ceremony-gate`,
 #: `merge-recovery-and-tag-cut`, `merge-gate-and-pr`, `portability-sweep`,
-#: `check-no-illegal-paths`, `merge-release-notes-derive`,
+#: `check-no-illegal-paths`,
 #: `orphan-branch-sweep`, `tier-u-grant`) resolve to a registered op, so ALL
-#: EIGHT stay `cli`-named — none migrate to `op`. No new op is minted to
+#: SEVEN stay `cli`-named — none migrate to `op`. No new op is minted to
 #: force a migration (out of scope by name). `orphan-branch-sweep` is the
 #: one name that LOOKS closest to a registered surface — its own bin script
 #: composes four registered `git_branch.*` ops internally
@@ -432,7 +421,7 @@ _COMPENSATORS: dict[str, Any] = {
 #: `ceremony_common.cli_dispatch` (no interpreter spawn, ever), each with an
 #: explicit repo-root argument. `node --test` is not `bash`/`sh`, so
 #: `docs/reference/shell-out-carve-outs.md` (scoped to interpreter/shell
-#: spawns) does not apply to any of the eight, and none is a `CONSUMES_MANIFEST`-driven
+#: spawns) does not apply to any of the seven, and none is a `CONSUMES_MANIFEST`-driven
 #: script module in the completion-family sense, so no `CONSUMES_MANIFEST`
 #: entry applies either.
 #:
@@ -455,7 +444,6 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "merge-gate-and-pr": _dispatch_merge_gate_and_pr,
     "portability-sweep": _dispatch_portability_sweep,
     "check-no-illegal-paths": _dispatch_check_no_illegal_paths,
-    "merge-release-notes-derive": _dispatch_merge_release_notes_derive,
     "orphan-branch-sweep": _dispatch_orphan_branch_sweep,
     "tier-u-grant": _dispatch_tier_u_grant,
 }

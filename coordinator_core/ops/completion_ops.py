@@ -1,11 +1,12 @@
 """
-coordinator_core.ops.completion_ops — in-place mutators for completion-entry
-release state and plan session appending.
+coordinator_core.ops.completion_ops — plan session appending and the
+completion-entry day-coverage sweep.
 
 Purpose: hosts ``plan.append_session`` (a byte-parity port of
-``append-plan-session.sh``, DoE 2737ca3d, 2026-07-19), ``completion.flip_to_released``,
-and ``day_coverage_sweep`` — plus the ``commits:`` YAML-list parsing shared by the
-latter two. ``completion.reconcile_commits`` (the module's original third op) was
+``append-plan-session.sh``, DoE 2737ca3d, 2026-07-19) and ``day_coverage_sweep`` —
+plus the ``commits:`` YAML-list parsing shared with the post-commit tail. Release
+stamping lives in ``ops/release_stamp`` (``completion.stamp_releases``).
+``completion.reconcile_commits`` (the module's original third op) was
 killed and rebuilt from scratch per PM ruling, 2026-08-23; do not resurrect its
 handler, ``resolve_chain_commits``, or the chain-widening helpers it alone used.
 
@@ -19,9 +20,8 @@ existing plan content. Read-modify-write to a temp file + atomic ``os.replace`` 
 Byte-parity target: ``append-plan-session.sh`` (DoE 2737ca3d, 2026-07-19,
 mapfile/printf write pass).
 
-MUTATING ops (DR-208 §2): write coordinator substrate directly — ``archive/completed/**/*.md``
-(``completion.flip_to_released``) or ``docs/plans/*.md`` completion sections
-(``plan.append_session``). NEVER writes ``state/handoffs/``, ``archive/handoffs/``,
+MUTATING ops (DR-208 §2): write coordinator substrate directly — ``docs/plans/*.md``
+completion sections (``plan.append_session``). NEVER writes ``state/handoffs/``, ``archive/handoffs/``,
 ``state/`` queue subdirs, rag's relational store, or any path outside the
 caller-supplied plan/entry file (DR-216 D2(iv)/D4 noun confinement). No git commit
 from handlers (DR-216 D2(v)). Blocking FS I/O wrapped via ``asyncio.to_thread``
@@ -42,7 +42,7 @@ Negative-spec (plan.append_session):
   - ``created_at`` is accepted as a parameter or generated at call time; NOT the oracle's
     ``_cs_now_iso`` side-channel.
 
-Registered as ``plan.append_session`` and ``completion.flip_to_released`` in
+Registered as ``plan.append_session`` in
 ``ops/__init__.py`` (C3). Classified ``OpClass.MUTATING`` in ``authz/classification.py`` (C3).
 
 Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C2
@@ -51,12 +51,10 @@ DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carve
 
 from __future__ import annotations
 
-# Generator-provenance declaration: completion.flip_to_released /
-# plan.append_session mutate a caller-supplied entry in place under
-# archive/completed/**/*.md or docs/plans/*.md -- a data-dependent set of
-# already-tracked files matching a predicate (which completion entry /
-# which plan), not a fixed artifact.
-MUTATES = ["archive/completed/**/*.md", "docs/plans/*.md"]
+# Generator-provenance declaration: plan.append_session mutates a
+# caller-supplied plan in place under docs/plans/*.md -- a data-dependent set of
+# already-tracked files matching a predicate, not a fixed artifact.
+MUTATES = ["docs/plans/*.md"]
 
 import asyncio
 import datetime
@@ -83,7 +81,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# commits: YAML-list parsing — shared by completion.flip_to_released and
+# commits: YAML-list parsing — shared by the post-commit tail and
 # day_coverage_sweep below (byte-parity oracle: reconcile-completion-commits.sh's
 # stored-SHA extraction awk).
 # ---------------------------------------------------------------------------
@@ -625,411 +623,6 @@ async def _append_session_handler(
         status=status,
         created_at=created_at,
     )
-
-
-# ---------------------------------------------------------------------------
-# completion.flip_to_released — per-entry release-tag resolution + frontmatter flip
-# ---------------------------------------------------------------------------
-# Byte-parity oracle: [coordinator-content-repo] coordinator/skills/merging-to-main/SKILL.md
-# § Step 1.65 item 3's python3 -<<'PYEOF' block. Contract provisional — see module docstring.
-# ---------------------------------------------------------------------------
-
-#: Frontmatter fields this op writes, in write order (mirrors the oracle's ``fields`` dict).
-_FLIP_FIELD_ORDER: Tuple[str, ...] = ("status", "released_in", "released_at", "released_sha")
-
-
-def _tag_sha(worktree_root: Path, tag: str) -> Optional[str]:
-    """Return the commit SHA a tag resolves to, or ``None`` if it doesn't exist yet.
-
-    Byte-parity port of the oracle's ``tag_sha()`` (``git rev-list -n 1 <tag>``). A
-    failure here is expected, not exceptional: ``candidate_tags``' last element is
-    conventionally the release currently being cut, which may not exist as a real
-    tag yet at flip time (tagging happens after this step in the ceremony).
-    """
-    result = run_git(["rev-list", "-n", "1", tag], cwd=str(worktree_root))
-    sha = result.stdout.strip()
-    return sha if result.returncode == 0 and sha else None
-
-
-def _tag_date(worktree_root: Path, sha_or_tag: str) -> Optional[str]:
-    """Return a commit's author date as ``YYYY-MM-DD``, or ``None`` on failure.
-
-    Byte-parity port of the oracle's ``tag_date()`` (``git log -1 --format=%ad
-    --date=short <sha_or_tag>``).
-    """
-    result = run_git(["log", "-1", "--format=%ad", "--date=short", sha_or_tag], cwd=str(worktree_root))
-    date = result.stdout.strip()
-    return date if result.returncode == 0 and date else None
-
-
-def _current_head_sha(worktree_root: Path) -> Optional[str]:
-    """Return the worktree's current ``HEAD`` commit SHA, or ``None`` on failure."""
-    result = run_git(["rev-parse", "HEAD"], cwd=str(worktree_root))
-    sha = result.stdout.strip()
-    return sha if result.returncode == 0 and sha else None
-
-
-def _today_utc_date() -> str:
-    """Return today's date (UTC) as ``YYYY-MM-DD`` — fallback when a tag has no commit yet."""
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-
-
-def _contains_all_commits(worktree_root: Path, tag: str, commits: Sequence[str]) -> bool:
-    """True iff every commit in ``commits`` is an ancestor of ``tag``.
-
-    BATCHED (2026-08 spawn-amplification fix, chunk C9): one ``git rev-list <tag>``
-    plus in-memory membership replaces one ``git merge-base --is-ancestor`` spawn
-    per commit — this loop resolves MANY commits against ONE ref (``tag``), the
-    batchable "one-ref-many-commits" shape (§ Anti-scope 1/2/4 governing
-    discrimination), NOT independent ranges: there is exactly one ref
-    involved, so no ``reachable(positives) \\ reachable(negatives)`` collapse risk
-    applies. Reuses the proven shape of
-    ``coordinator_core.ops.emit.resolvers.classify_shas_on_origin_main`` (its
-    ancestor-set half): everything printed by ``git rev-list <tag>`` is, by
-    definition, both a valid commit AND an ancestor of ``tag``.
-
-    ``commits`` (this module's own ``commits:`` frontmatter values, always short
-    SHAs — see ``_apply_commits_fold``) must be canonicalized to full length
-    before the membership test, since ``git rev-list`` always prints full SHAs —
-    a short sha can never string-match a full one. Reuses
-    ``_canonicalize_stored_shas`` (this module's own batched canonicalizer, chunk
-    C9) rather than re-deriving a second canonicalization primitive; a commit
-    that fails to canonicalize (bad/unknown ref) is, by the original loop's own
-    contract (non-zero ``merge-base --is-ancestor`` returncode -> False), never
-    an ancestor.
-
-    Same primitive SHAPE as ``orphan_branch_sweep.py``'s ``_is_ancestor``, composed
-    here over ``run_git(args, cwd=str(worktree_root))``
-    rather than imported — see module docstring for why the oracle module's
-    two-arg ``_is_ancestor`` (no ``cwd`` parameter, always runs against the
-    process's own cwd) is not safe to reuse for a ``common_dir``-scoped op
-    resolving state in the CALLER's worktree. Empty ``commits`` is never a match
-    (oracle: ``if commits and contains_all(...)``).
-    """
-    if not commits:
-        return False
-
-    rev_list = run_git(["rev-list", tag], cwd=str(worktree_root))
-    if rev_list.returncode != 0:
-        return False
-    ancestor_set = set(rev_list.stdout.split())
-
-    unique_commits = set(commits)
-    canonical, _warnings = _canonicalize_stored_shas(worktree_root, list(unique_commits))
-    if len(canonical) != len(unique_commits):
-        # At least one commit failed to canonicalize (bad/unknown ref) — never
-        # an ancestor, matching the original loop's returncode-!=0 -> False.
-        return False
-
-    return canonical.issubset(ancestor_set)
-
-
-def _resolve_release_tag(
-    worktree_root: Path, candidate_tags: Sequence[str], commits: Sequence[str]
-) -> str:
-    """Resolve the earliest candidate tag whose history contains every commit in ``commits``.
-
-    ``candidate_tags`` is caller-supplied, ordered oldest-first (the oracle's own
-    ``git tag --list ... --sort=creatordate`` enumeration is a caller concern, not this
-    op's — see module docstring negative-spec). Falls through to the LAST element of
-    ``candidate_tags`` (the release currently being cut) when no earlier tag contains
-    the commits — mirrors the oracle's ``resolved_tag = release_tag_cut`` fallback.
-    """
-    for tag in candidate_tags:
-        if _contains_all_commits(worktree_root, tag, commits):
-            return tag
-    return candidate_tags[-1]
-
-
-def _apply_flip_fields(content: str, fields: dict) -> str:
-    """Rewrite/insert frontmatter fields in place (byte-parity port of the oracle's write pass).
-
-    For each line in the first (and only) frontmatter block: a line whose key matches a
-    key in ``fields`` is replaced wholesale with ``"<key>: <value>"``; any key in
-    ``fields`` never encountered before the closing ``---`` fence is inserted immediately
-    before that fence (oracle: ``for key, val in fields.items(): if key not in seen: ...``
-    inserted at ``n == 2``). Lines outside the frontmatter block, and frontmatter lines
-    whose key is not in ``fields``, pass through unchanged (DR-216 D2(iii) parity).
-
-    Raises:
-        ValueError: malformed frontmatter (fewer than two ``---`` fence lines).
-    """
-    out: list[str] = []
-    n = 0
-    seen: set[str] = set()
-    for line in content.splitlines(keepends=True):
-        stripped = line.rstrip("\n")
-        if stripped == "---":
-            n += 1
-            if n == 2:
-                for key, val in fields.items():
-                    if key not in seen:
-                        out.append(f"{key}: {val}\n")
-            out.append(line)
-            continue
-        if n == 1:
-            key = stripped.split(":", 1)[0]
-            if key in fields:
-                out.append(f"{key}: {fields[key]}\n")
-                seen.add(key)
-                continue
-        out.append(line)
-
-    if n < 2:
-        raise ValueError("malformed frontmatter: fewer than two '---' fence lines")
-
-    return "".join(out)
-
-
-def _flip_one_entry(
-    worktree_root: Path, entry_path: Path, candidate_tags: Sequence[str]
-) -> Tuple[Optional[dict], Optional[str]]:
-    """Resolve and (conditionally) flip a single completion entry.
-
-    Returns ``(flipped_record, skip_reason)`` — exactly one is non-``None``.
-    ``flipped_record`` is ``{"path", "released_in", "released_at", "released_sha"}``.
-    A ``skip_reason`` covers: entry not readable, ``status:`` is not
-    ``pending-release``, or the resolved fields are already byte-identical to what is
-    on disk (idempotent no-op — see module docstring's idempotency note; this branch
-    is a port-time addition, not a byte-parity target of the oracle, which never
-    re-runs the same entry twice).
-
-    Locking (DR-216 § D2 criterion (vi), AMENDED 2026-08-06): the actual
-    frontmatter rewrite runs under ``coordinator_core.locked_write.locked_rmw``,
-    keyed to ``entry_path``. The four git subprocesses this function runs to
-    resolve ``resolved_tag``/``sha``/``date`` (``_resolve_release_tag`` ->
-    ``_contains_all_commits`` (N calls) -> ``_tag_sha`` -> ``_tag_date`` /
-    ``_current_head_sha``) all run BEFORE and OUTSIDE the lock — same rationale
-    as ``reconcile_completion_commits``: holding the lock across several git
-    subprocesses would widen the contention window on a lock that also guards a
-    break-glass annotation path. The pre-lock read (``text``) that seeds
-    ``commits``/``current_status`` for that resolution may be stale by the time
-    the lock is acquired; the mutate closure therefore re-derives
-    ``current_status`` from the FRESH lock-held read and re-applies the same
-    idempotency/already-released guards against it, so a concurrent flip
-    between resolution and the lock is never double-applied.
-    """
-    try:
-        text = entry_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return None, f"{entry_path}: unreadable ({exc})"
-
-    current_status = _read_frontmatter_field(text, "status")
-    if current_status not in ("pending-release", "released"):
-        return None, f"{entry_path}: status is not pending-release"
-
-    commits = sorted(_parse_existing_commits(text))
-    resolved_tag = _resolve_release_tag(worktree_root, candidate_tags, commits)
-
-    sha = _tag_sha(worktree_root, resolved_tag)
-    if not sha:
-        # resolved_tag has no commit history yet — the release currently being cut,
-        # not yet tagged (oracle: sha, date = merge_sha, merge_date fallback).
-        sha = _current_head_sha(worktree_root) or ""
-    date = _tag_date(worktree_root, sha) if sha else None
-    if not date:
-        date = _today_utc_date()
-
-    fields = {
-        "status": "released",
-        "released_in": resolved_tag,
-        "released_at": date,
-        "released_sha": sha,
-    }
-
-    # Closure-captured state — locked_rmw's return value doesn't distinguish a
-    # real flip from a skip (idiom: reconcile_completion_commits's `_state`,
-    # plan_status_transition._stamp_implemented's `_state`).
-    _state: dict = {"record": None, "skip_reason": None}
-
-    def mutate(old_text: str) -> str:
-        # Re-validate against the FRESH read (see docstring "Locking" section):
-        # the git-resolved `fields` above were computed against the pre-lock
-        # `text`, which may already be stale.
-        fresh_status = _read_frontmatter_field(old_text, "status")
-        if fresh_status not in ("pending-release", "released"):
-            _state["skip_reason"] = f"{entry_path}: status is not pending-release"
-            return old_text
-
-        if fresh_status == "released":
-            if (
-                _read_frontmatter_field(old_text, "released_in") == resolved_tag
-                and _read_frontmatter_field(old_text, "released_at") == date
-                and _read_frontmatter_field(old_text, "released_sha") == sha
-            ):
-                # Idempotent no-op (port-time addition — see module docstring): a
-                # second invocation re-resolving to the SAME fields writes nothing.
-                _state["skip_reason"] = f"{entry_path}: already released (idempotent no-op)"
-                return old_text
-            # Already released with DIFFERENT fields than this invocation would
-            # resolve (e.g. re-run against a different candidate_tags set, or a
-            # concurrent writer already flipped it differently) — never
-            # silently overwrite a prior release attribution; skip rather than
-            # re-flip (DR-216 D2(iii) parity: no rewriting existing content).
-            _state["skip_reason"] = (
-                f"{entry_path}: already released with different fields — not re-flipping"
-            )
-            return old_text
-
-        modified = _apply_flip_fields(old_text, fields)
-        _state["record"] = {
-            "path": str(entry_path),
-            "released_in": resolved_tag,
-            "released_at": date,
-            "released_sha": sha,
-        }
-        return modified
-
-    from coordinator_core.locked_write import LockTimeout, locked_rmw
-
-    try:
-        locked_rmw(entry_path, mutate, repo_root=worktree_root)
-    except FileNotFoundError as exc:
-        return None, f"{entry_path}: unreadable ({exc})"
-    except LockTimeout as exc:
-        return None, f"{entry_path}: timed out waiting for file lock ({exc})"
-
-    return _state["record"], _state["skip_reason"]
-
-
-def flip_completion_entries_to_released(
-    worktree_root: str,
-    entry_paths: list[str],
-    candidate_tags: list[str],
-) -> dict:
-    """Resolve each entry to its earliest containing release tag and flip its frontmatter.
-
-    Byte-parity port of the merging-to-main SKILL.md § Step 1.65 item 3 write pass.
-    For every entry in ``entry_paths`` whose ``status:`` is ``pending-release``: resolve
-    the earliest tag in ``candidate_tags`` (ordered oldest-first) whose history contains
-    every commit in the entry's ``commits:`` list, then rewrite ``status``/
-    ``released_in``/``released_at``/``released_sha`` in place.
-
-    Idempotent (port-time addition — see module docstring): an entry already carrying
-    the exact resolved fields is skipped without a write.
-
-    Parameters:
-        worktree_root:  Absolute path to the repo worktree root (git operations run here).
-        entry_paths:    Completion-entry paths (``archive/completed/**/*.md`` or
-                        ``docs/plans/*.md``) to consider — already containment-checked
-                        by the caller/handler.
-        candidate_tags: Ordered oldest-first release-tag names; the LAST element is
-                        treated as the release currently being cut (fallback target
-                        when no earlier tag contains an entry's commits).
-
-    Returns:
-        {"flipped": [{"path", "released_in", "released_at", "released_sha"}, ...],
-         "skipped": [str, ...]}  — ``skipped`` entries are ``"<path>: <reason>"`` strings.
-
-    Raises:
-        ValueError: ``candidate_tags`` is empty (nothing to resolve against).
-    """
-    if not candidate_tags:
-        raise ValueError(
-            "completion.flip_to_released: candidate_tags must be non-empty"
-        )
-
-    root = Path(worktree_root)
-    flipped: list[dict] = []
-    skipped: list[str] = []
-
-    for raw_path in entry_paths:
-        record, skip_reason = _flip_one_entry(root, Path(raw_path), candidate_tags)
-        if record is not None:
-            flipped.append(record)
-        else:
-            skipped.append(skip_reason or f"{raw_path}: skipped")
-
-    return {"flipped": flipped, "skipped": skipped}
-
-
-@register_op("completion.flip_to_released")
-async def _flip_to_released_handler(
-    params: dict, repo_root: Optional[Path] = None
-) -> dict:
-    """JSON-RPC ``completion.flip_to_released`` handler.
-
-    MUTATING: resolves each caller-supplied completion entry to its earliest
-    containing release tag and rewrites its frontmatter ``status``/``released_in``/
-    ``released_at``/``released_sha`` fields in place. Blocking FS + git I/O runs via
-    ``asyncio.to_thread``. Contract provisional pending DR-084 — see module docstring.
-
-    Required params:
-        entry_paths    (list[str]): completion-entry paths to consider.
-        candidate_tags (list[str]): ordered oldest-first release-tag names; the LAST
-            element is treated as the release currently being cut (fallback target).
-
-    Returns:
-        {"flipped": [{"path", "released_in", "released_at", "released_sha"}, ...],
-         "skipped": [str, ...]}
-        or ``{"error": str, "no_op": True}`` on a param/containment guard failure.
-
-    ``repo_root`` is provided by the IPC engine (``_OP_KEY_SCOPE: common_dir``, tail
-    pass) and used to derive the worktree root for both git resolution and the
-    per-entry containment check — mirrors ``completion.reconcile_commits`` above
-    (same allowed roots: ``archive/completed/`` and ``docs/plans/``).
-    """
-    raw_entry_paths = params.get("entry_paths", [])
-    if not isinstance(raw_entry_paths, list):
-        return {
-            "error": "completion.flip_to_released: 'entry_paths' must be a list",
-            "no_op": True,
-        }
-
-    raw_candidate_tags = params.get("candidate_tags", [])
-    if not isinstance(raw_candidate_tags, list) or not raw_candidate_tags:
-        return {
-            "error": "completion.flip_to_released: 'candidate_tags' must be a non-empty list",
-            "no_op": True,
-        }
-
-    if repo_root is None:
-        return {
-            "error": (
-                "completion.flip_to_released: repo_root is required "
-                "(no founding root available — handler called without socket-authoritative common_dir)"
-            ),
-            "no_op": True,
-        }
-
-    worktree = main_worktree_root(repo_root)
-
-    # Containment: mirrors completion.reconcile_commits's dual-root allow-list
-    # (archive/completed/ and docs/plans/) — see docs/problems/
-    # 2026-07-08-op-family-path-containment-investigation.md § 4.
-    allowed_roots = [worktree / "docs" / "plans", worktree / "archive" / "completed"]
-    contained_entry_paths: list[str] = []
-    skipped_uncontained: list[str] = []
-    for raw_path in raw_entry_paths:
-        if not isinstance(raw_path, str) or not raw_path:
-            skipped_uncontained.append(f"{raw_path!r}: not a non-empty string")
-            continue
-        p = Path(raw_path)
-        if not p.is_absolute():
-            p = worktree / p
-        contained = contained_path(p, allowed_roots)
-        if contained is None:
-            skipped_uncontained.append(
-                f"{raw_path}: escapes docs/plans/ or archive/completed/"
-            )
-            continue
-        contained_entry_paths.append(str(contained))
-
-    if not contained_entry_paths:
-        return {"flipped": [], "skipped": skipped_uncontained}
-
-    try:
-        result = await asyncio.to_thread(
-            flip_completion_entries_to_released,
-            worktree_root=str(worktree),
-            entry_paths=contained_entry_paths,
-            candidate_tags=[str(t) for t in raw_candidate_tags],
-        )
-    except ValueError as exc:
-        return {"error": f"completion.flip_to_released: {exc}", "no_op": True}
-
-    result["skipped"] = [*skipped_uncontained, *result["skipped"]]
-    return result
 
 
 # ---------------------------------------------------------------------------

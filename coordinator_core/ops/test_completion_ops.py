@@ -1,36 +1,18 @@
 """
-coordinator_core.ops.test_completion_ops — coverage for ``completion.flip_to_released``.
+coordinator_core.ops.test_completion_ops — coverage for ``completion.day_coverage_sweep``.
 
-Byte-parity oracle: [coordinator-content-repo] coordinator/skills/merging-to-main/SKILL.md
-§ Step 1.65 item 3's ``python3 -<<'PYEOF'`` block. Fixture pattern mirrors
-``coordinator_core/ops/tests/test_completion_ops_reconcile.py`` (tmp git repo, real
-subprocess git — not mocked) and ``coordinator_core/reconcile/tests/test_commit_reality.py``.
-
-Covers:
-  - single-entry flip to the earliest containing candidate tag (not the newest).
-  - fallback to the last (release-being-cut) candidate tag when no commits are
-    recorded, or none of the earlier tags contain them yet.
-  - idempotency: re-invoking with an already-``released``, byte-identical entry is a
-    no-op (reported in ``skipped``, not ``flipped``, and does not rewrite the file).
-  - non-``pending-release`` entries are skipped, not errored.
-  - path-containment guard (entry escaping the allowed roots is skipped, not raised).
-  - empty ``candidate_tags`` raises ``ValueError`` (oracle-parity fail-loud guard).
+Fixture pattern: tmp git repo, real subprocess git — not mocked.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.completion_ops import (
-    _flip_to_released_handler,
-    day_coverage_sweep,
-    flip_completion_entries_to_released,
-)
+from coordinator_core.ops.completion_ops import day_coverage_sweep
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -39,11 +21,6 @@ pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-
-def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
-    return asyncio.run(coro)
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -71,19 +48,6 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def _commit(root: Path, rel_path: str, content: str, subject: str) -> str:
-    full = root / rel_path
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(content, encoding="utf-8")
-    _git(root, "add", rel_path)
-    _git(root, "commit", "-q", "-m", subject)
-    return _git(root, "rev-parse", "--short", "HEAD").stdout.strip()
-
-
-def _tag(root: Path, name: str) -> None:
-    _git(root, "tag", name)
-
-
 def _write_entry(root: Path, rel_path: str, *, status: str, commits: list[str]) -> Path:
     commits_block = "\n".join(f'  - "{c}"' for c in commits)
     text = (
@@ -98,181 +62,6 @@ def _write_entry(root: Path, rel_path: str, *, status: str, commits: list[str]) 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
-
-
-def test_flips_to_earliest_containing_tag(repo: Path) -> None:
-    sha1 = _commit(repo, "archive/completed/a.md", "a", "work: a")
-    _tag(repo, "v1.0.0")
-    sha2 = _commit(repo, "archive/completed/b.md", "b", "work: b")
-    _tag(repo, "v2.0.0")
-    _commit(repo, "archive/completed/c.md", "c", "work: c")
-    _tag(repo, "v3.0.0")
-
-    entry = _write_entry(
-        repo, "archive/completed/entry.md", status="pending-release", commits=[sha1]
-    )
-
-    result = flip_completion_entries_to_released(
-        worktree_root=str(repo),
-        entry_paths=[str(entry)],
-        candidate_tags=["v1.0.0", "v2.0.0", "v3.0.0"],
-    )
-
-    assert result["skipped"] == []
-    assert len(result["flipped"]) == 1
-    record = result["flipped"][0]
-    assert record["path"] == str(entry)
-    assert record["released_in"] == "v1.0.0"  # earliest containing tag, not v3.0.0
-    assert record["released_sha"]
-    assert record["released_at"]
-
-    text = entry.read_text(encoding="utf-8")
-    assert "status: released" in text
-    assert "released_in: v1.0.0" in text
-    # DR-216 D2(iii): existing commits: block content preserved.
-    assert sha1 in text
-
-
-def test_no_commits_falls_back_to_last_candidate_tag(repo: Path) -> None:
-    _commit(repo, "archive/completed/a.md", "a", "work: a")
-    _tag(repo, "v1.0.0")
-
-    entry = _write_entry(
-        repo, "archive/completed/entry.md", status="pending-release", commits=[]
-    )
-
-    result = flip_completion_entries_to_released(
-        worktree_root=str(repo),
-        entry_paths=[str(entry)],
-        candidate_tags=["v1.0.0", "v2.0.0-cut"],
-    )
-
-    assert len(result["flipped"]) == 1
-    record = result["flipped"][0]
-    # v2.0.0-cut is not a real tag yet — falls back to it anyway (release being cut),
-    # with released_sha/released_at derived from current HEAD/today.
-    assert record["released_in"] == "v2.0.0-cut"
-    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    assert record["released_sha"] == head_sha
-
-
-def test_non_pending_release_entry_is_skipped_not_errored(repo: Path) -> None:
-    entry = _write_entry(
-        repo, "archive/completed/entry.md", status="draft", commits=[]
-    )
-
-    result = flip_completion_entries_to_released(
-        worktree_root=str(repo),
-        entry_paths=[str(entry)],
-        candidate_tags=["v1.0.0"],
-    )
-
-    assert result["flipped"] == []
-    assert len(result["skipped"]) == 1
-    assert "status is not pending-release" in result["skipped"][0]
-    # File untouched.
-    assert "status: draft" in entry.read_text(encoding="utf-8")
-
-
-def test_second_invocation_is_a_noop_idempotent(repo: Path) -> None:
-    """AC7: identical second invocation is a safe no-op — explicit double-invocation test."""
-    sha1 = _commit(repo, "archive/completed/a.md", "a", "work: a")
-    _tag(repo, "v1.0.0")
-
-    entry = _write_entry(
-        repo, "archive/completed/entry.md", status="pending-release", commits=[sha1]
-    )
-
-    first = flip_completion_entries_to_released(
-        worktree_root=str(repo),
-        entry_paths=[str(entry)],
-        candidate_tags=["v1.0.0"],
-    )
-    assert len(first["flipped"]) == 1
-
-    mtime_after_first = entry.stat().st_mtime_ns
-    text_after_first = entry.read_text(encoding="utf-8")
-
-    second = flip_completion_entries_to_released(
-        worktree_root=str(repo),
-        entry_paths=[str(entry)],
-        candidate_tags=["v1.0.0"],
-    )
-
-    assert second["flipped"] == []
-    assert len(second["skipped"]) == 1
-    assert "already released" in second["skipped"][0]
-    # No write occurred: content and mtime unchanged.
-    assert entry.read_text(encoding="utf-8") == text_after_first
-    assert entry.stat().st_mtime_ns == mtime_after_first
-
-
-def test_empty_candidate_tags_raises_value_error(repo: Path) -> None:
-    entry = _write_entry(
-        repo, "archive/completed/entry.md", status="pending-release", commits=[]
-    )
-    with pytest.raises(ValueError):
-        flip_completion_entries_to_released(
-            worktree_root=str(repo),
-            entry_paths=[str(entry)],
-            candidate_tags=[],
-        )
-
-
-def test_handler_containment_guard_skips_escaping_path(repo: Path) -> None:
-    outside = repo.parent / "outside.md"
-    outside.write_text("---\nstatus: pending-release\ncommits:\n---\n", encoding="utf-8")
-
-    result = _run(
-        _flip_to_released_handler(
-            {"entry_paths": [str(outside)], "candidate_tags": ["v1.0.0"]},
-            repo_root=repo / ".git",
-        )
-    )
-
-    assert result["flipped"] == []
-    assert len(result["skipped"]) == 1
-    assert "escapes" in result["skipped"][0]
-
-
-def test_handler_requires_repo_root() -> None:
-    result = _run(
-        _flip_to_released_handler(
-            {"entry_paths": [], "candidate_tags": ["v1.0.0"]}, repo_root=None
-        )
-    )
-    assert result.get("error")
-    assert result["no_op"] is True
-
-
-def test_handler_requires_nonempty_candidate_tags(repo: Path) -> None:
-    result = _run(
-        _flip_to_released_handler(
-            {"entry_paths": [], "candidate_tags": []},
-            repo_root=repo / ".git",
-        )
-    )
-    assert result.get("error")
-    assert result["no_op"] is True
-
-
-def test_handler_end_to_end_flip(repo: Path) -> None:
-    sha1 = _commit(repo, "archive/completed/a.md", "a", "work: a")
-    _tag(repo, "v1.0.0")
-
-    entry = _write_entry(
-        repo, "archive/completed/entry.md", status="pending-release", commits=[sha1]
-    )
-
-    result = _run(
-        _flip_to_released_handler(
-            {"entry_paths": [str(entry)], "candidate_tags": ["v1.0.0"]},
-            repo_root=repo / ".git",
-        )
-    )
-
-    assert len(result["flipped"]) == 1
-    assert result["flipped"][0]["released_in"] == "v1.0.0"
 
 
 # ---------------------------------------------------------------------------

@@ -222,7 +222,6 @@
     "coordinator/bin/memo-outbox-tracking-guard.py",
     "coordinator/bin/merge-assemble.py",
     "coordinator/bin/merge-gate-and-pr.py",
-    "coordinator/bin/merge-release-notes-derive.py",
     "coordinator/bin/mint-deliverable-id.py",
     "coordinator/bin/misc-session-and-guards.py",
     "coordinator/bin/mise-prep-run.py",

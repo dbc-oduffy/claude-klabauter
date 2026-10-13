@@ -1030,13 +1030,13 @@ def _strip_quoted_spans(text: str) -> str:
     while i < n:
         ch = text[i]
         if quote:
-            if ch == quote and prev != "\\":
+            if ch == quote and (quote == "'" or prev != "\\"):
                 quote = None
                 out.append(ch)
                 prev = ch
                 i += 1
                 continue
-            if ch == "`" or text[i: i + 2] == "$(":
+            if quote == '"' and (ch == "`" or text[i: i + 2] == "$("):
                 span, consumed = _copy_command_substitution(text, i)
                 out.append(span)
                 prev = span[-1] if span else prev
@@ -1044,6 +1044,11 @@ def _strip_quoted_spans(text: str) -> str:
                 continue
             prev = ch
             i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(text[i: i + 2])
+            prev = text[i + 1]
+            i += 2
             continue
         if ch in ("'", '"'):
             quote = ch
@@ -1173,13 +1178,34 @@ def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
     return "<(" not in bare and not _has_write_marker(bare)
 
 
+_GIT_RESET_WORKTREE_FLAGS = frozenset({"--hard", "--merge", "--keep"})
+
+
+def _is_git_index_only_reset(segment: str) -> bool:
+    """``git reset`` without ``--hard``/``--merge``/``--keep`` rewrites index
+    entries only; the working-tree file is untouched."""
+    if _git_subcommand(segment) != "reset":
+        return False
+    tokens = _fold_literal_joins(segment).split()
+    return not any(
+        token.replace("'", "").replace('"', "") in _GIT_RESET_WORKTREE_FLAGS
+        for token in tokens
+    )
+
+
 def _is_git_content_mutation(segment: str) -> bool:
-    return _git_subcommand(segment) in _GIT_CONTENT_MUTATING_SUBCOMMANDS
+    if _git_subcommand(segment) not in _GIT_CONTENT_MUTATING_SUBCOMMANDS:
+        return False
+    return not (_is_git_index_only_reset(segment) and _passes_git_read_checks(segment))
 
 
 def _is_git_read_shape(segment: str) -> bool:
-    if _git_subcommand(segment) not in _GIT_CONTENT_SAFE_SUBCOMMANDS:
+    if _git_subcommand(segment) not in _GIT_CONTENT_SAFE_SUBCOMMANDS and not _is_git_index_only_reset(segment):
         return False
+    return _passes_git_read_checks(segment)
+
+
+def _passes_git_read_checks(segment: str) -> bool:
     without_heredocs = _strip_heredoc_bodies(segment)
     if _has_write_marker(_strip_quoted_spans(without_heredocs)):
         return False
@@ -1230,9 +1256,13 @@ def _split_top_level_segments(cmd: str) -> "list[str]":
         ch = cmd[i]
         if quote:
             current.append(ch)
-            if ch == quote and cmd[i - 1] != "\\":
+            if ch == quote and (quote == "'" or cmd[i - 1] != "\\"):
                 quote = None
             i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            current.append(cmd[i: i + 2])
+            i += 2
             continue
         if ch in ("'", '"'):
             quote = ch

@@ -662,7 +662,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "install.detect_python3_appx_stub":        "none",
     "lessons.filter_undated_universal":        "none",
     "lessons.reject_orphan_strip_entries":     "common_dir",
-    "completion.flip_to_released":             "common_dir",
+    "completion.stamp_releases":               "common_dir",
     "install.clone_idempotent":                "none",
     "coverage.halt_on_uncovered":              "show_top",
     "ceremony.init_anchor_injection_state":    "none",
