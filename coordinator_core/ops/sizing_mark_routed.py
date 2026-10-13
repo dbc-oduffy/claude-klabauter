@@ -23,6 +23,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.sizing_ship import _err, _validate_sizing_fm
+from coordinator_core.session import record_homes
 
 _ROUTABLE_FROM = frozenset({"sized", "routed"})
 
@@ -60,9 +61,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     p = Path(sizing_path_raw)
     if not p.is_absolute():
         p = worktree / p
-    p = contained_path(p, [worktree / "state" / "sizings"])
+    p = contained_path(p, [Path(record_homes.home_dir(str(worktree), "sizings"))])
     if p is None:
-        return _err(f"sizing_path escapes state/sizings/: {sizing_path_raw!r}")
+        return _err(f"sizing_path escapes {Path(record_homes.home_dir('.', 'sizings')).as_posix()}/: {sizing_path_raw!r}")
     if not p.is_file():
         return _err(f"sizing-object not found on disk: {sizing_path_raw}")
 

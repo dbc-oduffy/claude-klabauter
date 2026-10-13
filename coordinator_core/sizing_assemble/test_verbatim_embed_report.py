@@ -174,3 +174,45 @@ def test_write_derives_a_register_covering_every_turn(repo, sid, capsys) -> None
         "turns_total": 2,
         "turns_uncovered": [],
     }
+
+
+def test_no_verbatims_embeds_nothing_and_leaves_the_mark(repo, sid, capsys) -> None:
+    _record(3, size=10)
+    pm_turns.mark_sized_through(1, session_id=sid, cwd=str(repo))
+    path = _sizing(repo)
+    code, out, err = _run(path, capsys, "--no-verbatims")
+    assert code == 0
+    assert err.strip() == "embedded 0 pm_verbatims"
+    assert "pm_verbatims" not in yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert store.read_baton(sid, str(repo))["sized_through_turn"] == 1
+    assert json.loads(out)["write"]["pm_verbatims"] == {"embedded": 0, "turns": None}
+
+
+def test_without_no_verbatims_the_turn_is_embedded(repo, sid, capsys) -> None:
+    _record(3, size=10)
+    path = _sizing(repo)
+    code, _, _ = _run(path, capsys)
+    assert code == 0
+    assert "pm_verbatims" in yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert store.read_baton(sid, str(repo))["sized_through_turn"] == 2
+
+
+def test_no_verbatims_with_verbatim_turns_is_a_usage_error(repo, sid, capsys) -> None:
+    _record(3, size=10)
+    code, _, err = _run(_sizing(repo), capsys, "--no-verbatims", "--verbatim-turns", "0-0")
+    assert code == sizing_assemble.EXIT_USAGE
+    assert "--no-verbatims" in err and "--verbatim-turns" in err
+
+
+def test_no_verbatims_with_intent_turn_is_a_usage_error(repo, sid, capsys) -> None:
+    _record(3, size=10)
+    code, _, err = _run(_sizing(repo), capsys, "--no-verbatims", "--intent-turn", "0")
+    assert code == sizing_assemble.EXIT_USAGE
+    assert "--no-verbatims" in err and "--intent-turn" in err
+
+
+def test_no_verbatims_without_write_is_a_usage_error(repo, sid, capsys) -> None:
+    code = sizing_assemble.main([*_ARGS, "--no-verbatims"])
+    _, err = capsys.readouterr()
+    assert code == sizing_assemble.EXIT_USAGE
+    assert "--no-verbatims needs --write" in err

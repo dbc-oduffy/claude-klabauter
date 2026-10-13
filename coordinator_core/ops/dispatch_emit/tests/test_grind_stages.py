@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit import grind_stages
 
@@ -247,19 +249,60 @@ def test_op_runner_agent_type_equals_vocab_constant():
     assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in call_text
 
 
-def test_every_composer_writes_literal_sonnet_model():
-    calls = list(_all_non_commit_calls().values())
-    calls.append(
-        grind_stages.compose_commit_call(
-            label="commit:row1",
-            phase_title="Commit",
-            row_id="row1",
-            touched_files=["a.py"],
-        )
+def _calls_by_stage(**kw) -> dict:
+    calls = {
+        "triage": grind_stages.compose_triage_call(
+            label="triage:b1", phase_title="Triage", run_dir="r", batch_id="b1", **kw
+        ),
+        "refute-close": grind_stages.compose_refute_close_call(
+            label="rc", phase_title="Refute-close", **kw
+        ),
+        **_size_calls(**kw),
+        "fix": grind_stages.compose_fix_call(
+            label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"], **kw
+        ),
+        "verify": grind_stages.compose_verify_agent_call(label="v", phase_title="Verify", **kw),
+        "verify-op": grind_stages.compose_verify_op_call(
+            label="vo", phase_title="Verify", op="x.y", run_dir="r", batch_id="b1", **kw
+        ),
+        "commit": grind_stages.compose_commit_call(
+            label="c", phase_title="Commit", row_id="row1", touched_files=["a.py"], **kw
+        ),
+        "ledger-sweep": grind_stages.compose_ledger_sweep_call(
+            label="ls", phase_title="Sweep", profile="p", run_id="r", **kw
+        ),
+        "undo": grind_stages.compose_undo_call(
+            label="u", phase_title="Undo", paths=["a.py"], **kw
+        ),
+    }
+    calls["review-fix-commit"] = grind_stages.compose_review_fix_commit_call(
+        touched_files_js="paths", label="rf", phase_title="Fix", **kw
     )
-    calls.append(_sweep_call())
-    for call_text in calls:
-        assert "model: 'sonnet'" in call_text
+    return calls
+
+
+def test_every_composer_carries_its_stage_model():
+    for key, call_text in _calls_by_stage().items():
+        stage = "commit" if key == "review-fix-commit" else key
+        assert f"model: '{grind_stages.STAGE_MODELS[stage]}'" in call_text
+
+
+def test_models_override_changes_only_its_stage():
+    calls = _calls_by_stage(models={"triage": "haiku"})
+    for key, call_text in calls.items():
+        assert ("model: 'haiku'" in call_text) == (key == "triage")
+
+
+def test_unknown_stage_key_in_models_raises():
+    with pytest.raises(ValueError, match="nonesuch"):
+        grind_stages.compose_undo_call(
+            label="u", phase_title="Undo", paths=["a"], models={"nonesuch": "haiku"}
+        )
+    with pytest.raises(ValueError, match="bogus"):
+        grind_stages._agent_call(
+            "p", stage="bogus", label="l", phase_title="t", agent_type="a",
+            agent_type_host=None, effort="low", schema={},
+        )
 
 
 def test_fix_prompt_precheck_peer_dirty_before_work():
@@ -612,67 +655,6 @@ def test_grind_row_verb_always_run_through_backlog_grind_assemble():
             )
 
 
-# ---------------------------------------------------------------------------
-# P145-C3: compose_resize_call
-# ---------------------------------------------------------------------------
-
-
-def test_resize_answer_enum_is_exactly_the_three_values():
-    call_text = grind_stages.compose_resize_call(
-        label="resize:b1", phase_title="Grind", profile="p1",
-        fix_verdict="confirmed-bug", close_verdict="not-reproduced",
-    )
-    assert '"enum": ["plan-weight", "focused-fix", "not-reproduced"]' in call_text
-
-
-def test_resize_ledger_append_carries_stage_triage_verdict_resize_and_no_resize_dash_outcome():
-    call_text = grind_stages.compose_resize_call(
-        label="resize:b1", phase_title="Grind", profile="p1",
-        fix_verdict="confirmed-bug", close_verdict="not-reproduced",
-    )
-    assert "--stage triage --verdict resize --outcome" in call_text
-    assert "resize-" not in call_text
-
-
-def test_resize_prompt_names_the_caller_resolved_verdicts_never_invents_one():
-    call_text = grind_stages.compose_resize_call(
-        label="resize:b1", phase_title="Grind", profile="p1",
-        fix_verdict="confirmed-bug", close_verdict="not-reproduced",
-    )
-    assert "--outcome confirmed-bug" in call_text
-    assert "--outcome not-reproduced" in call_text
-
-
-def test_resize_prompt_names_ambiguity_rather_than_a_made_up_verdict_when_none_given():
-    call_text = grind_stages.compose_resize_call(
-        label="resize:b1", phase_title="Grind", profile="p1",
-        fix_verdict=None, close_verdict=None,
-    )
-    assert "no fix-kind edge is resolvable" in call_text
-    assert "no refute-close-kind edge is resolvable" in call_text
-    assert "resize-" not in call_text
-
-
-def test_resize_call_carries_no_posix_only_construct():
-    call_text = grind_stages.compose_resize_call(
-        label="resize:b1", phase_title="Grind", profile="p1",
-        fix_verdict="confirmed-bug", close_verdict="not-reproduced",
-    )
-    for construct in ("/dev/null", "| grep", "sleep "):
-        assert construct not in call_text
-    import re
-    assert not re.search(r"(?<![\w-])[A-Z][A-Z0-9_]*=\S+ [a-z]", call_text)
-
-
-def test_resize_is_read_only_and_never_stages_or_commits():
-    call_text = grind_stages.compose_resize_call(
-        label="resize:b1", phase_title="Grind", profile="p1",
-        fix_verdict="confirmed-bug", close_verdict="not-reproduced",
-    )
-    assert "read-only" in call_text
-    assert "You do not stage or commit anything. Only the committer stage does that." in call_text
-
-
 def test_every_stage_binds_the_fire_time_repo_root_never_cwd():
     """A queue grind emitted for repo A and fired from a session whose cwd is
     repo B ran every committer in B. Each prompt must anchor to `REPO_ROOT`,
@@ -786,3 +768,64 @@ def test_every_evidence_file_flag_names_its_evidence_path():
     assert "'state/queue-grind/bug/evidence/' + (RID) + '/' + '<its row_id>' + '.verify.md'" in refute
     assert "<a file with your evidence>" not in refute
     assert "never truncate" in refute
+
+
+def _size_calls(**kw) -> dict:
+    return {
+        "size": grind_stages.compose_size_call(
+            label="sz", phase_title="Size", row_js="row", evidence_js="ev", fix_plan_js="fp", **kw
+        ),
+        "size-assemble": grind_stages.compose_size_assemble_call(
+            label="sa", phase_title="Size", commands_js="cmds", **kw
+        ),
+    }
+
+
+def test_size_call_carries_scout_agent_schema_and_clauses():
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    call = _size_calls()["size"]
+    assert "agentType: 'coordinator:sizing-scout'" in call
+    for field in ask_contract.SCOUT_SCHEMA["required"]:
+        assert f'"{field}"' in call
+    assert grind_stages._JUDGE_AGAINST_HEAD_CLAUSE in call
+    assert grind_stages._NO_STAGING_CLAUSE in call
+    assert "tshirt_size" not in call
+    assert "plan-weight" not in call
+
+
+def test_size_assemble_call_is_an_op_runner_at_low_effort():
+    call = _size_calls()["size-assemble"]
+    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in call
+    assert "effort: 'low'" in call
+    assert '"results"' in call
+
+
+def test_size_calls_carry_sonnet_and_follow_a_models_override():
+    for call in _size_calls().values():
+        assert "model: 'sonnet'" in call
+    calls = _size_calls(models={"size": "haiku"})
+    assert "model: 'haiku'" in calls["size"]
+    assert "model: 'sonnet'" in calls["size-assemble"]
+
+
+def test_size_stages_are_in_the_table_driven_model_helper():
+    for key, call_text in _size_calls().items():
+        assert f"model: '{grind_stages.STAGE_MODELS[key]}'" in call_text
+
+
+def test_size_assemble_js_commands():
+    js = grind_stages.SIZE_ASSEMBLE_JS
+    assemble = js.split("const _sizeMarkCmd")[0]
+    for token in ("sizing-assemble", "--write", "--no-plan-hand-off", "--no-verbatims", "--intent-source em-elaborated"):
+        assert token in assemble
+    assert "--repo-root" not in assemble
+    mark = js.split("const _sizeMarkCmd")[1].split("const _sizeBatonCmd")[0]
+    for token in ("grind-row append", "--stage size", "--outcome route-to-plan"):
+        assert token in mark
+    baton = js.split("const _sizeBatonCmd")[1].split("const _sizeChainCmd")[0]
+    for token in ("coordinator-doc-new", "--type spinoff", "--from-sizing"):
+        assert token in baton
+    chain = js.split("const _sizeChainCmd")[1]
+    assert "'cd '" in chain
+    assert chain.index("_sizeAssembleCmd") < chain.index("_sizeBatonCmd") < chain.index("_sizeMarkCmd")

@@ -27,7 +27,10 @@ from coordinator_core.contract.decision_object.judgment import build_disposition
 from coordinator_core.ceremony_common.run import decide, receipt
 from coordinator_core.ceremony_common.run.contract import Decision, StepSpec
 from coordinator_core.ceremony_common.run.spec import CeremonySpec
+from coordinator_core.session import record_homes
 from coordinator_core.workweek_start import header
+
+_GOALS_REL = Path(record_homes.home_dir(".", "goals")).as_posix()
 
 COSTS_PATH = Path(__file__).resolve().parent / "step_costs.json"
 _MODULE = "coordinator_core.workweek_start.run_spec"
@@ -603,7 +606,7 @@ def finish_steps(decisions: Sequence[Decision], ledger_rows: Sequence[Any], *, r
         if slug in used:
             slug = f"{slug[:36]}-{i}"
         used.add(slug)
-        out = f"state/goals/{today}-{slug}-{sid}.yaml"
+        out = f"{_GOALS_REL}/{today}-{slug}-{sid}.yaml"
         row["goal_path"] = out
         goals.append(out)
         steps.append(_cli(

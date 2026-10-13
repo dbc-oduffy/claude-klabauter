@@ -36,6 +36,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     SIZING_SCOUT_AGENT_TYPE,
     STOP_AFTER_PLAN,
+    ASSEMBLE_SCHEMA,
+    DOC_NEW_CMD,
+    SCOUT_RETURN_CLAUSE,
+    SCOUT_SCHEMA,
+    SIZING_ASSEMBLE_CMD,
+    scout_assemble_flags_js,
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
@@ -71,11 +77,11 @@ from coordinator_core.ops.review_mint.execute_review import (
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
+from coordinator_core.session.record_homes import home_dir
 
+_SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
-_DOC_NEW = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new"'
-_SIZING_ASSEMBLE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/sizing-assemble"'
 _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
@@ -166,27 +172,6 @@ def _ruling_schema(ruling_schema: dict) -> dict:
             "recorded": _RECORDED_SCHEMA,
         },
     }
-_SCOUT_SCHEMA = _obj(
-    ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"],
-    {
-        "tshirt": {"type": "string", "enum": ["XS", "S", "M", "L", "XL", "XXL"]},
-        "intent": _STR,
-        "name": _STR,
-        "premise_provenance": {"type": "string", "enum": ["executed", "read", "not-applicable"]},
-        "premise_evidence": _STR,
-        "exit_criterion": _STR,
-        "writes": {"type": "array", "items": _STR},
-        "jtbd_unclear": {"type": "boolean"},
-        "well_trodden_step_change": {"type": "boolean"},
-        "gated": {
-            "type": "array",
-            "items": _obj(["title", "owner_repo"], {"title": _STR, "owner_repo": _STR, "requires": _STR}),
-        },
-    },
-)
-_ASSEMBLE_SCHEMA = _obj(
-    ["exit_code", "stdout"], {"exit_code": {"type": "integer"}, "stdout": _STR, "stderr": _STR}
-)
 _ACCEPT_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
     {
@@ -704,19 +689,8 @@ def compose_ask_script(
         scout_prompt = prompt_of(
             "Size this ask afresh, never reusing or editing an existing sizing, by following the "
             "sizing skill (`coordinator:sizing`). Judge only; write no file and run no "
-            "`sizing-assemble`. Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), "
-            "name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with "
-            "premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` "
-            "the repo-relative files the ask will create, edit or delete -- every file the ask names, "
-            "plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set "
-            "jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), "
-            "and well_trodden_step_change true only when the ask proposes a new direction on ground "
-            "recently built (it also routes the ask to shaping, a PM conversation). An ask that "
-            "continues a workstream an existing sizing, plan, ruling or baton already scoped is "
-            "not a step change, however much it rebuilds. Return "
-            "as `gated` every deliverable the ask declares as owned by another repo or blocked on an "
-            "external gate (title, owner_repo, requires): never fold one into `writes` and never omit "
-            "one."
+            "`sizing-assemble`. "
+            + SCOUT_RETURN_CLAUSE
             + ledger_clause
             + (
                 "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
@@ -726,7 +700,7 @@ def compose_ask_script(
             + (prompt or "")
         )
         b.append(
-            f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_SCOUT_SCHEMA, agent_model='sonnet')};"
+            f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=SCOUT_SCHEMA, agent_model='sonnet')};"
         )
         b.append("  _writes = _scouted.writes ?? [];")
         b.append("  _gated = _scouted.gated ?? [];")
@@ -734,20 +708,16 @@ def compose_ask_script(
             "  const _slug = String(_scouted.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
             ".replace(/^-+|-+$/g, '') || 'ask';"
         )
-        b.append(f"  const _sizingPath = 'state/sizings/' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
+        _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
+        b.append(f"  const _sizingPath = '{_sizings_prefix}' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         deliverable = (
             f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
         )
         b.append(
-            f"  const _assembleCmd = {_lit(_SIZING_ASSEMBLE)} + ' --tshirt ' + _q(_scouted.tshirt)"
-            " + ' --intent ' + _q(_scouted.intent) + ' --name ' + _q(_scouted.name)"
-            " + ' --premise-provenance ' + _q(_scouted.premise_provenance)"
-            " + ' --premise-evidence ' + _q(_scouted.premise_evidence)"
-            f" + ' --exit-criterion ' + _q(_scouted.exit_criterion){deliverable}"
-            " + (_scouted.jtbd_unclear === true ? ' --jtbd-unclear' : '')"
-            " + (_scouted.well_trodden_step_change === true ? ' --well-trodden-step-change' : '')"
-            f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)};"
+            f"  const _assembleCmd = {_lit(SIZING_ASSEMBLE_CMD)}"
+            + scout_assemble_flags_js("_scouted", "_q", deliverable)
+            + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)};"
         )
         assemble_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -756,7 +726,7 @@ def compose_ask_script(
             "js:_assembleCmd",
         )
         b.append(
-            f"  const _assembled = await {_agent(assemble_prompt, label='assemble', phase='size', agent_type=agent_type, schema=_ASSEMBLE_SCHEMA)};"
+            f"  const _assembled = await {_agent(assemble_prompt, label='assemble', phase='size', agent_type=agent_type, schema=ASSEMBLE_SCHEMA)};"
         )
         b.append("  let _decision = null;")
         # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
@@ -928,7 +898,7 @@ def compose_ask_script(
         f"{head}\n\n{anchor}\n\n",
         "Author the plan for the sizing at ",
         "js:_sizingRel",
-        f": scaffold it with `{_DOC_NEW} --type plan --sizing-object <that sizing path> --title "
+        f": scaffold it with `{DOC_NEW_CMD} --type plan --sizing-object <that sizing path> --title "
         "\"<title>\" --out docs/plans/<sizing-stem>.md` (that launcher, never `python3` on the "
         "script; never author the frontmatter block by hand), then change its existing `scope_mode:` line to `spec-dispatch`, derive its "
         "spine from the sizing, then FILL the "

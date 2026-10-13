@@ -237,7 +237,7 @@ import uuid
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.cartography._guard import PathEscapeError
@@ -259,6 +259,7 @@ from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
 from coordinator_core.ops.dispatch_emit.grind_admission import NOT_ADMITTED_EXTRA_KEY
+from coordinator_core.ops.dispatch_emit.grind_stages import STAGE_MODELS
 from coordinator_core.ops.dispatch_emit.emission_receipt import (
     _load_review_inputs,
     _receipt_session_id,
@@ -751,6 +752,7 @@ _PARAM_FIELDS = (
     Field("row_budget", "pos_int"),
     Field("queue", "list"),
     Field("overrides", "dict"),
+    Field("stage_models", "dict"),
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
     Field("context", "str_list"),
@@ -767,6 +769,24 @@ _PARAM_FIELDS = (
     Field("flags", "dict"),
     Field("lists", "dict"),
 )
+
+
+_STAGE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _validated_stage_models(value: Any) -> Optional[dict]:
+    """The queue route's ``stage_models`` mapping, or ValueError naming the bad key and the valid ones."""
+    if not value:
+        return None
+    valid = sorted(STAGE_MODELS)
+    for kind, model in value.items():
+        if kind not in STAGE_MODELS:
+            raise ValueError(f"stage_models key {kind!r} is not a stage; valid keys: {valid}")
+        if not isinstance(model, str) or not _STAGE_MODEL_RE.match(model):
+            raise ValueError(
+                f"stage_models[{kind!r}] = {model!r} is not a model name matching {_STAGE_MODEL_RE.pattern}"
+            )
+    return dict(value)
 
 
 def _pipeline_content_root() -> Path:
@@ -1534,6 +1554,7 @@ def _dispatch_emit(
         profile_dir = params.get("profile_dir")
         if not profile_dir:
             raise ValueError("dispatch.emit queue route requires param: profile_dir")
+        stage_models = _validated_stage_models(params.get("stage_models"))
 
         review_roster_fragment, review_stage_schemas = _load_review_inputs(review_route)
         target_root_path = Path(target_root)
@@ -1554,6 +1575,7 @@ def _dispatch_emit(
             commit_trailers=read_host_commit_trailers(target_root_path),
             review_roster_fragment=review_roster_fragment,
             review_stage_schemas=review_stage_schemas,
+            stage_models=stage_models,
         )
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}

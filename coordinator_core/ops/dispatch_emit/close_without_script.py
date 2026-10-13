@@ -198,6 +198,22 @@ def _commit_v2(params: dict, root: Path):
     return terminal_commit.reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
 
 
+def _holds_valid_stamp(
+    worktree_root: Path, plan_rel: str, plan_fm: dict, terminal_sha: str, judged: str,
+) -> bool:
+    """Whether the plan's own ``review_stamp`` is for this run's terminal commit, records the
+    verdict being closed on, and ``check`` accepts it."""
+    from coordinator_core.ops.review_stamp import check
+
+    stamp = plan_fm.get("review_stamp")
+    if not isinstance(stamp, dict) or stamp.get("terminal_commit_sha") != terminal_sha:
+        return False
+    criterion = stamp.get("criterion")
+    if not isinstance(criterion, dict) or criterion.get("status") != judged:
+        return False
+    return check(worktree_root / plan_rel, worktree_root) is None
+
+
 def _stamp_refusal(
     worktree_root: Path, review_path: Optional[Path], review: Optional[dict], plan_id: str,
     plan_rel: str, judged: str,
@@ -335,13 +351,11 @@ def _pay(
         amend["falsifier_broken"] = verdict.falsifier
     if amend:
         run_close.amend_close_job(worktree_root, run_id, **amend)
-    writeback = tc._register_writeback(worktree_root, plan_rel, {"criterion": gated}, terminal_sha)
 
     reply: dict = {**base}
     reply["criterion_status"] = gated["status"]
-    reply.update(writeback)
-    minted = already
-    if already:
+    minted = already or _holds_valid_stamp(worktree_root, plan_rel, plan_fm, terminal_sha, gated["status"])
+    if minted:
         reply["review_stamp"] = "minted"
     else:
         refusal = _stamp_refusal(worktree_root, review_path, review, plan_id, plan_rel, judged)
@@ -350,6 +364,11 @@ def _pay(
             minted = reply.get("review_stamp") == "minted"
         else:
             reply.update(review_stamp="refused", review_stamp_refusal=refusal)
+    # A refused close writes no register row or entry: nothing is left behind for a commit to miss.
+    writeback: dict = {}
+    if minted:
+        writeback = tc._register_writeback(worktree_root, plan_rel, {"criterion": gated}, terminal_sha)
+    reply.update(writeback)
     fresh = minted and not already
     if fresh:
         stamped = (_plan_frontmatter(tc._read_rel(worktree_root, plan_rel)).get("review_stamp") or {}).get("criterion")
@@ -359,7 +378,9 @@ def _pay(
 
     entry_paths: list = []
     entry_result = entry_state
-    if not entry_paid:
+    if not entry_paid and not minted:
+        entry_result = tc._leg("failed", "review stamp refused; no completion entry written")
+    elif not entry_paid:
         try:
             entry_result, entry_paths = completion_entry_leg(worktree_root, run_id, plan_rel, gated)
         except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised

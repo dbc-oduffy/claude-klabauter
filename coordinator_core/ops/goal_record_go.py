@@ -46,6 +46,7 @@ from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session import record_homes
 
 MUTATES = ["state/goals/*.yaml"]
 
@@ -65,7 +66,7 @@ def _load_goal(text: str) -> dict:
 
 
 def _find_goal(worktree: Path, ref: str) -> Optional[tuple[Path, dict]]:
-    for path in sorted((worktree / "state" / "goals").glob("*.yaml")):
+    for path in sorted(Path(record_homes.home_dir(str(worktree), "goals")).glob("*.yaml")):
         try:
             fm = _load_goal(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
@@ -78,7 +79,7 @@ def _find_goal(worktree: Path, ref: str) -> Optional[tuple[Path, dict]]:
 def _goal_seeds(worktree: Path, goal_id: str) -> dict[str, str]:
     """handoff_id -> repo-relative path of every live, undone roadmap-seed of the goal."""
     found: dict[str, str] = {}
-    for path in sorted((worktree / "state" / "handoffs").glob("*.md")):
+    for path in sorted(Path(record_homes.home_dir(str(worktree), "handoffs")).glob("*.md")):
         try:
             fm = _parse_frontmatter(path.read_text(encoding="utf-8", errors="replace"))
         except OSError:

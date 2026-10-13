@@ -131,7 +131,7 @@ def _fixture(tmp_path: Path, monkeypatch, capsys, tshirt: str, mode: str, flags:
 def _stub(scout: dict, decision: dict, verdict: dict) -> dict:
     return {
         "size": scout,
-        "assemble": {"exit_code": 0, "stdout": json.dumps(decision), "stderr": ""},
+        "assemble": {"exit_code": 0, "stdout": json.dumps(decision, indent=2, sort_keys=True),"stderr": ""},
         "gate": {**verdict, "tshirt": decision["resolved_estimate"]["tshirt"], "route": decision["route"]},
         "blitz": {"plan_rel": PLAN_PATH},
     }

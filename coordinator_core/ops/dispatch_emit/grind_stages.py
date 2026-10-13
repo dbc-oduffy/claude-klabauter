@@ -26,13 +26,10 @@ This module owns the trap text every stage-kind prompt must carry:
 - the triage schema carries the t-shirt size and tradeoff-statement fields
   the engine's size/tradeoff routing gate (DR-404 § Run authority) reads.
 
-The model literal is always ``'sonnet'``, written directly at every
-composer's call site -- never looked up through
-``emit._model_opt``/``emit._AGENT_MODELS``, whose default is Haiku
-(eng-director F5/prior-art item 1). The git-commit-agent runs on Sonnet
-here even though the plan path's ``_AGENT_MODELS`` pins it to Haiku (plan
-EM note 4); re-homed to this module since the call sites are composed here,
-not at C7.
+Each call's model comes from ``STAGE_MODELS`` (keyed by stage), overridable
+per run by a ``models`` mapping -- never looked up through
+``emit._model_opt``/``emit._AGENT_MODELS``, whose default is Haiku. The
+commit agent's model here is this table's, not the plan path's.
 
 Every prompt is a pure function of its arguments: no counters, no spend, no
 wall-clock time read anywhere in this module. A run stamp, when a prompt
@@ -50,12 +47,22 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 from __future__ import annotations
 
 import json
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from coordinator_core.contract.grind_vocab import (
     OP_RUNNER_AGENT_TYPE,
     TRIAGE_RECORD_FIELDS,
     TSHIRT_SIZES,
+)
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASSEMBLE_SCHEMA,
+    DOC_NEW_CMD,
+    NO_PLAN_HAND_OFF_FLAG,
+    SCOUT_RETURN_CLAUSE,
+    SCOUT_SCHEMA,
+    SIZING_ASSEMBLE_CMD,
+    SIZING_SCOUT_AGENT_TYPE,
+    scout_assemble_flags_js,
 )
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
@@ -66,7 +73,20 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
-_MODEL_LITERAL = "model: 'sonnet'"
+#: Default model per stage; a run's ``models`` mapping overrides entries.
+STAGE_MODELS: dict[str, str] = {
+    "triage": "sonnet",
+    "refute-close": "sonnet",
+    "size": "sonnet",
+    "size-assemble": "sonnet",
+    "fix": "sonnet",
+    "verify": "sonnet",
+    "verify-op": "sonnet",
+    "commit": "sonnet",
+    "ledger-sweep": "sonnet",
+    "undo": "sonnet",
+    "adjudicate": "sonnet",
+}
 
 _NO_STAGING_CLAUSE = (
     "You do not stage or commit anything. Only the committer stage does "
@@ -87,6 +107,8 @@ def _schema_opt(schema: dict) -> str:
 def _agent_call(
     prompt: str,
     *,
+    stage: str,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     agent_type: str,
@@ -106,7 +128,18 @@ def _agent_call(
     EXPRESSION that evaluates to the prompt at run time (``is_expr=True`` --
     ``_join_prompt_parts``'s output: static, escaped literal pieces
     concatenated with a live runtime expression via ``+``), it is emitted
-    verbatim instead."""
+    verbatim instead.
+
+    The model is ``models[stage]`` when ``models`` has the key, else
+    ``STAGE_MODELS[stage]``; ``ValueError`` names a ``stage`` or a ``models``
+    key that ``STAGE_MODELS`` lacks."""
+    if stage not in STAGE_MODELS:
+        raise ValueError(f"unknown stage {stage!r}; known: {sorted(STAGE_MODELS)}")
+    if models:
+        unknown = sorted(k for k in models if k not in STAGE_MODELS)
+        if unknown:
+            raise ValueError(f"unknown stage model key(s) {unknown}; known: {sorted(STAGE_MODELS)}")
+    model = (models or {}).get(stage, STAGE_MODELS[stage])
     prompt_text = prompt if is_expr else _js_string_literal(prompt)
     return (
         "  await agent("
@@ -115,7 +148,7 @@ def _agent_call(
         f"label: {_js_string_literal(label)}, "
         f"phase: {_js_string_literal(phase_title)}, "
         f"agentType: {_js_string_literal(_degrade_agent_type(agent_type, agent_type_host))}, "
-        f"{_MODEL_LITERAL}, "
+        f"model: {_js_string_literal(model)}, "
         f"effort: {_js_string_literal(effort)}, "
         f"{_schema_opt(schema)} "
         "});"
@@ -206,6 +239,7 @@ def _list_parts(files: Sequence[str], files_js: Optional[str]) -> list[tuple[str
 
 def compose_triage_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     run_dir: str,
@@ -312,6 +346,8 @@ def compose_triage_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="triage",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
@@ -324,6 +360,7 @@ def compose_triage_call(
 
 def compose_refute_close_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     profile: str = "",
@@ -414,6 +451,8 @@ def compose_refute_close_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="refute-close",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
@@ -424,109 +463,132 @@ def compose_refute_close_call(
     )
 
 
-RESIZE_ANSWERS: tuple[str, ...] = ("plan-weight", "focused-fix", "not-reproduced")
-
-
-def compose_resize_call(
+def compose_size_call(
     *,
     label: str,
     phase_title: str,
-    profile: str = "",
-    rows_js: Optional[str] = None,
-    run_id_js: Optional[str] = None,
-    fix_verdict: Optional[str] = None,
-    close_verdict: Optional[str] = None,
+    row_js: str,
+    evidence_js: str,
+    fix_plan_js: str,
     agent_type_host: Optional[str] = None,
     repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
+    models: Optional[Mapping[str, str]] = None,
 ) -> str:
-    rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
-    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
-    if fix_verdict:
-        fix_note = f"`focused-fix` writes `--outcome {fix_verdict}`"
-    else:
-        fix_note = "no fix-kind edge is resolvable off triage for this profile, so `focused-fix` has no `--outcome` value to write"
-    if close_verdict:
-        close_note = f"`not-reproduced` writes `--outcome {close_verdict}`"
-    else:
-        close_note = "no refute-close-kind edge is resolvable off triage for this profile, so `not-reproduced` has no `--outcome` value to write"
-    if fix_verdict:
-        plan_note = f"`plan-weight` also writes `--outcome {fix_verdict}` (the row's underlying verdict is unchanged -- only the routing decision differs)"
-    else:
-        plan_note = "no fix-kind edge is resolvable off triage for this profile, so `plan-weight` has no `--outcome` value to write"
+    """One sizing-scout call for one backlog row. ``row_js`` evaluates at run
+    time to ``{row_id, path, digest}``; ``evidence_js`` and ``fix_plan_js`` to
+    strings. The prompt never carries triage's size verdict."""
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         (
             "lit",
-            "You are the resize stage. This batch's rows were routed to a "
-            "hand-back on size alone before you were asked. Your rows "
-            "(row_id/path/digest) are: ",
+            "Size the work of resolving one backlog row, afresh, judging only: "
+            "write no file and run no sizing-assemble. \"The ask\" is resolving "
+            "this one row. The row (row_id/path/digest) is: ",
         ),
-        rows_part,
+        ("expr", f"JSON.stringify({row_js})"),
+        ("lit", ". Triage's evidence on it: "),
+        ("expr", evidence_js),
+        ("lit", ". Triage's fix plan: "),
+        ("expr", fix_plan_js),
         (
             "lit",
-            ". You are read-only: you do not fix, close, or stage anything "
-            "yourself. For each row, decide exactly one answer from this "
-            f"list, verbatim, and no other value: {list(RESIZE_ANSWERS)}. "
-            "`plan-weight` means the row genuinely needs a plan before it "
-            "can proceed -- state the design question that plan must "
-            "answer in `design_question`. `focused-fix` means it fits a "
-            "normal fix after all. `not-reproduced` means the defect is "
-            "not reproduced. As you decide each row, run "
-            "`" + ASSEMBLE_CMD + " grind-row append --profile "
-            f"{profile} --row-id <its row_id> --digest <its digest> --stage "
-            "triage --verdict resize --outcome <the verdict named below "
-            "for your answer> --evidence-file ",
-        ),
-        *_evidence_path_parts(profile, run_id_part, ("lit", "<its row_id>"), "verify"),
-        (
-            "lit",
-            ". " + _EVIDENCE_APPEND_NOTE + "Then pass --run-stamp ",
-        ),
-        run_id_part,
-        ("lit", " --repo-root "),
-        _shq_part(repo_root_js),
-        (
-            "lit",
-            f"` immediately. {plan_note}; {fix_note}; "
-            f"{close_note}. " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
+            ". " + SCOUT_RETURN_CLAUSE + " Name the row's path in premise_evidence, so "
+            "the sizing records the row it came from. "
+            + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
         ),
     ]
+    return _agent_call(
+        _join_prompt_parts(parts),
+        stage="size",
+        models=models,
+        label=label,
+        phase_title=phase_title,
+        agent_type=SIZING_SCOUT_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        effort="medium",
+        schema=SCOUT_SCHEMA,
+        is_expr=True,
+    )
+
+
+def compose_size_assemble_call(
+    *,
+    label: str,
+    phase_title: str,
+    commands_js: str,
+    agent_type_host: Optional[str] = None,
+    models: Optional[Mapping[str, str]] = None,
+) -> str:
+    """One op-runner call that runs each ``{row, command}`` in ``commands_js``
+    verbatim and returns ``{results: [{row, exit_code, stdout}]}``."""
+    parts: list[tuple[str, str]] = [
+        (
+            "lit",
+            "Run each command in this JSON array of {row, command}, exactly as "
+            "written, one Bash call each, in order, without editing, retrying or "
+            "repairing any: ",
+        ),
+        ("expr", f"JSON.stringify({commands_js})"),
+        (
+            "lit",
+            ". Return for each its row, exit code and stdout verbatim. "
+            + _NO_STAGING_CLAUSE,
+        ),
+    ]
+    item = {
+        **ASSEMBLE_SCHEMA,
+        "required": ["row", *ASSEMBLE_SCHEMA["required"]],
+        "properties": {"row": {"type": "string"}, **ASSEMBLE_SCHEMA["properties"]},
+    }
     schema = {
         "type": "object",
-        "required": ["answers"],
-        "properties": {
-            "answers": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["row", "answer"],
-                    "properties": {
-                        "row": {
-                            "type": "string",
-                            "description": "the row_id exactly as given above, never the row's path",
-                        },
-                        "answer": {"type": "string", "enum": list(RESIZE_ANSWERS)},
-                        "design_question": {"type": "string"},
-                    },
-                },
-            },
-        },
+        "required": ["results"],
+        "properties": {"results": {"type": "array", "items": item}},
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="size-assemble",
+        models=models,
         label=label,
         phase_title=phase_title,
-        agent_type=GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type=OP_RUNNER_AGENT_TYPE,
         agent_type_host=agent_type_host,
-        effort="medium",
+        effort="low",
         schema=schema,
         is_expr=True,
     )
 
 
+#: Needs `_shq`, `REPO_ROOT`, `PROFILE_NAME`, `RUN_ID` in scope. sizing-assemble has no
+#: --repo-root, so its --write path is absolute; `sizingPath` stays repo-relative elsewhere.
+SIZE_ASSEMBLE_JS = (
+    "const _sizeAssembleCmd = (scouted, sizingPath) => "
+    + _js_string_literal(SIZING_ASSEMBLE_CMD)
+    + scout_assemble_flags_js("scouted", "_shq")
+    + " + ' --no-verbatims --intent-source em-elaborated'"
+    " + ' --write ' + _shq(REPO_ROOT + '/' + sizingPath) + ' ' + "
+    + _js_string_literal(NO_PLAN_HAND_OFF_FLAG)
+    + ";\n"
+    "const _sizeMarkCmd = (row, sizingPath) => "
+    + _js_string_literal(ASSEMBLE_CMD + " grind-row append")
+    + " + ' --profile ' + _shq(PROFILE_NAME) + ' --row-id ' + _shq(row.row_id)"
+    " + ' --digest ' + _shq(row.digest) + ' --stage size --verdict sized'"
+    " + ' --outcome route-to-plan --evidence-file ' + _shq(sizingPath)"
+    " + ' --run-stamp ' + _shq(RUN_ID) + ' --repo-root ' + _shq(REPO_ROOT);\n"
+    "const _sizeBatonCmd = (sizingPath) => "
+    + _js_string_literal(DOC_NEW_CMD + " --type spinoff --from-sizing ")
+    + " + _shq(sizingPath);\n"
+    "const _sizeChainCmd = (scouted, row, sizingPath) => 'cd ' + _shq(REPO_ROOT)"
+    " + ' && ' + _sizeAssembleCmd(scouted, sizingPath)"
+    " + ' && ' + _sizeBatonCmd(sizingPath)"
+    " + ' && ' + _sizeMarkCmd(row, sizingPath);"
+)
+
+
 def compose_fix_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     row_id: str = "",
@@ -665,6 +727,8 @@ def compose_fix_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="fix",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
@@ -677,6 +741,7 @@ def compose_fix_call(
 
 def compose_verify_agent_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     row_id_js: Optional[str] = None,
@@ -720,6 +785,8 @@ def compose_verify_agent_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="verify",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
@@ -732,6 +799,7 @@ def compose_verify_agent_call(
 
 def compose_verify_op_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     run_dir: str,
@@ -766,6 +834,8 @@ def compose_verify_op_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="verify-op",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=OP_RUNNER_AGENT_TYPE,
@@ -810,10 +880,17 @@ _COMMIT_TAIL_PARTS: tuple[tuple[str, str], ...] = (
 
 
 def _compose_commit_agent_call(
-    parts: list[tuple[str, str]], *, label: str, phase_title: str, agent_type_host: Optional[str]
+    parts: list[tuple[str, str]],
+    *,
+    label: str,
+    phase_title: str,
+    agent_type_host: Optional[str],
+    models: Optional[Mapping[str, str]] = None,
 ) -> str:
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="commit",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=COMMIT_AGENT_TYPE,
@@ -826,6 +903,7 @@ def _compose_commit_agent_call(
 
 def compose_commit_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     profile: str = "",
@@ -914,12 +992,13 @@ def compose_commit_call(
     parts.append(_shq_part(repo_root_js))
     parts.append(("lit", "` (it takes only those three flags); never stage what it removes."))
     return _compose_commit_agent_call(
-        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
+        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host, models=models
     )
 
 
 def compose_review_fix_commit_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     touched_files_js: str,
     label: str,
     phase_title: str,
@@ -951,12 +1030,13 @@ def compose_review_fix_commit_call(
         )
     parts.extend(_COMMIT_TAIL_PARTS)
     return _compose_commit_agent_call(
-        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
+        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host, models=models
     )
 
 
 def compose_ledger_sweep_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     profile: str,
@@ -1030,6 +1110,8 @@ def compose_ledger_sweep_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="ledger-sweep",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=OP_RUNNER_AGENT_TYPE,
@@ -1042,6 +1124,7 @@ def compose_ledger_sweep_call(
 
 def compose_undo_call(
     *,
+    models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
     paths: Sequence[str] = (),
@@ -1078,6 +1161,8 @@ def compose_undo_call(
     }
     return _agent_call(
         _join_prompt_parts(parts),
+        stage="undo",
+        models=models,
         label=label,
         phase_title=phase_title,
         agent_type=OP_RUNNER_AGENT_TYPE,

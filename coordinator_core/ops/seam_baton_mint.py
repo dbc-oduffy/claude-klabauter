@@ -44,12 +44,14 @@ from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops import mint_deliverable_id
+from coordinator_core.session import record_homes
 
 GENERATES: list = []
 MUTATES = ["state/handoffs/*.md", "state/seam-baton-index.json"]
 
 CAP = 5
 INDEX_REL = "state/seam-baton-index.json"
+_HANDOFFS_REL = Path(record_homes.home_dir(".", "handoffs")).as_posix()
 _TERMINAL = ("shipped", "continued", "closed")
 _HOLD = "staged by seam.mint_batons: promote through triage before any session fires it"
 _NOTES = "Minted for a residual seam flag; staged, not fireable until promoted through triage."
@@ -95,7 +97,7 @@ def _load_index(root: Path) -> Dict[str, str]:
 
 def _is_live(root: Path, rel: str) -> bool:
     """True when ``rel`` is a baton still on the live shelf and not in a terminal state."""
-    if not rel.startswith("state/handoffs/") or ".." in rel.split("/"):
+    if not rel.startswith(_HANDOFFS_REL + "/") or ".." in rel.split("/"):
         return False
     try:
         with open(root / rel, encoding="utf-8") as fh:
@@ -192,11 +194,11 @@ def _validate(content: str, rel: str) -> None:
 
 
 def _free_path(root: Path, today: str, stem: str) -> str:
-    rel = f"state/handoffs/{today}-{stem}.md"
+    rel = f"{_HANDOFFS_REL}/{today}-{stem}.md"
     n = 1
     while (root / rel).exists():
         n += 1
-        rel = f"state/handoffs/{today}-{stem}-{n}.md"
+        rel = f"{_HANDOFFS_REL}/{today}-{stem}-{n}.md"
     return rel
 
 

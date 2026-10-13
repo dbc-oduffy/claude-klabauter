@@ -31,6 +31,71 @@ HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
 STOP_AFTER_PLAN = "plan"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
+DOC_NEW_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new"'
+SIZING_ASSEMBLE_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/sizing-assemble"'
+#: The sizing scout's return fields; every scout prompt concatenates this one passage.
+SCOUT_RETURN_CLAUSE = (
+    "Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), "
+    "name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with "
+    "premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` "
+    "the repo-relative files the ask will create, edit or delete -- every file the ask names, "
+    "plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set "
+    "jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), "
+    "and well_trodden_step_change true only when the ask proposes a new direction on ground "
+    "recently built (it also routes the ask to shaping, a PM conversation). An ask that "
+    "continues a workstream an existing sizing, plan, ruling or baton already scoped is "
+    "not a step change, however much it rebuilds. Return "
+    "as `gated` every deliverable the ask declares as owned by another repo or blocked on an "
+    "external gate (title, owner_repo, requires): never fold one into `writes` and never omit "
+    "one."
+)
+_STR = {"type": "string"}
+SCOUT_SCHEMA = {
+    "type": "object",
+    "required": ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"],
+    "properties": {
+        "tshirt": {"type": "string", "enum": ["XS", "S", "M", "L", "XL", "XXL"]},
+        "intent": _STR,
+        "name": _STR,
+        "premise_provenance": {"type": "string", "enum": ["executed", "read", "not-applicable"]},
+        "premise_evidence": _STR,
+        "exit_criterion": _STR,
+        "writes": {"type": "array", "items": _STR},
+        "jtbd_unclear": {"type": "boolean"},
+        "well_trodden_step_change": {"type": "boolean"},
+        "gated": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["title", "owner_repo"],
+                "properties": {"title": _STR, "owner_repo": _STR, "requires": _STR},
+            },
+        },
+    },
+}
+ASSEMBLE_SCHEMA = {
+    "type": "object",
+    "required": ["exit_code", "stdout"],
+    "properties": {"exit_code": {"type": "integer"}, "stdout": _STR, "stderr": _STR},
+}
+
+
+def scout_assemble_flags_js(scouted: str, quote: str, extra: str = "") -> str:
+    """JS expression text appending the sizing-assemble flags a scout's return fills.
+
+    ``scouted`` names the JS variable holding the scout's return and ``quote`` the JS
+    shell-quoting function in scope; ``extra`` is spliced after ``--exit-criterion``.
+    Starts with `` + `` so it follows the command literal directly.
+    """
+    return (
+        f" + ' --tshirt ' + {quote}({scouted}.tshirt)"
+        f" + ' --intent ' + {quote}({scouted}.intent) + ' --name ' + {quote}({scouted}.name)"
+        f" + ' --premise-provenance ' + {quote}({scouted}.premise_provenance)"
+        f" + ' --premise-evidence ' + {quote}({scouted}.premise_evidence)"
+        f" + ' --exit-criterion ' + {quote}({scouted}.exit_criterion){extra}"
+        f" + ({scouted}.jtbd_unclear === true ? ' --jtbd-unclear' : '')"
+        f" + ({scouted}.well_trodden_step_change === true ? ' --well-trodden-step-change' : '')"
+    )
 PM_EXIT_QUESTION_KEY = "pm_exit_question"
 RUN_DIR_ROOT = "scratch/warp"
 #: Engine-written beside the run's briefs: the ask as submitted (raw asks), and the PM's verbatim

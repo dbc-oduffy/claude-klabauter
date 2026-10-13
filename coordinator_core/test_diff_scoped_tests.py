@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.diff_scoped_tests import (
     PYTEST_NO_TESTS_COLLECTED,
+    STANDING_GUARDS,
     append_test_paths,
     compute_diff_scoped_paths,
     find_changed_source_files,
@@ -233,3 +235,74 @@ def test_compute_diff_scoped_paths_no_changes_is_fully_mapped_empty(tmp_path):
     paths, fully_mapped = compute_diff_scoped_paths(str(root))
     assert paths == []
     assert fully_mapped is True
+
+
+_GUARD = STANDING_GUARDS[0][1]
+
+
+def _init_repo_with_guard_prefix(tmp_path, with_guard):
+    _git(["init", "-q"], tmp_path)
+    _git(["config", "user.email", "test@example.com"], tmp_path)
+    _git(["config", "user.name", "Test"], tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["coordinator_core", "other"]\n'
+    )
+    (tmp_path / "coordinator_core").mkdir()
+    (tmp_path / "coordinator_core" / "mod.py").write_text("x = 1\n")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "mod.py").write_text("x = 1\n")
+    if with_guard:
+        guard = tmp_path / _GUARD
+        guard.parent.mkdir(parents=True)
+        guard.write_text("def test_g():\n    assert True\n")
+    _git(["add", "-A"], tmp_path)
+    _git(["commit", "-q", "-m", "initial"], tmp_path)
+    return tmp_path
+
+
+def test_source_edit_under_guard_prefix_selects_guard(tmp_path):
+    root = _init_repo_with_guard_prefix(tmp_path, with_guard=True)
+    for _prefix, test_path in STANDING_GUARDS:
+        guard = root / test_path
+        guard.parent.mkdir(parents=True, exist_ok=True)
+        guard.write_text("def test_g():\n    assert True\n")
+    (root / "coordinator_core" / "mod.py").write_text("x = 2\n")
+
+    paths, _ = compute_diff_scoped_paths(str(root))
+    for _prefix, test_path in STANDING_GUARDS:
+        assert test_path in paths
+
+
+def test_absent_guard_file_is_never_selected(tmp_path):
+    root = _init_repo_with_guard_prefix(tmp_path, with_guard=False)
+    (root / "coordinator_core" / "mod.py").write_text("x = 2\n")
+
+    paths, _ = compute_diff_scoped_paths(str(root))
+    assert _GUARD not in paths
+
+
+def test_source_edit_under_other_root_does_not_select_guard(tmp_path):
+    root = _init_repo_with_guard_prefix(tmp_path, with_guard=True)
+    (root / "other" / "mod.py").write_text("x = 2\n")
+
+    paths, _ = compute_diff_scoped_paths(str(root))
+    assert _GUARD not in paths
+
+
+def test_standing_guard_leaves_fully_mapped_unchanged(tmp_path):
+    from coordinator_core.source_test_map import map_changed_sources
+
+    root = _init_repo_with_guard_prefix(tmp_path, with_guard=True)
+    (root / "coordinator_core" / "mod.py").write_text("x = 2\n")
+
+    _, fully_mapped = compute_diff_scoped_paths(str(root))
+    _, expected = map_changed_sources(
+        find_changed_source_files(str(root)), str(root)
+    )
+    assert fully_mapped is expected
+
+
+def test_every_standing_guard_test_path_is_a_repo_file():
+    repo = Path(__file__).resolve().parent.parent
+    for _prefix, test_path in STANDING_GUARDS:
+        assert (repo / test_path).is_file(), test_path

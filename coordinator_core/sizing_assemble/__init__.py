@@ -1696,6 +1696,7 @@ def _write_back(
     scout_register: Optional[dict[str, Any]] = None,
     doc_consumers: Optional[list[str]] = None,
     ask_conflicts: Optional[list[dict[str, str]]] = None,
+    embed_verbatims: bool = True,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1753,7 +1754,9 @@ def _write_back(
         raise SizingAssembleError("--premise-provenance given without --premise-evidence")
     from coordinator_core.ops.baton_pm_turns import recent_window
 
-    if verbatim_turns is None:
+    if not embed_verbatims:
+        pm_verbatims = []
+    elif verbatim_turns is None:
         pm_verbatims = recent_window(cwd=str(root))
     else:
         from coordinator_core.ops.baton_pm_turns import read_turns
@@ -2336,6 +2339,7 @@ def main(argv: list[str]) -> int:
     research_destination = None
     verbatim_turns_raw = None
     intent_turn_raw = None
+    no_verbatims = False
 
     i = 0
     while i < len(argv):
@@ -2373,6 +2377,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--write" and i + 1 < len(argv):
             write_path = argv[i + 1]
             i += 2
+        elif tok == "--no-verbatims":
+            no_verbatims = True
+            i += 1
         elif tok == "--verbatim-turns" and i + 1 < len(argv):
             verbatim_turns_raw = argv[i + 1]
             i += 2
@@ -2485,6 +2492,15 @@ def main(argv: list[str]) -> int:
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
+
+    if no_verbatims and (
+        write_path is None or verbatim_turns_raw is not None or intent_turn_raw is not None
+    ):
+        print(
+            f"{prog}: --no-verbatims needs --write and excludes --verbatim-turns and --intent-turn",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
 
     verbatim_turns = None
     if verbatim_turns_raw is not None:
@@ -2718,6 +2734,7 @@ def main(argv: list[str]) -> int:
                 scout_register=scout_register,
                 doc_consumers=doc_consumers,
                 ask_conflicts=ask_conflicts,
+                embed_verbatims=not no_verbatims,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)

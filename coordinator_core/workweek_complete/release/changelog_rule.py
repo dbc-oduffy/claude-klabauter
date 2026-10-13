@@ -13,6 +13,7 @@ from typing import Sequence
 
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.records_query import query_records
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.workweek_complete.release.contract import (
     DAILY_BLOCK_RE,
     PENDING_RELEASE_SUFFIX,
@@ -84,7 +85,7 @@ def _week_commits(root: Path, week_start: str) -> list[tuple[str, set[str]]]:
 
 def evaluate(repo_root: Path | str, *, ledger_rows: Sequence[object]) -> RuleResult:
     root = Path(repo_root)
-    week_dir = root / "state" / "week-changelog"
+    week_dir = Path(home_dir(str(root), "week-changelog"))
     close = _close()
     week_start = close.derive_week_start(week_dir / "HEADER.md")
     start = date.fromisoformat(week_start)

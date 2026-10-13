@@ -7,7 +7,7 @@ A ruling never clears a named irreversible or external gate, and a missing verdi
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Mapping, Optional
 
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -55,7 +55,9 @@ _PROMPT_TAIL = (
 )
 
 
-def compose_adjudicate_block(*, agent_type_host: Optional[str]) -> str:
+def compose_adjudicate_block(
+    *, agent_type_host: Optional[str], models: Optional[Mapping[str, str]] = None
+) -> str:
     """JS text defining ``_adjudicatePmBound()``; the caller awaits it after the grind loop.
 
     Every PM-bound entry in ``_handedBack`` gains an ``adjudication`` record
@@ -63,6 +65,8 @@ def compose_adjudicate_block(*, agent_type_host: Optional[str]) -> str:
     """
     call = stages._agent_call(
         _adjudicate_prompt_expr(),
+        stage="adjudicate",
+        models=models,
         label="adjudicate",
         phase_title=ADJUDICATE_PHASE_TITLE,
         agent_type=ADJUDICATOR_AGENT_TYPE,

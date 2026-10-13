@@ -24,6 +24,7 @@ import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.goal_kr_status import set_kr_status
+from coordinator_core.session import record_homes
 
 MET = "met"
 
@@ -89,7 +90,7 @@ def discharge_goal_kr(plan_path: Path, repo_root: Path) -> Optional[str]:
     outstanding = _outstanding_plans(Path(repo_root), ref)
     if outstanding:
         return f"{goal_id}#{kr_id} held: plans not implemented: {', '.join(sorted(outstanding))}"
-    goals_dir = Path(repo_root) / "state" / "goals"
+    goals_dir = Path(record_homes.home_dir(str(repo_root), "goals"))
     goal_file = _find_goal_file(goals_dir, goal_id) if goals_dir.is_dir() else None
     if goal_file is None:
         return (

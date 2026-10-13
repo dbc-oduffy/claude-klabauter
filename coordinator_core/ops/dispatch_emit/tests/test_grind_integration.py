@@ -31,11 +31,13 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.backlog_grind_assemble import grind_rows
+from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.queue_emit import emit_queue_script
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
 
@@ -362,8 +364,11 @@ def test_reemit_is_byte_identical_and_zero_spawn(grind_repo, monkeypatch):
     review_end = script_1.index("phase('Review fixes')")
     grind_only = script_1[:review_start] + script_1[review_end:]
     agent_call_count = len(re.findall(r"await agent\(", grind_only))
-    sonnet_model_count = len(re.findall(r"model: 'sonnet'", grind_only))
-    assert agent_call_count == sonnet_model_count > 0
+    stage_names = "|".join(
+        re.escape(n) for n in sorted(set(grind_stages.STAGE_MODELS.values()))
+    )
+    stage_model_count = len(re.findall(rf"model: '(?:{stage_names})'", grind_only))
+    assert agent_call_count == stage_model_count > 0
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +400,106 @@ def test_emitted_prompt_flags_match_grind_rows_argparse():
     assert 'required=(' in source
     source = inspect.getsource(grind_rows.cmd_close)
     assert 'required=(' in source
+
+
+def _golden_size_chain_command(repo_root: Path, row: dict, sizing_path: str) -> str:
+    """The `_sizeChainCmd` text the golden holds, evaluated by node over fixed scout values."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    golden = _GOLDEN_PATH.read_text(encoding="utf-8")
+    size_consts = "\n".join(re.findall(r"^const _size\w+ = .*$", golden, re.M))
+    scouted = {
+        "tshirt": "M",
+        "intent": "rework the thing that row-a names",
+        "name": "row-a-rework",
+        "premise_provenance": "read",
+        "premise_evidence": f"read {row['path']}",
+        "exit_criterion": "the thing no longer breaks",
+    }
+    js = (
+        grind_stages.SHQ_JS
+        + "\n" + size_consts
+        + f"\nconst REPO_ROOT = {json.dumps(str(repo_root))}, PROFILE_NAME = 'fixture', RUN_ID = '20261013T000000Z';"
+        + f"\nconsole.log(_sizeChainCmd({json.dumps(scouted)}, {json.dumps(row)}, {json.dumps(sizing_path)}));"
+    )
+    out = subprocess.run(
+        [node, "-e", js], capture_output=True, text=True, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+def _settings_home_with_engine_shims(tmp_path: Path) -> Path:
+    """A settings home whose three `bin/` tools run this checkout's own code."""
+    bin_dir = tmp_path / "settings-home" / "bin"
+    bin_dir.mkdir(parents=True)
+    head = f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(_REPO_ROOT)!r})\n"
+    doc_new = _REPO_ROOT / "coordinator" / "bin" / "coordinator-doc-new.py"
+    shims = {
+        "sizing-assemble": "from coordinator_core.sizing_assemble import main\nsys.exit(main(sys.argv[1:]))\n",
+        "backlog-grind-assemble": (
+            "from coordinator_core.backlog_grind_assemble.grind_rows import main\n"
+            "args = sys.argv[1:]\nsys.exit(main(args[1:] if args[:1] == ['grind-row'] else args))\n"
+        ),
+        "coordinator-doc-new": (
+            "import runpy\n"
+            f"sys.argv = [{str(doc_new)!r}] + sys.argv[1:]\n"
+            f"runpy.run_path({str(doc_new)!r}, run_name='__main__')\n"
+        ),
+    }
+    for name, body in shims.items():
+        path = bin_dir / name
+        path.write_text(head + body, encoding="utf-8")
+        path.chmod(0o755)
+    return tmp_path / "settings-home"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the chained command is a POSIX shell line")
+def test_size_chain_command_writes_a_valid_sizing_mints_a_baton_and_marks_the_row(grind_repo, tmp_path_factory, monkeypatch):
+    from coordinator_core.frontmatter import schema_validate
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(_settings_home_with_engine_shims(tmp_path_factory.mktemp("shims"))))
+    repo_root = grind_repo["repo_root"]
+    digest = hashlib.sha256(grind_repo["row_a"].read_bytes()).hexdigest()
+    row = {"row_id": "row-a", "path": "state/bug-backlog/row-a.yaml", "digest": digest}
+    sizing_rel = "state/sizings/2026-10-13-row-a-rework-row-a.yaml"
+    command = _golden_size_chain_command(repo_root, row, sizing_rel)
+
+    ran = subprocess.run(
+        ["bash", "-c", command], capture_output=True, text=True, check=False, cwd=repo_root,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+
+    sizing = schema_validate.parse_yaml((repo_root / sizing_rel).read_text(encoding="utf-8"))
+    assert "pm_verbatims" not in sizing
+    schema = json.loads(
+        (_REPO_ROOT / "coordinator_core" / "frontmatter" / "schemas" / "sizing-object.schema.json").read_text(encoding="utf-8")
+    )
+    result = schema_validate.validate_frontmatter_obj(sizing, schema)
+    assert isinstance(result, dict) and result.get("ok"), result
+
+    baton_edge = sizing.get("baton")
+    baton_rel = baton_edge.get("path") if isinstance(baton_edge, dict) else baton_edge
+    assert baton_rel and baton_rel.startswith("state/handoffs/"), sizing
+    assert (repo_root / baton_rel).is_file()
+
+    manifest = select_rows(
+        [grind_repo["queue_dir"]],
+        where=None,
+        order=("severity", "asc"),
+        limit=None,
+        batch_key=["severity"],
+        batch_sizes={"default": 4, "@unkeyed": 4},
+        row_id_key="@stem",
+        profile="fixture",
+        repo_root=repo_root,
+        absent_sentinels={"owner": ("none", "N/A")},
+    )
+    assert "row-a" not in {e.row_id for e in manifest.entries}
+    assert "row-a" in {d.row_id for d in manifest.declined}
 
 
 def test_emitted_script_names_no_host_path(grind_repo):

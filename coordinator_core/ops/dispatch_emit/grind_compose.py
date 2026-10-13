@@ -23,8 +23,12 @@ in the same triage batch can diverge to different graph nodes depending
 on their own verdict/size/tradeoff.
 
 **Engine-fixed routing** (DR-404 § Run authority, not a profile knob): a
-row sized ``>= grind_vocab.PLAN_WEIGHT_FLOOR`` routes to ``baton`` and
-never reaches ``fix``; a row below plan weight with a non-empty tradeoff
+row triage sizes ``>= grind_vocab.PLAN_WEIGHT_FLOOR`` is sized afresh by the
+``coordinator:sizing-scout`` (one call per row): a size below the floor sends
+it to ``fix``, and at or above it the row is handed back as ``baton`` naming
+its sizing, which one run-level ``size-assemble`` call writes (with the baton
+and the row's ``route-to-plan`` ledger mark) before the drain sweep. A row
+below plan weight with a non-empty tradeoff
 routes to ``needs-judgment`` (checked at triage-exit AND fix-exit, since a
 fixer can surface a tradeoff triage missed); ``NEEDS_PLAN`` maps to
 ``baton``; ``NEEDS_WIDER_SCOPE`` gets exactly one release-and-reacquire
@@ -101,7 +105,7 @@ __all__ = [
     "batch_reserve",
     "build_routing_table",
     "route_after_triage",
-    "resize_verdict_map",
+    "triage_fix_verdict",
     "follow_edge",
     "Row",
     "run_admission",
@@ -191,13 +195,33 @@ def route_after_triage(
         return ("handback", target or "stage-dead")
     return ("node", target)
 
-def resize_verdict_map(routing: Mapping[str, dict], triage_node_id: str) -> tuple[Optional[str], Optional[str]]:
+def triage_fix_verdict(routing: Mapping[str, dict], triage_node_id: str) -> Optional[str]:
+    """The one triage verdict whose edge reaches a fix-kind node; None when there are none or several."""
     edges = routing[triage_node_id]["edges"]
     fix_verdicts = [v for v, t in edges.items() if t in routing and routing[t]["kind"] == "fix"]
-    close_verdicts = [v for v, t in edges.items() if t in routing and routing[t]["kind"] == "refute-close"]
-    fix_verdict = fix_verdicts[0] if len(fix_verdicts) == 1 else None
-    close_verdict = close_verdicts[0] if len(close_verdicts) == 1 else None
-    return fix_verdict, close_verdict
+    return fix_verdicts[0] if len(fix_verdicts) == 1 else None
+
+
+_SIZE_CHECK_KEYS = (
+    "triaged",
+    "triage_handback",
+    "size_confirmed",
+    "size_collapsed",
+    "fix_needs_plan",
+    "fix_not_reproduced",
+    "fix_late_tradeoff",
+)
+
+
+def _slug(text: Any) -> str:
+    """Lowercase ``text`` reduced to ``[a-z0-9-]``. Twin: ``_slug`` in the emitted script."""
+    return re.sub(r"[^a-z0-9-]+", "-", str(text).lower()).strip("-")
+
+
+def _sizing_path(run_id: str, scouted: Mapping[str, Any], row_id: str) -> str:
+    """Repo-relative sizing path for one row. Twin: ``_sizingPath`` in the emitted script."""
+    d = str(run_id).replace("-", "")[:8]
+    return f"state/sizings/{d[:4]}-{d[4:6]}-{d[6:8]}-{_slug(scouted.get('name')) or 'sizing'}-{_slug(row_id) or 'row'}.yaml"
 
 
 #: Substring of `grind_rows.cmd_close`'s own stderr line ("grind-row close:
@@ -283,6 +307,7 @@ def run_admission(
     budget_tokens: Optional[int] = None,
     budget: Any,
     agent: Callable[[str, str], Any],
+    run_id: str = "20260101T000000Z",
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
@@ -298,7 +323,8 @@ def run_admission(
 
     ``agent(stage_kind, unit_id) -> result`` is the caller's stub. ``unit_id``
     is a batch id for ``triage``/``refute-close``, a row id for
-    ``fix``/``verify``/``commit``/``undo``. It is expected to call
+    ``fix``/``verify``/``commit``/``undo``/``size``, and ``"run"`` for the one
+    run-level ``size-assemble`` call. It is expected to call
     ``budget.spend(n)`` itself (mirroring the real runtime, where every
     agent call is what advances ``budget.spent()``).
 
@@ -307,7 +333,9 @@ def run_admission(
     ``refute-close`` it returns ``{"confirmed": [...], "refuted": [{"row":
     id, "reason": r}, ...]}``. For ``fix``/``verify``/``commit`` it returns
     a dict carrying at least ``"outcome"`` (and ``"tradeoff"``/
-    ``"extra_files"``/``"sha"`` where relevant).
+    ``"extra_files"``/``"sha"`` where relevant). For ``size`` it returns the
+    scout's ``{tshirt, intent, name, ...}`` (or ``{}`` for a refusal); for
+    ``size-assemble`` it returns ``{"results": [{row, exit_code, stdout}]}``.
 
     Downstream-first, one admitted batch's row work fully drains before the
     next admission decision -- this reference scheduler never holds more
@@ -337,6 +365,10 @@ def run_admission(
     admitted: dict[str, _Batch] = {}
     exhausted = False
     by_refute_origin: dict[str, dict[str, int]] = {}
+    by_triage_check: dict[str, int] = {k: 0 for k in _SIZE_CHECK_KEYS}
+    fix_verdict = triage_fix_verdict(routing, triage_node_id)
+    fix_target = routing[triage_node_id]["edges"].get(fix_verdict) if fix_verdict else None
+    size_pending: list[tuple[str, str, str]] = []
 
     def _bump_refute_origin(origin: str, key: str) -> None:
         entry = by_refute_origin.setdefault(origin, {"confirmed": 0, "refuted": 0})
@@ -377,47 +409,48 @@ def run_admission(
         result = _record_call("triage", batch.batch_id)
         batch.triaged = True
         seen: set[str] = set()
-        to_resize: list[Row] = []
+        to_size: list[Row] = []
         for rec in result or []:
             if rec["row"] not in batch.row_ids:
                 continue
             row = rows[rec["row"]]
             seen.add(rec["row"])
+            by_triage_check["triaged"] += 1
             row.origin = f"triage:{rec['verdict']}"
             tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
             action = route_after_triage(
                 routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff
             )
             if action == ("handback", "baton"):
-                to_resize.append(row)
+                to_size.append(row)
                 continue
+            if action[0] == "handback":
+                by_triage_check["triage_handback"] += 1
             _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         for rid in batch.row_ids:
             row = rows[rid]
             if rid not in seen and not row.done and row.node is None:
                 _handback(row, "stage-dead", "triage never returned a record for this row")
-        if to_resize:
-            _resize_batch(batch, to_resize)
+        for row in to_size:
+            _size_row(row)
 
-    def _resize_batch(batch: _Batch, to_resize: list[Row]) -> None:
-        fix_verdict, close_verdict = resize_verdict_map(routing, triage_node_id)
-        edges = routing[triage_node_id]["edges"]
-        fix_target = edges.get(fix_verdict) if fix_verdict else None
-        close_target = edges.get(close_verdict) if close_verdict else None
-        result = _record_call("resize", batch.batch_id) or {}
-        by_row = {a["row"]: a for a in result.get("answers", [])}
-        for row in to_resize:
-            ans = by_row.get(row.row_id)
-            answer = ans.get("answer") if ans else None
-            if answer == "focused-fix" and fix_target and fix_target in routing:
-                row.origin = "resize:focused-fix"
-                row.node = fix_target
-            elif answer == "not-reproduced" and close_target and close_target in routing:
-                row.origin = "resize:not-reproduced"
-                row.node = close_target
-            else:
-                reason = (ans.get("design_question") if ans else None) or "resize confirmed plan-weight"
-                _handback(row, "baton", reason)
+    def _size_row(row: Row) -> None:
+        scouted = _record_call("size", row.row_id) or {}
+        tshirt = scouted.get("tshirt")
+        if not tshirt:
+            reason = scouted.get("reason")
+            _handback(row, "baton", "size scout returned no size" + (f": {reason}" if reason else ""))
+            return
+        below_floor = _tshirt_rank(tshirt) < _PLAN_WEIGHT_FLOOR_RANK
+        if below_floor and fix_target and fix_target in routing:
+            by_triage_check["size_collapsed"] += 1
+            row.origin = "size:below-plan-weight"
+            row.node = fix_target
+            return
+        if not below_floor:
+            by_triage_check["size_confirmed"] += 1
+        row.done = True
+        size_pending.append((row.row_id, _sizing_path(run_id, scouted, row.row_id), scouted.get("intent", "")))
 
     def _close_batch(batch: _Batch) -> None:
         proposal_ids = [
@@ -480,9 +513,11 @@ def run_admission(
             row.removed_files = list(row.removed_files) + [close_result.get("old", row.path)]
             row.touched_files = list(row.touched_files) + [close_result.get("new", "")]
         if tradeoff:
+            by_triage_check["fix_late_tradeoff"] += 1
             _handback(row, "needs-judgment", "fix reported a tradeoff")
             return
         if outcome == "NEEDS_PLAN":
+            by_triage_check["fix_needs_plan"] += 1
             _handback(row, "baton", "fix reported NEEDS_PLAN")
             return
         if outcome == "PEER_DIRTY":
@@ -506,6 +541,8 @@ def run_admission(
                 + ", ".join(escaped),
             )
             return
+        if outcome == "NOT_REPRODUCED":
+            by_triage_check["fix_not_reproduced"] += 1
         row.fix_node = prior_node
         _apply_route(row, follow_edge(routing, row.node, outcome, row), f"fix outcome {outcome!r}")
 
@@ -605,12 +642,24 @@ def run_admission(
             for rid in batch_objs[bid].row_ids:
                 handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
 
+    if size_pending:
+        assembled = _record_call("size-assemble", "run") or {}
+        by_row = {r.get("row"): r for r in assembled.get("results", [])}
+        for rid, path, intent in size_pending:
+            res = by_row.get(rid)
+            code = res.get("exit_code") if res else "missing"
+            if code == 0:
+                handed_back.append({"row": rid, "type": "baton", "reason": f"sized at {path}: {intent}"})
+            else:
+                handed_back.append({"row": rid, "type": "baton", "reason": f"{intent} (size step failed: exit {code})"})
+
     end_spent = budget.spent()
     return {
         "call_log": call_log,
         "handed_back": handed_back,
         "settled": settled,
         "by_refute_origin": by_refute_origin,
+        "by_triage_check": by_triage_check,
         "spend": {
             "output_tokens": end_spent - start_spent,
             "agent_calls_total": len(call_log),
@@ -761,8 +810,15 @@ def _indent_block(text: str, indent: str) -> str:
     return indent + f"\n{indent}".join(text.splitlines())
 
 
-def _drain_sweep_block(*, profile_name: str, queue_dirs: Sequence[str], agent_type_host: Optional[str]) -> str:
+def _drain_sweep_block(
+    *,
+    profile_name: str,
+    queue_dirs: Sequence[str],
+    agent_type_host: Optional[str],
+    models: Optional[Mapping[str, str]] = None,
+) -> str:
     raw = stages.compose_ledger_sweep_call(
+        models=models,
         label="ledger-sweep:drain",
         phase_title="Grind",
         profile=profile_name,
@@ -816,6 +872,18 @@ ARCHIVE_DESTINATION_JS = (
 )
 
 
+#: JS twin of ``_slug`` / ``_sizing_path``; the path is built in-script from RUN_ID.
+_SIZE_PATH_JS = (
+    "function _slug(text) { return String(text == null ? '' : text).toLowerCase()"
+    ".replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''); }\n"
+    "function _sizingPath(scouted, rowId) {\n"
+    "  const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);\n"
+    "  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8)"
+    " + '-' + (_slug(scouted.name) || 'sizing') + '-' + (_slug(rowId) || 'row') + '.yaml';\n"
+    "}"
+)
+
+
 def compose_grind_script(
     manifest: Manifest,
     profile: Profile,
@@ -830,6 +898,7 @@ def compose_grind_script(
     review_roster_fragment: Optional[dict] = None,
     review_stage_schemas: Optional[dict] = None,
     review_run_base_sha: str = "",
+    stage_models: Optional[Mapping[str, str]] = None,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -865,7 +934,7 @@ def compose_grind_script(
     ``preamble`` (optional) is a run-wide posture block declared
     ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
     ``PREAMBLE +`` expression, to every general-purpose (executor-tier)
-    stage prompt -- triage, refute-close, resize, fix, verify-agent, undo.
+    stage prompt -- triage, refute-close, size, fix, verify-agent, undo.
     Never inlined per call site (mirrors the ``_shared`` write-set array's
     own discipline, ``emit.py``'s ``SharedBlocks``), and never spliced into
     ``verify-op`` or ``commit``, which are not executor prompts. A no-op
@@ -900,10 +969,8 @@ def compose_grind_script(
     triage_node_id = _triage_node_id(profile)
     node_kind = {node_id: node.kind for node_id, node in profile.graph.items()}
     routing_table = build_routing_table(profile)
-    resize_fix_verdict, resize_close_verdict = resize_verdict_map(routing_table, triage_node_id)
-    resize_edges = routing_table[triage_node_id]["edges"]
-    resize_fix_target = resize_edges.get(resize_fix_verdict) if resize_fix_verdict else None
-    resize_close_target = resize_edges.get(resize_close_verdict) if resize_close_verdict else None
+    size_fix_verdict = triage_fix_verdict(routing_table, triage_node_id)
+    size_fix_target = routing_table[triage_node_id]["edges"].get(size_fix_verdict) if size_fix_verdict else None
 
     batches_const: list[dict[str, Any]] = [
         {"id": batch_id, "batch_key": entries[0].batch_key, "rows": [e.row_id for e in entries]}
@@ -939,8 +1006,7 @@ def compose_grind_script(
     )
     lines.append(f"const TRIAGE_NODE_ID = {_js_string_literal(triage_node_id)};")
     lines.append(f"const PLAN_WEIGHT_FLOOR_RANK = {_PLAN_WEIGHT_FLOOR_RANK};")
-    lines.append(f"const RESIZE_FIX_TARGET = {json.dumps(resize_fix_target)};")
-    lines.append(f"const RESIZE_CLOSE_TARGET = {json.dumps(resize_close_target)};")
+    lines.append(f"const SIZE_FIX_TARGET = {json.dumps(size_fix_target)};")
     lines.append(_MUTEX_HELPERS)
     lines.append(_ROUTING_HELPERS)
 
@@ -965,6 +1031,8 @@ def compose_grind_script(
     # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
     # firing session's ambient cwd.
     lines.append("const REPO_ROOT = args.repo_root;")
+    lines.append(stages.SIZE_ASSEMBLE_JS)
+    lines.append(_SIZE_PATH_JS)
     # The commit-failed hand-back names the runnable sweep spelling, not the
     # bare verb: the verb is not a binary and takes required flags.
     if queue_dirs:
@@ -984,6 +1052,10 @@ def compose_grind_script(
     lines.append(
         f"const RESOLVED_KNOBS = {json.dumps({k: v for k, v in knobs.items() if k != 'appetite'}, sort_keys=True)};"
     )
+    stage_models_field = ""
+    if stage_models:
+        lines.append(f"const STAGE_MODELS_USED = {json.dumps(dict(stage_models), sort_keys=True)};")
+        stage_models_field = "stage_models: STAGE_MODELS_USED, "
     lines.append(f"const MANIFEST_DIGEST = {_js_string_literal(manifest.digest)};")
     lines.append("const TRIAGE_DEPTH_BY_KEY = " + json.dumps(triage_depth_by_key, sort_keys=True) + ";")
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
@@ -999,6 +1071,11 @@ def compose_grind_script(
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
     lines.append("const _byRefuteOrigin = {};")
+    lines.append(
+        "const _byTriageCheck = { "
+        + ", ".join(f"{k}: 0" for k in _SIZE_CHECK_KEYS)
+        + " };\nconst _sizePending = [];"
+    )
     lines.append(
         "function _bumpRefuteOrigin(origin, key) {\n"
         "  if (!_byRefuteOrigin[origin]) { _byRefuteOrigin[origin] = { confirmed: 0, refuted: 0 }; }\n"
@@ -1025,6 +1102,7 @@ def compose_grind_script(
     # object and interpolates its runtime fields via grind_stages' `*_js`
     # params; per-batch-key variation reads TRIAGE_DEPTH_BY_KEY/VERIFY_SPEC.
     triage_raw = stages.compose_triage_call(
+        models=stage_models,
         label="triage", phase_title="Grind", run_dir=run_dir_s, profile=profile.name,
         verdicts=profile.verdicts,
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
@@ -1044,24 +1122,29 @@ def compose_grind_script(
         + "\n}"
     )
 
-    resize_raw = stages.compose_resize_call(
-        label="resize", phase_title="Grind", profile=profile.name,
-        rows_js="JSON.stringify(rowsData)", run_id_js="RUN_ID",
-        fix_verdict=resize_fix_verdict, close_verdict=resize_close_verdict,
+    size_raw = stages.compose_size_call(
+        models=stage_models,
+        label="size", phase_title="Grind",
+        row_js="{ row_id: row.rowId, path: row.path, digest: row.digest }",
+        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
         agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
+    lines.append("async function _sizeCall(row) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
+
+    size_assemble_raw = stages.compose_size_assemble_call(
+        models=stage_models,
+        label="size-assemble", phase_title="Grind", commands_js="commands",
+        agent_type_host=agent_type_host,
+    )
     lines.append(
-        "async function _resizeCall(rowIds) {\n"
-        "  const rowsData = rowIds.map((r) => {\n"
-        "    const row = _rows[r];\n"
-        "    return { row_id: r, path: row.path, digest: row.digest };\n"
-        "  });\n"
-        + _indent_block(_capture(resize_raw, "resize", return_expr="_result.answers || []"), "  ")
+        "async function _sizeAssembleCall(commands) {\n"
+        + _indent_block(_capture(size_assemble_raw, "size-assemble", return_expr="_result.results || []"), "  ")
         + "\n}"
     )
 
     if has_close_node:
         close_raw = stages.compose_refute_close_call(
+            models=stage_models,
             label="close", phase_title="Grind", profile=profile.name,
             profile_dir_js="PROFILE_DIR",
             proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host,
@@ -1072,6 +1155,7 @@ def compose_grind_script(
         )
 
     fix_raw = stages.compose_fix_call(
+        models=stage_models,
         label="fix", phase_title="Grind", row_id_js="row.rowId", locked_files_js="row.declaredFiles",
         feedback_js="(row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')",
         close_note_js=(
@@ -1088,12 +1172,14 @@ def compose_grind_script(
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
     verify_agent_raw = stages.compose_verify_agent_call(
+        models=stage_models,
         label="verify-agent", phase_title="Grind",
         row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
         agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     verify_op_raw = stages.compose_verify_op_call(
+        models=stage_models,
         label="verify-op", phase_title="Grind", run_dir=run_dir_s, op_js="spec.op", batch_id_js="row.batchId",
         agent_type_host=agent_type_host,
     )
@@ -1120,6 +1206,7 @@ def compose_grind_script(
     )
 
     commit_raw = stages.compose_commit_call(
+        models=stage_models,
         label="commit", phase_title="Grind", profile=profile.name, row_id_js="row.rowId",
         outcome_js="row.lastOutcome || 'settled'",
         # Created files and the archive destination are staged too: a fixer reports new files
@@ -1134,6 +1221,7 @@ def compose_grind_script(
     lines.append("async function _commitCall(row) {\n" + _indent_block(_capture(commit_raw, "commit"), "  ") + "\n}")
 
     undo_raw = stages.compose_undo_call(
+        models=stage_models,
         label="undo", phase_title="Grind",
         paths_js=(
             "Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
@@ -1144,7 +1232,7 @@ def compose_grind_script(
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
 
     lines.append(
-        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };\n}"
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };\n}"
     )
     lines.append(
         "const _rows = {};\n"
@@ -1177,7 +1265,7 @@ def compose_grind_script(
         "  const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);\n"
         "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
-        "  const _toResize = [];\n"
+        "  const _toSize = [];\n"
         "  for (const rec of (_out.rows || [])) {\n"
         "    const recRow = _normalizeRowRef(rowsMeta, rec.row);\n"
         "    if (!batch.rows.includes(recRow)) continue;\n"
@@ -1187,10 +1275,12 @@ def compose_grind_script(
         "    row.evidence = rec.evidence || '';\n"
         "    row.fixPlan = rec.fix_plan || '';\n"
         "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }\n"
+        "    _byTriageCheck.triaged += 1;\n"
         "    row.origin = `triage:${rec.verdict}`;\n"
         "    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
         "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);\n"
-        "    if (route.kind === 'handback' && route.value === 'baton') { _toResize.push(recRow); continue; }\n"
+        "    if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
+        "    if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
         "    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);\n"
         "  }\n"
         "  for (const staleRef of (_out.stale || [])) {\n"
@@ -1208,25 +1298,30 @@ def compose_grind_script(
         "      _handBack(r, 'stage-dead', 'triage never returned a record for this row');\n"
         "    }\n"
         "  }\n"
-        "  if (_toResize.length) {\n"
-        "    const _answers = await _resizeCall(_toResize);\n"
-        "    const _byRow = {};\n"
-        "    for (const a of _answers) { _byRow[a.row] = a; }\n"
-        "    for (const rid of _toResize) {\n"
-        "      const row = _rows[rid];\n"
-        "      const a = _byRow[rid];\n"
-        "      const answer = a && a.answer;\n"
-        "      if (answer === 'focused-fix' && RESIZE_FIX_TARGET && ROUTING[RESIZE_FIX_TARGET]) {\n"
-        "        row.origin = 'resize:focused-fix';\n"
-        "        row.node = RESIZE_FIX_TARGET;\n"
-        "      } else if (answer === 'not-reproduced' && RESIZE_CLOSE_TARGET && ROUTING[RESIZE_CLOSE_TARGET]) {\n"
-        "        row.origin = 'resize:not-reproduced';\n"
-        "        row.node = RESIZE_CLOSE_TARGET;\n"
-        "      } else {\n"
-        "        row.done = true;\n"
-        "        _handBack(rid, 'baton', (a && a.design_question) || 'resize confirmed plan-weight');\n"
-        "      }\n"
+        "  for (const rid of _toSize) {\n"
+        "    const row = _rows[rid];\n"
+        "    const scouted = await _sizeCall(row);\n"
+        "    if (!scouted.tshirt) {\n"
+        "      row.done = true;\n"
+        "      _handBack(rid, 'baton', 'size scout returned no size' + (scouted.reason ? ': ' + scouted.reason : ''));\n"
+        "      continue;\n"
         "    }\n"
+        "    const _belowFloor = _tshirtRank(scouted.tshirt) < PLAN_WEIGHT_FLOOR_RANK;\n"
+        "    if (_belowFloor && SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET]) {\n"
+        "      _byTriageCheck.size_collapsed += 1;\n"
+        "      row.origin = 'size:below-plan-weight';\n"
+        "      row.node = SIZE_FIX_TARGET;\n"
+        "      continue;\n"
+        "    }\n"
+        "    if (!_belowFloor) { _byTriageCheck.size_confirmed += 1; }\n"
+        "    row.done = true;\n"
+        "    const _sizingRel = _sizingPath(scouted, rid);\n"
+        "    _sizePending.push({\n"
+        "      rid,\n"
+        "      path: _sizingRel,\n"
+        "      intent: scouted.intent || '',\n"
+        "      command: _sizeChainCmd(scouted, { row_id: rid, path: row.path, digest: row.digest }, _sizingRel),\n"
+        "    });\n"
         "  }\n"
         "}"
     )
@@ -1304,8 +1399,8 @@ def compose_grind_script(
         "    row.touchedFiles = row.touchedFiles.concat([_archived]);\n"
         "    row.closeResult = { old: row.path, new: _archived };\n"
         "  }\n"
-        "  if (tradeoff) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }\n"
-        "  if (outcome === 'NEEDS_PLAN') { row.done = true; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
+        "  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }\n"
+        "  if (outcome === 'NEEDS_PLAN') { row.done = true; _byTriageCheck.fix_needs_plan += 1; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
         "  if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
         "  if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"
         "  if (outcome === 'NEEDS_WIDER_SCOPE') {\n"
@@ -1314,6 +1409,7 @@ def compose_grind_script(
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
         "  if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
+        "  if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }\n"
         "  row.fixNode = _priorNode;\n"
         "  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
         "}"
@@ -1366,7 +1462,7 @@ def compose_grind_script(
     )
 
     lines.append(
-        _drain_sweep_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host)
+        _drain_sweep_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, models=stage_models)
     )
     lines.append(
         "const _admitted = {};\n"
@@ -1418,12 +1514,27 @@ def compose_grind_script(
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
         "_handBack(r, 'budget-exhausted', " + repr(_EXHAUSTED_REASON) + "); }\n"
         "  }\n"
+        "  if (_sizePending.length) {\n"
+        "    const _commands = _sizePending.map((p) => ({ row: p.rid, command: p.command }));\n"
+        "    const _byRow = {};\n"
+        "    try {\n"
+        "      for (const r of (await _sizeAssembleCall(_commands))) { _byRow[r.row] = r; }\n"
+        "    } catch (err) {\n"
+        "      for (const p of _sizePending) { _byRow[p.rid] = { exit_code: `assemble call threw: ${err && err.message ? err.message : String(err)}` }; }\n"
+        "    }\n"
+        "    for (const p of _sizePending) {\n"
+        "      const r = _byRow[p.rid];\n"
+        "      if (r && r.exit_code === 0) { _handBack(p.rid, 'baton', 'sized at ' + p.path + ': ' + p.intent); }\n"
+        "      else { _handBack(p.rid, 'baton', p.intent + ' (size step failed: exit ' + (r ? r.exit_code : 'missing') + ')'); }\n"
+        "    }\n"
+        "  }\n"
         "  await _drainSweep();\n"
         "}\n"
         "await runGrind();"
     )
 
     review_fix_raw = stages.compose_review_fix_commit_call(
+        models=stage_models,
         touched_files_js="_reviewPaths", label="review-fix-commit", phase_title=_REVIEW_FIX_PHASE,
         profile=profile.name, agent_type_host=agent_type_host, trailers=commit_trailers,
     )
@@ -1441,7 +1552,7 @@ def compose_grind_script(
         + "\n  })();\n}"
     )
 
-    lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host))
+    lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, models=stage_models))
     lines.append("await _adjudicatePmBound();")
 
     lines.append(

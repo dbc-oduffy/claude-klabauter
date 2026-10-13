@@ -75,10 +75,11 @@ from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_state import IndexParseError, read_index
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git_lock_retry import run_with_lock_retry
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.win_portability import no_console_creationflags
 
 
-_BLOCK_DISCHARGE_SPOOL_ROOT = "state/block-discharge/"
+_BLOCK_DISCHARGE_SPOOL_ROOT = Path(home_dir(".", "block-discharge")).as_posix() + "/"
 _SPOOL_COMMIT_MESSAGE = "block-discharge: commit staged spool so reconcile can merge"
 _CONFLICT_LINE = re.compile(
     r"^CONFLICT \([^)]*\): (?:Merge conflict in (?P<merge>.+)"

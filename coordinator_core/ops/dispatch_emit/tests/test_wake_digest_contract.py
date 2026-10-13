@@ -286,7 +286,10 @@ def test_criterion_status_is_computed_from_differs_from_baseline(tmp_path, falsi
 @pytest.mark.cadence
 def test_a_null_falsifier_result_keeps_observation_null(tmp_path):
     digest = _run_digest(tmp_path, falsifier_js="null")
-    assert digest["criterion"] == {"status": "not_run", "observation": None, "sidecar": None, "reason": None}
+    assert digest["criterion"] == {
+        "status": "not_run", "observation": None, "sidecar": None, "reason": None,
+        "completion_summary": None, "lesson_candidates": None,
+    }
 
 
 @pytest.mark.spawns_process

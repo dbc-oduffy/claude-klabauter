@@ -1,59 +1,59 @@
-"""Regression guard for C2 (docs/plans/2026-09-02-one-owner-for-where-a-work-
-record-lives.md): a hand-built `state/<declared-kind>` path join re-entering
-`coordinator_core/` fails this test, where `<declared-kind>` is one of the
-work-record kinds `session/record_homes.HOMES` declares.
+"""Regression guard for archive/specs/2026-09/2026-09-02-one-owner-for-where-a-work-
+record-lives.md: a hand-built `state/<declared-kind>` path join re-entering
+production code under `coordinator_core/` fails this test, where `<declared-kind>`
+is one of the work-record kinds `session/record_homes.HOMES` declares.
 
-SCOPE -- corpus-wide, on purpose, unlike its sibling
-`test_no_hand_built_machinery_joins.py`. That guard's own SCOPE docstring
-names the thing to fix rather than copy: it polices only the 21+7 sites its
-own chunk repointed, so a hand-built join in any OTHER module raises nothing.
-This guard walks the whole `coordinator_core/` tree, because the plan's
-Problem statement is precisely that a record's home has no owner and no
-single guard watching for a new literal landing anywhere in it.
+SCOPE -- production modules, by two rules (unlike its sibling
+`test_no_hand_built_machinery_joins.py`, which polices only the sites its own
+chunk repointed, this guard walks the whole `coordinator_core/` tree):
 
-THE RATCHET, both directions. `_KNOWN_LITERAL_SITES` is a seeded frozenset of
-the files that carry a hand-built `state/<kind>` literal TODAY (measured by
-walking the tree at the time this test was written, not copied from the
-plan's own "119"/"271" prose -- those numbers describe a moving tree and are
-expectations to check, not values to trust). A literal in a file NOT in that
-set fails -- a new hand-built join landing anywhere is what this guard exists
-to catch. A file IN the set that no longer carries a literal also fails --
-the set can only shrink, so a file repointed onto `record_homes.py`'s
-accessors cannot quietly regain its exemption by staying listed after the
-literal is gone.
+    1. Test scaffolding is out of scope. The predicate is the generator
+       census's own, `assemble._is_test_scaffolding` (a `/tests/` segment, a
+       `test_` basename, `conftest.py`, `coordinator_core/benchmarks/`,
+       `coordinator_core/testing/`). A test literal is the independent witness
+       of where a record must land; computing it from the accessor under test
+       would remove the witness.
+    2. A column-0 op declaration is not a join. A literal inside a plain or
+       annotated module-body assignment to one of
+       `declarations.DECLARATION_NAMES` (`MUTATES = ["state/handoffs/*.md"]`) is
+       not counted: the census reads those statically and a function call there
+       folds to MALFORMED, so they cannot go through an accessor.
+
+THE RATCHET, both directions. `_KNOWN_LITERAL_SITES` is the seeded frozenset of
+the production files that carry a counted `state/<kind>` literal. It only
+shrinks. A literal in a file NOT in the set fails -- a new hand-built join
+landing anywhere is what this guard exists to catch. A file IN the set that no
+longer carries a counted literal also fails, so a file repointed onto
+`record_homes.py`'s accessors cannot keep its exemption by staying listed. A
+scaffolding path added to the set fails the same way: the scan never visits it.
 
 `record_homes.py` itself is exempt -- the one module allowed to spell the
 `"state"` + `"<kind>"` segments together, the same way
-`test_no_hand_built_machinery_joins.py` exempts `machinery_paths.py`.
+`test_no_hand_built_machinery_joins.py` exempts `machinery_paths.py`. This file
+is scaffolding by rule 1, so its inline fixture strings are never scanned.
 
 Negative-spec:
     - Static scan only -- this test never imports or executes any scanned
-      module. It reads each file's source text and regex-matches it; a
-      module that raises on import, has side effects, or is otherwise
-      unsafe to execute is scanned exactly as safely as one that is not.
-    - Does NOT sweep the seeded sites onto `record_homes.py`'s accessors --
-      that sweep is the plan's own Anti-scope ("Do not sweep the 119 literal
-      sites"). This guard ratchets the count; it does not reduce it.
-    - Does NOT police a `"state/<segment>"` literal for a segment that is
-      NOT a declared `record_homes.HOMES` kind (e.g. a machinery bucket like
-      `"state/subagent-share"`, already covered by
-      `test_no_hand_built_machinery_joins.py`, or a loose top-level file
-      that is not a record kind at all -- see `record_homes.py`'s own
-      docstring on why those are excluded from `HOMES`).
-    - Does NOT run at cadence -- no `@pytest.mark.cadence` marker, no
-      `spawns_process` marker. The write-side literal count regrew
-      unguarded between relocations specifically because the allowlist's
-      own converse check IS cadence-marked; this guard is the fast-tier
-      counterpart that fires on every run instead of at the next cadence
-      gate.
+      module. It reads each file's source text, regex-matches it, and parses
+      (never imports) a file only when it both matches and names a declaration.
+    - Does NOT sweep the seeded sites onto `record_homes.py`'s accessors; this
+      guard ratchets the count and does not reduce it.
+    - Does NOT police a `"state/<segment>"` literal for a segment that is NOT a
+      declared `record_homes.HOMES` kind (e.g. a machinery bucket like
+      `"state/subagent-share"`, covered by `test_no_hand_built_machinery_joins.py`).
+    - Does NOT run at cadence -- no `@pytest.mark.cadence` or `spawns_process`
+      marker; it fires on every fast-tier run.
 """
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from functools import lru_cache
 
+from coordinator_core.ops.generator_census.assemble import _is_test_scaffolding
+from coordinator_core.ops.generator_census.declarations import DECLARATION_NAMES
 from coordinator_core.session import record_homes
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -61,7 +61,6 @@ _SCAN_ROOT = os.path.join(_REPO_ROOT, "coordinator_core")
 
 _EXCLUDED_FILES = {
     os.path.join(_SCAN_ROOT, "session", "record_homes.py"),
-    os.path.abspath(__file__),
 }
 
 _KIND_ALTERNATION = "|".join(
@@ -75,168 +74,46 @@ _JOIN_PATTERN = re.compile(
 )
 
 _KNOWN_LITERAL_SITES = frozenset({
-    "attribution/tests/test_detector.py",
     "backlog_grind_assemble/grind_rows.py",
     "backlog_grind_assemble/readers_blitz.py",
     "backlog_grind_assemble/readers_mise.py",
     "backlog_grind_assemble/readers_sweep.py",
-    "backlog_grind_assemble/tests/test_apply_unify_batons_verb.py",
-    "backlog_grind_assemble/tests/test_grind_rows.py",
-    "backlog_grind_assemble/tests/test_readers_blitz_liveness.py",
-    "backlog_grind_assemble/tests/test_readers_debt_no_improvement_leg.py",
-    "backlog_grind_assemble/tests/test_readers_mise_unify.py",
     "bash_guards/_alternative_liveness.py",
     "bash_guards/_write_bump_message.py",
     "bash_guards/_write_bump_stand_down.py",
     "bash_guards/dispatch_checks.py",
-    "bash_guards/tests/guard_message_corpus.py",
-    "bash_guards/tests/guard_message_exemptions.py",
-    "bash_guards/tests/test_check_seven_claude_md_budget.py",
-    "bash_guards/tests/test_commit_literal_pathspec_bracket_routes.py",
-    "bash_guards/tests/test_commit_ownership_leg_stand_down.py",
-    "bash_guards/tests/test_commit_scope_directory_operand_still_advises.py",
-    "bash_guards/tests/test_destructive_rm_quote_split_verb.py",
-    "bash_guards/tests/test_guard_doctrine_surface_point3_quoted_heredoc_indirection.py",
-    "bash_guards/tests/test_in_repo_build_output_not_foreign.py",
-    "bash_guards/tests/test_reap_stale_git_lock.py",
-    "bash_guards/tests/test_scope_orphan_census.py",
-    "bash_guards/tests/test_validate_commit_lessons_archive_pair.py",
-    "bash_guards/tests/test_write_bump_message.py",
-    "bash_guards/tests/test_write_bump_stand_down_mirror_dedupe.py",
-    "bash_guards/tests/test_write_claim_record_issue50_junk_tokens.py",
     "baton_assemble/__init__.py",
-    "baton_assemble/tests/test_adopt_prior_attempt_unreadable_candidate.py",
-    "baton_assemble/tests/test_apply_degrade_no_compensation.py",
-    "baton_assemble/tests/test_apply_minted_successor_attestation.py",
-    "baton_assemble/tests/test_apply_orphan_on_commit_pipeline_error.py",
-    "baton_assemble/tests/test_brief_segments.py",
-    "baton_assemble/tests/test_d2_session_ledger_body_check.py",
-    "baton_assemble/tests/test_d6_fan_in_n3_budget.py",
-    "baton_assemble/tests/test_d6_routes_through_housekeeping.py",
-    "baton_assemble/tests/test_deliverable_ancestor_archived.py",
-    "baton_assemble/tests/test_deliverable_collision_budget.py",
-    "baton_assemble/tests/test_deliverable_collision_warn.py",
-    "baton_assemble/tests/test_deliverable_ids_union_carry.py",
-    "baton_assemble/tests/test_discovery_tier_expectation.py",
-    "baton_assemble/tests/test_dropped_join_guard_plan_input_axis.py",
-    "baton_assemble/tests/test_falsifier_one_hop_over_fan_in_fixture.py",
-    "baton_assemble/tests/test_fan_in_cardinality_judgment_point.py",
-    "baton_assemble/tests/test_fan_in_mints_fresh_deliverable_id.py",
-    "baton_assemble/tests/test_fresh_output_path_hhmmss_strip.py",
-    "baton_assemble/tests/test_j_continuation_vs_fork_excise.py",
-    "baton_assemble/tests/test_j_divergent_deliverable_id.py",
-    "baton_assemble/tests/test_kind_axis.py",
-    "baton_assemble/tests/test_ledger_claim_record_liveness.py",
-    "baton_assemble/tests/test_plan_input_predecessor.py",
-    "baton_assemble/tests/test_plan_owner_stamp.py",
-    "baton_assemble/tests/test_plan_stamp_carry.py",
-    "baton_assemble/tests/test_predecessor_stage_rank_stamped.py",
-    "baton_assemble/tests/test_replay_carries_union.py",
-    "baton_assemble/tests/test_repo_identity_gate.py",
-    "baton_assemble/tests/test_roadmap_identity_carry.py",
-    "baton_assemble/tests/test_spinoff_association_jp.py",
-    "baton_assemble/tests/test_spinoff_no_unify.py",
-    "baton_assemble/tests/test_supersede_degrade_messages.py",
-    "baton_assemble/tests/test_supersede_refuses_placeholder_continued_into.py",
-    "baton_assemble/tests/test_untitled_mint_derivation.py",
-    "benchmarks/boot_backstop_cold.py",
-    "benchmarks/handoff_supersede_baseline.py",
-    "benchmarks/listener_availability.py",
-    "benchmarks/op_fixtures.py",
     "block_discharge.py",
-    "cartography/tests/test_atlas_record.py",
-    "cartography/tests/test_file_index.py",
     "ceremony_common/_phantom_sweep_providers.py",
     "claude_md_budget.py",
-    "clustering/tests/test_candidates_parent_dir.py",
     "commit_ledger/resolve_owner.py",
     "commit_ledger/store.py",
-    "commit_ledger/tests/test_store.py",
-    "completion_receipts/tests/test_model_and_store.py",
-    "conftest.py",
-    "conservatism/tests/test_declared_directions_hold.py",
     "contract/cockpit_schema/entities/roadmap_summary.py",
-    "contract/cockpit_schema/tests/test_completion_receipt_entity.py",
-    "contract/cockpit_schema/tests/test_emit_conformance_fixture.py",
-    "contract/cockpit_schema/tests/test_goal_authoring_wire_projection.py",
-    "contract/cockpit_schema/tests/test_new_entity_schemas.py",
-    "contract/cockpit_schema/tests/test_producer_axis_entity.py",
-    "contract/cockpit_schema/tests/test_round_trip.py",
-    "contract/cockpit_schema/tests/test_session_hierarchy.py",
-    "contract/cockpit_schema/tests/test_verify_superseded_retirement.py",
-    "contract/cockpit_schema/tests/test_verify_vocabulary_retirement.py",
-    "contract/cockpit_schema/tests/test_verify_vocabulary_retirement_claude_klabauter_corpus.py",
-    "contract/decision_object/tests/test_reportable_partition.py",
     "contract/emit_memo_schema.py",
     "coverage.py",
     "dag.py",
     "distill/_common.py",
     "distill/curation_status.py",
     "distill/delete_guard.py",
-    "distill/tests/test_delete_guard.py",
     "environment_story/guard_enforcement_join.py",
-    "environment_story/tests/test_environment_story.py",
     "execute_plan_assemble/close_out_and_stamp.py",
-    "execute_plan_assemble/tests/test_close_out_and_stamp.py",
-    "execute_plan_assemble/tests/test_close_out_goal_refusal.py",
     "fact_contract_gate/dangling_consumer.py",
     "fact_contract_gate/engine_gap_ratchet.py",
     "fact_contract_gate/prose_rederivation.py",
-    "fact_contract_gate/tests/test_fact_contract_gate.py",
     "frontmatter/author_dependence.py",
     "frontmatter/schema_validate.py",
-    "frontmatter/tests/test_author_dependence.py",
-    "frontmatter/tests/test_author_dependence_measurement_reproduces.py",
-    "frontmatter/tests/test_bug_backlog_corpus_parses.py",
-    "frontmatter/tests/test_handoff_kind_enum_alias_parity.py",
-    "frontmatter/tests/test_handoff_lineage_corpus_dangling_refs.py",
-    "frontmatter/tests/test_parity_handoff_ops.py",
-    "frontmatter/tests/test_plan_scaffold_brightline_parity.py",
-    "frontmatter/tests/test_plan_scaffold_census_parity.py",
-    "frontmatter/tests/test_plan_scaffold_falsifier_parity.py",
-    "frontmatter/tests/test_plan_schema_falsifier_optional.py",
-    "frontmatter/tests/test_plan_sizing_object_field.py",
-    "frontmatter/tests/test_roadmap_approval_identity.py",
-    "frontmatter/tests/test_roadmap_schema_glob.py",
-    "frontmatter/tests/test_routed_sizing_carries_a_deliverable_id.py",
-    "frontmatter/tests/test_schema_cli_parity.py",
-    "frontmatter/tests/test_schema_validate.py",
-    "frontmatter/tests/test_shape_hash_strips_root_locator.py",
-    "frontmatter/tests/test_sizing_object_baton_field.py",
-    "frontmatter/tests/test_sizing_object_exit_criterion_and_mode_fields.py",
-    "git/test_commit_trailers.py",
-    "git/tests/test_commit_refuses_mid_sequence_repo.py",
-    "git/tests/test_eol_declared.py",
     "goals/__init__.py",
     "goals/reassess_krs.py",
-    "goals/tests/test_kr_suggestion_reader.py",
     "hooks/claude_md_ledger.py",
     "hooks/guard_handoff_summary_cap_on_write.py",
     "hooks/nudge_initiative_goals_ladder.py",
     "hooks/nudge_unauthorized_handoff.py",
     "hooks/pickup_autofire.py",
     "hooks/support/stop_family_runner_contract.py",
-    "hooks/test_nudge_unrouted_sizing.py",
-    "hooks/test_postuse_advisory_dispatch.py",
-    "hooks/tests/test_arrival_w4_c12.py",
-    "hooks/tests/test_arrival_w4_c7.py",
-    "hooks/tests/test_guard_terminal_review.py",
-    "hooks/tests/test_nudge_unrouted_sizing_touch_seam.py",
-    "hooks/tests/test_watchdog_undischarged_next_move.py",
     "housekeeping/cycle.py",
-    "housekeeping/tests/corpus_fixture.py",
-    "housekeeping/tests/test_corpus_fixture.py",
-    "housekeeping/tests/test_cycle.py",
-    "housekeeping/tests/test_gate_clear.py",
-    "housekeeping/tests/test_resolve.py",
-    "housekeeping/tests/test_terminal.py",
     "install/scaffold_structure.py",
-    "install/tests/test_scaffold_structure.py",
     "install/uninstall_legs.py",
-    "invoke/tests/test_repo_scope_refusal.py",
     "learn_lessons_pipeline/__init__.py",
-    "learn_lessons_pipeline/tests/test_brief.py",
-    "learn_lessons_pipeline/tests/test_universal_rows_and_containment.py",
     "memo_corpus.py",
     "op_budget_suspension.py",
     "ops/backfill_deliverable_spine.py",
@@ -247,23 +124,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/cascade_retract.py",
     "ops/ceremony/renderers.py",
     "ops/ceremony/tail_ops.py",
-    "ops/ceremony/tests/test_attribution_gate.py",
-    "ops/ceremony/tests/test_branch_resolution.py",
-    "ops/ceremony/tests/test_commit_admission.py",
-    "ops/ceremony/tests/test_commit_gates.py",
-    "ops/ceremony/tests/test_commit_scoped_trailer_replay.py",
-    "ops/ceremony/tests/test_git_native.py",
-    "ops/ceremony/tests/test_pipeline_context.py",
-    "ops/ceremony/tests/test_post_commit_tail.py",
-    "ops/ceremony/tests/test_post_commit_tail_claim_release.py",
-    "ops/ceremony/tests/test_post_commit_tail_completion_fold.py",
-    "ops/ceremony/tests/test_records_query.py",
-    "ops/ceremony/tests/test_renderers_plans_join.py",
-    "ops/ceremony/tests/test_renderers_roadmap_callout.py",
-    "ops/ceremony/tests/test_renderers_unreadable_handoff.py",
-    "ops/ceremony/tests/test_tail_ops.py",
-    "ops/ceremony/tests/test_update_docs_scan.py",
-    "ops/ceremony/tests/test_wsc_disposition.py",
     "ops/changelog_ops.py",
     "ops/check_competitor_positioning_nudge.py",
     "ops/commit_anchors.py",
@@ -277,78 +137,10 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/detect_onboarding_offer.py",
     "ops/dispatch_emit/grind_compose.py",
     "ops/dispatch_emit/queue_select.py",
-    "ops/dispatch_emit/tests/test_ask_baton_input.py",
-    "ops/dispatch_emit/tests/test_ask_compose.py",
-    "ops/dispatch_emit/tests/test_ask_compose_apm_accept.py",
-    "ops/dispatch_emit/tests/test_ask_compose_gated_and_halt.py",
-    "ops/dispatch_emit/tests/test_ask_gate.py",
-    "ops/dispatch_emit/tests/test_ask_roadmap.py",
-    "ops/dispatch_emit/tests/test_ask_stage.py",
-    "ops/dispatch_emit/tests/test_ask_zero_headless.py",
-    "ops/dispatch_emit/tests/test_cli.py",
-    "ops/dispatch_emit/tests/test_cli_admission.py",
-    "ops/dispatch_emit/tests/test_cli_reverify_delivery_empty.py",
-    "ops/dispatch_emit/tests/test_commit_request.py",
-    "ops/dispatch_emit/tests/test_completion_receipt_builder.py",
-    "ops/dispatch_emit/tests/test_emit.py",
-    "ops/dispatch_emit/tests/test_external_gate_shapes.py",
-    "ops/dispatch_emit/tests/test_fence_admits_the_declared_surface.py",
-    "ops/dispatch_emit/tests/test_grind_compose.py",
-    "ops/dispatch_emit/tests/test_grind_improvement_queue.py",
-    "ops/dispatch_emit/tests/test_grind_integration.py",
-    "ops/dispatch_emit/tests/test_grind_profile.py",
-    "ops/dispatch_emit/tests/test_grind_stages.py",
-    "ops/dispatch_emit/tests/test_inventory_default_out.py",
-    "ops/dispatch_emit/tests/test_inventory_mint.py",
-    "ops/dispatch_emit/tests/test_inventory_mint_plan_chunk_reconcile.py",
-    "ops/dispatch_emit/tests/test_inventory_optional_columns.py",
-    "ops/dispatch_emit/tests/test_op.py",
-    "ops/dispatch_emit/tests/test_op_returns_fire_args.py",
-    "ops/dispatch_emit/tests/test_pathspec.py",
-    "ops/dispatch_emit/tests/test_queue_emit.py",
-    "ops/dispatch_emit/tests/test_queue_select.py",
-    "ops/dispatch_emit/tests/test_sizing_fire_contract.py",
-    "ops/dispatch_emit/tests/test_sizing_fire_routes.py",
-    "ops/dispatch_emit/tests/test_sizing_fire_wiring.py",
-    "ops/dispatch_emit/tests/test_sizing_xs_mint.py",
-    "ops/dispatch_emit/tests/test_stop_rule_halt_scopes_to_plan.py",
-    "ops/dispatch_emit/tests/test_terminal_commit.py",
-    "ops/dispatch_emit/tests/test_terminal_commit_completion_receipts.py",
-    "ops/dispatch_emit/tests/test_terminal_commit_sizing_ride.py",
-    "ops/dispatch_emit/tests/test_write_set_shared_once.py",
-    "ops/dispatch_emit/tests/test_writes_under.py",
-    "ops/dispatch_emit/tests/test_writes_under_carry_through.py",
-    "ops/dispatch_emit/tests/test_writes_under_gitignored_prefix.py",
-    "ops/distill_apply_disposal.py",
-    "ops/docgen/tests/test_c6_conformance.py",
-    "ops/docgen/tests/test_doc_render.py",
-    "ops/docgen/tests/test_dr_corpus_ids_unique.py",
     "ops/draft_plan_aging.py",
     "ops/emit/sections/initiatives.py",
     "ops/emit/sections/roadmaps.py",
     "ops/emit/sections/routine_signals.py",
-    "ops/emit/tests/test_ac_priority_resolution.py",
-    "ops/emit/tests/test_ac_priority_single_impl.py",
-    "ops/emit/tests/test_ac_priority_spinoff_wall.py",
-    "ops/emit/tests/test_backlogs_section.py",
-    "ops/emit/tests/test_dead_join_fixes_reviewer_plan_id_superseded_by.py",
-    "ops/emit/tests/test_goal_wire_2130.py",
-    "ops/emit/tests/test_handoff_id_derivation.py",
-    "ops/emit/tests/test_handoffs_section_vocabulary.py",
-    "ops/emit/tests/test_human_axis_emission.py",
-    "ops/emit/tests/test_human_axis_stays_off_the_wire.py",
-    "ops/emit/tests/test_priority_emission.py",
-    "ops/emit/tests/test_priority_resolve.py",
-    "ops/emit/tests/test_priority_resolve_cache.py",
-    "ops/emit/tests/test_producer_passthrough.py",
-    "ops/emit/tests/test_provenance_path_relativize.py",
-    "ops/emit/tests/test_roadmap_dag_parity.py",
-    "ops/emit/tests/test_roadmap_dag_section.py",
-    "ops/emit/tests/test_roadmap_initiative_field.py",
-    "ops/emit/tests/test_roadmaps_no_overview_bucket.py",
-    "ops/emit/tests/test_roadmaps_no_overview_bucket_claude_klabauter_corpus.py",
-    "ops/emit/tests/test_roadmaps_scalars.py",
-    "ops/emit/tests/test_sedge03_deliverable_status_liveness.py",
     "ops/extract_cited_sidecars.py",
     "ops/fleet/_common.py",
     "ops/fleet/_memo_anchor.py",
@@ -359,46 +151,9 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/fleet/archive_terminal_handoffs.py",
     "ops/fleet/capability_index.py",
     "ops/fleet/consumer_corpus_preflight.py",
-    "ops/fleet/memo_heal.py",
-    "ops/fleet/memo_send.py",
     "ops/fleet/migrate_handoff_vocabulary.py",
     "ops/fleet/prune_bugs.py",
-    "ops/fleet/tests/test_archival_move_claims_the_sink.py",
-    "ops/fleet/tests/test_archival_resync_self_heals.py",
-    "ops/fleet/tests/test_archive_actioned_memos.py",
-    "ops/fleet/tests/test_archive_and_commit_batched_drift_and_restage.py",
-    "ops/fleet/tests/test_archive_and_commit_disk_head_drift.py",
-    "ops/fleet/tests/test_archive_and_commit_envelope_contract.py",
-    "ops/fleet/tests/test_archive_dest_conflict_wedge_detector.py",
-    "ops/fleet/tests/test_archive_family_batch_and_cap_sites.py",
-    "ops/fleet/tests/test_archive_family_fixture_guard.py",
-    "ops/fleet/tests/test_archive_git_free_seam_smoke.py",
-    "ops/fleet/tests/test_archive_release_accumulator_refusal.py",
-    "ops/fleet/tests/test_archive_sizings.py",
-    "ops/fleet/tests/test_archive_sizings_xl_exit_roadmap.py",
-    "ops/fleet/tests/test_archive_terminal_handoffs.py",
-    "ops/fleet/tests/test_capability_index.py",
-    "ops/fleet/tests/test_common_claim_release.py",
-    "ops/fleet/tests/test_common_tree_build.py",
-    "ops/fleet/tests/test_consumer_corpus_preflight.py",
-    "ops/fleet/tests/test_delete_superseded_decisions.py",
-    "ops/fleet/tests/test_fleet_work_state.py",
-    "ops/fleet/tests/test_head_race_between_read_tree_and_commit.py",
-    "ops/fleet/tests/test_main_index_resync.py",
-    "ops/fleet/tests/test_memo_delivery_durability.py",
-    "ops/fleet/tests/test_memo_heal.py",
-    "ops/fleet/tests/test_memo_list.py",
-    "ops/fleet/tests/test_memo_send.py",
-    "ops/fleet/tests/test_memo_send_citation_lint.py",
-    "ops/fleet/tests/test_migrate_handoff_vocabulary.py",
-    "ops/fleet/tests/test_migrate_vocabulary_discharges_archival.py",
-    "ops/fleet/tests/test_prune_bugs.py",
-    "ops/fleet/tests/test_prune_bugs_registration_smoke.py",
-    "ops/fleet/tests/test_record_history_real_git.py",
-    "ops/fleet/tests/test_supersedes_portability.py",
     "ops/fleet_machinery_sweep.py",
-    "ops/generator_census/tests/test_census_semantics.py",
-    "ops/generator_census/tests/test_globs.py",
     "ops/goals_match.py",
     "ops/handoff_append_session_ledger.py",
     "ops/handoff_archive_transition.py",
@@ -415,14 +170,10 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/handoff_stamp.py",
     "ops/handoff_transition.py",
     "ops/initiatives_serve.py",
-    "ops/introspect/tests/test_verify_shipped.py",
-    "ops/memo/tests/test_memo_transition_distill_fate.py",
-    "ops/memo/tests/test_memo_transition_unit.py",
     "ops/normalize_claimed_frontmatter.py",
     "ops/plan_status_transition.py",
     "ops/promote_shipped_in_flight_stubs.py",
     "ops/propagate_body.py",
-    "ops/queue_append.py",
     "ops/queue_scaffold_baton.py",
     "ops/read_sizing_object_fields.py",
     "ops/reap_in_progress_memos.py",
@@ -430,20 +181,12 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/records_query.py",
     "ops/refresh_roadmap_callout.py",
     "ops/review_brightline_gate.py",
-    "ops/review_mint/tests/test_supersede.py",
     "ops/roadmap_dag.py",
     "ops/roadmap_link_stubs.py",
     "ops/session/fix_concrete_path_citations.py",
     "ops/session/guard_concrete_path_citations.py",
     "ops/session/record_pickup.py",
     "ops/session/resolve_chain_terminal_disposition.py",
-    "ops/session/tests/test_end_to_end_wrap_writer_tail_sample.py",
-    "ops/session/tests/test_fix_concrete_path_citations.py",
-    "ops/session/tests/test_guard_concrete_path_citations.py",
-    "ops/session/tests/test_record_pickup.py",
-    "ops/session/tests/test_resolve_chain_terminal_disposition.py",
-    "ops/session/tests/test_safe_commit_offer.py",
-    "ops/session/tests/test_scope_report.py",
     "ops/sizing_accept_exit_criterion.py",
     "ops/sizing_decline.py",
     "ops/sizing_discharge_surfaced.py",
@@ -452,405 +195,41 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/strategic/draft_writer.py",
     "ops/strategic/emit_writer.py",
     "ops/strategic/version_highlights.py",
-    "ops/test__relative_link.py",
-    "ops/test_assert_no_dangling_plan_backlinks.py",
-    "ops/test_backfill_deliverable_spine.py",
-    "ops/test_baton_drift_sweep.py",
-    "ops/test_blocked.py",
-    "ops/test_bootstrap_repo.py",
-    "ops/test_changelog_compute_day_fields.py",
-    "ops/test_changelog_ops.py",
-    "ops/test_check_competitor_positioning_nudge.py",
-    "ops/test_completion_ops.py",
-    "ops/test_deliverable_carry.py",
-    "ops/test_detect_onboarding_offer.py",
-    "ops/test_dirty_tree_gate.py",
-    "ops/test_draft_plan_aging.py",
-    "ops/test_emit_artifact_shape_contract.py",
-    "ops/test_list_week_changelog.py",
-    "ops/test_normalize_claimed_frontmatter.py",
-    "ops/test_onboarding_signal_contract.py",
-    "ops/test_promote_shipped_in_flight_stubs.py",
-    "ops/test_propagate_body.py",
-    "ops/test_red_record.py",
-    "ops/test_refresh_roadmap_callout.py",
-    "ops/test_resolve_baton_path.py",
-    "ops/test_verify_schema_registry_sync.py",
-    "ops/test_workday_complete_backfill_scan.py",
-    "ops/test_workday_stitch_sidecar_summary.py",
-    "ops/test_workweek_trail_scope.py",
-    "ops/tests/conftest.py",
-    "ops/tests/test_archive_transition_attested_succession.py",
-    "ops/tests/test_archive_transition_refusal_reason.py",
-    "ops/tests/test_assert_plan_sizing_citation.py",
-    "ops/tests/test_backfill_deliverable_spine.py",
-    "ops/tests/test_backfill_reference_edges.py",
-    "ops/tests/test_blocker_id_resolves_to_one_chain_terminus.py",
-    "ops/tests/test_campaign_enumerate.py",
-    "ops/tests/test_candidate_quarantine_is_one_line.py",
-    "ops/tests/test_cascade_backstop_sweep.py",
-    "ops/tests/test_cascade_baton_rows.py",
-    "ops/tests/test_cascade_divergence_report.py",
-    "ops/tests/test_cascade_retract.py",
-    "ops/tests/test_cascade_terminal_op.py",
-    "ops/tests/test_changelog_parity.py",
-    "ops/tests/test_check3_succession_exemption.py",
-    "ops/tests/test_commit_anchors_claim_state.py",
-    "ops/tests/test_completion_nature.py",
-    "ops/tests/test_completion_ops_claim_state.py",
-    "ops/tests/test_crossrepo_closure_status.py",
-    "ops/tests/test_cutover_gate_handler.py",
-    "ops/tests/test_deferral_detect_orphan_memo.py",
-    "ops/tests/test_deliverable_cascade.py",
-    "ops/tests/test_deliverable_cascade_claim_state.py",
-    "ops/tests/test_deliverable_cascade_kinds.py",
-    "ops/tests/test_deliverable_cascade_leg_a_liveness.py",
-    "ops/tests/test_deliverable_cascade_reads_corpus_once.py",
-    "ops/tests/test_deliverable_equivalence.py",
-    "ops/tests/test_deliverable_fork_detect.py",
-    "ops/tests/test_deliverable_ledger_write.py",
-    "ops/tests/test_deliverable_rollup.py",
-    "ops/tests/test_distill_apply_disposal.py",
-    "ops/tests/test_distill_disposal_manifest.py",
-    "ops/tests/test_distill_scope.py",
-    "ops/tests/test_distill_stamp_disposal.py",
-    "ops/tests/test_extract_cited_sidecars.py",
-    "ops/tests/test_gate_add_blocker.py",
-    "ops/tests/test_gate_cascade_clear_terminal_states.py",
-    "ops/tests/test_gate_dimension_review.py",
-    "ops/tests/test_gate_recheck_cleared_readiness.py",
-    "ops/tests/test_gate_recheck_retires_blocked_by.py",
-    "ops/tests/test_goal_kr_status.py",
-    "ops/tests/test_goals_match.py",
-    "ops/tests/test_grind_ops.py",
-    "ops/tests/test_handoff_append_session_ledger.py",
-    "ops/tests/test_handoff_append_session_ledger_two_ceremony.py",
-    "ops/tests/test_handoff_archive_transition.py",
-    "ops/tests/test_handoff_archive_transition_holder_live.py",
-    "ops/tests/test_handoff_author_fork.py",
-    "ops/tests/test_handoff_author_fork_claim_state.py",
-    "ops/tests/test_handoff_author_lint.py",
-    "ops/tests/test_handoff_carry_gate.py",
-    "ops/tests/test_handoff_children.py",
-    "ops/tests/test_handoff_close_displaced_edge.py",
-    "ops/tests/test_handoff_close_origin_stub.py",
-    "ops/tests/test_handoff_columns_query.py",
-    "ops/tests/test_handoff_correct_body.py",
-    "ops/tests/test_handoff_correct_body_claim_state.py",
-    "ops/tests/test_handoff_discharge_landed.py",
-    "ops/tests/test_handoff_lineage_ancestry.py",
-    "ops/tests/test_handoff_match.py",
-    "ops/tests/test_handoff_normalize.py",
-    "ops/tests/test_handoff_normalize_carry_scope.py",
-    "ops/tests/test_handoff_repair_archived_shipped_in.py",
-    "ops/tests/test_handoff_stamp.py",
-    "ops/tests/test_handoff_summary_cap_normalize.py",
-    "ops/tests/test_handoff_supersede_shipped_refused.py",
-    "ops/tests/test_handoff_transition_claim_terminal.py",
-    "ops/tests/test_handoff_transition_derives_readiness.py",
-    "ops/tests/test_handoff_transition_unclaim.py",
-    "ops/tests/test_initiatives_serve.py",
-    "ops/tests/test_initiatives_store.py",
-    "ops/tests/test_initiatives_store_claude_klabauter_corpus.py",
-    "ops/tests/test_lifecycle_pair_consistency.py",
-    "ops/tests/test_newly_wired_commit_routes_release_claims.py",
-    "ops/tests/test_normalize_claimed_frontmatter.py",
-    "ops/tests/test_ownership_index.py",
-    "ops/tests/test_path_guard.py",
-    "ops/tests/test_plan_capture_persist.py",
-    "ops/tests/test_plan_narrow_criterion.py",
-    "ops/tests/test_plan_status_transition.py",
-    "ops/tests/test_plan_status_transition_empty_cascade.py",
-    "ops/tests/test_plan_status_transition_goal_refusal.py",
-    "ops/tests/test_plan_status_transition_live_foreign_holder.py",
-    "ops/tests/test_plan_tasks_mutate.py",
-    "ops/tests/test_plan_tasks_render.py",
-    "ops/tests/test_producer_axis_creation_seam.py",
-    "ops/tests/test_queue_append_concurrency.py",
-    "ops/tests/test_queue_cluster.py",
-    "ops/tests/test_queue_family.py",
-    "ops/tests/test_queue_parity.py",
-    "ops/tests/test_queue_scaffold_baton.py",
-    "ops/tests/test_read_sizing_object_fields.py",
-    "ops/tests/test_reap_in_progress_memos.py",
-    "ops/tests/test_record_history.py",
-    "ops/tests/test_records_query.py",
-    "ops/tests/test_repair_archived_verbs.py",
-    "ops/tests/test_repair_deployment_state_live_tree.py",
-    "ops/tests/test_reverify_delivery.py",
-    "ops/tests/test_review_stamp.py",
-    "ops/tests/test_review_stamp_superseding_record.py",
-    "ops/tests/test_roadmap_blitz_stage_spawn_count.py",
-    "ops/tests/test_roadmap_dag.py",
-    "ops/tests/test_roadmap_dag_sprint_gates.py",
-    "ops/tests/test_roadmap_link_stubs.py",
-    "ops/tests/test_roadmap_plan_gate.py",
-    "ops/tests/test_run_commenting_sweep.py",
-    "ops/tests/test_session_baton_promote.py",
-    "ops/tests/test_session_baton_promote_learned_section.py",
-    "ops/tests/test_sizing_accept_exit_criterion.py",
-    "ops/tests/test_sizing_citation_archive_fallback.py",
-    "ops/tests/test_sizing_decline.py",
-    "ops/tests/test_sizing_discharge_surfaced.py",
-    "ops/tests/test_sizing_record_pm_resolution.py",
-    "ops/tests/test_sizing_record_xl_exit.py",
-    "ops/tests/test_sizing_resize.py",
-    "ops/tests/test_sizing_ship.py",
-    "ops/tests/test_sizing_spike_verdict.py",
-    "ops/tests/test_strang10_invoke_smoke.py",
-    "ops/tests/test_supersede_archives_atomically.py",
-    "ops/tests/test_supersede_holderless_is_terminal_only.py",
-    "ops/tests/test_unclaim_parks_a_blocked_baton.py",
-    "ops/tests/test_unclaim_strips_mirror_names.py",
-    "ops/tests/test_unresolvable_blocker_id_is_not_a_none_state.py",
-    "ops/tests/test_updatedocs_gates.py",
-    "ops/tracker/tests/test_push_suggestion.py",
     "ops/updatedocs_gates.py",
     "ops/workday_complete_step2_5_dirty_tree.py",
     "ops/workday_stitch_sidecar_summary.py",
-    "ops/workflow_fire/tests/test_end_to_end_fire.py",
     "ops/workweek_trail_scope.py",
     "orient_brief/_health.py",
     "orient_brief/_work.py",
-    "orientation/test_expired_grant_signal.py",
     "pickup_assemble/__init__.py",
     "pickup_assemble/apply.py",
-    "pickup_assemble/tests/test_adjudicate_claimed_batons.py",
-    "pickup_assemble/tests/test_baton_unification.py",
-    "pickup_assemble/tests/test_baton_unification_decision.py",
-    "pickup_assemble/tests/test_brief_awaiting_gate_typed_fields.py",
-    "pickup_assemble/tests/test_brief_claim_lease.py",
-    "pickup_assemble/tests/test_brief_open_budget.py",
-    "pickup_assemble/tests/test_brief_supersession_gate.py",
-    "pickup_assemble/tests/test_claim_leg_threads_explicit_sid.py",
-    "pickup_assemble/tests/test_claim_rule.py",
-    "pickup_assemble/tests/test_claim_state_reads.py",
-    "pickup_assemble/tests/test_consumer_field_path_contract.py",
-    "pickup_assemble/tests/test_cross_repo_pickup_denied.py",
-    "pickup_assemble/tests/test_drop_abandoned_holder.py",
-    "pickup_assemble/tests/test_drop_holder_gate.py",
-    "pickup_assemble/tests/test_drop_holder_path_ordering.py",
-    "pickup_assemble/tests/test_drop_on_a_shipped_baton.py",
-    "pickup_assemble/tests/test_drop_stranded_claim.py",
-    "pickup_assemble/tests/test_emitted_directive_verbs_are_cli_verbs.py",
-    "pickup_assemble/tests/test_gate_check_blocked_by_resolution.py",
-    "pickup_assemble/tests/test_gate_check_shipped_blocker_evidence.py",
-    "pickup_assemble/tests/test_lineage_related_sessions_archived.py",
-    "pickup_assemble/tests/test_pickup_claim_stage_stamp_evidence.py",
-    "pickup_assemble/tests/test_read_only_invariant.py",
-    "pickup_assemble/tests/test_reportable_partition.py",
-    "pickup_assemble/tests/test_resolver_verdicts.py",
-    "pickup_assemble/tests/test_route_baton_adoption_never_unifies.py",
-    "pickup_assemble/tests/test_scoped_commit_carry_gate.py",
-    "pickup_assemble/tests/test_session_baton_adoption.py",
-    "pickup_assemble/tests/test_unification_raise_is_clean.py",
     "pickup_brief.py",
-    "plan_assemble/predicates/test_composition_lints.py",
-    "plan_assemble/predicates/test_exit_gates.py",
-    "plan_assemble/predicates/test_triage.py",
-    "plan_assemble/test_residue_admission.py",
     "plugin_health/__init__.py",
     "quick_wrap_assemble/__init__.py",
-    "quick_wrap_assemble/tests/test_c3_archived_baton.py",
-    "quick_wrap_assemble/tests/test_dispatch_sizing_ship.py",
-    "quick_wrap_assemble/tests/test_recovery_baton_is_chain_root.py",
     "reconcile/ac27_differential_oracle.py",
     "reconcile/commitments_recheck.py",
     "reconcile/handoff_corpus.py",
-    "reconcile/tests/test_ac27_differential_oracle.py",
-    "reconcile/tests/test_commitments_recheck.py",
-    "reconcile/tests/test_continuation_chain_collision.py",
-    "reconcile/tests/test_gate_eval.py",
-    "review_assemble/test_exec_auth_stamp.py",
-    "review_trail/tests/test_reviewed_set_equivalence.py",
     "roadmap/blitz_land.py",
     "roadmap/number_stubs.py",
     "roadmap/plan_gate.py",
     "roadmap/spine.py",
-    "roadmap/tests/test_audit.py",
-    "roadmap/tests/test_audit_sprint_scope.py",
-    "roadmap/tests/test_audit_write_set_disjointness.py",
-    "roadmap/tests/test_blitz_land.py",
-    "roadmap/tests/test_blitz_land_fire_hold.py",
-    "roadmap/tests/test_blitz_land_reconciles_sizing.py",
-    "roadmap/tests/test_blitz_land_resolves_an_archived_baton.py",
-    "roadmap/tests/test_blitz_land_shipped_in_reachability.py",
-    "roadmap/tests/test_blitz_stage.py",
-    "roadmap/tests/test_number_stubs.py",
-    "roadmap/tests/test_plan_gate.py",
-    "roadmap/tests/test_plan_gate_fire_in_flight_hold.py",
-    "roadmap/tests/test_post_stamp_clause.py",
-    "roadmap/tests/test_prep_gate.py",
-    "roadmap/tests/test_prep_gate_four_legs.py",
-    "roadmap/tests/test_prep_gate_placeholder.py",
-    "roadmap/tests/test_prep_gate_prime_exit_inherits.py",
-    "roadmap/tests/test_sized_requires_a_sizing_that_exists.py",
     "roadmap_planning_assemble/__init__.py",
-    "roadmap_planning_assemble/tests/test_roadmap_planning_assemble.py",
     "session/claim_neighbours.py",
     "session/claims.py",
     "session/session_facts.py",
-    "session/tests/test_artifact_owner.py",
-    "session/tests/test_claim_neighbours.py",
-    "session/tests/test_claim_plan_concurrent_executing_overlap.py",
-    "session/tests/test_claim_relinquishment.py",
-    "session/tests/test_claims.py",
-    "session/tests/test_no_untracked_relocation.py",
-    "session/tests/test_receiver_state.py",
-    "session/tests/test_record_homes.py",
-    "session/tests/test_session_facts.py",
-    "session/tests/test_stale_claims.py",
-    "session/tests/test_stale_claims_claim_state.py",
-    "session/tests/test_work_state.py",
-    "session_baton/tests/test_store.py",
-    "session_hierarchy/test_derive.py",
-    "session_hierarchy/tests/test_derive_claim_state.py",
     "session_ledger/aggregate_chain_loe.py",
-    "session_ledger/test_aggregate_chain_loe.py",
-    "session_ledger/test_closing_session.py",
-    "session_ledger/test_dispatch_fallback.py",
     "sizing_assemble/__init__.py",
-    "sizing_assemble/test_write_back.py",
-    "subagent_sandbox/tests/test_provision_report.py",
-    "test_archive_stamp.py",
-    "test_artifact_subject.py",
-    "test_backlog_grind_assemble.py",
-    "test_baton_assemble.py",
-    "test_claude_md_budget.py",
-    "test_handoff_creation_guard.py",
-    "test_pickup_apply.py",
-    "test_pickup_assemble.py",
-    "test_pickup_assemble_reply_closure.py",
-    "test_quick_wrap_assemble.py",
-    "test_sizing_assemble.py",
-    "test_wire_paths_separator.py",
-    "tests/_baton_dag_oracle.py",
-    "tests/guard_witnesses/write_advisory_a.py",
-    "tests/guard_witnesses/write_advisory_b.py",
-    "tests/guard_witnesses/write_hard_deny_a.py",
-    "tests/guard_witnesses/write_hard_deny_b.py",
-    "tests/oracles/test_archive_and_commit_spawn_floor.py",
-    "tests/test_archival.py",
-    "tests/test_archival_claimed_or_shipped.py",
-    "tests/test_archive_stamp_claim_atomicity.py",
-    "tests/test_archive_stamp_claimant_identity.py",
-    "tests/test_archive_stamp_human_claimant.py",
-    "tests/test_archive_stamp_ship_releases_claim.py",
-    "tests/test_assembler_cli_boundary_budget.py",
-    "tests/test_block_discharge.py",
-    "tests/test_budget_claims_name_their_instrument.py",
-    "tests/test_c6_pointer_normalization.py",
-    "tests/test_c6_pointer_normalization_claude_klabauter_corpus.py",
-    "tests/test_ceremony_brief_budget.py",
-    "tests/test_claim_ceremony_stamps_stable_pid.py",
-    "tests/test_claim_state_accessor.py",
-    "tests/test_commit_anchors.py",
-    "tests/test_coverage_bookkeeping_partition.py",
-    "tests/test_coverage_claim_resolution.py",
-    "tests/test_coverage_dag_archived_repo_root.py",
-    "tests/test_dag_git_history_tier_path_shapes.py",
-    "tests/test_dag_git_path_ever_tracked_cache.py",
-    "tests/test_dag_handoff_id_index.py",
-    "tests/test_dag_resolve_target_tier3_dedup.py",
-    "tests/test_dag_sha_shaped_ref_short_circuit.py",
-    "tests/test_deep_per_item_spawn_worklist.py",
-    "tests/test_docstring_shell_paste_hazard.py",
-    "tests/test_draft_plan_aging.py",
-    "tests/test_every_register_resolves_or_declares.py",
-    "tests/test_every_registered_guard_can_fail.py",
-    "tests/test_foreign_identity_subject_exemptions.py",
-    "tests/test_guard_enforcement_join_covers_every_registered_guard.py",
-    "tests/test_handoff_backfill_claim_stamp.py",
-    "tests/test_handoff_children.py",
-    "tests/test_handoff_gate_aging.py",
-    "tests/test_hooks_roundtrip.py",
-    "tests/test_hot_path_surface_test_target_guard.py",
-    "tests/test_install_chain_driven_leaf_seed_sweep.py",
-    "tests/test_ipc_scope_touch_self_report.py",
-    "tests/test_known_red_ratchet.py",
-    "tests/test_memo_corpus.py",
-    "tests/test_no_dangling_machinery_citations.py",
-    "tests/test_no_global_os_name_monkeypatch.py",
-    "tests/test_no_repo_building_conftest_tree_wide.py",
-    "tests/test_op_classification_manifest.py",
-    "tests/test_op_suspension_ratchet.py",
-    "tests/test_orient_brief_contract.py",
-    "tests/test_orient_brief_health.py",
-    "tests/test_orient_brief_work.py",
-    "tests/test_party_screen_audit_covers_every_registered_guard.py",
-    "tests/test_pickup_assemble_scoped_commit.py",
-    "tests/test_pickup_brief_import_closure.py",
-    "tests/test_pickup_brief_requirement.py",
-    "tests/test_repo_standing.py",
-    "tests/test_review_brightline_gate.py",
-    "tests/test_sibling_fact.py",
-    "tests/test_sizing_disposition.py",
-    "tests/test_stamp_verbs_stay_off_the_sweep.py",
-    "tests/test_strategic_emit.py",
-    "tests/test_strategic_generate.py",
-    "tests/test_test_red_record.py",
-    "tests/test_tracker_store.py",
-    "tests/test_warm_identity_env_reads.py",
-    "tests/test_writer_tail_claims_rest.py",
-    "text/test_query_record_display.py",
-    "text/test_refresh_queries.py",
     "updatedocs/plan_prune.py",
-    "updatedocs/tests/test_plan_prune.py",
-    "warm/tests/test_breadcrumb_and_spawn.py",
-    "warm/tests/test_warm_identity_fails_closed_at_mutating_sites.py",
-    "workday_complete/test_brief_completion_receipts.py",
     "workstream_complete/__init__.py",
     "workstream_complete/directives_commit_tail.py",
     "workstream_complete/directives_completion.py",
     "workstream_complete/directives_memo_lifecycle.py",
-    "workstream_complete/test_apply.py",
-    "workstream_complete/test_close_coverage_advisory.py",
-    "workstream_complete/test_directives_review_scale.py",
-    "workstream_complete/test_lesson_capture_reachable.py",
-    "workstream_complete/test_workstream_complete.py",
-    "workstream_complete/test_workstream_complete_contract.py",
-    "workstream_complete/tests/test_archival_collision_regression.py",
-    "workstream_complete/tests/test_close_disposes_non_shipped.py",
-    "workstream_complete/tests/test_close_ships_its_batons.py",
-    "workstream_complete/tests/test_close_ships_the_consumed_predecessor.py",
-    "workstream_complete/tests/test_directives_memo_lifecycle_scoped_dirty_check.py",
-    "workstream_complete/tests/test_review_receipt_gates_delivered_close.py",
     "write_guards/block_home_dir_memo_delivery.py",
     "write_guards/block_oss_mirror_memo_delivery.py",
     "write_guards/nudge_baton_body_bar.py",
     "write_guards/nudge_session_display_name_as_identifier.py",
     "write_guards/nudge_terminal_artifact_edit.py",
     "write_guards/nudge_unattributed_process_time_figure.py",
-    "write_guards/tests/test_ac5_flip_runtime_probes.py",
-    "write_guards/tests/test_block_consumed_handoff_edit.py",
-    "write_guards/tests/test_block_consumed_handoff_edit_claim_state.py",
-    "write_guards/tests/test_block_cutover_phase_hand_edit.py",
-    "write_guards/tests/test_block_hand_authored_handoff_creation.py",
-    "write_guards/tests/test_block_home_dir_memo_delivery.py",
-    "write_guards/tests/test_block_oss_mirror_memo_delivery.py",
-    "write_guards/tests/test_block_sizing_object_schema_violation.py",
-    "write_guards/tests/test_check_claude_md_size.py",
-    "write_guards/tests/test_deny_text_reachable_override.py",
-    "write_guards/tests/test_guard_concrete_path_citations.py",
-    "write_guards/tests/test_guard_memory_store_cap.py",
-    "write_guards/tests/test_no_retired_memo_invocation_offered.py",
-    "write_guards/tests/test_no_retired_memo_invocation_offered_claude_klabauter_corpus.py",
-    "write_guards/tests/test_nudge_baton_body_bar.py",
-    "write_guards/tests/test_nudge_dangling_sizing_citation.py",
-    "write_guards/tests/test_nudge_handoff_ac_shape.py",
-    "write_guards/tests/test_nudge_handoff_author_lint.py",
-    "write_guards/tests/test_nudge_improvement_queue_write.py",
-    "write_guards/tests/test_nudge_prose_queue_append.py",
-    "write_guards/tests/test_nudge_session_display_name_as_identifier.py",
-    "write_guards/tests/test_nudge_tasks_state_folder_split.py",
-    "write_guards/tests/test_nudge_terminal_artifact_edit.py",
-    "write_guards/tests/test_nudge_unattributed_process_time_figure.py",
-    "write_guards/tests/test_strict_dispatch_guard.py",
-    "write_guards/tests/test_validate_frontmatter_schema_advisory.py",
-    "write_guards/tests/test_validate_frontmatter_schema_deny.py",
-    "write_guards/tests/test_validate_frontmatter_schema_handoff_kind_advisory_and_coercion.py",
-    "write_guards/tests/test_windows_platform_simulation.py",
-    "write_guards/tests/test_writer_tail_claims_guards.py",
     "write_guards/validate_frontmatter_schema_advisory.py",
     "write_guards/validate_frontmatter_schema_deny.py",
 })
@@ -864,7 +243,44 @@ def _iter_py_files():
             fpath = os.path.join(dirpath, fn)
             if fpath in _EXCLUDED_FILES:
                 continue
+            rel = os.path.relpath(fpath, _REPO_ROOT).replace(os.sep, "/")
+            if _is_test_scaffolding(rel):
+                continue
             yield fpath
+
+
+def _declaration_lines(text: str) -> set[int]:
+    """0-based line indexes of every column-0 declaration statement; empty if `text` does not parse."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()
+    lines: set[int] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if any(isinstance(t, ast.Name) and t.id in DECLARATION_NAMES for t in targets):
+            lines.update(range(node.lineno - 1, node.end_lineno))
+    return lines
+
+
+def _holds_counted_literal(text: str) -> bool:
+    """True when `text` has a record-home literal outside a column-0 op declaration."""
+    if not _JOIN_PATTERN.search(text):
+        return False
+    if not any(name in text for name in DECLARATION_NAMES):
+        return True
+    blank = _declaration_lines(text)
+    if not blank:
+        return True
+    kept = "\n".join(
+        "" if i in blank else line for i, line in enumerate(text.split("\n"))
+    )
+    return bool(_JOIN_PATTERN.search(kept))
 
 
 @lru_cache(maxsize=1)
@@ -876,7 +292,7 @@ def _sites_with_literal():
                 text = fh.read()
         except OSError:
             continue
-        if _JOIN_PATTERN.search(text):
+        if _holds_counted_literal(text):
             rel = os.path.relpath(fpath, _SCAN_ROOT).replace(os.sep, "/")
             hits.add(rel)
     return frozenset(hits)
@@ -884,8 +300,9 @@ def _sites_with_literal():
 
 def test_no_new_hand_built_record_home_joins():
     """A literal at a file NOT in `_KNOWN_LITERAL_SITES` fails -- a new
-    hand-built `state/<kind>` join landing anywhere in `coordinator_core/`
-    (outside `record_homes.py`) is exactly what this guard exists to catch.
+    hand-built `state/<kind>` join landing anywhere in production code under
+    `coordinator_core/` (outside `record_homes.py`) is exactly what this guard
+    exists to catch.
     """
     hits = _sites_with_literal()
     unseeded = hits - _KNOWN_LITERAL_SITES
@@ -902,3 +319,22 @@ def test_seeded_sites_still_carry_a_literal():
         "seeded site(s) no longer carry a hand-built 'state/<kind>' "
         f"literal -- remove from _KNOWN_LITERAL_SITES: {sorted(stale)}"
     )
+
+
+def test_declaration_rule_counts_only_joins_outside_column_0_declarations():
+    single = 'MUTATES = ["state/handoffs/*.md"]\n'
+    spanning = 'GENERATES = [\n    "x",\n    "state/sizings/*.yaml",\n]\n'
+    annotated = 'MUTATES: list = ["state/goals/*.yaml"]\n'
+    for text in (single, spanning, annotated):
+        assert not _holds_counted_literal(text), text
+
+    join = 'p = root / "state" / "handoffs"\n'
+    for text in (single + join, spanning + join, annotated + join):
+        assert _holds_counted_literal(text), text
+
+    nested = 'if True:\n    MUTATES = ["state/handoffs/*.md"]\n'
+    assert _holds_counted_literal(nested)
+    in_function = 'def f():\n    GENERATES = ["state/handoffs/*.md"]\n'
+    assert _holds_counted_literal(in_function)
+
+    assert _holds_counted_literal('MUTATES = [\n  "state/handoffs/*.md"\n')

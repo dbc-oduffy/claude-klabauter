@@ -49,6 +49,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.mint_deliverable_id import mint_artifact_id
 from coordinator_core.roadmap.plan_gate import scan_batons
+from coordinator_core.session import record_homes
 
 MUTATES = ["state/handoffs/*.md"]
 
@@ -132,7 +133,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         orig_id = str(fm.get("handoff_id") or source["id"])
         title = str(params.get("title") or f"{fm.get('title') or orig_id} (gate-free part)")
         new_id = mint_artifact_id("hnd", _slug(title))
-        dest = worktree / "state" / "handoffs" / f"{today.isoformat()}-{_slug(title)}.md"
+        dest = Path(record_homes.home_dir(str(worktree), "handoffs")) / f"{today.isoformat()}-{_slug(title)}.md"
         if dest.exists():
             raise MutateAbort(f"destination already exists: {dest.name}")
 

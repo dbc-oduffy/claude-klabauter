@@ -20,9 +20,7 @@ const TRIAGE_NODE_ID = 'triage';
 
 const PLAN_WEIGHT_FLOOR_RANK = 2;
 
-const RESIZE_FIX_TARGET = "fix";
-
-const RESIZE_CLOSE_TARGET = "refute_close";
+const SIZE_FIX_TARGET = "fix";
 
 const _locked = new Set();
 const _waiters = [];
@@ -123,6 +121,17 @@ const PROFILE_DIR = args.profile_dir;
 
 const REPO_ROOT = args.repo_root;
 
+const _sizeAssembleCmd = (scouted, sizingPath) => '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/sizing-assemble"' + ' --tshirt ' + _shq(scouted.tshirt) + ' --intent ' + _shq(scouted.intent) + ' --name ' + _shq(scouted.name) + ' --premise-provenance ' + _shq(scouted.premise_provenance) + ' --premise-evidence ' + _shq(scouted.premise_evidence) + ' --exit-criterion ' + _shq(scouted.exit_criterion) + (scouted.jtbd_unclear === true ? ' --jtbd-unclear' : '') + (scouted.well_trodden_step_change === true ? ' --well-trodden-step-change' : '') + ' --no-verbatims --intent-source em-elaborated' + ' --write ' + _shq(REPO_ROOT + '/' + sizingPath) + ' ' + '--no-plan-hand-off';
+const _sizeMarkCmd = (row, sizingPath) => '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row append' + ' --profile ' + _shq(PROFILE_NAME) + ' --row-id ' + _shq(row.row_id) + ' --digest ' + _shq(row.digest) + ' --stage size --verdict sized' + ' --outcome route-to-plan --evidence-file ' + _shq(sizingPath) + ' --run-stamp ' + _shq(RUN_ID) + ' --repo-root ' + _shq(REPO_ROOT);
+const _sizeBatonCmd = (sizingPath) => '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new" --type spinoff --from-sizing ' + _shq(sizingPath);
+const _sizeChainCmd = (scouted, row, sizingPath) => 'cd ' + _shq(REPO_ROOT) + ' && ' + _sizeAssembleCmd(scouted, sizingPath) + ' && ' + _sizeBatonCmd(sizingPath) + ' && ' + _sizeMarkCmd(row, sizingPath);
+
+function _slug(text) { return String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''); }
+function _sizingPath(scouted, rowId) {
+  const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);
+  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + '-' + (_slug(scouted.name) || 'sizing') + '-' + (_slug(rowId) || 'row') + '.yaml';
+}
+
 const SWEEP_HINT = ' -- settle ledgers with `' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row sweep --profile-dir ' + _shq(PROFILE_DIR) + ' --profile fixture --queue state/bug-backlog --repo-root ' + _shq(REPO_ROOT) + '`; never commit them';
 
 const APPETITE_NAME = 'standard';
@@ -150,6 +159,9 @@ const _handedBack = [];
 const _settled = [];
 
 const _byRefuteOrigin = {};
+
+const _byTriageCheck = { triaged: 0, triage_handback: 0, size_confirmed: 0, size_collapsed: 0, fix_needs_plan: 0, fix_not_reproduced: 0, fix_late_tradeoff: 0 };
+const _sizePending = [];
 
 function _bumpRefuteOrigin(origin, key) {
   if (!_byRefuteOrigin[origin]) { _byRefuteOrigin[origin] = { confirmed: 0, refuted: 0 }; }
@@ -179,14 +191,16 @@ async function _triageCall(batchId, batchKey, rowIds) {
     return { rows: _result.rows || [], stale: _result.stale || [] };
 }
 
-async function _resizeCall(rowIds) {
-  const rowsData = rowIds.map((r) => {
-    const row = _rows[r];
-    return { row_id: r, path: row.path, digest: row.digest };
-  });
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the resize stage. This batch\'s rows were routed to a hand-back on size alone before you were asked. Your rows (row_id/path/digest) are: ' + (JSON.stringify(rowsData)) + '. You are read-only: you do not fix, close, or stage anything yourself. For each row, decide exactly one answer from this list, verbatim, and no other value: [\'plan-weight\', \'focused-fix\', \'not-reproduced\']. `plan-weight` means the row genuinely needs a plan before it can proceed -- state the design question that plan must answer in `design_question`. `focused-fix` means it fits a normal fix after all. `not-reproduced` means the defect is not reproduced. As you decide each row, run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row append --profile fixture --row-id <its row_id> --digest <its digest> --stage triage --verdict resize --outcome <the verdict named below for your answer> --evidence-file ' + 'state/queue-grind/fixture/evidence/' + (RUN_ID) + '/' + '<its row_id>' + '.verify.md' + '. Write that file before the command; if a stage already wrote it, append a section headed with your stage name and never truncate it. Then pass --run-stamp ' + (RUN_ID) + ' --repo-root ' + (_shq(REPO_ROOT)) + '` immediately. `plan-weight` also writes `--outcome confirmed-bug` (the row\'s underlying verdict is unchanged -- only the routing decision differs); `focused-fix` writes `--outcome confirmed-bug`; `not-reproduced` writes `--outcome not-reproduced`. If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'resize', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'medium', schema: {"properties": {"answers": {"items": {"properties": {"answer": {"enum": ["plan-weight", "focused-fix", "not-reproduced"], "type": "string"}, "design_question": {"type": "string"}, "row": {"description": "the row_id exactly as given above, never the row's path", "type": "string"}}, "required": ["row", "answer"], "type": "object"}, "type": "array"}}, "required": ["answers"], "type": "object"} })) || {};
-    _recordCall('resize');
-    return _result.answers || [];
+async function _sizeCall(row) {
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Size the work of resolving one backlog row, afresh, judging only: write no file and run no sizing-assemble. "The ask" is resolving this one row. The row (row_id/path/digest) is: ' + (JSON.stringify({ row_id: row.rowId, path: row.path, digest: row.digest })) + '. Triage\'s evidence on it: ' + (row.evidence) + '. Triage\'s fix plan: ' + (row.fixPlan) + '. Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` the repo-relative files the ask will create, edit or delete -- every file the ask names, plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), and well_trodden_step_change true only when the ask proposes a new direction on ground recently built (it also routes the ask to shaping, a PM conversation). An ask that continues a workstream an existing sizing, plan, ruling or baton already scoped is not a step change, however much it rebuilds. Return as `gated` every deliverable the ask declares as owned by another repo or blocked on an external gate (title, owner_repo, requires): never fold one into `writes` and never omit one. Name the row\'s path in premise_evidence, so the sizing records the row it came from. If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'size', phase: 'Grind', agentType: 'coordinator:sizing-scout', model: 'sonnet', effort: 'medium', schema: {"properties": {"exit_criterion": {"type": "string"}, "gated": {"items": {"properties": {"owner_repo": {"type": "string"}, "requires": {"type": "string"}, "title": {"type": "string"}}, "required": ["title", "owner_repo"], "type": "object"}, "type": "array"}, "intent": {"type": "string"}, "jtbd_unclear": {"type": "boolean"}, "name": {"type": "string"}, "premise_evidence": {"type": "string"}, "premise_provenance": {"enum": ["executed", "read", "not-applicable"], "type": "string"}, "tshirt": {"enum": ["XS", "S", "M", "L", "XL", "XXL"], "type": "string"}, "well_trodden_step_change": {"type": "boolean"}, "writes": {"items": {"type": "string"}, "type": "array"}}, "required": ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"], "type": "object"} })) || {};
+    _recordCall('size');
+    return _result;
+}
+
+async function _sizeAssembleCall(commands) {
+    const _result = (await agent('Run each command in this JSON array of {row, command}, exactly as written, one Bash call each, in order, without editing, retrying or repairing any: ' + (JSON.stringify(commands)) + '. Return for each its row, exit code and stdout verbatim. You do not stage or commit anything. Only the committer stage does that.', { label: 'size-assemble', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'sonnet', effort: 'low', schema: {"properties": {"results": {"items": {"properties": {"exit_code": {"type": "integer"}, "row": {"type": "string"}, "stderr": {"type": "string"}, "stdout": {"type": "string"}}, "required": ["row", "exit_code", "stdout"], "type": "object"}, "type": "array"}}, "required": ["results"], "type": "object"} })) || {};
+    _recordCall('size-assemble');
+    return _result.results || [];
 }
 
 async function _closeCall(proposals) {
@@ -232,7 +246,7 @@ function _counts() {
   for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }
   const by_outcome = {};
   for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }
-  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin };
+  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };
 }
 function _spend() {
   return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };
@@ -262,7 +276,7 @@ async function _triageBatch(batchState) {
   const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);
   batchState.triaged = true;
   const _seen = new Set();
-  const _toResize = [];
+  const _toSize = [];
   for (const rec of (_out.rows || [])) {
     const recRow = _normalizeRowRef(rowsMeta, rec.row);
     if (!batch.rows.includes(recRow)) continue;
@@ -272,10 +286,12 @@ async function _triageBatch(batchState) {
     row.evidence = rec.evidence || '';
     row.fixPlan = rec.fix_plan || '';
     if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }
+    _byTriageCheck.triaged += 1;
     row.origin = `triage:${rec.verdict}`;
     const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';
     const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);
-    if (route.kind === 'handback' && route.value === 'baton') { _toResize.push(recRow); continue; }
+    if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }
+    if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }
     applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);
   }
   for (const staleRef of (_out.stale || [])) {
@@ -293,25 +309,30 @@ async function _triageBatch(batchState) {
       _handBack(r, 'stage-dead', 'triage never returned a record for this row');
     }
   }
-  if (_toResize.length) {
-    const _answers = await _resizeCall(_toResize);
-    const _byRow = {};
-    for (const a of _answers) { _byRow[a.row] = a; }
-    for (const rid of _toResize) {
-      const row = _rows[rid];
-      const a = _byRow[rid];
-      const answer = a && a.answer;
-      if (answer === 'focused-fix' && RESIZE_FIX_TARGET && ROUTING[RESIZE_FIX_TARGET]) {
-        row.origin = 'resize:focused-fix';
-        row.node = RESIZE_FIX_TARGET;
-      } else if (answer === 'not-reproduced' && RESIZE_CLOSE_TARGET && ROUTING[RESIZE_CLOSE_TARGET]) {
-        row.origin = 'resize:not-reproduced';
-        row.node = RESIZE_CLOSE_TARGET;
-      } else {
-        row.done = true;
-        _handBack(rid, 'baton', (a && a.design_question) || 'resize confirmed plan-weight');
-      }
+  for (const rid of _toSize) {
+    const row = _rows[rid];
+    const scouted = await _sizeCall(row);
+    if (!scouted.tshirt) {
+      row.done = true;
+      _handBack(rid, 'baton', 'size scout returned no size' + (scouted.reason ? ': ' + scouted.reason : ''));
+      continue;
     }
+    const _belowFloor = _tshirtRank(scouted.tshirt) < PLAN_WEIGHT_FLOOR_RANK;
+    if (_belowFloor && SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET]) {
+      _byTriageCheck.size_collapsed += 1;
+      row.origin = 'size:below-plan-weight';
+      row.node = SIZE_FIX_TARGET;
+      continue;
+    }
+    if (!_belowFloor) { _byTriageCheck.size_confirmed += 1; }
+    row.done = true;
+    const _sizingRel = _sizingPath(scouted, rid);
+    _sizePending.push({
+      rid,
+      path: _sizingRel,
+      intent: scouted.intent || '',
+      command: _sizeChainCmd(scouted, { row_id: rid, path: row.path, digest: row.digest }, _sizingRel),
+    });
   }
 }
 
@@ -384,8 +405,8 @@ async function _fixStage(rowId) {
     row.touchedFiles = row.touchedFiles.concat([_archived]);
     row.closeResult = { old: row.path, new: _archived };
   }
-  if (tradeoff) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }
-  if (outcome === 'NEEDS_PLAN') { row.done = true; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }
+  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }
+  if (outcome === 'NEEDS_PLAN') { row.done = true; _byTriageCheck.fix_needs_plan += 1; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }
   if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }
   if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }
   if (outcome === 'NEEDS_WIDER_SCOPE') {
@@ -394,6 +415,7 @@ async function _fixStage(rowId) {
   }
   const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));
   if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }
+  if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }
   row.fixNode = _priorNode;
   applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);
 }
@@ -492,6 +514,20 @@ async function runGrind() {
   }
   if (_exhausted) {
     for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) _handBack(r, 'budget-exhausted', 'emit-admitted row; runtime ceiling reached (per-row cost above the measured admission cost, or runtime budget bound)'); }
+  }
+  if (_sizePending.length) {
+    const _commands = _sizePending.map((p) => ({ row: p.rid, command: p.command }));
+    const _byRow = {};
+    try {
+      for (const r of (await _sizeAssembleCall(_commands))) { _byRow[r.row] = r; }
+    } catch (err) {
+      for (const p of _sizePending) { _byRow[p.rid] = { exit_code: `assemble call threw: ${err && err.message ? err.message : String(err)}` }; }
+    }
+    for (const p of _sizePending) {
+      const r = _byRow[p.rid];
+      if (r && r.exit_code === 0) { _handBack(p.rid, 'baton', 'sized at ' + p.path + ': ' + p.intent); }
+      else { _handBack(p.rid, 'baton', p.intent + ' (size step failed: exit ' + (r ? r.exit_code : 'missing') + ')'); }
+    }
   }
   await _drainSweep();
 }

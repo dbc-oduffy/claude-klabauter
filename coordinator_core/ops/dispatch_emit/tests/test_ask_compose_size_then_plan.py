@@ -59,6 +59,10 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
     assert SIZING_SCOUT_AGENT_TYPE not in load_policy().report_sidecar
 
 
+def test_sizing_path_prefix_is_emitted_verbatim():
+    assert "const _sizingPath = 'state/sizings/' + " in _compose()
+
+
 def test_scout_jtbd_flags_reach_the_assemble_command():
     cmd = next(ln for ln in _compose().splitlines() if "const _assembleCmd" in ln)
     assert "_scouted.jtbd_unclear === true ? ' --jtbd-unclear'" in cmd

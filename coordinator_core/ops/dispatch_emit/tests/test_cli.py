@@ -59,6 +59,52 @@ def test_queue_route_defaults_repo_root_from_cwd(tmp_path, monkeypatch):
     assert out_path.is_file()
 
 
+def _stage_model_argv(tmp_path, monkeypatch, *flags):
+    repo_root, queue_dir = _queue_fixture(tmp_path)
+    monkeypatch.chdir(repo_root)
+    return [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--out", str(repo_root / "state" / "queue-grind" / "out.workflow.mjs"),
+        *flags,
+    ]
+
+
+def test_stage_model_flag_reaches_the_op_params(tmp_path, monkeypatch):
+    seen = {}
+    real = cli_module._dispatch_emit
+
+    def spy(params, *a, **kw):
+        seen.update(params)
+        return real(params, *a, **kw)
+
+    monkeypatch.setattr(cli_module, "_dispatch_emit", spy)
+    argv = _stage_model_argv(tmp_path, monkeypatch, "--stage-model", "triage=haiku")
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    assert seen["stage_models"] == {"triage": "haiku"}
+
+
+@pytest.mark.parametrize("value", ["triage", "=haiku", "triage="])
+def test_malformed_stage_model_is_usage_error(tmp_path, monkeypatch, capsys, value):
+    argv = _stage_model_argv(tmp_path, monkeypatch, "--stage-model", value)
+    assert cli_module.main(argv) == cli_module.EXIT_USAGE
+    assert value in capsys.readouterr().err
+
+
+def test_unknown_stage_model_key_is_refused_naming_the_key(tmp_path, monkeypatch, capsys):
+    argv = _stage_model_argv(tmp_path, monkeypatch, "--stage-model", "bogus=haiku")
+    assert cli_module.main(argv) != cli_module.EXIT_OK
+    assert "bogus" in capsys.readouterr().err
+
+
+def test_stage_model_off_the_queue_route_is_usage_error(tmp_path):
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text("# a plan\n", encoding="utf-8")
+    argv = ["--plan", str(plan_path), "--out", str(tmp_path / "o.workflow.mjs"), "--stage-model", "triage=haiku"]
+    assert cli_module.main(argv) == cli_module.EXIT_USAGE
+
+
 def test_queue_route_without_repo_root_and_no_git_ancestor_still_refuses(tmp_path, monkeypatch):
     """No ``.git`` ancestor from cwd: the pre-existing ``QueueRootMissingError``
     refusal is unchanged -- the default never invents a root."""

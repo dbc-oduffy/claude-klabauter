@@ -123,6 +123,7 @@ def _reemit_argv(
     profile_dir: Path,
     queue: Sequence[Path],
     overrides: Optional[Mapping[str, Any]],
+    stage_models: Optional[Mapping[str, str]] = None,
 ) -> list:
     argv: list = [
         "emit-dispatch-workflow.py",
@@ -139,6 +140,8 @@ def _reemit_argv(
         argv += ["--limit", str(overrides["limit"])]
     if "budget_tokens" in overrides:
         argv += ["--budget-tokens", str(overrides["budget_tokens"])]
+    for kind, model in sorted((stage_models or {}).items()):
+        argv += ["--stage-model", f"{kind}={model}"]
     return argv
 
 
@@ -157,6 +160,7 @@ def emit_queue_script(
     commit_trailers: Sequence[str] = (),
     review_roster_fragment: Optional[dict] = None,
     review_stage_schemas: Optional[dict] = None,
+    stage_models: Optional[Mapping[str, str]] = None,
 ) -> QueueEmission:
     """Both review kwargs thread to compose_grind_script; either being None
     raises NoReviewStageError."""
@@ -224,6 +228,7 @@ def emit_queue_script(
         review_stage_schemas=review_stage_schemas,
         review_run_base_sha=head_sha(repo_root) or "",
         queue_dirs=[Path(os.path.relpath(q, repo_root)).as_posix() for q in guarded_queue_dirs],
+        stage_models=stage_models,
     )
 
     profile_digest = hashlib.sha256(loaded_profile.source_path.read_bytes()).hexdigest()
@@ -246,7 +251,7 @@ def emit_queue_script(
         "unselected": {"count": len(manifest.unselected), "row_ids": list(manifest.unselected)},
         NOT_ADMITTED_EXTRA_KEY: receipt_block(admission),
         "source": source_extra,
-        "reemit": _reemit_argv(profile, appetite, Path(profile_dir), queue, overrides),
+        "reemit": _reemit_argv(profile, appetite, Path(profile_dir), queue, overrides, stage_models),
     }
 
     refuse_colliding_receipt_extras(receipt_extras)

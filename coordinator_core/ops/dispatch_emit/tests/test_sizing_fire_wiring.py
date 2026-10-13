@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import types
 from pathlib import Path
@@ -61,6 +62,8 @@ def test_raw_ask_composes_and_writes_to_the_default_run_path(env):
     assert out == env.root / RUN_DIR_ROOT / f"{reply['run_id']}.workflow.mjs"
     assert out.read_text(encoding="utf-8") == "// ask script\n"
     assert reply["receipt"] and Path(reply["receipt"]).is_file()
+    token = reply["fire_args"].pop("runToken")
+    assert re.fullmatch(r"[0-9a-f]{32}", token)
     assert reply["fire_args"] == {"repoRoot": env.root.as_posix()}
     assert "arm" not in reply
 

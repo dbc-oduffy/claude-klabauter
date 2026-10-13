@@ -249,6 +249,7 @@ def _expected_signature() -> inspect.Signature:
         commit_trailers: Sequence[str] = (),
         review_roster_fragment: Optional[dict] = None,
         review_stage_schemas: Optional[dict] = None,
+        stage_models: Optional[Mapping[str, str]] = None,
     ) -> QueueEmission: ...
 
     return inspect.signature(emit_queue_script)
@@ -534,6 +535,44 @@ def test_cli_where_without_queue_route_is_exit_usage(tmp_path):
         "--where", '{"a": 1}',
     ]
     assert cli_module.main(argv) == cli_module.EXIT_USAGE
+
+
+def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = _emit(tmp_path / "a")
+    haiku = _emit(tmp_path / "b", stage_models={"triage": "haiku"})
+    assert haiku.script.count("model: 'haiku'") == 1
+    assert "model: 'haiku'" not in plain.script
+    argv = haiku.receipt_extras["reemit"]
+    assert argv[argv.index("--stage-model") + 1] == "triage=haiku"
+    assert "--stage-model" not in plain.receipt_extras["reemit"]
+
+
+def test_stage_models_absent_script_is_unchanged(tmp_path):
+    for name in "abc":
+        (tmp_path / name).mkdir()
+    a = _emit(tmp_path / "a")
+    b = _emit(tmp_path / "b", stage_models=None)
+    c = _emit(tmp_path / "c", stage_models={})
+    assert a.script == b.script == c.script
+
+
+@pytest.mark.parametrize("bad", [{"nope": "haiku"}, {"triage": "ha iku"}, {"triage": "-x"}])
+def test_op_refuses_bad_stage_models_before_writing(tmp_path, bad):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
+    out = tmp_path / "queue-grind" / "emitted.mjs"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    params = {
+        "queue": [str(queue_dir)], "profile": "fixture",
+        "profile_dir": str(_FIXTURE_PROFILE_DIR), "output_path": str(out),
+        "stage_models": bad,
+    }
+    with pytest.raises(ValueError) as exc:
+        _dispatch_emit(params, repo_root=repo_root)
+    offender = next(iter(bad)) if next(iter(bad)) not in {"triage"} else next(iter(bad.values()))
+    assert offender in str(exc.value)
+    assert not out.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -439,6 +439,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "machine-local dispatch.box_terms_path)",
     )
     parser.add_argument(
+        "--stage-model",
+        action="append",
+        default=None,
+        metavar="KIND=MODEL",
+        help="run one grind stage on a different model (repeatable; queue route), "
+        "e.g. triage=haiku",
+    )
+    parser.add_argument(
         "--preamble",
         dest="preamble_path",
         default=None,
@@ -1373,6 +1381,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 ("--where-file", args.where_file),
                 ("--limit", args.limit),
                 ("--budget-tokens", args.budget_tokens),
+                ("--stage-model", args.stage_model),
             )
             if value
         ]
@@ -1661,6 +1670,19 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_USAGE
+
+        stage_models: dict = {}
+        for item in args.stage_model or ():
+            kind, sep, model = item.partition("=")
+            if not sep or not kind.strip() or not model.strip():
+                print(
+                    f"emit-dispatch-workflow: ERROR — --stage-model {item!r} is not KIND=MODEL",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            stage_models[kind.strip()] = model.strip()
+        if stage_models:
+            params["stage_models"] = stage_models
 
         overrides: dict = {}
         if where is not None:

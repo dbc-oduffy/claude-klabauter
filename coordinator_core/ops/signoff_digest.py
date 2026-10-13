@@ -23,6 +23,7 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import signoff_provenance as sp
+from coordinator_core.session import record_homes
 
 _PREFILTER = re.compile(r"pm_approved|approved|accepted|execution_authorized_by")
 _FILE_DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
@@ -138,7 +139,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     out: dict[str, Any] = {b: [] for b in _BUCKETS}
     iso = since.isoformat()
     _scan(repo_root, "docs/plans", "*.md", iso, _plan_signoffs, out)
-    _scan(repo_root, "state/sizings", "*.yaml", iso, _sizing_signoffs, out)
+    _scan(repo_root, Path(record_homes.home_dir(".", "sizings")).as_posix(), "*.yaml", iso, _sizing_signoffs, out)
     return {
         "exit_code": 0,
         "since": iso,

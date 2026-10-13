@@ -1388,15 +1388,18 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
         return {"plan_status": "not-stamped", "plan_status_reason": "criterion observation is empty"}
     source = criterion.get("sidecar") or "the run's criterion leg"
     err = io.StringIO()
+    recorded = isinstance(fm, dict) and fm.get("exit_criterion_met") is not None
+    record = (
+        {}
+        if recorded
+        else {
+            "falsifier_verdict": "pass",
+            "falsifier_output": observation[:_FALSIFIER_OUTPUT_MAX],
+            "prose": f"criterion met at {sha} per {source}",
+        }
+    )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-        rc = cs_stamp_plan_implemented(
-            str(plan_abs),
-            falsifier_verdict="pass",
-            falsifier_output=observation[:_FALSIFIER_OUTPUT_MAX],
-            prose=f"criterion met at {sha} per {source}",
-            refuse_open_spine_rows=True,
-            commit=False,
-        )
+        rc = cs_stamp_plan_implemented(str(plan_abs), **record, refuse_open_spine_rows=True, commit=False)
     if rc != 0:
         reason = err.getvalue().strip()[-600:]
         return {"plan_status": "refused", "plan_status_refusal": reason, "plan_status_reason": reason}

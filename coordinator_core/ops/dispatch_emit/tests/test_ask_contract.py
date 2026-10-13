@@ -93,3 +93,26 @@ def test_record_dir_unsafe_run_id_raises(tmp_path):
     for bad in ("..", "a/b", ""):
         with pytest.raises(ValueError):
             c.record_dir(tmp_path, bad)
+
+
+def test_scout_and_assemble_schema_required_fields():
+    assert set(c.SCOUT_SCHEMA["required"]) == {
+        "tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes",
+    }
+    assert set(c.ASSEMBLE_SCHEMA["required"]) == {"exit_code", "stdout"}
+
+
+def test_shim_commands_name_settings_home():
+    for cmd, tail in (
+        (c.SIZING_ASSEMBLE_CMD, '/bin/sizing-assemble"'),
+        (c.DOC_NEW_CMD, '/bin/coordinator-doc-new"'),
+    ):
+        assert cmd.endswith(tail)
+        assert "COORDINATOR_SETTINGS_HOME" in cmd
+
+
+def test_scout_return_clause_names_every_required_field():
+    for field in c.SCOUT_SCHEMA["required"]:
+        assert field in c.SCOUT_RETURN_CLAUSE
+    assert c.SCOUT_RETURN_CLAUSE.startswith("Return its inputs:")
+    assert c.SCOUT_RETURN_CLAUSE.endswith("never omit one.")

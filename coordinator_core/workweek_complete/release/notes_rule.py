@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.workweek_complete.release.contract import (
     RuleResult,
     last_ledger_row,
@@ -57,7 +58,7 @@ def evaluate(
     ledger_rows: Sequence[object],
 ) -> RuleResult:
     root = Path(repo_root)
-    pending = sorted((root / "state" / "week-changelog").glob(PENDING_GLOB), key=lambda p: p.name)
+    pending = sorted(Path(home_dir(str(root), "week-changelog")).glob(PENDING_GLOB), key=lambda p: p.name)
     if not pending:
         return _miss("notes-missing")
     notes = pending[-1]

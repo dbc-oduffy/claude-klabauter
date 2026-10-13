@@ -23,6 +23,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
 )
+from coordinator_core.session import record_homes
 
 REGISTER_KEY = "requirement_register"
 SOURCES_KEY = "sources"
@@ -618,7 +619,8 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
     """Stale rows, stuck plans and unclaimed rows. Zero-spawn and read-only: one byte read per
     sizing, one parse per register-bearing sizing, plans read only when such a sizing exists."""
     root = Path(repo_root)
-    sizings_dir = root / "state" / "sizings"
+    sizings_dir = Path(record_homes.home_dir(str(root), "sizings"))
+    sizings_rel = Path(record_homes.home_dir(".", "sizings")).as_posix()
     bearing: dict[str, Register] = {}
     try:
         names = sorted(n for n in os.listdir(sizings_dir) if n.endswith(".yaml"))
@@ -634,7 +636,7 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
             continue
         register = read_register(data.decode("utf-8", "replace"))
         if register is not None:
-            bearing[f"state/sizings/{name}"] = register
+            bearing[f"{sizings_rel}/{name}"] = register
     if not bearing:
         return StallReport()
 

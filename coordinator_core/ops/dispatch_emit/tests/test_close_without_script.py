@@ -325,7 +325,7 @@ def test_review_record_that_disagrees_with_the_verdict_refuses_the_stamp(env, mo
     assert out["review_stamp"] == "refused"
     assert "not_met" in out["review_stamp_refusal"] and "met" in out["review_stamp_refusal"]
     assert out["criterion_status"] == "not_met" and env.plan()["status"] == "executing"
-    assert env.entries() == [] and written == ["not_met"]
+    assert env.entries() == [] and written == []
 
 
 def _rejudge_record(env, criterion):
@@ -552,3 +552,117 @@ def test_waived_not_met_and_attested_indeterminate_are_not_mismatches(env, monke
 
     assert attested["review_stamp"] == "minted" and attested["criterion_status"] == "indeterminate"
     assert attested["stamp_criterion_status"] == "met"
+
+
+def _stamped_not_implemented(env) -> dict:
+    """Close once, then leave the plan `executing` with its minted stamp uncommitted, as a re-stamped plan sits."""
+    env.new_record()
+    env.call()
+    text = (env.repo / PLAN).read_text(encoding="utf-8")
+    assert "status: implemented" in text
+    env.git("reset", "--hard", "HEAD~1")
+    (env.repo / PLAN).write_text(text.replace("status: implemented", "status: executing", 1), encoding="utf-8")
+    env.set_record(legs={**env.record()["legs"], "review": {"status": "failed", "detail": "x"}})
+    return env.plan()["review_stamp"]
+
+
+def _forbid_mint(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("a kept stamp is never re-minted")
+
+    monkeypatch.setattr(terminal_commit, "_mint_review_stamp", refuse)
+
+
+def test_valid_stamp_is_kept_and_committed_whatever_the_review_record_says_of_build_test(env, monkeypatch):
+    stamp = _stamped_not_implemented(env)
+    env.edit_review(lambda data: data.update(build_test={"verdict": "fail"}))
+    _forbid_mint(monkeypatch)
+    before = int(env.git("rev-list", "--count", "HEAD"))
+
+    out = env.call()
+
+    assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented"
+    assert int(env.git("rev-list", "--count", "HEAD")) == before + 1
+    assert PLAN in env.git("show", "--name-only", "--format=", out["sha"]).split()
+    committed = yaml.safe_load(split_frontmatter(env.git("show", f"HEAD:{PLAN}")).fm_text)
+    assert committed["status"] == "implemented" and committed["review_stamp"] == stamp
+    assert _status(env, PLAN) == ""
+    assert not {"completion-entry", "review", "plan-reconciliation"} & set(out["close"]["outstanding"])
+
+
+def test_kept_stamp_runs_the_close_legs_as_a_fresh_mint_does(env, monkeypatch):
+    env.new_record()
+    fresh = env.call()
+    env.set_record(legs={**env.record()["legs"], "review": {"status": "failed", "detail": "x"}})
+    text = (env.repo / PLAN).read_text(encoding="utf-8")
+    (env.repo / PLAN).write_text(text.replace("status: implemented", "status: executing", 1), encoding="utf-8")
+    _forbid_mint(monkeypatch)
+
+    kept = env.call()
+
+    assert kept["close"]["outstanding"] == fresh["close"]["outstanding"]
+    assert kept["close"]["legs"]["completion-entry"]["status"] == fresh["close"]["legs"]["completion-entry"]["status"]
+    assert len(env.launches) == 2
+
+
+@pytest.mark.parametrize("field", ["terminal_commit_sha", "terminal_tree_sha"])
+def test_stamp_for_another_commit_or_tree_is_not_kept_and_the_refused_mint_lands_nothing(env, field):
+    _stamped_not_implemented(env)
+    text = (env.repo / PLAN).read_text(encoding="utf-8")
+    current = env.plan()["review_stamp"][field]
+    (env.repo / PLAN).write_text(text.replace(current, "b" * 40, 1), encoding="utf-8")
+    env.edit_review(lambda data: data.update(plan_id="pln-other-000000"))
+    head, count, status = env.git("rev-parse", "HEAD"), env.git("rev-list", "--count", "HEAD"), env.git("status", "--porcelain")
+
+    out = env.call()
+
+    assert out["review_stamp"] == "refused" and out["committed"] is False
+    assert env.git("rev-parse", "HEAD") == head and env.git("rev-list", "--count", "HEAD") == count
+    assert env.git("status", "--porcelain") == status
+
+
+def test_refused_mint_lands_no_commit_and_leaves_no_entry_or_register_row(env):
+    env.new_record()
+    env.edit_review(lambda data: data.update(plan_id="pln-other-000000"))
+    head, status = env.git("rev-parse", "HEAD"), env.git("status", "--porcelain")
+
+    out = env.call()
+
+    assert out["review_stamp"] == "refused" and out["committed"] is False
+    assert env.git("rev-parse", "HEAD") == head and env.git("status", "--porcelain") == status
+    assert env.entries() == [] and "register_sizing" not in out
+
+
+def test_kept_stamp_with_a_broken_falsifier_withholds_the_flip(env, monkeypatch):
+    env.new_record(falsifier=[])
+    env.call()
+    _forbid_mint(monkeypatch)
+
+    out = env.call()
+
+    assert out["review_stamp"] == "minted" and out["plan_status"] == "not-stamped"
+    assert "BROKEN" in out["plan_status_reason"] and env.plan()["status"] == "executing"
+
+
+def test_kept_stamp_with_an_unknown_falsifier_mark_withholds_the_flip(env, monkeypatch):
+    env.call()
+    _forbid_mint(monkeypatch)
+
+    out = env.call()
+
+    assert out["review_stamp"] == "minted" and out["plan_status"] == "not-stamped"
+    assert "task_output_path" in out["plan_status_reason"] and env.plan()["status"] == "executing"
+
+
+def test_kept_stamp_with_a_register_failure_withholds_the_flip(env, monkeypatch):
+    env.new_record()
+    env.call()
+    text = (env.repo / PLAN).read_text(encoding="utf-8")
+    (env.repo / PLAN).write_text(text.replace("status: implemented", "status: executing", 1), encoding="utf-8")
+    _forbid_mint(monkeypatch)
+    monkeypatch.setattr(terminal_commit, "_register_gate", lambda root, plan, inline: "register row R1: not wired")
+
+    out = env.call()
+
+    assert out["plan_status"] == "not-stamped" and out["plan_status_reason"] == "register row R1: not wired"
+    assert env.plan()["status"] == "executing"

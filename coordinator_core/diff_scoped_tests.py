@@ -42,6 +42,11 @@ anti-scope to fix, in a brand new module instead of an existing one --
 there is no reason to mint a second copy when the existing in-process
 import path already reaches both callers.
 
+Standing-guard leg: ``STANDING_GUARDS`` pairs a source prefix with a guard
+test that no source-to-test convention reaches; a changed source file under
+the prefix adds that test to the returned paths when the file exists under
+the repo root. It never changes ``fully_mapped``.
+
 Negative-spec (anti-scope, do not build any of this here):
   - Does NOT add a hook or a ``coordinator.local.md`` config key for the
     source-to-test mapping leg -- ``coordinator_core.source_test_map`` is a
@@ -66,6 +71,20 @@ from typing import Optional, Sequence
 
 
 _TEST_FILE_RE = re.compile(r"^test_.*\.py$")
+
+# (repo-relative POSIX source prefix, repo-relative POSIX test file): a guard
+# no source-to-test convention maps, selected whenever a changed source file
+# starts with the prefix.
+STANDING_GUARDS: tuple = (
+    (
+        "coordinator_core/",
+        "coordinator_core/session/tests/test_no_hand_built_record_home_joins.py",
+    ),
+    (
+        "coordinator_core/",
+        "coordinator_core/session/tests/test_no_hand_built_machinery_joins.py",
+    ),
+)
 
 
 def _run_git(args: Sequence[str], repo_root: str) -> list[str]:
@@ -208,7 +227,15 @@ def compute_diff_scoped_paths(repo_root: Optional[str] = None):
 
     mapped, fully_mapped = map_changed_sources(changed_sources, repo_root)
 
-    paths = sorted(set(changed_tests) | set(mapped))
+    root_path = Path(repo_root if repo_root is not None else ".")
+    guards = {
+        test_path
+        for prefix, test_path in STANDING_GUARDS
+        if any(src.startswith(prefix) for src in changed_sources)
+        and (root_path / test_path).is_file()
+    }
+
+    paths = sorted(set(changed_tests) | set(mapped) | guards)
     return (paths, fully_mapped)
 
 

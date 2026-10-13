@@ -60,6 +60,7 @@ def _fixture_profile():
 def _compose(**overrides):
     profile = overrides.pop("profile", None) or _fixture_profile()
     appetite = overrides.pop("appetite", "standard")
+    stage_models = overrides.pop("stage_models", None)
     knobs = gp.resolve_appetite(profile, appetite)
     knobs.update(overrides)
     manifest = overrides.pop("manifest", None) or _fixture_manifest()
@@ -71,6 +72,7 @@ def _compose(**overrides):
         appetite=appetite,
         agent_type_host=None,
         queue_dirs=["state/bug-backlog"],
+        stage_models=stage_models,
         **REVIEW_KW,
     )
 
@@ -130,12 +132,26 @@ def grind_only(script: str) -> str:
     return script[:start] + script[end:]
 
 
-def test_every_agent_call_site_carries_model_sonnet():
+def _stage_model_option_count(script: str) -> int:
+    names = "|".join(re.escape(n) for n in sorted(set(gc.stages.STAGE_MODELS.values())))
+    return len(re.findall(rf"model: '(?:{names})'", script))
+
+
+def test_every_agent_call_site_carries_a_stage_model():
     script = grind_only(_compose())
     calls = len(re.findall(r"\bagent\(", script))
-    sonnet = len(re.findall(r"model: 'sonnet'", script))
     assert calls > 0
-    assert calls == sonnet
+    assert calls == _stage_model_option_count(script)
+
+
+def test_stage_models_override_changes_one_call_and_records_it():
+    base = grind_only(_compose())
+    script = grind_only(_compose(stage_models={"triage": "haiku"}))
+    assert script.count("model: 'haiku'") == 1
+    assert "stage_models: STAGE_MODELS_USED" in script
+    assert 'const STAGE_MODELS_USED = {"triage": "haiku"};' in script
+    assert "STAGE_MODELS_USED" not in base
+    assert _compose(stage_models={}) == _compose()
 
 
 def test_no_banned_tokens_and_zero_error_findings():
@@ -443,6 +459,14 @@ def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_
     return result, budget
 
 
+def _scout(tshirt, **extra):
+    return {"tshirt": tshirt, "intent": f"intent {tshirt}", "name": "Scout Name", **extra}
+
+
+def _assembled(*row_codes):
+    return {"results": [{"row": row, "exit_code": code, "stdout": ""} for row, code in row_codes]}
+
+
 def _all_close_batches(row_ids):
     return {rid: {"verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""} for rid in row_ids}
 
@@ -731,9 +755,8 @@ def test_row_sized_m_or_above_routes_to_baton_never_fix():
     fix_calls = {"n": 0}
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
-        # Design item 4 (P145-C3): the size-floor baton now goes through one
-        # read-only resize call first; a `plan-weight` answer confirms it.
-        "resize": lambda bid: {"answers": [{"row": "r0", "answer": "plan-weight", "design_question": "needs a plan"}]},
+        "size": lambda rid: _scout("M"),
+        "size-assemble": lambda unit: _assembled(("r0", 0)),
         "fix": lambda rid: (fix_calls.__setitem__("n", fix_calls["n"] + 1), {"outcome": "done"})[1],
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
@@ -1226,118 +1249,179 @@ def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outc
 
 
 # ---------------------------------------------------------------------------
-# P145-C3: one read-only resize per triage batch before any baton hand-back
+# The size stage: one scout per plan-weight row, one size-assemble per run
 # ---------------------------------------------------------------------------
 
 
-def test_resize_batch_with_two_baton_rows_makes_exactly_one_resize_call():
-    routing, triage_node = _fixture_routing()
-
-    def triage(batch_id):
-        return [{"row": rid, "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""} for rid in ("r0", "r1")]
-
-    def resize(batch_id):
-        return {"answers": [
-            {"row": "r0", "answer": "plan-weight", "design_question": "does this need a design?"},
-            {"row": "r1", "answer": "plan-weight", "design_question": "does this need a design?"},
-        ]}
-
-    result, _ = _run([("b0", ["r0", "r1"])], {"triage": triage, "resize": resize})
-    assert result["spend"]["agent_calls_by_stage_kind"].get("resize") == 1
+def _m_triage(row_ids):
+    return lambda batch_id: [
+        {"row": rid, "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""} for rid in row_ids
+    ]
 
 
-def test_resize_plan_weight_hands_back_baton_with_the_design_question_as_reason():
-    routing, triage_node = _fixture_routing()
+def test_scout_below_plan_weight_reaches_the_fix_node_with_size_origin():
+    fix_seen = []
 
-    def triage(batch_id):
-        return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""}]
+    def fix(row_id):
+        fix_seen.append(row_id)
+        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
 
-    def resize(batch_id):
-        return {"answers": [{"row": "r0", "answer": "plan-weight", "design_question": "does this need a design?"}]}
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("S"), "fix": fix})
+    assert fix_seen == ["r0"]
+    assert result["by_triage_check"]["size_collapsed"] == 1
+    assert result["by_triage_check"]["fix_needs_plan"] == 1
+    assert "size-assemble" not in result["spend"]["agent_calls_by_stage_kind"]
 
-    result, _ = _run([("b0", ["r0"])], {"triage": triage, "resize": resize})
+
+def test_scout_below_plan_weight_marks_origin_size_below_plan_weight():
+    origins = []
+
+    def fix(row_id):
+        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
+
+    original = gc.Row
+
+    class _Spy(original):
+        def __setattr__(self, name, value):
+            if name == "origin":
+                origins.append(value)
+            super().__setattr__(name, value)
+
+    gc.Row = _Spy
+    try:
+        _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("XS"), "fix": fix})
+    finally:
+        gc.Row = original
+    assert "size:below-plan-weight" in origins
+
+
+def test_scout_at_plan_weight_hands_back_baton_naming_the_sizing():
+    script_by_kind = {
+        "triage": _m_triage(["r0"]),
+        "size": lambda rid: _scout("M"),
+        "size-assemble": lambda unit: _assembled(("r0", 0)),
+    }
+    result, _ = _run([("b0", ["r0"])], script_by_kind, )
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
     assert hand["type"] == "baton"
-    assert hand["reason"] == "does this need a design?"
+    assert hand["reason"].startswith("sized at state/sizings/")
+    assert hand["reason"].endswith("-scout-name-r0.yaml: intent M")
+    assert result["by_triage_check"]["size_confirmed"] == 1
 
 
-def test_resize_focused_fix_reaches_the_fix_node():
-    routing, triage_node = _fixture_routing()
+def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code():
+    script_by_kind = {
+        "triage": _m_triage(["r0"]),
+        "size": lambda rid: _scout("L"),
+        "size-assemble": lambda unit: _assembled(("r0", 3)),
+    }
+    result, _ = _run([("b0", ["r0"])], script_by_kind)
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["type"] == "baton"
+    assert hand["reason"] == "intent L (size step failed: exit 3)"
+
+
+def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
+    script_by_kind = {"triage": _m_triage(["r0"]), "size": lambda rid: {"reason": "refused"}}
+    result, _ = _run([("b0", ["r0"])], script_by_kind)
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["type"] == "baton"
+    assert hand["reason"] == "size scout returned no size: refused"
+    assert "size-assemble" not in result["spend"]["agent_calls_by_stage_kind"]
+
+
+def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_one_assemble_before_the_end():
+    batches = [("b0", ["r0"]), ("b1", ["r1"])]
 
     def triage(batch_id):
-        return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""}]
+        return _m_triage(["r0"] if batch_id == "b0" else ["r1"])(batch_id)
 
-    def resize(batch_id):
-        return {"answers": [{"row": "r0", "answer": "focused-fix"}]}
+    script_by_kind = {
+        "triage": triage,
+        "size": lambda rid: _scout("M"),
+        "size-assemble": lambda unit: _assembled(("r0", 0), ("r1", 0)),
+    }
+    result, _ = _run(batches, script_by_kind, batch_size=1)
+    by_kind = result["spend"]["agent_calls_by_stage_kind"]
+    assert by_kind["size"] == 2
+    assert by_kind["size-assemble"] == 1
+    assert result["call_log"][-1] == ("size-assemble", "run")
+    assert {h["row"] for h in result["handed_back"] if h["type"] == "baton"} == {"r0", "r1"}
 
-    def fix(row_id):
-        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
 
-    result, _ = _run([("b0", ["r0"])], {"triage": triage, "resize": resize, "fix": fix})
-    assert ("fix", "r0") in result["call_log"]
+def test_a_run_with_no_plan_weight_row_makes_no_size_call():
+    verdicts = _all_fix_batches(["r0"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
+        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+    }
+    result, _ = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    by_kind = result["spend"]["agent_calls_by_stage_kind"]
+    assert "size" not in by_kind and "size-assemble" not in by_kind
 
 
-def test_resize_not_reproduced_reaches_refute_close_in_the_batchs_single_close_call_with_origin():
-    routing, triage_node = _fixture_routing()
-
+def test_by_triage_check_counts_each_branch_and_a_straight_hand_back():
     def triage(batch_id):
         return [
-            {"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""},
-            {"row": "r1", "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""},
+            {"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": "a corner"},
+            {"row": "r1", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""},
+            {"row": "r2", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""},
+            {"row": "r3", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""},
         ]
 
-    def resize(batch_id):
-        return {"answers": [{"row": "r0", "answer": "not-reproduced"}]}
-
-    def close(batch_id):
-        return {"confirmed": [], "refuted": [{"row": "r0", "reason": "not live"}, {"row": "r1", "reason": "not live"}]}
-
-    def fix(row_id):
-        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
-
-    result, _ = _run(
-        [("b0", ["r0", "r1"])], {"triage": triage, "resize": resize, "refute-close": close, "fix": fix},
-    )
-    assert result["spend"]["agent_calls_by_stage_kind"].get("refute-close") == 1
-    assert result["by_refute_origin"].get("resize:not-reproduced") == {"confirmed": 0, "refuted": 1}
-
-
-def test_resize_batch_with_no_baton_row_makes_zero_resize_calls():
-    routing, triage_node = _fixture_routing()
-
-    def triage(batch_id):
-        return [{"row": rid, "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""} for rid in ("r0", "r1")]
-
-    def close(batch_id):
-        return {"confirmed": [], "refuted": [{"row": rid, "reason": "n/a"} for rid in ("r0", "r1")]}
-
-    def fix(row_id):
-        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
-
-    result, _ = _run([("b0", ["r0", "r1"])], {"triage": triage, "refute-close": close, "fix": fix})
-    assert result["spend"]["agent_calls_by_stage_kind"].get("resize", 0) == 0
+    sizes = {"r1": "M", "r2": "S", "r3": "S"}
+    fixes = {
+        "r2": {"outcome": "NEEDS_PLAN", "has_tradeoff": False},
+        "r3": {"outcome": "done", "has_tradeoff": True, "tradeoff": "late"},
+    }
+    script_by_kind = {
+        "triage": lambda bid: [dict(r, has_tradeoff=bool(r["tradeoff"])) for r in triage(bid)],
+        "size": lambda rid: _scout(sizes[rid]),
+        "size-assemble": lambda unit: _assembled(("r1", 0)),
+        "fix": lambda rid: fixes[rid],
+    }
+    result, _ = _run([("b0", ["r0", "r1", "r2", "r3"])], script_by_kind)
+    assert result["by_triage_check"] == {
+        "triaged": 4,
+        "triage_handback": 1,
+        "size_confirmed": 1,
+        "size_collapsed": 2,
+        "fix_needs_plan": 1,
+        "fix_not_reproduced": 0,
+        "fix_late_tradeoff": 1,
+    }
 
 
-def test_resize_two_fix_kind_triage_targets_hands_focused_fix_back_as_baton():
-    """`resize_verdict_map` refuses to pick a fix node when triage's own
-    edges reach TWO fix-kind targets -- ambiguous, never guessed."""
+def test_fix_not_reproduced_is_counted():
+    verdicts = _all_fix_batches(["r0"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: {"outcome": "NOT_REPRODUCED", "has_tradeoff": False},
+    }
+    result, _ = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    assert result["by_triage_check"]["fix_not_reproduced"] == 1
+
+
+def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_row_sized():
+    """`triage_fix_verdict` refuses to pick a fix node when triage's own edges
+    reach TWO fix-kind targets, so a below-floor scout size is assembled."""
     routing = {
         "triage": {"kind": "triage", "edges": {"v1": "fixA", "v2": "fixB"}, "on_fail": None},
         "fixA": {"kind": "fix", "edges": {}, "on_fail": None},
         "fixB": {"kind": "fix", "edges": {}, "on_fail": None},
     }
-    fix_verdict, close_verdict = gc.resize_verdict_map(routing, "triage")
-    assert fix_verdict is None
-    assert close_verdict is None
+    assert gc.triage_fix_verdict(routing, "triage") is None
 
     def triage(batch_id):
         return [{"row": "r0", "verdict": "v1", "tshirt_size": "M", "tradeoff": ""}]
 
-    def resize(batch_id):
-        return {"answers": [{"row": "r0", "answer": "focused-fix"}]}
-
     budget = _StubBudgetSpender()
-    agent_fn = _agent_stub({"triage": triage, "resize": resize}, budget)
+    agent_fn = _agent_stub(
+        {"triage": triage, "size": lambda rid: _scout("S"), "size-assemble": lambda unit: _assembled(("r0", 0))},
+        budget,
+    )
     result = gc.run_admission(
         [("b0", ["r0"])], routing, "triage", reserve=gc.batch_reserve(1), budget=budget, agent=agent_fn,
     )
@@ -1345,54 +1429,44 @@ def test_resize_two_fix_kind_triage_targets_hands_focused_fix_back_as_baton():
     assert hand["type"] == "baton"
 
 
-def test_resize_verdict_map_resolves_distinct_verdicts_for_fix_and_close_kinds():
+def test_triage_fix_verdict_resolves_the_fix_kind_verdict():
     routing = {
         "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}, "on_fail": None},
         "fix": {"kind": "fix", "edges": {}, "on_fail": None},
         "refute_close": {"kind": "refute-close", "edges": {}, "on_fail": None},
     }
-    fix_verdict, close_verdict = gc.resize_verdict_map(routing, "triage")
-    assert fix_verdict == "confirmed-bug"
-    assert close_verdict == "not-reproduced"
-
-
-def test_every_outcome_a_stage_triage_ledger_line_can_carry_is_a_declared_triage_verdict():
-    """New test (P145-C3 acceptance): every `--outcome` value the triage and
-    resize prompts can instruct on a `--stage triage` ledger line is a
-    member of the profile's own declared triage verdict set -- covers the
-    triage prompt itself (its `--outcome <its verdict>` is always one of
-    `verdicts`) and every entry of the resize prompt's answer-to-verdict
-    map, over the fixture profile and over a graph whose `focused-fix` and
-    `not-reproduced` targets are reached by different verdicts."""
+    assert gc.triage_fix_verdict(routing, "triage") == "confirmed-bug"
     profile = _fixture_profile()
-    routing = gc.build_routing_table(profile)
-    triage_node = gc._triage_node_id(profile)
-    fix_verdict, close_verdict = gc.resize_verdict_map(routing, triage_node)
-    for verdict in (fix_verdict, close_verdict):
-        if verdict is not None:
-            assert verdict in profile.verdicts
-
-    other_routing = {
-        "triage": {"kind": "triage", "edges": {"a": "fixnode", "b": "closenode"}, "on_fail": None},
-        "fixnode": {"kind": "fix", "edges": {}, "on_fail": None},
-        "closenode": {"kind": "refute-close", "edges": {}, "on_fail": None},
-    }
-    other_verdicts = ["a", "b"]
-    other_fix_verdict, other_close_verdict = gc.resize_verdict_map(other_routing, "triage")
-    assert other_fix_verdict == "a"
-    assert other_close_verdict == "b"
-    for verdict in (other_fix_verdict, other_close_verdict):
-        assert verdict in other_verdicts
+    fixture_routing = gc.build_routing_table(profile)
+    verdict = gc.triage_fix_verdict(fixture_routing, gc._triage_node_id(profile))
+    assert verdict is None or verdict in profile.verdicts
 
 
-def test_golden_resize_call_site_ordered_before_first_dispatch_row_call():
-    """The rendered golden's triage exit shows the resize `agent(` call
-    site ordered before the first `_dispatchRow` call for that batch --
-    a positional assertion over the golden text (eng-director F7)."""
+def test_golden_size_call_site_ordered_before_first_dispatch_row_call():
     script = _compose()
-    resize_agent_idx = script.index("label: 'resize'")
+    size_agent_idx = script.index("label: 'size'")
     dispatch_row_call_idx = script.index("await _dispatchRow(")
-    assert resize_agent_idx < dispatch_row_call_idx
+    assert size_agent_idx < dispatch_row_call_idx
+
+
+def test_golden_size_assemble_runs_in_run_grind_before_the_drain_sweep():
+    script = _compose()
+    run_grind = script[script.index("async function runGrind()"):]
+    assert run_grind.index("await _sizeAssembleCall(") < run_grind.index("await _drainSweep();")
+    assert "_recordCall('size-assemble')" in script and "_recordCall('size')" in script
+
+
+def test_golden_holds_no_resize_in_any_case():
+    assert "resize" not in _GOLDEN_PATH.read_text(encoding="utf-8").lower()
+    assert "resize" not in _compose().lower()
+
+
+def test_golden_run_cost_record_holds_no_sized_key_and_counts_by_triage_check():
+    script = _compose()
+    record = script[script.index("function _runCostRecord()"):]
+    record = record[:record.index("\n}")]
+    assert "sized" not in record
+    assert "by_triage_check: _byTriageCheck" in script
 
 
 @pytest.mark.parametrize(

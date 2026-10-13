@@ -22,10 +22,12 @@ def _is_link(path: str | os.PathLike[str]) -> bool:
 
 
 def _size_and_mtime(entry: Path) -> tuple[int, float]:
-    """Total bytes and newest mtime under ``entry``; links are counted as themselves, never followed."""
+    """Total file bytes and newest mtime under ``entry``; links are counted as themselves, never followed.
+    A directory's own ``st_size`` is a filesystem artifact (96 on APFS, 4096 on ext4) and adds no bytes."""
     st = entry.lstat()
-    total, newest = st.st_size, st.st_mtime
-    if _is_link(entry) or not entry.is_dir():
+    is_dir = not _is_link(entry) and entry.is_dir()
+    total, newest = (0 if is_dir else st.st_size), st.st_mtime
+    if not is_dir:
         return total, newest
     # Not os.walk: before 3.12 its followlinks=False still descends a Windows junction.
     stack = [os.fspath(entry)]
@@ -40,10 +42,11 @@ def _size_and_mtime(entry: Path) -> tuple[int, float]:
                     s = e.stat(follow_symlinks=False)
                 except OSError:
                     continue
-                total += s.st_size
                 newest = max(newest, s.st_mtime)
                 if not _is_link(e.path) and e.is_dir(follow_symlinks=False):
                     stack.append(e.path)
+                else:
+                    total += s.st_size
     return total, newest
 
 

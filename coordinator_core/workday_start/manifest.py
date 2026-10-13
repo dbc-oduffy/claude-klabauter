@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from coordinator_core.contract.decision_object.reader_result import build_directive
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.workday_start import contract
 
 STEP_COSTS_PATH = Path(__file__).resolve().parent / "step_costs.json"
@@ -22,7 +23,7 @@ STEP_COSTS_PATH = Path(__file__).resolve().parent / "step_costs.json"
 WEEKLY_MARKER = "state/.workday-start-weekly-marker"
 WEEKLY_WINDOW_DAYS = 7
 DRAFT_PLAN_MIN_ENTRIES = 5
-OUTBOX_DIR = "state/cross-repo/outbox"
+OUTBOX_DIR = (Path(home_dir(".", "cross-repo")) / "outbox").as_posix()
 GOAL_EVENT_TEXT = ".coordinator-local/workday-start-goal-event.txt"
 SNIPPETS_PREFIX = "coordinator/snippets/"
 HARVEST_DEBT_NONE_WITHIN_SCAN = 99

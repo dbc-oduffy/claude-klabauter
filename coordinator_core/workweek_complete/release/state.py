@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.git.run import git_out
 from coordinator_core.merge_assemble import _parse_version_tag
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.workweek_complete.release.contract import (
     DAILY_BLOCK_RE,
     PENDING_RELEASE_SUFFIX,
@@ -20,7 +21,7 @@ from coordinator_core.workweek_complete.release.contract import (
 from coordinator_core.workweek_complete.release.declared import declared_version
 from coordinator_core.workweek_complete.release.version_rule import local_release_tags
 
-_WEEK_DIR = "state/week-changelog"
+_WEEK_DIR = Path(home_dir(".", "week-changelog")).as_posix()
 _WEEK_START_RE = re.compile(r"^\*\*Week starting:\*\*\s*(\d{4}-\d{2}-\d{2})", re.M)
 _PRIOR_RE = re.compile(r"^\*\*Prior week released:\*\*(.*)$", re.M)
 _NOTES_GLOB = ":(glob)archive/release-notes/*-v{version}.md"
