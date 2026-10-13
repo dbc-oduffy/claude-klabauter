@@ -1,4 +1,5 @@
-"""The quick-wrap brief's git spawn budget: one raw floor..head log, one own-commit numstat log (only when under the commit and surface brightline) and one status."""
+"""The quick-wrap brief's git spawn budget: one raw floor..head log, one own-commit numstat log
+(only when under the commit and surface brightline) and one status."""
 
 from __future__ import annotations
 

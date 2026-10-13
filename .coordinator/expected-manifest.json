@@ -2056,8 +2056,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "e8f3669b14a9989acc9c46bded23a715febe8fc4",
-    "coordinator_core/_engine_stamp": "0f4be1642969c6dccc2e1d75ed4cae0778d96da3",
+    "coordinator_core/_engine_published_at": "20e386dfd9856f567621105e63ebc0bd9e18434e",
+    "coordinator_core/_engine_stamp": "92227a43c66ee1a377b0fe19359d01eb7b3ffea9",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5935,7 +5935,7 @@
     "coordinator_core/quick_wrap_assemble/__init__.py": "1ed9ede62e49f622753aa62716e4a60c89230cf2",
     "coordinator_core/quick_wrap_assemble/divergence.py": "3e8e1b46cecf550bf16176a2ce01365a9e50fc9e",
     "coordinator_core/quick_wrap_assemble/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
-    "coordinator_core/quick_wrap_assemble/tests/test_brief_spawn_budget.py": "4981c39a04633d41618617140f3edc7ecc4baffc",
+    "coordinator_core/quick_wrap_assemble/tests/test_brief_spawn_budget.py": "1800c6b841666f259b432d62589d46ff5a8b41a6",
     "coordinator_core/quick_wrap_assemble/tests/test_c3_archived_baton.py": "bc76bd455b7570ddea53178f1b2154eb571cb3cc",
     "coordinator_core/quick_wrap_assemble/tests/test_close_ledger.py": "189970701a1d1f24f0ecbd5cf4055e2bdf8e2dbe",
     "coordinator_core/quick_wrap_assemble/tests/test_dispatch_sizing_ship.py": "503bb59748decdbe9acab9f08b1b4f1e68a7777d",
@@ -7448,5 +7448,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "904c89d63991384a6dd7b399eb1038c95e36336f"
+  "source_head": "f86116bb855664aa1b2170e537e70d6fad761c22"
 }
