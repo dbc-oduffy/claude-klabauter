@@ -47,6 +47,17 @@ def test_latest_supersession_wins_and_original_is_untouched(tmp_path):
     assert record.read_bytes() == before
 
 
+def test_a_verdict_older_than_a_rewritten_run_record_no_longer_supersedes_it(tmp_path):
+    # A late-delta review re-runs the plan and rewrites the same plan-scoped run record; the
+    # reverify recorded against the earlier run must not pull mint back to its head and tests.
+    repo, record, rel = _fail_record(tmp_path)
+    _supersede(repo, rel, "PASS", head_sha="832cd509b3")
+    assert rd.latest_delivery_supersession(repo, rel)["head_sha"] == "832cd509b3"
+    text = record.read_text(encoding="utf-8")
+    record.write_text(text.replace("---\n", "---\nrecorded_at: '2999-01-01T00:00:00Z'\n", 1), encoding="utf-8")
+    assert rd.latest_delivery_supersession(repo, rel) is None
+
+
 def test_mint_accepts_a_superseding_pass(tmp_path):
     repo, record, rel = _fail_record(tmp_path)
     with pytest.raises(m.MintRefusal, match="'FAIL'"):

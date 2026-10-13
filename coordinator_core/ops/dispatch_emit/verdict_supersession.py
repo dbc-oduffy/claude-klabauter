@@ -8,7 +8,7 @@ stays out of every minter's import closure.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,15 +36,24 @@ def _frontmatter(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
+    """The newest record superseding `run_record_rel`, recorded no earlier than the run record.
+
+    Trap: a run record's path is plan-scoped, so a later run (a late-delta review) rewrites the
+    same path; a verdict recorded before that rewrite superseded the earlier run, and applying it
+    would pull the stamp back to the old head and its old tests."""
     base = repo_root / VERDICT_DIR
     if not base.is_dir():
         return None
+    floor = _run_record_written_at(repo_root / run_record_rel)
     best: Optional[tuple] = None
     for path in base.glob("*/*.md"):
         fm = _frontmatter(path)
         if not fm or fm.get("kind") != RECORD_KIND or fm.get("supersedes") != run_record_rel:
             continue
         if not isinstance(fm.get("delivery"), dict):
+            continue
+        at = _aware(_instant(fm.get("recorded_at")))
+        if floor is not None and (at is None or at < floor):
             continue
         key = (str(fm.get("recorded_at") or ""), path.name)
         if best is None or key > best[0]:
@@ -88,6 +97,23 @@ def latest_foreign_claims_supersession(repo_root: Path, run_record_rel: str) -> 
 
 
 REJUDGE_KIND = "criterion-rejudge"
+
+
+def _run_record_written_at(path: Path) -> Optional[datetime]:
+    """The run record's `recorded_at`, else its mtime: records written before the bookkeeper
+    stamped `recorded_at` live gitignored under `.coordinator-local/`, which no checkout rewrites
+    and no reverify touches."""
+    at = _aware(_instant((_frontmatter(path) or {}).get("recorded_at")))
+    if at is not None:
+        return at
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+
+
+def _aware(at: Optional[datetime]) -> Optional[datetime]:
+    return at if at is None or at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
 
 
 def _instant(value: Any) -> Optional[datetime]:

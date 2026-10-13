@@ -374,8 +374,13 @@ def bookkeep_wave(
 
 
 def _render_record_frontmatter(record: Dict[str, Any]) -> str:
+    from datetime import datetime, timezone
+
+    # `recorded_at` is the floor a delivery-verdict supersession must clear: a later run
+    # rewrites this same plan-scoped path, and an older reverify must stop applying to it.
     ordered = {
         "agent_type": "engine:review-wave-bookkeeping",
+        "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **record,
     }
     return yaml.safe_dump(ordered, default_flow_style=False, sort_keys=False).strip()
