@@ -178,5 +178,13 @@ def test_derive_register_backfills_a_sizing_that_embeds_turns(turns_repo, capsys
     assert sa.main(["--derive-register", "--write", _REL]) == 0  # identical: idempotent
 
 
+def test_help_prints_multiline_usage_with_register_shape(repo, capsys):
+    assert sa.main(["--help"]) == 0
+    out = capsys.readouterr().out
+    assert len(out.splitlines()) > 1
+    register_block = out[out.index("or: --register"):out.index("or: --derive-register")]
+    assert "sources" in register_block and "{doc, ref}" in register_block
+
+
 def test_derive_register_without_pm_words_is_refused(repo):
     assert sa.main(["--derive-register", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL

@@ -12,11 +12,14 @@ rollup is recomputed, so an input rollup is never trusted. Every byte outside th
 Re-record invariant:
   - identical sources+rows+unrelated_turns on disk -> idempotent no-op (the rollup timestamp
     alone is not a change).
+  - every mode -> each row's absent `status` defaults to `open`, `surface` to `internal`,
+    `claimed_by` to [], before the identity compare.
+  - sources -> the resolved register's `sources` must be a non-empty list of {doc, ref} string
+    mappings, else refused before schema validation.
   - amend -> the input is an overlay on the recorded register: rows merged by id (a given
-    field replaces the recorded one; a new id is appended, `status` defaulting to `open`,
-    `surface` to `internal`, `claimed_by` to []), `drop: [ids]` removes rows, `unrelated_turns`
-    merged by turn, new `sources` appended. With no register recorded the overlay is the
-    register, defaults filled. Engine-written state on fields the overlay does not name is kept.
+    field replaces the recorded one; a new id is appended), `drop: [ids]` removes rows,
+    `unrelated_turns` merged by turn, new `sources` appended. With no register recorded the
+    overlay is the register. Engine-written state on fields the overlay does not name is kept.
   - different register, no amend, no supersede -> refused.
   - different register, supersede               -> replaced; engine-written row state is discarded.
 
@@ -53,8 +56,39 @@ _PARAMS_HINT = (
     "supersede, amend"
 )
 
-_ROW_DEFAULTS = ((rr.ROW_STATUS, rr.STATUS_OPEN), (rr.ROW_SURFACE, "internal"))
+_ROW_DEFAULTS = (
+    (rr.ROW_STATUS, rr.STATUS_OPEN),
+    (rr.ROW_SURFACE, "internal"),
+    (rr.ROW_CLAIMED_BY, []),
+)
 _DROP_KEY = "drop"
+_SOURCES_SHAPE = (
+    "register.sources must be a non-empty list of {doc, ref} "
+    "(doc: a path; ref: <repo>@<sha> or an anchor)"
+)
+
+
+def _sources_shape_ok(sources) -> bool:
+    return (
+        isinstance(sources, list)
+        and bool(sources)
+        and all(
+            isinstance(s, dict)
+            and all(isinstance(s.get(k), str) and s[k].strip() for k in ("doc", "ref"))
+            for s in sources
+        )
+    )
+
+
+def _with_defaults(wanted: dict) -> dict:
+    """`wanted` with every row's status/surface/claimed_by filled where absent."""
+    rows = []
+    for r in wanted[rr.ROWS_KEY]:
+        row = dict(r)
+        for key, default in _ROW_DEFAULTS:
+            row.setdefault(key, list(default) if isinstance(default, list) else default)
+        rows.append(row)
+    return {**wanted, rr.ROWS_KEY: rows}
 
 
 def _err(msg: str) -> dict:
@@ -89,9 +123,6 @@ def _overlay(recorded: Optional[dict], overlay: dict) -> dict:
             by_id[rid].update(given)
             continue
         row = dict(given)
-        for key, default in _ROW_DEFAULTS:
-            row.setdefault(key, default)
-        row.setdefault(rr.ROW_CLAIMED_BY, [])
         rows.append(row)
         by_id[rid] = row
     sources = list(base.get(rr.SOURCES_KEY) or [])
@@ -141,8 +172,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Exit-code contract:
         exit_code 1 — a missing param; a non-mapping register; a sizing escaping the sizings
                       home or absent; duplicate row ids; a deferred/waived row without a
-                      ruling; an overlay dropping an unknown row; a different register with
-                      neither `amend` nor `supersede`; schema validation failure; lock timeout.
+                      ruling; absent/empty/malformed sources; an overlay dropping an unknown
+                      row; a different register with neither `amend` nor `supersede`; schema
+                      validation failure; lock timeout.
         exit_code 0, applied True  — the register was written.
         exit_code 0, applied False — the register on disk already matches; no-op.
     """
@@ -200,6 +232,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 wanted = _overlay(existing.raw if existing is not None else None, register)
             except ValueError as exc:
                 raise MutateAbort(str(exc)) from exc
+        if not _sources_shape_ok(wanted.get(rr.SOURCES_KEY)):
+            raise MutateAbort(_SOURCES_SHAPE)
+        wanted = _with_defaults(wanted)
         unruled = rr.unruled_rows(wanted[rr.ROWS_KEY])
         if unruled:
             raise MutateAbort(

@@ -101,7 +101,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "op", "params"],
-      "description": "`kind: none` carries null `op`/`params`. `kind: execute` (a ready `plan` digest) names the chain's logical op `plan_chain.run`, realized as the engine CLI `plan-chain-run`, with its params. `kind: terminal_commit` (a chain halted after its execute child returned) names `dispatch.terminal_commit` with the params to run unedited: the execute digest's own params plus `script_path` and `task_output_path`.",
+      "description": "`kind: none` carries null `op`/`params`. `kind: execute` (a ready `plan` digest) names the execute stage `execute-plan` with its params: in session the EM runs `/execute-plan` on `plan_path`; a `--chain` fire's driver reads `plan_path` and runs it headless via `plan-chain-run`. `kind: terminal_commit` (a chain halted after its execute child returned) names `dispatch.terminal_commit` with the params to run unedited: the execute digest's own params plus `script_path` and `task_output_path`.",
       "properties": {
         "kind": { "type": "string", "enum": ["execute", "terminal_commit", "none"] },
         "op": { "type": ["string", "null"], "maxLength": 100 },

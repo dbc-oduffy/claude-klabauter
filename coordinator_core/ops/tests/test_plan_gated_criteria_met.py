@@ -36,15 +36,24 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def base_repo(tmp_path, monkeypatch):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "a@b")
     _git(tmp_path, "config", "user.name", "a")
     (tmp_path / "docs/plans").mkdir(parents=True)
-    (tmp_path / "docs/plans/p.md").write_text(PLAN)
     (tmp_path / "x.txt").write_text("x")
-    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "add", "x.txt")
     _git(tmp_path, "commit", "-qm", "init")
+    monkeypatch.setattr(mod, "main_worktree_root", lambda r: r)
+    return tmp_path
+
+
+@pytest.fixture
+def repo(base_repo, monkeypatch):
+    tmp_path = base_repo
+    (tmp_path / "docs/plans/p.md").write_text(PLAN)
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "plan")
     commits = []
 
     def fake_commit(rel, content, msg, cwd, **kw):
@@ -52,7 +61,6 @@ def repo(tmp_path, monkeypatch):
         return git_native.GitResult(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(git_native, "commit_authored_content", fake_commit)
-    monkeypatch.setattr(mod, "main_worktree_root", lambda r: r)
     return tmp_path, commits
 
 
@@ -76,6 +84,29 @@ def test_flip_sets_met_and_evidence_and_commits(repo):
     assert text.count("met: true") == 2 and "met: false" not in text
     assert "evidence: x.txt" in text and "other: 1\n---\nbody" in text
     assert time.process_time() - t0 < 1.0
+
+
+def test_plan_absent_from_head_flips_on_disk_without_committing(base_repo):
+    root = base_repo
+    (root / "docs/plans/p.md").write_text(PLAN)
+    head = _sha(root)
+    r = _run(root, [{"brightline": "multi-os-first-class", "evidence": "x.txt"}])
+    assert r["committed"] is False and r["changed"] == ["multi-os-first-class"]
+    assert "absent from HEAD" in r["message"]
+    text = (root / "docs/plans/p.md").read_text()
+    assert "met: true\n    evidence: x.txt\n" in text
+    assert _sha(root) == head
+    status = subprocess.run(["git", "status", "--porcelain", "--", "docs/plans/p.md"], cwd=root,
+                            capture_output=True, text=True, **no_console_creationflags()).stdout
+    assert status.startswith("??")
+
+
+def test_other_commit_refusal_still_raises_naming_the_flip(repo, monkeypatch):
+    root, _ = repo
+    monkeypatch.setattr(git_native, "commit_authored_content",
+                        lambda *a, **k: git_native.GitResult(returncode=1, stdout="", stderr="index locked"))
+    with pytest.raises(ValueError, match="flip written to docs/plans/p.md"):
+        _run(root, [{"brightline": "multi-os-first-class", "evidence": "x.txt"}])
 
 
 def test_unknown_brightline_refused_nothing_written(repo):

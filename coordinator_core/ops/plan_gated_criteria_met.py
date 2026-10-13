@@ -13,10 +13,13 @@ Wire params:
         repo-relative path that exists.
 
 Reply: ``{"plan", "changed": [brightline, ...], "committed": bool, "message"}``.
+    A plan absent from HEAD replies ``committed: false`` with the flip on disk; any other
+    commit refusal raises.
 
 Negative-spec:
   - A refusal (unknown brightline, bad evidence) raises ValueError and writes nothing.
   - Never flips ``met`` back to false and never touches ``statement``.
+  - An absent-from-HEAD plan is flipped on disk, never committed or refused by this op.
   - A re-run with identical evidence is byte-identical: no write, no commit.
 """
 
@@ -184,6 +187,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         res = git_native.commit_authored_content(rel, new_text, msg_path, worktree_root)
     finally:
         Path(msg_path).unlink(missing_ok=True)
+    if not res.ok and "does not exist in HEAD" in (res.stderr or ""):
+        return {"plan": rel, "changed": changed, "committed": False,
+                "message": f"flip written to {rel}, not committed: {rel} is absent from HEAD; commit the plan to carry it"}
     if not res.ok:
         raise ValueError(f"flip written to {rel} but commit failed: {(res.stderr or '').strip()[:200]}")
     return {"plan": rel, "changed": changed, "committed": True, "message": "met flipped and committed"}

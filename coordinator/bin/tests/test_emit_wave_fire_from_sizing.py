@@ -342,3 +342,66 @@ def test_deliverable_mismatch_refuses_naming_both_ids(tmp_path, monkeypatch, cap
     err = capsys.readouterr().err
     assert "dlv-aaa" in err and "dlv-zzz" in err
     assert not (tmp_path / "trail" / "fire-0-1.mjs").exists()
+
+
+def _git(repo, *args):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+
+
+def _real_repo(tmp_path):
+    import shutil
+
+    shutil.rmtree(tmp_path / ".git", ignore_errors=True)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "t")
+    _git(tmp_path, "config", "core.autocrlf", "false")
+    for rel in (SIZING_REL, BATON_REL):
+        p = tmp_path / rel
+        p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))
+    (tmp_path / "unrelated.txt").write_text("one\n", encoding="utf-8")
+    _git(tmp_path, "add", "unrelated.txt")
+    _git(tmp_path, "commit", "-q", "-m", "seed")
+    (tmp_path / "unrelated.txt").write_text("two\n", encoding="utf-8")
+
+
+@pytest.mark.spawns_process
+def test_fire_commits_the_pair(tmp_path, monkeypatch, capsys):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("M"))
+    _real_repo(tmp_path)
+    assert _fire_with(tmp_path, "--deliverable-id", "dlv-aaa") == ewf.EXIT_OK
+    assert "committed pair" in capsys.readouterr().out
+    names = _git(tmp_path, "log", "-1", "--name-only", "--format=%B").splitlines()
+    assert sorted(n for n in names if n.startswith("state/")) == [BATON_REL, SIZING_REL]
+    assert "unrelated.txt" not in names
+    assert "emit-wave-fire: sizing + baton for hnd-1" in names[0]
+    assert "Deliverable-Id: dlv-aaa" in "\n".join(names)
+    assert _git(tmp_path, "status", "--porcelain", "--", "unrelated.txt").strip().endswith("unrelated.txt")
+
+
+@pytest.mark.spawns_process
+def test_second_fire_makes_no_commit(tmp_path, monkeypatch, capsys):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("M"))
+    _real_repo(tmp_path)
+    assert _fire_with(tmp_path, "--deliverable-id", "dlv-aaa") == ewf.EXIT_OK
+    head = _git(tmp_path, "rev-parse", "HEAD")
+    capsys.readouterr()
+    sha, reason = ewf._commit_pair(tmp_path, BATON_REL, SIZING_REL, "dlv-aaa", "hnd-1")
+    assert (sha, reason) == (None, None)
+    assert _git(tmp_path, "rev-parse", "HEAD") == head
+
+
+def test_commit_failure_never_fails_the_emit(tmp_path, monkeypatch, capsys):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("M"))
+    assert _fire(tmp_path) == ewf.EXIT_OK
+    cap = capsys.readouterr()
+    assert "uncommitted pair for the EM: state/handoffs/b1.md  state/sizings/s1.yaml" in cap.out
+    assert "pair not committed" in cap.err

@@ -89,6 +89,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 from typing import List, Optional, Tuple, Union
@@ -1789,6 +1790,50 @@ def _report_concurrent_executing_plans(slug: str, root: str, cwd: Optional[str])
         return
 
 
+def _first_commit_plan_if_untracked(root: Path, rel: str, slug: str) -> bool:
+    """First-commit the plan at ``rel`` when HEAD resolves and lacks it, so the
+    stamp-executing rung sees a tracked plan and commits its own flip. A tracked
+    plan, or a repo with no HEAD, is a no-op returning True; False only on a
+    failed first commit (the caller releases the claim)."""
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.temp_layout import managed_tempdir
+
+    if not git_native.rev_parse_head(root).ok or git_native._head_entry_for(root, rel) is not None:
+        return True
+    try:
+        text = (root / rel).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"cs_claim_plan: {slug}: cannot read plan for first commit: {exc} — claim refused", file=sys.stderr)
+        return False
+    split = split_frontmatter(text.replace("\r\n", "\n"))
+    deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id") if split is not None else None
+    message = f"{slug}: first-commit plan ahead of stamp-executing\n"
+    if deliverable_id:
+        message += f"\nDeliverable-Id: {deliverable_id}\n"
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8", dir=managed_tempdir(root)
+    ) as fh:
+        fh.write(message)
+        msg_path = fh.name
+    try:
+        result = git_native.commit_authored_new_file(
+            rel, text, msg_path, root, deliverable_id=deliverable_id, record_ledger=True
+        )
+    finally:
+        try:
+            Path(msg_path).unlink()
+        except OSError:
+            pass
+    if not result.ok:
+        print(
+            f"cs_claim_plan: first commit of {rel} failed: {result.stderr.strip()} — claim refused",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def claim_plan(
     slug: str,
     cwd: Optional[str] = None,
@@ -1959,6 +2004,9 @@ def claim_plan(
             return False
         if approved_state == APPROVED_BODY_UNVERIFIABLE:
             print(f"cs_claim_plan: {slug}: {approved_msg}", file=sys.stderr)
+        if not _first_commit_plan_if_untracked(Path(root), rel, slug):
+            release_artifact("plan", slug, cwd=cwd)
+            return False
         from coordinator_core.ops import plan_status_transition
 
         rc = plan_status_transition.main(["stamp-executing", "--plan", plan_path])

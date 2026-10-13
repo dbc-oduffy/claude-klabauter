@@ -74,6 +74,11 @@ def mise_full_path_measurement(tmp_path_factory):
     return _measure(tmp_path_factory.mktemp("terminal_commit_budget_mise"), "--kind", "mise")
 
 
+@pytest.fixture(scope="module")
+def ask_full_path_measurement(tmp_path_factory):
+    return _measure(tmp_path_factory.mktemp("terminal_commit_budget_ask"), "--kind", "ask")
+
+
 def _assert_under_bar(m: dict) -> None:
     # Positive net is necessary, not sufficient: completion is the driver's rc==0
     # (last of k runs only, see batched_process_time_ms).
@@ -87,3 +92,9 @@ def test_terminal_commit_full_path_is_under_the_500ms_bar(full_path_measurement)
 
 def test_terminal_commit_mise_full_path_is_under_the_500ms_bar(mise_full_path_measurement):
     _assert_under_bar(mise_full_path_measurement)
+
+
+def test_terminal_commit_ask_full_path_cost_is_observed(ask_full_path_measurement):
+    m = ask_full_path_measurement
+    assert m["net_ms"] > 0 and m["net_procs"] > 0, f"call cost not observed (full <= setup-only): {m['detail']}"
+    print(f"TERMINAL-COMMIT-ASK {m['detail']}")

@@ -244,6 +244,53 @@ def test_non_probe_forms_not_counted(repo, cmd) -> None:
     assert not g.runs_verification(cmd, str(repo), str(repo))
 
 
+def _execute_plan_session(repo, status="executing") -> None:
+    d = repo / ".git" / "coordinator-sessions" / SID
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "session-shape.json").write_text(json.dumps({"plan": {"path": "docs/plans/p.md"}}))
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans" / "p.md").write_text(f"---\nstatus: {status}\n---\nbody\n")
+
+
+def test_scoped_pytest_in_execute_plan_session_never_denied(repo) -> None:
+    _executor_ran(repo)
+    _execute_plan_session(repo)
+    for cmd in ("python -m pytest pkg/test_a.py::t -q", "pytest tools -q", "pytest pkg/test_a.py -k x"):
+        assert g.check(_bash(repo, cmd)) is None
+
+
+def test_scoped_pytest_without_execute_plan_signal_still_denied(repo) -> None:
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "pytest pkg/test_a.py")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg/test_a.py")))
+
+
+def test_non_executing_plan_does_not_exempt(repo) -> None:
+    _executor_ran(repo)
+    _execute_plan_session(repo, "landed")
+    assert g.check(_bash(repo, "pytest pkg/test_a.py")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg/test_a.py")))
+
+
+@pytest.mark.parametrize("cmd", [
+    "pytest",
+    "pytest -k foo",
+    "pytest -m slow",
+    "pytest --pyargs pkg",
+    "pytest /elsewhere/test_a.py",
+    "pytest ../elsewhere/test_a.py",
+    "pytest pkg/test_a.py && pytest",
+])
+def test_unscoped_pytest_in_execute_plan_session_still_denied(repo, cmd) -> None:
+    _executor_ran(repo)
+    _execute_plan_session(repo)
+    assert g.check(_bash(repo, "pytest pkg/test_a.py -k exempt_leaves_counter_untouched")) is None
+    # An exempt run does not bump the counter; the probe is the first (free) bump so
+    # that ``cmd`` is the second and would be denied.
+    assert g.check(_bash(repo, "python3 -c 'import pkg'")) is None
+    assert _denied(g.check(_bash(repo, cmd)))
+
+
 def test_probe_shares_pytest_counter(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest a.py")) is None

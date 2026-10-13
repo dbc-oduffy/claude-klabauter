@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -20,7 +21,8 @@ class EmBriefRefused(ValueError):
 
 @dataclass(frozen=True)
 class EmBrief:
-    """``source`` is ``"inline"`` or the repo-relative brief-file path; ``context`` is repo-relative."""
+    """``source`` is ``"inline"`` or the repo-relative brief-file path; ``context`` is repo-relative,
+    except a session-scratchpad file, which is carried as an absolute posix path."""
 
     text: str
     source: str
@@ -37,6 +39,27 @@ def _rel(repo_root: Path, raw: str, flag: str) -> tuple[Path, str]:
     except ValueError:
         raise EmBriefRefused(f"{flag} {raw}: outside the repo root") from None
     return resolved, rel
+
+
+def _in_session_scratchpad(resolved: Path) -> bool:
+    """True for a file under ``<tempdir>/claude/<project-slug>/<session-uuid>/scratchpad/``."""
+    try:
+        parts = resolved.relative_to(Path(tempfile.gettempdir()).resolve()).parts
+    except ValueError:
+        return False
+    return len(parts) >= 5 and parts[0] == "claude" and parts[3] == "scratchpad"
+
+
+def _context_path(repo_root: Path, raw: str) -> tuple[Path, str]:
+    """Repo-relative form for an in-repo file; absolute posix form for one in a session scratchpad."""
+    try:
+        return _rel(repo_root, raw, "--context")
+    except EmBriefRefused:
+        p = Path(raw.replace("\\", "/"))
+        resolved = p.resolve() if p.is_absolute() else None
+        if resolved is None or not _in_session_scratchpad(resolved):
+            raise
+        return resolved, resolved.as_posix()
 
 
 def load_em_brief(
@@ -71,7 +94,7 @@ def load_em_brief(
 
     ctx_rel: list[str] = []
     for raw in ctx_paths:
-        path, rel = _rel(repo_root, raw, "--context")
+        path, rel = _context_path(repo_root, raw)
         if not path.is_file():
             raise EmBriefRefused(f"--context {raw}: no such file")
         ctx_rel.append(rel)
@@ -82,7 +105,7 @@ def check_em_brief_paths(repo_root: Path, *, brief_file: str | None, context: Se
     """Refuse a --brief-file or --context path that is outside the repo or absent: stats only, no read."""
     named = [("--brief-file", brief_file)] if brief_file else []
     for flag, raw in named + [("--context", c) for c in context if c]:
-        path, _ = _rel(repo_root, raw, flag)
+        path, _ = _context_path(repo_root, raw) if flag == "--context" else _rel(repo_root, raw, flag)
         if not path.is_file():
             raise EmBriefRefused(f"{flag} {raw}: no such file")
 

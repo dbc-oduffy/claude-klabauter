@@ -38,14 +38,16 @@ Negative-spec:
     (``docs/delivery/``, a wiki, a README, and the cited sizing's
     ``doc_consumers``/``ask_conflicts``), and the changed files in
     ``state/warp/<run_id>/`` (nothing from an in-flight run's ``scratch/warp``
-    directory). Its other process records -- sizing, plan, review record,
-    sidecars, completion receipts -- stay on disk (receipts under
-    ``.coordinator-local/``) and are named by trailers instead
-    (``Completion-Receipt``, ``Review``, ``Falsifier``, ``Resolves-Sizing``);
-    the run makes no second, plan-only commit. When the run dir holds a
+    directory), plus its own ``docs/delivery/<run_id>.md`` when that file is on disk
+    (no ``doc_writes`` needed). When its plan is stageable (set, not gitignored) a second,
+    plan-only stamp commit lands the plan, completion entry and shipped sizing; a
+    gitignored plan keeps the stamps on disk and the run makes one commit. Sidecars and
+    completion receipts stay on disk (receipts under ``.coordinator-local/``) and are
+    named by trailers (``Completion-Receipt``, ``Review``, ``Falsifier``,
+    ``Resolves-Sizing``). When the run dir holds a
     requirements ledger, the commit refuses unless ``ledger_verdict`` passes
     ``requirements_ledger.judge`` against the live ledger, in addition to
-    the delivery, criterion and falsifier gates at every size. A docs path
+    the delivery, criterion and falsifier gates at every size. Any other docs path
     rides the commit only if ``params.doc_writes`` declares it.
   - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine.
@@ -1070,8 +1072,8 @@ def _stamp_coded_commit(
     committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
     the one commit below carries rows, minted stamp and status together; its reply
     returns under ``_flip``. A commit that does not land restores the flip with the rows.
-    ``commit=False`` (an ask run, whose plan is a process record) leaves the stamps on disk and
-    lands nothing. ``_committed`` names the paths the commit carried.
+    ``commit=False`` (an ask run whose plan is gitignored or unknown to the snapshot) leaves the
+    stamps on disk and lands nothing. ``_committed`` names the paths the commit carried.
     ``receipt`` names the file holding the run's minted ``review_stamp``. When it is gitignored
     (a minted XS spine) the commit cannot carry it and the receipt dies with the scratch dir, so
     the reply adds ``coded_stamp_error`` beside the rest of the commit's result.
@@ -2456,8 +2458,8 @@ def _terminal_commit(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     anchor_only = not request.chunks
-    # An ask run commits product and its record directory; its working files stay on disk,
-    # named by trailers.
+    # An ask run's product commit carries product, its delivery note and its record directory;
+    # a stageable plan gets the second, stamp commit.
     product_only = ask_run_dir is not None
     record_dir_rel: Optional[str] = None
     if ask_run_dir is not None:
@@ -2638,11 +2640,17 @@ def _terminal_commit(
         str(PurePosixPath(request.plan_path).with_name(PurePosixPath(request.plan_path).stem + _SEAM_SIDECAR_SUFFIX))
         if request.plan_path else None
     )
+    ask_note_rel: Optional[str] = None
+    if ask_run_dir is not None:
+        candidate = f"{_ASK_DOC_PREFIXES[0]}{ask_run_dir.name}.md"
+        if (worktree_root / candidate).is_file():
+            ask_note_rel = candidate
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
         + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
-        + companions,
+        + companions
+        + ([ask_note_rel] if ask_note_rel else []),
         [prefix for c in request.chunks for prefix in c.prefixes]
         + ([record_dir_rel] if record_dir_rel else []),
         _scope_pathspecs(request),
@@ -2775,6 +2783,15 @@ def _terminal_commit(
             params.get("doc_writes"),
         )
         all_paths.extend(p for p in doc_kept if p not in all_paths)
+    if (
+        ask_note_rel is not None
+        and ask_note_rel not in all_paths
+        and not (snapshot is not None and snapshot.ignored_among([ask_note_rel]))
+    ):
+        all_paths.append(ask_note_rel)
+        doc_dropped = [p for p in doc_dropped if p != ask_note_rel]
+    else:
+        ask_note_rel = None
 
     if held_paths:
         all_paths = [p for p in all_paths if p not in held_paths]
@@ -2810,9 +2827,12 @@ def _terminal_commit(
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     scope_request = request
-    if product_only and params.get("doc_writes"):
+    docs_declared = list(params.get("doc_writes") or ())
+    if ask_note_rel is not None and ask_note_rel not in docs_declared:
+        docs_declared.append(ask_note_rel)
+    if product_only and docs_declared:
         scope_request = CommitRequest(
-            chunks=request.chunks + (ChunkCommit(id="docs", title="docs", paths=tuple(params["doc_writes"])),),
+            chunks=request.chunks + (ChunkCommit(id="docs", title="docs", paths=tuple(docs_declared)),),
             deliverable_id=request.deliverable_id, plan_path=request.plan_path,
             session_id=request.session_id,
         )
@@ -3091,6 +3111,11 @@ def _terminal_commit(
             and not incomplete_chunks
             and not unsent_memos
         )
+        stamp_commit = not product_only or (
+            bool(request.plan_path)
+            and snapshot is not None
+            and not snapshot.ignored_among([request.plan_path])
+        )
         reply.update(
             _stamp_coded_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
@@ -3101,7 +3126,7 @@ def _terminal_commit(
                 flip_plan=request.plan_path if flips else None,
                 receipt=request.plan_path if reply.get("review_stamp") == "minted" else None,
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
-                commit=not product_only,
+                commit=stamp_commit,
             )
         )
         flipped = reply.pop("_flip", None)

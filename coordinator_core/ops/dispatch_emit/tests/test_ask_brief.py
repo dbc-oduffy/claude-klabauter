@@ -7,6 +7,7 @@ from coordinator_core.ops.dispatch_emit.ask_brief import (
     EmBriefRefused,
     EmBrief,
     brief_decl_js,
+    check_em_brief_paths,
     load_em_brief,
     receipt_fields,
 )
@@ -71,6 +72,45 @@ def test_receipt_fields(tmp_path):
 def test_resume_plan_emitted_only_when_set():
     assert "resume_plan" not in GateVerdict(arm="s", halt=None).to_json()
     assert GateVerdict(arm="s", halt=None, resume_plan="docs/plans/p.md").to_json()["resume_plan"] == "docs/plans/p.md"
+
+
+def _fake_tmp(tmp_path, monkeypatch):
+    tmp = tmp_path / "tmp"
+    pad = tmp / "claude" / "E--proj" / "1234-uuid" / "scratchpad"
+    pad.mkdir(parents=True)
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp))
+    root = tmp_path / "repo"
+    root.mkdir()
+    return tmp, pad, root
+
+
+def test_scratchpad_context_admitted_absolute(tmp_path, monkeypatch):
+    _, pad, root = _fake_tmp(tmp_path, monkeypatch)
+    f = pad / "cap.md"
+    f.write_text("c")
+    b = load_em_brief(root, brief="x", brief_file=None, context=[str(f)])
+    assert b.context == (f.resolve().as_posix(),)
+    assert receipt_fields(b)["context"] == [f.resolve().as_posix()]
+    check_em_brief_paths(root, brief_file=None, context=[str(f)])
+
+
+def test_non_scratchpad_temp_and_sibling_repo_still_refused(tmp_path, monkeypatch):
+    tmp, pad, root = _fake_tmp(tmp_path, monkeypatch)
+    other = tmp / "claude" / "E--proj" / "1234-uuid" / "other.md"
+    other.write_text("c")
+    sibling = tmp_path / "sibling.md"
+    sibling.write_text("c")
+    for f in (other, sibling):
+        with pytest.raises(EmBriefRefused, match="outside the repo root"):
+            load_em_brief(root, brief="x", brief_file=None, context=[str(f)])
+
+
+def test_brief_file_in_scratchpad_still_refused(tmp_path, monkeypatch):
+    _, pad, root = _fake_tmp(tmp_path, monkeypatch)
+    f = pad / "b.md"
+    f.write_text("hello")
+    with pytest.raises(EmBriefRefused, match="outside the repo root"):
+        load_em_brief(root, brief=None, brief_file=str(f))
 
 
 def test_backslash_context_path_resolves_to_the_same_file(tmp_path):

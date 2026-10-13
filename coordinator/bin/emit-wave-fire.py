@@ -1148,6 +1148,66 @@ def _stamp_fire_hold(baton_path: Path, repo_root: Path, fire_script: Path) -> No
         print(f"  WARNING: could not stamp the fire hold on {baton_path.name}: {exc}", file=sys.stderr)
 
 
+def _commit_pair(
+    repo_root: Path, baton_rel: str, sizing_rel: str, deliverable_id: str | None,
+    baton_id: str,
+) -> tuple[str | None, str | None]:
+    """One zero-spawn `commit_paths` over the minted baton + sizing. Returns (sha, failure reason).
+
+    A failure never fails the emit; `(None, None)` means the pair was already committed.
+    """
+    from coordinator_core.git.commit import (
+        CommitRefused, FilterUnsupported, NothingToCommit, commit_paths,
+    )
+    from coordinator_core.git.commit_trailers import apply_missing_trailers
+    from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
+
+    paths = [baton_rel, sizing_rel]
+    try:
+        msg = apply_missing_trailers(
+            f"emit-wave-fire: sizing + baton for {baton_id}", repo_root, paths,
+            deliverable_id_override=deliverable_id,
+        )
+        outcome = commit_paths(repo_root, paths, msg, prefer_deliberate_stage=True)
+    except IndexStaleAfterCommit as exc:
+        return exc.outcome.sha, None
+    except NothingToCommit:
+        return None, None
+    except (FilterUnsupported, CommitRefused, IndexWriteError, OSError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    differing = [*outcome.staged_preferred, *outcome.worktree_over_staged]
+    if differing:
+        print(
+            "  WARNING: committed bytes differed from the other side for: " + ", ".join(differing),
+            file=sys.stderr,
+        )
+    return outcome.sha, None
+
+
+def _report_pair(
+    repo_root: Path, baton: dict, sizing_rel: str, deliverable_id: str | None,
+    *, as_json: bool = False,
+) -> None:
+    out = sys.stderr if as_json else sys.stdout
+    if not deliverable_id:
+        import yaml
+
+        try:
+            sized = yaml.safe_load((repo_root / sizing_rel).read_text(encoding="utf-8")) or {}
+            deliverable_id = str(sized.get("deliverable_id") or "") or None
+        except (OSError, yaml.YAMLError, AttributeError):
+            deliverable_id = None
+    sha, reason = _commit_pair(repo_root, baton["path"], sizing_rel, deliverable_id, baton["id"])
+    if sha:
+        print(f"  committed pair {sha[:9]}: {baton['path']}  {sizing_rel}", file=out)
+        return
+    if reason is None:
+        print("  pair already committed", file=out)
+        return
+    print(f"  WARNING: pair not committed: {reason}", file=sys.stderr)
+    print(f"  uncommitted pair for the EM: {baton['path']}  {sizing_rel}", file=out)
+
+
 def _emit_chain_from_sizing(
     args, repo_root: Path, trail_dir: Path, script_source: Path, wave_args: dict,
     wave_number: int, baton: dict, baton_path: Path, sizing_rel: str,
@@ -1193,6 +1253,7 @@ def _emit_chain_from_sizing(
         return _refuse_from_sizing(str(exc))
     _stamp_fire_hold(baton_path, repo_root, manifest_file)
     if args.json:
+        _report_pair(repo_root, baton, sizing_rel, args.deliverable_id, as_json=True)
         print(json.dumps({"waveIndex": wave_number, "chain": {
             "manifest": str(manifest_file), "batons": [baton["id"]],
         }}, indent=2))
@@ -1203,7 +1264,7 @@ def _emit_chain_from_sizing(
         file=sys.stderr,
     )
     print(f"emit-wave-fire: chain fire for {baton['id']} (mode=single, chain).")
-    print(f"  uncommitted pair for the EM: {baton['path']}  {sizing_rel}")
+    _report_pair(repo_root, baton, sizing_rel, args.deliverable_id)
     print(
         f'\n  Bash(run_in_background: true): {contract.CHAIN_BIN} --manifest "{manifest_file}"'
         "   # its exit is your wake"
@@ -1304,6 +1365,9 @@ def _emit_single_from_sizing(
         "interactionMode": interaction_mode,
         "executionOpen": False,
     }
+    deliverable_id = args.deliverable_id or str(sizing.get("deliverable_id") or "")
+    if deliverable_id:
+        baton["deliverableId"] = deliverable_id
 
     pba = _plan_blitz_args()
     plugin_agents, plugin_agents_why = pba._plugin_agents_available(
@@ -1351,12 +1415,13 @@ def _emit_single_from_sizing(
     _write_fire_receipt(out)
     _stamp_fire_hold(baton_path, repo_root, out)
     if args.json:
+        _report_pair(repo_root, baton, sizing_rel, deliverable_id or None, as_json=True)
         print(json.dumps({"waveIndex": wave_number, "fires": [
             {"fire": 1, "scriptPath": str(out), "batons": [baton["id"]]}
         ]}, indent=2))
         return EXIT_OK
     print(f"emit-wave-fire: single-plan fire for {baton['id']} (mode=single).")
-    print(f"  uncommitted pair for the EM: {baton['path']}  {sizing_rel}")
+    _report_pair(repo_root, baton, sizing_rel, deliverable_id or None)
     print(f'\n  Workflow({{ scriptPath: "{out}" }})   # no args — they are bound')
     return EXIT_OK
 

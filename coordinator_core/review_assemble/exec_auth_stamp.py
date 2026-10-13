@@ -96,7 +96,9 @@ Negative-spec:
     That judgment call stays the calling skill's, per
     `coordinator-content-repo coordinator/docs/wiki/planning/plan-execute-session-split.md` § Write-bar -- this op is a
     pure mutation once the skill has already decided to write.
-  - Does NOT git-commit. Frontmatter mutation only, via `locked_rmw`.
+  - The mints do NOT git-commit: frontmatter mutation only, via `locked_rmw`.
+    The `authorize-invocation` CLI verb alone commits its own write
+    (`_commit_own_write`, scoped to the plan path); `stamp` does not.
   - Does NOT touch any file other than the single target plan.
   - Does NOT re-derive a body-hash algorithm independently of the shared
     `coordinator_core.frontmatter.primitives.canonical_body_sha` recipe --
@@ -1258,7 +1260,7 @@ def _fire_stamp_reviewed(plan_path: str) -> None:
         )
 
 
-def _fire_stamp_approved(plan_path: str) -> None:
+def _fire_stamp_approved(plan_path: str, result: Optional[dict] = None) -> None:
     """Fire ``stamp-approved`` (``coordinator_core.ops.plan_status_transition``)
     as a SEPARATE lock and commit, after this module's own exec-auth stamp
     write has already returned `EXIT_OK` (AC8/AC9) -- never composed into
@@ -1288,7 +1290,9 @@ def _fire_stamp_approved(plan_path: str) -> None:
     A `stamp-approved` failure is reported to stderr but never turns this
     op's own exit code non-zero: the exec-auth stamp already landed and
     returned `EXIT_OK`, and this rung-advance is an additive side effect of
-    that success, not a precondition for it.
+    that success, not a precondition for it. A failure is also named in the
+    caller's JSON ``result`` (``rung_advance: failed``) when one is passed, so a
+    ready path cannot end unstamped in silence.
     """
     import sys
 
@@ -1296,11 +1300,73 @@ def _fire_stamp_approved(plan_path: str) -> None:
 
     rc = plan_status_transition.main(["stamp-approved", "--plan", plan_path])
     if rc != 0:
+        if result is not None:
+            result["rung_advance"] = "failed"
         print(
             f"review-exec-auth-stamp: stamp-approved rung advance failed for "
             f"{plan_path} (exit {rc}) -- the exec-auth stamp itself still landed",
             file=sys.stderr,
         )
+
+
+def _commit_own_write(plan_path: str, result: dict) -> None:
+    """Commit the plan path scoped to that one path, after a landed
+    `authorize-invocation` mint and BEFORE `_fire_stamp_approved`, so the
+    four-field write is never left uncommitted. First-commits the plan when it
+    is absent from HEAD.
+
+    The mint returns no text, so the committed bytes are the on-disk text read
+    back here; they are committed only if their body hash still equals the
+    mint's `result["sha"]` (a body edited in between is not absorbed).
+
+    A no-op mint (`applied` false) commits nothing. A failure is named in
+    *result* (`own_write_commit: failed`) and on stderr; it never changes the
+    caller's exit code. Only the body hash is checked, so a frontmatter edit
+    landing between the mint and this read is committed with the stamp.
+    """
+    import sys
+
+    from coordinator_core.ops import plan_status_transition as pst
+
+    if not result.get("applied"):
+        return
+
+    def _fail(why: str) -> None:
+        result["own_write_commit"] = "failed"
+        print(
+            f"review-exec-auth-stamp: committing the stamp write for {plan_path} "
+            f"failed ({why}) -- the exec-auth stamp itself still landed",
+            file=sys.stderr,
+        )
+
+    given = Path(plan_path)
+    root = resolve_repo_root(given.parent if given.is_absolute() else None)
+    if root is None:
+        return _fail("could not resolve a git worktree root")
+    live = given if given.is_absolute() else root / plan_path
+    relpath, err = pst._relpath_for_commit(live, root)
+    if relpath is None:
+        return _fail(err or "unresolvable path")
+    if not pst._head_resolves(root):
+        return _fail("HEAD does not resolve")
+    try:
+        text = live.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _fail(f"could not read ({exc})")
+    if canonical_body_sha(text) != result.get("sha"):
+        return _fail("plan body changed after the stamp")
+    split = split_frontmatter(text)
+    deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id") if split else None
+    commit = pst._commit_plan_flip(
+        root,
+        relpath,
+        f"review-exec-auth-stamp: authorize-invocation stamp on {relpath}\n",
+        text,
+        deliverable_id,
+        new_file=not pst._plan_tracked_in_head(root, relpath),
+    )
+    if not commit.ok:
+        _fail((commit.stderr or "").strip()[:200])
 
 
 USAGE = (
@@ -1534,7 +1600,8 @@ def _main_authorize_invocation(rest: list[str]) -> int:
             plan_path, delegation, delegation_source, standing_quote=standing_quote, at=at
         )
         if exit_code == EXIT_OK:
-            _fire_stamp_approved(plan_path)
+            _commit_own_write(plan_path, result)
+            _fire_stamp_approved(plan_path, result)
         print(json.dumps(result, indent=2, sort_keys=True))
         return exit_code
 
@@ -1548,7 +1615,8 @@ def _main_authorize_invocation(rest: list[str]) -> int:
             return EXIT_USAGE
         exit_code, result = stamp_sizing_authorization(plan_path, sizing_path, at=at)
         if exit_code == EXIT_OK:
-            _fire_stamp_approved(plan_path)
+            _commit_own_write(plan_path, result)
+            _fire_stamp_approved(plan_path, result)
         print(json.dumps(result, indent=2, sort_keys=True))
         return exit_code
 
@@ -1574,7 +1642,8 @@ def _main_authorize_invocation(rest: list[str]) -> int:
         plan_path, utterance, typed_command, at=at
     )
     if exit_code == EXIT_OK:
-        _fire_stamp_approved(plan_path)
+        _commit_own_write(plan_path, result)
+        _fire_stamp_approved(plan_path, result)
     print(json.dumps(result, indent=2, sort_keys=True))
     return exit_code
 
@@ -1710,6 +1779,6 @@ def main(argv: list[str]) -> int:
     )
     if exit_code == EXIT_OK:
         _fire_stamp_reviewed(plan_path)
-        _fire_stamp_approved(plan_path)
+        _fire_stamp_approved(plan_path, result)
     print(json.dumps(result, indent=2, sort_keys=True))
     return exit_code

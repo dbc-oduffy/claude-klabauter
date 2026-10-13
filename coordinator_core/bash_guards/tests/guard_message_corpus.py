@@ -4457,6 +4457,30 @@ def _fire_block_ungranted_opus_subagent_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_hook_block_ungranted_opus_subagent.check(payload))
 
 
+def _fire_persona_execution_brief(prompt: str) -> Optional[Dict[str, Any]]:
+    original = _hook_block_ungranted_opus_subagent.resolve_model_pins
+    _hook_block_ungranted_opus_subagent.resolve_model_pins = lambda *, content_root=None, home=None: (
+        {"game-dev:staff-game-dev": {"model": "opus"}},
+        None,
+    )
+    try:
+        payload = {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "game-dev:staff-game-dev", "prompt": prompt},
+        }
+        return _to_envelope_or_none(_hook_block_ungranted_opus_subagent.check(payload))
+    finally:
+        _hook_block_ungranted_opus_subagent.resolve_model_pins = original
+
+
+def _fire_block_ungranted_opus_persona_execution() -> Optional[Dict[str, Any]]:
+    return _fire_persona_execution_brief("Diagnose the defect and implement the fix.")
+
+
+def _fire_block_ungranted_opus_persona_execution_control() -> Optional[Dict[str, Any]]:
+    return _fire_persona_execution_brief("Review the plan and give a verdict.")
+
+
 def _fire_block_workflow_foreign_emission() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwfe-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
@@ -5960,6 +5984,18 @@ HOOK_ROWS: List[HookRow] = [
         "control-sonnet",
         False,
         _fire_block_ungranted_opus_subagent_control,
+    ),
+    HookRow(
+        "block_ungranted_opus_subagent",
+        "fire-persona-execution-brief",
+        True,
+        _fire_block_ungranted_opus_persona_execution,
+    ),
+    HookRow(
+        "block_ungranted_opus_subagent",
+        "control-persona-judgment-brief",
+        False,
+        _fire_block_ungranted_opus_persona_execution_control,
     ),
     HookRow("block_workflow_foreign_emission", "fire-sha-mismatch", True, _fire_block_workflow_foreign_emission),
     HookRow(

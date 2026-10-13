@@ -275,7 +275,19 @@ def classify(fm_text: str, path: Path) -> str:
     if in_inbox_dir or (_has_memo_shape(fm_text) and (status == "open" or status in _MEMO_TERMINAL_STATUS)):
         return "memo"
 
+    if status and _path_is_under_plan_dir(posix):
+        return "plan"
+
     return "ambiguous"
+
+
+def _path_is_under_plan_dir(posix_path: str) -> bool:
+    """True iff the (absolute or repo-relative) posix path sits under a plan
+    directory prefix; `..` components never qualify."""
+    if ".." in posix_path.split("/"):
+        return False
+    anchored = "/" + posix_path.lstrip("/")
+    return any(("/" + d.lstrip("/")) in anchored for d in _plan_dirs())
 
 
 #: Matched-pair wrapper punctuation a caller-pasted path is commonly found
@@ -4205,6 +4217,69 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
     return BriefResult(decision_object, exit_code)
 
 
+def _plan_brief(
+    root: Path, artifact: dict[str, Any], abs_path: Path, display_path: str, fm: dict[str, Any]
+) -> BriefResult:
+    """Brief for a `plan` artifact: read-only claim state under the plan
+    claim class plus `gates.execution_stamp_match`, which is synthesised as
+    `unstamped` when the plan carries no `execution_authorized_sha` (a
+    non-terminal plan only). No directives; no brief-stage claim."""
+    status = fm.get("status")
+    stem = Path(display_path).stem
+    claim = gates_claim(abs_path, root, "plan", stem)
+    claim_grant = compute_claim_grant(root, "plan", stem, display_path, cwd=str(root), fm=fm)
+    scope = fm.get("scope") if isinstance(fm.get("scope"), list) else []
+    tree_quiescence = compute_tree_quiescence(root, [str(s) for s in scope])
+
+    stamp_hit = compute_execution_stamp_match(root, fm, display_path)
+    stamp_gate = stamp_hit[0] if stamp_hit else None
+    if stamp_gate is None and status not in PLAN_TERMINAL_STATUS:
+        try:
+            plan_text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            plan_text = ""
+        stamp_gate = {
+            "verdict": "unstamped",
+            "stamped_sha": None,
+            "computed_sha": canonical_body_sha(plan_text),
+            "stamp_commit": None,
+            "delta_class": None,
+            "next_move": (
+                f"Run `review-exec-auth-stamp authorize-invocation {display_path}` to mint "
+                "execution_authorized_sha before executing."
+            ),
+        }
+
+    judgment_points: list[dict[str, Any]] = []
+    stamp_jp = build_execution_stamp_judgment_point(stamp_gate) if stamp_gate else None
+    if stamp_jp is not None:
+        judgment_points.append(stamp_jp)
+
+    gates_obj: dict[str, Any] = {
+        "claim": claim,
+        "claim_grant": claim_grant,
+        "coast": compute_coast(judgment_points, claim_grant, tree_quiescence),
+    }
+    if stamp_gate is not None:
+        gates_obj["execution_stamp_match"] = stamp_gate
+
+    if stamp_gate is not None and stamp_gate["verdict"] in ("stale-substantive", "unstampable"):
+        next_move = stamp_gate["next_move"]
+    elif status in ("reviewed", "approved"):
+        next_move = f"/execute-plan {display_path}"
+    else:
+        next_move = f"Plan is `{status}` — no execution move until it is reviewed."
+    return _emit({
+        "artifact": artifact,
+        "gates": gates_obj,
+        "directives": [],
+        "judgment_points": judgment_points,
+        "narration": f"{display_path} is a plan with status `{status}`.",
+        "next_move": next_move,
+        "preflight": {"tree_quiescence": tree_quiescence},
+    }, EXIT_OK)
+
+
 def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_at_brief: bool = False, repo_root: Optional[Path] = None) -> BriefResult:
     """Computes the pickup decision object for one artifact — exactly the
     kept-set keys (§ pickup oracle), nothing more. `claim_at_brief=True`
@@ -4346,6 +4421,9 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             "next_move": next_move,
             "preflight": {"tree_quiescence": tree_quiescence},
         }, EXIT_OK)
+
+    if classification == "plan":
+        return _plan_brief(root, artifact, abs_path, display_path, fm)
 
     if classification == "memo" and fm.get("status") in _MEMO_TERMINAL_STATUS:
         # M0 short-circuit (HEAD parity) — an already-`actioned`/`superseded`

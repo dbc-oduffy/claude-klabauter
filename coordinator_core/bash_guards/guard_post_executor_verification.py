@@ -19,7 +19,10 @@ Executor signal: a ``coordinator:executor`` row in the session's
 file records dispatch, not arrival; a foreground dispatch has returned before
 the EM's next tool call, which is the case this targets.
 
-Exempt: subagents (``agent_id`` present) and a sentinel
+Exempt: a scoped pytest (every target an explicit in-repo test path or node id) in an
+execute-plan session -- ``session-shape.json`` records a ``plan.path`` whose plan reads
+``status: executing`` (execute-plan doctrine has the EM run the chunk's tests itself);
+no counter bump. Also subagents (``agent_id`` present) and a sentinel
 carrying a reason line (the dispatch sentinel; each honoured one is appended to
 ``dispatch-escapes.jsonl``). One counter, ``post-executor-pytest-runs`` in the
 session share dir, spans every verification kind; counter I/O failure fails open.
@@ -27,6 +30,7 @@ session share dir, spans every verification kind; counter I/O failure fails open
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
@@ -230,6 +234,104 @@ def _runs(cmd: str, repo_root: Optional[str], cwd: Optional[str], needle: str) -
     return False
 
 
+_PYTEST_OPTS_WITH_ARG = frozenset({
+    "-k", "-m", "-p", "-c", "-o", "-W", "-n", "--maxfail", "--rootdir", "--deselect",
+    "--ignore", "--ignore-glob", "--tb", "--junitxml", "--basetemp", "--durations", "--timeout",
+    "--cov", "--cov-report", "--confcutdir", "--import-mode", "--log-level", "--color", "--capture",
+})
+_REDIRECT_RE = re.compile(r"^\d*[<>]")
+
+
+def _pytest_targets(working: List[str]) -> Optional[List[str]]:
+    """Positional targets of a direct pytest / python -m pytest segment, or None
+    when the segment is not one (nested shells, probes) or uses ``--pyargs``."""
+    working = _peel_wrappers(working)
+    if not working:
+        return None
+    head = _normalize_executable_basename(working[0])
+    if head == "pytest":
+        rest = working[1:]
+    elif _PYTHON_RE.match(head):
+        rest = None
+        for i, tok in enumerate(working[1:], 1):
+            if tok == "-m" and i + 1 < len(working) and working[i + 1] == "pytest":
+                rest = working[i + 2:]
+                break
+            if tok.startswith("-") or tok in _PY_OPTS_WITH_ARG:
+                continue
+            return None
+        if rest is None:
+            return None
+    else:
+        return None
+    targets: List[str] = []
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        i += 1
+        if tok == "--pyargs":
+            return None
+        if _REDIRECT_RE.match(tok):
+            if re.fullmatch(r"\d*[<>]+&?\d*", tok):
+                i += 1
+            continue
+        if tok.startswith("-"):
+            if "=" not in tok and tok in _PYTEST_OPTS_WITH_ARG:
+                i += 1
+            continue
+        targets.append(tok)
+    return targets
+
+
+def _is_scoped_target(target: str, repo_root: str, cwd: str) -> bool:
+    path = target.split("::", 1)[0]
+    if not path or "$" in path or "*" in path:
+        return False
+    full = os.path.normcase(os.path.normpath(os.path.join(cwd, path)))
+    root = os.path.normcase(os.path.normpath(repo_root))
+    if full != root and not full.startswith(root + os.sep):
+        return False
+    return full != root and (path.endswith(".py") or os.path.isdir(full))
+
+
+def is_scoped_pytest(cmd: str, repo_root: str, cwd: str) -> bool:
+    """True iff every verification segment is a direct pytest whose every positional
+    target is an explicit in-repo test path or node id, with at least one target."""
+    tokens = _tokenize_full_command(cmd)
+    if tokens is None:
+        return False
+    stdin_code = _heredoc_code(cmd) if "<<" in cmd else ""
+    seen = False
+    for seg_tokens, _pipe_before in _segments_from_tokens(tokens):
+        working = seg_tokens if seg_tokens and "$(" in seg_tokens[0] else _strip_leading_subshell_and_env(seg_tokens) if seg_tokens else []
+        if not working or not _is_pytest_segment(working, repo_root, cwd, stdin_code):
+            continue
+        targets = _pytest_targets(working)
+        if not targets or not all(_is_scoped_target(t, repo_root, cwd) for t in targets):
+            return False
+        seen = True
+    return seen
+
+
+def execute_plan_session(session_id: str, repo_root: str) -> bool:
+    """This session claimed a plan through execute-plan: ``claim_plan(for_execution=True)``
+    stamps the plan ``executing`` and records ``plan.path`` in the session's
+    ``session-shape.json``. Two small reads, no spawn; any failure reads as False."""
+    from coordinator_core.lifecycle import git_common_dir
+
+    try:
+        sdir = git_common_dir(Path(repo_root)) / "coordinator-sessions" / session_id
+        with open(sdir / "session-shape.json", "r", encoding="utf-8") as fh:
+            rel = ((json.load(fh).get("plan") or {}).get("path")) or ""
+        if not rel:
+            return False
+        with open(Path(repo_root) / rel, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4096)
+    except Exception:
+        return False
+    return re.search(r"^status:\s*['\"]?executing['\"]?\s*$", head, re.M) is not None
+
+
 def _executor_type(value: str) -> bool:
     folded = value.strip().casefold()
     if folded.startswith("coordinator:"):
@@ -320,7 +422,12 @@ def check(payload: dict) -> Optional[dict]:
     if not cmd or "python" not in cmd and "pytest" not in cmd:
         return None
     session_id, repo_root, verdict = _gate(payload, cmd[:200])
-    if verdict != "deny" or not runs_verification(cmd.replace("\r", ""), repo_root, payload.get("cwd") or repo_root):
+    clean = cmd.replace("\r", "")
+    cwd = payload.get("cwd") or repo_root
+    if verdict != "deny" or not runs_verification(clean, repo_root, cwd):
+        return None
+    if is_scoped_pytest(clean, repo_root, cwd) and execute_plan_session(session_id, repo_root):
+        record_silent(GUARD_NAME, "scoped pytest in an execute-plan session: exempt")
         return None
     if _bump_counter(repo_root, session_id) < 1:
         return None

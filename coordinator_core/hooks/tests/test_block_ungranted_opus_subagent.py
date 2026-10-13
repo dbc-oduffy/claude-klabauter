@@ -148,6 +148,68 @@ def test_opus_pinned_persona_passes_with_explicit_model_opus(monkeypatch: pytest
     assert mod.check(_agent_payload("coordinator:eng-director", model="opus")) is None
 
 
+_SID = {"game-dev:staff-game-dev": {"model": "opus", "_source_path": "x"}}
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Diagnose the two eye-render defects and implement host code plus tests.",
+        "Fix the crash in the loader.",
+        "Probe the cache and patch the stale entry.",
+        "Implement the plan in docs/plans/x.md and fix the loader",
+        "Patch per the review findings",
+    ],
+)
+def test_opus_persona_execution_brief_denies_with_executor_pointer(
+    monkeypatch: pytest.MonkeyPatch, prompt: str
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    envelope = mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt))
+    assert envelope is not None
+    hso = envelope["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "coordinator:executor" in hso["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Review the plan and give a verdict.",
+        "Critique this design; fix nothing.",
+        "Rule on whether we should implement the cache.",
+        "Evaluating the patch for the loader fix.",
+        "Ruling on whether to fix the crash.",
+        "do the thing",
+        "",
+    ],
+)
+def test_opus_persona_judgment_or_ambiguous_brief_passes(
+    monkeypatch: pytest.MonkeyPatch, prompt: str
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt)) is None
+
+
+def test_opus_persona_execution_brief_description_field_classified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    payload = _agent_payload("game-dev:staff-game-dev", prompt="see attached")
+    payload["tool_input"]["description"] = "Fix the eye shader"
+    assert mod.check(payload)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_opus_persona_execution_brief_grant_env_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    monkeypatch.setenv(mod._OVERRIDE_ENV, "1")
+    assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt="Fix the crash.")) is None
+    monkeypatch.delenv(mod._OVERRIDE_ENV)
+    assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt="Fix the crash.")) is not None
+
+
 def test_fork_under_opus_parent_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")

@@ -1806,3 +1806,51 @@ def test_sizing_arm_engine_rule_record_authorizes_like_a_null_acceptance(tmp_pat
     assert code == EXIT_OK, result
     fm = yaml.safe_load((tmp_path / plan).read_text(encoding="utf-8").split("---")[1])
     assert fm["execution_authorized_by"] == "engine-size-rule"
+
+
+def test_ready_path_stamps_approved_body_sha_and_first_commits_untracked_plan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
+
+    _init_repo(tmp_path)
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    plan = plans / "p.md"
+    plan.write_text(_PLAN_TEXT, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["mark-reviewed", str(plan)]) == EXIT_OK
+    rc = main([
+        "authorize-invocation", str(plan),
+        "--authorized-by-delegation", "accepted sizing (mode=pm)",
+        "--delegation-source", "state/sizings/s.yaml",
+    ])
+    assert rc == EXIT_OK
+    text = plan.read_text(encoding="utf-8")
+    fm = yaml.safe_load(text.split("---")[1])
+    assert fm["status"] == "approved"
+    assert check_approved_body(text)[0] == APPROVED_BODY_OK
+    assert _git(tmp_path, "ls-tree", "HEAD", "--", "docs/plans/p.md").stdout.strip()
+    assert _git(tmp_path, "status", "--porcelain", "--", "docs/plans/p.md").stdout.strip() == ""
+
+
+def test_authorize_invocation_names_a_failed_rung_advance_in_its_json(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A failed stamp-approved rung advance is named in the mint's JSON result."""
+    import json
+
+    from coordinator_core.ops import plan_status_transition
+
+    plan, _ = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(plan_status_transition, "main", lambda argv: 1)
+    capsys.readouterr()
+    rc = main([
+        "authorize-invocation", str(tmp_path / plan),
+        "--authorized-by-delegation", "a", "--delegation-source", "s",
+    ])
+    assert rc == EXIT_OK
+    out = capsys.readouterr().out
+    assert json.loads(out)["rung_advance"] == "failed"

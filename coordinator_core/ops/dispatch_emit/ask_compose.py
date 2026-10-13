@@ -307,7 +307,7 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
     """`planBlitz` defined inside a scope whose `agent` prefixes the ledger clause, so every
     plan-blitz prompt reads the requirements ledger first. An EM-brief shadow inside the function
     calls `_askAgent`, rebound here to the ledger-prefixed agent: the brief and the ledger compose."""
-    rebind = "    const _askAgent = (p, o) => agent(p, o);\n" if em_brief else ""
+    rebind = "    const _askAgent = agent;\n" if em_brief else ""
     return (
         "  const _outerAgent = agent;\n"
         f"  const {_PLAN_BLITZ_FN} = (() => {{\n"
@@ -1148,7 +1148,7 @@ def compose_ask_script(
         ": { kind: 'none', op: null, params: null };"
     )
     b.append(
-        "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
+        "  if (_nextAction.params) { _nextAction.params.ledger_verdict = { items: (_ledger?.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, "
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}) })) }; }"
     )
@@ -1219,8 +1219,9 @@ def _append_docs_and_commit(
     """The run's last two stages, under a live terminal-commit `_nextAction` and no halt: a Sonnet
     docs stage (stale README and wiki pages, the delivery note) whose reported files ride the
     commit as `doc_paths`, then a git-commit-agent running `dispatch.terminal_commit` with the run
-    token. The commit lands product only: plans, sizings, briefs and sidecars are process records
-    it never carries. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has no commit to run.
+    token. The product commit lands the product files and the delivery note; a second commit
+    stamps the plan and the completion entry unless the plan is gitignored. Briefs and
+    sidecars stay on disk. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has no commit to run.
 
     Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
     `block_subagent_commit` run-token leg admits nothing else.

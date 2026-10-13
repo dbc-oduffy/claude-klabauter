@@ -255,7 +255,8 @@ def test_landing_never_walks_a_plan_backwards(tmp_path, status):
 
     out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
 
-    assert out["approved"][0]["stamped"] is False
+    # An already-approved plan with no body sha is stamped in place; it is never re-flipped.
+    assert out["approved"][0]["stamped"] is (status == "approved")
     assert _status(root, plan) == status
 
 
@@ -1617,3 +1618,35 @@ def test_a_claude_home_fallback_outside_the_documented_default_is_still_flagged(
     result = guard.check(_blitz_em_bash(command))
     assert result is not None
     assert "unresolved" in result["hookSpecificOutput"]["additionalContext"]
+
+
+def _linked_report(baton: str, plan: str) -> dict:
+    return {"batons": [{"path": baton, "plan": {"path": plan}}]}
+
+
+def test_approve_ready_stamps_a_plan_already_approved_without_a_body_sha(tmp_path):
+    """The already-approved branch repairs an absent approved_body_sha."""
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
+
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1")
+    plan = _plan(root, "p-1", "approved")
+    assert check_approved_body((root / plan).read_text(encoding="utf-8"))[0] != APPROVED_BODY_OK
+
+    out = bl.approve_ready(root, baton, plan, _linked_report(baton, plan))
+
+    assert out["stamped"] is True
+    assert check_approved_body((root / plan).read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+
+@pytest.mark.parametrize("status", ["executing", "implemented"])
+def test_approve_ready_leaves_a_later_status_without_a_stamp_untouched(tmp_path, status):
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1")
+    plan = _plan(root, "p-1", status)
+    before = (root / plan).read_text(encoding="utf-8")
+
+    out = bl.approve_ready(root, baton, plan, _linked_report(baton, plan))
+
+    assert out["stamped"] is False
+    assert (root / plan).read_text(encoding="utf-8") == before

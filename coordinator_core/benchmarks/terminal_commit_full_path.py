@@ -6,7 +6,7 @@ whole close: product commit, review-stamp mint, coded-stamp commit, implemented
 flip. `--setup-only` does everything except the handler call, so the cost of the
 call is `full - setup-only` (the run-close spike's method).
 
-    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise]
+    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask]
 
 `--kind mise` rewires the same repo as an inventory-mode run: the emitted script's marker
 names a minted spine, whose sibling inventory record maps row `P1.C3` to the source plan.
@@ -184,6 +184,93 @@ def build_mise_fixture(parent: Path) -> tuple[Path, str]:
     return repo, script
 
 
+ASK_RUN = "run1"
+ASK_DLV = "dlv-alpha-aaaaaa"
+ASK_SIZING_REL = "state/sizings/20260101-a.yaml"
+ASK_PLAN_REL = "docs/plans/p.md"
+ASK_DELIVERY_REL = f"docs/delivery/{ASK_RUN}.md"
+_ASK_SIZING = (
+    "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: S\n  provisional: true\n"
+    "route: spec-dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\n"
+    "premise:\n  provenance: read\n  evidence: fixture\n"
+)
+_ASK_PLAN = f"""---
+title: p
+status: executing
+plan_id: {PLAN_ID}
+deliverable_id: {ASK_DLV}
+sizing_object: {ASK_SIZING_REL}
+prime_exit_criterion:
+  text: a.py exists
+  statement: done
+  falsifier:
+    how: pytest tests/test_a.py::test_x -q
+    expected_when_true: passes
+---
+
+# Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C3
+  title: t3
+  change_kind: code-edit
+  surface: a.py
+  disposition: open
+  deferred: false
+```
+"""
+
+
+def build_ask_fixture(parent: Path) -> tuple[Path, str]:
+    """`build_fixture` rewired as a warp ask run: sizing committed, in-run plan on disk and
+    uncommitted, a run directory with marker and manifest, an ask-manifest script, a seeded
+    requirements ledger, a delivery note and one product file."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        ASK_MANIFEST_MARKER,
+        RUN_DIR_ROOT,
+        StageManifest,
+    )
+    from coordinator_core.ops.dispatch_emit.commit_request import (
+        ChunkCommit,
+        CommitRequest,
+        render_marker,
+    )
+
+    repo, script = build_fixture(parent)
+    (repo / ".gitignore").write_text("scratch/\n.coordinator-local/\n", encoding="utf-8")
+    (repo / ASK_SIZING_REL).parent.mkdir(parents=True)
+    (repo / ASK_SIZING_REL).write_text(_ASK_SIZING, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "ask seed")
+    (repo / ASK_PLAN_REL).parent.mkdir(parents=True)
+    (repo / ASK_PLAN_REL).write_text(_ASK_PLAN, encoding="utf-8")
+    run_rel = f"{RUN_DIR_ROOT}/{ASK_RUN}"
+    marker_rel = f"{run_rel}/commit-request.txt"
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),),
+        deliverable_id=ASK_DLV,
+        plan_path=ASK_PLAN_REL,
+    )
+    (repo / run_rel).mkdir(parents=True)
+    (repo / marker_rel).write_text(render_marker(request) + "\n", encoding="utf-8")
+    manifest = StageManifest(
+        run_dir=run_rel, rows=(), review_declared_paths=(), marker_path=marker_rel
+    )
+    (repo / run_rel / "manifest.json").write_text(json.dumps(manifest.to_json()), encoding="utf-8")
+    (repo / script).write_text(
+        f"// emitted script\n{ASK_MANIFEST_MARKER}{run_rel}/manifest.json\n", encoding="utf-8"
+    )
+    rl.seed(repo / run_rel, ASK_RUN, ["ship a.py"], origin=rl.ORIGIN_PM_VERBATIMS, all_of_pm_ask=False)
+    (repo / ASK_DELIVERY_REL).parent.mkdir(parents=True)
+    (repo / ASK_DELIVERY_REL).write_text("# delivered\n", encoding="utf-8")
+    return repo, script
+
+
 def _prepare_close(repo: Path) -> None:
     """Point the lessons outbox and the close job at the fixture, and stub the session's baton claim.
 
@@ -234,18 +321,20 @@ def _close_failure(out: dict) -> str:
     return ""
 
 
-def _run_full_path(repo: Path, script: str) -> dict:
+def _run_full_path(repo: Path, script: str, kind: str = "plan") -> dict:
     from coordinator_core.ops.dispatch_emit import terminal_commit
 
-    return terminal_commit._handler(
-        {
-            "script_path": script,
-            "incomplete_chunks": [],
-            "session_id": SESSION_ID,
-            "inline_review": INLINE_REVIEW,
-        },
-        repo_root=repo / ".git",
-    )
+    params = {
+        "script_path": script,
+        "incomplete_chunks": [],
+        "session_id": SESSION_ID,
+        "inline_review": INLINE_REVIEW,
+    }
+    if kind == "ask":
+        params["ledger_verdict"] = {"items": [{"id": "R1", "status": "met"}]}
+        params["doc_paths"] = [ASK_DELIVERY_REL]
+        params["doc_writes"] = [ASK_DELIVERY_REL]
+    return terminal_commit._handler(params, repo_root=repo / ".git")
 
 
 def main(argv: list[str]) -> int:
@@ -258,25 +347,36 @@ def main(argv: list[str]) -> int:
         del argv[at : at + 2]
     args = [a for a in argv if not a.startswith("--")]
     unknown = [a for a in argv if a.startswith("--") and a != "--setup-only"]
-    if len(args) != 1 or unknown or kind not in ("plan", "mise"):
-        print("usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise]", file=sys.stderr)
+    builders = {"plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture}
+    if len(args) != 1 or unknown or kind not in builders:
+        print("usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask]", file=sys.stderr)
         return 2
-    repo, script = (build_mise_fixture if kind == "mise" else build_fixture)(Path(args[0]))
+    repo, script = builders[kind](Path(args[0]))
     from coordinator_core.ops.dispatch_emit import terminal_commit  # noqa: F401  (loaded in both modes)
 
     _prepare_close(repo)
     if "--setup-only" in argv:
         return 0
-    out = _run_full_path(repo, script)
-    complete = (
-        bool(out.get("committed")) and "coded_sha" in out
-        if kind == "mise"
-        else out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"
-    )
+    out = _run_full_path(repo, script, kind)
+    if kind == "mise":
+        complete = bool(out.get("committed")) and "coded_sha" in out
+    elif kind == "ask":
+        complete = (
+            out.get("committed") is True
+            and out.get("review_stamp") == "minted"
+            and not out.get("coded_stamp_error")
+        )
+    else:
+        complete = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"
     if not complete:
         print(f"full path did not complete: {out!r}", file=sys.stderr)
         return 1
-    failure = (_mise_close_failure if kind == "mise" else _close_failure)(out)
+    if kind == "mise":
+        failure = _mise_close_failure(out)
+    elif kind == "ask":
+        failure = ""
+    else:
+        failure = _close_failure(out)
     if failure:
         print(failure, file=sys.stderr)
         return 1

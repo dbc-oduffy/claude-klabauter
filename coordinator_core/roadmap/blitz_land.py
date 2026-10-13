@@ -575,6 +575,11 @@ def approve_ready(
         if current in PLAN_APPROVED_STATUSES:
             # Idempotent: a re-landed wave must not walk a plan backwards from
             # `implemented` to `approved`, which would re-open a gate that closed.
+            from coordinator_core.ops.plan_status_transition import repair_absent_approved_stamp
+
+            with_stamp = repair_absent_approved_stamp(old)
+            if with_stamp != old:
+                return with_stamp
             raise MutateAbort(f"already at status: {current}")
         from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
 

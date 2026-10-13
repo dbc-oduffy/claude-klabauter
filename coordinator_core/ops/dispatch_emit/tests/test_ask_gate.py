@@ -94,6 +94,17 @@ def test_agent_run_plan_and_dispatch_to_l_skip_acceptance_and_stamp_the_engine(r
     assert v.acceptance["by"] == "engine-size-rule" and v.acceptance["mode"] == mode
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_m_plus_baton_carries_the_sizing_deliverable_id(repo):
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, tshirt="M", route="plan")
+    v = gate(repo, REL)
+    assert v.halt is None and v.arm == "m_plus"
+    assert v.baton["deliverableId"] == "dlv-fixture-abc123"
+    assert v.to_json()["baton"]["deliverableId"] == "dlv-fixture-abc123"
+
+
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt,route", [("XL", "plan"), ("XXL", "plan")])
 def test_xl_keeps_the_acceptance_touchpoint(repo, mode, tshirt, route):

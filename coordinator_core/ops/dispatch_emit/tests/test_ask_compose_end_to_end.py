@@ -46,6 +46,23 @@ def test_size_stays_on_the_cheap_executor():
     assert "model: 'sonnet'" in _agent_opts(_compose(), "size")
 
 
+@pytest.mark.parametrize("em_brief", [False, True])
+def test_every_composed_agent_call_is_modeled(em_brief):
+    from coordinator_core.hooks.block_workflow_unmodeled_agent import _count_agent_modeled_with_types
+    from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief
+
+    over = {}
+    if em_brief:
+        over = {
+            "em_brief": EmBrief(text="brief", source="inline", context=()),
+            "wrap_stage": lambda text, agent_prefix_var=None: ("  async function planBlitz(args) { return {}; }", ["Size"]),
+        }
+    script = _compose(in_run_commit=True, **over)
+    assert ("const _askAgent = agent;" in script) == em_brief
+    agent_n, modeled_n, _ = _count_agent_modeled_with_types(script)
+    assert agent_n > 0 and modeled_n == agent_n
+
+
 def test_no_run_token_leaves_the_commit_to_the_em():
     script = _compose()
     assert "phase('commit')" not in script and "phase('docs')" not in script

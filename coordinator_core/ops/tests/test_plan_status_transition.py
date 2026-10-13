@@ -1582,7 +1582,6 @@ def test_rung_verb_rejects_override_reason(tmp_path, capsys, verb, target):
         ("stamp-reviewed", "reviewed", "reviewed"),
         ("stamp-reviewed", "reviewed", "approved"),
         ("stamp-reviewed", "reviewed", "executing"),
-        ("stamp-approved", "approved", "approved"),
         ("stamp-approved", "approved", "executing"),
         ("stamp-executing", "executing", "executing"),
     ],
@@ -1603,6 +1602,80 @@ def test_rung_verb_at_or_past_target_is_byte_identical_no_op(
     assert "already at or past" in capsys.readouterr().err
     assert p.read_text(encoding="utf-8") == original
     assert p.stat().st_mtime_ns == before_mtime
+
+
+def test_stamp_approved_on_approved_plan_with_stamp_is_byte_identical_no_op(tmp_path, capsys):
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    original = stamp_approved_body_sha("---\nstatus: approved\n---\n\nBody.\n")
+    p = _write(tmp_path, "p.md", original)
+    before_mtime = p.stat().st_mtime_ns
+    assert main(["stamp-approved", "--plan", str(p)]) == 0
+    assert "already at or past" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+    assert p.stat().st_mtime_ns == before_mtime
+
+
+def test_stamp_approved_stamps_an_approved_plan_whose_body_sha_is_absent(tmp_path):
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
+
+    p = _write(tmp_path, "p.md", "---\nstatus: approved\n---\n\nBody.\n")
+    assert main(["stamp-approved", "--plan", str(p)]) == 0
+    text = p.read_text(encoding="utf-8")
+    assert check_approved_body(text)[0] == APPROVED_BODY_OK
+    log = subprocess.run(
+        ["git", "log", "-1", "--format=%s", "--", "p.md"], cwd=str(tmp_path),
+        capture_output=True, text=True, timeout=15, **no_console_creationflags(),
+    )
+    assert "stamp status" in log.stdout
+
+
+def test_stamp_approved_never_repairs_an_executing_plan_without_a_stamp(tmp_path):
+    original = "---\nstatus: executing\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    assert main(["stamp-approved", "--plan", str(p)]) == 0
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_approved_leaves_a_present_but_different_stamp_alone(tmp_path):
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    stamped = stamp_approved_body_sha("---\nstatus: approved\n---\n\nBody.\n")
+    original = stamped.replace("Body.", "Amended.")
+    p = _write(tmp_path, "p.md", original)
+    assert main(["stamp-approved", "--plan", str(p)]) == 0
+    assert p.read_text(encoding="utf-8") == original
+
+
+def _tracked_state(tmp_path):
+    return subprocess.run(
+        ["git", "status", "--porcelain", "--", "p.md"], cwd=str(tmp_path),
+        capture_output=True, text=True, timeout=15, **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def test_stamp_approved_first_commits_an_untracked_plan(tmp_path):
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
+
+    _ensure_git_repo(tmp_path)
+    p = tmp_path / "p.md"
+    p.write_text("---\nstatus: reviewed\ndeliverable_id: d-1\n---\n\nBody.\n", encoding="utf-8")
+    assert main(["stamp-approved", "--plan", str(p)]) == 0
+    assert check_approved_body(p.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+    assert _tracked_state(tmp_path) == ""
+    shown = subprocess.run(
+        ["git", "show", "HEAD:p.md"], cwd=str(tmp_path), capture_output=True, text=True,
+        timeout=15, **no_console_creationflags(),
+    )
+    assert shown.stdout == p.read_text(encoding="utf-8")
+
+
+def test_stamp_reviewed_leaves_an_untracked_plan_uncommitted(tmp_path):
+    _ensure_git_repo(tmp_path)
+    p = tmp_path / "p.md"
+    p.write_text("---\nstatus: draft\n---\n\nBody.\n", encoding="utf-8")
+    assert main(["stamp-reviewed", "--plan", str(p)]) == 0
+    assert _tracked_state(tmp_path).startswith("??")
 
 
 @pytest.mark.parametrize("verb", ["stamp-reviewed", "stamp-approved"])

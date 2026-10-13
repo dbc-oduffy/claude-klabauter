@@ -398,6 +398,20 @@ _FLIPPABLE_STATUSES = frozenset(_FLIPPABLE_STATUSES_ORDER)
 _CLOSE_OUT_PARTIAL_FIELD = "close_out_last_partial"
 
 
+def repair_absent_approved_stamp(text: str) -> str:
+    """`text` with `approved_body_sha` stamped when status is exactly `approved` and the
+    stamp is ABSENT; otherwise `text` unchanged. A present stamp, right or wrong, is
+    never touched (that is `restamp`'s job), and `executing` or later is never repaired."""
+    split = split_frontmatter(text)
+    if split is None:
+        return text
+    status = _strip_unquoted_trailing_comment(read_fm_field(split.fm_text, "status"))
+    status = unquote_yaml_scalar(status) if status is not None else status
+    if status != "approved" or read_fm_field_unquoted(split.fm_text, "approved_body_sha"):
+        return text
+    return stamp_approved_body_sha(text)
+
+
 class _Opts:
     __slots__ = (
         "verb", "plan", "by", "override_reason", "reason", "findings",
@@ -959,6 +973,8 @@ def _commit_plan_flip(
     message: str,
     content: str,
     deliverable_id: Optional[str],
+    *,
+    new_file: bool = False,
 ) -> git_native.GitResult:
     """Commit the plan's own status flip, scoped to exactly the plan path
     just written -- the writer-side commit-ownership shape this module's
@@ -1003,6 +1019,8 @@ def _commit_plan_flip(
     ``commit_authored_content`` and falls through to that function's own
     blind env-var read, same as every other caller of it.
     """
+    if new_file and deliverable_id:
+        message = f"{message.rstrip()}\n\nDeliverable-Id: {deliverable_id}\n"
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8",
         dir=managed_tempdir(worktree_root),
@@ -1010,7 +1028,10 @@ def _commit_plan_flip(
         fh.write(message)
         msg_path = fh.name
     try:
-        return git_native.commit_authored_content(
+        commit = (
+            git_native.commit_authored_new_file if new_file else git_native.commit_authored_content
+        )
+        return commit(
             relpath, content, msg_path, worktree_root, deliverable_id=deliverable_id,
         )
     finally:
@@ -3264,6 +3285,11 @@ def _stamp_rung(
         if not is_reentry and status_index >= target_index:
             _state["flipped"] = False
             _state["prior_status"] = status
+            if target_status == "approved":
+                repaired = repair_absent_approved_stamp(text)
+                if repaired != text:
+                    _state["flipped"] = True
+                    return repaired
             return old_text  # byte-identical -> locked_rmw skips the write
 
         fm_text = replace_fm_field(split.fm_text, "status", target_status)
@@ -3319,12 +3345,16 @@ def _stamp_rung(
             )
             return 1
         untracked_reason: Optional[str] = None
-        if not _head_resolves(worktree_root):
+        head_ok = _head_resolves(worktree_root)
+        if not head_ok:
             untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
         elif not _plan_tracked_in_head(worktree_root, relpath):
             untracked_reason = "not tracked in git (absent from HEAD)"
 
-        if untracked_reason is not None:
+        # The approved rung is the one that first-commits an untracked plan: the op that
+        # marks a plan ready owns landing it. Every other rung leaves it uncommitted.
+        first_commit = untracked_reason is not None and head_ok and target_status == "approved"
+        if untracked_reason is not None and not first_commit:
             print(
                 f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
                 "disk but was left uncommitted (this op mutates an existing tracked "
@@ -3338,6 +3368,7 @@ def _stamp_rung(
             )
             commit_result = _commit_plan_flip(
                 worktree_root, relpath, message, written_text, _state["deliverable_id"],
+                new_file=first_commit,
             )
             if not commit_result.ok:
                 print(

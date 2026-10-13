@@ -3565,3 +3565,72 @@ def test_round_reports_wiki_seed_match_and_proceeds(tmp_path, monkeypatch):
 
     assert "percolate.wiki_seed_count_match: true (1 published" in out
     assert len(commit_calls) == 1
+
+
+_REAL_FIELD7_PREFLIGHT = _mod._field7_preflight
+
+
+@pytest.fixture(autouse=True)
+def _stub_field7_preflight(monkeypatch):
+    """Round tests fake the source repo; the real preflight runs the generator
+    against this checkout. The field-7 tests below re-install the real one."""
+    monkeypatch.setattr(_mod, "_field7_preflight", lambda _target: None)
+
+
+class _FakePublish:
+    def __init__(self, result):
+        self._result = result
+        self.checks = 0
+
+    def _round_pin_source_sha(self, root, pinned):
+        return "abc123"
+
+    def _field7_declaration_check(self, pinned_sha=None):
+        self.checks += 1
+        assert pinned_sha == "abc123"
+        return self._result
+
+
+def _drive_field7_round(tmp_path, monkeypatch, result):
+    publish = _FakePublish(result)
+    monkeypatch.setattr(_mod, "_field7_preflight", _REAL_FIELD7_PREFLIGHT)
+    monkeypatch.setattr(_mod, "_sibling_cli", lambda script: publish)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(tmp_path))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path))
+    reached: list = []
+    monkeypatch.setattr(_mod, "_cmd_round_default", lambda *a, **k: reached.append(1) or _mod._EXIT_OK)
+    args = _mod._build_parser().parse_args(["claude-klabauter", "--percolate-root", str(tmp_path), "--yes"])
+    return _mod._cmd_round(args), reached, publish
+
+
+def test_red_field7_for_an_owned_row_refuses_before_any_sync(tmp_path, monkeypatch, capsys):
+    rc, reached, publish = _drive_field7_round(
+        tmp_path, monkeypatch, (False, "stale deny entry: x", frozenset({"claude-klabauter"}))
+    )
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    err = capsys.readouterr().err
+    assert "stale deny entry: x" in err and "publish-allowlist-generate.py" in err
+
+
+def test_unknown_owned_set_refuses_when_field7_is_red(tmp_path, monkeypatch):
+    rc, reached, _publish = _drive_field7_round(tmp_path, monkeypatch, (False, "could not load", None))
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+
+
+def test_red_field7_for_an_unowned_target_proceeds(tmp_path, monkeypatch):
+    rc, reached, _publish = _drive_field7_round(
+        tmp_path, monkeypatch, (False, "stale", frozenset({"other-row"}))
+    )
+    assert rc == _mod._EXIT_OK
+    assert reached == [1]
+
+
+def test_green_field7_proceeds_with_one_check(tmp_path, monkeypatch):
+    rc, reached, publish = _drive_field7_round(
+        tmp_path, monkeypatch, (True, "", frozenset({"claude-klabauter"}))
+    )
+    assert rc == _mod._EXIT_OK
+    assert reached == [1]
+    assert publish.checks == 1

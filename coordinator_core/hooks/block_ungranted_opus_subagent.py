@@ -86,12 +86,19 @@ rewrite cannot degrade. Rung 2 -- a gated non-`opus` frontmatter pin -- is a
 human-authored declaration, so it hard-denies at every guard level rather
 than being quietly overridden.
 
-PERSONA EXEMPTION -- UNCONDITIONAL ON THE TYPE'S OWN PIN, NOT ON WHAT WAS
-PASSED. If `resolve_model_pins()` shows this `subagent_type`'s own
-frontmatter pins `model: opus`, this module returns `None` (out of scope)
-immediately, before computing an effective model at all -- an Opus-pinned
-persona (e.g. an eng-director/reviewer type) is TRUSTED for whatever it is
-dispatched as; the composed sibling `enforce_agent_model_pin` already
+PERSONA EXEMPTION -- ON THE TYPE'S OWN PIN, NOT ON WHAT WAS PASSED, BUT ONLY
+FOR JUDGMENT BRIEFS (PM ruling 2026-10-13: Opus is for review and plan, not
+patching and probing). If `resolve_model_pins()` shows this `subagent_type`'s
+own frontmatter pins `model: opus`, this module does not compute an effective
+model; it classifies the brief (`tool_input` description + prompt, in-process
+regex, no spawn). A brief with execution/diagnosis vocabulary (fix, patch,
+probe, diagnose, implement, debug, write code/tests ...) and NO judgment
+vocabulary (review, critique, verdict, ruling, assess, audit, plan, design ...)
+is DENIED with a pointer to `coordinator:executor` -- denied, not rewritten,
+because a persona on Sonnet is still the wrong worker. Every other brief,
+ambiguous ones included, returns `None`: an Opus-pinned persona is trusted for
+judgment work. The env grant and fork exits run before this and still
+override. The composed sibling `enforce_agent_model_pin` already
 governs any attempt to run it under a passed value that isn't equal-to or
 cheaper-than its own pin (a passed `model: "fable"` against an `opus` pin
 is `enforce_agent_model_pin`'s own "unorderable -> deny" leg, upstream of
@@ -145,6 +152,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from typing import Any, Dict, Optional
 
@@ -177,6 +185,39 @@ def _is_gated_tier(model_id: Optional[str]) -> bool:
         return False
     lowered = model_id.lower()
     return any(token in lowered for token in _GATED_TIER_TOKENS)
+
+
+_JUDGMENT_RE = re.compile(
+    r"\A\W*(review|critiqu|rul|assess|audit|evaluat|adjudicat|apprais|approv|"
+    r"plan|design|architect|recommend|advis|opin|judg)\w*\b",
+    re.IGNORECASE,
+)
+_EXECUTION_RE = re.compile(
+    r"\b(fix|fixes|fixing|patch\w*|prob(?:e|es|ing)|diagnos\w*|implement\w*|debug\w*|"
+    r"repair\w*|refactor\w*|write (?:the )?(?:code|tests?)|code (?:up|the)|"
+    r"add (?:a )?tests?)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_execution_brief(tool_input: Dict[str, Any]) -> bool:
+    """True when the brief carries execution/diagnosis vocabulary and neither the
+    description nor the prompt opens with a judgment verb (a judgment word later in
+    the text does not shield). No execution hit resolves to False."""
+    fields = [
+        v for v in (tool_input.get("description"), tool_input.get("prompt")) if isinstance(v, str)
+    ]
+    if not fields or any(_JUDGMENT_RE.match(v) for v in fields):
+        return False
+    return _EXECUTION_RE.search(" ".join(fields)) is not None
+
+
+def _persona_execution_reason(subagent_type: str) -> str:
+    return (
+        f"AGENT DISPATCH BLOCKED: persona {subagent_type!r} is Opus; the brief is "
+        "execution/diagnosis work, not review or plan, and no PM grant applies. "
+        "Dispatch coordinator:executor."
+    )
 
 
 def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
@@ -212,6 +253,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if pin_model == "opus":
         # Named persona -- see module docstring "PERSONA EXEMPTION".
+        if _is_execution_brief(tool_input):
+            return deny("PreToolUse", _persona_execution_reason(subagent_type))
         return None
 
     passed_model = _clean_str(tool_input.get("model"))

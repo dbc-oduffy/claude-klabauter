@@ -177,10 +177,14 @@ def gate(
         return _halt(HALT_REFUSAL, str(exc))
     # The effective route, so a PM-recorded accept_multi_session plans in the
     # single-mode wave instead of re-adjudicating the sizing's raw `pm-decision`.
+    minted = {"id": baton["id"], "path": baton["path"], "route": route}
+    deliverable_id = str(sizing.get("deliverable_id") or "").strip()
+    if deliverable_id:
+        minted["deliverableId"] = deliverable_id
     return GateVerdict(
         arm=arm,
         halt=None,
-        baton={"id": baton["id"], "path": baton["path"], "route": route},
+        baton=minted,
         acceptance=acceptance,
         resume_plan=resume,
     )

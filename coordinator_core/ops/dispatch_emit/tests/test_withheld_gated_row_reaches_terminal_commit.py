@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -72,7 +72,7 @@ def test_gated_em_row_is_withheld_and_listed_incomplete(tmp_path):
     (root / "pkg").mkdir()
     (root / "pkg" / "a.py").write_text("a\n", encoding="utf-8")
     (root / "run.mjs").write_text(
-        f"// emitted\n{ASK_MANIFEST_MARKER}{manifest['run_dir']}/manifest.json\n", encoding="utf-8"
+        f"// emitted\n{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/r1/manifest.json\n", encoding="utf-8"
     )
     out = terminal_commit._handler(
         {

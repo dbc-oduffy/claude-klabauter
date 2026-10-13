@@ -163,6 +163,42 @@ def test_different_register_needs_supersede(repo):
     assert len(_doc(p)["requirement_register"]["rows"]) == 2
 
 
+@pytest.mark.parametrize("extra", [{}, {"supersede": True}])
+def test_row_defaults_in_every_mode(repo, extra):
+    p = _seed(repo)
+    bare = {"id": "a", "source_text": "text a"}
+    r = _run(repo, {"sources": [{"doc": "d.md", "ref": "r"}], "rows": [bare]}, **extra)
+    assert r["exit_code"] == 0, r
+    row = _doc(p)["requirement_register"]["rows"][0]
+    assert (row["status"], row["surface"], row["claimed_by"]) == ("open", "internal", [])
+    again = _run(repo, {"sources": [{"doc": "d.md", "ref": "r"}], "rows": [bare]}, **extra)
+    assert again["exit_code"] == 0 and again["applied"] is False
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [None, [], [{"doc": "d.md"}], [{"doc": "d.md", "ref": ""}], ["d.md"]],
+    ids=["missing", "empty", "doc_only", "blank_ref", "not_mapping"],
+)
+def test_empty_sources_refused_with_shape(repo, sources):
+    p = _seed(repo)
+    before = p.read_bytes()
+    reg = {"rows": [_row("a")]}
+    if sources is not None:
+        reg["sources"] = sources
+    r = _run(repo, reg)
+    assert r["exit_code"] == 1 and r["applied"] is False and "{doc, ref}" in r["error"], r
+    assert p.read_bytes() == before
+
+
+def test_amend_without_sources_on_recorded_register_records(repo):
+    p = _seed(repo)
+    assert _run(repo, _register(_row("a")))["applied"] is True
+    r = _run(repo, {"rows": [{"id": "b", "source_text": "text b"}]}, amend=True)
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    assert [x["id"] for x in _doc(p)["requirement_register"]["rows"]] == ["a", "b"]
+
+
 def test_crlf_sizing_stays_crlf(repo):
     p = _seed(repo, newline="\r\n")
     assert _run(repo, _register(_row("a")))["exit_code"] == 0

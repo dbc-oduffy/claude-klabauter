@@ -346,6 +346,68 @@ def _approved_body_finding(text: str, for_execution: bool):
     return None
 
 
+#: Basenames every package/test tree repeats by design; a collision on them names nothing reusable.
+_COLLISION_EXEMPT_BASENAMES = frozenset({"__init__.py", "conftest.py"})
+
+
+def _repo_root_of(path: Path) -> "Path | None":
+    """Nearest ancestor holding a `.git` entry (dir or worktree file); no git spawn."""
+    for candidate in path.resolve().parents:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _basename_collisions(path: Path, rows: list) -> list:
+    """Advisories for each new `writes` path whose basename is tracked at another path.
+
+    One cached `tracked_files` listing per check; "new" means absent from that listing.
+    """
+    wanted = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        label = row.get("id") or f"row {index + 1} (no id)"
+        for p in row.get("writes") or []:
+            if isinstance(p, str):
+                wanted.append((label, p, _norm_path(p).removeprefix("./")))
+    if not wanted:
+        return []
+    root = _repo_root_of(path)
+    if root is None:
+        return []
+    _ensure_engine_on_path()
+    from coordinator_core.git import ls_files
+
+    tracked = ls_files.tracked_files(root)
+    if not tracked:
+        return []
+    tracked_set = set(tracked)
+    by_basename: dict = {}
+    for entry in tracked:
+        by_basename.setdefault(entry.rsplit("/", 1)[-1], []).append(entry)
+    out = []
+    for label, raw, norm in wanted:
+        base = norm.rsplit("/", 1)[-1]
+        if norm in tracked_set or base in _COLLISION_EXEMPT_BASENAMES:
+            continue
+        others = by_basename.get(base)
+        if not others:
+            continue
+        out.append(
+            {
+                "row": label,
+                "error": (
+                    f"BASENAME-COLLISION: new file {raw} collides with existing "
+                    f"{', '.join(others)} — reuse or justify"
+                ),
+                "at": "writes",
+                "class": "advisory",
+            }
+        )
+    return out
+
+
 def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
     result, LocateStatus = _locate_spine(text)
     if result.status is LocateStatus.ABSENT:
@@ -481,6 +543,8 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
                 findings.append(finding)
             else:
                 advisories.append(finding)
+
+    advisories.extend(_basename_collisions(path, rows))
 
     width, width_unavailable = _compute_width(path)
     if width is not None:
