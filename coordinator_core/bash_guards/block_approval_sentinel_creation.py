@@ -30,10 +30,12 @@ DEFAULT-ON. The doctrine-edit approval gate is on every profile; this guard
 allows only after `machine-local set coordinator.feature.doctrine_edit_gate off`.
 
 WHY THIS EXISTS. A sibling DoE-side hook denies edits to always-loaded
-doctrine surfaces (global CLAUDE.md and friends) unless a repo-root sentinel
-file named `.coordinator-doctrine-edit-approved` exists and is under 30
-minutes old. The PM creates that sentinel themselves, by hand, as the
-approval act. If ANY agent could create the sentinel via Bash -- `touch`,
+doctrine surfaces (global CLAUDE.md and friends) unless a git-dir sentinel
+file named `.coordinator-doctrine-edit-approved` exists, is under 30
+minutes old, and was touched after the previous PM turn began, i.e. for the
+current one (it disarms itself).
+The PM creates that sentinel themselves, by hand, as the approval act. If ANY
+agent could create the sentinel via Bash -- `touch`,
 a redirect, `cp` from a stashed copy, `python3 -c` -- the approval boundary
 would be significantly weakened: an EM (or any dispatched subagent) could
 reflexively forge its own approval and edit doctrine unsupervised. This
@@ -1456,7 +1458,7 @@ def gate_disable_denial(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
-    if pm_approval_fresh(cwd):
+    if pm_approval_fresh(cwd, payload):
         return None
     envelope = {
         "hookSpecificOutput": {

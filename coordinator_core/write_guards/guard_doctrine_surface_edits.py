@@ -71,9 +71,13 @@ deliberately NOT printed in the deny message — see Deny message below):
   - a file at the repo root instead -> DENY (a root file never approves)
   - present, mtime older than APPROVAL_WINDOW_SECONDS (30 minutes) -> DENY
     (treated as expired)
-  - present, mtime within the window -> ALLOW (silent, no output). One
-    approval covers a multi-edit change, which is the normal shape of a
-    doctrine edit (several Edit calls against the same file in one pass).
+  - present, mtime within the window -> turn-bound check: ALLOW only while
+    the sentinel was touched after the previous genuine PM turn began
+    (`_turn_bound_state`); an older one is unlinked and DENIED. One approval
+    covers a multi-edit change inside one PM turn. No readable transcript or
+    genuine PM turn -> DENY (fail closed). EM audience gets a lifetime
+    sentence on allow and on deny; other audiences are unchanged. A sentinel
+    judged stale is deleted by the guard at deny time; nothing else removes it.
 
 Fail-closed is DELIBERATE and is the one place this guard differs from
 every sibling guard in this tree. Every other guard fails OPEN on its own
@@ -163,6 +167,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -572,10 +577,11 @@ def _user_turn_text(entry: Any) -> str:
     return content.strip()
 
 
-def _last_pm_turn(transcript_path: Any) -> str:
-    """Most recent genuine user turn from the transcript tail; "" if none."""
+def _pm_turn_entries(transcript_path: Any) -> "list[Dict[str, Any]]":
+    """Newest-first genuine PM turns (at most two) from the transcript tail,
+    each `{"text", "timestamp"}`; [] when the transcript is absent or unreadable."""
     if not isinstance(transcript_path, str) or not transcript_path:
-        return ""
+        return []
     try:
         with open(transcript_path, "rb") as fh:
             size = fh.seek(0, os.SEEK_END)
@@ -583,18 +589,77 @@ def _last_pm_turn(transcript_path: Any) -> str:
             fh.seek(start)
             data = fh.read().decode("utf-8", "replace")
     except OSError:
-        return ""
+        return []
     lines = data.split("\n")
     if start:
         lines = lines[1:]
+    turns: "list[Dict[str, Any]]" = []
     for line in reversed(lines):
         try:
-            text = _user_turn_text(json.loads(line))
+            entry = json.loads(line)
         except ValueError:
             continue
+        text = _user_turn_text(entry)
         if text:
-            return text
-    return ""
+            turns.append({"text": text, "timestamp": entry.get("timestamp")})
+            if len(turns) == 2:
+                break
+    return turns
+
+
+def _last_pm_turn(transcript_path: Any) -> str:
+    """Most recent genuine user turn from the transcript tail; "" if none."""
+    turns = _pm_turn_entries(transcript_path)
+    return turns[0]["text"] if turns else ""
+
+
+def _epoch_of(timestamp: Any) -> "float | None":
+    if not isinstance(timestamp, str) or not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return None
+
+
+def _turn_bound_state(root: "str | None", payload: Optional[Dict[str, Any]]) -> str:
+    """"allow" or "deny-expired" for a sentinel `_sentinel_state` already allowed.
+
+    An approval binds to the PM turn it was given for: one touched before the
+    previous genuine PM turn began is stale, so it is unlinked and denied. No
+    readable transcript or genuine turn denies and deletes nothing. Stateless:
+    the sentinel is the only file read or written; no process is spawned.
+    """
+    if not isinstance(payload, dict):
+        return "deny-expired"
+    turns = _pm_turn_entries(payload.get("transcript_path"))
+    if not turns:
+        return "deny-expired"
+    if len(turns) < 2:
+        try:
+            truncated = os.path.getsize(payload["transcript_path"]) > _TRANSCRIPT_TAIL_BYTES
+        except OSError:
+            return "deny-expired"
+        return "deny-expired" if truncated else "allow"
+    previous_start = _epoch_of(turns[1]["timestamp"])
+    git_dir = _git_dir(root) if root else None
+    if previous_start is None or not git_dir:
+        return "deny-expired"
+    sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
+    try:
+        mtime = os.path.getmtime(sentinel_path)
+    except OSError:
+        return "deny-expired"
+    if mtime > previous_start:
+        return "allow"
+    try:
+        os.unlink(sentinel_path)
+    except OSError:
+        pass
+    return "deny-expired"
 
 
 def _pm_turn_names_target(payload: Dict[str, Any], target: str, repo_root: "str | None") -> bool:
@@ -664,7 +729,30 @@ def _deny_reason(
                     " A root-level approval file is not an approval; "
                     "approvals live under the git dir."
                 )
+        base += _LIFETIME_DENY_SUFFIX
     return base
+
+
+_LIFETIME_CONTEXT = (
+    "[doctrine-surface guard] PM approval in effect for this turn only; it "
+    "disarms itself when the turn ends, so there is nothing to remove."
+)
+_LIFETIME_DENY_SUFFIX = (
+    " An approval lasts one PM turn and disarms itself; there is nothing to remove."
+)
+
+
+def _with_lifetime_context(advisory: "Optional[Dict[str, Any]]") -> Dict[str, Any]:
+    """EM-audience allow result: the lifetime sentence, joined with the rot advisory when present."""
+    context = _LIFETIME_CONTEXT
+    if advisory:
+        context += "\n" + advisory["hookSpecificOutput"]["additionalContext"]
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": context,
+        }
+    }
 
 
 def _write_repo_identity_advisory_log(
@@ -691,8 +779,6 @@ def _write_repo_identity_advisory_log(
     if not repo_root or not session_id:
         return
     try:
-        from datetime import datetime, timezone
-
         log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
         # NEVER mkdir here. This used to be `mkdir(parents=True,
         # exist_ok=True)`, which let an ADVISORY log line MINT a session
@@ -771,14 +857,23 @@ def _sentinel_write_deny_reason() -> str:
     )
 
 
-def pm_approval_fresh(cwd: "str | None" = None) -> bool:
-    """True when the PM's approval sentinel exists under the git dir and is
-    unexpired; the session repo is resolved from `cwd` when given."""
+def pm_approval_fresh(
+    cwd: "str | None" = None, payload: "Optional[Dict[str, Any]]" = None
+) -> bool:
+    """True when the PM's approval sentinel exists under the git dir, is
+    unexpired, and was given for the current PM turn; the session repo is
+    resolved from `cwd` when given. `payload=None` fails closed."""
+    if payload is None:
+        return False
     try:
         root = resolve_repo_root(cwd=cwd) if cwd else _git_root()
     except Exception:
         return False
-    return _sentinel_state(root or None) == "allow"
+    root = root or None
+    return (
+        _sentinel_state(root) == "allow"
+        and _turn_bound_state(root, payload) == "allow"
+    )
 
 
 _GATE_KEY = "coordinator.feature." + _GATE_FEATURE
@@ -958,7 +1053,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     weakened = _weakening_write(payload.get("tool_name", ""), tool_input, target)
     if weakened and not pm_approval_fresh(
-        payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+        payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
+        payload,
     ):
         return apply_guard_level(
             _GUARD_NAME,
@@ -987,12 +1083,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         owning_root = foreign_root
 
     state = _sentinel_state(owning_root or repo_root)
+    if state == "allow":
+        state = _turn_bound_state(owning_root or repo_root, payload)
     if state != "allow" and _pm_turn_names_target(payload, target, owning_root or repo_root):
         state = "allow"
     if state == "allow":
-        return _rot_token_advisory(
+        advisory = _rot_token_advisory(
             payload.get("tool_name", ""), tool_input, target
         )
+        if not resolves_em_audience(payload, _git_root()):
+            return advisory
+        return _with_lifetime_context(advisory)
 
     tool_name = payload.get("tool_name", "")
     is_local_config = os.path.basename(target) == "coordinator.local.md"

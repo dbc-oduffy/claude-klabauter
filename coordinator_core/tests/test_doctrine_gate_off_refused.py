@@ -3,7 +3,10 @@ sentinel permits it, and turning it on is never refused."""
 
 from __future__ import annotations
 
+import json
 import os
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +16,22 @@ from coordinator_core.write_guards import guard_doctrine_surface_edits as write_
 
 KEY = "coordinator.feature.doctrine_edit_gate"
 SENTINEL = ".coordinator-doctrine-edit-approved"
+_TRANSCRIPT = ""
+
+
+def _write_transcript(path, turns):
+    """A genuine-turn JSONL transcript; `turns` is oldest-first (text, iso timestamp)."""
+    lines = [
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": stamp,
+                "message": {"role": "user", "content": text},
+            }
+        )
+        for text, stamp in turns
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @pytest.fixture()
@@ -29,13 +48,21 @@ def box(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setattr(write_guard, "_git_root", lambda: str(repo))
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [("go ahead", "2026-10-13T10:00:00Z")])
+    monkeypatch.setattr(sys.modules[__name__], "_TRANSCRIPT", str(transcript))
     mp.reset_cache()
     yield reg, repo
     mp.reset_cache()
 
 
 def _bash(cmd, repo, tool="Bash"):
-    return {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(repo)}
+    return {
+        "tool_name": tool,
+        "tool_input": {"command": cmd},
+        "cwd": str(repo),
+        "transcript_path": _TRANSCRIPT,
+    }
 
 
 def _deny(result):
@@ -73,6 +100,27 @@ def test_set_off_allowed_with_fresh_sentinel(box, cmd):
     assert bash_guard.check(_bash(cmd, box[1])) is None
 
 
+def test_set_off_denied_in_next_pm_turn_without_fresh_touch(box):
+    _approve(box[1])
+    approval = box[1] / ".git" / SENTINEL
+    _write_transcript(
+        Path(_TRANSCRIPT),
+        [("one", "2099-01-01T00:00:00Z"), ("two", "2099-01-01T00:01:00Z")],
+    )
+    assert _deny(bash_guard.check(_bash(f"machine-local set {KEY} off", box[1])))
+    assert not approval.exists()
+
+
+def test_registry_file_write_off_denied_in_next_pm_turn(box):
+    _approve(box[1])
+    _write_transcript(
+        Path(_TRANSCRIPT),
+        [("one", "2099-01-01T00:00:00Z"), ("two", "2099-01-01T00:01:00Z")],
+    )
+    path = box[0] / "registry.local.toml"
+    assert _deny(write_guard.check(_write(path, f'"{KEY}" = \'off\'\n')))
+
+
 def test_expired_sentinel_does_not_permit(box):
     _approve(box[1])
     approval = box[1] / ".git" / SENTINEL
@@ -98,7 +146,11 @@ def test_on_and_reads_never_refused(box, cmd):
 
 
 def _write(path, content):
-    return {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": content}}
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(path), "content": content},
+        "transcript_path": _TRANSCRIPT,
+    }
 
 
 @pytest.mark.parametrize("name", ["registry.local.toml", "registry.toml"])
@@ -114,6 +166,7 @@ def test_registry_file_edit_off_refused(box):
     payload = {
         "tool_name": "Edit",
         "tool_input": {"file_path": str(path), "old_string": "'on'", "new_string": "'off'"},
+        "transcript_path": _TRANSCRIPT,
     }
     assert _deny(write_guard.check(payload))
 
@@ -190,7 +243,7 @@ def test_registry_file_level_lowering_refused(box):
     path = box[0] / "registry.local.toml"
     path.write_text('"coordinator.guard_level" = "strict"\n', encoding="utf-8")
     assert _deny(write_guard.check(_write(path, '"coordinator.guard_level" = "off"\n')))
-    edit = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "strict", "new_string": "warn"}}
+    edit = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "strict", "new_string": "warn"}, "transcript_path": _TRANSCRIPT}
     assert _deny(write_guard.check(edit))
     assert write_guard.check(_write(path, '"coordinator.guard_level" = "strict"\n')) is None
     _approve(box[1])
@@ -219,8 +272,16 @@ def test_settings_env_weakening_refused(box, where, name, tool):
             return _write(path, text)
         edit = {"old_string": path.read_text(), "new_string": text}
         if tool == "Edit":
-            return {"tool_name": "Edit", "tool_input": {"file_path": str(path), **edit}}
-        return {"tool_name": "MultiEdit", "tool_input": {"file_path": str(path), "edits": [edit]}}
+            return {
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(path), **edit},
+                "transcript_path": _TRANSCRIPT,
+            }
+        return {
+            "tool_name": "MultiEdit",
+            "tool_input": {"file_path": str(path), "edits": [edit]},
+            "transcript_path": _TRANSCRIPT,
+        }
 
     assert _deny(write_guard.check(payload(new_text)))
     assert _deny(write_guard.check(payload(lvl_text)))

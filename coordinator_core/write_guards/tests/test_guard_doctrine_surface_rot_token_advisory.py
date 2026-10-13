@@ -12,7 +12,9 @@ only the return value gains an advisory payload.
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 
@@ -24,9 +26,22 @@ def _make_repo(root) -> None:
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
 
+def _write_transcript(path, turns) -> None:
+    """A genuine-turn JSONL transcript; `turns` is oldest-first (text, iso timestamp)."""
+    lines = [
+        json.dumps(
+            {"type": "user", "timestamp": stamp, "message": {"role": "user", "content": text}}
+        )
+        for text, stamp in turns
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _approve(repo_root) -> None:
+    """Touch the approval and give `_edit_payload` a one-turn transcript beside the repo."""
     sentinel = repo_root / ".git" / _SENTINEL_NAME
     sentinel.write_text("", encoding="utf-8")
+    _write_transcript(repo_root.parent / "t.jsonl", [("go ahead", "2026-10-13T10:00:00Z")])
 
 
 def _no_gate(monkeypatch) -> None:
@@ -36,6 +51,7 @@ def _no_gate(monkeypatch) -> None:
     monkeypatch.setattr(
         guard, "compute_repo_identity_gate", lambda *a, **k: {"verdict": "UNRESOLVED", "message": ""}
     )
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: False)
 
 
 def _edit_payload(file_path, old_string, new_string, session_id="sess-b06"):
@@ -47,6 +63,7 @@ def _edit_payload(file_path, old_string, new_string, session_id="sess-b06"):
             "new_string": new_string,
         },
         "session_id": session_id,
+        "transcript_path": str(Path(file_path).parent.parent / "t.jsonl"),
     }
 
 

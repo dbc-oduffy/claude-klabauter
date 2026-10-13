@@ -66,6 +66,27 @@ def _fresh(path) -> None:
     path.write_text("", encoding="utf-8")
 
 
+def _write_transcript(path, turns) -> str:
+    """Write a genuine-turn JSONL transcript; `turns` is oldest-first (text, iso timestamp)."""
+    lines = [
+        json.dumps(
+            {"type": "user", "timestamp": stamp, "message": {"role": "user", "content": text}}
+        )
+        for text, stamp in turns
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+_SHARED_TRANSCRIPT = [""]
+
+
+def _shared_transcript(tmp_path) -> None:
+    _SHARED_TRANSCRIPT[0] = _write_transcript(
+        tmp_path / "shared.jsonl", [("go ahead", "2026-10-13T10:00:00Z")]
+    )
+
+
 def _age(path, seconds_ago: float) -> None:
     old_time = time.time() - seconds_ago
     os.utime(path, (old_time, old_time))
@@ -232,11 +253,14 @@ def test_git_dir_sentinel_approves_a_doctrine_edit_and_root_one_does_not(
         "session_id": "t",
         "tool_input": {"file_path": str(scratch_repo / "CLAUDE.md")},
     }
+    payload["transcript_path"] = _write_transcript(
+        scratch_repo.parent / "t.jsonl", [("go ahead", "2026-10-13T10:00:00Z")]
+    )
     _fresh(scratch_repo / _SENTINEL_NAME)
     assert guard.check(payload) is not None
     (scratch_repo / _SENTINEL_NAME).unlink()
     _fresh(_gs(scratch_repo))
-    assert guard.check(payload) is None
+    assert not _denied(guard.check(payload))
 
 
 # ---------------------------------------------------------------------------
@@ -624,15 +648,21 @@ def two_roots(tmp_path, monkeypatch):
     guard._content_root_memo.clear()
     monkeypatch.setattr(guard, "read_content_root", lambda: str(doe))
     monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
+    _shared_transcript(tmp_path)
     yield doe, session_repo
     guard._content_root_memo.clear()
 
 
 def _verdict(target) -> str:
     result = guard.check(
-        {"tool_name": "Edit", "session_id": "t", "tool_input": {"file_path": str(target)}}
+        {
+            "tool_name": "Edit",
+            "session_id": "t",
+            "tool_input": {"file_path": str(target)},
+            "transcript_path": _SHARED_TRANSCRIPT[0],
+        }
     )
-    return "allow" if result is None else "deny"
+    return "deny" if _denied(result) else "allow"
 
 
 @pytest.mark.parametrize("relative", _DOE_ONLY_RELATIVES)
@@ -720,6 +750,7 @@ def foreign_third_repo(tmp_path, monkeypatch):
     guard._content_root_memo.clear()
     monkeypatch.setattr(guard, "read_content_root", lambda: "")
     monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
+    _shared_transcript(tmp_path)
     yield session_repo, third_repo
     guard._content_root_memo.clear()
 
@@ -989,3 +1020,179 @@ def test_workstation_denies_even_with_a_naming_turn(tmp_path, monkeypatch):
 
 def test_cloud_denies_on_missing_transcript(tmp_path, monkeypatch):
     assert _denied(_cloud_check(tmp_path, monkeypatch, [], write=False))
+
+
+# ---------------------------------------------------------------------------
+# Turn-bound approval: a touch binds to the PM turn it precedes and disarms
+# itself once its turn is no longer the previous one (the touch precedes turn T).
+# ---------------------------------------------------------------------------
+
+_HEAD_SUBAGENT_DENY = (
+    "[doctrine-surface guard] BLOCKED: CLAUDE.md is always-loaded doctrine — it "
+    "reaches every session and every dispatched agent in the fleet, so a change "
+    "here is not a unilateral edit the EM can make on its own. Describe the "
+    "proposed change to the PM and ask them to approve it before editing this "
+    "file. Consider whether the content belongs in a wiki page or a skill "
+    "surface instead — those need no approval."
+)
+
+
+def _iso(offset_seconds: float) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(time.time() + offset_seconds, timezone.utc).isoformat()
+
+
+def _touch_at(path, offset_seconds: float) -> None:
+    path.write_text("", encoding="utf-8")
+    stamp = time.time() + offset_seconds
+    os.utime(path, (stamp, stamp))
+
+
+@pytest.fixture
+def turn_env(scratch_repo, tmp_path, monkeypatch):
+    guard._content_root_memo.clear()
+    monkeypatch.setattr(guard, "_git_root", lambda: str(scratch_repo))
+    monkeypatch.setattr(guard, "read_content_root", lambda: "")
+    monkeypatch.setattr(
+        guard, "compute_repo_identity_gate", lambda *a, **k: {"verdict": "MATCH", "message": ""}
+    )
+    monkeypatch.setattr(guard, "_write_repo_identity_advisory_log", lambda *a, **k: None)
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: True)
+    monkeypatch.setattr(guard, "_in_cloud_session", lambda: False)
+    yield scratch_repo, tmp_path
+    guard._content_root_memo.clear()
+
+
+def _turn_payload(repo, tmp_path, turns, new_string="y"):
+    transcript = _write_transcript(tmp_path / "turns.jsonl", turns)
+    return {
+        "tool_name": "Edit",
+        "session_id": "t",
+        "tool_input": {
+            "file_path": str(repo / "CLAUDE.md"),
+            "old_string": "x",
+            "new_string": new_string,
+        },
+        "transcript_path": transcript,
+    }
+
+
+def _turns(*offsets):
+    return [(f"turn {i}", _iso(off)) for i, off in enumerate(offsets)]
+
+
+def test_approval_allows_in_turn_t_denies_in_turn_t_plus_1_and_is_removed(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    in_t = _turn_payload(repo, tmp_path, _turns(-300, -100))
+    assert not _denied(guard.check(in_t))
+    in_t1 = _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
+    assert _denied(guard.check(in_t1))
+    assert not _gs(repo).exists()
+
+
+def test_fresh_touch_rearms_in_turn_t_plus_1(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    assert _denied(guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10))))
+    _touch_at(_gs(repo), -5)
+    assert not _denied(guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10))))
+
+
+def test_two_edits_in_one_turn_both_allow(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    payload = _turn_payload(repo, tmp_path, _turns(-300, -100))
+    assert not _denied(guard.check(payload))
+    assert not _denied(guard.check(payload))
+    assert _gs(repo).exists()
+
+
+def test_sentinel_older_than_previous_turn_denies(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -600)
+    assert _denied(guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100))))
+    assert not _gs(repo).exists()
+
+
+def test_missing_transcript_path_denies_and_keeps_sentinel(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    payload = _turn_payload(repo, tmp_path, _turns(-100))
+    del payload["transcript_path"]
+    assert _denied(guard.check(payload))
+    assert _gs(repo).exists()
+
+
+def test_transcript_without_genuine_turn_denies_and_keeps_sentinel(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    payload = _turn_payload(repo, tmp_path, _turns(-100))
+    (tmp_path / "turns.jsonl").write_text(
+        json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "hi"}}) + "\n",
+        encoding="utf-8",
+    )
+    assert _denied(guard.check(payload))
+    assert _gs(repo).exists()
+
+
+def test_em_audience_allow_and_deny_state_the_lifetime(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    allowed = guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100)))
+    context = allowed["hookSpecificOutput"]["additionalContext"]
+    assert "disarms itself when the turn ends" in context
+    assert "nothing to remove" in context
+    assert guard._SENTINEL_NAME not in context
+    denied = guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10)))
+    reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "disarms itself" in reason
+    assert "nothing to remove" in reason
+    assert guard._SENTINEL_NAME not in reason
+
+
+def test_em_allow_joins_lifetime_and_rot_advisory(turn_env):
+    repo, tmp_path = turn_env
+    (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
+    _touch_at(_gs(repo), -200)
+    result = guard.check(
+        _turn_payload(repo, tmp_path, _turns(-300, -100), new_string="ratified 2026-09-26")
+    )
+    context = result["hookSpecificOutput"]["additionalContext"]
+    assert "nothing to remove" in context
+    assert "2026-09-26" in context
+
+
+def test_subagent_audience_render_is_unchanged(turn_env, monkeypatch):
+    repo, tmp_path = turn_env
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: False)
+    _touch_at(_gs(repo), -200)
+    assert guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100))) is None
+    denied = guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10)))
+    reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == _HEAD_SUBAGENT_DENY.replace("CLAUDE.md is", f"{repo / 'CLAUDE.md'} is", 1)
+
+
+def test_pm_approval_fresh_is_turn_bound_and_fails_closed_without_payload(turn_env):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    assert guard.pm_approval_fresh(str(repo)) is False
+    assert guard.pm_approval_fresh(str(repo), _turn_payload(repo, tmp_path, _turns(-300, -100)))
+    assert not guard.pm_approval_fresh(
+        str(repo), _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
+    )
+
+
+def test_turn_bound_state_spawns_nothing(turn_env, monkeypatch):
+    repo, tmp_path = turn_env
+    _touch_at(_gs(repo), -200)
+    payload = _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_turn_bound_state spawned a process")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(os, "system", _boom)
+    assert guard._turn_bound_state(str(repo), payload) == "deny-expired"

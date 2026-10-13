@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from coordinator_core import machine_profile as mp
@@ -33,6 +35,16 @@ def author_box(tmp_path, monkeypatch):
     mp.reset_cache()
     yield home
     mp.reset_cache()
+
+
+def _write_transcript(path, text):
+    """A one-turn genuine-PM-turn JSONL transcript."""
+    entry = {
+        "type": "user",
+        "timestamp": "2026-10-13T10:00:00Z",
+        "message": {"role": "user", "content": text},
+    }
+    path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
 
 def _set_gate(monkeypatch, value):
@@ -86,7 +98,13 @@ def test_genuine_pm_sentinel_still_passes(author_box, monkeypatch, tmp_path):
     (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(guard_doctrine_surface_edits, "_git_root", lambda: str(repo))
     monkeypatch.setattr(guard_doctrine_surface_edits, "read_content_root", lambda: "")
-    payload = {"tool_name": "Edit", "tool_input": {"file_path": str(repo / "CLAUDE.md")}}
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, "go ahead")
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(repo / "CLAUDE.md")},
+        "transcript_path": str(transcript),
+    }
     assert _is_deny(guard_doctrine_surface_edits.check(payload))
     (repo / ".git" / SENTINEL).write_text("", encoding="utf-8")  # the PM's out-of-band act
     assert guard_doctrine_surface_edits.check(payload) is None
