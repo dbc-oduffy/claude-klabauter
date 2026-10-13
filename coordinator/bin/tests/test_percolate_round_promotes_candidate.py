@@ -231,3 +231,27 @@ def test_no_publish_and_failed_push_never_reach_the_leg(tmp_path, monkeypatch):
     second.mkdir()
     rc, _out, _spy, _dest = base._run_round(second, monkeypatch, push_returncode=1)
     assert rc == base._mod._EXIT_FAIL and calls == []
+
+
+def test_subdirectory_dest_resolves_to_the_mirror_root_and_the_leg_reports(tmp_path, capsys):
+    rig = _Rig(tmp_path)
+    rig.commit(80)
+    rig.push(80)
+    sub = rig.dest / "coordinator_core"
+    sub.mkdir()
+    rc = _mod._promote_if_channel(str(sub), "alpha", str(rig.root))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "promoted" in out
+    rc = _mod._promote_if_channel(str(sub), "alpha", str(rig.root))
+    assert rc == 0
+    assert "nothing to promote" in capsys.readouterr().out
+
+
+def test_subdirectory_dest_of_a_non_channel_mirror_still_skips(tmp_path, monkeypatch):
+    rig = _Rig(tmp_path)
+    _g(rig.dest, "checkout", "-B", "main2")
+    sub = rig.dest / "coordinator_core"
+    sub.mkdir()
+    monkeypatch.setattr(_mod, "_sibling_cli", lambda s: pytest.fail("loaded"))
+    assert _mod._promote_if_channel(str(sub), "alpha", str(rig.root)) == 0

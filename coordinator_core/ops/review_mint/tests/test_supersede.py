@@ -262,7 +262,8 @@ def _reverify_share(root, s, *, verdict="PASS", head_sha=None, criterion=True):
     """A share with reviewer + prep only; the delivery/criterion/tests live in a delivery-verdicts record."""
     share = root / ".coordinator-local" / "subagent-share" / "sess-1"
     _sc(share, "coordinator-code-reviewer.a1.md", agent_type="coordinator:code-reviewer", target_plan=PLAN)
-    _sc(share, f"{PLAN}.review-wave-bookkeeping.md", plan_id=PLAN, delivery={"verdict": "FAIL"})
+    _sc(share, f"{PLAN}.review-wave-bookkeeping.md", plan_id=PLAN, delivery={"verdict": "FAIL"},
+        recorded_at="2026-10-06T00:00:00Z")
     rec = {
         "kind": "delivery-verdict",
         "supersedes": f".coordinator-local/subagent-share/sess-1/{PLAN}.review-wave-bookkeeping.md",

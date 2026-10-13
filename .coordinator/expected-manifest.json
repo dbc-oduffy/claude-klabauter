@@ -887,7 +887,7 @@
     "coordinator/bin/publish-resolve-target.py": "1bf3db81840e305c065e4b4de85a7c5414d31ffe",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "99da381428c8bd02aeced3ee50f338f080484588",
-    "coordinator/bin/published-name-map.json": "da4b3fa2f0b25a3fa82c127708461f650e27a571",
+    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
     "coordinator/bin/push-hold.cmd": "f02664333181a2ec7a3385dcbfb141b92399d88c",
     "coordinator/bin/push-hold.py": "c0fff21a69360eb2e547edd5478de7689f272ac8",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -1560,7 +1560,7 @@
     "coordinator/bin/tests/test_percolate_round_not_carried_wiring.py": "2cf422a7d48d8fa0a9a39ad86faa12e7734d5358",
     "coordinator/bin/tests/test_percolate_round_pathspec_form_matches_head_tree.py": "271c43d5235988affd1ba2a3e937f0bf619e089a",
     "coordinator/bin/tests/test_percolate_round_pathspec_spawn_budget.py": "67770e76e1b495d16d65080b53217366ef5f1b46",
-    "coordinator/bin/tests/test_percolate_round_promotes_candidate.py": "74306df7acae61d1fe4eb9be8e087a0cc849fad5",
+    "coordinator/bin/tests/test_percolate_round_promotes_candidate.py": "b4733b105fe9e86a91371985a69887eab057e78c",
     "coordinator/bin/tests/test_percolate_round_publish_trailers.py": "1ca9f7a4a03cd313f3e7a89a20d1c3b394f7d72b",
     "coordinator/bin/tests/test_percolate_round_removal_on_disk_refusal.py": "54decf135357e0a53ab09d091d50c0df6f1617b2",
     "coordinator/bin/tests/test_percolate_round_removal_side_scoping.py": "07b9bb9684d32f575568f3b60e447ee93d4fd597",
@@ -2057,8 +2057,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "cf19f469f8138a727c3beb12d56a37acaa39383c",
-    "coordinator_core/_engine_stamp": "fac3072585f592679d6cde9e10c9cdbd5ce4719d",
+    "coordinator_core/_engine_published_at": "9dd858472db8649535a01f4ffe5151657e21ab29",
+    "coordinator_core/_engine_stamp": "d7d1e22b194befaead8410f279e9be966e3f0f0b",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5068,7 +5068,7 @@
     "coordinator_core/ops/review_mint/tests/test_op.py": "911d1408d3fb6874719223e0d979be2dbb54927a",
     "coordinator_core/ops/review_mint/tests/test_roster.py": "e22b8c7a6e7b6fe4cac435e6323617752a9d68e7",
     "coordinator_core/ops/review_mint/tests/test_share_stages_test_verdict.py": "6cbfdf0469c06f18e705a86785441a059de1fd17",
-    "coordinator_core/ops/review_mint/tests/test_supersede.py": "dccb8f4c4ac66f22633225f748ecce3c66c71a8e",
+    "coordinator_core/ops/review_mint/tests/test_supersede.py": "2d3dee6f52c0cfa0c6bc1c42453bb113e0a1fe1e",
     "coordinator_core/ops/review_mint/tests/test_supersede_json_arg.py": "05079b8c6638099e3f23eeb93aee612aadd4a79d",
     "coordinator_core/ops/review_mint/tests/test_wave_bookkeeping.py": "bea6882a543b3df730ba90d03a233d67c91ee393",
     "coordinator_core/ops/review_mint/wave_bookkeeping.py": "93fb58941f92e9862e5dd800a87b6b0818a55766",
@@ -7479,5 +7479,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "1d70d3acbde4a4d32b89774e706771d91da1580b"
+  "source_head": "f86554b0c400b7f04166568ffba5befa6e0a54b9"
 }
