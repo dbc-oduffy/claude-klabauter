@@ -2224,6 +2224,17 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
     "dispatch.terminal_commit": OpClass.MUTATING,
+    # close.background — MUTATING: pays a run's queued close legs off the critical path
+    # (ops/ceremony/close_background.py). DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Archives claimed batons, resolves the source memo, patches the orientation
+    #      cache and rewrites the run's close-job record.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #   5. Persistent state changes observable across process boundaries?      YES.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "close.background": OpClass.MUTATING,
     # dispatch.ask_gate — MUTATING: decides an arm for a sizing; at an M+ arm with no halt it
     # mints the baton record in-process (ops/dispatch_emit/ask_gate.py). Every other verdict
     # is a read.

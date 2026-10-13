@@ -264,6 +264,28 @@ def _criterion_status_expr(falsifier_var: Optional[str]) -> str:
     )
 
 
+def _judge_fields_js(judge_var: str, schema: dict) -> tuple:
+    """`(completion_summary, lesson_candidates)` JS expressions off the criterion judge's
+    result. Carried only when `authored_by === 'terminal-judge'`; an absent field reads null,
+    never a reject, since the judge may not return them yet."""
+    gate = f"{judge_var}?.authored_by === 'terminal-judge'"
+    summary = (
+        f"({gate} ? _cap({judge_var}.completion_summary ?? null, "
+        f"{_maxlength(schema, 'criterion.completion_summary')}) : null)"
+    )
+    caps = {
+        f: _maxlength(schema, f"criterion.lesson_candidates[].{f}")
+        for f in ("title", "body", "change_kind", "target_wiki")
+    }
+    max_items = schema["properties"]["criterion"]["properties"]["lesson_candidates"]["maxItems"]
+    item = ", ".join(f"{f}: _cap(c?.{f} ?? null, {n})" for f, n in caps.items())
+    lessons = (
+        f"({gate} && Array.isArray({judge_var}.lesson_candidates) ? "
+        f"{judge_var}.lesson_candidates.slice(0, {max_items}).map(c => ({{ {item} }})) : null)"
+    )
+    return summary, lessons
+
+
 def next_action_parts(
     *,
     has_commit_request: bool,
@@ -294,6 +316,9 @@ def next_action_parts(
     falsifier_present = falsifier_var is not None
     tests_status_expr = _tests_status_expr(test_var, verification_var, test_absent_status)
     criterion_status_expr = _criterion_status_expr(falsifier_var)
+    judge_summary_js, judge_lessons_js = (
+        _judge_fields_js(falsifier_var, load_schema()) if falsifier_present else ("null", "null")
+    )
 
     # A run with no marker (verify-only rows write no product file) still owes its
     # PASS review a fresh `Inline-Review` anchor commit: `terminal_commit` lands one
@@ -364,10 +389,14 @@ def next_action_parts(
                     f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
                     f"sidecar: {falsifier_var}.sidecar_path ?? null, "
+                    f"completion_summary: {judge_summary_js}, "
+                    f"lesson_candidates: {judge_lessons_js}, "
                     f"register_rows: {falsifier_var}.register_rows ?? null }} "
-                    ": { status: 'not_run', observation: null, sidecar: null })"
+                    ": { status: 'not_run', observation: null, sidecar: null, "
+                    "completion_summary: null, lesson_candidates: null })"
                     if falsifier_present
-                    else "{ status: 'not_run', observation: null, sidecar: null }"
+                    else "{ status: 'not_run', observation: null, sidecar: null, "
+                    "completion_summary: null, lesson_candidates: null }"
                 )
             )
         if review_vars and review_vars.get("integration"):
@@ -639,6 +668,12 @@ def completion_return_js(
             if falsifier_present
             else "null"
         ),
+        "criterion.completion_summary": (
+            _judge_fields_js(falsifier_var, schema)[0] if falsifier_present else "null"
+        ),
+        "criterion.lesson_candidates": (
+            _judge_fields_js(falsifier_var, schema)[1] if falsifier_present else "null"
+        ),
         "tests.status": tests_status_expr,
         "tests.run": f"({test_var} ? {test_var}.tests_run : null)" if test_present else "null",
         "tests.failed": f"({test_var} ? {test_var}.tests_failed : null)" if test_present else "null",
@@ -773,10 +808,12 @@ def completion_return_js(
     lines.append(f"  halted: {table['halted']},")
     lines.append(f"  chunks: {table['chunks']},")
     lines.append(
-        "  criterion: { status: %s, observation: %s, sidecar: %s, reason: %s },"
+        "  criterion: { status: %s, observation: %s, sidecar: %s, reason: %s, "
+        "completion_summary: %s, lesson_candidates: %s },"
         % (
             table["criterion.status"], table["criterion.observation"], table["criterion.sidecar"],
-            table["criterion.reason"],
+            table["criterion.reason"], table["criterion.completion_summary"],
+            table["criterion.lesson_candidates"],
         )
     )
     lines.append("  tests: {")

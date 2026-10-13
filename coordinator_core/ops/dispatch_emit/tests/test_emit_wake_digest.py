@@ -687,3 +687,62 @@ def test_composed_script_passes_the_dispatch_suite_guard():
     script = compose_script(waves, name="wf", description="guard", **REVIEW_KW)
 
     assert [h for h in _classify(script, None) if h.position == "imperative"] == []
+
+
+_JUDGE_CRITERION = {
+    "status": "met",
+    "observation": "o",
+    "sidecar": None,
+    "completion_summary": "Three things shipped.",
+    "lesson_candidates": [
+        {"title": "t", "body": "b", "change_kind": "wiki-append", "target_wiki": "docs/wiki/x.md"}
+    ],
+}
+
+
+def test_a_judge_result_carrying_both_fields_yields_them_in_digest_and_inline_review():
+    from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
+
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    script = compose_script(
+        waves, name="wf", description="judge", plan_path="docs/plans/p.md",
+        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
+    )
+    gate = "_falsifierResult?.authored_by === 'terminal-judge'"
+    assert script.count(gate) >= 4  # digest + inline_review, summary + lessons each
+    assert "completion_summary: (" + gate in script
+    assert "lesson_candidates: (" + gate in script
+    assert "_falsifierResult.completion_summary ?? null" in script
+
+    obj = _simulate_return(script, incomplete_chunks=[], halted=None)
+    obj["criterion"] = dict(_JUDGE_CRITERION)
+    obj["next_action"]["params"]["inline_review"] = {
+        "integration_stem": "s", "slices": 1, "fixes": 0, "criterion": dict(_JUDGE_CRITERION),
+    }
+    assert validate_digest(obj) == []
+
+
+def test_a_judge_result_without_the_fields_yields_null_and_a_digest_without_them_validates():
+    from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
+
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    script = compose_script(waves, name="wf", description="plain", **REVIEW_KW)
+    assert "completion_summary: null, lesson_candidates: null" in script
+
+    obj = _simulate_return(script, incomplete_chunks=[], halted=None)
+    assert validate_digest(obj) == []
+    obj["criterion"].update(completion_summary=None, lesson_candidates=None)
+    assert validate_digest(obj) == []
+
+
+def test_the_judge_fields_are_capped_by_the_schema():
+    from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
+
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    obj = _simulate_return(compose_script(waves, name="wf", description="p", **REVIEW_KW),
+                           incomplete_chunks=[], halted=None)
+    obj["criterion"]["completion_summary"] = "x" * 1201
+    assert validate_digest(obj) != []
+    obj["criterion"]["completion_summary"] = None
+    obj["criterion"]["lesson_candidates"] = [{}] * 6
+    assert validate_digest(obj) != []

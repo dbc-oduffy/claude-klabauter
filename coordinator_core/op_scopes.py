@@ -716,6 +716,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # ONE in-process ceremony.commit_v2 call. Keyed identically to commit_v2
     # itself (D3) -- the caller's own worktree, never a params override.
     "dispatch.terminal_commit":                 "common_dir",
+    # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
+    "close.background":                         "common_dir",
     # dispatch.ask_gate / dispatch.ask_stage — keyed like dispatch.terminal_commit: the caller's own worktree.
     "dispatch.ask_gate":                        "common_dir",
     "dispatch.ask_stage":                       "common_dir",

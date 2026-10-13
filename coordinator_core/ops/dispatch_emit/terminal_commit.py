@@ -1227,6 +1227,11 @@ class _Snapshot:
     def covers(self, path: str) -> bool:
         return path in self.literals or any(path == r or path.startswith(r + "/") for r in self.roots)
 
+    def note_written(self, paths: list) -> None:
+        """Record files this run just wrote (they differ from HEAD by construction)."""
+        self.literals.update(paths)
+        self.changed.update(paths)
+
     def changed_among(self, specs: list) -> set:
         bounds = [(s, s.rstrip("/") + "/") for s in specs]
         return {p for p in self.changed if any(p == s or p.startswith(under) for s, under in bounds)}
@@ -1421,6 +1426,216 @@ def _regenerate_landing_allowlist(worktree_root: Path, paths: list) -> Optional[
     return ptc.PORTABLE_PATH
 
 
+#: Script the close job runs as; ``None`` is ``ops/ceremony/close_background.py``. A budget
+#: driver points it at a no-op so the gate measures the launch, not the job's own work.
+CLOSE_JOB_SCRIPT: Optional[str] = None
+_CLOSE_JOB_WINDOW_MINUTES = 5
+_BACKGROUND_LEGS = ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
+_PATH_WITHHELD = "detail withheld: names a non-repo-relative path"
+_NOT_LANDED = "coded-stamp commit did not land"
+
+
+def _leg(status: str, detail: str = ""):
+    """A ``LegResult``; a detail naming a non-repo-relative path is replaced, never raised."""
+    from coordinator_core.ops.dispatch_emit.run_close import LegResult
+
+    try:
+        return LegResult(status, detail)
+    except ValueError:
+        return LegResult(status, _PATH_WITHHELD)
+
+
+def _plan_source_memo(worktree_root: Path, plan_rel: Optional[str]) -> Optional[str]:
+    text = _read_rel(worktree_root, plan_rel) if plan_rel else None
+    if text is None:
+        return None
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+
+    split = split_frontmatter(text.replace("\r\n", "\n"))
+    value = read_fm_field_unquoted(split.fm_text, "source_memo") if split else None
+    return None if value in (None, "", "null", "~") else value
+
+
+def _deferred_rows(worktree_root: Path, plan_rel: str) -> list:
+    """Ids of the plan's spine rows marked ``deferred: true`` (harvest is not built here)."""
+    text = _read_rel(worktree_root, plan_rel)
+    if text is None:
+        return []
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    located = locate_fenced_block(text.replace("\r\n", "\n"))
+    if located.status != LocateStatus.LOCATED:
+        return []
+    try:
+        rows = yaml.safe_load(located.body) or []
+    except yaml.YAMLError:
+        return []
+    return sorted(
+        str(r.get("id")) for r in rows if isinstance(r, dict) and r.get("deferred") is True
+    ) if isinstance(rows, list) else []
+
+
+def _pay_inline_legs(
+    worktree_root: Path, ctx: dict, work_sha: str, session_id: Optional[str],
+    snapshot: Optional[_Snapshot],
+) -> list:
+    """Run the ``completion-entry`` and ``baton-ship`` legs; returns the repo files they wrote,
+    which the coded-stamp commit carries. ``ctx["rollback"]`` keeps what undoing them needs."""
+    from coordinator_core.ops.dispatch_emit.completion_receipt import _handoff_claims
+    from coordinator_core.ops.dispatch_emit.run_close_baton_ship import baton_ship_leg
+    from coordinator_core.ops.dispatch_emit.run_close_completion import completion_entry_leg
+
+    run_id, legs = ctx["run_id"], ctx["legs"]
+    criterion = ctx["inline_review"].get("criterion")
+    criterion = criterion if isinstance(criterion, dict) else None
+    try:
+        result, entry_paths = completion_entry_leg(worktree_root, run_id, ctx["plan_rel"], criterion)
+    except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
+        result, entry_paths = _leg("failed", f"completion-entry raised {type(exc).__name__}"), []
+    legs["completion-entry"] = result
+    if result.status in ("ran", "discharged"):
+        ctx["completion_entry"] = (entry_paths or [result.detail.removeprefix("entry ")])[0]
+
+    batons = _handoff_claims(worktree_root, session_id)
+    ctx["batons"] = batons
+    status = criterion.get("status") if criterion else None
+    saved: dict = {}
+    written = list(entry_paths)
+    if batons and status != "met":
+        legs["baton-ship"] = _leg("failed", f"criterion {status or 'absent'}: batons not shipped")
+    else:
+        saved = {rel: _read_rel(worktree_root, rel) for rel in batons}
+        try:
+            shipped = baton_ship_leg(worktree_root, run_id, batons, work_sha)
+        except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
+            shipped = _leg("failed", f"baton-ship raised {type(exc).__name__}")
+        legs["baton-ship"] = shipped
+        if shipped.status == "ran":
+            written += batons
+        else:
+            _restore_texts(worktree_root, saved)
+            saved = {}
+    ctx["rollback"] = {"entries": list(entry_paths), "saved": saved}
+    if snapshot is not None:
+        snapshot.note_written(written)
+    return written
+
+
+def _restore_texts(worktree_root: Path, saved: dict) -> None:
+    for rel, text in saved.items():
+        if text is not None:
+            replace_text(worktree_root / rel, text)
+
+
+def _launch_close_job(worktree_root: Path, run_id: str, batons: list, memo: Optional[str]) -> bool:
+    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+
+    engine = Path(__file__).resolve().parents[3]
+    script = CLOSE_JOB_SCRIPT or str(engine / "coordinator_core" / "ops" / "ceremony" / "close_background.py")
+    params = json.dumps({"claimed_batons": list(batons), "source_memo": memo})
+    return spawn_detached(
+        str(engine), script, [run_id, "--root", str(worktree_root), "--params", params]
+    )
+
+
+def _background_legs(worktree_root: Path, ctx: dict) -> dict:
+    """Write the close-job record, launch the job, and report each background leg."""
+    from datetime import datetime, timedelta
+
+    from coordinator_core.ops.dispatch_emit.run_close import read_close_job, write_close_job
+
+    run_id, batons = ctx["run_id"], ctx.get("batons") or []
+    memo = _plan_source_memo(worktree_root, ctx["plan_rel"])
+    legs: dict = {}
+    queue: list = []
+    for leg in _BACKGROUND_LEGS:
+        if leg == "baton-drain" and not batons:
+            legs[leg] = _leg("not-applicable", "run claims no baton")
+        elif leg == "memo-lifecycle" and not memo:
+            legs[leg] = _leg("not-applicable", "plan names no source memo")
+        else:
+            queue.append(leg)
+    deadline = datetime.now().astimezone() + timedelta(minutes=_CLOSE_JOB_WINDOW_MINUTES)
+    try:
+        write_close_job(worktree_root, run_id, queue, deadline)
+    except OSError as exc:
+        legs.update({leg: _leg("failed", f"close job record not written: {type(exc).__name__}") for leg in queue})
+        return legs
+    if not _launch_close_job(worktree_root, run_id, batons, memo):
+        legs.update({leg: _leg("failed", "close job did not start") for leg in queue})
+        return legs
+    legs.update(read_close_job(worktree_root, run_id, datetime.now().astimezone(), queue))
+    return legs
+
+
+def _settle_close(worktree_root: Path, ctx: dict, landed: bool) -> None:
+    """After the coded-stamp commit: forward lessons and launch the job when it landed, else
+    undo the inline legs' files and report every leg that depended on it ``failed``."""
+    from coordinator_core.ops.dispatch_emit.completion_receipt import _remove
+
+    legs = ctx["legs"]
+    if not landed:
+        rollback = ctx.get("rollback") or {}
+        _remove(worktree_root, rollback.get("entries", []))
+        _restore_texts(worktree_root, rollback.get("saved", {}))
+        for leg, result in list(legs.items()):
+            if result.status == "ran":
+                legs[leg] = _leg("failed", _NOT_LANDED)
+        for leg in ("lessons", *_BACKGROUND_LEGS):
+            legs[leg] = _leg("failed", _NOT_LANDED)
+        ctx["completion_entry"] = None
+        return
+    from coordinator_core.ops.dispatch_emit.run_close_lessons import lessons_leg
+
+    criterion = ctx["inline_review"].get("criterion")
+    try:
+        legs["lessons"] = lessons_leg(
+            worktree_root, ctx["run_id"], criterion if isinstance(criterion, dict) else None
+        )
+    except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
+        legs["lessons"] = _leg("failed", f"lessons raised {type(exc).__name__}")
+    legs.update(_background_legs(worktree_root, ctx))
+
+
+def _close_block(ctx: dict, reply: dict) -> dict:
+    """The reply's ``close`` block: the settled inline and background legs, with ``review`` and
+    ``plan-reconciliation`` read off the reply, and every leg nobody settled ``failed`` with why."""
+    from coordinator_core.ops.dispatch_emit.run_close import RUN_BOUND_LEGS, build_close_block
+
+    legs = dict(ctx["legs"])
+    if ctx["applies"]:
+        if reply.get("committed") is not True:
+            why = f"terminal commit did not land ({reply['refused']})" if reply.get("refused") else "terminal commit did not land"
+        elif "coded_stamp_error" in reply:
+            why = _NOT_LANDED
+        else:
+            why = "leg did not run"
+        stamp = reply.get("review_stamp")
+        if stamp == "minted":
+            legs["review"] = _leg("ran", "review stamp minted")
+        elif stamp == "refused":
+            legs["review"] = _leg("failed", str(reply.get("review_stamp_refusal") or "review stamp refused")[:200])
+        else:
+            legs["review"] = _leg("failed", f"no review stamp: {why}")
+        status = reply.get("plan_status")
+        if status == "implemented":
+            deferred = _deferred_rows(ctx["root"], ctx["plan_rel"])
+            legs["plan-reconciliation"] = (
+                _leg("failed", "deferred rows unharvested: " + ", ".join(deferred))
+                if deferred
+                else _leg("ran", "plan implemented")
+            )
+        elif status:
+            legs["plan-reconciliation"] = _leg("failed", str(reply.get("plan_status_reason") or status)[:200])
+        else:
+            legs["plan-reconciliation"] = _leg("failed", f"plan not reconciled: {why}")
+        for leg in RUN_BOUND_LEGS:
+            legs.setdefault(leg, _leg("failed", why))
+    return build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"])
+
+
 @register_op("dispatch.terminal_commit")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
@@ -1508,7 +1723,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     gated_ids: set = set()
     blockers: dict = {}
     regraded: dict = {}
-    reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids, blockers, regraded)
+    close_ctx: dict = {}
+    reply = _terminal_commit(
+        params, repo_root, stranded, scope, gated_ids, blockers, regraded, close_ctx=close_ctx
+    )
+    if close_ctx:
+        reply["close"] = _close_block(close_ctx, reply)
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS:
         reply["stranded"] = stranded
     if blockers:
@@ -1572,6 +1792,7 @@ def _terminal_commit(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
     gated_ids: Optional[set] = None, blockers: Optional[dict] = None,
     regraded: Optional[dict] = None,
+    close_ctx: Optional[dict] = None,
 ) -> dict:
     if repo_root is None:
         return _error(
@@ -1671,6 +1892,16 @@ def _terminal_commit(
     anchor_only = not request.chunks
     # A review-only run closes no row: a row reopened since its emit must stay open.
     rows_untouched = anchor_only or request.review_only
+    if close_ctx is not None:
+        close_ctx.update(
+            root=worktree_root,
+            run_id=PurePosixPath(script_path_raw.replace("\\", "/")).stem,
+            applies=bool(request.plan_path) and not rows_untouched,
+            plan_rel=request.plan_path,
+            inline_review=inline_review if isinstance(inline_review, dict) else {},
+            legs={},
+            completion_entry=None,
+        )
 
     # Review at close is deterministic (PM ruling 2026-10-01): a run whose
     # result carries no review-stage output cannot land code, however the
@@ -1895,6 +2126,8 @@ def _terminal_commit(
         return reply
 
     if not all_paths:
+        if close_ctx is not None:
+            close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     if not anchor_only:
@@ -1933,6 +2166,8 @@ def _terminal_commit(
         all_paths = [p for p in all_paths if p not in removed]
 
     if not all_paths and not deleted_paths:
+        if close_ctx is not None:
+            close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     scope.update(root=worktree_root, request=request, snapshot=snapshot)
@@ -2130,6 +2365,11 @@ def _terminal_commit(
                 register_sizing,
             ) if p
         )
+        paying_close = close_ctx is not None and close_ctx["applies"]
+        if paying_close:
+            also_commit += tuple(
+                _pay_inline_legs(worktree_root, close_ctx, str(reply["sha"]), session_id, snapshot)
+            )
         broken_tells = _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path)
         flips = bool(
             request.plan_path
@@ -2151,6 +2391,8 @@ def _terminal_commit(
         )
         flipped = reply.pop("_flip", None)
         scope["landed"].update(reply.pop("_committed", ()))
+        if paying_close:
+            _settle_close(worktree_root, close_ctx, "coded_stamp_error" not in reply)
         coded_stale = reply.pop("coded_index_stale", [])
         if coded_stale:
             reply["index_stale"] = sorted(set(reply.get("index_stale") or []) | set(coded_stale))

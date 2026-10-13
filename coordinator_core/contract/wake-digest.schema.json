@@ -38,7 +38,13 @@
         },
         "observation": { "type": ["string", "null"], "maxLength": 300 },
         "sidecar": { "type": ["string", "null"], "maxLength": 300 },
-        "reason": { "type": ["string", "null"], "maxLength": 200 }
+        "reason": { "type": ["string", "null"], "maxLength": 200 },
+        "completion_summary": { "type": ["string", "null"], "maxLength": 1200 },
+        "lesson_candidates": {
+          "type": ["array", "null"],
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/lesson_candidate" }
+        }
       }
     },
     "tests": {
@@ -366,6 +372,12 @@
                             "status": { "type": "string" },
                             "observation": { "type": ["string", "null"] },
                             "sidecar": { "type": ["string", "null"] },
+                            "completion_summary": { "type": ["string", "null"], "maxLength": 1200 },
+                            "lesson_candidates": {
+                              "type": ["array", "null"],
+                              "maxItems": 5,
+                              "items": { "$ref": "#/$defs/lesson_candidate" }
+                            },
                             "register_rows": {
                               "type": ["array", "null"],
                               "items": {
@@ -405,6 +417,16 @@
     }
   },
   "$defs": {
+    "lesson_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": ["string", "null"], "maxLength": 200 },
+        "body": { "type": ["string", "null"], "maxLength": 1200 },
+        "change_kind": { "type": ["string", "null"], "maxLength": 60 },
+        "target_wiki": { "type": ["string", "null"], "maxLength": 300 }
+      }
+    },
     "line_anchor": {
       "type": "object",
       "additionalProperties": false,
