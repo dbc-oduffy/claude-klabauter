@@ -55,8 +55,8 @@ def test_stalled_agent_with_rate_limit_tail_yields_halt(tmp_path):
     assert record["resets_at_iso"] == "2026-10-06T18:40:00Z"
     assert record["agent_label"] == "test:terminal"
     assert record["run_id"] == "wf_e039085a-f70"
-    assert record["resume"] == ("TaskStop the task, then Workflow({scriptPath: 'wf.js', "
-                                "resumeFromRunId: 'wf_e039085a-f70'})")
+    assert record["resume"] == ('TaskStop the task, then Workflow({scriptPath: "wf.js", '
+                                'resumeFromRunId: "wf_e039085a-f70"})')
     assert halt.line("wf.js").startswith("halted: ")
 
 
@@ -108,7 +108,7 @@ def test_watch_exits_halted_with_runnable_resume_line(tmp_path, capsys, monkeypa
     assert out.startswith("halted: ")
     record = json.loads(out[len("halted: "):])
     assert record["halted_by"] == "usage_limit"
-    assert "scriptPath: 'wf.js'" in record["resume"]
+    assert 'scriptPath: "wf.js"' in record["resume"]
 
 
 def test_journal_tail_cap_scans_inside_and_skips_outside(tmp_path):

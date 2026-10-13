@@ -41,23 +41,29 @@ def _rel(repo_root: Path, raw: str, flag: str) -> tuple[Path, str]:
     return resolved, rel
 
 
-def _in_session_scratchpad(resolved: Path) -> bool:
-    """True for a file under ``<tempdir>/claude/<project-slug>/<session-uuid>/scratchpad/``."""
+def _in_session_scratchpad(resolved: Path, session_id: str | None) -> bool:
+    """True for a file under ``<tempdir>/claude/<project-slug>/<session_id>/scratchpad/``.
+
+    ``session_id=None`` admits any session's scratchpad (existence pre-check only); an empty
+    string admits none.
+    """
     try:
         parts = resolved.relative_to(Path(tempfile.gettempdir()).resolve()).parts
     except ValueError:
         return False
-    return len(parts) >= 5 and parts[0] == "claude" and parts[3] == "scratchpad"
+    if not (len(parts) >= 5 and parts[0] == "claude" and parts[3] == "scratchpad"):
+        return False
+    return session_id is None or (bool(session_id) and parts[2] == session_id)
 
 
-def _context_path(repo_root: Path, raw: str) -> tuple[Path, str]:
-    """Repo-relative form for an in-repo file; absolute posix form for one in a session scratchpad."""
+def _context_path(repo_root: Path, raw: str, session_id: str | None = "") -> tuple[Path, str]:
+    """Repo-relative form for an in-repo file; absolute posix form for one in the session's scratchpad."""
     try:
         return _rel(repo_root, raw, "--context")
     except EmBriefRefused:
         p = Path(raw.replace("\\", "/"))
         resolved = p.resolve() if p.is_absolute() else None
-        if resolved is None or not _in_session_scratchpad(resolved):
+        if resolved is None or not _in_session_scratchpad(resolved, session_id):
             raise
         return resolved, resolved.as_posix()
 
@@ -68,6 +74,7 @@ def load_em_brief(
     brief: str | None,
     brief_file: str | None,
     context: Sequence[str] = (),
+    session_id: str = "",
 ) -> EmBrief | None:
     """None when brief, brief_file and context are all empty; EmBriefRefused otherwise on bad input."""
     if brief and brief_file:
@@ -94,7 +101,7 @@ def load_em_brief(
 
     ctx_rel: list[str] = []
     for raw in ctx_paths:
-        path, rel = _context_path(repo_root, raw)
+        path, rel = _context_path(repo_root, raw, session_id)
         if not path.is_file():
             raise EmBriefRefused(f"--context {raw}: no such file")
         ctx_rel.append(rel)
@@ -105,7 +112,7 @@ def check_em_brief_paths(repo_root: Path, *, brief_file: str | None, context: Se
     """Refuse a --brief-file or --context path that is outside the repo or absent: stats only, no read."""
     named = [("--brief-file", brief_file)] if brief_file else []
     for flag, raw in named + [("--context", c) for c in context if c]:
-        path, _ = _context_path(repo_root, raw) if flag == "--context" else _rel(repo_root, raw, flag)
+        path, _ = _context_path(repo_root, raw, None) if flag == "--context" else _rel(repo_root, raw, flag)
         if not path.is_file():
             raise EmBriefRefused(f"{flag} {raw}: no such file")
 

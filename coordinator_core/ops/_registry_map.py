@@ -101,6 +101,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.plan_persistence_check":           "coordinator_core.hooks",
     "hooks.runtime_tripwire_em_check":        "coordinator_core.hooks",
     "hooks.stop_dispatch":                    "coordinator_core.hooks",
+    "hooks.workflow_stall_stop":              "coordinator_core.hooks",
     "hooks.check_claude_md_size":             "coordinator_core.hooks",
     "hooks.derive_global_doctrine_live_copy": "coordinator_core.hooks",
     "hooks.derive_setup_copies":              "coordinator_core.hooks",

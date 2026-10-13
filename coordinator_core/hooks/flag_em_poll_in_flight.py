@@ -197,6 +197,11 @@ def _run_ids_in_flight(tmpdir: str, session_id: str) -> list:
         return []
 
 
+def session_workflow_run_ids(session_id: str) -> list:
+    """`run_id`s of every Workflow run this session launched; empty on any read error."""
+    return _run_ids_in_flight(_tmpdir(), session_id)
+
+
 def _run_completed_in_tail(tail: str, run_ids: list) -> bool:
     """True when the tail names one of `run_ids`' completion — a task notification carrying
     the run id. Best-effort substring match: the exact notification shape is harness-owned and

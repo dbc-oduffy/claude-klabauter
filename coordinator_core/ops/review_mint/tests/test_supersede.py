@@ -29,10 +29,10 @@ def _git(root, *args):
 def repo(tmp_path):
     _git(tmp_path, "init", "-q")
     shas = []
-    for i, trailer in enumerate(["", "\n\nSession-Id: other-session", ""]):
+    for i, trailer in enumerate(["", "\nSession-Id: other-session", ""]):
         (tmp_path / f"f{i}.txt").write_text(str(i))
         _git(tmp_path, "add", ".")
-        _git(tmp_path, "commit", "-q", "-m", f"c{i}{trailer}")
+        _git(tmp_path, "commit", "-q", "-m", f"c{i}\n\nDeliverable-Id: dlv-sup-1{trailer}")
         shas.append(_git(tmp_path, "rev-parse", "HEAD"))
     return tmp_path, shas
 
@@ -161,7 +161,7 @@ def _share_call(root, s, **kw):
     return record_superseding_review(
         repo_root=root, plan=PLAN, commit_range={"base": s[0], "head": s[2]},
         wave_sidecar_paths=[], prep_sidecar=None, stage_returns=None,
-        session_id="sess-1", from_share=True, **kw,
+        session_id="sess-1", from_share=True, **{"deliverable_id": "dlv-sup-1", **kw},
     )
 
 

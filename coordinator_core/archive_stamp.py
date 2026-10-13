@@ -867,9 +867,16 @@ def stamp_shipped_in(
     force: bool = False,
     worktree: Optional[Path] = None,
     not_after: Optional[str] = None,
+    fallback_sha: Optional[str] = None,
 ) -> StampOutcome:
     """Resolve the most recent git SHA touching the handoff's scope: paths, then insert
     `shipped_in: <SHA8>` into the frontmatter via the native handoff.stamp op.
+
+    fallback_sha: a hex sha the caller holds (terminal/implemented commit). Used ONLY
+    on the `kind="scope-derived"` path when the handoff has an EMPTY scope list (no
+    path to resolve from); stamped as `kind="ship-commit"`, exempt from the
+    derived-sha ownership guard (a caller assertion, not a derivation). A non-empty
+    scope ignores it; absent, the empty-scope refusal stands.
 
     kind: REQUIRED, keyword-only, no default (DR-096, coordinator-content-repo 2026-07-26 ruling —
     "kind must be REQUIRED at the seam, not defaulted silently. A caller that does not
@@ -1127,7 +1134,18 @@ def stamp_shipped_in(
                 file=sys.stderr,
             )
             return StampOutcome(exit_code=0)
-        if resolved is None and allow_branch_tip_fallback:
+        if resolved is None and not scope_paths and fallback_sha:
+            fb = fallback_sha.strip()
+            if not _SHA_HEX_RE.fullmatch(fb):
+                print(
+                    f"stamp_shipped_in: rejected malformed fallback_sha {fb!r} "
+                    "(expected 7-64 hex chars)",
+                    file=sys.stderr,
+                )
+                return StampOutcome(exit_code=1, error=f"malformed fallback_sha {fb!r}")
+            kind = "ship-commit"
+            resolved = fb
+        elif resolved is None and allow_branch_tip_fallback:
             resolved = _resolve_branch_tip_sha(resolve_worktree)
         if resolved is None:
             # Documented oracle-parity no-op (see docstring: "matches the
@@ -1149,7 +1167,11 @@ def stamp_shipped_in(
         # resolution both funnel through here); never applied to `override`
         # above. See _ownership_block_reason's docstring for the invariant and
         # the structural tooth (refuse-only, never re-select).
-        block_reason = _ownership_block_reason(resolve_worktree, resolved, facts=scope_facts)
+        block_reason = (
+            None
+            if kind == "ship-commit"
+            else _ownership_block_reason(resolve_worktree, resolved, facts=scope_facts)
+        )
         if block_reason is not None:
             print(
                 f"stamp_shipped_in: ownership guard — leaving shipped_in unset for "
@@ -1502,6 +1524,30 @@ def cs_ship_handoff(
     return rc
 
 
+def _deliverable_commit_for_scopeless(handoff_path: str) -> Optional[str]:
+    """HEAD-most commit carrying the handoff's `Deliverable-Id` trailer, only when the
+    handoff declares no `scope:` paths; None otherwise. One git spawn."""
+    hpath = Path(handoff_path)
+    if _parse_scope_paths(hpath):
+        return None
+    from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+
+    deliverable_id = read_frontmatter_field(handoff_path, "deliverable_id")
+    if not deliverable_id:
+        return None
+    worktree, _ = _resolve_repo_root_for(hpath)
+    if worktree is None:
+        return None
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(
+        ["log", "-n1", "--format=%H", "--fixed-strings", f"--grep=Deliverable-Id: {deliverable_id}"],
+        cwd=str(worktree), timeout=30,
+    )
+    out = proc.stdout.strip() if proc.returncode == 0 else ""
+    return out if _SHA_HEX_RE.fullmatch(out) else None
+
+
 def _cs_ship_handoff_core(
     handoff_path: str,
     archive: bool = False,
@@ -1590,6 +1636,8 @@ def _cs_ship_handoff_core(
         return 1, False
     mode = "stamp_shipped" if archive else "stamp_only"
     params: dict = {"mode": mode}
+    if not (sha and sha.strip()) and not force:
+        sha = _deliverable_commit_for_scopeless(handoff_path) or sha
     if sha:
         params["sha"] = sha
     if force:

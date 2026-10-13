@@ -178,6 +178,38 @@ def test_non_taskstop_and_non_windows_are_noops(monkeypatch, tmp_path):
     assert not k.killed and _log(tmp_path) == []
 
 
+def _marker_dir(monkeypatch, tmp_path):
+    d = tmp_path / "managed"
+    d.mkdir()
+    monkeypatch.setattr(reaper, "managed_tempdir", lambda: d)
+    return d
+
+
+def test_stopped_marker_written_off_windows(monkeypatch, tmp_path):
+    d = _marker_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(reaper.sys, "platform", "linux")
+    assert reaper._handler(_payload("bg9", "s9")) == {}
+    assert (d / "workflow-stopped-s9-bg9").exists()
+
+
+def test_no_stopped_marker_for_invalid_task_id(monkeypatch, tmp_path):
+    d = _marker_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(reaper.sys, "platform", "linux")
+    assert reaper._handler(_payload("../evil", "s9")) == {}
+    assert reaper._handler(_payload("", "s9")) == {}
+    assert list(d.iterdir()) == []
+
+
+def test_reap_still_reached_on_windows_with_marker(monkeypatch, tmp_path):
+    d = _marker_dir(monkeypatch, tmp_path)
+    _rec()
+    k = StubKill()
+    _install(monkeypatch, k, _tree())
+    reaper._handler(_payload())
+    assert (d / "workflow-stopped-s1-bg1").exists()
+    assert [p for p, _ in k.killed] == [102, 101, 100]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows snapshot")
 def test_cost_real_snapshot_zero_spawns(monkeypatch, tmp_path):
     monkeypatch.undo()

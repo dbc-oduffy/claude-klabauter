@@ -138,6 +138,15 @@ def test_committer_passes_the_declared_list_verbatim_with_skip_missing():
     assert "git status --porcelain" not in script
 
 
+def test_committer_prompt_disowns_foreign_staged_paths():
+    script = _script(expected_branch="work/run")
+
+    assert (
+        "A path staged in the index but absent from this list is not yours: never a reason "
+        "to refuse, never unstaged by you; the route commits only the listed paths."
+    ) in script
+
+
 def test_skip_missing_commits_existing_declared_paths_and_reports_the_missing(tmp_path):
     import subprocess
 

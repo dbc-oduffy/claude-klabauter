@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.hooks import context_pressure_precompact as cpp  # noqa: E402
+from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 
 SESSION = "test-session-precompact-wf"
@@ -149,7 +150,7 @@ def test_run_carries_active_workflow_run_into_state_snapshot(tmp_path, monkeypat
     raw = json.dumps({"session_id": SESSION, "transcript_path": ""})
     cpp.run(raw)
 
-    state_path = tmp_path / f"compaction-state-{SESSION}.md"
+    state_path = managed_tempdir() / f"compaction-state-{SESSION}.md"
     assert state_path.is_file()
     content = state_path.read_text(encoding="utf-8")
     assert "## Active Workflow Runs" in content
@@ -165,7 +166,7 @@ def test_run_never_raises_when_workflow_run_record_is_corrupt(tmp_path, monkeypa
     raw = json.dumps({"session_id": SESSION, "transcript_path": ""})
     cpp.run(raw)  # must not raise
 
-    state_path = tmp_path / f"compaction-state-{SESSION}.md"
+    state_path = managed_tempdir() / f"compaction-state-{SESSION}.md"
     assert state_path.is_file()
 
 
@@ -259,4 +260,4 @@ def test_run_returns_journal_steering(tmp_path, monkeypatch):
     text = cpp.run(json.dumps({"session_id": SESSION, "trigger": "auto"}))
 
     assert str(sdir / "pm_turns.jsonl") in text
-    assert (tmp_path / f"compaction-occurred-{SESSION}").is_file()
+    assert (managed_tempdir() / f"compaction-occurred-{SESSION}").is_file()

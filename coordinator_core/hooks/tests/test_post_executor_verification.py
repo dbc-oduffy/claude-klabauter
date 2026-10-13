@@ -67,7 +67,8 @@ def test_first_pytest_allowed_second_denied(repo) -> None:
     out = g.check(_bash(repo, "pytest b.py -q"))
     assert _denied(out)
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert '"coordinator:engine-ask", args: {"sizing": ' in reason
+    assert "engine-ask" not in reason and "sizing" not in reason
+    assert "test-runner" in reason
     assert "No self-escape" in reason and "honoured once." in reason
 
 
@@ -162,7 +163,7 @@ def test_scratch_py_write_denied_after_executor(repo) -> None:
     _executor_ran(repo)
     out = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))
     assert _denied(out)
-    assert "warp run's test stage" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "test-runner" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_scratch_py_write_allowed_before_executor(repo) -> None:
@@ -255,7 +256,8 @@ def _execute_plan_session(repo, status="executing") -> None:
 def test_scoped_pytest_in_execute_plan_session_never_denied(repo) -> None:
     _executor_ran(repo)
     _execute_plan_session(repo)
-    for cmd in ("python -m pytest pkg/test_a.py::t -q", "pytest tools -q", "pytest pkg/test_a.py -k x"):
+    (repo / "pkg" / "tests").mkdir(parents=True, exist_ok=True)
+    for cmd in ("python -m pytest pkg/test_a.py::t -q", "pytest pkg/tests -q", "pytest pkg/test_a.py -k x"):
         assert g.check(_bash(repo, cmd)) is None
 
 
@@ -280,6 +282,8 @@ def test_non_executing_plan_does_not_exempt(repo) -> None:
     "pytest /elsewhere/test_a.py",
     "pytest ../elsewhere/test_a.py",
     "pytest pkg/test_a.py && pytest",
+    "pytest tools -q",
+    "pytest pkg",
 ])
 def test_unscoped_pytest_in_execute_plan_session_still_denied(repo, cmd) -> None:
     _executor_ran(repo)
@@ -289,6 +293,31 @@ def test_unscoped_pytest_in_execute_plan_session_still_denied(repo, cmd) -> None
     # that ``cmd`` is the second and would be denied.
     assert g.check(_bash(repo, "python3 -c 'import pkg'")) is None
     assert _denied(g.check(_bash(repo, cmd)))
+
+
+def _workflow_run_record(monkeypatch, tmp_path) -> None:
+    from coordinator_core.hooks import flag_em_poll_in_flight as poll
+
+    d = tmp_path / "wf"
+    d.mkdir()
+    (d / f"workflow-run-{SID}-t1.json").write_text(json.dumps({"run_id": "run-1"}))
+    monkeypatch.setattr(poll, "_tmpdir", lambda: str(d))
+
+
+def test_scoped_pytest_after_workflow_run_never_denied(repo, monkeypatch, tmp_path) -> None:
+    _executor_ran(repo)
+    _workflow_run_record(monkeypatch, tmp_path)
+    for _ in range(3):
+        assert g.check(_bash(repo, "pytest pkg/test_a.py -q")) is None
+
+
+def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_path) -> None:
+    _executor_ran(repo)
+    _workflow_run_record(monkeypatch, tmp_path)
+    assert g.check(_bash(repo, "pytest")) is None
+    out = g.check(_bash(repo, "pytest"))
+    assert _denied(out)
+    assert "engine-ask" not in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_probe_shares_pytest_counter(repo) -> None:

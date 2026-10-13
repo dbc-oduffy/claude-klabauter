@@ -610,6 +610,7 @@ async def _predicate_refusal(
     exclude_children_check: Optional[List[str]] = None,
     kind: _KindDescriptor = _HANDOFF_KIND,
     corpus_metas: Optional[Dict[str, dict]] = None,
+    caller_session_id: str = "",
 ) -> Optional[str]:
     """Evaluate the DR-263 three-legged per-target predicate, per `kind`'s own
     predicate-leg policy table (AC11). Returns a human-readable refusal reason,
@@ -689,7 +690,8 @@ async def _predicate_refusal(
     leg_a = kind.predicate_legs["a"]
     if leg_a.applies:
         claimant = _claimant(candidate_path, repo_root)
-        if claimant is not None:
+        # The calling session's own claim is itself, never a foreign live claimant.
+        if claimant is not None and not (caller_session_id and claimant == caller_session_id):
             live_sids = resolve_live_session_ids()
             if claimant in live_sids:
                 return f"claimed by live session {claimant!r} — refusing to advance out from under it"
@@ -881,6 +883,7 @@ def _advance_one(
             kind="scope-derived",
             allow_branch_tip_fallback=False,
             not_after=advanced_at,
+            fallback_sha=fallback_sha or None,
         )
     if outcome.exit_code != 0:
         return False, f"stamp_shipped_in failed: {outcome.error}"
@@ -1167,6 +1170,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Optional params:
         at (str) — ISO-8601 timestamp for `advanced_at`. Defaults to now (UTC) when absent.
+        caller_session_id (str) — the invoking session; leg (a) treats a claim held by this
+                             exact session as the caller's own, not a foreign live claim.
         target_kind (str) — which kind descriptor's corpus to scan (AC5). Defaults to
                              "handoff" (the pre-existing, only behaviour before this chunk),
                              so every existing caller that omits this param is unaffected.
@@ -1234,6 +1239,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     source_path: str = (params.get("source_path") or "").strip()
     fallback_sha: str = (params.get("ship_sha") or "").strip().lower()
     at: str = (params.get("at") or "").strip() or _iso_now()
+    caller_session_id: str = (params.get("caller_session_id") or "").strip()
     target_kind_name: str = (params.get("target_kind") or "").strip() or "handoff"
     # Fail-loud on an unregistered kind (AC5) — never caught here, propagates
     # as a genuine exception rather than degrading to an empty candidate set.
@@ -1407,6 +1413,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 exclude_children_check=resolved_this_run,
                 kind=target_kind,
                 corpus_metas=corpus_metas,
+                caller_session_id=caller_session_id,
             )
             if refusal is not None:
                 refused_reason[str(candidate_path)] = refusal

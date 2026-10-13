@@ -737,7 +737,7 @@ def compose_ask_script(
             "catch (_e) { _decision = null; }"
         )
         b.append(
-            "  if (_assembled.exit_code !== 0 || !_decision) { _halted = { halted: "
+            "  if (_assembled.exit_code !== 0) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _assembled.exit_code + '); "
             "the gate, plan, stage, execute and review phases were skipped', "
             "detail: String(_assembled.stderr ?? _assembled.stdout ?? '').slice(0, 300), run_id: _runId }; }"

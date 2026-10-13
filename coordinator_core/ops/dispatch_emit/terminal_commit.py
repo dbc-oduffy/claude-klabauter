@@ -32,7 +32,9 @@ Negative-spec:
     the marker's ``expected_branch`` refuses before any write).
   - Carries exactly one undeclared file: the ``state/sizings/`` sizing the
     plan (or minted spine) cites as ``sizing_object:``, which the ask arm
-    rewrites mid-run. Never for an anchor-only run, never outside that dir.
+    rewrites mid-run; an ask run's stamp commit also carries the
+    ``state/handoffs/`` baton that sizing names as ``baton:``. Never for an
+    anchor-only run, never outside those dirs.
   - A warp ask run (its script carries the ask-run-manifest marker) lands
     PRODUCT plus its record directory: its declared writes, docs output
     (``docs/delivery/``, a wiki, a README, and the cited sizing's
@@ -291,6 +293,27 @@ def _cited_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional[str
     if not cited:
         return None
     return _sizing_file_rel(worktree_root, cited)
+
+
+def _cited_baton(worktree_root: Path, sizing_rel: Optional[str]) -> Optional[str]:
+    """Worktree-relative path of the handoff the cited sizing names as its top-level ``baton:``,
+    when it is an existing file under the handoffs home. In-process read: no spawn."""
+    text = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
+    if text is None:
+        return None
+    import yaml
+
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    cited = doc.get("baton") if isinstance(doc, dict) else None
+    if not isinstance(cited, str) or not cited:
+        return None
+    guarded = contained_path(worktree_root / cited, [Path(home_dir(str(worktree_root), "handoffs"))])
+    if guarded is None or not guarded.is_file():
+        return None
+    return guarded.relative_to(worktree_root.resolve()).as_posix()
 
 
 def _sizing_file_rel(worktree_root: Path, cited: str) -> Optional[str]:
@@ -896,7 +919,7 @@ def _sizing_doc_targets(worktree_root: Path, plan_path: Optional[str]) -> frozen
         return frozenset()
     raw = [p for p in doc.get("doc_consumers") or [] if isinstance(p, str)]
     raw += [c.get("path") for c in doc.get("ask_conflicts") or [] if isinstance(c, dict) and isinstance(c.get("path"), str)]
-    process = (home_dir(".", "sizings"), "docs/plans/")
+    process = (PurePosixPath(home_dir(".", "sizings").replace("\\", "/")).as_posix(), "docs/plans/")
     out = set()
     for entry in raw:
         rel = PurePosixPath(_DOC_TARGET_SUFFIX.sub("", entry.strip()).replace("\\", "/")).as_posix()
@@ -2644,7 +2667,11 @@ def _terminal_commit(
         if request.plan_path else None
     )
     ask_note_rel: Optional[str] = None
+    ask_baton: Optional[str] = None
     if ask_run_dir is not None:
+        ask_baton = _cited_baton(worktree_root, cited_sizing if not anchor_only else None)
+        if ask_baton:
+            companions.append(ask_baton)
         candidate = f"{_ASK_DOC_PREFIXES[0]}{ask_run_dir.name}.md"
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
@@ -3087,6 +3114,8 @@ def _terminal_commit(
                 reply.get("review_receipt"),
                 register_sizing,
                 shipped_sizing,
+                # The baton rides the stamp commit with the sizing; not a product-commit member.
+                ask_baton if product_only and shipped_sizing else None,
             ) if p
         )
         paying_close = close_ctx is not None and close_ctx["applies"]

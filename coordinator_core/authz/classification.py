@@ -339,6 +339,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # nudge_harness_directive_dispatch, nudge_unrouted_sizing) were removed
     # with their registrations; no consumer found for any of them.
     "hooks.stop_dispatch": OpClass.MUTATING,
+    "hooks.workflow_stall_stop": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
     # hooks.subagent_review_mark — MUTATING, same session-runtime write class as
     # hooks.subagent_zero_tool_use directly above (same SubagentStop event, same

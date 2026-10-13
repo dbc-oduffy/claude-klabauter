@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -358,10 +359,81 @@ def _repo_root_of(path: Path) -> "Path | None":
     return None
 
 
-def _basename_collisions(path: Path, rows: list) -> list:
+def _tracked_listing(path: Path, rows: list) -> list:
+    """The one `tracked_files` listing per check; empty when no row writes or no repo root."""
+    if not any(isinstance(r, dict) and r.get("writes") for r in rows):
+        return []
+    root = _repo_root_of(path)
+    if root is None:
+        return []
+    _ensure_engine_on_path()
+    from coordinator_core.git import ls_files
+
+    return ls_files.tracked_files(root) or []
+
+
+def _gate_created_elsewhere(text: str, rows: list, tracked: list) -> list:
+    """Advisories for a row a `row_build_gate` matches while another row creates the gate command.
+
+    A command token naming a `writes` path of row V absent from `tracked` is a created file;
+    every matched row other than V is flagged.
+    """
+    _ensure_engine_on_path()
+    from coordinator_core.ops.dispatch_emit.row_build_gate import (
+        gate_commands_for,
+        parse_row_build_gates,
+    )
+
+    gates = parse_row_build_gates(text)
+    if not gates or not tracked:
+        return []
+    tracked_set = set(tracked)
+    creators = []
+    for index, row in enumerate(rows):
+        if isinstance(row, dict):
+            label = row.get("id") or f"row {index + 1} (no id)"
+            writes = [p for p in (row.get("writes") or []) if isinstance(p, str)]
+            creators.append((label, row, writes))
+    out = []
+    for kind, glob, command in gates:
+        try:
+            tokens = shlex.split(command, posix=True)
+        except ValueError:
+            continue
+        tokens = {_norm_path(t).removeprefix("./") for t in tokens}
+        created = {}
+        for label, _row, writes in creators:
+            for w in writes:
+                norm = _norm_path(w).removeprefix("./")
+                if norm in tokens and norm not in tracked_set:
+                    created.setdefault(norm, label)
+        if not created:
+            continue
+        for label, row, writes in creators:
+            if command not in gate_commands_for(writes, row.get("change_kind"), ((kind, glob, command),)):
+                continue
+            for norm, creator in created.items():
+                if creator == label:
+                    continue
+                out.append(
+                    {
+                        "row": label,
+                        "error": (
+                            f"row_build_gate `{command}` matches this row, but the gate command "
+                            f"is created by another row ({creator} writes {norm}) "
+                            "— narrow the gate's `when`"
+                        ),
+                        "at": "row_build_gate",
+                        "class": "advisory",
+                    }
+                )
+    return out
+
+
+def _basename_collisions(rows: list, tracked: list) -> list:
     """Advisories for each new `writes` path whose basename is tracked at another path.
 
-    One cached `tracked_files` listing per check; "new" means absent from that listing.
+    "New" means absent from the shared `tracked` listing.
     """
     wanted = []
     for index, row in enumerate(rows):
@@ -373,13 +445,6 @@ def _basename_collisions(path: Path, rows: list) -> list:
                 wanted.append((label, p, _norm_path(p).removeprefix("./")))
     if not wanted:
         return []
-    root = _repo_root_of(path)
-    if root is None:
-        return []
-    _ensure_engine_on_path()
-    from coordinator_core.git import ls_files
-
-    tracked = ls_files.tracked_files(root)
     if not tracked:
         return []
     tracked_set = set(tracked)
@@ -544,7 +609,9 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
             else:
                 advisories.append(finding)
 
-    advisories.extend(_basename_collisions(path, rows))
+    tracked = _tracked_listing(path, rows)
+    advisories.extend(_basename_collisions(rows, tracked))
+    advisories.extend(_gate_created_elsewhere(text, rows, tracked))
 
     width, width_unavailable = _compute_width(path)
     if width is not None:

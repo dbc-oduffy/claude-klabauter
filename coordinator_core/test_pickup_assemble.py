@@ -4744,6 +4744,28 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         directive_ids = {d["id"] for d in result.decision_object["directives"]}
         assert "d-stamp" not in directive_ids
 
+    def _brief_unstamped_plan(self, tmp_path, status: str):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = repo / "docs" / "plans" / "unstamped.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\ntitle: \"Test Plan\"\ncreated: 2026-01-01\nstatus: {status}\n---\n\n# Plan\n\nbody\n",
+            encoding="utf-8",
+        )
+        _git(repo, "add", "docs/plans/unstamped.md")
+        _git(repo, "commit", "-m", "add unstamped")
+        return pb.brief("docs/plans/unstamped.md", repo_root=repo).decision_object
+
+    def test_unstamped_reviewed_plan_surfaces_authorize_invocation_next_move(self, tmp_path):
+        obj = self._brief_unstamped_plan(tmp_path, "reviewed")
+        assert obj["gates"]["execution_stamp_match"]["verdict"] == "unstamped"
+        assert obj["next_move"].startswith("Run `review-exec-auth-stamp authorize-invocation")
+
+    def test_unstamped_draft_plan_keeps_no_execution_move_text(self, tmp_path):
+        obj = self._brief_unstamped_plan(tmp_path, "draft")
+        assert obj["next_move"] == "Plan is `draft` — no execution move until it is reviewed."
+
 
 # ---------------------------------------------------------------------------
 # Multi-artifact ` AND `-split + `/<repo-basename>/` re-anchoring

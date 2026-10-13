@@ -17,7 +17,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
 
-_HALT = "if (!_halted) { const _r = _heldDependentsReason(); if (_r) _halted = _r; }"
+_HALT = "if (!_halted) { const _r = _heldDependentsReason(); if (_r) { _halted = _r; _haltedByHold = true; } }"
 _GATE = "row_build_gate:\n  - when: {surface_glob: '**/*.ts'}\n    command: 'tsc --noEmit'\n"
 
 _HARNESS = r"""
@@ -25,7 +25,7 @@ _HARNESS = r"""
   const _incompleteChunks = [], _blockedChunks = [], _unansweredBriefs = [], _stoppedBy = [],
     _notStarted = [], _verifications = [], _landed = {};
   const _gateOwed = {};
-  let _halted = null;
+  let _halted = null, _haltedByHold = false;
   const _rowPlan = {};
   const _haltedPlans = new Set(), _haltedPlanReasons = new Map();
   const _ROW_VERIFY_SCHEMA = {};

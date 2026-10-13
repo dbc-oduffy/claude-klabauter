@@ -1,5 +1,5 @@
 """
-coordinator_core.hooks.stop_dispatch — Stop-event fan-in, ten legs.
+coordinator_core.hooks.stop_dispatch — Stop-event fan-in, twelve legs.
 
 Purpose: warm-engine composition for coordinator-content-repo's `stop-dispatch.py`, the
 single `Stop` hooks.json registration that currently pays one interpreter
@@ -86,6 +86,17 @@ per leg:
      `post_advisory()` / `no_advisory()`), so it composes into the fold
      below exactly like the Kira leg, placed immediately after it.
 
+  12. `guard_drive_root_new_dir` — PORTED from DoE's `guard-drive-root-new-dir.py`
+     (no claude-klabauter body existed): a new top-level directory on a drive root since
+     the baseline blocks the Stop. Composed after `guard_terminal_review`.
+
+  11. `workflow_stall_resume` — COMPOSED, a foldable Stop leg
+     (`_workflow_stall_stop_handler` below). A stalled workflow run in this
+     session's resolved records blocks the Stop with the exact resume call
+     (`postuse_advisory_dispatch.workflow_stall_resume_text`); a chained Stop
+     (`stop_hook_active`) downgrades to an advisory so a session that cannot
+     resume is never looped. Silent on a subagent stop (payload `agent_id`).
+
 AGGREGATION CONTRACT: mirrors `stop-dispatch.py`'s own CONCATENATE-ALL
 (never first-fires-wins) — every foldable leg above (all but the producers #8, #10) runs
 regardless of whether an earlier leg already produced a block/advisory; one
@@ -115,9 +126,14 @@ DoE source: coordinator/hooks/scripts/stop-dispatch.py,
 """
 from __future__ import annotations
 
+import json
 import os
+import time
+from pathlib import Path
 from typing import Mapping, Optional
 
+from coordinator_core._settings_home import settings_home
+from coordinator_core.block_discharge import record_fire
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
@@ -135,6 +151,7 @@ from coordinator_core.hooks.nudge_harness_directive_dispatch import (
     op as _nudge_harness_directive_dispatch_op,
 )
 from coordinator_core.hooks.nudge_unrouted_sizing import op as _nudge_unrouted_sizing_op
+from coordinator_core.hooks.postuse_advisory_dispatch import workflow_stall_resume_text
 from coordinator_core.hooks.receiver_state_sensor import _handler as _receiver_state_sensor_handler
 from coordinator_core.hooks.runtime_tripwire_em_check import _handler as _runtime_tripwire_em_check_handler
 from coordinator_core.hooks.watchdog_undischarged_next_move import _handler as _watchdog_undischarged_next_move_handler
@@ -177,6 +194,198 @@ _nudge_harness_directive_dispatch_handler = _wrap_flat_op(
 _nudge_unrouted_sizing_handler = _wrap_flat_op(_nudge_unrouted_sizing_op)
 
 
+def _workflow_stall_stop_handler(params: dict, repo_root=None) -> dict:
+    """Block a top-level Stop on a stalled workflow run, once per stop chain."""
+    payload = payload_of(params)
+    if payload.get("agent_id"):
+        return no_advisory()
+    session_id = payload.get("session_id")
+    transcript_path = payload.get("transcript_path")
+    if not isinstance(session_id, str) or not session_id:
+        return no_advisory()
+    text = workflow_stall_resume_text(
+        session_id, transcript_path if isinstance(transcript_path, str) else "", time.time()
+    )
+    if not text:
+        return no_advisory()
+    if payload.get("stop_hook_active"):
+        return post_advisory(text)
+    return deny("Stop", text)
+
+
+@register_op("hooks.workflow_stall_stop")
+def _workflow_stall_stop_op(params: dict, repo_root=None) -> dict:
+    """Standalone Stop leg: params {"payload": {session_id, transcript_path,
+    stop_hook_active, agent_id?}} (or the same keys flat); returns a deny
+    envelope, an advisory envelope (chained Stop), or no_advisory()."""
+    return _workflow_stall_stop_handler(params, repo_root)
+
+
+_DRIVE_GUARD = "guard-drive-root-new-dir"
+_DRIVE_TRIPWIRE = "SCRATCH-AT-A-DRIVE-ROOT-IS-LITTER"
+_DRIVE_OVERRIDE_KEY = "COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR"
+_TRANSCRIPT_TAIL_BYTES = 400_000
+
+
+def _drive_baseline_path() -> Path:
+    env = os.environ.get("COORDINATOR_DRIVE_ROOT_BASELINE")
+    return Path(env) if env else settings_home() / "state" / "drive-root-baseline.json"
+
+
+def _drive_roots(cwd: str, repo_root: Optional[str]) -> list:
+    env = os.environ.get("COORDINATOR_DRIVE_ROOTS")
+    if env:
+        return [r for r in env.split(os.pathsep) if r]
+    anchors: list = []
+    for p in (cwd, repo_root, str(Path.home())):
+        if p:
+            anchor = Path(p).anchor
+            if anchor and anchor not in anchors:
+                anchors.append(anchor)
+    return anchors
+
+
+def _top_level_dir_names(root: str) -> set:
+    try:
+        with os.scandir(root) as it:
+            return {e.name for e in it if e.is_dir(follow_symlinks=False)}
+    except OSError:
+        return set()
+
+
+def _is_checkout_or_link(path: str) -> bool:
+    try:
+        if os.path.islink(path) or getattr(os.path, "isjunction", lambda _p: False)(path):
+            return True
+        return os.path.exists(os.path.join(path, ".git"))
+    except OSError:
+        return False
+
+
+def _creating_command(transcript_path: str, name: str) -> Optional[str]:
+    """Last Bash/PowerShell command in the transcript tail that names `name`."""
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as fh:
+            if size > _TRANSCRIPT_TAIL_BYTES:
+                fh.seek(size - _TRANSCRIPT_TAIL_BYTES)
+            tail = fh.read().decode("utf-8", "replace")
+    except (OSError, TypeError):
+        return None
+    found = None
+    for line in tail.splitlines():
+        if name not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        msg = entry.get("message") if isinstance(entry, dict) else None
+        for block in (msg.get("content") if isinstance(msg, dict) else None) or []:
+            if (isinstance(block, dict) and block.get("type") == "tool_use"
+                    and block.get("name") in ("Bash", "PowerShell")):
+                command = (block.get("input") or {}).get("command")
+                if isinstance(command, str) and name in command:
+                    found = command
+    return found
+
+
+def _guard_drive_root_new_dir_handler(params: dict, repo_root=None) -> dict:
+    """Block a Stop when a NEW top-level directory appeared on a drive root since
+    the last baseline (a stray from code the PreToolUse guards never see).
+    A root seen first is seeded silently; a checkout or link is absorbed;
+    COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR=1 absorbs without firing."""
+    payload = payload_of(params)
+    if payload.get("stop_hook_active"):
+        return no_advisory()
+    try:
+        raw_cwd = payload.get("cwd")
+        cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else os.getcwd()
+        git_root = show_toplevel(cwd)
+        baseline_path = _drive_baseline_path()
+        try:
+            data = json.loads(baseline_path.read_text(encoding="utf-8"))
+            baseline = data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            baseline = {}
+        new: list = []
+        changed = False
+        for root in _drive_roots(cwd, git_root):
+            current = _top_level_dir_names(root)
+            if not current:
+                continue
+            known = baseline.get(root)
+            if not isinstance(known, list):
+                baseline[root] = sorted(current)
+                changed = True
+                continue
+            known_set = set(known)
+            new.extend((root, n) for n in sorted(current - known_set)
+                       if not _is_checkout_or_link(os.path.join(root, n)))
+            if current != known_set:
+                baseline[root] = sorted(current)
+                changed = True
+        if changed:
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = baseline_path.with_name(baseline_path.name + f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(baseline, indent=1, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, baseline_path)
+    except Exception:
+        return no_advisory()
+    if not new or os.environ.get(_DRIVE_OVERRIDE_KEY) == "1":
+        return no_advisory()
+
+    session_id = payload.get("session_id") or "unknown-session"
+    anchor_repo = git_root or cwd
+    created_here = True
+    lines = [f"[guard] {_DRIVE_GUARD}: new top-level director{'y' if len(new) == 1 else 'ies'} "
+             f"on a drive root since the last check (session {session_id}):"]
+    for root, name in new:
+        command = _creating_command(payload.get("transcript_path") or "", name)
+        created_here = created_here and bool(command)
+        lines.append(f"  {os.path.join(root, name)}" + (
+            f"  <- command: {command[:300]}" if command
+            else "  <- no command in this session's transcript names it "
+                 "(another session, or code such as a test resolving a bare '/path')"))
+    scratch = "Scratch lives in <repo>/scratch/ and tests write only under tmp_path. "
+    if created_here:
+        lines.append(f"{scratch}Find the writer, fix it, then remove the directory. "
+                     f"Tripwire: {_DRIVE_TRIPWIRE}.")
+    else:
+        lines.append(f"{scratch}Not every directory above was created by a command in this "
+                     f"session: identify the writer and tell them; deleting is the writer's "
+                     f"call, never yours. Tripwire: {_DRIVE_TRIPWIRE}.")
+    reason = "\n".join(lines) + "\n"
+    try:
+        nonce = record_fire(anchor_repo, session_id, _DRIVE_GUARD, reason)
+    except Exception:
+        nonce = None
+    if nonce:
+        reason += (f"Recorded as {nonce}. When you have acted on this, run:\n"
+                   f'  block-discharge record --nonce {nonce} --action "<what you did>" '
+                   f'--repo-root "{anchor_repo}"\n')
+    else:
+        reason += "Could not record this fire (engine unresolvable or write failed).\n"
+    return deny("Stop", reason)
+
+
+# Folded guard legs in fan-in order; handlers resolve at call time so a test
+# can substitute one. The two producers run after the fold and are not listed.
+_FOLDED_LEGS = (
+    ("runtime_tripwire_em_check", lambda p: _runtime_tripwire_em_check_handler(p)),
+    ("watchdog_undischarged_next_move", lambda p: _watchdog_undischarged_next_move_handler(p)),
+    ("guard_manufactured_blocker", lambda p: _guard_manufactured_blocker_handler(p)),
+    ("guard_kira_verdict_routed", lambda p: _guard_kira_verdict_routed_handler(p)),
+    ("guard_terminal_review", lambda p: _guard_terminal_review_handler(p)),
+    ("guard_drive_root_new_dir", lambda p: _guard_drive_root_new_dir_handler(p)),
+    ("stop_em_report_altitude", lambda p: _stop_em_report_altitude_handler(p)),
+    ("nudge_harness_directive_dispatch", lambda p: _nudge_harness_directive_dispatch_handler(p)),
+    ("nudge_unrouted_sizing", lambda p: _nudge_unrouted_sizing_handler(p)),
+    ("workflow_stall_resume", lambda p: _workflow_stall_stop_handler(p)),
+)
+PRODUCER_LEG_NAMES = ("receiver_state_sensor", "group_em_park_spool")
+
+
 # ---------------------------------------------------------------------------
 # Aggregation: normalise every leg's own return shape uniformly, then
 # CONCATENATE-ALL per the source dispatcher's own contract (see module
@@ -209,7 +418,7 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
 
 @register_op("hooks.stop_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """Stop fan-in: compose the ten legs and aggregate CONCATENATE-ALL, per
+    """Stop fan-in: compose the twelve legs and aggregate CONCATENATE-ALL, per
     module docstring.
 
     `repo_root` (the framework-supplied handler argument) is unused — every
@@ -224,18 +433,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     block_reasons: list = []
     advisories: list = []
 
-    for leg_call in (
-        lambda: _runtime_tripwire_em_check_handler(leg_params),
-        lambda: _watchdog_undischarged_next_move_handler(leg_params),
-        lambda: _guard_manufactured_blocker_handler(leg_params),
-        lambda: _guard_kira_verdict_routed_handler(leg_params),
-        lambda: _guard_terminal_review_handler(leg_params),
-        lambda: _stop_em_report_altitude_handler(leg_params),
-        lambda: _nudge_harness_directive_dispatch_handler(leg_params),
-        lambda: _nudge_unrouted_sizing_handler(leg_params),
-    ):
+    for _name, leg in _FOLDED_LEGS:
         try:
-            result = leg_call()
+            result = leg(leg_params)
         except Exception:
             continue
         is_block, text = _extract_advisory(result)

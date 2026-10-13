@@ -17,6 +17,8 @@ from coordinator_core.bash_guards._taskstop_attribution import attribute
 from coordinator_core.bash_guards._taskstop_contract import ReapOutcome, ReapRow
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
+from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.workflow_watch.stall import stopped_marker_path
 
 # Seams: tests substitute a KillPrimitives and a snapshot callable.
 _kill = _process_kill
@@ -82,10 +84,25 @@ def _reap(payload: dict) -> None:
     store.delete_record(task_id)
 
 
+def _write_stopped_marker(payload: dict) -> None:
+    """Touch the stopped marker for this TaskStop so the stall detector never offers the run."""
+    tool_input = payload.get("tool_input")
+    task_id = tool_input.get("task_id") if isinstance(tool_input, dict) else None
+    path = stopped_marker_path(str(managed_tempdir()), payload.get("session_id"), task_id)
+    with open(path, "a"):
+        pass
+
+
 @register_op("hooks.taskstop_reaper")
 def _handler(params: dict, repo_root=None) -> dict:
-    """Reap the orphan tree of a TaskStop's background launch; always returns no_advisory()."""
+    """Mark a TaskStop's task stopped, then reap the orphan tree of its background launch;
+    always returns no_advisory()."""
     payload = payload_of(params)
+    try:
+        if payload.get("tool_name") == "TaskStop":
+            _write_stopped_marker(payload)
+    except Exception:
+        pass
     try:
         if sys.platform == "win32":
             if payload.get("tool_name") == "TaskStop":

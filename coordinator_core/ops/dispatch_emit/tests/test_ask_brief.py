@@ -88,10 +88,19 @@ def test_scratchpad_context_admitted_absolute(tmp_path, monkeypatch):
     _, pad, root = _fake_tmp(tmp_path, monkeypatch)
     f = pad / "cap.md"
     f.write_text("c")
-    b = load_em_brief(root, brief="x", brief_file=None, context=[str(f)])
+    b = load_em_brief(root, brief="x", brief_file=None, context=[str(f)], session_id="1234-uuid")
     assert b.context == (f.resolve().as_posix(),)
     assert receipt_fields(b)["context"] == [f.resolve().as_posix()]
     check_em_brief_paths(root, brief_file=None, context=[str(f)])
+
+
+@pytest.mark.parametrize("sid", ["9999-other", ""])
+def test_other_or_empty_session_scratchpad_refused(tmp_path, monkeypatch, sid):
+    _, pad, root = _fake_tmp(tmp_path, monkeypatch)
+    f = pad / "cap.md"
+    f.write_text("c")
+    with pytest.raises(EmBriefRefused, match="outside the repo root"):
+        load_em_brief(root, brief="x", brief_file=None, context=[str(f)], session_id=sid)
 
 
 def test_non_scratchpad_temp_and_sibling_repo_still_refused(tmp_path, monkeypatch):

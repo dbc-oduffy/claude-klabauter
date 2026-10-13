@@ -46,6 +46,14 @@ _OP_NAMES = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_drive_root_leg(tmp_path, monkeypatch):
+    root = tmp_path / "fake-drive"
+    root.mkdir()
+    monkeypatch.setenv("COORDINATOR_DRIVE_ROOTS", str(root))
+    monkeypatch.setenv("COORDINATOR_DRIVE_ROOT_BASELINE", str(tmp_path / "drive-baseline.json"))
+
+
 def _make_repo(tmp_path):
     repo_root = tmp_path / "repo"
     (repo_root / ".git").mkdir(parents=True)
@@ -295,9 +303,11 @@ def _silence_all_legs(monkeypatch, mod):
         "_runtime_tripwire_em_check_handler",
         "_watchdog_undischarged_next_move_handler",
         "_guard_kira_verdict_routed_handler",
+        "_guard_drive_root_new_dir_handler",
         "_stop_em_report_altitude_handler",
         "_nudge_harness_directive_dispatch_handler",
         "_nudge_unrouted_sizing_handler",
+        "_workflow_stall_stop_handler",
     ):
         monkeypatch.setattr(mod, name, lambda _p: mod_no_advisory(), raising=True)
 
@@ -438,3 +448,44 @@ def test_park_spool_runs_after_receiver_state_sensor(monkeypatch) -> None:
 
     _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
     assert calls == ["sensor", "spool"]
+
+
+# --- stalled-workflow Stop leg ---------------------------------------------------
+
+_RESUME_TEXT = "Workflow run wf_1 stalled: agent scout idle 120m. Next action: RESUME-CALL."
+
+
+def _stall_aggregate(monkeypatch, tmp_path, text, **payload_extra):
+    mod = importlib.import_module(_MODULE)
+    real = mod._workflow_stall_stop_handler
+    _silence_all_legs(monkeypatch, mod)
+    monkeypatch.setattr(mod, "_workflow_stall_stop_handler", real, raising=True)
+    for name in ("_guard_manufactured_blocker_handler", "_guard_terminal_review_handler"):
+        monkeypatch.setattr(mod, name, lambda _p: mod_no_advisory(), raising=True)
+    monkeypatch.setattr(mod, "workflow_stall_resume_text", lambda *_a: text, raising=True)
+    payload = {"cwd": _make_repo(tmp_path), "session_id": "sess-ws", "transcript_path": "", **payload_extra}
+    return _aggregate(payload)[1]
+
+
+def test_stalled_workflow_blocks_with_the_resume_call(monkeypatch, tmp_path) -> None:
+    result = _stall_aggregate(monkeypatch, tmp_path, _RESUME_TEXT)
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "RESUME-CALL" in hso["permissionDecisionReason"]
+
+
+def test_stop_hook_active_downgrades_stalled_workflow_to_advisory(monkeypatch, tmp_path) -> None:
+    result = _stall_aggregate(monkeypatch, tmp_path, _RESUME_TEXT, stop_hook_active=True)
+    hso = result["hookSpecificOutput"]
+    assert hso.get("permissionDecision") != "deny"
+    assert "RESUME-CALL" in hso["additionalContext"]
+
+
+def test_subagent_stop_is_silent_for_stalled_workflow(monkeypatch, tmp_path) -> None:
+    result = _stall_aggregate(monkeypatch, tmp_path, _RESUME_TEXT, agent_id="a1")
+    assert "RESUME-CALL" not in str(result)
+
+
+def test_settled_workflow_adds_nothing(monkeypatch, tmp_path) -> None:
+    result = _stall_aggregate(monkeypatch, tmp_path, "")
+    assert result == mod_no_advisory()

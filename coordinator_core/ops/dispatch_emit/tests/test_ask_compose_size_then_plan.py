@@ -101,6 +101,28 @@ def test_gate_halt_carries_the_pm_exit_question():
     assert f"_decision['{PM_EXIT_QUESTION_KEY}']" in script
 
 
+def test_halt_expression_does_not_reference_the_relay_parsed_decision():
+    halt = next(ln for ln in _compose().splitlines() if "_assembled.exit_code !== 0" in ln)
+    assert "_decision" not in halt
+
+
+def test_paraphrased_relay_with_exit_zero_still_reaches_the_sizing_path():
+    """Composed-branch text only: there is no Node runtime. A prose relay leaves `_decision` null,
+    and the only halt condition is the exit code, so the else branch assigns the sizing."""
+    script = _compose()
+    assert "if (_assembled.exit_code !== 0)" in script
+    assert "else { _sizingRel = _sizingPath; }" in script
+    assert "!_decision" not in script
+
+
+def test_gate_refuses_an_absent_sizing(tmp_path):
+    from coordinator_core.ops.dispatch_emit import ask_gate
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REFUSAL
+
+    verdict = ask_gate.gate(tmp_path, "state/sizings/absent.yaml")
+    assert verdict.halt is not None and verdict.halt["kind"] == HALT_REFUSAL
+
+
 def test_stop_after_plan_composes_no_stage_execute_or_review():
     script = _compose(stop_after=STOP_AFTER_PLAN)
     for absent in ("phase('stage')", "phase('execute')", "phase('review')", "_runRow(r.id", "dispatch.terminal_commit"):

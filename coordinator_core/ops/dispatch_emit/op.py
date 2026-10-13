@@ -1342,6 +1342,7 @@ def _dispatch_emit(
                 brief=params.get("ask_brief"),
                 brief_file=params.get("ask_brief_file"),
                 context=params.get("ask_context") or (),
+                session_id=_receipt_session_id(params),
             )
         except _ask_brief.EmBriefRefused as exc:
             from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused

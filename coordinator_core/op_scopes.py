@@ -78,6 +78,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.plan_persistence_check": "none",
     "hooks.runtime_tripwire_em_check": "none",
     "hooks.stop_dispatch": "none",
+    "hooks.workflow_stall_stop": "none",
     "hooks.context_pressure_precompact":     "none",
     "hooks.postusefailure_cross_repo_memo_remediate": "none",
     "hooks.postuse_subagent_compaction_warning": "none",

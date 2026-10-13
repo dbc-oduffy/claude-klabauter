@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core import block_discharge as bd
 
 
@@ -137,6 +139,38 @@ class TestReadLedgerAggregatesAcrossSessions:
         records, skipped = bd.read_ledger(repo_root, session_id=None)
         assert records == []
         assert skipped == 0
+
+
+class TestWriterNeverStages:
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    def test_fire_and_discharge_leave_the_index_untouched_and_ledger_untracked(self, tmp_path):
+        import subprocess
+
+        nowin = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **nowin
+            ).stdout
+
+        git("init", "-q", "-b", "work/p")
+        git("config", "user.email", "t@local")
+        git("config", "user.name", "t")
+        git("config", "commit.gpgsign", "false")
+        (tmp_path / "seed.txt").write_text("x\n", encoding="utf-8", newline="\n")
+        git("add", "seed.txt")
+        git("commit", "-q", "-m", "seed")
+        index_before = (tmp_path / ".git" / "index").read_bytes()
+
+        nonce = bd.record_fire(str(tmp_path), "sess-idx", "guard-x", "reason")
+        assert nonce is not None
+        assert bd.record_discharge(str(tmp_path), "sess-idx", nonce, "did the thing")
+
+        assert (tmp_path / ".git" / "index").read_bytes() == index_before
+        assert git("diff", "--cached", "--name-only").strip() == ""
+        status = git("status", "--porcelain", "--", "state/block-discharge").splitlines()
+        assert status and all(line.startswith("??") for line in status)
 
 
 class TestLedgerWriteIsLfOnly:

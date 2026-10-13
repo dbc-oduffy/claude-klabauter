@@ -111,13 +111,21 @@ def _matches_any(path: str, globs: list[str], ignorecase: bool) -> bool:
 
 
 def guard_against_dirty_write_set(
-    plan_path, repo_root: Path, *, run=None, ignorecase=None, hold=frozenset(), landed=frozenset()
+    plan_path, repo_root: Path, *, run=None, ignorecase=None, hold=frozenset(), landed=frozenset(),
+    own=frozenset(),
 ) -> Optional[dict]:
     """Refuse emission when a path the dispatchable rows will write and commit
     is already dirty or untracked — before any script or brief reaches disk.
 
     Dirty paths matching a declared `generated_outputs` glob do not refuse;
-    they come back as `{"count", "examples", "note"}` (else `None`).
+    they come back as `{"count", "examples", "note"}`.
+
+    With `own` (row ids), a dirty path declared by exactly one dispatchable row
+    (hold/landed rows are already out of the ownership count), that
+    row in `own`, is that row's carried prior draft: it does not refuse and returns under
+    `own_leftover` as `{row_id: [paths]}`. A path declared by two rows, by a row
+    outside `own`, or by none still refuses. The result is `None` only when
+    there is neither regenerable dirt nor own leftover.
 
     Rows this emit will not dispatch are out of the write set: `hold` rows and
     their transitive dependents, and `landed` rows (an `--only-incomplete` re-emit).
@@ -145,6 +153,26 @@ def guard_against_dirty_write_set(
             fold = _default_ignorecase() if ignorecase is None else ignorecase
             regenerable = [d for d in dirty if _matches_any(_norm(d), globs, fold)]
             dirty = [d for d in dirty if d not in set(regenerable)]
+    own_leftover: dict[str, list[str]] = {}
+    if dirty and own:
+        fold_own = _default_ignorecase() if ignorecase is None else ignorecase
+        fo = (lambda s: s.lower()) if fold_own else (lambda s: s)
+        declared = {
+            row.id: [fo(_norm(d)) for d in (*_declared_paths(row), *row.writes_under) if _norm(d)]
+            for row in rows
+        }
+        remaining = []
+        for d in dirty:
+            f = fo(_norm(d))
+            owners = [
+                rid for rid, decl in declared.items()
+                if any(f == q or f.startswith(q + "/") for q in decl)
+            ]
+            if len(owners) == 1 and owners[0] in own:
+                own_leftover.setdefault(owners[0], []).append(d)
+            else:
+                remaining.append(d)
+        dirty = remaining
     if dirty is None:
         raise DirtyWriteSetError(
             "emission refused -- the write-set dirtiness check could not run "
@@ -159,6 +187,9 @@ def guard_against_dirty_write_set(
             + "\n  - ".join(dirty)
             + "\nCommit or reconcile them with their owner, then re-emit."
         )
+    out: dict = {}
     if regenerable:
-        return {"count": len(regenerable), "examples": regenerable[:_EXAMPLES], "note": REGENERABLE_NOTE}
-    return None
+        out = {"count": len(regenerable), "examples": regenerable[:_EXAMPLES], "note": REGENERABLE_NOTE}
+    if own_leftover:
+        out["own_leftover"] = own_leftover
+    return out or None

@@ -985,6 +985,54 @@ def test_a_met_criterion_on_the_last_open_row_flips_the_plan_implemented(repo):
     assert "falsifier_output: a.py exists at HEAD" in committed
 
 
+def test_a_retried_flip_over_an_already_recorded_verdict_stays_implemented(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
+    script = _write_script(repo, request)
+    inline_review = {
+        "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+        "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
+        "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+    }
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [],
+                       "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
+    assert out["plan_status"] == "implemented", out.get("plan_status_refusal")
+    plan = repo / "docs" / "plan.md"
+    plan.write_text(plan.read_text(encoding="utf-8").replace("status: implemented", "status: executing", 1),
+                    encoding="utf-8")
+    retry = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", out["sha"])
+    assert retry == {"plan_status": "implemented"}, retry
+    assert "status: implemented" in plan.read_text(encoding="utf-8")
+
+
+def test_a_met_criterion_flips_a_plan_that_was_never_committed(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
+    script = _write_script(repo, request)
+    inline_review = {
+        "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+        "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
+        "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+    }
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [],
+                       "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
+    assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
+    assert out["plan_status"] == "implemented", out.get("plan_status_refusal")
+    assert "status: implemented" in _show(repo, "HEAD:docs/plan.md")
+
+
 def test_a_refused_mint_is_reported_and_the_product_commit_stands(repo):
     plan = _PLAN.replace("title: p\n", "title: p\nplan_id: pln-x-123456\n", 1)
     (repo / "docs").mkdir()

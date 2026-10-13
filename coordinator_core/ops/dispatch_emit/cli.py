@@ -1721,11 +1721,32 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
             guard_root = repo_root or _repo_root_for_plan(args.plan)
             if guard_root is not None:
+                hold_set = frozenset(params.get("hold_rows") or ())
+                landed_set = frozenset(params.get("landed_rows") or ())
+                own_rows: frozenset = frozenset()
+                if args.only_incomplete:
+                    from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+                    from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
+
+                    spine = read_spine(Path(args.plan))
+                    held = set(hold_set)
+                    if hold_set:
+                        held.update(transitive_dependents(spine, set(hold_set)))
+                    own_rows = frozenset(r.id for r in spine) - landed_set - held
                 regenerable_dirty = guard_against_dirty_write_set(
                     Path(args.plan), guard_root,
-                    hold=frozenset(params.get("hold_rows") or ()),
-                    landed=frozenset(params.get("landed_rows") or ()),
+                    hold=hold_set, landed=landed_set, own=own_rows,
                 )
+                if regenerable_dirty and "own_leftover" in regenerable_dirty:
+                    regenerable_dirty = dict(regenerable_dirty)
+                    for row_id, paths in sorted(regenerable_dirty.pop("own_leftover").items()):
+                        print(
+                            f"emit-dispatch-workflow: {row_id}: {len(paths)} uncommitted path(s) "
+                            "in its own writes carried as its prior draft",
+                            file=sys.stderr,
+                        )
+                    if "count" not in regenerable_dirty:
+                        regenerable_dirty = None
         if params.get("plan_path") and not args.inventory and args.review_only is None:
             params["auto_split"] = True
         try:

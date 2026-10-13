@@ -83,7 +83,9 @@ def test_gate_owed_trailer_is_read_in_the_same_spawn(tmp_path):
         "Checkpoint-Plan: docs/plans/a.md", "Checkpoint-Gate-Owed: C2",
     )
 
-    assert checkpoint_landed_state(r, "docs/plans/a.md") == (frozenset({"C1", "C2"}), frozenset({"C2"}))
+    assert checkpoint_landed_state(r, "docs/plans/a.md") == (
+        frozenset({"C1", "C2"}), frozenset({"C2"}), None,
+    )
 
 
 def test_landed_id_absent_from_rows_and_closed_set_still_refused():

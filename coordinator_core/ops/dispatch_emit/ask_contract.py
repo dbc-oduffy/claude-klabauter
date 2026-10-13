@@ -13,7 +13,7 @@ Signatures implemented in their own modules:
   ask_plan_blitz.wrap_stage(plan_blitz_text: str, *, agent_prefix_var: str | None = None)
                   -> tuple[str, list[str]]
   sizing_fire.resumable_plan(sizing, sizing_rel: str, repo_root) -> str | None
-  ask_brief.load_em_brief(repo_root, *, brief, brief_file, context=()) -> EmBrief | None
+  ask_brief.load_em_brief(repo_root, *, brief, brief_file, context=(), session_id="") -> EmBrief | None
 """
 
 from __future__ import annotations

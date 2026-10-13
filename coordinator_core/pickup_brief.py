@@ -4263,7 +4263,10 @@ def _plan_brief(
     if stamp_gate is not None:
         gates_obj["execution_stamp_match"] = stamp_gate
 
-    if stamp_gate is not None and stamp_gate["verdict"] in ("stale-substantive", "unstampable"):
+    if stamp_gate is not None and (
+        stamp_gate["verdict"] in ("stale-substantive", "unstampable")
+        or (stamp_gate["verdict"] == "unstamped" and status in ("reviewed", "approved"))
+    ):
         next_move = stamp_gate["next_move"]
     elif status in ("reviewed", "approved"):
         next_move = f"/execute-plan {display_path}"

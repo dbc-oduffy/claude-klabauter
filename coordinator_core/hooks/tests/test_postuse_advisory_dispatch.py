@@ -460,6 +460,7 @@ def test_handler_schedules_no_thread_for_tool_name_gated_legs_that_cannot_fire()
     for tool_name, extra, leg in (
         ("Agent", {}, "_check_first_agent_dispatch_sync"),
         ("Workflow", {"transcript_path": "t.jsonl"}, "_capture_workflow_run_record_sync"),
+        ("Read", {"transcript_path": "t.jsonl"}, "_check_workflow_stall_sync"),
         ("Bash", {"command": "git commit -m x"}, "_release_claims_on_bash_commit_sync"),
     ):
         spawned.clear()

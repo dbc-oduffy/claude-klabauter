@@ -279,28 +279,9 @@ def _render_resume_call(run: dict) -> str:
     quotes via json.dumps: a newline inside it still breaks the ONE-LINE
     assumption the state-snapshot renderer makes elsewhere in this module.
     """
-    run_id = run.get("run_id")
-    script_path = run.get("scriptPath")
-    args = run.get("args")
-    if not isinstance(run_id, str) or not run_id or _CONTROL_CHAR_RE.search(run_id):
-        return ""
-    if (
-        not isinstance(script_path, str)
-        or not script_path
-        or _CONTROL_CHAR_RE.search(script_path)
-    ):
-        return (
-            "Workflow({scriptPath: <unknown -- capture missed it>, "
-            f"resumeFromRunId: {json.dumps(run_id)}}})"
-        )
-    parts = [f"scriptPath: {json.dumps(script_path)}"]
-    if isinstance(args, (dict, list)) and args:
-        try:
-            parts.append("args: " + json.dumps(args))
-        except Exception:
-            pass
-    parts.append(f"resumeFromRunId: {json.dumps(run_id)}")
-    return "Workflow({" + ", ".join(parts) + "})"
+    from coordinator_core.workflow_watch.stall import render_resume_call
+
+    return render_resume_call(run.get("run_id"), run.get("scriptPath"), run.get("args"))
 
 
 def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
@@ -316,13 +297,15 @@ def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
     except Exception:
         matches = []
     rendered: List[str] = []
-    for path in matches[:10]:
+    for path in matches:
+        if len(rendered) >= 10:
+            break
         try:
             with open(path, encoding="utf-8") as fh:
                 record = json.load(fh)
         except Exception:
             continue
-        if not isinstance(record, dict):
+        if not isinstance(record, dict) or record.get("pending") is True:
             continue
         resume_call = _render_resume_call(record)
         if not resume_call:

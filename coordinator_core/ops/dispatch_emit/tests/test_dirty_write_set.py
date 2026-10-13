@@ -342,3 +342,36 @@ def test_held_rows_their_dependents_and_landed_rows_leave_the_write_set(tmp_path
     run = FakeRun("")
     tool.guard_against_dirty_write_set(_plan(tmp_path, ROWS_CHAIN), tmp_path, run=run, ignorecase=False, **kw)
     assert [a.split("src/", 1)[1] for a in run.calls[0] if "src/" in a] == [e.split("src/", 1)[1] for e in expected]
+
+
+# --- own: a re-dispatched row's sole-declared leftover is carried, not dirt ---
+
+
+def test_sole_declared_own_path_is_admitted_and_returned(tmp_path) -> None:
+    run = FakeRun(" M src/b.py\n")
+    out = tool.guard_against_dirty_write_set(
+        _plan(tmp_path, ROWS_CHAIN), tmp_path, run=run, ignorecase=False, own=frozenset({"C2"})
+    )
+    assert out == {"own_leftover": {"C2": ["src/b.py"]}}
+    assert len(run.calls) == 1
+
+
+def test_path_declared_by_two_rows_still_refuses_under_own(tmp_path) -> None:
+    with pytest.raises(tool.DirtyWriteSetError, match="src/shared.py"):
+        tool.guard_against_dirty_write_set(
+            _plan(tmp_path, ROWS_OVERLAP), tmp_path, run=FakeRun(" M src/shared.py\n"),
+            ignorecase=False, own=frozenset({"C1", "C2"}),
+        )
+
+
+def test_dirty_path_of_a_row_outside_own_still_refuses(tmp_path) -> None:
+    with pytest.raises(tool.DirtyWriteSetError, match="src/a.py"):
+        tool.guard_against_dirty_write_set(
+            _plan(tmp_path, ROWS_CHAIN), tmp_path, run=FakeRun(" M src/a.py\n"),
+            ignorecase=False, own=frozenset({"C2"}),
+        )
+
+
+def test_own_empty_refuses_as_today(tmp_path) -> None:
+    with pytest.raises(tool.DirtyWriteSetError, match="src/b.py"):
+        _guard(_plan(tmp_path, ROWS_CHAIN), tmp_path, FakeRun(" M src/b.py\n"))

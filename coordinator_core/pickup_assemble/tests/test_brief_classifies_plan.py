@@ -62,7 +62,8 @@ def test_reviewed_unstamped_plan_classifies_plan_with_unstamped_gate(tmp_path, m
     assert gate["computed_sha"] == canonical_body_sha(plan.read_text(encoding="utf-8"))
     assert "authorize-invocation" in gate["next_move"]
     assert out["directives"] == []
-    assert out["next_move"] == f"/execute-plan {_PLAN_REL}"
+    assert out["next_move"] == gate["next_move"]
+    assert out["next_move"] != f"/execute-plan {_PLAN_REL}"
 
 
 def test_reviewed_stamped_plan_reports_match(tmp_path, monkeypatch, capsys):

@@ -1237,48 +1237,12 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
 # recovery for background Workflow runs — a regression this row's spec did
 # not ask for, so the persist stays wired even though the advisory does not.
 #
-# Gate is tool_name == "Workflow" — PostToolUse fires immediately after the
-# tool returns its async-launch result, so the launch record this check looks
-# for at the transcript tail IS the launch that just happened (see the plan's
-# Evidence section, pln 2026-08-30-the-workflow-monitor-outlives-the-run-it-
-# watches). taskId/runId/transcriptDir are read from the transcript tail via
-# coordinator_core.workflow_watch.tail.TailReader (the same reader C1a
-# builds), never from an unmapped `params` field — `_handler` receives
-# exactly session_id, transcript_path, agent_id, tool_name, file_path,
-# content, and this check reads no field beyond those six.
+# Gate is tool_name == "Workflow". PostToolUse fires BEFORE this call's own
+# async_launched result reaches the transcript, so "the last launch in the tail"
+# is the previous call's. Each `tool_use` is paired with its result by
+# tool_use_id instead (`resolve_workflow_run_records`); an unresolved call
+# persists a pending record that a later pass resolves.
 # ---------------------------------------------------------------------------
-
-# Matches the async-launch result record's field order verbatim as observed
-# in the plan's evidence transcript: status, taskId, taskType, runId,
-# transcriptDir. Deliberately field-order-sensitive (not a JSON parse of an
-# arbitrary object) — the record is embedded inside a larger transcript line
-# that is not itself valid standalone JSON, the same reason terminal.py's
-# _TASK_NOTIFICATION_RE matches by regex rather than by json.loads.
-#
-# taskId/runId are captured with the SAME charset this module treats as a safe
-# filesystem-path component (_SAFE_ID_RE, below), not `[^"]*` — both values
-# flow unmodified into `_workflow_run_record_path`'s os.path.join, and the
-# harness's own task/run ids are opaque hex/uuid-shaped tokens, so narrowing
-# the capture costs nothing real while closing the path-traversal opening a
-# permissive `[^"]*` transcript-text capture left.
-_ASYNC_LAUNCH_RE = re.compile(
-    r'"status"\s*:\s*"async_launched"'
-    r'[^{}]*?"taskId"\s*:\s*"(?P<task_id>[A-Za-z0-9_-]*)"'
-    r'[^{}]*?"taskType"\s*:\s*"(?P<task_type>[^"]*)"'
-    r'[^{}]*?"runId"\s*:\s*"(?P<run_id>[A-Za-z0-9_-]*)"'
-    r'[^{}]*?"transcriptDir"\s*:\s*"(?P<transcript_dir>[^"]*)"'
-)
-
-# Defensive, best-effort ONLY — unlike _ASYNC_LAUNCH_RE above, neither of these
-# is pinned to a confirmed harness field order/shape: `scriptPath`/`args` are
-# the Workflow tool's INPUT, not part of the toolUseResult record this module
-# already parses, and no evidence transcript in this repo confirms whether/how
-# they're echoed back near the async_launched record. Scanned independently
-# over the same tail text (last occurrence wins, mirroring the "last match is
-# this launch" premise above) so that a miss here degrades to "id captured,
-# scriptPath/args unknown" rather than losing the run id capture too.
-_SCRIPT_PATH_RE = re.compile(r'"scriptPath"\s*:\s*"(?P<script_path>[^"]*)"')
-_ARGS_RE = re.compile(r'"args"\s*:\s*')
 
 # Charset a session_id/task_id must satisfy before either is used to build a
 # filesystem path under tmpdir. Both values can originate from data an agent
@@ -1303,61 +1267,177 @@ def _workflow_run_record_path(tmpdir: str, session_id: str, task_id: str) -> str
     return os.path.join(tmpdir, f"workflow-run-{session_id}-{task_id}.json")
 
 
-def _capture_script_path_and_args(text: str) -> "tuple[str | None, dict | list | None]":
-    """Best-effort scriptPath/args capture from the same tail text already
-    read for the async_launched record. Never raises -- any parse failure
-    yields (None, None), which the caller persists as-is rather than
-    guessing. See the module comment above _SCRIPT_PATH_RE/_ARGS_RE for why
-    this is defensive rather than pinned."""
-    script_path = None
-    for m in _SCRIPT_PATH_RE.finditer(text):
-        try:
-            script_path = json.loads('"' + m.group("script_path") + '"')
-        except Exception:
-            continue
-    args = None
-    decoder = json.JSONDecoder()
-    for m in _ARGS_RE.finditer(text):
-        try:
-            candidate, _ = decoder.raw_decode(text, m.end())
-        except Exception:
-            continue
-        if isinstance(candidate, (dict, list)):
-            args = candidate
-    return script_path, args
-
-
-def _persist_workflow_run_record(
-    tmpdir: str,
-    session_id: str,
-    task_id: str,
-    run_id: str,
-    script_path: "str | None",
-    args: "dict | list | None",
-) -> None:
-    """Persist `{run_id, scriptPath, args, fired_at, session_id}` at fire time
-    so a later PreCompact (context_pressure_precompact.py) can carry the exact
-    `Workflow({scriptPath, args, resumeFromRunId})` resume call across a
-    compaction that killed the background run's own session state.
-
-    Best-effort, fail-open -- a write failure here must never affect the
-    advisory this leg returns. One record per (session_id, task_id); a repeat
-    fire for the same task id (unlikely -- task ids aren't reused) overwrites
-    rather than accumulating.
-    """
+def _write_workflow_run_record(path: str, record: dict) -> None:
+    """Best-effort, fail-open write of one run record; overwrites in place."""
     try:
-        record = {
-            "run_id": run_id,
-            "scriptPath": script_path,
-            "args": args,
-            "fired_at": int(time.time()),
-            "session_id": session_id,
-        }
-        path = _workflow_run_record_path(tmpdir, session_id, task_id)
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(record, fh)
     except Exception:
         pass
+
+
+def _remove_workflow_run_record(path: str) -> None:
+    """Best-effort, fail-open removal of a pending run record."""
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
+def _read_workflow_run_record(path: str) -> "dict | None":
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _parse_workflow_tail(text: str) -> "tuple[dict, dict]":
+    """Pair Workflow `tool_use` entries with their `tool_result` by id.
+
+    Returns `(uses, results)`. `uses` maps tool_use id -> {scriptPath, args,
+    resumeFromRunId}. `results` maps tool_use_id -> the `async_launched`
+    local_workflow `toolUseResult` dict for a launch, or None for any other
+    result (error, refusal). A line cut by the tail window fails to parse and
+    is skipped; a user line carrying several `tool_result` blocks is skipped
+    too, since its single `toolUseResult` cannot be attributed to one id.
+    """
+    uses: dict = {}
+    results: dict = {}
+    for line in text.split("\n"):
+        if '"tool_use"' not in line and '"tool_result"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        message = obj.get("message") if isinstance(obj, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        result_blocks = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == "Workflow":
+                tool_input = block.get("input")
+                if not isinstance(tool_input, dict) or not isinstance(block.get("id"), str):
+                    continue
+                uses[block["id"]] = {
+                    "scriptPath": tool_input.get("scriptPath"),
+                    "args": tool_input.get("args"),
+                    "resumeFromRunId": tool_input.get("resumeFromRunId"),
+                }
+            elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                result_blocks.append(block)
+        if len(result_blocks) != 1:
+            continue
+        launch = obj.get("toolUseResult")
+        is_launch = (
+            isinstance(launch, dict)
+            and launch.get("status") == "async_launched"
+            and launch.get("taskType") == "local_workflow"
+        )
+        results[result_blocks[0]["tool_use_id"]] = launch if is_launch else None
+    return uses, results
+
+
+def resolve_workflow_run_records(session_id: str, transcript_path: str, tmpdir: str) -> list:
+    """Reconcile this session's Workflow launches in the transcript tail with
+    the run records under `tmpdir`, pairing each launch with its own `tool_use`
+    by id. Returns the task-keyed records written by this pass.
+
+    - A `tool_use` with a launch result persists `{run_id, scriptPath, args,
+      fired_at, session_id, task_id, tool_use_id, transcript_dir}` under the
+      task-keyed path (overwriting any prior record) and removes its pending
+      record.
+    - A `tool_use` with no result persists a pending record at
+      `workflow-run-<session>-<tool_use_id>.json` (`run_id` null, `pending`
+      true); an existing pending record is left as it was.
+    - A non-launch result removes the pending record only.
+    - A result whose `tool_use` fell out of the tail window takes scriptPath and
+      args from its pending record, and is dropped when there is none.
+
+    Never raises; ids reaching a path are held to `_SAFE_ID_RE`.
+    """
+    written: list = []
+    if not session_id or not transcript_path or not _SAFE_ID_RE.fullmatch(session_id):
+        return written
+    try:
+        from coordinator_core.workflow_watch.tail import TailReader
+
+        text = TailReader(transcript_path, seek_to_tail=True).poll()
+        if not text:
+            return written
+        uses, results = _parse_workflow_tail(text)
+    except Exception:
+        return written
+
+    def pending_path(tool_use_id: str) -> "str | None":
+        try:
+            return _workflow_run_record_path(tmpdir, session_id, tool_use_id)
+        except ValueError:
+            return None
+
+    for tool_use_id, use in uses.items():
+        if tool_use_id in results:
+            continue
+        path = pending_path(tool_use_id)
+        if path is None or os.path.exists(path):
+            continue
+        _write_workflow_run_record(path, {
+            "run_id": None,
+            "pending": True,
+            "scriptPath": use["scriptPath"],
+            "args": use["args"],
+            "resumeFromRunId": use["resumeFromRunId"],
+            "fired_at": int(time.time()),
+            "session_id": session_id,
+            "tool_use_id": tool_use_id,
+        })
+
+    for tool_use_id, launch in results.items():
+        path = pending_path(tool_use_id)
+        if path is None:
+            continue
+        use = uses.get(tool_use_id)
+        if use is None:
+            use = _read_workflow_run_record(path)
+            if use is None:
+                continue
+        if launch is not None:
+            task_id = launch.get("taskId")
+            run_id = launch.get("runId")
+            transcript_dir = launch.get("transcriptDir")
+            if (
+                isinstance(task_id, str) and isinstance(run_id, str)
+                and _SAFE_ID_RE.fullmatch(task_id) and _SAFE_ID_RE.fullmatch(run_id)
+                and isinstance(transcript_dir, str) and transcript_dir
+            ):
+                task_path = _workflow_run_record_path(tmpdir, session_id, task_id)
+                prior = _read_workflow_run_record(task_path)
+                fired_at = int(time.time())
+                if (
+                    prior is not None
+                    and prior.get("run_id") == run_id
+                    and isinstance(prior.get("fired_at"), (int, float))
+                ):
+                    fired_at = prior["fired_at"]
+                record = {
+                    "run_id": run_id,
+                    "scriptPath": use.get("scriptPath"),
+                    "args": use.get("args"),
+                    "fired_at": fired_at,
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "tool_use_id": tool_use_id,
+                    "transcript_dir": transcript_dir,
+                }
+                _write_workflow_run_record(task_path, record)
+                written.append(record)
+        _remove_workflow_run_record(path)
+    return written
 
 
 def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, tool_name: str) -> None:
@@ -1382,94 +1462,78 @@ def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, too
     """
     if not session_id or tool_name != "Workflow" or not transcript_path:
         return
+    resolve_workflow_run_records(session_id, transcript_path, _managed_tmpdir())
 
+
+def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float) -> str:
+    """One register-shaped line naming this session's first stalled Workflow run
+    and the exact resume call, or "" when none is stalled.
+
+    Reads the session's run records, one journal tail and file stats; spawns
+    nothing and never writes the journal. Its only record writes are
+    `resolve_workflow_run_records`', and only while a pending record exists.
+    Never raises.
+    """
+    if not session_id or not isinstance(session_id, str) or not _SAFE_ID_RE.fullmatch(session_id):
+        return ""
     try:
-        from coordinator_core.workflow_watch.tail import TailReader
+        import glob
 
-        # A fresh TailReader starts
-        # at offset 0, so an unseeded construction here reads the ENTIRE
-        # session transcript on every Workflow PostToolUse event. This call
-        # site takes exactly one snapshot (no repeated polling), so
-        # seek_to_tail bounds the read to the trailing window instead.
-        text = TailReader(transcript_path, seek_to_tail=True).poll()
+        from coordinator_core.workflow_watch import stall
+
+        tmpdir = _managed_tmpdir()
+        pattern = os.path.join(glob.escape(tmpdir), f"workflow-run-{session_id}-*.json")
+
+        def load() -> list:
+            return [r for r in map(_read_workflow_run_record, glob.glob(pattern)) if r]
+
+        records = load()
+        if transcript_path and any(r.get("pending") for r in records):
+            resolve_workflow_run_records(session_id, transcript_path, tmpdir)
+            records = load()
+
+        newest: dict = {}
+        for record in records:
+            run_id = record.get("run_id")
+            fired_at = record.get("fired_at")
+            if (record.get("pending") or not isinstance(run_id, str)
+                    or not isinstance(fired_at, (int, float))
+                    or now - fired_at > stall.STALL_HORIZON_SECONDS):
+                continue
+            if run_id not in newest or fired_at > newest[run_id]["fired_at"]:
+                newest[run_id] = record
+
+        for run_id, record in newest.items():
+            task_id = record.get("task_id")
+            transcript_dir = record.get("transcript_dir")
+            if not isinstance(task_id, str) or not isinstance(transcript_dir, str):
+                continue
+            try:
+                marker = stall.stopped_marker_path(tmpdir, session_id, task_id)
+            except ValueError:
+                continue
+            if os.path.exists(marker):
+                continue
+            stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)
+            if stalled is None:
+                continue
+            call = stall.render_resume_call(
+                run_id, record.get("scriptPath"), record.get("args"), task_id
+            )
+            if not call:
+                continue
+            return (
+                f"Workflow run {run_id} stalled: agent {stalled.agent_label} idle "
+                f"{int(stalled.idle_seconds // 60)}m. Next action: {call}. "
+                f'To abandon it instead: TaskStop({{"task_id": "{task_id}"}}).'
+            )
     except Exception:
-        return
-    if not text:
-        return
+        return ""
+    return ""
 
-    # Last match wins: PostToolUse fires immediately after the tool returns,
-    # so the most recent async_launched record in the tail IS this launch.
-    # Materialized (not iterated once) so the chosen match's own capture
-    # window (below) can be bounded by its NEIGHBOURS in this list — the
-    # previous match's end and the next match's start — rather than scanning
-    # the whole tail for scriptPath/args.
-    all_launches = list(_ASYNC_LAUNCH_RE.finditer(text))
-    match = None
-    match_index = -1
-    for idx, candidate in enumerate(all_launches):
-        match = candidate
-        match_index = idx
-    if match is None:
-        # Breadcrumb, not silence. A regex that stopped matching because the
-        # harness reordered or nested these fields would otherwise be
-        # indistinguishable from "no Workflow was launched" -- forever, with
-        # no signal.
-        print(
-            "postuse_advisory_dispatch: capture_workflow_run_record found no "
-            "async_launched record in the transcript tail -- if a Workflow did "
-            "launch, _ASYNC_LAUNCH_RE no longer matches the harness record shape",
-            file=sys.stderr,
-        )
-        return
-    if match.group("task_type") != "local_workflow":
-        # "Last match wins" assumes the most recent async_launched record is this
-        # tool call's own launch. A concurrent background dispatch of another
-        # taskType landing later in the same tail window would shadow it, and the
-        # real launch sits moments earlier, unseen. Name it rather than
-        # persisting a record for the wrong run.
-        print(
-            "postuse_advisory_dispatch: capture_workflow_run_record saw taskType="
-            f"{match.group('task_type')!r}"
-            " nearest the tail, not local_workflow -- a concurrent dispatch may "
-            "have shadowed this Workflow's own launch record",
-            file=sys.stderr,
-        )
-        return
 
-    task_id = match.group("task_id")
-    run_id = match.group("run_id")
-    # The regex captures a JSON STRING LITERAL out of the raw transcript text,
-    # so a Windows path arrives with its separators still escaped
-    # (C:\Users\... as two characters each). Feeding that to os.path.join
-    # yields a mixed-separator path that is wrong even where it happens to
-    # resolve. Decode it back through the JSON rules that escaped it.
-    try:
-        transcript_dir = json.loads('"' + match.group("transcript_dir") + '"')
-    except Exception:
-        return
-    if not task_id or not run_id or not transcript_dir:
-        return
-
-    tmpdir = _managed_tmpdir()
-
-    # Scoped to the text strictly between the PRECEDING async_launched record
-    # (or start of text) and the FOLLOWING one (or end of text) -- not the
-    # whole tail. `scriptPath`/`args` are observed to precede the record they
-    # belong to (the tool's own input, echoed ahead of its result), so the
-    # window must reach backward, not merely forward from this match. A
-    # multi-launch tail otherwise lets an unrelated call's scriptPath/args
-    # blob get persisted against the wrong run's record, since
-    # _SCRIPT_PATH_RE/_ARGS_RE previously scanned unbounded and kept the LAST
-    # occurrence in the whole tail.
-    window_start = all_launches[match_index - 1].end() if match_index > 0 else 0
-    window_end = (
-        all_launches[match_index + 1].start()
-        if match_index + 1 < len(all_launches)
-        else len(text)
-    )
-    capture_window = text[window_start:window_end]
-    script_path, args = _capture_script_path_and_args(capture_window)
-    _persist_workflow_run_record(tmpdir, session_id, task_id, run_id, script_path, args)
+def _check_workflow_stall_sync(session_id: str, transcript_path: str) -> str:
+    return workflow_stall_resume_text(session_id, transcript_path, time.time())
 
 
 # ---------------------------------------------------------------------------
@@ -2193,6 +2257,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
             else _idle()
         ),
         hw_coro,
+        (
+            asyncio.to_thread(_check_workflow_stall_sync, session_id, transcript_path)
+            if transcript_path
+            else _idle()
+        ),
         return_exceptions=True,
     )
     labels = (
@@ -2221,7 +2290,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     hw_text = _text_or_breadcrumb("hand_written_plan", results[8])
 
-    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, hw_text, ge_text) if text]
+    stall_text = _text_or_breadcrumb("workflow_stall", results[9])
+
+    texts = [
+        text for text in (cp_text, rt_text, ad_text, uh_text, hw_text, ge_text, stall_text) if text
+    ]
     if texts:
         return post_advisory("\n\n".join(texts))
     return no_advisory()

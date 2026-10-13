@@ -38,6 +38,7 @@ import yaml
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.completion_receipts.verdict import _count, body_product_files
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.git.commit_trailers import _read_deliverable_id_from_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -95,12 +96,54 @@ def _resolve_plan_id(repo_root: Path, plan: str) -> str:
     return str(plan_id)
 
 
-def _write_range_prep(repo_root: Path, session_id: str, plan: str, base: str, head: str) -> Path:
+def _plan_deliverable_id(repo_root: Path, plan: str) -> str:
+    """The ``deliverable_id`` of ``plan`` when it is a readable plan file path, else ``""``."""
+    if plan.startswith("pln-"):
+        return ""
+    plan_path = Path(plan)
+    if not plan_path.is_absolute():
+        plan_path = repo_root / plan_path
+    return _read_deliverable_id_from_frontmatter(plan_path)
+
+
+def _owned_range_files(repo_root: Path, base: str, head: str, deliverable_id: str) -> List[str]:
+    """Distinct files touched by the commits in ``base..head`` carrying a
+    ``Deliverable-Id: <deliverable_id>`` trailer; peers' commits in the range
+    are skipped. One git spawn."""
+    proc = run_git(
+        ["log", "--name-only", "--format=%x01%(trailers:key=Deliverable-Id,valueonly,separator=%x2C)",
+         f"{base}..{head}"],
+        cwd=str(repo_root), timeout=_GIT_TIMEOUT_SECS,
+    )
+    if proc.returncode != 0:
+        raise SupersedeRefused(f"git log {base}..{head} failed: {proc.stderr.strip()}")
+    files: Dict[str, None] = {}
+    for chunk in proc.stdout.split("\x01")[1:]:
+        lines = chunk.splitlines()
+        owners = [v.strip() for v in (lines[0] if lines else "").split(",")]
+        if deliverable_id in owners:
+            files.update((line.strip(), None) for line in lines[1:] if line.strip())
+    if not files:
+        raise SupersedeRefused(
+            f"no commit in {base}..{head} carries Deliverable-Id {deliverable_id}: "
+            "the owned review covers zero files"
+        )
+    return list(files)
+
+
+def _write_range_prep(
+    repo_root: Path, session_id: str, plan: str, base: str, head: str, deliverable_id: str = "",
+) -> Path:
     """Write the prep sidecar for an ad-hoc review of ``base..head``: the
     fields ``share_stages`` reads off the emitted workflow's prep stage, with
-    ``product_files`` counted over the range. One git spawn."""
-    proc = run_git(["diff", "--name-only", f"{base}..{head}"], cwd=str(repo_root), timeout=_GIT_TIMEOUT_SECS)
-    files = [line for line in proc.stdout.splitlines() if line.strip()]
+    ``product_files`` counted over only the commits carrying
+    ``deliverable_id``; none given is refused. One git spawn."""
+    if not deliverable_id:
+        raise SupersedeRefused(
+            f"plan {plan!r} resolves no deliverable_id: the range-prep would count peers' commits in "
+            f"{base}..{head}; add deliverable_id to the plan frontmatter or pass deliverable_id explicitly"
+        )
+    files = _owned_range_files(repo_root, base, head, deliverable_id)
     share = repo_root / ".coordinator-local" / "subagent-share" / session_id
     share.mkdir(parents=True, exist_ok=True)
     target = share / f"{review_wave_bookkeeping_stem(plan, session_id)}.range-prep.md"
@@ -156,15 +199,20 @@ def record_superseding_review(
     supersedes: Optional[str] = None,
     from_share: bool = False,
     judge_result: Optional[Dict[str, Any]] = None,
+    deliverable_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Write the superseding record; returns ``{record_path, record}`` with
     ``record_path`` repo-root-relative. ``plan`` is a ``pln-`` id or a plan
-    file path. ``from_share`` assembles ``prep_sidecar``, the wave sidecars
+    file path. The range-prep counts only commits carrying
+    ``Deliverable-Id: <deliverable_id>`` (default: the plan file's own
+    ``deliverable_id``; none resolvable refuses a range-prep).
+    ``from_share`` assembles ``prep_sidecar``, the wave sidecars
     and ``stage_returns`` from the session's plan-scoped sidecars
     (``share_stages``), ignoring the three hand-supplied arguments, and adds
     ``used`` (stage -> sidecar paths) to the result. Raises
     ``SupersedeRefused``."""
     plan_stem = None if plan.startswith("pln-") else Path(plan).stem
+    deliverable_id = deliverable_id or _plan_deliverable_id(repo_root, plan)
     plan = _resolve_plan_id(repo_root, plan)
     base = str(commit_range.get("base") or "")
     head = str(commit_range.get("head") or "")
@@ -192,7 +240,7 @@ def record_superseding_review(
                 # A post-run review has no emitted prep stage; the range itself is the prep.
                 if exc.stage != "prep":
                     raise
-                _write_range_prep(repo_root, session_id, plan, base, head)
+                _write_range_prep(repo_root, session_id, plan, base, head, deliverable_id)
                 assembled = assemble()
         except (ShareStageMissing, ShareStagesMissing, ValueError) as exc:
             raise SupersedeRefused(str(exc))
@@ -270,6 +318,7 @@ def _record_superseding_review_handler(params: dict, repo_root: Optional[Path] =
             supersedes=params.get("supersedes"),
             from_share=bool(params.get("from_share")),
             judge_result=params.get("judge_result"),
+            deliverable_id=params.get("deliverable_id"),
         )
     except SupersedeRefused as exc:
         return {"status": "refused", "reason": str(exc)}
@@ -306,6 +355,11 @@ def main(argv: "list[str] | None" = None) -> int:
         help="with --from-share: the exit-criterion-judge's returned terminal-judge-result JSON "
         "(inline or a file path); the judge writes no sidecar",
     )
+    parser.add_argument(
+        "--deliverable-id", default=None,
+        help="count the range-prep over only commits carrying this Deliverable-Id "
+        "(default: the plan file's deliverable_id)",
+    )
     parser.add_argument("--supersedes", default=None)
     parser.add_argument("--repo-root", default=None)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
@@ -341,6 +395,7 @@ def main(argv: "list[str] | None" = None) -> int:
             supersedes=args.supersedes,
             from_share=args.from_share,
             judge_result=judge_result,
+            deliverable_id=args.deliverable_id,
         )
     except SupersedeRefused as exc:
         print(f"record-superseding-review: refused: {exc}", file=sys.stderr)

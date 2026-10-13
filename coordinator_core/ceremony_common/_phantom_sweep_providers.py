@@ -189,6 +189,11 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
                 f"refs/heads/{n}\t{n}\tme@x\n" for n in ("current", "main", "stale")
             )
             return SimpleNamespace(returncode=0, stdout=rows, stderr="")
+        if args[0] == "log" and args[1].startswith("--format="):
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "rev-parse" and all(a.endswith("^{commit}") for a in args[1:]):
+            tips = "".join(f"{i:040x}\n" for i, _ in enumerate(args[1:], start=1))
+            return SimpleNamespace(returncode=0, stdout=tips, stderr="")
         if args[0] == "log" and args[1] == "-1":
             return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
         if args[0] == "log" and args[1] == "--oneline":

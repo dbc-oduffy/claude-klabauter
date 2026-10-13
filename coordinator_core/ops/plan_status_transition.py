@@ -665,6 +665,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = 
     # unconditionally would inject a new stderr line into the handoff-only path
     # that no test, and no prior behaviour, ever produced.
     from coordinator_core.ops.goal_kr_cascade import discharge_goal_kr
+    from coordinator_core.session.core import attributable_session_id
 
     kr_note = discharge_goal_kr(Path(plan_path), Path(git_common_dir).parent)
     if kr_note:
@@ -681,6 +682,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = 
                     "source_path": plan_path,
                     "target_kind": target_kind,
                     "ship_sha": ship_sha,
+                    "caller_session_id": attributable_session_id() or "",
                 },
                 repo_root=git_common_dir,
             )

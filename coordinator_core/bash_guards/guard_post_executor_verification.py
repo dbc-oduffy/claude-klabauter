@@ -19,10 +19,12 @@ Executor signal: a ``coordinator:executor`` row in the session's
 file records dispatch, not arrival; a foreground dispatch has returned before
 the EM's next tool call, which is the case this targets.
 
-Exempt: a scoped pytest (every target an explicit in-repo test path or node id) in an
+Exempt: a scoped pytest (every target an explicit in-repo test file, node id, or directory
+under a ``tests/`` dir; a bare package dir is broad) in an
 execute-plan session -- ``session-shape.json`` records a ``plan.path`` whose plan reads
-``status: executing`` (execute-plan doctrine has the EM run the chunk's tests itself);
-no counter bump. Also subagents (``agent_id`` present) and a sentinel
+``status: executing`` (execute-plan doctrine has the EM run the chunk's tests itself) --
+or in a session with a ``workflow-run-<session>-*.json`` record (any Workflow run it
+launched, completed or not); no counter bump. Also subagents (``agent_id`` present) and a sentinel
 carrying a reason line (the dispatch sentinel; each honoured one is appended to
 ``dispatch-escapes.jsonl``). One counter, ``post-executor-pytest-runs`` in the
 session share dir, spans every verification kind; counter I/O failure fails open.
@@ -45,7 +47,6 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_leading_subshell_and_env,
     _tokenize_full_command,
 )
-from coordinator_core.warp_fire import fire_step
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -58,8 +59,8 @@ _PYTHON_RE = re.compile(r"^python[0-9.]*$")
 _DASH_M_BUNDLED_RE = re.compile(r"^-m(.+)$")
 
 _DENY_BODY = (
-    "Verification after an executor is the warp run's test stage, not the EM's. "
-    + fire_step("<this session's sizing path>")
+    "A second verification run after an executor is not the EM's. "
+    "Dispatch a coordinator:test-runner."
 )
 
 
@@ -291,7 +292,11 @@ def _is_scoped_target(target: str, repo_root: str, cwd: str) -> bool:
     root = os.path.normcase(os.path.normpath(repo_root))
     if full != root and not full.startswith(root + os.sep):
         return False
-    return full != root and (path.endswith(".py") or os.path.isdir(full))
+    if full == root:
+        return False
+    if path.endswith(".py"):
+        return True
+    return os.path.isdir(full) and "tests" in full[len(root):].split(os.sep)
 
 
 def is_scoped_pytest(cmd: str, repo_root: str, cwd: str) -> bool:
@@ -426,9 +431,15 @@ def check(payload: dict) -> Optional[dict]:
     cwd = payload.get("cwd") or repo_root
     if verdict != "deny" or not runs_verification(clean, repo_root, cwd):
         return None
-    if is_scoped_pytest(clean, repo_root, cwd) and execute_plan_session(session_id, repo_root):
-        record_silent(GUARD_NAME, "scoped pytest in an execute-plan session: exempt")
-        return None
+    if is_scoped_pytest(clean, repo_root, cwd):
+        if execute_plan_session(session_id, repo_root):
+            record_silent(GUARD_NAME, "scoped pytest in an execute-plan session: exempt")
+            return None
+        from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
+
+        if session_workflow_run_ids(session_id):
+            record_silent(GUARD_NAME, "scoped pytest after a workflow run: exempt")
+            return None
     if _bump_counter(repo_root, session_id) < 1:
         return None
     from coordinator_core.hooks import dispatch_escape as nd

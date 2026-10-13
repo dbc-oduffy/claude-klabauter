@@ -167,6 +167,30 @@ def test_ask_run_stamps_its_plan_in_a_second_commit_and_its_note_rides_the_first
     assert f"disposition_ref: {out['sha']}" in (repo / PLAN).read_text(encoding="utf-8")
 
 
+def test_ask_run_stamp_commit_carries_the_baton_its_sizing_names(repo, monkeypatch):
+    baton = "state/handoffs/2026-01-01-p.md"
+    _closable_plan(repo, PLAN)
+    _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8") + f"baton: {baton}\n")
+    _write(repo, baton, "---\ntitle: p\nstatus: open\nkind: session-handoff\n---\n\n# handoff\n")
+    out = _call(repo, inline_review=_MINTING_REVIEW)
+    assert out["committed"] is True and "coded_stamp_error" not in out, out.get("coded_stamp_error")
+    stamp = set(_git(repo, "show", "--name-only", "--format=", "HEAD").split())
+    assert {PLAN, SIZING, baton} <= stamp
+    tracked = set(_git(repo, "ls-files").split())
+    assert {PLAN, SIZING, baton} <= tracked
+    assert _git(repo, "status", "--porcelain", "--", PLAN, SIZING, baton) == ""
+
+
+@pytest.mark.parametrize("cited", ["docs/reference/x.md", "state/handoffs/../../docs/reference/x.md"])
+def test_a_baton_outside_the_handoffs_home_is_not_committed(repo, cited):
+    _closable_plan(repo, PLAN)
+    _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8") + f"baton: {cited}\n")
+    _write(repo, "docs/reference/x.md", "# not a handoff\n")
+    out = _call(repo, inline_review=_MINTING_REVIEW)
+    assert out["committed"] is True, out
+    assert "docs/reference/x.md" not in _git(repo, "ls-files").split()
+
+
 def test_ask_run_with_a_gitignored_plan_makes_one_commit_and_stamps_on_disk(repo, monkeypatch):
     ignored_plan = "scratch/plans/p.md"
     _closable_plan(repo, ignored_plan)
