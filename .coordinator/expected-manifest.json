@@ -2062,8 +2062,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "233d9cc6fbd80b90680e891446d01279fc31c4ad",
-    "coordinator_core/_engine_stamp": "8bfd620791b3d8f0ca7c82da6ac8d97dc39055a0",
+    "coordinator_core/_engine_published_at": "082dc1a710b732769f58a3df9b34f245999c7200",
+    "coordinator_core/_engine_stamp": "52698c2a9edb5f436a7d67e071e58f5cad8bec39",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3392,7 +3392,7 @@
     "coordinator_core/hooks/block_dispatch_suite_invocation.py": "90c995ac71250f07279a391f85683fd4a20e4982",
     "coordinator_core/hooks/block_group_em_agent_cap_grant.py": "29db3d2c35c400c984cce9432601603c9d128b1e",
     "coordinator_core/hooks/block_unenumerated_agent_type.py": "fdc6317f88f6e3fc7eab125d95c45417370d99a5",
-    "coordinator_core/hooks/block_ungranted_opus_subagent.py": "e18a348ea5724b40e5ff3f068984ce6eb8cc47a4",
+    "coordinator_core/hooks/block_ungranted_opus_subagent.py": "7220f207d3c2c2af9296e1f93401518dabe36f62",
     "coordinator_core/hooks/block_workflow_foreign_emission.py": "16932bf304812956e1eab2eae4ba5ed381061299",
     "coordinator_core/hooks/block_workflow_unmodeled_agent.py": "61150da75a50d26c8747f42409ca0a26498a0d89",
     "coordinator_core/hooks/block_worktree_tool.py": "8cae873e6c4791864a82cc4ac29c088bfec8cd76",
@@ -3564,7 +3564,7 @@
     "coordinator_core/hooks/tests/test_block_dispatch_suite_scoped.py": "da378620cbee78b06d3d90fea83024f1355053df",
     "coordinator_core/hooks/tests/test_block_group_em_agent_cap_grant.py": "2c61728b185029784a548022e07ef4bfd6ace726",
     "coordinator_core/hooks/tests/test_block_unenumerated_agent_type.py": "1ce80878e7f7b681bae3ee0856392ecfdf692e8f",
-    "coordinator_core/hooks/tests/test_block_ungranted_opus_subagent.py": "5162ff14bdab0028e5b2e829911ba0337886baef",
+    "coordinator_core/hooks/tests/test_block_ungranted_opus_subagent.py": "eff88a4cedfb2b1ff37854e82c3b267208c8eaf8",
     "coordinator_core/hooks/tests/test_block_workflow_foreign_emission_pipeline.py": "003edb5d699895ce928847f03f7e8a2a87d6809e",
     "coordinator_core/hooks/tests/test_block_workflow_foreign_emission_receipt_rule.py": "9a351717706adcdd51b69512fe2bee9d851441fb",
     "coordinator_core/hooks/tests/test_c4_ownership_inherited_at_dispatch_tripwires.py": "744b4733083353280ee16034c4ebf811d9ada667",
@@ -7547,5 +7547,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "d7e6b05deb4c62005e06e23d828687e48b92b534"
+  "source_head": "35e7fcdec65cb9620a26d0680ea5d0ba7610ab7f"
 }

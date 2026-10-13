@@ -200,6 +200,11 @@ _EXECUTION_RE = re.compile(
 )
 
 
+# Personas whose role is authoring a plan document: every brief to them is plan work,
+# whatever verbs it uses ("amend the plan: add two rows, fix the tier column").
+_PLAN_AUTHORING_PERSONAS = frozenset({"coordinator:plan-author", "coordinator:roadmap-planner"})
+
+
 def _is_execution_brief(tool_input: Dict[str, Any]) -> bool:
     """True when the brief carries execution/diagnosis vocabulary and neither the
     description nor the prompt opens with a judgment verb (a judgment word later in
@@ -253,7 +258,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if pin_model == "opus":
         # Named persona -- see module docstring "PERSONA EXEMPTION".
-        if _is_execution_brief(tool_input):
+        if subagent_type not in _PLAN_AUTHORING_PERSONAS and _is_execution_brief(tool_input):
             return deny("PreToolUse", _persona_execution_reason(subagent_type))
         return None
 

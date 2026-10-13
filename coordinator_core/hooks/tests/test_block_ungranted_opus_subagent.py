@@ -191,6 +191,15 @@ def test_opus_persona_judgment_or_ambiguous_brief_passes(
     assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt)) is None
 
 
+@pytest.mark.parametrize("persona", ["coordinator:plan-author", "coordinator:roadmap-planner"])
+def test_plan_authoring_persona_passes_an_amend_brief_with_execution_verbs(
+    monkeypatch: pytest.MonkeyPatch, persona: str
+) -> None:
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    prompt = "Amend the executing plan in place: add a tier dimension, fix two rows, implement R10."
+    assert mod.check(_agent_payload(persona, prompt=prompt)) is None
+
+
 def test_opus_persona_execution_brief_description_field_classified(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
