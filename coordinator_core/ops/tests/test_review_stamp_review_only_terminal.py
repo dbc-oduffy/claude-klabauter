@@ -80,3 +80,36 @@ def test_trailer_walk_picks_the_newest_inline_review_commit_for_the_plan(tmp_pat
     sha, _, _ = m._resolve_terminal_commit(repo, _PLAN_ID)
 
     assert sha == newest
+
+
+def _two_runs(repo: Path, review_base: str) -> str:
+    share = repo / ".coordinator-local" / "subagent-share" / "s1"
+    _frontmatter(share / "execute.md", {"plan_id": _PLAN_ID, "prep": {"product_files": 3}, "delivery": {"verdict": "PASS"}})
+    terminal = _commit(repo, "one.txt", "execute\n\nInline-Review: applies execute")
+    base = terminal if review_base == "terminal" else review_base
+    _frontmatter(
+        share / "review.md",
+        {"plan_id": _PLAN_ID, "prep": {"run_base_sha": base, "product_files": 0}, "delivery": {"verdict": "PASS"}},
+    )
+    return terminal
+
+
+def test_a_zero_file_review_only_run_based_at_the_stamped_terminal_supersedes_it(tmp_path):
+    repo, _ = _repo(tmp_path)
+    _two_runs(repo, "terminal")
+    review = _commit(repo, "two.txt", "review trail\n\nInline-Review: applies review")
+
+    sha, _, data = m._resolve_terminal_commit(repo, _PLAN_ID)
+
+    assert sha == review
+    assert data["prep"]["product_files"] == 0
+
+
+def test_a_zero_file_run_based_elsewhere_still_yields_to_the_older_reviewed_diff(tmp_path):
+    repo, _ = _repo(tmp_path)
+    terminal = _two_runs(repo, "c" * 40)
+    _commit(repo, "two.txt", "evidence only\n\nInline-Review: applies review")
+
+    sha, _, _ = m._resolve_terminal_commit(repo, _PLAN_ID)
+
+    assert sha == terminal
