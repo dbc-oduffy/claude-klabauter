@@ -888,7 +888,7 @@
     "coordinator/bin/publish-resolve-target.py": "1bf3db81840e305c065e4b4de85a7c5414d31ffe",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "99da381428c8bd02aeced3ee50f338f080484588",
-    "coordinator/bin/published-name-map.json": "da4b3fa2f0b25a3fa82c127708461f650e27a571",
+    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
     "coordinator/bin/push-hold.cmd": "f02664333181a2ec7a3385dcbfb141b92399d88c",
     "coordinator/bin/push-hold.py": "c0fff21a69360eb2e547edd5478de7689f272ac8",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -1860,7 +1860,7 @@
     "coordinator/bin/workday-complete-step3-consolidate.cmd": "f2434cae9c2fffd919c85d42f9c894c63d6e33fd",
     "coordinator/bin/workday-complete-step3-consolidate.py": "f1be03e1a2b64245b8d6b1b475dd87c9985bcac2",
     "coordinator/bin/workday-complete-step9-append-changelog.cmd": "8a2607abdc0dd249cbeed14b27b75540aed4351b",
-    "coordinator/bin/workday-complete-step9-append-changelog.py": "0f886fc0ece078b4a3f39e3eb8774f4f5bc5c866",
+    "coordinator/bin/workday-complete-step9-append-changelog.py": "41b9cc893e7fb9b12ba40ab7fa13bd49c4fbe54e",
     "coordinator/bin/workday-start-advisory-counters.cmd": "31c6aa2d9dad5c55544dab3fda54fef1ec40fb19",
     "coordinator/bin/workday-start-advisory-counters.py": "5accd65d9e7a829070fcf484fba683bf5937d844",
     "coordinator/bin/workday-start-cross-repo-memo-outbox-surface.cmd": "03330d91e42bc9e3b74c5d1ebad964516918bdd7",
@@ -2062,8 +2062,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "95b62972f878374b5eefa5f7f5bd25ce5ceb033a",
-    "coordinator_core/_engine_stamp": "a09bb3b68bff51f4342ce39ec62137da3e332884",
+    "coordinator_core/_engine_published_at": "fac10e76da2fa31e89d8b5e25d69c34c7e0fb4a9",
+    "coordinator_core/_engine_stamp": "25cdc14b241172b13c90a26e7afefc287460caed",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4095,7 +4095,7 @@
     "coordinator_core/ops/ceremony/tests/test_wsc_disposition.py": "084adeb37a03d0528d790985dd4669f1d4df284e",
     "coordinator_core/ops/ceremony/update_docs_scan.py": "08c22194983a4ef407d13fd4df7baedb336e1f80",
     "coordinator_core/ops/ceremony/wsc_disposition.py": "e42f4ba510f90aaaf09763346a6f8bcc8ff54b2e",
-    "coordinator_core/ops/changelog_ops.py": "ff3d950d697c9769d91966d144fb0820ab8ceea1",
+    "coordinator_core/ops/changelog_ops.py": "cdbcd9443fad5a7a688c39a53344149517163e93",
     "coordinator_core/ops/check_arch_audit_staleness.py": "3010d1b7bed5bfd5b67b57b83792075928d27b25",
     "coordinator_core/ops/check_atlas_watch_drift.py": "aa5f96414f48caa6a71875d751bf355a2f897ad2",
     "coordinator_core/ops/check_auto_memory_drained.py": "91b5c33e4488629132e4a358b8ab037a02f9b628",
@@ -7552,5 +7552,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "b4a2a14743515aec8746bba8b85f1da8af4950cc"
+  "source_head": "5133f5508ca9e2b071310e0e30babe1b231898af"
 }

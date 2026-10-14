@@ -346,6 +346,33 @@ def _superseded_backfill_headers(content: str, date: str) -> List[str]:
     return headers
 
 
+def compose_day_block(
+    *,
+    worktree: Path,
+    date: str,
+    machine: str,
+    is_backfill: bool = False,
+    **block_fields,
+) -> Tuple[str, str]:
+    """Return `(effective_machine, block)` exactly as `append_day` would write it.
+
+    The sole home of the backfill machine swap and the daily-summary link; the
+    step9 `--dry-run` preview and `append_day` both call it.
+    """
+    if is_backfill:
+        # A synthesized day is keyed by DATE, never by the box that ran the
+        # ceremony -- see BACKFILL_MACHINE.
+        machine = BACKFILL_MACHINE
+    block = _compose_block(
+        date=date,
+        machine=machine,
+        is_backfill=is_backfill,
+        summary_link=_daily_summary_link(worktree, date, machine),
+        **block_fields,
+    )
+    return machine, block
+
+
 def append_day(
     *,
     worktree: Path,
@@ -389,13 +416,8 @@ def append_day(
     if reviewed_lines is None:
         reviewed_lines = []
 
-    if is_backfill:
-        # A synthesized day is keyed by DATE, never by the box that ran the
-        # ceremony -- see BACKFILL_MACHINE for why the caller's machine is the
-        # wrong attribution for a machine-agnostic commit range.
-        machine = BACKFILL_MACHINE
-
-    block = _compose_block(
+    machine, block = compose_day_block(
+        worktree=worktree,
         date=date,
         machine=machine,
         branch=branch,
@@ -411,7 +433,6 @@ def append_day(
         reviewed_lines=reviewed_lines,
         has_non_trivial=has_non_trivial,
         is_backfill=is_backfill,
-        summary_link=_daily_summary_link(worktree, date, machine),
     )
     section_header = f"## {date} — {machine}"
 
