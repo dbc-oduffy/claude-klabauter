@@ -89,9 +89,10 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced
 
 _OPEN = "open"
 
-_CLOSED_SECTION_DISPOSITIONS = ("spun_off", "backlogged", "wont_do")
+_CLOSED_SECTION_DISPOSITIONS = ("spun_off", "backlogged", "wont_do", "delivered_elsewhere")
 
 _DISPOSITION_SECTION_TITLES = {
+    "delivered_elsewhere": "Delivered elsewhere",
     "spun_off": "Spun off",
     "backlogged": "Backlogged",
     "wont_do": "Won't do",
@@ -192,6 +193,9 @@ def _render_row_bullet(row: dict) -> str:
     detail = row.get("disposition_detail")
 
     parts = [f"**{row_id}** — {title}"]
+    via = row.get("delivered_via")
+    if via:
+        parts.append(f"[via {via}, asserted not commit-proven]")
     if ref:
         parts.append(f"(`{ref}`)")
     if detail:

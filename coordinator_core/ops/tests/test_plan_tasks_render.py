@@ -202,6 +202,24 @@ def test_render_closed_items_includes_ref_and_detail():
     assert "PM ratified 2026-07-27" in rendered
 
 
+def test_render_closed_items_delivered_elsewhere_shows_via_ref_detail():
+    rows = [
+        {
+            "id": "C7",
+            "title": "Done by peer",
+            "disposition": "delivered_elsewhere",
+            "delivered_via": "memo",
+            "disposition_ref": "memo-thread-x",
+            "disposition_detail": "peer landed it",
+        },
+    ]
+    rendered = render_closed_items(rows)
+    assert "### Delivered elsewhere" in rendered
+    assert "via memo" in rendered
+    assert "memo-thread-x" in rendered
+    assert "peer landed it" in rendered
+
+
 def test_render_closed_items_wont_do_has_no_ref():
     rows = [
         {"id": "C5", "title": "Declined thing", "disposition": "wont_do", "disposition_detail": "not worth it"},

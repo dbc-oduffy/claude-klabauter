@@ -87,7 +87,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 _TERMINAL_DEPLOYMENT = {"shipped", "continued", "closed"}
-_RESOLVED_DISPOSITIONS = {"coded", "wont_do", "backlogged", "spun_off"}
+_RESOLVED_DISPOSITIONS = {"coded", "wont_do", "backlogged", "spun_off", "delivered_elsewhere"}
 _COMMENT_PREFIX = re.compile(r"\A\s*<!--.*?-->", re.DOTALL)
 _SPINE_FENCE = re.compile(r"```ya?ml\s+plan-tasks\s*\n(.*?)\n```", re.DOTALL)
 

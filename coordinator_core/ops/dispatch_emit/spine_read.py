@@ -175,7 +175,7 @@ class _Undeclared:
 
 UNDECLARED = _Undeclared()
 
-NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided"})
+NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided", "delivered_elsewhere"})
 
 #: Authored aliases for a canonical disposition. Spines written before `coded`
 #: was enforced say `done`; every reader folds them where rows are read.

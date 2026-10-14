@@ -97,11 +97,29 @@ def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
     if context is not None:
         items = [context] if isinstance(context, str) else context
         if not isinstance(items, list) or not all(isinstance(c, str) for c in items):
-            return {}, "context must be a path or a list of paths."
-        paths = [c for c in items if c.strip()]
+            return {}, "context must be a string (a path or inline prose) or a list of them."
+        paths = [c.strip() for c in items if _is_path_shaped(c)]
+        prose = [c.strip() for c in items if c.strip() and not _is_path_shaped(c)]
         if paths:
             params["ask_context"] = paths
+        if prose:
+            params["ask_brief"] = "\n\n".join(([params["ask_brief"]] if "ask_brief" in params else []) + prose)
     return params, None
+
+
+def _is_path_shaped(item: str) -> bool:
+    """A single whitespace-free token carrying a separator or an extension; anything else is prose."""
+    text = item.strip()
+    return bool(text) and not any(ch.isspace() for ch in text) and ("/" in text or "\\" in text or "." in text)
+
+
+def _missing_context(root: Path, paths: list[str]) -> Optional[str]:
+    """The first path-shaped context that names no existing file (relative ones against `root`)."""
+    for raw in paths:
+        p = Path(raw.replace("\\", "/"))
+        if not (p if p.is_absolute() else root / p).is_file():
+            return raw
+    return None
 
 
 def _repo_root(repo_arg: Optional[str], cwd: object) -> Optional[Path]:
@@ -176,6 +194,9 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
 
     if ask is not None and repo_arg is None and brief.get("ask_context"):
         root = _context_home(root, brief["ask_context"])
+    missing = _missing_context(root, brief.get("ask_context", []))
+    if missing:
+        return _refuse(f"context {missing}: no such file. Pass inline prose as brief or context text, or fix the path.")
 
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None

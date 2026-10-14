@@ -4433,7 +4433,7 @@ def _scaffold_plan(
         "  #     gate_kind: output-consumption-runtime  # or epistemic-premise — the only two writable kinds",
         "  #     note: one-line rationale for the edge",
         "  queue_scope: project  # project (default) | central",
-        "  disposition: open  # open (default) | coded | spun_off | backlogged | wont_do",
+        "  disposition: open  # open (default) | coded | spun_off | backlogged | wont_do | delivered_elsewhere",
         "  # case_against: >",
         "  #   Required when disposition is backlogged or wont_do (not spun_off — nothing",
         "  #   leaves the corpus there). The strongest HONEST case for doing this work now,",

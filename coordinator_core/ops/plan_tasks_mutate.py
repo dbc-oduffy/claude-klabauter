@@ -1248,6 +1248,9 @@ _LEGACY_PM_APPROVAL_HINT = (
 
 _PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS = frozenset({'spun_off', 'backlogged', 'wont_do'})
 
+_DELIVERED_ELSEWHERE = "delivered_elsewhere"
+_DELIVERED_VIA = frozenset({"direct-message", "memo", "other"})
+
 _DISPOSITION_DETAIL_OFFER = (
     "pass disposition_detail naming the PM's reasoning "
     "(--verb resolve --id {task_id} --disposition {disposition} "
@@ -1947,6 +1950,19 @@ def _resolve(
                 )
 
         for r in resolutions:
+            if r["disposition"] != _DELIVERED_ELSEWHERE:
+                continue
+            tid = r["id"]
+            if not str(r.get("disposition_ref") or "").strip():
+                raise MutateAbort(f"resolve: row {tid}: delivered_elsewhere requires a non-blank ref")
+            if not str(r.get("disposition_detail") or "").strip():
+                raise MutateAbort(f"resolve: row {tid}: delivered_elsewhere requires a non-blank disposition_detail")
+            if r.get("delivered_via") not in _DELIVERED_VIA:
+                raise MutateAbort(
+                    f"resolve: row {tid}: delivered_via must be one of {sorted(_DELIVERED_VIA)}"
+                )
+
+        for r in resolutions:
             if r["disposition"] == _VOIDED and not str(r.get("reason") or "").strip():
                 raise MutateAbort(
                     f"resolve: disposition 'voided' for task {r['id']!r} requires a "
@@ -1978,6 +1994,7 @@ def _resolve(
             )
 
         resolved_ids: list = []
+        delivered_warnings: list = []
         for r in resolutions:
             task_id = r["id"]
             disposition = r["disposition"]
@@ -1998,6 +2015,11 @@ def _resolve(
                 row["disposition_ref"] = effective_ref
             if disposition_detail is not None:
                 row["disposition_detail"] = disposition_detail
+            if disposition == _DELIVERED_ELSEWHERE:
+                row["delivered_via"] = r["delivered_via"]
+                delivered_warnings.append(
+                    f"completion asserted, not commit-proven: {disposition_ref} via {r['delivered_via']}"
+                )
             resolved_ids.append(task_id)
 
         try:
@@ -2006,7 +2028,7 @@ def _resolve(
             )
         except MutateAbort as exc:
             raise MutateAbort(f"resolve: {exc.args[0] if exc.args else exc}") from exc
-        _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
+        _state["warnings"] = delivered_warnings + _untouched_invalid_warnings(untouched_invalid)
 
         body_yaml = _patch_body(result.body, original_rows, rows)
         start, end = result.span
@@ -2103,7 +2125,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    disposition/disposition_ref/disposition_detail — use
                    resolve for those (D4).
         resolve  : EITHER id (str), disposition (str, required) — one of
-                   open|coded|spun_off|backlogged|wont_do|voided (voided
+                   open|coded|delivered_elsewhere|spun_off|backlogged|wont_do|voided
+                   (delivered_elsewhere requires disposition_ref, disposition_detail
+                   and delivered_via direct-message|memo|other; replies with a
+                   "completion asserted, not commit-proven" warning; voided
                    requires reason; actor optional; both land in
                    disposition_detail with the UTC date); disposition_ref
                    (str, optional); disposition_detail (str, required for
@@ -2204,6 +2229,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                         "disposition_ref": entry.get("disposition_ref"),
                         "disposition_detail": entry.get("disposition_detail"),
                         "case_against": entry.get("case_against"),
+                        "delivered_via": entry.get("delivered_via"),
                         "reason": entry.get("reason"),
                         "actor": entry.get("actor"),
                     }
@@ -2216,6 +2242,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     "disposition_ref": params.get("disposition_ref"),
                     "disposition_detail": params.get("disposition_detail"),
                     "case_against": params.get("case_against"),
+                    "delivered_via": params.get("delivered_via"),
                     "reason": params.get("reason"),
                     "actor": params.get("actor"),
                 }

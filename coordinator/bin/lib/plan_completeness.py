@@ -49,10 +49,10 @@ import yaml
 # ---------------------------------------------------------------------------
 
 #: plan-tasks.schema.json's closed `disposition` enum.
-KNOWN_DISPOSITIONS = frozenset({"open", "coded", "spun_off", "backlogged", "wont_do"})
+KNOWN_DISPOSITIONS = frozenset({"open", "coded", "spun_off", "backlogged", "wont_do", "delivered_elsewhere"})
 
 #: Rows counted as resolved (plan's § CONTRADICTION predicate, `rows_resolved`).
-RESOLVED_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
+RESOLVED_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "delivered_elsewhere"})
 
 #: `disposition` -> `grouping_approvals` block name for the gated-closure join.
 GATED_GROUPING_FOR_DISPOSITION = {

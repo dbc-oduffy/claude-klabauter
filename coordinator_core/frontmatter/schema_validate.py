@@ -2997,10 +2997,11 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
         [fm],
         field_name='disposition',
         open_token='open',
-        requires_ref=frozenset({'coded', 'spun_off', 'backlogged'}),
+        requires_ref=frozenset({'coded', 'spun_off', 'backlogged', 'delivered_elsewhere'}),
         forbids_ref=frozenset({'wont_do'}),
         detail_exempt=frozenset({'coded'}),
         ref_remedy={
+            'delivered_elsewhere': '`plan-tasks-resolve --id <row> --delivered-elsewhere --via <channel> --ref <ref> --disposition-detail "<what landed>"`',
             'coded': '`plan-tasks-resolve --id <row> --coded <sha>`',
             'spun_off': '`plan-tasks-resolve --id <row> --spun-off <ref>`',
             'backlogged': '`plan-tasks-resolve --id <row> --backlogged`',
@@ -3010,6 +3011,15 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
         return error
 
     disposition = fm.get('disposition')
+    if disposition == 'delivered_elsewhere' and not str(fm.get('delivered_via') or '').strip():
+        return {
+            'field': 'delivered_via',
+            'error': "disposition 'delivered_elsewhere' requires delivered_via",
+            'hint': (
+                'Record the channel with `plan-tasks-resolve --id <row> --delivered-elsewhere '
+                '--via <direct-message|memo|other> --ref <ref> --disposition-detail "<what landed>"`.'
+            ),
+        }
     if disposition in _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS and not governed:
         if fm.get('pm_approved') is not True:
             return {
@@ -3648,6 +3658,7 @@ _PLAN_TASKS_GROUPING_ORDER = ('do', 'spun_off', 'defer', 'ruled_out')
 _PLAN_TASKS_GROUPING_BY_DISPOSITION = {
     'open': 'do',
     'coded': 'do',
+    'delivered_elsewhere': 'do',
     'spun_off': 'spun_off',
     'backlogged': 'defer',
     'wont_do': 'ruled_out',

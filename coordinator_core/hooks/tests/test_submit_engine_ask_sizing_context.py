@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief, EmBriefRefused
 
 def test_hook_forwards_context_beside_a_sizing(tmp_path):
     (tmp_path / ".git").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ctx.md").write_text("x", encoding="utf-8")
     seen: list[dict] = []
 
     def emit(params: dict, root: Path) -> dict:
@@ -54,6 +56,7 @@ def test_outside_brief_file_refusal_names_the_accepted_shape(tmp_path):
 
 def test_hook_surfaces_the_engine_refusal_text_in_the_deny_reason(tmp_path):
     (tmp_path / ".git").mkdir()
+    (tmp_path / "ctx.md").write_text("x", encoding="utf-8")
 
     def emit(params: dict, root: Path) -> dict:
         raise EmBriefRefused("--context /x: outside the repo root; accepted: a file inside the repo or in this session's scratchpad")
@@ -62,7 +65,7 @@ def test_hook_surfaces_the_engine_refusal_text_in_the_deny_reason(tmp_path):
         "tool_name": "Workflow",
         "cwd": str(tmp_path),
         "session_id": "s1",
-        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"sizing": "state/sizings/x.yaml", "context": "/x"}},
+        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"sizing": "state/sizings/x.yaml", "context": "ctx.md"}},
     }
     env = mod.evaluate(payload, emit=emit)
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -141,7 +144,8 @@ def test_ask_with_explicit_repo_arg_is_never_rerooted(tmp_path, monkeypatch):
 
 def test_bad_context_refusal_reaches_the_deny_reason_whole(tmp_path):
     (tmp_path / ".git").mkdir()
-    long_reason = "--context /x/" + "d/" * 300 + "f.md: no such file; accepted: a file inside the repo or in this session's scratchpad"
+    (tmp_path / "ctx.md").write_text("x", encoding="utf-8")
+    long_reason ="--context /x/" + "d/" * 300 + "f.md: no such file; accepted: a file inside the repo or in this session's scratchpad"
 
     def emit(params: dict, root: Path) -> dict:
         raise EmBriefRefused(long_reason)
@@ -150,7 +154,7 @@ def test_bad_context_refusal_reaches_the_deny_reason_whole(tmp_path):
         "tool_name": "Workflow",
         "cwd": str(tmp_path),
         "session_id": "s1",
-        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"ask": "a", "context": "/x"}},
+        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"ask": "a", "context": "ctx.md"}},
     }
     env = mod.evaluate(payload, emit=emit)
     assert long_reason in env["hookSpecificOutput"]["permissionDecisionReason"]

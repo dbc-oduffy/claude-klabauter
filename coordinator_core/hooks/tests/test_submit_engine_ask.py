@@ -458,11 +458,62 @@ def test_a_redeemed_token_is_not_live(tmp_path):
 def test_an_em_brief_beside_the_ask_reaches_the_emit_params(tmp_path):
     root = _repo(tmp_path)
     emit = _Emit()
+    for name in ("c.md", "d.md"):
+        (root / name).write_text("x\n", encoding="utf-8")
     args = {"ask": "a", "brief": "prefer X", "brief_file": "b.md", "context": "c.md"}
     mod.evaluate(_payload(root, args), emit=emit)
     params = emit.calls[0][0]
     assert (params["ask_brief"], params["ask_brief_file"], params["ask_context"]) == ("prefer X", "b.md", ["c.md"])
     mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml", "context": ["c.md", "d.md"]}), emit=_Emit())
+
+
+def test_prose_context_rides_the_brief_not_ask_context(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    note = "Sequence B after A.\nA lands first, then B."
+    out = mod.evaluate(_payload(root, {"ask": "a", "context": note}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "allow"
+    params = emit.calls[0][0]
+    assert params["ask_brief"] == note
+    assert "ask_context" not in params
+
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"ask": "a", "brief": "prefer X", "context": "do it in order"}), emit=emit)
+    assert emit.calls[0][0]["ask_brief"] == "prefer X\n\ndo it in order"
+
+
+def test_a_path_context_that_exists_reaches_ask_context_unchanged(tmp_path):
+    root = _repo(tmp_path)
+    (root / "docs").mkdir()
+    (root / "docs" / "note.md").write_text("x\n", encoding="utf-8")
+    absolute = tmp_path / "abs.md"
+    absolute.write_text("x\n", encoding="utf-8")
+    emit = _Emit()
+    ctx = ["docs/note.md", str(absolute)]
+    mod.evaluate(_payload(root, {"ask": "a", "context": ctx}), emit=emit)
+    params = emit.calls[0][0]
+    assert params["ask_context"] == ctx
+    assert "ask_brief" not in params
+
+
+@pytest.mark.parametrize("missing", ["docs/missing.md", "docs\\missing.md"])
+def test_a_missing_path_shaped_context_is_refused_naming_it(tmp_path, missing):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "a", "context": missing}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert missing in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == []
+
+
+def test_a_mixed_context_list_splits_paths_from_prose(tmp_path):
+    root = _repo(tmp_path)
+    (root / "c.md").write_text("x\n", encoding="utf-8")
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"ask": "a", "context": ["c.md", "run it v2.1 first"]}), emit=emit)
+    params = emit.calls[0][0]
+    assert params["ask_context"] == ["c.md"]
+    assert params["ask_brief"] == "run it v2.1 first"
 
 
 def test_a_submission_without_a_brief_adds_no_brief_params(tmp_path):

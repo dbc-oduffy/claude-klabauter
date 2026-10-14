@@ -147,11 +147,13 @@ _INDETERMINATE_SUMMARY = (
 )
 
 _WARN_TEMPLATE = """WARN [open-spine-row-worklist]: {count} plan-spine row(s) still open on {plan_ref}.
-Five honest ends, via `python3 coordinator/bin/plan-tasks-resolve --id <row-id> ... --disposition-detail "<why>"`:
+Six honest ends, via `python3 coordinator/bin/plan-tasks-resolve --id <row-id> ... --disposition-detail "<why>"`:
   - do it now  : --coded <sha>          (disposition: coded      -- no PM word needed)
   - spin off   : --spun-off <ref>       (disposition: spun_off   -- no PM word needed)
   - move it    : --moved-to <plan-path> (disposition: spun_off   -- no PM word needed)
-  - backlog it : --backlogged           (disposition: backlogged -- PM word required)
+  - done elsewhere: --delivered-elsewhere --via <direct-message|memo|other> --ref <ref>
+                                        (disposition: delivered_elsewhere -- asserted, not commit-proven)
+  - backlog it : --backlogged          (disposition: backlogged -- PM word required)
   - won't do   : --wont-do              (disposition: wont_do    -- PM word required)
 Or leave it open and carried on the successor baton -- that is still a legitimate close.
 

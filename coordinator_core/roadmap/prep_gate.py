@@ -1001,7 +1001,7 @@ def _is_settings_home_path(normalized: str) -> bool:
 #: rather than an import: this gate is read by callers that have not loaded
 #: the emitter, and a gate that needs another subsystem to answer is a gate
 #: that fails for the wrong reason.
-_UNSCHEDULABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided"})
+_UNSCHEDULABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided", "delivered_elsewhere"})
 
 
 def _row_is_unschedulable(row: Dict[str, Any]) -> bool:
