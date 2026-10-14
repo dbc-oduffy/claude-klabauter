@@ -381,8 +381,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "plan.append_session" (strang-10 B, DR-216)',
     ),
     (
-        "coordinator_core.ops.release_stamp",
-        'registers "completion.stamp_releases" (DR-216)',
+        "coordinator_core.ops.release_index",
+        'registers "release.write_index" (DR-216)',
     ),
     (
         "coordinator_core.ops.review_freeze_diff",

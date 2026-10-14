@@ -80,13 +80,22 @@ def repo_env(tmp_path, monkeypatch):
     repo, bare, merge_sha = _init_repo_with_origin(tmp_path)
     fake = _FakeGh()
     monkeypatch.setattr(rt, "_gh", fake)
+    from coordinator_core.ops import release_index as ri
+
+    monkeypatch.setattr(
+        ri, "write_release_index",
+        lambda root, *, tag_prefix="", report=False: {
+            "report": False, "tags_considered": 0, "written": [], "skipped": [],
+        },
+    )
     return repo, bare, merge_sha, fake
 
 
 def test_cut_tag_creates_and_pushes_annotated_tag(repo_env):
     repo, bare, merge_sha, _fake = repo_env
     out = rt.cut_tag(repo, merge_sha, "v1.0.0")
-    assert out.pop("release_stamps") == {"stamped": 0, "unreleased": 0}
+    assert "release_index" in out
+    out.pop("release_index")
     assert out == {
         "tag": "v1.0.0",
         "created": True,
@@ -104,7 +113,7 @@ def test_cut_tag_double_invocation_is_documented_noop(repo_env):
     first = rt.cut_tag(repo, merge_sha, "v1.0.0")
     assert first["created"] is True
     second = rt.cut_tag(repo, merge_sha, "v1.0.0")
-    second.pop("release_stamps")
+    second.pop("release_index")
     assert second == {
         "tag": "v1.0.0",
         "created": False,
@@ -166,7 +175,7 @@ def test_cut_tag_handler_registered_and_routes_params(repo_env):
     out = asyncio.run(
         handler({"repo_root": str(repo), "merge_sha": merge_sha, "tag_prefix": "v2.0.0"})
     )
-    out.pop("release_stamps")
+    out.pop("release_index")
     assert out == {
         "tag": "v2.0.0",
         "created": True,
@@ -243,64 +252,71 @@ def test_cut_tag_and_publish_handler_registered_and_routes_params(repo_env):
     assert out["release_created"] is True
 
 
-def _fake_stamp(calls, result=None, exc=None):
-    def stamp(root, *, tag_prefix="", report=False):
+def _fake_index(calls, result=None, exc=None):
+    def write_release_index(root, *, tag_prefix="", report=False):
         calls.append((Path(root), tag_prefix))
         if exc is not None:
             raise exc
         return result
 
-    return stamp
+    return write_release_index
 
 
-_STAMPED = {"stamped": [{"path": "a"}, {"path": "b"}], "unreleased": {"count": 3, "paths": []}}
+_INDEXED = {
+    "report": False,
+    "tags_considered": 2,
+    "written": [
+        {"path": "archive/releases/v0.9.0.yaml", "tag": "v0.9.0", "entries": ["a"]},
+        {"path": "archive/releases/v1.0.0.yaml", "tag": "v1.0.0", "entries": ["b"]},
+    ],
+    "skipped": [],
+}
+_INDEXED_PATHS = {"written": ["archive/releases/v0.9.0.yaml", "archive/releases/v1.0.0.yaml"]}
 
 
 @pytest.mark.parametrize(
     "tag,prefix", [("v0.9.0", ""), ("example-game-repo-v0.4.0", "example-game-repo-")]
 )
-def test_cut_tag_carries_release_stamps_with_derived_prefix(repo_env, monkeypatch, tag, prefix):
-    import coordinator_core.ops.release_stamp as rs
+def test_cut_tag_carries_release_index_with_derived_prefix(repo_env, monkeypatch, tag, prefix):
+    import coordinator_core.ops.release_index as ri
 
     repo, _bare, merge_sha, _fake = repo_env
     calls: list = []
-    monkeypatch.setattr(rs, "stamp_releases", _fake_stamp(calls, _STAMPED))
+    monkeypatch.setattr(ri, "write_release_index", _fake_index(calls, _INDEXED))
     out = rt.cut_tag(repo, merge_sha, tag)
-    assert out["release_stamps"] == {"stamped": 2, "unreleased": 3}
+    assert out["release_index"] == _INDEXED_PATHS
     assert calls == [(repo, prefix)]
 
 
-def test_cut_tag_and_publish_stamps_before_publish(repo_env, monkeypatch):
-    import coordinator_core.ops.release_stamp as rs
+def test_cut_tag_and_publish_indexes_before_publish(repo_env, monkeypatch):
+    import coordinator_core.ops.release_index as ri
 
     repo, _bare, merge_sha, fake = repo_env
     seen: list = []
-    monkeypatch.setattr(
-        rs, "stamp_releases", _fake_stamp([], _STAMPED)
-    )
-    real = rt._stamp_after_cut
+    monkeypatch.setattr(ri, "write_release_index", _fake_index([], _INDEXED))
+    real = rt._index_after_cut
 
     def spy(root, tag):
         seen.append(len(fake.calls))
         return real(root, tag)
 
-    monkeypatch.setattr(rt, "_stamp_after_cut", spy)
+    monkeypatch.setattr(rt, "_index_after_cut", spy)
     out = rt.cut_tag_and_publish(repo, merge_sha, "v1.0.0", "n")
     assert seen == [0]
-    assert out["release_stamps"] == {"stamped": 2, "unreleased": 3}
+    assert out["release_index"] == _INDEXED_PATHS
     assert out["release_created"] is True
 
 
-def test_stamp_error_surfaces_and_cut_keys_unchanged(repo_env, monkeypatch):
-    import coordinator_core.ops.release_stamp as rs
-    from coordinator_core.ops.release_stamp.model import StampError
+def test_index_error_surfaces_and_cut_keys_unchanged(repo_env, monkeypatch):
+    import coordinator_core.ops.release_index as ri
 
     repo, _bare, merge_sha, _fake = repo_env
     monkeypatch.setattr(
-        rs, "stamp_releases", _fake_stamp([], exc=StampError("git-failed", "boom"))
+        ri, "write_release_index",
+        _fake_index([], exc=ri.ReleaseIndexError("git-failed", "boom")),
     )
     out = rt.cut_tag(repo, merge_sha, "v1.0.0")
-    assert out.pop("release_stamps") == {"error": "git-failed: boom"}
+    assert out.pop("release_index") == {"error": "git-failed: boom"}
     assert out == {
         "tag": "v1.0.0",
         "created": True,
@@ -308,12 +324,16 @@ def test_stamp_error_surfaces_and_cut_keys_unchanged(repo_env, monkeypatch):
         "pushed": True,
     }
     pub = rt.cut_tag_and_publish(repo, merge_sha, "v1.0.0", "n")
-    assert pub["release_stamps"] == {"error": "git-failed: boom"}
+    assert pub["release_index"] == {"error": "git-failed: boom"}
     assert pub["release_created"] is True
 
 
-def test_unsubstituted_cut_stamps_entry_present_in_tagged_tree(repo_env):
-    repo, _bare, merge_sha, _fake = repo_env
+def test_cut_tag_writes_a_real_index_listing_the_tagged_entry(repo_env, monkeypatch):
+    import coordinator_core.ops.release_index as ri
+
+    monkeypatch.undo()
+    monkeypatch.setattr(rt, "_gh", _FakeGh())
+    repo, _bare, _merge_sha, _fake = repo_env
     entry = repo / "archive/completed/2026-10/e.md"
     entry.parent.mkdir(parents=True)
     entry.write_text("---\nstatus: pending-release\n---\nbody\n")
@@ -321,10 +341,8 @@ def test_unsubstituted_cut_stamps_entry_present_in_tagged_tree(repo_env):
     _git(repo, "commit", "-q", "-m", "entry")
     sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     out = rt.cut_tag(repo, sha, "v1.0.0")
-    assert out["release_stamps"] == {"stamped": 1, "unreleased": 0}
-    text = entry.read_text()
-    assert "status: released" in text
-    assert "released_in: v1.0.0" in text
+    assert out["release_index"] == {"written": ["archive/releases/v1.0.0.yaml"]}
+    assert ri.released_names(repo) == {"e.md": "v1.0.0"}
 
 
 def test_cut_tag_and_publish_handler_without_repo_root_fails_loud():

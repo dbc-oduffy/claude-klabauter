@@ -513,7 +513,7 @@ _FOLD_ALLOWED_ROOT_SUFFIXES: tuple[tuple[str, ...], ...] = (
 def _resolve_fold_entry_path(worktree_root: Path, entry_path: str) -> Optional[Path]:
     """Resolve and contain a caller-supplied completion-entry path against
     this worktree's `docs/plans/` and `archive/completed/` roots -- the
-    same two roots `completion.stamp_releases` confines its own writes to.
+    same two roots the completion-entry writers confine themselves to.
     Returns `None` (never raises) on an empty path, an
     unresolvable path, or one that escapes both roots -- the caller treats
     that as a clean skip, not a failure to diagnose.
@@ -538,7 +538,7 @@ def _apply_commit_fold(content: str, sha: str) -> tuple[str, bool]:
     Reuses `completion_ops`'s own `commits:` shape regexes/parsing (never a
     second, drifting parser) — mirrors `_parse_existing_commits`'s exact
     flow/block/any-other-shape discrimination so this write agrees with
-    what `completion.stamp_releases` will later read back.
+    what later readers of the entry's `commits:` list will read back.
 
     Returns ``(content, False)`` unchanged when ``sha`` is already present
     (idempotent no-op — the caller never fires a commit for a no-op).

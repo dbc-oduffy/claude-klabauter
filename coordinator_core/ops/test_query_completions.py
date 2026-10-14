@@ -254,3 +254,57 @@ def test_the_formatter_survives_an_all_digit_sha_end_to_end(tmp_path: Path):
     ]
     out = query_completions._format_completion_markdown(records)
     assert "1234567" in out
+
+
+def _write_index(root: Path, tag: str, entries: list[str]) -> None:
+    d = root / "archive" / "releases"
+    d.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"  - {e}\n" for e in entries)
+    (d / f"{tag}.yaml").write_text(f"tag: {tag}\nsha: {'a' * 40}\ndate: 2026-10-01\nentries:\n{body}", encoding="utf-8")
+
+
+def _paths(root: Path, *argv: str) -> list[str]:
+    with mock.patch.object(query_completions, "_detect_root", return_value=root):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = query_completions.main([*argv, "--format", "paths"])
+    assert rc == 0
+    return buf.getvalue().splitlines()
+
+
+def test_unreleased_drops_listed_and_keeps_unlisted(tmp_path: Path):
+    _write_completion(tmp_path, "2026-10", "shipped", "title: S\nnature: fix\n")
+    _write_completion(tmp_path, "2026-10", "pending", "title: P\nnature: fix\n")
+    _write_index(tmp_path, "v0.1.0", ["archive/completed/2026-10/shipped.md"])
+    assert _paths(tmp_path, "--unreleased") == ["archive/completed/2026-10/pending.md"]
+
+
+def test_unreleased_joins_by_file_name_so_a_moved_entry_stays_released(tmp_path: Path):
+    _write_completion(tmp_path, "2026-11", "moved", "title: M\nnature: fix\n")
+    _write_index(tmp_path, "v0.1.0", ["archive/completed/2026-10/moved.md"])
+    assert _paths(tmp_path, "--unreleased") == []
+
+
+def test_unreleased_composes_with_since_and_where(tmp_path: Path):
+    _write_completion(tmp_path, "2026-10", "a", "title: A\nnature: fix\ncreated: 2099-01-01\n")
+    _write_completion(tmp_path, "2026-10", "b", "title: B\nnature: fix\ncreated: 2099-01-01\n")
+    _write_completion(tmp_path, "2026-10", "c", "title: C\nnature: code\ncreated: 2099-01-01\n")
+    _write_completion(tmp_path, "2026-10", "d", "title: D\nnature: fix\ncreated: 2020-01-01\n")
+    _write_index(tmp_path, "v0.1.0", ["archive/completed/2026-10/a.md"])
+    got = _paths(tmp_path, "--unreleased", "--since", "1d", "--where", "nature=fix")
+    assert got == ["archive/completed/2026-10/b.md"]
+
+
+def test_unreleased_limit_applies_after_the_filter(tmp_path: Path):
+    names = [f"e{i:02d}" for i in range(6)]
+    for n in names:
+        _write_completion(tmp_path, "2026-10", n, f"title: {n}\nnature: fix\n")
+    _write_index(tmp_path, "v0.1.0", [f"archive/completed/2026-10/{n}.md" for n in names[:4]])
+    got = _paths(tmp_path, "--unreleased", "--limit", "2")
+    assert got == [f"archive/completed/2026-10/{n}.md" for n in names[4:]]
+
+
+def test_unreleased_without_release_dir_keeps_every_record(tmp_path: Path):
+    _write_completion(tmp_path, "2026-10", "x", "title: X\nnature: fix\n")
+    _write_completion(tmp_path, "2026-10", "y", "title: Y\nnature: fix\n")
+    assert len(_paths(tmp_path, "--unreleased")) == 2

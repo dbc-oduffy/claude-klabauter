@@ -2038,29 +2038,30 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md
     "changelog.upsert_reviewed": OpClass.MUTATING,
-    # completion.stamp_releases — MUTATING: stamps every pending-release entry under
-    # archive/completed/** with the earliest version tag whose tree held it. Per-entry
-    # locked read-modify-write (locked_rmw) + atomic replace. Also called in process by
-    # release.cut_tag and release.cut_tag_and_publish after a successful cut.
-    # DR-208 five-question affirmation (citing ops/release_stamp/):
+    # release.write_index — MUTATING: writes one archive/releases/<tag>.yaml per version
+    # tag that lacks one (tag, sha, date, covered entry paths). One locked_rmw per index
+    # file; no entry file is opened. Also called in process by release.cut_tag and
+    # release.cut_tag_and_publish after a successful cut.
+    # DR-208 five-question affirmation (citing ops/release_index.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      writer.stamp_entry sets status and released_* on each pending entry.
+    #      One new index file per unindexed tag.
     #   2. Writes into rag's relational store?                                 No.
     #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      locked_rmw writes a temp file and os.replace's it onto the entry.
+    #      locked_rmw writes a temp file and os.replace's it onto the index path.
     #   4. Mutates shared mutable state outside its own module?                YES.
-    #      archive/completed/ entries are read by the EM and the release pipeline.
+    #      archive/releases/ is read by query_completions and the release pipeline.
     #   5. Persistent state changes observable across process boundaries?     YES.
-    # DR-216 D2 five-bound affirmed (completion in-place-mutation sub-category):
-    #   D2(i) per-record idempotent: only status pending-release is written; a released
-    #         entry is never rewritten.
-    #   D2(ii) git-reversible: git checkout -- <entry> recovers.
-    #   D2(iii) content-additive in place: status replaced, released_* set; nothing else moves.
-    #   D2(iv) confined noun: archive/completed/**.
+    # DR-216 D2 six-bound affirmed (D1, 2026-10-14 amendment):
+    #   D2(i) per-record idempotent: an existing index is never rewritten; a retargeted
+    #         tag refuses the whole op before any write.
+    #   D2(ii) git-reversible: delete or revert one index file.
+    #   D2(iii) additive-create: one new file per tag; nothing else moves.
+    #   D2(iv) confined noun: archive/releases/**.
     #   D2(v) no git commit: files are written and declared; the caller commits.
+    #   D2(vi) each write is a locked_rmw.
     # Authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md
-    #            § D1 (2026-10-13 amendment) and § D2
-    "completion.stamp_releases": OpClass.MUTATING,
+    #            § D1 (2026-10-14 amendment) and § D2
+    "release.write_index": OpClass.MUTATING,
     # plan.append_session — MUTATING: in-place append of a session-tracking entry to the
     # agent_sessions: YAML list of a caller-supplied docs/plans/<plan>.md. Locked
     # read-modify-write (coordinator_core.locked_write.locked_rmw) + atomic os.replace,
@@ -4271,8 +4272,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   release.cut_tag / release.cut_tag_and_publish — ops/release_tagging.py:
     #     `_cut_tag` creates a git tag (write); `_cut_tag_and_publish` additionally
     #     calls `_publish_release` (`gh release create`), an external write.
-    #     Each also stamps archive/completed/** entries through
-    #     completion.stamp_releases's writer (`_stamp_after_cut`).
+    #     Each also indexes the cut through release.write_index
+    #     (`_index_after_cut`).
     #   repo.clone_and_register — ops/repo_bootstrap.py
     #     `clone_and_register_sibling_repo`: clones a repo to disk AND calls
     #     `_machine_local_set` (writes the machine-local registry) — two

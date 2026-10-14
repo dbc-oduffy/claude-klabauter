@@ -383,7 +383,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "install.detect_python3_appx_stub":       "coordinator_core.ops.ensure_python3_exe_shim",
     "lessons.filter_undated_universal":       "coordinator_core.ops.lessons_filter",
     "lessons.reject_orphan_strip_entries":    "coordinator_core.ops.lessons_filter",
-    "completion.stamp_releases":              "coordinator_core.ops.release_stamp",
+    "release.write_index":                    "coordinator_core.ops.release_index",
     "install.clone_idempotent":               "coordinator_core.install.clone_sibling_repo",
     "ceremony.init_anchor_injection_state":   "coordinator_core.ops.init_anchor_injection_state",
     "install.write_shell_rc_guard_block":     "coordinator_core.install.shell_rc_guard",

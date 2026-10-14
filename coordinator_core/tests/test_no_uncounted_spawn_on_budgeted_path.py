@@ -1105,6 +1105,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/sizing_mark_routed.py",
         ("_handler",),
     ),
+    "sizing.intake_mint": (
+        "coordinator_core/ops/sizing_intake.py",
+        ("_handler",),
+    ),
     "spec_backlink.resolve": (
         "coordinator_core/ops/spec_backlink_resolve.py",
         ("_resolve_handler",),
@@ -2467,7 +2471,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "review.reachability": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
-    "completion.stamp_releases": (
+    "release.write_index": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "review.snapshot_diff_and_head": (
@@ -2532,7 +2536,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.partition_slices": ("coordinator_core/ops/review_partition_slices.py", "_handler"),
     "review.reachability": ("coordinator_core/ops/review_reachability.py", "_handler"),
-    "completion.stamp_releases": ("coordinator_core/ops/release_stamp/__init__.py", "_stamp_releases_handler"),
+    "release.write_index": ("coordinator_core/ops/release_index.py", "_write_index_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session_ledger.aggregate_chain_loe": (
@@ -2636,9 +2640,10 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # 59 -> 60 (2026-10-08): new op `research.close` reaches `git/run.py::run_git` (CRLF blob fallback): +1.
     # 60 -> 59 (2026-10-12): `orientation.regenerate_cache` no longer reaches `repo_root.py::_spawn_rev_parse`.
     # 59 -> 60 (2026-10-13): new op `completion.stamp_releases` reaches `git/run.py::run_git`: +1.
+    # 60 -> 60 (2026-10-14): `completion.stamp_releases` replaced by `release.write_index` (same run_git site): net 0.
     assert total_pairs == 60, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "60 measured 2026-10-14 (completion.stamp_releases -> release.write_index: run_git); 60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -6858,7 +6863,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
     "commit.anchors": 2,
-    "completion.stamp_releases": 1,
+    "release.write_index": 1,
     "fleet.record_history": 2,
     "git_branch.compute_descendant_tip": 2,
     "git_branch.detect_unpushed_commits": 2,
