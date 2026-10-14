@@ -407,6 +407,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.decline":                           "common_dir",
     "sizing.supersede":                         "common_dir",
     "sizing.ship":                               "common_dir",
+    "sizing.intake_mint":                        "common_dir",
     "sizing.mark_routed":                        "common_dir",
     "review.reachability":                       "show_top",
     "sizing.discharge_surfaced":                 "common_dir",

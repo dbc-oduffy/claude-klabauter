@@ -1177,6 +1177,49 @@ def _scan_terminal(
     return results
 
 
+def _move_for(
+    worktree_root: Path, cid: str, handoff_path: Path
+) -> Tuple[Optional[Move], Optional[str]]:
+    """``(Move, None)`` for a terminal handoff, or ``(None, _REASON_DEST_CONFLICT)`` when a
+    different file occupies its archive destination; a byte-identical one converges (force)."""
+    dst = handoff_archive_dest(worktree_root, handoff_path)
+    force = False
+    if dst.exists():
+        if not _is_identical_duplicate(handoff_path, dst):
+            _LOG.warning(
+                "archive_terminal_handoffs: %s NOT archived — a DIFFERENT file already "
+                "occupies the archive destination %s.",
+                cid, rel_id(dst, worktree_root),
+            )
+            return None, _REASON_DEST_CONFLICT
+        force = True
+    return Move(src=handoff_path, dst=dst, candidate_id=cid, force=force), None
+
+
+def plan_in_run_move(
+    worktree_root: Path, common_dir: Path, rel: str
+) -> Tuple[Optional[Move], Optional[str]]:
+    """Single-target entry for ``dispatch.terminal_commit``: may the run's consumed baton
+    ``rel`` move to ``archive/handoffs/YYYY-MM/`` now?
+
+    Reads that one record and applies the sweep's terminality rule (``_classify_branch``,
+    shipped_in resolved without a spawn): no corpus walk, no dirty rail, no git spawn, no
+    commit. ``(None, reason)`` leaves the baton live for the boot sweep."""
+    handoffs_dir = (worktree_root / "state" / "handoffs").resolve()
+    handoff_path = (worktree_root / rel).resolve()
+    if not handoff_path.is_relative_to(handoffs_dir):
+        return None, "path-traversal: candidate escapes state/handoffs/"
+    if not handoff_path.is_file():
+        return None, "already-archived"
+    meta = _read_meta(str(handoff_path)) or {}
+    shipped_in = str(meta.get("shipped_in") or "").strip()
+    resolved = _batch_resolve_shipped_in(common_dir, [shipped_in]) if shipped_in else {}
+    qualifies, reason, _label, _branch_b = _classify_branch(meta, resolved)
+    if not qualifies:
+        return None, reason
+    return _move_for(worktree_root, rel, handoff_path)
+
+
 def plan_sweep(
     worktree_root: Path,
     common_dir: Path,
@@ -1237,19 +1280,11 @@ def plan_sweep(
 
     def _plan_one(cid: str) -> None:
         handoff_path, _note = terminal_by_id[cid]
-        dst = handoff_archive_dest(worktree_root, handoff_path)
-        force = False
-        if dst.exists():
-            if not _is_identical_duplicate(handoff_path, dst):
-                _LOG.warning(
-                    "archive_terminal_handoffs: %s NOT archived — a DIFFERENT file already "
-                    "occupies the archive destination %s.",
-                    cid, rel_id(dst, worktree_root),
-                )
-                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
-                return
-            force = True
-        moves.append(Move(src=handoff_path, dst=dst, candidate_id=cid, force=force))
+        move, reason = _move_for(worktree_root, cid, handoff_path)
+        if move is None:
+            skipped.append({"id": cid, "reason": reason})
+            return
+        moves.append(move)
 
     if candidate_ids is None:
         ordered_ids = list(terminal_by_id.keys())

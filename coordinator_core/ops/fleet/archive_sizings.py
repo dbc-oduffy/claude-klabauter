@@ -431,6 +431,70 @@ def _dirty_sizing_relpaths(worktree_root: Path, candidate_relpaths: List[str]) -
     return dirty_relpaths_from_porcelain(worktree_root, candidate_relpaths, caller="archive_sizings")
 
 
+def _plan_move(
+    worktree_root: Path,
+    cid: str,
+    sizing_path: Path,
+    citer_index: Optional[Any] = None,
+) -> Tuple[Optional[Move], Optional[str]]:
+    """The refusal rails after terminality and dirtiness for one terminal sizing:
+    forward-plan FK, roadmap stubs, archive date, destination collision.
+    ``(Move, None)`` when it may move, ``(None, reason)`` when a rail refuses.
+    Pure: reads, never writes."""
+    plan_fk = _read_plan_fk(sizing_path)
+    if plan_fk is not None:
+        refusal = _forward_plan_refusal_reason(worktree_root, plan_fk)
+        if refusal is not None:
+            return None, refusal
+
+    roadmap_refusal = _roadmap_stubs_refusal_reason(
+        worktree_root, sizing_path, cid, citer_index=citer_index
+    )
+    if roadmap_refusal is not None:
+        return None, roadmap_refusal
+
+    yyyy_mm = _derive_yyyy_mm(sizing_path.name)
+    if yyyy_mm is None:
+        return None, (
+            f"cannot-derive-date: filename {sizing_path.name!r} "
+            f"has no YYYY-MM-DD prefix"
+        )
+
+    dst = worktree_root / "archive" / "sizings" / yyyy_mm / sizing_path.name
+
+    force = False
+    if dst.exists():
+        if not _is_identical_duplicate(sizing_path, dst):
+            # A DIFFERENT file already occupies the archive destination —
+            # never "already-archived" (that string is AC12-pinned to the
+            # source-gone case), never clobbered.
+            return None, _REASON_DEST_CONFLICT
+        force = True
+
+    return Move(src=sizing_path, dst=dst, candidate_id=cid, force=force), None
+
+
+def plan_in_run_move(worktree_root: Path, rel: str) -> Tuple[Optional[Move], Optional[str]]:
+    """Single-target entry for ``dispatch.terminal_commit``: may the run's own
+    just-shipped sizing ``rel`` move to ``archive/sizings/YYYY-MM/`` now?
+
+    Applies the sweep's classification (terminal status, forward-plan FK,
+    roadmap stubs, date, destination collision) and nothing else: no dirty rail
+    (the sizing is dirty by construction, the stamp commit carries it), no git
+    spawn, no commit. The caller renames the returned ``Move`` and puts both ends
+    in its own commit."""
+    sizings_dir = (worktree_root / "state" / "sizings").resolve()
+    sizing_path = (worktree_root / rel).resolve()
+    if not sizing_path.is_relative_to(sizings_dir):
+        return None, "path-traversal: candidate escapes state/sizings/"
+    if not sizing_path.is_file():
+        return None, "already-archived"
+    status = parse_frontmatter_status(sizing_path)
+    if status not in _TERMINAL_STATUSES:
+        return None, f"terminality-drift: status is now {status!r}"
+    return _plan_move(worktree_root, rel, sizing_path)
+
+
 @register_op("fleet.archive_terminal_sizings")
 async def _archive_terminal_sizings(
     params: dict, repo_root=None, scan_skipped: Optional[List[dict]] = None,
@@ -632,42 +696,11 @@ async def _handle_act(
             skipped.append({"id": cid, "reason": REASON_WORKTREE_DIRTY})
             continue
 
-        plan_fk = _read_plan_fk(sizing_path)
-        if plan_fk is not None:
-            refusal = _forward_plan_refusal_reason(worktree_root, plan_fk)
-            if refusal is not None:
-                skipped.append({"id": cid, "reason": refusal})
-                continue
-
-        roadmap_refusal = _roadmap_stubs_refusal_reason(
-            worktree_root, sizing_path, cid, citer_index=citer_index
-        )
-        if roadmap_refusal is not None:
-            skipped.append({"id": cid, "reason": roadmap_refusal})
+        move, refusal = _plan_move(worktree_root, cid, sizing_path, citer_index)
+        if move is None:
+            skipped.append({"id": cid, "reason": refusal})
             continue
-
-        yyyy_mm = _derive_yyyy_mm(sizing_path.name)
-        if yyyy_mm is None:
-            skipped.append({
-                "id": cid,
-                "reason": f"cannot-derive-date: filename {sizing_path.name!r} "
-                          f"has no YYYY-MM-DD prefix",
-            })
-            continue
-
-        dst = worktree_root / "archive" / "sizings" / yyyy_mm / sizing_path.name
-
-        force = False
-        if dst.exists():
-            if not _is_identical_duplicate(sizing_path, dst):
-                # A DIFFERENT file already occupies the archive destination —
-                # never "already-archived" (that string is AC12-pinned to the
-                # source-gone case), never clobbered.
-                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
-                continue
-            force = True
-
-        candidate_moves[cid] = Move(src=sizing_path, dst=dst, candidate_id=cid, force=force)
+        candidate_moves[cid] = move
 
     if not candidate_moves:
         return build_act_result(mode, acted, skipped, failed)

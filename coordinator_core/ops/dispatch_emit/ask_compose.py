@@ -407,6 +407,19 @@ def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
         return None
 
 
+def _intake_sizing(repo_root: str, sizing_rel: Optional[str]) -> Optional[dict]:
+    """The sizing at `sizing_rel` when it is an unsized intake mint, else None."""
+    if not sizing_rel:
+        return None
+    from coordinator_core.ops.sizing_intake_contract import is_intake
+
+    try:
+        sizing = load_sizing(Path(repo_root), sizing_rel)
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return None
+    return sizing if is_intake(sizing) else None
+
+
 def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
     """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, ceo mode."""
     if not sizing_rel:
@@ -517,6 +530,9 @@ def compose_ask_script(
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
+    A `sizing_rel` that is an intake mint (`is_intake`) is sized in-run like a raw ask, into that
+    same file: its placeholder route never picks the arm and its minted `pm_verbatims` are kept.
+
     `ask_source="relayed"` marks `prompt` as an EM's relay: every prompt that would call the ask
     the PM's words names it a relayed ask instead, and the run reads `relayed-ask.md`, not `ask.md`.
 
@@ -568,7 +584,10 @@ def compose_ask_script(
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     review = parse_execute_review(review_roster_fragment)
 
-    known_arm = _known_arm(repo_root, sizing_rel)
+    intake = _intake_sizing(repo_root, sizing_rel)
+    # An intake sizing's estimate and route are placeholders: the in-run size stage judges them.
+    sized_in_run = not sizing_rel or intake is not None
+    known_arm = None if intake is not None else _known_arm(repo_root, sizing_rel)
     if preamble and known_arm in (None, ARM_M_PLUS, ARM_ROADMAP):
         raise AskComposeRefused(
             f"--preamble reaches only XS/S row executors; this script's arm is {known_arm or 'unsized'}, "
@@ -590,7 +609,7 @@ def compose_ask_script(
 
     xl_open = _xl_exit_open(repo_root, sizing_rel)
     # A raw ask is sized in-run, so any size can reach the XL exit.
-    xl_possible = not sizing_rel or xl_open
+    xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
     rb_phases: list[str] = []
     if xl_possible and not em_brief:
@@ -606,7 +625,10 @@ def compose_ask_script(
 
     if known_arm == ARM_ROADMAP:
         if em_brief:
-            raise AskComposeRefused("the roadmap arm takes no EM brief; drop --brief/--brief-file/--context")
+            raise AskComposeRefused(
+                "the roadmap arm takes no EM brief; drop args.brief, args.brief_file and args.context "
+                "(CLI: --brief/--brief-file/--context), or re-submit once the sizing routes to a plan arm"
+            )
         from coordinator_core.ops.dispatch_emit.ask_roadmap import compose_roadmap_script
 
         return compose_roadmap_script(
@@ -710,7 +732,7 @@ def compose_ask_script(
     if judge_expr is not None:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 
-    if not sizing_rel:
+    if sized_in_run:
         b.append("  phase('size');")
         scout_prompt = prompt_of(
             "Size this ask afresh, never reusing or editing an existing sizing, by following the "
@@ -726,7 +748,7 @@ def compose_ask_script(
                 if relayed
                 else "\n\nAsk:\n"
             )
-            + (prompt or "")
+            + (prompt or str((intake or {}).get("intent") or ""))
         )
         b.append(
             f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=SCOUT_SCHEMA, agent_model='sonnet')};"
@@ -738,7 +760,10 @@ def compose_ask_script(
             ".replace(/^-+|-+$/g, '') || 'ask';"
         )
         _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
-        b.append(f"  const _sizingPath = '{_sizings_prefix}' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
+        if intake is not None:
+            b.append(f"  const _sizingPath = {_lit(sizing_rel)};")
+        else:
+            b.append(f"  const _sizingPath = '{_sizings_prefix}' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         deliverable = (
             f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
@@ -799,7 +824,7 @@ def compose_ask_script(
         schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT,
     )
     b.append(
-        f"  let _gate = {'_halted ? { arm: null, halt: null } : ' if not sizing_rel else ''}await {gate_call};"
+        f"  let _gate = {'_halted ? { arm: null, halt: null } : ' if sized_in_run else ''}await {gate_call};"
     )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
@@ -899,7 +924,7 @@ def compose_ask_script(
             "    if (!_progressed) break;\n"
             "  }"
         )
-    if sizing_rel:
+    if not sized_in_run:
         b.append(
             "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
             f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}"
@@ -1018,10 +1043,10 @@ def compose_ask_script(
             manifest_rel,
             "Size, gate and plan from an ask, then stop before stage.",
             _phase_titles(
-                with_size=not sizing_rel,
+                with_size=sized_in_run,
                 blitz_phases=blitz_phases,
                 review_titles=[],
-                with_accept=accept_pending or not sizing_rel,
+                with_accept=accept_pending or sized_in_run,
                 through_plan=True,
             ),
         )
@@ -1277,17 +1302,17 @@ def compose_ask_script(
         manifest_rel,
         (
             f"Plan, stage, execute, review from accepted sizing {Path(sizing_rel).stem}."
-            if sizing_rel
+            if not sized_in_run
             else "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review."
         ),
         _phase_titles(
-            with_size=not sizing_rel,
+            with_size=sized_in_run,
             blitz_phases=blitz_phases,
             review_titles=review_titles,
             judged=judge_expr is not None,
-            with_accept=accept_pending or not sizing_rel,
+            with_accept=accept_pending or sized_in_run,
             extra=[
-                *(["xl-exit"] if accept_pending or not sizing_rel else []),
+                *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["roadmap-blitz", *rb_phases, "workstream-complete"] if rb_fn else []),
                 "ledger-check",
                 *stage_titles,

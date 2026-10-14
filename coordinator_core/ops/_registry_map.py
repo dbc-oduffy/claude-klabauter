@@ -251,6 +251,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",
     "sizing.supersede":                        "coordinator_core.ops.sizing_supersede",
     "sizing.ship":                              "coordinator_core.ops.sizing_ship",
+    "sizing.intake_mint":                       "coordinator_core.ops.sizing_intake",
     "sizing.mark_routed":                       "coordinator_core.ops.sizing_mark_routed",
     "sizing.discharge_surfaced":                "coordinator_core.ops.sizing_discharge_surfaced",
     "sizing.accept_exit_criterion":              "coordinator_core.ops.sizing_accept_exit_criterion",

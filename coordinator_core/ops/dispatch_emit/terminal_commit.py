@@ -86,6 +86,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
@@ -114,6 +115,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     parse_manifest_marker,
     parse_marker,
     plan_deliverable_id,
+    plan_trailer_deliverable_ids,
     valid_deliverable_id,
 )
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
@@ -971,10 +973,11 @@ def _record_resolution(worktree_root: Path, resolves: dict, sha: str) -> dict:
 def _ship_cited_sizing(worktree_root: Path, repo_root: Path, plan_path: Optional[str]) -> dict:
     """Flip the run's cited sizing to ``status: shipped`` through ``sizing.ship`` once its work
     has landed whole. ``{"sizing_shipped": rel}`` on a write, ``{}`` when nothing applies or it
-    was already shipped, ``{"sizing_ship_skipped": reason}`` when ``sizing.ship`` refuses (a
-    register-bearing or cascade-only sizing closes through the deliverable cascade); never raises -- the
-    product commit stands. The sizing schema has no SHA field: the SHA rides the carrying
-    commit's ``Sizing-Shipped`` trailer."""
+    was already shipped, ``{"sizing_ship_skipped": reason}`` when ``sizing.ship`` refuses (a register
+    not fully met, or a cascade-only sizing: it stays live and the deliverable cascade is the backstop);
+    never raises -- the product commit stands. A register-bearing sizing ships here too: ``sizing.ship``
+    runs ``requirement_register.ship_refusal`` itself over the rows ``_register_writeback`` just wrote.
+    The sizing schema has no SHA field: the SHA rides the carrying commit's ``Sizing-Shipped`` trailer."""
     sizing_rel = _cited_sizing(worktree_root, plan_path)
     if sizing_rel is None:
         return {}
@@ -1024,13 +1027,68 @@ def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: st
     return {}
 
 
+def _archive_in_run(worktree_root: Path, repo_root: Path, rels: tuple) -> tuple:
+    """Rename the run's shipped sizing (``rels[0]``) and consumed baton (``rels[1:]``) under
+    ``archive/`` in-process, through the sweep families' own classification. Returns
+    ``([(old_rel, new_rel, Move)], [{"id", "reason"}])``: the renames done, and the targets a
+    rail left live for the boot sweep. Spawns nothing and commits nothing."""
+    from coordinator_core.ops.fleet import archive_sizings, archive_terminal_handoffs
+
+    root = worktree_root.resolve()
+    planned = []
+    skipped = []
+    for index, rel in enumerate(rels):
+        if index == 0:
+            move, reason = archive_sizings.plan_in_run_move(worktree_root, rel)
+        else:
+            move, reason = archive_terminal_handoffs.plan_in_run_move(worktree_root, repo_root, rel)
+        if move is None:
+            skipped.append({"id": rel, "reason": reason})
+        else:
+            planned.append((rel, move))
+    done = []
+    for rel, move in planned:
+        _acted, failed = archive_terminal_handoffs.apply_sweep([move])
+        if failed:
+            skipped.extend(failed)
+            continue
+        done.append((rel, move.dst.relative_to(root).as_posix(), move))
+    return done, skipped
+
+
+def _undo_archive(archived: list) -> None:
+    """Put back what ``_archive_in_run`` renamed when the carrying commit did not land. A
+    byte-identical duplicate (``force``) already lived at the destination, so it is copied back."""
+    import shutil
+
+    for _old, _new, move in archived:
+        try:
+            if move.force:
+                shutil.copy2(move.dst, move.src)
+            else:
+                os.replace(move.dst, move.src)
+        except OSError:
+            continue
+
+
+def _tracked_at_head(worktree_root: Path, rels: list) -> list:
+    """The subset of ``rels`` HEAD tracks: the deletions ``commit_v2`` accepts as declared. An
+    unreadable tree answers every path, leaving the refusal to the committer."""
+    if not rels:
+        return []
+    from coordinator_core.git.commit import partition_declared_deletions
+
+    split = partition_declared_deletions(worktree_root, rels)
+    return list(rels) if split is None else split[0]
+
+
 def _stamp_coded_commit(
     commit_v2, worktree_root: Path, repo_root: Path, source_rows: dict,
     sha: str, session_id: Optional[str], also_commit: tuple = (),
     noop_rows: Optional[dict] = None, checkpoint_rows: Optional[dict] = None,
     snapshot: Optional[_Snapshot] = None, flip_plan: Optional[str] = None,
     receipt: Optional[str] = None,
-    trailers: tuple = (), commit: bool = True,
+    trailers: tuple = (), commit: bool = True, archive_after_flip: tuple = (),
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1050,16 +1108,22 @@ def _stamp_coded_commit(
     ``receipt`` names the file holding the run's minted ``review_stamp``. When it is gitignored
     (a minted XS spine) the commit cannot carry it and the receipt dies with the scratch dir, so
     the reply adds ``coded_stamp_error`` beside the rest of the commit's result.
+    ``archive_after_flip`` (the run's shipped sizing, then its consumed baton) is renamed under
+    ``archive/`` only once the flip above reads ``implemented``; both ends of each rename ride this
+    commit (``archived`` in the reply, a refusal in ``archive_skipped``). A plan that did not flip
+    leaves them live for the boot sweep.
     Returns ``{"rows_coded", "coded_sha"}`` or ``{"coded_stamp_error"}``.
     """
     from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 
     originals: dict = {}
     rows_coded: dict = {}
+    archived: list = []
 
     def restore() -> None:
         for rel, text in originals.items():
             replace_text(worktree_root / rel, text)
+        _undo_archive(archived)
 
     noop_rows = noop_rows or {}
     checkpoint_rows = checkpoint_rows or {}
@@ -1102,6 +1166,15 @@ def _stamp_coded_commit(
             if before is not None:
                 originals.setdefault(flip_plan, before)
             paths = sorted(set(paths) | {flip_plan})
+    archive_skipped: list = []
+    archive_deleted: list = []
+    if archive_after_flip and flip_result is not None and flip_result.get("plan_status") == "implemented":
+        archived, archive_skipped = _archive_in_run(worktree_root, repo_root, archive_after_flip)
+        old = {o for o, _n, _m in archived}
+        paths = sorted((set(paths) - old) | {n for _o, n, _m in archived})
+        if snapshot is not None:
+            snapshot.note_written([n for _o, n, _m in archived])
+        archive_deleted = _tracked_at_head(worktree_root, sorted(old))
     # A path is stageable unless it is an untracked gitignored plan (a warp run
     # spine), which is never staged; the snapshot answers that without a spawn.
     ignored = set(snapshot.ignored_among(paths)) if snapshot is not None else set()
@@ -1120,9 +1193,13 @@ def _stamp_coded_commit(
         return {"rows_coded": {}, "coded_sha": None, **lost_receipt}
     n = sum(len(v) for v in rows_coded.values())
     message = f"mark {n} rows coded ({sha[:7]})" if n else f"review stamp ({sha[:7]})"
+    if archive_deleted:
+        message += "\n\narchived (moved under archive/): " + ", ".join(archive_deleted)
     if trailers:
         message += "\n\n" + "\n".join(trailers)
     params: dict = {"paths": paths, "message": message}
+    if archive_deleted:
+        params["deleted_paths"] = archive_deleted
     if snapshot is not None and not uncovered:
         params["ignored_untracked"] = []
     if session_id is not None:
@@ -1138,6 +1215,10 @@ def _stamp_coded_commit(
     out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": paths, **lost_receipt}
     if flip_result is not None:
         out["_flip"] = flip_result
+    if archived:
+        out["archived"] = {o: n for o, n, _m in archived}
+    if archive_skipped:
+        out["archive_skipped"] = archive_skipped
     if reply.get("index_stale"):
         out["coded_index_stale"] = list(reply["index_stale"])
     return out
@@ -2926,6 +3007,13 @@ def _terminal_commit(
     trailers = []
     if request.deliverable_id:
         trailers.append(f"Deliverable-Id: {request.deliverable_id}")
+    extra_plan_text = _read_rel(worktree_root, request.plan_path) if request.plan_path else None
+    if extra_plan_text is not None:
+        trailers.extend(
+            f"Deliverable-Id: {did}"
+            for did in plan_trailer_deliverable_ids(extra_plan_text)
+            if did != request.deliverable_id
+        )
     resolves = None if anchor_only or incomplete_chunks else _resolving_sizing(worktree_root, request.plan_path)
     if resolves is not None:
         trailers.append(f"Resolves-Sizing: {resolves['id']} {resolves['tshirt']}")
@@ -3076,7 +3164,7 @@ def _terminal_commit(
                 str(params.get("run_id") or ask_run_dir.name), str(reply["sha"]),
             ))
         shipped_sizing = None
-        if not anchor_only and not incomplete_chunks and not register_sizing:
+        if not anchor_only and not incomplete_chunks:
             shipped = _ship_cited_sizing(worktree_root, repo_root, request.plan_path)
             shipped_sizing = shipped.pop("sizing_shipped", None)
             reply.update(shipped)
@@ -3120,6 +3208,12 @@ def _terminal_commit(
             and not incomplete_chunks
             and not unsent_memos
         )
+        archive_targets = ()
+        if shipped_sizing and re.search(
+            r"^requirement_register:", _read_rel(worktree_root, shipped_sizing) or "", re.MULTILINE
+        ):
+            consumed_baton = _cited_baton(worktree_root, shipped_sizing)
+            archive_targets = (shipped_sizing, consumed_baton) if consumed_baton else (shipped_sizing,)
         stamp_commit = not product_only or (
             bool(request.plan_path)
             and snapshot is not None
@@ -3136,6 +3230,7 @@ def _terminal_commit(
                 receipt=request.plan_path if reply.get("review_stamp") == "minted" else None,
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
+                archive_after_flip=archive_targets,
             )
         )
         flipped = reply.pop("_flip", None)

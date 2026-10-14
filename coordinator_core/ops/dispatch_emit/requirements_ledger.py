@@ -197,9 +197,10 @@ def _validated(text: str) -> str:
     return text
 
 
-def _mutate_register(root: Path, sizing_rel: str, edit) -> list[dict]:
+def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[Mapping] = ()) -> list[dict]:
     """Apply `edit(rows) -> rows | None` to the sizing's register under the file lock; None or an
-    unchanged list writes nothing. Returns the rows on disk afterwards."""
+    unchanged list writes nothing. `unrelated` entries (`{turn, reason}`) join the register's
+    `unrelated_turns` when rows were written. Returns the rows on disk afterwards."""
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 
     path = _sizing_path(root, sizing_rel)
@@ -217,6 +218,11 @@ def _mutate_register(root: Path, sizing_rel: str, edit) -> list[dict]:
         if not any(s.get("doc") == sizing_rel for s in sources):
             sources.append({"doc": sizing_rel, "ref": "pm_verbatims, ask, workflow.revise"})
         block = {**raw, rr.SOURCES_KEY: sources, rr.ROWS_KEY: new_rows}
+        if unrelated:
+            waived = [e for e in raw.get(rr.UNRELATED_TURNS_KEY) or [] if isinstance(e, dict)]
+            have_turns = {e.get("turn") for e in waived}
+            waived += [dict(e) for e in unrelated if e["turn"] not in have_turns]
+            block[rr.UNRELATED_TURNS_KEY] = waived
         crlf = "\r\n" in old
         new = _validated(rr.write_register_text(old.replace("\r\n", "\n"), block, datetime.now(timezone.utc)))
         out["rows"] = new_rows
@@ -231,11 +237,66 @@ def _mutate_register(root: Path, sizing_rel: str, edit) -> list[dict]:
     return out["rows"]
 
 
-def _append_rows(root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]]) -> list[dict]:
+def _quotes(ask: str, turn_text: str) -> bool:
+    """True when the run's ask is, contains, or quotes the PM turn."""
+    from coordinator_core.ops.baton_pm_turns import quotes_turn
+
+    a, t = " ".join(ask.lower().split()), " ".join(turn_text.lower().split())
+    return bool(a and t and (a in t or t in a)) or quotes_turn(ask, turn_text)
+
+
+def _session_turns(root: Path) -> list[tuple[int, str]]:
+    """The session's recorded PM turns as `(turn, prompt)`; empty when no session resolves."""
+    from coordinator_core.ops.baton_pm_turns import read_turns
+
+    try:
+        found = read_turns(cwd=str(root), all_turns=True)["turns"]
+    except Exception:  # noqa: BLE001 -- no session log: nothing proves a turn foreign
+        return []
+    return [(t["turn"], str(t.get("prompt") or "")) for t in found if isinstance(t.get("turn"), int)]
+
+
+def foreign_turn(
+    root: Path, sizing: Optional[Mapping], ask_text: Optional[str], relayed_text: Optional[str]
+) -> Optional[int]:
+    """The turn number of a one-turn sizing's lone embedded PM turn when the run's raw ask is
+    provably a different session turn: the sizing embedded the session's newest turn by recency,
+    which belongs to another run. None for a relayed run, a run without an ask, a multi-turn
+    sizing, a turn the ask quotes, or an ask no recorded session turn quotes."""
+    if (relayed_text and relayed_text.strip()) or not (ask_text and ask_text.strip()):
+        return None
+    turns = [v for v in (sizing or {}).get("pm_verbatims") or [] if isinstance(v, Mapping)]
+    if len(turns) != 1 or not isinstance(turns[0].get("turn"), int) or isinstance(turns[0].get("turn"), bool):
+        return None
+    lone = turns[0]["turn"]
+    if _quotes(ask_text, str(turns[0].get("text") or "")):
+        return None
+    from coordinator_core.ops.baton_pm_turns import quotes_turn
+
+    # Proof of "another run's turn" uses the word-run rule only: a short turn ("ok", "do it")
+    # that happens to sit inside the ask must not prove the lone turn foreign.
+    return lone if any(n != lone and quotes_turn(ask_text, text) for n, text in _session_turns(root)) else None
+
+
+FOREIGN_TURN_REASON = "another run's PM turn: the run's ask does not quote it"
+
+
+def _append_rows(
+    root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turn: Optional[int] = None,
+) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
-    (same verbatim text) is not added twice, a revision always is."""
+    (same verbatim text) is not added twice, a revision always is. `drop_turn` removes the open,
+    unclaimed rows derived from that PM turn and lists it in `unrelated_turns`."""
 
     def edit(rows: list[dict]) -> list[dict]:
+        if drop_turn is not None:
+            rows = [
+                r for r in rows
+                if not (
+                    str(r.get(rr.ROW_ANCHOR) or "") == f"{ORIGIN_PM_VERBATIMS} turn {drop_turn}"
+                    and r.get(rr.ROW_STATUS) == rr.STATUS_OPEN and not r.get(rr.ROW_CLAIMED_BY)
+                )
+            ]
         have = {str(r.get(rr.ROW_TEXT) or "").strip() for r in rows}
         for text, anchor in entries:
             t = text.strip()
@@ -248,7 +309,8 @@ def _append_rows(root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]]
             })
         return rows
 
-    return _mutate_register(root, sizing_rel, edit)
+    unrelated = [{"turn": drop_turn, "reason": FOREIGN_TURN_REASON}] if drop_turn is not None else []
+    return _mutate_register(root, sizing_rel, edit, unrelated=unrelated)
 
 
 def render(ledger: Ledger, run_id: str) -> str:
@@ -333,10 +395,12 @@ def bind(
         sizing = yaml.safe_load(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
+    sizing = sizing if isinstance(sizing, dict) else {}
+    foreign = foreign_turn(root, sizing, ask_text, relayed_text)
     entries = (
         []
-        if relayed_text and relayed_text.strip()
-        else [(t, ORIGIN_PM_VERBATIMS) for t in pm_words(sizing if isinstance(sizing, dict) else {})]
+        if foreign is not None or (relayed_text and relayed_text.strip())
+        else [(t, ORIGIN_PM_VERBATIMS) for t in pm_words(sizing)]
     )
     if ask_text and ask_text.strip():
         entries.append((ask_text, ORIGIN_ASK))
@@ -344,8 +408,8 @@ def bind(
         entries.append((relayed_text, ORIGIN_RELAYED))
     queued = _inbox(dir_)
     entries.extend((e["text"], f"{ORIGIN_REVISION}@{e.get('at') or _now()}") for e in queued)
-    if entries:
-        _append_rows(root, sizing_rel, entries)
+    if entries or foreign is not None:
+        _append_rows(root, sizing_rel, entries, drop_turn=foreign)
     if not bound:
         _write_run(dir_, {**run, "sizing_rel": sizing_rel})
     if queued:

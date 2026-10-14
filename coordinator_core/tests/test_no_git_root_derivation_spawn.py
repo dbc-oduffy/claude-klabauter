@@ -284,17 +284,12 @@ def _collect_all_hits() -> list[tuple[str, str, int]]:
 #     `show_prefix()` spawns too, so routing it through trades a spawn for a
 #     spawn plus an indirection.
 #
-#   coordinator-prepare-commit-msg{,.py} -- MEASURED, not assumed. The
-#     file's own docstring claims it "cannot cheaply import
-#     coordinator_core"; that reason is false (the seam imports in ~3ms
-#     marginal, and the hook already pays for `subprocess`). The true reason
-#     is the trade: end-to-end the hook measures 52.0ms today against 48.3ms
-#     converted (median; p90 identical) -- ~4ms per commit, inside the 46%
-#     A/A noise floor `benchmarks/shim_decision_rule.py` measured on this
-#     box -- bought by adding an import-time failure mode to every commit on
-#     the machine. Bad trade, so it stays.
+#   remove-claude-klabauter-precommit-hook.py -- portability, not oversight. Its own
+#     docstring pins "no coordinator_core import, no engine-root resolution":
+#     it is the remediation for clones whose engine-side installer has been
+#     deleted, so it must keep running with nothing but pathlib/subprocess.
 #
-#   cross-repo-memo.py, git_scope.py -- NOT EXPRESSIBLE through the seam.
+#   cross-repo-memo.py, git_scope.py (`_probe_foreign_repo`) -- NOT EXPRESSIBLE through the seam.
 #     Both run `git -C <a DIFFERENT repo> rev-parse --absolute-git-dir`
 #     under a scrubbed env, precisely to detect a poisoned GIT_DIR, a `.git`
 #     file pointing elsewhere, or a GIT_CEILING_DIRECTORIES interaction. The
@@ -305,13 +300,6 @@ def _collect_all_hits() -> list[tuple[str, str, int]]:
 #   frontmatter/schema_validate.py -- hard prohibition (repo CLAUDE.md and
 #     this plan's own anti-scope). DoE imports this module BY FILE PATH and
 #     its leniency is contract; ~1350 records depend on it.
-#
-#   subagent_sandbox/engine.py -- attempted and reverted; see that
-#     function's own docstring. Three pinning tests count actual `git`
-#     spawns and require ALWAYS spawning, so the seam's walk makes the
-#     counts stop matching. Flagged for its own pass rather than forced: the
-#     barrier here is a test asserting that a spawn happens, which is the
-#     cost this campaign exists to remove.
 #
 # New entries are REFUSED (`test_inventory_is_exhaustive_and_matches_known_
 # sites` below): the fix for a new site is to convert it, never to add a row
@@ -325,11 +313,9 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
         "coordinator/bin/assert-cwd.py:main",
         "coordinator/bin/check-bin-sh-polyglot.py:_show_toplevel",
-        "coordinator/bin/coordinator-prepare-commit-msg.py:_resolve_git_dir",
-        "coordinator/bin/coordinator-prepare-commit-msg:_resolve_git_dir",
         "coordinator/bin/cross-repo-memo.py:_receiver_repo_unusable_reason",
-        "coordinator_core/git_scope.py:foreign_repo_unusable_reason",
-        "coordinator_core/subagent_sandbox/engine.py:_resolve_git_root_uncached",
+        "coordinator/bin/remove-claude-klabauter-precommit-hook.py:_git_common_dir",
+        "coordinator_core/git_scope.py:_probe_foreign_repo",
     }
 )
 

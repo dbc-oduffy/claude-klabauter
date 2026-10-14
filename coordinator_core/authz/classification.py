@@ -3531,6 +3531,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # sizing.ship — MUTATING: writes `status: shipped` under locked_rmw
     # (2026-08-13, PM ruling; see coordinator_core/ops/sizing_ship.py docstring).
     "sizing.ship": OpClass.MUTATING,
+    # sizing.intake_mint — MUTATING: writes a new draft sizing under locked_rmw and raises sized_through_turn.
+    "sizing.intake_mint": OpClass.MUTATING,
     # sizing.mark_routed — MUTATING: writes status: routed + goal_id under locked_rmw.
     "sizing.mark_routed": OpClass.MUTATING,
     # review.reachability — COMPUTE_ONLY: one `git diff` read plus in-process file reads; writes nothing.

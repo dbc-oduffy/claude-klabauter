@@ -237,6 +237,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         '`shipped` terminal status when no plan was ever minted for the routed work)',
     ),
     (
+        "coordinator_core.ops.sizing_intake",
+        'registers "sizing.intake_mint" (2026-10-14, mints the EM intake sizing seeded with '
+        'the newest PM turn and an optional em_brief)',
+    ),
+    (
         "coordinator_core.ops.sizing_mark_routed",
         'registers "sizing.mark_routed" (2026-10-08, sized -> routed plus goal_id for '
         'cascade-only routes that sizing.ship refuses)',

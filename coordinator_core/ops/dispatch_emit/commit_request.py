@@ -79,6 +79,32 @@ def plan_deliverable_id(plan_text: str) -> Optional[str]:
     return valid_deliverable_id(doc.get("deliverable_id"))
 
 
+def plan_trailer_deliverable_ids(plan_text: str) -> list[str]:
+    """The plan frontmatter's optional ``trailer_deliverable_ids`` list: each entry through
+    ``valid_deliverable_id``, deduped in order, the plan's own ``deliverable_id`` excluded.
+
+    Fail-soft like ``plan_deliverable_id``: no frontmatter, bad YAML or a non-list value is ``[]``.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return []
+    import yaml
+
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(doc, dict) or not isinstance(doc.get("trailer_deliverable_ids"), list):
+        return []
+    own = valid_deliverable_id(doc.get("deliverable_id"))
+    out: list[str] = []
+    for raw in doc["trailer_deliverable_ids"]:
+        did = valid_deliverable_id(raw)
+        if did is not None and did != own and did not in out:
+            out.append(did)
+    return out
+
+
 # The label an executor report uses to list files it created under a
 # declared prefix surface — the terminal commit (D3) trusts only files a
 # DONE chunk's own report lists under its OWN prefix.

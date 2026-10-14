@@ -37,7 +37,12 @@ def _rel(repo_root: Path, raw: str, flag: str) -> tuple[Path, str]:
     try:
         rel = resolved.relative_to(root).as_posix()
     except ValueError:
-        raise EmBriefRefused(f"{flag} {raw}: outside the repo root") from None
+        accepted = (
+            "; accepted: a file inside the repo or in this session's scratchpad"
+            if flag == "--context"
+            else "; accepted: a file inside the repo"
+        )
+        raise EmBriefRefused(f"{flag} {raw}: outside the repo root{accepted}") from None
     return resolved, rel
 
 

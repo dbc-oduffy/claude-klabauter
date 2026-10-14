@@ -1314,11 +1314,21 @@ def _dispatch_emit(
             ask_baton = _read_baton_ids(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
-            ask_sizing = _gate_sizing_at_emit(
-                ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton,
-                cross_repo_approved=bool(params.get("cross_repo_approved")),
-            )
+            from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing as _load_ask_sizing
+            from coordinator_core.ops.sizing_intake_contract import is_intake, read_em_brief
+
+            intake_doc = _load_ask_sizing(ask_root, sizing_rel)
+            if is_intake(intake_doc):
+                # Sized in-run: the gate and plan-blitz args are the run's, as for a raw ask.
+                ask_sizing = {"writes": list(params.get("writes") or []), "batons": []}
+            else:
+                intake_doc = None
+                ask_sizing = _gate_sizing_at_emit(
+                    ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton,
+                    cross_repo_approved=bool(params.get("cross_repo_approved")),
+                )
         else:
+            intake_doc = None
             given_root = repo_root or params.get("target_root")
             if not given_root:
                 raise ValueError("dispatch.emit ask requires repo_root or target_root")
@@ -1349,10 +1359,17 @@ def _dispatch_emit(
             from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
 
             raise SizingFireRefused([str(exc)]) from exc
+        if intake_doc is not None and not (params.get("ask_brief") or params.get("ask_brief_file")):
+            sizing_brief = read_em_brief(intake_doc)
+            if sizing_brief:
+                em_brief = _ask_brief.EmBrief(
+                    text=sizing_brief, source=sizing_rel,
+                    context=em_brief.context if em_brief is not None else (),
+                )
         if em_brief is not None:
             ask_ctx["em_brief"] = em_brief
             receipt_extras = {"em_brief": _ask_brief.receipt_fields(em_brief)}
-        if sizing_path:
+        if sizing_path and intake_doc is None:
             ask_ctx.update(ask_sizing)
             receipt_extras = {
                 **(receipt_extras or {}),
@@ -1363,6 +1380,8 @@ def _dispatch_emit(
             # A raw ask's arm is unknown until the in-run size phase, so its script always
             # carries the planBlitz branch and needs the launch args the sizing route resolves.
             ask_ctx["plan_blitz_args"] = _resolve_plan_blitz_args(None)
+            if intake_doc is not None:
+                ask_ctx["writes"] = ask_sizing["writes"]
         if not aliased_param(params, "output_path", "out_path"):
             default_out = ask_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
             default_out.parent.mkdir(parents=True, exist_ok=True)

@@ -1657,24 +1657,20 @@ def _reconcile_after_indeterminate(
     nothing, retry is safe" on ABSENT. Never retries a mutation itself
     (Anti-scope, this plan)."""
     _bootstrap_engine()
-    common_dir = subprocess.run(
-        ["git", "rev-parse", "--git-common-dir"],
-        cwd=worktree_root,
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if common_dir.returncode != 0:
+    from coordinator_core.git import repo_root as _repo_root_seam
+
+    common_dir = _repo_root_seam.git_common_dir(cwd=worktree_root)
+    if not common_dir:
         print(f"ERROR: ceremony.commit_v2: {exc}", file=sys.stderr)
         print(
             "Reconcile could not run: git common dir unresolved "
-            f"({(common_dir.stderr or '').strip()}). Do not assume the "
-            "commit landed; verify manually before retrying.",
+            f"({_repo_root_seam.last_failure_reason(worktree_root, _repo_root_seam.FORM_GIT_COMMON_DIR) or 'unknown'}). "
+            "Do not assume the commit landed; verify manually before retrying.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    resolved = Path(common_dir.stdout.strip())
+    resolved = Path(common_dir)
     if not resolved.is_absolute():
         resolved = Path(worktree_root) / resolved
 
