@@ -179,6 +179,27 @@ def test_peer_claimed_path_is_contested_never_open(repo: Path) -> None:
     assert payload["contested"] == ["tracked.txt"]
 
 
+def test_paths_under_dot_git_are_never_residue(repo: Path) -> None:
+    rel = f".git/coordinator-sessions/{SID}/review-targets.txt"
+    target = repo / rel
+    target.parent.mkdir(parents=True)
+    target.write_text("x\n", encoding="utf-8")
+    snap = cr.ResidueSnapshot((rel,), (), False)
+    payload = cr.owned_uncommitted_payload(repo, snap)
+    assert payload["verdict"] == "clean"
+    assert payload["items"] == []
+
+
+def test_dot_git_path_does_not_mask_a_real_owned_path(repo: Path) -> None:
+    rel = f".git/coordinator-sessions/{SID}/review-targets.txt"
+    (repo / rel).parent.mkdir(parents=True)
+    (repo / rel).write_text("x\n", encoding="utf-8")
+    (repo / "fresh.txt").write_text("f\n", encoding="utf-8")
+    snap = cr.ResidueSnapshot((rel, "fresh.txt"), (), False)
+    payload = cr.owned_uncommitted_payload(repo, snap)
+    assert payload["verdict"] == "open" and payload["items"] == ["fresh.txt"]
+
+
 def test_degraded_snapshot_is_indeterminate_never_clean(repo: Path) -> None:
     snap = cr.ResidueSnapshot(("tracked.txt",), (), True)
     payload = cr.owned_uncommitted_payload(repo, snap)

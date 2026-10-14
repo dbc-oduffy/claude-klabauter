@@ -162,6 +162,11 @@ def _ignored(worktree_root: Union[Path, str], rels: list[str]) -> Optional[set[s
     return {match[3] for match in git_native.parse_check_ignore_stdin_z(result.stdout)}
 
 
+def _under_dot_git(rel: str) -> bool:
+    """Paths inside `.git/` can never be committed, so they are never residue."""
+    return rel.replace("\\", "/").split("/", 1)[0] == ".git"
+
+
 def owned_uncommitted_payload(
     worktree_root: Union[Path, str],
     snap: ResidueSnapshot,
@@ -177,7 +182,7 @@ def owned_uncommitted_payload(
     if not snap.owned_paths:
         return _payload("not-applicable")
     skip = set(excluded)
-    candidates = [rel for rel in snap.owned_paths if rel not in skip]
+    candidates = [rel for rel in snap.owned_paths if rel not in skip and not _under_dot_git(rel)]
     states = landing_states(worktree_root, candidates)
     untracked = [rel for rel in candidates if states[rel] == UNTRACKED]
     if untracked:
