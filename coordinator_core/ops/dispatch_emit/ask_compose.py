@@ -219,6 +219,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "id": _STR,
                     "status": {"type": "string", "enum": list(LEDGER_STATUSES)},
                     "essential": {"type": "boolean"},
+                    "root_read": {"type": ["string", "array"], "items": _STR},
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
@@ -275,6 +276,7 @@ _MANIFEST_SCHEMA = _obj(
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
         "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "owner_root": _STR, "closure_key": {}})},
+        "engine_rows": {"type": "array", "items": _obj(["id"], {"id": _STR, "owner_repo": _STR, "owner_root": _STR, "root_class": _STR, "engine": {"type": "boolean"}})},
     },
 )
 
@@ -389,6 +391,7 @@ def _criterion_judge_call(
         falsifier=None,
         prompt_head=head + _JUDGE_PATH_CLAUSE,
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
+        prompt_suffix_js=owner_repo_clause_js(_OWNER_ROWS_JS),
     )
     if call is None:
         return None
@@ -1080,7 +1083,7 @@ def compose_ask_script(
     b.append(
         f"  if (!_manifest.error) {{ {_OWNER_ROWS_JS} = (_manifest.gated ?? []).filter((g) => g.owner_repo)"
         ".map((g) => ({ id: g.id, owner_repo: g.owner_repo, owner_root: g.owner_root ?? '', "
-        "closure_key: g.closure_key ?? null })); }"
+        "closure_key: g.closure_key ?? null })).concat(_manifest.engine_rows ?? []); }"
     )
     b.append(
         "  if (_manifest.error || !(_manifest.rows ?? []).length) { _halted = { halted: "
@@ -1177,7 +1180,8 @@ def compose_ask_script(
         ", the plan when one exists (",
         "js:(_planRel ?? 'none')",
         f"), and the briefs under {run_dir}/briefs. Return one entry in items for EVERY ledger item, by "
-        "its id (the sizing's requirement_register row id): status 'met' when the change makes the "
+        "its id (the sizing's requirement_register row id), and on every engine-plane item named above "
+        "set root_read to each root you judged it at: status 'met' when the change makes the "
         "item literally true, and wired true when the product actually reaches it (an entry a user, "
         "caller or the engine runs leads to it), not only when code for it exists; 'drifted' "
         "when it was lost or reinterpreted in transit -- a brief, plan, memo or stage narrowed, "

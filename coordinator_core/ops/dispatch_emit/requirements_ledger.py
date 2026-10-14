@@ -471,10 +471,31 @@ def normalize_verdict(verdict: object) -> object:
     return {**verdict, "items": out}
 
 
-def judge(ledger: Ledger, verdict: object) -> dict:
+def _roots_read(row: Mapping) -> list[str]:
+    value = row.get("root_read")
+    if isinstance(value, str):
+        value = [value]
+    return [v for v in value or [] if isinstance(v, str) and v.strip()]
+
+
+def _misrouted(row: Mapping, owed: str) -> Optional[str]:
+    """The failure reason when `row` (met/not_met/post_commit) did not name the engine root `owed`."""
+    from coordinator_core.win_portability import same_path
+
+    read = _roots_read(row)
+    if owed and any(same_path(r, owed) for r in read):
+        return None
+    return f"judged at {', '.join(read) or 'no root named'}, owed the engine root {owed or '(unresolved)'}"
+
+
+def judge(ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}]}` for a checker `verdict`
-    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?, "remaining"?}]}`,
-    read through `normalize_verdict`) against the live register.
+    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?, "remaining"?,
+    "root_read"?}]}`, read through `normalize_verdict`) against the live register.
+
+    `routed` maps an engine-routed item id to the engine root it was owed: a met/not_met/post_commit
+    item whose `root_read` (string or list) does not include that root adds a failure. It never
+    removes one; None or empty is the cwd-only judgment.
 
     Every row needs exactly one judgment. `drifted` (lost or reinterpreted) always fails;
     `superseded` passes only when it names a later revision row; `not_met` fails when
@@ -500,6 +521,10 @@ def judge(ledger: Ledger, verdict: object) -> dict:
             failures.append({"id": item.id, "reason": "unjudged (arrived after the check, or skipped)"})
             continue
         status = row.get("status")
+        if routed and item.id in routed and status in ("met", "not_met", "post_commit"):
+            reason = _misrouted(row, routed[item.id])
+            if reason is not None:
+                failures.append({"id": item.id, "reason": reason})
         if status not in STATUSES:
             failures.append({"id": item.id, "reason": f"status {status!r} is not one of {STATUSES}"})
         elif status == "drifted":

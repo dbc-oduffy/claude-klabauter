@@ -244,6 +244,17 @@ _OWNER_ABSENT = (
 )
 
 
+_ENGINE_HEAD = (
+    "\nEngine-plane rows (delivered in the engine; this run's diff may hold the cwd part):"
+)
+_ENGINE_OWNED = (
+    "\n- {id}: engine-plane row, engine root {root} ({root_class}). Judge what it names in the "
+    "engine with `git -C {root}` at its HEAD (log and files); any part naming this repo's own "
+    "files stays judged here. Report every root you read as root_read (a ledger item) or in "
+    "roots_read (the judge)."
+)
+
+
 def owner_repo_roots() -> Dict[str, str]:
     """Registry ``repos.*`` map as ``{shortname: posix root}`` (underscores in the key become
     dashes in the shortname). One registry read, no spawn; empty when no registry exists."""
@@ -260,10 +271,29 @@ def owner_repo_clause(rows: List[dict], roots: Dict[str, str]) -> str:
     """Prompt clause for rows owned by another repo (``{id, owner_repo, closure_key?}``): the
     verifier judges them at the owner's HEAD, and an owner absent from ``roots`` is judged
     nothing (never not_met). Mirrored text-for-text by ``owner_repo_clause_js``; the roots
-    lookup differs (here by lowercased ``owner_repo``, there by the stage-filled ``owner_root``)."""
+    lookup differs (here by lowercased ``owner_repo``, there by the stage-filled ``owner_root``).
+    A row carrying ``engine`` true is an engine-plane row (``owner_root``, ``root_class``) and
+    renders under its own head; an empty ``owner_root`` renders the unreadable text."""
     if not rows:
         return ""
-    out = _OWNER_HEAD
+    engine = [r for r in rows if r.get("engine")]
+    rows = [r for r in rows if not r.get("engine")]
+    out = ""
+    if rows:
+        out = _OWNER_HEAD
+    if engine:
+        tail = _ENGINE_HEAD
+        for row in engine:
+            root = row.get("owner_root") or ""
+            text = _ENGINE_OWNED if root else _OWNER_ABSENT
+            tail += (
+                text.replace("{id}", row["id"])
+                .replace("{owner_repo}", row["owner_repo"])
+                .replace("{root_class}", row.get("root_class") or "")
+                .replace("{root}", root)
+            )
+    else:
+        tail = ""
     for row in rows:
         owner = row["owner_repo"]
         root = roots.get(owner.lower())
@@ -279,22 +309,33 @@ def owner_repo_clause(rows: List[dict], roots: Dict[str, str]) -> str:
             .replace("{owner_repo}", owner)
             .replace("{root}", root or "")
         )
-    return out
+    return out + tail
 
 
 def owner_repo_clause_js(rows_js: str) -> str:
     """JS expression yielding ``owner_repo_clause`` for the runtime array ``rows_js`` of
-    ``{id, owner_repo, owner_root, closure_key}``; an empty ``owner_root`` renders the
-    unreadable text."""
+    ``{id, owner_repo, owner_root, closure_key, engine?, root_class?}``; an empty ``owner_root``
+    renders the unreadable text."""
     lit = _js_string_literal
-    return (
-        f"((rs) => rs.length ? {lit(_OWNER_HEAD)} + rs.map(r => "
+    gated = (
+        f"g.length ? {lit(_OWNER_HEAD)} + g.map(r => "
         f"(r.owner_root ? {lit(_OWNER_OWNED)} : {lit(_OWNER_ABSENT)})"
         f".split('{{closure}}').join(r.closure_key ? "
         f"{lit(_OWNER_CLOSURE)}.split('{{closure_key}}').join("
         f"typeof r.closure_key === 'string' ? r.closure_key : JSON.stringify(r.closure_key)) : '')"
         f".split('{{id}}').join(r.id).split('{{owner_repo}}').join(r.owner_repo)"
-        f".split('{{root}}').join(r.owner_root ?? '')).join('') : '')"
+        f".split('{{root}}').join(r.owner_root ?? '')).join('') : ''"
+    )
+    engine = (
+        f"e.length ? {lit(_ENGINE_HEAD)} + e.map(r => "
+        f"(r.owner_root ? {lit(_ENGINE_OWNED)} : {lit(_OWNER_ABSENT)})"
+        f".split('{{id}}').join(r.id).split('{{owner_repo}}').join(r.owner_repo)"
+        f".split('{{root_class}}').join(r.root_class ?? '')"
+        f".split('{{root}}').join(r.owner_root ?? '')).join('') : ''"
+    )
+    return (
+        f"((rs) => {{ const g = rs.filter(r => !r.engine), e = rs.filter(r => r.engine); "
+        f"return ({gated}) + ({engine}); }})"
         f"({rows_js})"
     )
 
@@ -787,6 +828,20 @@ def _tier1_clause(evidence: Optional[JudgeEvidence]) -> str:
     return "\n".join(out)
 
 
+ROOTS_READ_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["id", "root"],
+        "properties": {
+            "id": {"type": "string", "maxLength": 100},
+            "root": {"type": "string", "maxLength": 500},
+        },
+    },
+}
+
+
 def _widen_judge_schema(schema_literal: str) -> str:
     """The judge's roster schema plus the two fields the terminal verdict is
     computed from, matching ``dispatch_emit.emit._falsifier_schema_literal`` so
@@ -801,6 +856,7 @@ def _widen_judge_schema(schema_literal: str) -> str:
             "baseline_output": {"type": "string", "maxLength": 300},
         }
     )
+    properties.setdefault("roots_read", ROOTS_READ_SCHEMA)
     properties.setdefault(
         _rr.JUDGE_ROWS_KEY,
         {

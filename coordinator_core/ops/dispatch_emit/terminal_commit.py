@@ -1308,11 +1308,27 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
     return out
 
 
-def _ledger_gate(worktree_root: Path, run_dir: Path, verdict: object) -> tuple[Optional[dict], object]:
+def _routed_from_manifest(manifest_path: Optional[Path]) -> dict:
+    """``{id: engine root}`` the stage manifest routed; ``{}`` when unreadable (fail-open to the
+    cwd-only gate)."""
+    if manifest_path is None:
+        return {}
+    from coordinator_core.ops.dispatch_emit.engine_owned_rows import routed_roots
+
+    try:
+        return routed_roots(json.loads(Path(manifest_path).read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return {}
+
+
+def _ledger_gate(
+    worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None
+) -> tuple[Optional[dict], object]:
     """(refusal or None, ledger) for a ledger-bearing ask run: the refusal when ``verdict`` does not
-    pass ``requirements_ledger.judge`` against the live register rows. A run emitted without a
-    ledger is not gated (``(None, None)``). The pass is one gate among the review stage's; it
-    discharges none of them."""
+    pass ``requirements_ledger.judge`` against the live register rows, an engine-routed item
+    (``manifest_path``'s ``engine_rows``) included when it names another root than the one owed.
+    A run emitted without a ledger is not gated (``(None, None)``). The pass is one gate among
+    the review stage's; it discharges none of them."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
     ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
@@ -1325,7 +1341,7 @@ def _ledger_gate(worktree_root: Path, run_dir: Path, verdict: object) -> tuple[O
             "verdict, or revise with workflow.revise and re-run the check",
             refused="ledger-unjudged",
         ), ledger
-    result = requirements_ledger.judge(ledger, verdict)
+    result = requirements_ledger.judge(ledger, verdict, _routed_from_manifest(manifest_path))
     if result["pass"]:
         return None, ledger
     return _error(
@@ -2597,7 +2613,9 @@ def _terminal_commit(
         )
     ledger = None
     if ask_run_dir is not None:
-        unmet, ledger = _ledger_gate(worktree_root, ask_run_dir, params.get("ledger_verdict"))
+        unmet, ledger = _ledger_gate(
+            worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs
+        )
         if unmet is not None:
             return unmet
 

@@ -320,8 +320,9 @@ def compose_reverify_script(
         f"prior_unbacked_claims:\n{claim_lines or '(none)'}"
     )
     owner_rows = _owner_gate_rows(plan_path, repo_root)
-    if owner_rows:
-        prompt += owner_repo_clause(owner_rows, owner_repo_roots())
+    engine_rows = _engine_rows(plan_path, repo_root)
+    if owner_rows or engine_rows:
+        prompt += owner_repo_clause(owner_rows + engine_rows, owner_repo_roots())
     call = _agent_call_literal(
         _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
         prompt,
@@ -338,7 +339,7 @@ def compose_reverify_script(
         run_base_sha=base,
         falsifier=None,
         criterion=criterion,
-        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha),
+        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha) + owner_repo_clause(engine_rows, {}),
         host_degraded=host_degraded,
         evidence_path=evidence_path,
         evidence=_register_evidence(plan_path, repo_root),
@@ -787,7 +788,8 @@ def compose_rejudge_script(
         run_base_sha=run_base_sha or "run_base_sha",
         falsifier=None,
         criterion=resolve_operative_criterion_for_plan(plan_path, repo_root),
-        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha),
+        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha)
+        + owner_repo_clause(_engine_rows(plan_path, repo_root), {}),
         host_degraded=host_degraded,
         evidence_path=_row_evidence_path(plan_path, repo_root),
         evidence=_register_evidence(plan_path, repo_root),
@@ -1040,6 +1042,37 @@ def _owner_gate_rows(plan_path: str, repo_root: Optional[Path]) -> List[dict]:
                 item["closure_key"] = str(entry["closure_key"])
             out.append(item)
     return out
+
+
+def _engine_rows(plan_path: str, repo_root: Optional[Path]) -> List[dict]:
+    """Engine-plane rows of the plan at `plan_path` (its raw spine rows, its sizing's register
+    rows, its evidence sidecar; `repo_root` as cwd), minus rows on the gated owner path; empty
+    when the plan is unreadable."""
+    from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
+
+    plan_file = Path(plan_path)
+    if not plan_file.is_absolute() and repo_root is not None:
+        plan_file = Path(repo_root) / plan_file
+    try:
+        raw_rows = [r for r in load_rows_memo(plan_file.read_text(encoding="utf-8")).rows if isinstance(r, dict)]
+    except Exception:
+        return []
+    gated = {g["id"] for g in _owner_gate_rows(plan_path, repo_root)}
+    raw_rows = [r for r in raw_rows if r.get("id") not in gated]
+    evidence = _register_evidence(plan_path, repo_root)
+    evidence_rel = _row_evidence_path(plan_path, repo_root)
+    evidence_text = ""
+    if evidence_rel:
+        evidence_file = Path(evidence_rel)
+        if not evidence_file.is_absolute() and repo_root is not None:
+            evidence_file = Path(repo_root) / evidence_file
+        try:
+            evidence_text = evidence_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            evidence_text = ""
+    cwd = repo_root if repo_root is not None else _repo_of_cwd()
+    return engine_owner_rows(raw_rows, list(evidence.rows) if evidence else [], evidence_text, cwd)
 
 
 def _repo_of_record(record: Path) -> Path:

@@ -769,6 +769,57 @@ def test_owner_repo_clause_js_carries_the_same_text_fragments():
     assert "r.owner_root" in js
 
 
+_ENGINE_ROWS = [
+    {"id": "T8", "owner_repo": "claude-klabauter", "owner_root": "/roots/engine",
+     "root_class": "resolved-engine", "engine": True},
+]
+
+
+def test_engine_row_renders_under_its_own_head_with_root_class_and_root_read():
+    from coordinator_core.ops.review_mint.execute_review import owner_repo_clause
+
+    text = owner_repo_clause(_ENGINE_ROWS, {})
+    assert "Engine-plane rows" in text and "Owner-repo rows" not in text
+    assert "T8: engine-plane row, engine root /roots/engine (resolved-engine)" in text
+    assert "`git -C /roots/engine` at its HEAD" in text
+    assert "root_read" in text and "roots_read" in text
+
+
+def test_engine_row_with_no_root_renders_the_absent_text():
+    from coordinator_core.ops.review_mint.execute_review import owner_repo_clause
+
+    text = owner_repo_clause([{**_ENGINE_ROWS[0], "owner_root": ""}], {})
+    assert "T8: owner claude-klabauter is not on this machine" in text
+    assert "engine root" not in text
+
+
+def test_gated_only_clause_is_byte_identical_and_mixed_rows_render_both_heads():
+    from coordinator_core.ops.review_mint import execute_review as er
+
+    gated_only = er.owner_repo_clause(_OWNER_ROWS, _OWNER_ROOTS)
+    assert gated_only.startswith(er._OWNER_HEAD) and er._ENGINE_HEAD not in gated_only
+    mixed = er.owner_repo_clause([*_OWNER_ROWS, *_ENGINE_ROWS], _OWNER_ROOTS)
+    assert mixed.startswith(gated_only)
+    assert mixed.endswith(er.owner_repo_clause(_ENGINE_ROWS, {}))
+
+
+def test_owner_repo_clause_js_mirrors_the_engine_fragments():
+    from coordinator_core.ops import workflow_scaffold as ws
+    from coordinator_core.ops.review_mint import execute_review as er
+
+    js = er.owner_repo_clause_js("_rows")
+    for frag in (er._ENGINE_HEAD, er._ENGINE_OWNED):
+        assert ws._js_string_literal(frag) in js
+    assert "r.engine" in js and "r.root_class" in js
+
+
+def test_judge_schema_carries_roots_read():
+    schema = _emitted_schema(_compose_judge({**_STAGE_SCHEMAS, "judge-result": {"type": "object"}}))
+    item = schema["properties"]["roots_read"]["items"]
+    assert set(item["required"]) == {"id", "root"}
+    assert "roots_read" not in schema["required"]
+
+
 def test_owner_repo_roots_maps_registry_keys_to_dashed_shortnames(monkeypatch):
     from coordinator_core import machine_resolver
     from coordinator_core.ops.review_mint.execute_review import owner_repo_roots

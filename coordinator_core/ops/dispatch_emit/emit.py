@@ -359,7 +359,9 @@ from coordinator_core.executor_return_contract import (
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
+    ROOTS_READ_SCHEMA,
     compose_criterion_judge,
+    owner_repo_clause,
     OperativeCriterion,
     resolve_operative_criterion,
     compose_execute_review,
@@ -3200,6 +3202,50 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
     )
 
 
+def _judge_engine_clause(
+    plan_path: Optional[str],
+    plan_text: Optional[str],
+    cwd_root: Path,
+    judge_register,
+    excluded_rows: Optional[list],
+) -> str:
+    """The engine-plane owner clause for the plan-route judge: rows the plan delivers in the
+    engine (`engine_owned_rows`), minus rows held behind an execution-blocking gate. Empty when
+    the plan yields none, so the prompt is unchanged."""
+    if not plan_path or not plan_text:
+        return ""
+    from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    gated = {
+        e.get("id")
+        for e in (excluded_rows or [])
+        if e.get("reason") in ("external_gate", "transitive_gate_closure")
+    }
+    # A dispatched row's writes land in this repo, so its own diff holds them: path signals
+    # (writes/writes_under/surface) do not make it engine-owned on this route.
+    raw_rows = [
+        {k: v for k, v in r.items() if k not in ("writes", "writes_under", "surface")}
+        for r in load_rows(plan_text).rows
+        if isinstance(r, dict) and r.get("id") not in gated
+    ]
+    plan_file = Path(plan_path)
+    if not plan_file.is_absolute():
+        plan_file = Path(cwd_root) / plan_file
+    try:
+        evidence_text = evidence_sidecar_path(plan_file).read_text(encoding="utf-8")
+    except OSError:
+        evidence_text = ""
+    rows = engine_owner_rows(
+        raw_rows,
+        list(judge_register.rows) if judge_register is not None else [],
+        evidence_text,
+        cwd_root,
+    )
+    return owner_repo_clause(rows, {})
+
+
 def _falsifier_schema_literal() -> str:
     """The contract's ``falsifier_result`` schema plus the two fields the
     terminal verdict is computed from: required boolean
@@ -3208,6 +3254,7 @@ def _falsifier_schema_literal() -> str:
     schema = json.loads(stage_schema_literal("falsifier_result"))
     schema["properties"]["differs_from_baseline"] = {"type": "boolean"}
     schema["properties"]["baseline_output"] = {"type": "string", "maxLength": 300}
+    schema["properties"].setdefault("roots_read", ROOTS_READ_SCHEMA)
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
     )
@@ -5126,7 +5173,11 @@ def compose_script(
         plan_path=plan_path or "",
         run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
         falsifier=falsifier,
-        prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+        prompt_head=_BRIEF_PRECEDENCE_CLAUSE
+        + _judge_engine_clause(
+            plan_path, plan_text, repo_root if repo_root is not None else _REPO_ROOT,
+            judge_register, excluded_rows,
+        ),
         criterion=plan_context.operative_criterion if plan_context is not None else None,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         evidence_path=judge_evidence_path,

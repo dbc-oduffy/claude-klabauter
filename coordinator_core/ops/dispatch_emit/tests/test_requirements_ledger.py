@@ -318,3 +318,23 @@ def test_a_relayed_row_never_supersedes_a_pm_verbatim_row(run):
         {"id": "R2", "status": "met"}, {"id": "R3", "status": "met"},
     ]})
     assert not out["pass"] and out["failures"][0]["id"] == "R1"
+
+
+def test_routed_item_must_name_the_engine_root_it_read(run, tmp_path):
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    ledger = _ledger(run)
+    routed = {"R1": str(engine)}
+    base = [("R2", "met"), ("R3", "met")]
+    ok = rl.judge(ledger, _verdict(("R1", "met", {"root_read": [str(engine), "cwd"]}), *base), routed)
+    assert ok["pass"]
+    assert rl.judge(ledger, _verdict(("R1", "met", {"root_read": str(engine)}), *base), routed)["pass"]
+    for extra in ({"root_read": str(run[0])}, {}):
+        out = rl.judge(ledger, _verdict(("R1", "met", extra), *base), routed)
+        assert [f["id"] for f in out["failures"]] == ["R1"]
+        assert "owed the engine root" in out["failures"][0]["reason"]
+
+
+def test_unrouted_judgment_ignores_root_read(run):
+    verdict = _verdict(("R1", "met", {"root_read": "anywhere"}), ("R2", "met"), ("R3", "met"))
+    assert rl.judge(_ledger(run), verdict) == rl.judge(_ledger(run), verdict, {}) == {"pass": True, "failures": []}

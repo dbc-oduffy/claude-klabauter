@@ -415,7 +415,7 @@ def main(argv: list[str]) -> int:
                 with _signals_blocked(sigs):
                     proc = group.spawn(inv.runner, run_cwd)
             except OSError as exc:
-                why = f"runner spawn failed: {exc}"
+                why = f"runner spawn failed: {inv.runner[0]}: {exc}"
             else:
                 runner_exit = proc.wait()
         except ExportError as exc:

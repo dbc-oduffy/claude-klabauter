@@ -42,6 +42,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
+from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _dispatch_report_path,
@@ -253,6 +254,28 @@ def _with_owner_roots(gated: Sequence[GatedRow]) -> list[GatedRow]:
     return [replace(g, owner_root=roots.get(g.owner_repo, "")) for g in gated]
 
 
+def _engine_rows(
+    root: Path,
+    plan_path: Path,
+    raw_by_id: Mapping[str, Mapping],
+    gated: Sequence[GatedRow],
+    run_sizing: Optional[Mapping],
+) -> tuple[dict, ...]:
+    """Rows delivered in the engine plane, over the plan's ungated raw rows, the run sizing's
+    register rows and the plan's evidence sidecar. One text scan and at most one resolver call."""
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+
+    withheld = {g.id for g in gated}
+    plan_rows = [r for rid, r in raw_by_id.items() if rid not in withheld]
+    register = ((run_sizing or {}).get("requirement_register") or {}).get("rows") or []
+    sidecar = evidence_sidecar_path(plan_path)
+    try:
+        evidence = sidecar.read_text(encoding="utf-8") if sidecar.is_file() else ""
+    except OSError:
+        evidence = ""
+    return tuple(engine_owner_rows(plan_rows, [r for r in register if isinstance(r, Mapping)], evidence, root))
+
+
 def stage(
     repo_root: Path,
     *,
@@ -417,6 +440,7 @@ def stage(
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
+        engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing),
         test_targets=test_targets,
         no_test_target=no_test_target,
         doc_writes=docs,

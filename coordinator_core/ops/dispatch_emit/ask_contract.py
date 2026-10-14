@@ -258,9 +258,13 @@ class StageManifest:
     test_targets: tuple[str, ...] = ()
     no_test_target: dict[str, Any] | None = None
     doc_writes: tuple[str, ...] = ()
+    #: Rows delivered in the engine plane, in the owner-clause row shape `{id, owner_repo,
+    #: owner_root, root_class, engine}`; an absent key reads as ``()``.
+    engine_rows: tuple[dict[str, Any], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "engine_rows": [dict(r) for r in self.engine_rows],
             "plan_id": self.plan_id,
             "run_dir": self.run_dir,
             "rows": [r.to_json() for r in self.rows],
@@ -284,4 +288,5 @@ class StageManifest:
             test_targets=tuple(data.get("test_targets") or ()),
             no_test_target=data.get("no_test_target"),
             doc_writes=tuple(data.get("doc_writes") or ()),
+            engine_rows=tuple(dict(r) for r in data.get("engine_rows") or ()),
         )
