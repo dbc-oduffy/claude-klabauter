@@ -411,21 +411,6 @@ static const char *door_entrypoint_basename(void) {
 }
 
 
-static char *read_sidecar(const char *own_dir, size_t *out_len) {
-    char sidecar_path[PATH_MAX];
-    int n = snprintf(sidecar_path, sizeof(sidecar_path), "%s%s",
-                     own_dir, ENGINE_ROOT_SIDECAR_FILENAME);
-    if (n < 0 || (size_t)n >= sizeof(sidecar_path)) return NULL;
-
-    size_t len = 0;
-    char *buf = read_whole_file(sidecar_path, &len, 4096);
-    if (!buf) return NULL;
-
-    len = trim_sidecar_trailing(buf, len);
-    if (len == 0) { free(buf); return NULL; }
-    *out_len = len;
-    return buf;
-}
 
 /* True iff `root` carries a real, non-empty `coordinator_core/_engine_stamp`
  * -- mirroring `warm.engine_root.is_engine_root`'s readable-and-non-empty
@@ -456,36 +441,66 @@ static int door_env_warm_is_falsy(void) {
 }
 
 
-static int resolve_engine_root(char **out, size_t *out_len) {
-    char *root = NULL;
-    size_t root_len = 0;
+/* Per-rung verdicts of the last `resolve_engine_root()` run, in ladder order
+ * (override, sidecar, pointer); `fall_through` prints them in its refusal. An
+ * empty slot means that rung was never consulted. */
+static char g_rung_note[3][PATH_MAX + 96];
 
-    const char *env = getenv(ENGINE_ROOT_ENV_OVERRIDE);
-    if (env && env[0] != '\0') {
-        root_len = strlen(env);
-        root = (char *)malloc(root_len + 1);
-        if (!root) return 0;
-        memcpy(root, env, root_len + 1);
-    } else {
-        char own_dir[PATH_MAX];
-        if (!get_own_directory(own_dir, sizeof(own_dir))) return 0;
-        root = read_sidecar(own_dir, &root_len);
-        if (!root) return 0;
+enum { RUNG_UNSET = 0, RUNG_ABSENT, RUNG_UNREADABLE, RUNG_REJECTED };
+
+static void note_rung(int rung, const char *label, int why, const char *path) {
+    const char *verdict;
+    switch (why) {
+        case RUNG_UNSET:      verdict = "unset"; break;
+        case RUNG_ABSENT:     verdict = "absent"; break;
+        case RUNG_UNREADABLE: verdict = "unreadable"; break;
+        default:              verdict = "is not a stamped engine root"; break;
     }
+    if (path != NULL) {
+        snprintf(g_rung_note[rung], sizeof(g_rung_note[rung]), "%s %s %s", label, path, verdict);
+    } else {
+        snprintf(g_rung_note[rung], sizeof(g_rung_note[rung]), "%s %s", label, verdict);
+    }
+}
 
-    /* CANONICALISE HERE, NOT AT WRITE TIME. `root` may be a LITERAL symlink
-     * path (e.g. a cloud session's `/root/engine-current`, re-pointed after
-     * this door's sidecar was last written -- see
-     * `coordinator_core.hooks.repin_cloud_engine_root`). `realpath()` is the
-     * OS's own symlink resolution, called fresh on every invocation, so a
-     * repointed link is followed without any sidecar rewrite. This must
-     * happen before the clone-hash SHA-1 input is fixed: `election.pipe_name`
-     * / `breadcrumb.svc_dir` hash the SERVER's `Path(root).resolve()` at
-     * server-runtime, and this door must byte-match that same resolved
-     * string or it derives a different (orphaned) socket directory. Fails
-     * open to the literal `root` on any `realpath()` error (nonexistent
-     * target, ELOOP, etc.) -- `is_valid_engine_root` below still catches an
-     * unresolvable/invalid root exactly as it did before this existed. */
+/* Reads and trims a small file; on NULL `*why` is RUNG_ABSENT or RUNG_UNREADABLE. */
+static char *read_trimmed_file(const char *path, size_t *out_len, int *why) {
+    size_t len = 0;
+    char *buf = read_whole_file(path, &len, 4096);
+    if (!buf) {
+        *why = (access(path, F_OK) != 0 && errno == ENOENT) ? RUNG_ABSENT : RUNG_UNREADABLE;
+        return NULL;
+    }
+    len = trim_sidecar_trailing(buf, len);
+    if (len == 0) { free(buf); *why = RUNG_UNREADABLE; return NULL; }
+    *out_len = len;
+    return buf;
+}
+
+/* Settings home, porting the zero-spawn rungs of
+ * `coordinator_core._settings_home.settings_home`: COORDINATOR_SETTINGS_HOME,
+ * else <CLAUDE_HOME or HOME>/.coordinator-claude-settings. */
+static int settings_home_path(char *out, size_t out_size) {
+    const char *home = getenv("COORDINATOR_SETTINGS_HOME");
+    if (home && home[0] != '\0') {
+        int n = snprintf(out, out_size, "%s", home);
+        return n > 0 && (size_t)n < out_size;
+    }
+    const char *base = getenv("CLAUDE_HOME");
+    if (!base || base[0] == '\0') base = getenv("HOME");
+    if (!base || base[0] == '\0') return 0;
+    int n = snprintf(out, out_size, "%s/.coordinator-claude-settings", base);
+    return n > 0 && (size_t)n < out_size;
+}
+
+/* Takes ownership of `root`. Canonicalises it with `realpath()` on every
+ * invocation (the clone-hash input must byte-match the server's resolved
+ * path; a re-pointed symlink is followed without a sidecar rewrite; falls
+ * open to the literal on error), then stamp-checks. A stamped root fills the outputs and
+ * returns 1; otherwise frees it, records the rejection against `rung`, and
+ * returns 0 so the caller falls to the next rung. */
+static int accept_candidate(char *root, size_t root_len, int rung, const char *label,
+                            char **out, size_t *out_len) {
     char resolved[PATH_MAX];
     if (realpath(root, resolved) != NULL) {
         size_t resolved_len = strlen(resolved);
@@ -497,14 +512,76 @@ static int resolve_engine_root(char **out, size_t *out_len) {
             root_len = resolved_len;
         }
     }
-
     if (!is_valid_engine_root(root)) {
+        note_rung(rung, label, RUNG_REJECTED, root);
         free(root);
         return 0;
     }
     *out = root;
     *out_len = root_len;
     return 1;
+}
+
+/* Resolves the engine root this invocation should target. Ladder, first
+ * stamped candidate wins (an unstamped one falls to the next rung):
+ *   1. env-var override (`ENGINE_ROOT_ENV_OVERRIDE`)
+ *   2. the sidecar file next to this executable
+ *   3. <settings-home>/machine-local/.claude-klabauter-root
+ * The baked `BUILD_ENGINE_ROOT` is rung 4 (`fall_through`). Returns 0 with
+ * `*out` unwritten when no rung yields a stamped root. */
+static int resolve_engine_root(char **out, size_t *out_len) {
+    static const char *const labels[3] = {
+        "override " ENGINE_ROOT_ENV_OVERRIDE, "sidecar", "pointer" };
+    for (int i = 0; i < 3; i++) g_rung_note[i][0] = '\0';
+
+    const char *env = getenv(ENGINE_ROOT_ENV_OVERRIDE);
+    if (env && env[0] != '\0') {
+        size_t env_len = strlen(env);
+        char *root = (char *)malloc(env_len + 1);
+        if (root) {
+            memcpy(root, env, env_len + 1);
+            for (size_t i = 0; i < env_len; i++) if (root[i] == '\\') root[i] = '/';
+            if (accept_candidate(root, env_len, 0, labels[0], out, out_len)) return 1;
+        }
+    } else {
+        note_rung(0, labels[0], RUNG_UNSET, NULL);
+    }
+
+    char own_dir[PATH_MAX];
+    char sidecar_path[PATH_MAX];
+    if (get_own_directory(own_dir, sizeof(own_dir)) &&
+        snprintf(sidecar_path, sizeof(sidecar_path), "%s%s", own_dir,
+                 ENGINE_ROOT_SIDECAR_FILENAME) < (int)sizeof(sidecar_path)) {
+        size_t len = 0;
+        int why = RUNG_UNREADABLE;
+        char *root = read_trimmed_file(sidecar_path, &len, &why);
+        if (root) {
+            if (accept_candidate(root, len, 1, labels[1], out, out_len)) return 1;
+        } else {
+            note_rung(1, labels[1], why, NULL);
+        }
+    } else {
+        note_rung(1, labels[1], RUNG_UNREADABLE, NULL);
+    }
+
+    char home[PATH_MAX];
+    char pointer_path[PATH_MAX];
+    if (settings_home_path(home, sizeof(home)) &&
+        snprintf(pointer_path, sizeof(pointer_path), "%s/machine-local/.claude-klabauter-root",
+                 home) < (int)sizeof(pointer_path)) {
+        size_t len = 0;
+        int why = RUNG_UNREADABLE;
+        char *root = read_trimmed_file(pointer_path, &len, &why);
+        if (root) {
+            for (size_t i = 0; i < len; i++) if (root[i] == '\\') root[i] = '/';
+            if (accept_candidate(root, len, 2, labels[2], out, out_len)) return 1;
+        } else {
+            note_rung(2, labels[2], why, pointer_path);
+        }
+    } else {
+        note_rung(2, labels[2], RUNG_UNSET, NULL);
+    }
+    return 0;
 }
 
 
@@ -928,6 +1005,14 @@ static int emit_indeterminate(const char *detail) {
  * a hook-mode fall-through can never resolve a different CLI than an
  * ordinary one. */
 static int resolve_fallback_script(const char *engine_root, char *script_path) {
+    /* Pre-resolution cold legs (escape hatch, install-class, no argv) arrive
+     * with no root: climb the ladder here so they reach this machine's
+     * pointer before the baked default. Freed by process exit. */
+    char *ladder_root = NULL;
+    size_t ladder_len = 0;
+    if (engine_root == NULL && resolve_engine_root(&ladder_root, &ladder_len)) {
+        engine_root = ladder_root;
+    }
     const char *root = (engine_root != NULL) ? engine_root : BUILD_ENGINE_ROOT;
 
     /* `engine_root`, when supplied, was already validated by
@@ -940,14 +1025,15 @@ static int resolve_fallback_script(const char *engine_root, char *script_path) {
      * root AND the baked default does not itself validate, this refuses
      * outright -- no spawn at all. */
     if (engine_root == NULL && !is_valid_engine_root(root)) {
+        const char *notes[3];
+        for (int i = 0; i < 3; i++) {
+            notes[i] = g_rung_note[i][0] ? g_rung_note[i] : "not consulted";
+        }
         fprintf(stderr,
-            "door: no published engine could be resolved (no sidecar/env "
-            "override, and this binary's build-time default %s is not a "
-            "valid engine root on this machine) -- refusing to run anything "
-            "rather than guess. Remediation: rebuild or re-point the door "
-            "(coordinator_core/warm/door/build_posix.py) against this "
-            "machine's published engine, or set %s.\n",
-            root, ENGINE_ROOT_ENV_OVERRIDE);
+            "door: no stamped engine root: %s; %s; %s; baked %s "
+            "is not a stamped engine root. Rebuild the door "
+            "(coordinator_core/warm/door/build_posix.py) or set %s.\n",
+            notes[0], notes[1], notes[2], root, ENGINE_ROOT_ENV_OVERRIDE);
         return 1;
     }
 

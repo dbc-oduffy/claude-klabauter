@@ -1,0 +1,99 @@
+"""The run commits in-run only when closeable; otherwise it returns revise_and_refire, never a commit hand-off."""
+
+from __future__ import annotations
+
+from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.warp_fire import fire_command
+
+_BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
+_LIVE = "if (_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN) {"
+
+
+def _script(monkeypatch, **kw) -> str:
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    args = dict(
+        repo_root="REPO",
+        prompt=None,
+        sizing_rel="state/sizings/x.yaml",
+        run_id="run-1",
+        session_id=None,
+        wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]),
+        plan_blitz_text="stub",
+        script_path="x.mjs",
+        in_run_commit=True,
+        **REVIEW_KW,
+    )
+    args.update(kw)
+    return compose_ask_script(**args)
+
+
+def test_closeable_predicate_gates_next_action_and_both_commit_stages(monkeypatch):
+    script = _script(monkeypatch)
+    assert script.count("const _closeable = ") == 1
+    pred = script[script.index("const _closeable = ") :].split("\n", 1)[0]
+    assert "!_halted" in pred and "_manifest.error" in pred
+    assert "_deliveryVerdict.verdict === 'FAIL'" in pred
+    assert "_closeable ? { kind: 'terminal_commit'" in script
+    assert script.count(_LIVE) == 2
+    assert script.index("const _closeable") < script.index("_nextAction = _closeable")
+
+
+def test_criterion_not_met_blocks_close_when_a_judge_runs(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_criterion_judge_call", lambda *a, **k: "agent('judge')")
+    script = _script(monkeypatch)
+    var = ask_compose._emit._FALSIFIER_RESULT_VAR
+    pred = script[script.index("const _closeable = ") :].split("\n", 1)[0]
+    assert f"!({var} && {var}.status === 'not_met')" in pred
+    assert f"({var} && {var}.status === 'not_met') ? 'criterion not_met'" in script
+
+
+def test_revise_and_refire_rides_beside_next_action(monkeypatch):
+    script = _script(monkeypatch)
+    assert "let _reviseAndRefire = _closeable ? null : _mkRevise();" in script
+    assert "revise_and_refire: _reviseAndRefire" in script
+    assert ask_compose._lit(fire_command("state/sizings/x.yaml")) in script
+    assert "workflow.revise" in script
+
+
+def test_refire_without_a_sizing_renders_at_run_time(monkeypatch):
+    script = _script(monkeypatch, sizing_rel=None, prompt="do it")
+    assert "(_sizingRel ? " in script and "JSON.stringify(_sizingRel)" in script
+
+
+def test_commit_prompt_names_the_agent_definition_clause(monkeypatch):
+    script = _script(monkeypatch)
+    assert ask_compose._lit("A run's commit stage")[1:-1] in script
+    assert "no `paths` array is owed" in script
+
+
+def test_ledger_halt_composes_no_terminal_commit_hand_off(monkeypatch):
+    script = _script(monkeypatch)
+    ledger_halt = script.index("halted: 'ledger-check'")
+    assert ledger_halt < script.index("const _closeable")
+
+
+_REVISE = "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, sizing: _sizingRel, halted: _halted } }"
+
+
+def test_in_run_stopped_next_action_is_revise_and_refire_never_a_commit(monkeypatch):
+    script = _script(monkeypatch)
+    assert f": {_REVISE};" in script
+    assert "get terminal_commit_cli() { return this.next_action.kind === 'terminal_commit' " in script
+
+
+def test_refused_commit_halts_and_returns_revise_and_refire(monkeypatch):
+    script = _script(monkeypatch)
+    tail = script[script.index("_commit = await") :]
+    refused = tail[tail.index("else { if (!_halted) _halted = { halted: 'commit'") :].split("\n", 1)[0]
+    assert "refused: _commit?.refused ?? null" in refused and "error: _commit?.error ?? null" in refused
+    assert _REVISE in refused and "_reviseAndRefire = _mkRevise();" in refused
+    assert "kind: 'close_job'" in tail[: tail.index("else { if (!_halted)")]
+
+
+def test_token_less_composition_keeps_the_commit_hand_off(monkeypatch):
+    script = _script(monkeypatch, in_run_commit=False)
+    assert "revise_and_refire', op" not in script
+    assert "{ kind: 'none', op: null, params: null };" in script
+    assert "get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }" in script

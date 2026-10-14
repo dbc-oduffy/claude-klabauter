@@ -60,6 +60,57 @@ def test_one_line_per_red_tier(tmp_path):
     assert len(_run(tmp_path)[1].splitlines()) == 2
 
 
+def _home_with_config(tmp_path, monkeypatch, text=None):
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    if text is not None:
+        (tmp_path / ".claude.json").write_text(text, encoding="utf-8")
+
+
+def test_mcp_registration_counts_entries(tmp_path, monkeypatch):
+    _home_with_config(tmp_path, monkeypatch, '{"mcpServers": {"a": {}, "b": {}}, "x": 1}')
+    assert probes.mcp_registration(tmp_path) == (0, "- MCP servers registered: 2")
+
+
+def test_mcp_registration_no_key_is_zero(tmp_path, monkeypatch):
+    _home_with_config(tmp_path, monkeypatch, "{}")
+    assert probes.mcp_registration(tmp_path) == (0, "- MCP servers registered: 0")
+
+
+def test_mcp_registration_missing_file_one_line_exit_0(tmp_path, monkeypatch):
+    _home_with_config(tmp_path, monkeypatch)
+    code, text = probes.mcp_registration(tmp_path)
+    assert code == 0 and "not found" in text and "\n" not in text
+
+
+def test_mcp_registration_unparseable_one_line_exit_0(tmp_path, monkeypatch):
+    _home_with_config(tmp_path, monkeypatch, "{not json")
+    code, text = probes.mcp_registration(tmp_path)
+    assert code == 0 and "not valid JSON" in text and "\n" not in text
+
+
+def test_mcp_registration_non_object_servers(tmp_path, monkeypatch):
+    _home_with_config(tmp_path, monkeypatch, '{"mcpServers": ["a"]}')
+    code, text = probes.mcp_registration(tmp_path)
+    assert code == 0 and "not an object" in text
+
+
+def test_fixture_sync_absent_is_silent(tmp_path):
+    assert probes.fixture_sync_presence(tmp_path) == (0, "")
+
+
+def test_fixture_sync_present_reports_not_run_and_never_spawns(tmp_path, monkeypatch):
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "check-fixture-sync.sh").write_text("exit 1\n", encoding="utf-8")
+    import subprocess
+
+    def _boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    code, text = probes.fixture_sync_presence(tmp_path)
+    assert code == 0 and "bin/check-fixture-sync.sh" in text and "not run" in text
+
+
 def test_tool_availability_silent_when_both_resolve(monkeypatch, tmp_path):
     monkeypatch.setattr(probes.shutil, "which", lambda t: "/bin/" + t)
     assert probes.tool_availability(tmp_path) == (0, "")

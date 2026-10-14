@@ -27,7 +27,7 @@ from coordinator_core.completion_receipts.test_verdict import (
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
-from coordinator_core.ops.dispatch_emit.delivery_credit import ancestor_refs, coded_row_refs
+from coordinator_core.ops.dispatch_emit.delivery_credit import ancestor_refs, coded_row_landings
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_mint.compose import _agent_call_literal
 from coordinator_core.ops.review_mint.execute_review import (
@@ -41,6 +41,8 @@ from coordinator_core.ops.review_mint.execute_review import (
     compose_criterion_judge,
     delivery_supersession_clause,
     em_owned_clause,
+    owner_repo_clause,
+    owner_repo_roots,
     resolve_operative_criterion_for_plan,
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
@@ -191,14 +193,21 @@ def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) ->
     """Brief text crediting the plan's `coded` rows: those at an ancestor of `base` are backed by
     construction; the rest name the plan's own commits, so a peer's commit in `base..HEAD` is not
     judged as the plan's; refs whose ancestry git could not read are named apart, never as the
-    plan's own. Two git spawns total; empty when the spine names no coded SHA."""
-    by_ref = coded_row_refs(plan_path)
-    if not by_ref or repo_root is None:
+    plan's own. Two git spawns total, three when a no-op row is re-keyed; empty when the spine names no coded SHA."""
+    if repo_root is None:
+        return ""
+    by_ref, landed = coded_row_landings(plan_path, repo_root=repo_root, before=base)
+    if not by_ref:
         return ""
     ok, unknown = ancestor_refs(repo_root, list(by_ref), base)
     before = [i for ref, ids in by_ref.items() if ref in ok for i in ids]
     own = [ref for ref in by_ref if ref not in ok and ref not in unknown]
     note = ""
+    rekeyed = [f"{i} at {landed[i][:10]}" for i in before if i in landed]
+    if rekeyed:
+        note += (
+            "Rows " + ", ".join(rekeyed) + " landed before this run's base; count them backed.\n"
+        )
     if unknown:
         note += (
             "Ancestry of " + ", ".join(sorted(unknown)) + " to run_base_sha could not be read; "
@@ -310,6 +319,9 @@ def compose_reverify_script(
         f"supersedes: {run_record_rel}\n"
         f"prior_unbacked_claims:\n{claim_lines or '(none)'}"
     )
+    owner_rows = _owner_gate_rows(plan_path, repo_root)
+    if owner_rows:
+        prompt += owner_repo_clause(owner_rows, owner_repo_roots())
     call = _agent_call_literal(
         _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
         prompt,
@@ -991,6 +1003,43 @@ def _em_owned_rows(plan_path: str, repo_root: Optional[Path]) -> List[str]:
     except Exception:
         return []
     return em_owned_rows(exclusions)
+
+
+def _owner_gate_rows(plan_path: str, repo_root: Optional[Path]) -> List[dict]:
+    """``{id, owner_repo, closure_key?}`` for each uncleared execution-blocking ``external_gate``
+    entry naming an ``owner_repo``, row-level or frontmatter; empty when the spine is unreadable."""
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        _frontmatter_external_gates,
+        _has_uncleared_execution_gate,
+        load_rows_memo,
+    )
+
+    plan_file = Path(plan_path)
+    if not plan_file.is_absolute() and repo_root is not None:
+        plan_file = Path(repo_root) / plan_file
+    try:
+        source = plan_file.read_text(encoding="utf-8")
+        raw_rows = list(load_rows_memo(source).rows)
+        row_ids = {r.get("id") for r in raw_rows if isinstance(r.get("id"), str)}
+        fm_gates = _frontmatter_external_gates(source, row_ids)
+    except Exception:
+        return []
+    out: List[dict] = []
+    for raw in raw_rows:
+        row_id = raw.get("id")
+        own = raw.get("external_gate")
+        entries = list(own) if isinstance(own, list) else []
+        entries.extend(fm_gates.get(row_id, ()))
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("owner_repo"):
+                continue
+            if not _has_uncleared_execution_gate({"external_gate": [entry]}):
+                continue
+            item = {"id": row_id, "owner_repo": entry["owner_repo"]}
+            if entry.get("closure_key"):
+                item["closure_key"] = str(entry["closure_key"])
+            out.append(item)
+    return out
 
 
 def _repo_of_record(record: Path) -> Path:

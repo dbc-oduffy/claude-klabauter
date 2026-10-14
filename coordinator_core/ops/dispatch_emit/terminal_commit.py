@@ -1355,7 +1355,8 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
     review stamp it now carries records a ``met`` criterion; the caller's commit
     carries it. The verdict is read off the plan on disk, never a param, so only
     a minted stamp can discharge it. A refusal (open spine rows, the goal gate)
-    is reported and writes nothing."""
+    is reported and writes nothing. The refusal text is kept from its head: the
+    cause leads it and the override boilerplate trails."""
     import contextlib
     import io
 
@@ -1395,7 +1396,7 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         rc = cs_stamp_plan_implemented(str(plan_abs), **record, refuse_open_spine_rows=True, commit=False)
     if rc != 0:
-        reason = err.getvalue().strip()[-600:]
+        reason = err.getvalue().strip()[:600]
         return {"plan_status": "refused", "plan_status_refusal": reason, "plan_status_reason": reason}
     return {"plan_status": "implemented"}
 

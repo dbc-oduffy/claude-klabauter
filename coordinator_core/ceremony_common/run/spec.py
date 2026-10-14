@@ -49,9 +49,9 @@ class SpecUnavailable(LookupError):
 
 
 CEREMONY_SPECS: Mapping[str, str] = {
-    "workday_start": "coordinator_core.workday_start.spec:SPEC",
-    "workday_complete": "coordinator_core.workday_complete.spec:SPEC",
-    "workweek_start": "coordinator_core.workweek_start.spec:SPEC",
+    "workday_start": "coordinator_core.workday_start.run_spec:SPEC",
+    "workday_complete": "coordinator_core.workday_complete.run_spec:SPEC",
+    "workweek_start": "coordinator_core.workweek_start.run_spec:SPEC",
 }
 
 

@@ -114,6 +114,17 @@ def test_headings_are_briefing_sections() -> None:
         assert spec.heading in briefing.SECTION_ORDER, spec.id
 
 
+def test_doe_manifest_gap_legs_are_present() -> None:
+    by_id = {r["id"]: r for r in manifest.STEP_TABLE}
+    assert by_id["hyg-check-bin-forwarders"]["cli"] == "check-bin-forwarders"
+    assert by_id["hyg-fleet-claude-md-handoff-convention"]["cli"] == "check-fleet-claude-md-handoff-convention"
+    assert by_id["read-mcp-registration"]["inproc"].endswith(":mcp_registration")
+    assert by_id["sentinel-check-fixture-sync"]["inproc"].endswith(":fixture_sync_presence")
+    costs = _costs()
+    for sid in ("hyg-check-bin-forwarders", "hyg-fleet-claude-md-handoff-convention"):
+        assert costs[sid]["cost_class"] == "engine" and costs[sid]["process_ms_median"] <= 500
+
+
 def test_killed_steps_are_not_entries() -> None:
     ids = " ".join(r["id"] for r in manifest.STEP_TABLE)
     for killed in ("reconcile-sweep", "cruft-sweep", "roadmap", "severity"):

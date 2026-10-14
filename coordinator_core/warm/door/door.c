@@ -419,15 +419,22 @@ static const wchar_t *door_entrypoint_basename(void) {
 }
 
 
-static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len) {
-    wchar_t sidecar_path[MAX_PATH * 2];
-    if (swprintf(sidecar_path, MAX_PATH * 2, L"%s%s", own_dir,
-                 ENGINE_ROOT_SIDECAR_FILENAME) < 0) {
+/* Why a ladder rung yielded no candidate. Reported per rung by the refusal. */
+enum { RUNG_UNSET = 0, RUNG_ABSENT, RUNG_UNREADABLE, RUNG_REJECTED };
+
+/* Reads a small file, trims trailing whitespace. On NULL, `*why` is
+ * RUNG_ABSENT (no such file) or RUNG_UNREADABLE (present but empty,
+ * oversized, or unreadable). */
+static char *read_trimmed_file_utf8(const wchar_t *path, size_t *out_len, int *why) {
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        *why = (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+                   ? RUNG_ABSENT : RUNG_UNREADABLE;
         return NULL;
     }
-    HANDLE h = CreateFileW(sidecar_path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return NULL;
+    *why = RUNG_UNREADABLE;
 
     LARGE_INTEGER size;
     if (!GetFileSizeEx(h, &size) || size.QuadPart <= 0 || size.QuadPart > 4096) {
@@ -447,6 +454,16 @@ static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len) {
     if (len == 0) { free(buf); return NULL; }
     *out_len = len;
     return buf;
+}
+
+static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len, int *why) {
+    wchar_t sidecar_path[MAX_PATH * 2];
+    if (swprintf(sidecar_path, MAX_PATH * 2, L"%s%s", own_dir,
+                 ENGINE_ROOT_SIDECAR_FILENAME) < 0) {
+        *why = RUNG_UNREADABLE;
+        return NULL;
+    }
+    return read_trimmed_file_utf8(sidecar_path, out_len, why);
 }
 
 /* True iff `root_w` carries a real, non-empty `coordinator_core\
@@ -491,49 +508,122 @@ static int door_env_warm_is_falsy(void) {
     return falsy;
 }
 
-/* Resolves the engine root this invocation should target: the env-var
- * override (`ENGINE_ROOT_ENV_OVERRIDE`) if set and non-empty, else the
- * sidecar file next to this executable. Validates the result via
- * `is_valid_engine_root_w()` -- a sidecar pointing at a non-engine
- * directory is exactly the kind of doubt the safety property exists for.
+/* Per-rung verdicts of the last `resolve_engine_root()` run, in ladder order
+ * (override, sidecar, pointer); `fall_through` prints them in its refusal. An
+ * empty slot means that rung was never consulted. */
+static wchar_t g_rung_note[3][MAX_PATH * 2 + 96];
+
+static void note_rung(int rung, const wchar_t *label, int why, const wchar_t *path) {
+    const wchar_t *verdict;
+    switch (why) {
+        case RUNG_UNSET:      verdict = L"unset"; break;
+        case RUNG_ABSENT:     verdict = L"absent"; break;
+        case RUNG_UNREADABLE: verdict = L"unreadable"; break;
+        default:              verdict = L"is not a stamped engine root"; break;
+    }
+    if (path != NULL) {
+        swprintf(g_rung_note[rung], MAX_PATH * 2 + 96, L"%s %s %s", label, path, verdict);
+    } else {
+        swprintf(g_rung_note[rung], MAX_PATH * 2 + 96, L"%s %s", label, verdict);
+    }
+}
+
+/* Settings home, porting the zero-spawn rungs of
+ * `coordinator_core._settings_home.settings_home`: COORDINATOR_SETTINGS_HOME,
+ * else <CLAUDE_HOME or USERPROFILE>\.coordinator-claude-settings. */
+static int settings_home_w(wchar_t *out, DWORD out_chars) {
+    DWORD got = GetEnvironmentVariableW(L"COORDINATOR_SETTINGS_HOME", out, out_chars);
+    if (got > 0 && got < out_chars) return 1;
+    wchar_t base[MAX_PATH * 2];
+    got = GetEnvironmentVariableW(L"CLAUDE_HOME", base, MAX_PATH * 2);
+    if (!(got > 0 && got < MAX_PATH * 2)) {
+        got = GetEnvironmentVariableW(L"USERPROFILE", base, MAX_PATH * 2);
+        if (!(got > 0 && got < MAX_PATH * 2)) return 0;
+    }
+    return swprintf(out, out_chars, L"%s\\.coordinator-claude-settings", base) >= 0;
+}
+
+/* Takes ownership of `root_u8`. On a stamped root fills the outputs and
+ * returns 1; otherwise frees it, records the rejection against `rung`, and
+ * returns 0 so the caller falls to the next rung. */
+static int accept_candidate(char *root_u8, size_t root_u8_len, int rung, const wchar_t *label,
+                            wchar_t **out_w, char **out_u8, size_t *out_u8_len) {
+    wchar_t *root_w = utf8_to_wide(root_u8);
+    if (!root_w) { free(root_u8); note_rung(rung, label, RUNG_UNREADABLE, NULL); return 0; }
+    if (!is_valid_engine_root_w(root_w)) {
+        note_rung(rung, label, RUNG_REJECTED, root_w);
+        free(root_u8); free(root_w);
+        return 0;
+    }
+    *out_w = root_w;
+    *out_u8 = root_u8;
+    *out_u8_len = root_u8_len;
+    return 1;
+}
+
+/* Resolves the engine root this invocation should target. Ladder, first
+ * stamped candidate wins (an unstamped one falls to the next rung):
+ *   1. env-var override (`ENGINE_ROOT_ENV_OVERRIDE`)
+ *   2. the sidecar file next to this executable
+ *   3. <settings-home>\machine-local\.claude-klabauter-root
+ * The caller's baked `BUILD_ENGINE_ROOT_W` is rung 4 (`fall_through`).
  *
  * On success, fills `*out_w` (malloc'd wide string, for CreateFileW) and
  * `*out_u8`/`*out_u8_len` (malloc'd UTF-8 bytes, NOT NUL-assumed by the
  * caller -- length is authoritative -- for the clone-hash SHA-1 input)
  * and returns 1. Returns 0 on ANY failure, at which point neither output
- * pointer is written -- callers must not read them. Every failure here is
- * silent by design (module docstring's safety property): this function
- * itself never prints anything. */
+ * pointer is written -- callers must not read them. This function itself
+ * never prints anything; `g_rung_note` carries the per-rung verdicts. */
 static int resolve_engine_root(wchar_t **out_w, char **out_u8, size_t *out_u8_len) {
-    char *root_u8 = NULL;
-    size_t root_u8_len = 0;
+    static const wchar_t *const labels[3] = {
+        L"override COORDINATOR_DOOR_ENGINE_ROOT", L"sidecar", L"pointer" };
+    for (int i = 0; i < 3; i++) g_rung_note[i][0] = L'\0';
 
     wchar_t env_buf[MAX_PATH * 2];
     DWORD env_len = GetEnvironmentVariableW(ENGINE_ROOT_ENV_OVERRIDE, env_buf, MAX_PATH * 2);
     if (env_len > 0 && env_len < MAX_PATH * 2) {
+        for (DWORD i = 0; i < env_len; i++) if (env_buf[i] == L'/') env_buf[i] = L'\\';
         int u8_len;
-        root_u8 = wide_to_utf8(env_buf, &u8_len);
-        if (!root_u8) return 0;
-        root_u8_len = (size_t)u8_len;
+        char *root_u8 = wide_to_utf8(env_buf, &u8_len);
+        if (root_u8 &&
+            accept_candidate(root_u8, (size_t)u8_len, 0, labels[0], out_w, out_u8, out_u8_len)) {
+            return 1;
+        }
     } else {
-        wchar_t own_dir[MAX_PATH * 2];
-        if (!get_own_directory(own_dir, MAX_PATH * 2)) return 0;
-        root_u8 = read_sidecar_utf8(own_dir, &root_u8_len);
-        if (!root_u8) return 0;
+        note_rung(0, labels[0], RUNG_UNSET, NULL);
     }
 
-    wchar_t *root_w = utf8_to_wide(root_u8);
-    if (!root_w) { free(root_u8); return 0; }
-
-    if (!is_valid_engine_root_w(root_w)) {
-        free(root_u8); free(root_w);
-        return 0;
+    wchar_t own_dir[MAX_PATH * 2];
+    if (get_own_directory(own_dir, MAX_PATH * 2)) {
+        size_t len = 0;
+        int why = RUNG_UNREADABLE;
+        char *root_u8 = read_sidecar_utf8(own_dir, &len, &why);
+        if (root_u8) {
+            if (accept_candidate(root_u8, len, 1, labels[1], out_w, out_u8, out_u8_len)) return 1;
+        } else {
+            note_rung(1, labels[1], why, NULL);
+        }
+    } else {
+        note_rung(1, labels[1], RUNG_UNREADABLE, NULL);
     }
 
-    *out_w = root_w;
-    *out_u8 = root_u8;
-    *out_u8_len = root_u8_len;
-    return 1;
+    wchar_t pointer_path[MAX_PATH * 2];
+    wchar_t home_w[MAX_PATH * 2];
+    if (settings_home_w(home_w, MAX_PATH * 2) &&
+        swprintf(pointer_path, MAX_PATH * 2, L"%s\\machine-local\\.claude-klabauter-root", home_w) >= 0) {
+        size_t len = 0;
+        int why = RUNG_UNREADABLE;
+        char *root_u8 = read_trimmed_file_utf8(pointer_path, &len, &why);
+        if (root_u8) {
+            for (size_t i = 0; i < len; i++) if (root_u8[i] == '/') root_u8[i] = '\\';
+            if (accept_candidate(root_u8, len, 2, labels[2], out_w, out_u8, out_u8_len)) return 1;
+        } else {
+            note_rung(2, labels[2], why, pointer_path);
+        }
+    } else {
+        note_rung(2, labels[2], RUNG_UNSET, NULL);
+    }
+    return 0;
 }
 
 
@@ -791,6 +881,18 @@ static int emit_hook_deny(const char *reason) {
  * different CLI than an ordinary one. */
 static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t *engine_root_w,
                                        wchar_t *script_path_w) {
+    /* Pre-resolution cold legs (escape hatch, install-class, no argv) arrive
+     * with no root: climb the ladder here so they reach this machine's
+     * pointer before the baked default. Freed by process exit. */
+    if (engine_root_w == NULL) {
+        wchar_t *ladder_w = NULL;
+        char *ladder_u8 = NULL;
+        size_t ladder_u8_len = 0;
+        if (resolve_engine_root(&ladder_w, &ladder_u8, &ladder_u8_len)) {
+            free(ladder_u8);
+            engine_root_w = ladder_w;
+        }
+    }
     const wchar_t *root = (engine_root_w != NULL) ? engine_root_w : BUILD_ENGINE_ROOT_W;
 
     /* `engine_root_w`, when supplied, was already validated by
@@ -810,14 +912,16 @@ static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t 
      * but names no remediation; this is the same failure with one that
      * does). */
     if (engine_root_w == NULL && !is_valid_engine_root_w(root)) {
+        const wchar_t *notes[3];
+        for (int i = 0; i < 3; i++) {
+            notes[i] = g_rung_note[i][0] ? g_rung_note[i] : L"not consulted";
+        }
         fwprintf(stderr,
-            L"door: no published engine could be resolved (no sidecar/env "
-            L"override, and this binary's build-time default %s is not a "
-            L"valid engine root on this machine) -- refusing to run "
-            L"anything rather than guess. Remediation: reinstall the door "
-            L"(coordinator_core/install/door_install.py) against this "
-            L"machine's published engine, or set COORDINATOR_DOOR_ENGINE_ROOT.\n",
-            root);
+            L"door: no stamped engine root: %s; %s; %s; baked %s "
+            L"is not a stamped engine root. Reinstall the door "
+            L"(coordinator_core/install/door_install.py) or set "
+            L"COORDINATOR_DOOR_ENGINE_ROOT.\n",
+            notes[0], notes[1], notes[2], root);
         return NULL;
     }
 

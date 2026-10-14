@@ -429,7 +429,7 @@ def _composed_digest(ledger_js: str) -> dict:
 
 def _printed_params(digest: dict) -> dict:
     cli = digest["terminal_commit_cli"]
-    return json.loads(cli[cli.index("'") + 1 : cli.rindex("'")])
+    return json.loads(cli.split("\n")[1])
 
 
 def test_the_printed_terminal_commit_params_carry_the_ledger_verdict_top_level(repo):

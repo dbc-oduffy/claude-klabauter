@@ -35,7 +35,8 @@ def _next_action(script: str) -> str:
 
 def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
     na = _next_action(_script(monkeypatch))
-    assert na.startswith(f"  _nextAction = {_GUARD} ? {{ kind: 'terminal_commit', op: 'dispatch.terminal_commit'")
+    assert na.startswith("  _nextAction = _closeable ? { kind: 'terminal_commit', op: 'dispatch.terminal_commit'")
+    assert f"const _closeable = !!(!_halted && {_GUARD[1:-1]}" in _script(monkeypatch)
     assert ": { kind: 'none', op: null, params: null };" in na.split("\n", 1)[0]
     assert na.rstrip().endswith("get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }, };")
 

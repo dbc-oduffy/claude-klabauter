@@ -362,33 +362,66 @@ class PrimaryScanResult(NamedTuple):
     mirror_conflicts: list[str]
 
 
-def _claim_states_naming(directory: Path, repo_root: Path, sid: str):
+_FLOOR_UNSET: Any = object()
+
+
+def _session_floor(repo_root: Path, sid: str) -> float | None:
+    """The session-start floor, or `None` (the unfloored walk) when it cannot be resolved or the
+    engine predates `scan_floor`."""
+    try:
+        from coordinator_core.session import scan_floor
+    except ImportError:
+        return None
+    try:
+        return scan_floor.session_start_floor(repo_root, sid)
+    except Exception:
+        return None
+
+
+def _iter_floored(directory: Path, floor: float | None, always: frozenset[str], *, recursive: bool):
+    """`scan_floor.iter_files_at_or_above`, degrading to the unfloored walk on an engine without it.
+    Order is the unfloored walk's: `os.walk` top-down for recursive, `glob` order for flat."""
+    try:
+        from coordinator_core.session.scan_floor import iter_files_at_or_above
+    except ImportError:
+        if recursive:
+            for dirpath, _dirs, names in os.walk(directory):
+                for name in names:
+                    yield Path(dirpath, name)
+        else:
+            yield from directory.glob("*.md")
+        return
+    yield from iter_files_at_or_above(directory, floor, always, recursive=recursive)
+
+
+def _claim_states_naming(directory: Path, repo_root: Path, sid: str, floor: Any = _FLOOR_UNSET):
     """Yield `(file, ClaimState)` for each file under `directory` that the ledger or the 4 KiB
     frontmatter head could attribute to `sid`; every other file's resolved holder cannot be `sid`
-    and is never read through `resolve_claim_state`."""
-    import os
-
+    and is never read through `resolve_claim_state`. Files below the session-start `floor` are
+    skipped unless the ledger names them."""
     from coordinator_core.claim_state import MIRROR_READ_CAP, handoff_claim_dir
     from coordinator_core.lifecycle import git_common_dir
 
+    if floor is _FLOOR_UNSET:
+        floor = _session_floor(repo_root, sid)
     try:
         ledger_names = set(os.listdir(handoff_claim_dir(git_common_dir(repo_root), Path("x")).parent))
     except Exception:
         ledger_names = set()
-    for dirpath, _dirs, names in os.walk(directory):
-        for name in names:
-            f = Path(dirpath, name)
-            if name not in ledger_names:
-                try:
-                    with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                        if sid not in fh.read(MIRROR_READ_CAP):
-                            continue
-                except OSError:
-                    continue
-            yield f, resolve_claim_state(f, repo_root=repo_root)
+    for f in _iter_floored(directory, floor, frozenset(ledger_names), recursive=True):
+        if f.name not in ledger_names:
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    if sid not in fh.read(MIRROR_READ_CAP):
+                        continue
+            except OSError:
+                continue
+        yield f, resolve_claim_state(f, repo_root=repo_root)
 
 
-def primary_consumed_handoff_scan(repo_root: Path, sid: str) -> PrimaryScanResult:
+def primary_consumed_handoff_scan(
+    repo_root: Path, sid: str, floor: Any = _FLOOR_UNSET
+) -> PrimaryScanResult:
     """This bin script's OWN detector set: every file under state/handoffs/
     whose claim state — resolved ledger-first via
     `coordinator_core.claim_state.resolve_claim_state`, frontmatter mirror
@@ -439,7 +472,7 @@ def primary_consumed_handoff_scan(repo_root: Path, sid: str) -> PrimaryScanResul
         return PrimaryScanResult([], [])
     matches: list[Path] = []
     conflicts: list[Path] = []
-    for f, state in _claim_states_naming(handoffs_dir, repo_root, sid):
+    for f, state in _claim_states_naming(handoffs_dir, repo_root, sid, floor):
         if state.holder != sid:
             continue
         if state.mirror_holder and state.mirror_holder != sid:
@@ -479,7 +512,7 @@ def primary_consumed_handoff(repo_root: Path, sid: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def detector_a(repo_root: Path, sid: str) -> str | None:
+def detector_a(repo_root: Path, sid: str, floor: Any = _FLOOR_UNSET) -> str | None:
     """An ARCHIVED handoff whose claim state — resolved ledger-first via
     `coordinator_core.claim_state.resolve_claim_state`, frontmatter mirror as
     fallback (C1) — names this session as holder AND carries a
@@ -493,7 +526,7 @@ def detector_a(repo_root: Path, sid: str) -> str | None:
         return None
     predecessor_re = re.compile(r"^predecessor:", re.MULTILINE)
     candidates = []
-    for f, state in _claim_states_naming(archive_dir, repo_root, sid):
+    for f, state in _claim_states_naming(archive_dir, repo_root, sid, floor):
         if state.holder == sid:
             candidates.append(f)
     for f in sorted(candidates):
@@ -1443,7 +1476,9 @@ def _resolve_memo_session_start_time(repo_root: Path, sid: str) -> "datetime | N
     return None
 
 
-def find_memo_predecessor(repo_root: Path, sid: str, diagnostics: list[str]) -> str | None:
+def find_memo_predecessor(
+    repo_root: Path, sid: str, diagnostics: list[str], floor: Any = _FLOOR_UNSET
+) -> str | None:
     """Scans `cross-repo/inbox/*.md` and `cross-repo/archive/*.md` (flat,
     non-nested trees as of this writing — no `rglob` needed) for a memo
     whose frontmatter `picked_up_by` equals `sid` AND whose `picked_up_at`
@@ -1472,6 +1507,8 @@ def find_memo_predecessor(repo_root: Path, sid: str, diagnostics: list[str]) -> 
 
     Returns the matched memo's repo-relative path, or `None` if the leg did
     not fire or nothing matched."""
+    if floor is _FLOOR_UNSET:
+        floor = _session_floor(repo_root, sid)
     candidates: list[tuple[Path, str, "datetime"]] = []
     corpus_root = repo_root / "state" / "cross-repo"
     if not corpus_root.is_dir():
@@ -1480,8 +1517,8 @@ def find_memo_predecessor(repo_root: Path, sid: str, diagnostics: list[str]) -> 
         memo_dir = corpus_root / dirname
         if not memo_dir.is_dir():
             continue
-        for f in memo_dir.glob("*.md"):
-            if not f.is_file():
+        for f in _iter_floored(memo_dir, floor, frozenset(), recursive=False):
+            if f.suffix != ".md":
                 continue
             try:
                 if sid.encode("utf-8") not in f.read_bytes():
@@ -1946,7 +1983,8 @@ def resolve_disposition(repo_root: Path, sid: str, *, history: Any = None) -> "D
             "cannot flip disposition."
         )
 
-    consumed_paths, mirror_conflicts = primary_consumed_handoff_scan(repo_root, sid)
+    floor = _session_floor(repo_root, sid)
+    consumed_paths, mirror_conflicts = primary_consumed_handoff_scan(repo_root, sid, floor)
     if mirror_conflicts:
         diagnostics.append(
             f"WARN: {len(mirror_conflicts)} handoff(s) name this session as ledger claim holder "
@@ -1988,7 +2026,7 @@ def resolve_disposition(repo_root: Path, sid: str, *, history: Any = None) -> "D
             _det("live-consume"),
         )
 
-    arch = detector_a(repo_root, sid)
+    arch = detector_a(repo_root, sid, floor)
 
     ship_base = None if history is not None else git_merge_base(repo_root)
     if history is not None and not history.resolved:
@@ -2039,7 +2077,7 @@ def resolve_disposition(repo_root: Path, sid: str, *, history: Any = None) -> "D
     c_status: str | None = None
     c_match_facts: dict[str, Any] | None = None
     if not arch:
-        memo_path = find_memo_predecessor(repo_root, sid, diagnostics)
+        memo_path = find_memo_predecessor(repo_root, sid, diagnostics, floor)
         c_outcome = detector_c(
             repo_root,
             sid,

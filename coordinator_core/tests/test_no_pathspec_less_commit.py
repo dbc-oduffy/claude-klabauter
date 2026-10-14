@@ -379,6 +379,12 @@ _KNOWN_BARE_COMMIT_SITES: frozenset[tuple[str, str, str]] = frozenset(
             "_act_gitignore",
             "_run_git",
         ),
+        # MERGE COMMIT. Git refuses a partial (pathspec'd) commit while MERGE_HEAD exists, so
+        # the conclusion of an open reconcile merge is necessarily bare. Safe because
+        # `main` refuses (RECONCILE-CONCLUDE-FOREIGN-STAGED) before committing when any
+        # staged path lies outside the merge's own change set plus the conflict manifest.
+        # RETIRES if git gains a pathspec'd merge-conclusion commit.
+        ("coordinator_core/ops/reconcile_merge_conclude.py", "_commit_merge", "_git"),
         # SELF-CREATED REPO. `_scratch_git_repo()` builds `tmp` via
         # `tempfile.mkdtemp(prefix="altlive-repo-")` and runs `git init -q` on it before this
         # commit ever fires; no peer's work can be staged in a repo that did not exist a

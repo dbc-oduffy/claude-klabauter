@@ -27,6 +27,14 @@ def test_round_trip_sorts_and_normalises(repo):
     assert rm.manifest_path(repo).parent == repo / ".git" / "coordinator-reconcile"
 
 
+def test_write_leaves_only_the_manifest(repo):
+    _open_merge(repo)
+    rm.write(repo, merge_head=SHA, branch="b", paths=["a"])
+    assert [p.name for p in rm.manifest_path(repo).parent.iterdir()] == [
+        "conflict-manifest.json"
+    ]
+
+
 def test_absent_returns_none(repo):
     _open_merge(repo)
     assert rm.read(repo) is None

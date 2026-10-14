@@ -283,11 +283,14 @@ def test_non_executing_plan_does_not_exempt(repo) -> None:
     "pytest ../elsewhere/test_a.py",
     "pytest pkg/test_a.py && pytest",
     "pytest tools -q",
+    "pytest coordinator_core",
     "pytest pkg",
 ])
 def test_unscoped_pytest_in_execute_plan_session_still_denied(repo, cmd) -> None:
     _executor_ran(repo)
     _execute_plan_session(repo)
+    for d in ("tools", "coordinator_core"):
+        (repo / d).mkdir(exist_ok=True)
     assert g.check(_bash(repo, "pytest pkg/test_a.py -k exempt_leaves_counter_untouched")) is None
     # An exempt run does not bump the counter; the probe is the first (free) bump so
     # that ``cmd`` is the second and would be denied.
@@ -390,3 +393,59 @@ def test_stale_counter_before_newest_arming_row_is_ignored(repo) -> None:
     counter = next((repo / ".git").rglob(g.COUNTER_NAME), None) or next(repo.parent.rglob(g.COUNTER_NAME))
     os.utime(counter, (500, 500))
     assert g.check(_bash(repo, "pytest b.py -q")) is None
+
+
+_MEASURE = "python -m coordinator_core.benchmarks.measure"
+
+
+def _counter(repo):
+    return next(repo.parent.rglob(g.COUNTER_NAME), None) or next((repo / ".git").rglob(g.COUNTER_NAME), None)
+
+
+@pytest.mark.parametrize("cmd", [
+    f"{_MEASURE} -- python -X importtime -c 'import pkg'",
+    f"{_MEASURE} --k 3 --once -- python tools/x.py",
+    f"{_MEASURE} --json -- python -c 'import pkg; pkg.run()'",
+    f"{_MEASURE} --",
+    _MEASURE,
+])
+def test_measure_wrapped_non_pytest_neither_counted_nor_denied(repo, cmd) -> None:
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    before = _counter(repo).read_text()
+    assert before == "1"
+    assert g.check(_bash(repo, cmd)) is None
+    assert _counter(repo).read_text() == before
+
+
+@pytest.mark.parametrize("cmd", [
+    f"{_MEASURE} -- python -m pytest a.py",
+    f"{_MEASURE} --once -- pytest a.py -q",
+    f"{_MEASURE} -- timeout 60 python3 -m pytest a.py",
+    "python -mcoordinator_core.benchmarks.measure -- pytest a.py",
+])
+def test_measure_wrapped_pytest_is_still_counted_and_denied(repo, cmd) -> None:
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    out = g.check(_bash(repo, cmd))
+    assert _denied(out)
+
+
+def test_measure_wrapped_scoped_pytest_gets_the_scoped_exemption(repo) -> None:
+    _executor_ran(repo)
+    _execute_plan_session(repo)
+    assert g.check(_bash(repo, "python -m pytest pkg/test_a.py")) is None
+    assert g.check(_bash(repo, f"{_MEASURE} -- python -m pytest pkg/test_a.py -q")) is None
+    assert g.check(_bash(repo, "python3 -c 'import pkg'")) is None
+    assert _denied(g.check(_bash(repo, f"{_MEASURE} -- pytest")))
+
+
+def test_both_deny_halves_name_the_measurement_route(repo) -> None:
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "pytest a.py")) is None
+    bash_reason = g.check(_bash(repo, "pytest b.py"))["hookSpecificOutput"]["permissionDecisionReason"]
+    write_reason = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))["hookSpecificOutput"]["permissionDecisionReason"]
+    for reason in (bash_reason, write_reason):
+        assert "coordinator_core.benchmarks.measure -- <argv>" in reason
+        assert "test-runner" in reason
+        assert "No self-escape" in reason and "honoured once." in reason

@@ -72,6 +72,7 @@ import functools
 import hashlib
 import os
 import re
+import shlex
 import time
 from pathlib import Path
 from typing import Callable, Dict, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
@@ -1137,12 +1138,21 @@ def commit_paths(
         refused = published_tree_classification.unclassified(touched, _read_landing)
         if refused:
             detail = ", ".join(f"{row}: {name}" for row, name in refused)
+            subdirs = dict(published_tree_classification._ROWS)
+            pending_args = []
+            for row, name in refused:
+                prefix = subdirs[row] + "/" + name
+                for p in path_list:
+                    if (p == prefix or p.startswith(prefix + "/")) and p not in pending_args:
+                        pending_args.append(p)
+            pending_flags = " ".join(f"--pending {shlex.quote(p)}" for p in pending_args)
             raise CommitRefused(
                 "commit lands a published-tree top-level name the landing "
                 f"allowlist does not classify -- {detail} -- run "
-                "coordinator/bin/publish-allowlist-generate.py and add "
-                "setup/publish-targets.portable to this commit's paths, or "
-                "add the name to the row's deny in "
+                f"coordinator/bin/publish-allowlist-generate.py {pending_flags} "
+                "(a not-yet-tracked name is invisible to it without --pending) "
+                "then add setup/publish-targets.portable to this commit's "
+                "paths, or add the name to the row's deny in "
                 "setup/publish-allowlist-declarations.yaml"
             )
 

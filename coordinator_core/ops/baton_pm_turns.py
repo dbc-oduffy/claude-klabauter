@@ -279,45 +279,23 @@ def quotes_turn(intent: str, turn_text: str) -> bool:
 
 def bound_window(intent: Optional[str], session_id: Optional[str] = None, cwd: Optional[str] = None,
                  budget: int = SIZING_WINDOW_CHARS) -> List[Dict[str, Any]]:
-    """The turns a sizing embeds, bound to its ask by content: every turn `intent` quotes comes
-    first, whatever its age (one over the budget left is cut and marked `truncated`), then the
-    newest unquoted turns past the session's ``sized_through_turn`` mark fill what budget is left,
-    stopping before the first whole turn that would overrun it. Returned newest first. An intent that quotes no turn (the EM's paraphrase)
-    falls back to `recent_window`, as does a missing intent."""
-    if not intent or not intent.strip():
-        return recent_window(session_id, cwd)
-    sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
-    path = log_path(sid, cwd) if sid else None
-    if path is None or not path.is_file():
-        return []
-    turns = list(reversed(_load(path)))
-    quoted = [t for t in turns if quotes_turn(intent, t["prompt"])]
-    if not quoted:
-        return recent_window(session_id, cwd)
-    window: List[Dict[str, Any]] = []
-    used = 0
-    for entry in quoted:
-        text = entry["prompt"]
-        room = budget - used
-        if len(text) > room:
-            if room > 0:
-                window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": text[:room], "truncated": True})
-                used = budget
-            continue
-        window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": text})
-        used += len(text)
-    taken = {t["turn"] for t in quoted}
-    mark = store.read_baton(sid, cwd).get("sized_through_turn")
-    for entry in turns:
-        if entry["turn"] in taken or (
-            isinstance(mark, int) and not isinstance(mark, bool) and entry["turn"] <= mark
-        ):
-            continue
-        if used + len(entry["prompt"]) > budget:
-            break
-        window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": entry["prompt"]})
-        used += len(entry["prompt"])
-    return sorted(window, key=lambda t: t["turn"], reverse=True)
+    """The one turn a sizing embeds, bound to its ask by content: the newest turn `intent`
+    quotes, whatever its age, else (a paraphrased or missing intent) the newest turn past the
+    session's ``sized_through_turn`` mark, else ``[]``. The turn is head-cut to `budget` and
+    marked `truncated` when longer. Earlier PM turns stay readable through ``baton.pm_turns``."""
+    if intent and intent.strip():
+        sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
+        path = log_path(sid, cwd) if sid else None
+        if path is None or not path.is_file():
+            return []
+        for entry in reversed(_load(path)):
+            if quotes_turn(intent, entry["prompt"]):
+                text = entry["prompt"]
+                item = {"turn": entry["turn"], "ts": entry.get("ts"), "text": text[:budget]}
+                if len(text) > budget:
+                    item["truncated"] = True
+                return [item]
+    return recent_window(session_id=session_id, cwd=cwd)[:1]
 
 
 def _int_param(params: dict, key: str) -> Optional[int]:

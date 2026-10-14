@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
-from coordinator_core.ceremony_common.run import cli, decide, ledger
+from coordinator_core.ceremony_common.run import cli, decide, driver, ledger
 from coordinator_core.ceremony_common.run import spec as spec_mod
 from coordinator_core.ceremony_common.run.contract import StepSpec
 from coordinator_core.ceremony_common.run.runner import ChildOutcome
@@ -147,6 +147,24 @@ def test_finish_twice_renders_once(box):
 def test_help_lists_the_registered_ceremonies(box, capsys):
     code, out, _ = box.go(["--help"])
     assert code == 0 and "fixture-cer" in out
+
+
+@pytest.mark.parametrize("key", sorted(spec_mod.CEREMONY_SPECS))
+def test_launch_hands_the_driver_each_registered_spec(key, tmp_path, monkeypatch):
+    seen = []
+
+    def fake_launch(spec, **_kw):
+        seen.append(spec)
+        return 0
+
+    monkeypatch.setattr(driver, "launch", fake_launch)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "session-under-test")
+    code = cli.main(
+        [key.replace("_", "-"), "launch"], dispatch={}, plugin_root=tmp_path, repo_root=tmp_path, today=DAY,
+    )
+    assert code == 0 and len(seen) == 1
+    assert isinstance(seen[0], CeremonySpec)
+    assert seen[0].name.replace("-", "_") == key
 
 
 def test_only_spec_py_names_a_ceremony():

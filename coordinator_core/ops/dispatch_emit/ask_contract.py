@@ -213,18 +213,22 @@ class ManifestRow:
 @dataclass(frozen=True)
 class GatedRow:
     """A row withheld from the run; ``reason`` is ``external_gate`` or
-    ``transitive_gate_closure`` and ``gate`` describes the blocking gate."""
+    ``transitive_gate_closure`` and ``gate`` describes the blocking gate.
+    ``owner_root`` is the owner repo's checkout on this box, filled at stage time;
+    ``""`` when the box's registry has no entry for it."""
 
     id: str
     reason: str
     gate: str
     owner_repo: str = ""
     closure_key: Any = None
+    owner_root: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
             "id": self.id, "reason": self.reason, "gate": self.gate,
             "owner_repo": self.owner_repo, "closure_key": self.closure_key,
+            "owner_root": self.owner_root,
         }
 
     @classmethod
@@ -232,6 +236,7 @@ class GatedRow:
         return cls(
             id=data["id"], reason=data["reason"], gate=data["gate"],
             owner_repo=data.get("owner_repo") or "", closure_key=data.get("closure_key"),
+            owner_root=data.get("owner_root") or "",
         )
 
 

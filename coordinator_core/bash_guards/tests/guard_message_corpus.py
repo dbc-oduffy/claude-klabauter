@@ -5919,7 +5919,7 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("submit_engine_ask", "fire-neither-ask-nor-sizing", True, _fire_submit_engine_ask_neither),
     HookRow("submit_engine_ask", "fire-non-repo", True, _fire_submit_engine_ask_non_repo),
     HookRow("submit_engine_ask", "fire-subagent-submits", True, _fire_submit_engine_ask_subagent),
-    HookRow("submit_engine_ask", "control-scout-no-live-run", False, _fire_submit_engine_ask_scout_idle),
+    HookRow("submit_engine_ask", "fire-scout-no-live-run", True, _fire_submit_engine_ask_scout_idle),
     HookRow("guard_terminal_review", "fire-unreviewed-code-commit", True, _fire_guard_terminal_review),
     HookRow("guard_terminal_review", "control-doc-only-commit", False, _fire_guard_terminal_review_control),
     HookRow("preuse_search_dispatch", "fire-first-grep", True, _fire_preuse_search_dispatch),

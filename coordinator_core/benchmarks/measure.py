@@ -15,12 +15,20 @@ a platform that primitive cannot resolve on prints `head=unknown`, never a
 `single_invocation_tree_process_time` raise `NotImplementedError` on
 (Linux for `--once`), this module prints the error and exits 2 -- it never
 degrades to `time.process_time` or wall clock to paper over the gap.
+
+NEGATIVE SPEC: a measured call that exits nonzero prints no figure (stdout
+empty, `--json` included) and exits 1; an early exit is never a measurement.
+
+NEGATIVE SPEC: a suite-shaped argv (per `check_test_suite_invocation.
+classify_command`) is refused with exit 2 before anything is spawned; a tier
+run is never a measurement. A scoped test file or `python -c` stays measurable.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 
 from coordinator_core.benchmarks import declare_benchmark_origin
@@ -49,6 +57,7 @@ def _run(argv: list, k: int, once: bool) -> dict:
             "procs_per_call": result["procs"],
             "instrument": "single_invocation_tree_process_time",
             "k": 1,
+            "rc": result["rc"],
         }
     result = batched_process_time_ms(argv, k=k)
     return {
@@ -56,6 +65,7 @@ def _run(argv: list, k: int, once: bool) -> dict:
         "procs_per_call": result["procs_per_call"],
         "instrument": "batched_process_time_ms",
         "k": k,
+        "rc": result["rc"],
     }
 
 
@@ -85,11 +95,30 @@ def main(argv: list = None) -> int:
         print("measure: an argv to measure is required after --", file=sys.stderr)
         return 2
 
+    from coordinator_core.bash_guards.check_test_suite_invocation import classify_command
+
+    suite = classify_command(shlex.join(cmd))
+    if suite:
+        print(
+            f"measure: refused: {suite[0].detected} is a test-tier invocation; "
+            "tier runs go through the suite route",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
         measured = _run(cmd, parsed.k, parsed.once)
     except NotImplementedError as exc:
         print(f"measure: NotImplementedError: {exc}", file=sys.stderr)
         return 2
+
+    rc = measured["rc"]
+    if rc != 0:
+        print(
+            f"measure: refused: measured call exited rc={rc}; no figure",
+            file=sys.stderr,
+        )
+        return 1
 
     head = _resolve_head()
     stamped = {

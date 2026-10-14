@@ -344,6 +344,23 @@ class TestReasonClassSpecificMessages:
         assert guard.check(_payload(literal)) is None
         assert guard.check(_payload('python3 "${W1A_UNSET_P}/noshebang.py"')) is not None
 
+    @pytest.mark.parametrize("spelling", ["native", "forward"])
+    def test_abs_path_spellings_of_a_clean_script_are_admitted(self, tmp_path, spelling):
+        script = tmp_path / "clean.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        path = str(script) if spelling == "native" else str(script).replace("\\", "/")
+        assert guard.check(_payload("python3 " + path)) is None
+
+    @pytest.mark.parametrize("spelling", ["native", "forward"])
+    def test_abs_path_spellings_of_a_mentioning_writer_are_denied(self, tmp_path, spelling):
+        script = tmp_path / "bad.py"
+        script.write_text("open('%s', 'w').write('x')\n" % SENTINEL, encoding="utf-8")
+        path = str(script) if spelling == "native" else str(script).replace("\\", "/")
+        assert guard.check(_payload("python3 " + path)) is not None
+
+    def test_native_path_to_a_missing_file_is_denied(self, tmp_path):
+        assert guard.check(_payload("python3 " + str(tmp_path / "missing.py"))) is not None
+
     def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
         assert guard.check(_payload("./bin/install-git-hooks.sh")) is None
 
@@ -1217,3 +1234,216 @@ class TestReadOnlyPythonProbeMentioningSentinel:
     def test_bash_script_mentioning_sentinel_still_denies(self, tmp_path):
         (tmp_path / "probe.sh").write_text("test -f %s\n" % SENTINEL, encoding="utf-8")
         _reason(guard.check(_payload("bash probe.sh", cwd=str(tmp_path))))
+
+
+class TestHeredocWrittenProbeRuns:
+    """A script written by a bare `cat > path <<EOF` and run in the same
+    command does not exist on disk when the guard reads it; the heredoc body
+    is the text that runs, so it is judged in place of the file."""
+
+    @staticmethod
+    def _cmd(body, path, run="python3 {p}", delim="'EOF'"):
+        return "cat > {p} <<{d}\n{b}\nEOF\n{r}".format(
+            p=path, d=delim, b=body, r=run.format(p=path)
+        )
+
+    def test_clean_probe_written_and_run_in_one_call_allows(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = self._cmd("print('measure')", path)
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_relative_path_probe_allows(self, tmp_path):
+        cmd = self._cmd("print('measure')", "scratch/probe.py")
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_shell_variable_path_written_then_run_allows(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = "P=%s\n%s" % (path, self._cmd("print('measure')", "$P"))
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_unquoted_delimiter_probe_allows(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = self._cmd("print('measure')", path, delim="EOF")
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_probe_body_creating_the_sentinel_denies(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = self._cmd("open(%r, 'w').close()" % SENTINEL, path)
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_probe_body_inspecting_the_sentinel_allows(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        body = "import os\nprint(os.path.exists(%r))" % SENTINEL
+        cmd = self._cmd(body, path)
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_bash_probe_body_mentioning_the_sentinel_denies(self, tmp_path):
+        path = (tmp_path / "probe.sh").as_posix()
+        cmd = self._cmd("touch %s" % SENTINEL, path, run="bash {p}")
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_append_writer_keeps_the_deny(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = "cat >> %s <<'EOF'\nprint(1)\nEOF\npython3 %s" % (path, path)
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_second_writer_of_the_same_path_keeps_the_deny(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = "%s\necho x >> %s\npython3 %s" % (
+            self._cmd("print(1)", path, run="true"),
+            path,
+            path,
+        )
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_non_cat_writer_keeps_the_deny(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = "cp /elsewhere/x.py %s && python3 %s" % (path, path)
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_backgrounded_earlier_segment_keeps_the_deny(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = "sleep 1 &\n" + self._cmd("print(1)", path)
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_stdin_heredoc_after_a_file_heredoc_judges_its_own_body(self, tmp_path):
+        path = (tmp_path / "w.txt").as_posix()
+        clean_first = "cat > %s <<'A'\ntouch %s\nA\n" % (path, SENTINEL)
+        cmd = clean_first + "python3 - <<'B'\nprint(1)\nB"
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+
+class TestHeredocWriterContextMustBeProvablyUnchanged:
+    """The heredoc body is judged only when the run segment provably names the
+    file the writer wrote. A directory change, a reassigned variable or any
+    other possible writer between the two keeps the deny, because the file
+    that runs is then not the file whose body was judged."""
+
+    @staticmethod
+    def _other_dir_with_sentinel_script(tmp_path):
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "p.py").write_text("open(%r, 'w')\n" % SENTINEL, encoding="utf-8")
+        (other / "b.py").write_text("open(%r, 'w')\n" % SENTINEL, encoding="utf-8")
+        return other.as_posix()
+
+    @staticmethod
+    def _writer(path="p.py"):
+        return "cat > %s <<'EOF'\nprint(1)\nEOF\n" % path
+
+    @pytest.mark.parametrize("move", ["cd {o}", "pushd {o}", "cd {o} && true", "(cd {o} && true)"])
+    def test_directory_change_between_writer_and_run_denies(self, tmp_path, move):
+        other = self._other_dir_with_sentinel_script(tmp_path)
+        cmd = self._writer() + move.format(o=other) + "\npython3 p.py"
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_subshell_cd_run_denies(self, tmp_path):
+        other = self._other_dir_with_sentinel_script(tmp_path)
+        cmd = self._writer() + "(cd %s && python3 p.py)" % other
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_reassigned_variable_between_writer_and_run_denies(self, tmp_path):
+        other = self._other_dir_with_sentinel_script(tmp_path)
+        cmd = "P=%s/a.py\ncat > $P <<'EOF'\nprint(1)\nEOF\nP=%s/b.py\npython3 $P" % (other, other)
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_variable_assigned_after_an_environment_writer_denies(self, tmp_path):
+        other = self._other_dir_with_sentinel_script(tmp_path)
+        cmd = "cat > $P <<'EOF'\nprint(1)\nEOF\nP=%s/b.py\npython3 $P" % other
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    @pytest.mark.parametrize(
+        "between",
+        [
+            "curl -o p.py http://example.invalid/x",
+            "git checkout -- p.py",
+            "sed -n 'w p.py' x.txt",
+            "bash -c 'cp x p.py'",
+            "cp x.py p.py",
+            "chmod +x p.py",
+            "echo hi > unrelated.txt",
+            "git stash",
+        ],
+    )
+    def test_other_possible_writer_between_writer_and_run_denies(self, tmp_path, between):
+        cmd = self._writer() + between + "\npython3 p.py"
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_harmless_builtin_between_writer_and_run_still_allows(self, tmp_path):
+        cmd = self._writer() + "echo running\npython3 p.py"
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_cd_before_the_writer_still_allows(self, tmp_path):
+        other = self._other_dir_with_sentinel_script(tmp_path)
+        cmd = "cd %s\n" % other + self._writer("q.py") + "python3 q.py"
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_single_assignment_variable_before_the_writer_still_allows(self, tmp_path):
+        path = (tmp_path / "probe.py").as_posix()
+        cmd = "P=%s\n" % path + self._writer("$P") + "python3 $P"
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+
+class TestLiteralVariableScriptPath:
+    def test_single_assignment_path_to_clean_script_allows(self, tmp_path):
+        script = tmp_path / "probe.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        cmd = "P=%s\npython3 $P" % script.as_posix()
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_single_assignment_path_to_sentinel_script_denies(self, tmp_path):
+        script = tmp_path / "probe.py"
+        script.write_text("open(%r, 'w')\n" % SENTINEL, encoding="utf-8")
+        cmd = "P=%s\npython3 $P" % script.as_posix()
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_reassigned_variable_stays_denied(self, tmp_path):
+        script = tmp_path / "probe.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        cmd = "P=%s\nP=/other.py\npython3 $P" % script.as_posix()
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+    def test_unassigned_variable_stays_denied(self, tmp_path):
+        _reason(guard.check(_payload("python3 $UNSET_PROBE_PATH_VAR", cwd=str(tmp_path))))
+
+
+class TestGitInitIntoScratch:
+    """`git init` of a throwaway fixture tree is allowed under `<repo>/scratch/`;
+    the guard for it lives in block_subagent_destructive_action."""
+
+    @staticmethod
+    def _at(command, cwd):
+        from coordinator_core.bash_guards import block_subagent_destructive_action as sub
+
+        p = _payload(
+            command, agent_id="deadbeef0123", agent_type="coordinator:executor", cwd=str(cwd)
+        )
+        return sub.check(p)
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        main = tmp_path / "repo"
+        (main / ".git").mkdir(parents=True)
+        (main / "scratch").mkdir()
+        return main
+
+    def test_init_into_scratch_subdir_allows(self, tree):
+        assert self._at("git init scratch/fixture", tree) is None
+        assert self._at("git init -q -b main scratch/fixture", tree) is None
+        assert self._at("git init %s" % (tree / "scratch" / "f").as_posix(), tree) is None
+
+    def test_bare_init_inside_scratch_subdir_allows(self, tree):
+        sub = tree / "scratch" / "fixture"
+        sub.mkdir()
+        assert self._at("git init", sub) is None
+        assert self._at("git init -q", sub) is None
+
+    def test_init_of_the_repo_or_outside_scratch_denies(self, tree):
+        assert self._at("git init", tree) is not None
+        assert self._at("git init elsewhere", tree) is not None
+        assert self._at("git init ../escape", tree / "scratch") is not None
+        assert self._at("git init scratch", tree) is not None
+
+    def test_init_with_hook_vector_denies(self, tree):
+        assert self._at("git init --template=/t scratch/x", tree) is not None
+        assert self._at("git init --separate-git-dir=/g scratch/x", tree) is not None

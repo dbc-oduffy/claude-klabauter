@@ -782,6 +782,20 @@ def claim_age_minutes(claim_dir: Union[str, Path]) -> Optional[int]:
     return (elapsed if elapsed > 0 else 0) // 60
 
 
+def stamp_plan_claim_fired(claim_dir: Union[str, Path]) -> bool:
+    """Record "this plan fired just now" as ``last_fired_at`` in its plan claim
+    dir. A separate file, because ``claimed_at`` is write-once ordering
+    evidence; ``claimed_plan.plan_claim_is_active`` reads it. False when the
+    stamp could not be written; never raises."""
+    try:
+        (Path(claim_dir) / "last_fired_at").write_text(
+            f"{core.now_iso()}\n", encoding="utf-8", newline="\n"
+        )
+    except OSError:
+        return False
+    return True
+
+
 def brief_lease_expired(claim_dir: Union[str, Path]) -> bool:
     """True iff ``claim_dir`` holds a ``brief``-stage claim whose lease has
     elapsed — the one condition under which a LIVE holder's claim is takeable.

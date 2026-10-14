@@ -37,6 +37,7 @@ CORPUS_DIRS = (
     ("state/cross-repo/inbox", 150),
     ("state/cross-repo/archive", 300),
 )
+CORPUS_EPOCH = 1_700_000_000  # corpus mtime: years before any session start
 ENTRY_REL = "archive/completed/2026-10/2026-10-13-adhoc-555555.md"
 _ENTRY = (
     f"---\ntitle: closed\nnature: ad-hoc\ncreated: 2026-10-13\nauthored_by: {SESSION_ID}\n---\n\n"
@@ -145,6 +146,7 @@ def _build(repo: Path) -> None:
     (claim / "started_at").write_text(
         datetime.now().astimezone().isoformat(timespec="seconds"), encoding="ascii"
     )
+    _age_corpus(repo)
     (repo / "docs" / "plans").mkdir(parents=True)
     (repo / PLAN_REL).write_text(_PLAN, encoding="utf-8")
     entry = repo / ENTRY_REL
@@ -168,6 +170,35 @@ def _build(repo: Path) -> None:
     ).stdout.strip()
     if len(floor) != 40 or above != str(WINDOW + 1):
         raise SystemExit(f"fixture floor {floor!r} has {above} commits above it, not {WINDOW + 1}")
+    _check_corpus_ages(repo, (claim / "started_at").stat().st_mtime)
+
+
+def _touched_count(count: int) -> int:
+    return max(1, count // 100)
+
+
+def _age_corpus(repo: Path) -> None:
+    """Backdate every corpus file far below the session start, then rewrite ~1% of each dir
+    (peer claims only, body unchanged) so only that set sits above the floor."""
+    for directory, count in CORPUS_DIRS:
+        for i in range(count):
+            os.utime(repo / f"{directory}/2026-01-01-h{i}.md", (CORPUS_EPOCH, CORPUS_EPOCH))
+    bodies = dict(_corpus_files())
+    for directory, count in CORPUS_DIRS:
+        for i in range(_touched_count(count)):
+            rel = f"{directory}/2026-01-01-h{i}.md"
+            (repo / rel).write_text(bodies[rel], encoding="utf-8", newline="")
+
+
+def _check_corpus_ages(repo: Path, floor: float) -> None:
+    for directory, count in CORPUS_DIRS:
+        above = 0
+        for path in (repo / directory).iterdir():
+            above += path.stat().st_mtime >= floor
+            if SESSION_ID in path.read_text(encoding="utf-8"):
+                raise SystemExit(f"{path} names the bench session")
+        if above != _touched_count(count):
+            raise SystemExit(f"{directory} has {above} files above the floor, not {_touched_count(count)}")
 
 
 def main(argv: list[str]) -> int:

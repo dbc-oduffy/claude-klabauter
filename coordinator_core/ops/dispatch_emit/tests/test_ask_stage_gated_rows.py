@@ -76,6 +76,59 @@ def test_ac_closure_gate_is_staged_as_an_ordinary_row(tmp_path):
     assert reply["gated"] == []
 
 
+def _owned_gate(owner: str) -> str:
+    return f"  external_gate:\n    - owner_repo: {owner}\n      requires: landed-work"
+
+
+def _patch_registry(monkeypatch, table, aliases=None):
+    import coordinator_core.machine_resolver as mr
+    import coordinator_core.ops.fleet._memo_resolver as memo
+
+    monkeypatch.setattr(mr, "registry_get", lambda key: table.get(key))
+    monkeypatch.setattr(memo, "read_receiver_aliases", lambda: aliases or {})
+
+
+def test_gated_row_carries_the_registered_owner_root(tmp_path, monkeypatch):
+    _patch_registry(monkeypatch, {"repos.claude_klabauter": "OWNER/ROOT"})
+    reply = _stage(tmp_path, _plan(_owned_gate("claude-klabauter")))
+    assert [(g["id"], g["owner_root"]) for g in reply["gated"]] == [("G1", "OWNER/ROOT")]
+
+
+def test_gated_row_without_a_registry_entry_has_empty_owner_root(tmp_path, monkeypatch):
+    _patch_registry(monkeypatch, {})
+    reply = _stage(tmp_path, _plan(_owned_gate("claude-klabauter")))
+    assert reply["gated"][0]["owner_root"] == ""
+
+
+def test_aliased_owner_resolves_through_the_alias_key(tmp_path, monkeypatch):
+    _patch_registry(
+        monkeypatch, {"repos.example_game_workbench_repo": "HOLO/ROOT"}, {"example-game-repo": "example_game_workbench_repo"}
+    )
+    reply = _stage(tmp_path, _plan(_owned_gate("example-game-repo")))
+    assert reply["gated"][0]["owner_root"] == "HOLO/ROOT"
+
+
+def test_owner_root_resolution_spawns_no_process(tmp_path, monkeypatch):
+    import subprocess
+
+    _patch_registry(monkeypatch, {"repos.claude_klabauter": "OWNER/ROOT"})
+
+    def _boom(*a, **k):
+        raise AssertionError("spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    reply = _stage(tmp_path, _plan(_owned_gate("claude-klabauter")))
+    assert reply["gated"][0]["owner_root"] == "OWNER/ROOT"
+
+
+def test_owner_root_round_trips_through_json():
+    from coordinator_core.ops.dispatch_emit.ask_contract import GatedRow
+
+    row = GatedRow(id="G1", reason="external_gate", gate="g", owner_repo="x", owner_root="R")
+    assert GatedRow.from_json(row.to_json()) == row
+    assert GatedRow.from_json({"id": "G1", "reason": "r", "gate": "g"}).owner_root == ""
+
+
 def test_dependent_of_gated_row_is_gated_transitively(tmp_path):
     reply = _stage(tmp_path, _plan(_gate("landed-work"), extra_dep=True))
     assert [r["id"] for r in reply["rows"]] == ["U1"]

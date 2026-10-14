@@ -34,7 +34,8 @@ names the victim's id, collected in the same scan pass. May be absent.
 There is no partial supersession: a decision changed in part is edited in
 place, so every `status: superseded` record is a deletion candidate. A stray
 one whose successor only narrows it is fixed by folding the surviving ruling
-into the successor; git history keeps the original either way. The module text names no deletable record id: a live-surface citation here
+into the successor; git history keeps the original either way.
+The module text names no deletable record id: a live-surface citation here
 would strand the very record this op exists to delete.
 
 Citation-stranding refusal — ONE batched search, never a per-record spawn:

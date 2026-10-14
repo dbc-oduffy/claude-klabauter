@@ -2191,8 +2191,8 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # `maximalist.py`'s Step 3.5b (`_install_claude_author_wrapper`) points
 # ``~/.local/bin/claude-author`` at ``<settings-home>/bin/claude-author`` as a POSIX
 # symlink, and `coordinator_core.ops.install_claude_author_wrapper` (run by
-# `scripts/setup.py :: install_claude_author_launcher_chain`, AFTER the forwarder
-# loop here) `shutil.copyfile`s the wrapper source onto that path -- through the
+# DoE's install chain, Step 3.5b, via the `install-claude-author-wrapper`
+# forwarder, AFTER the forwarder loop here) `shutil.copyfile`s the wrapper source onto that path -- through the
 # symlink, onto the settings-home file. The generated forwarder this module
 # writes is therefore never the FINAL body on POSIX; the source bytes are. The
 # wrapper carries its own shebang precisely because of this delivery shape
@@ -2202,9 +2202,10 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # Declared here, as data, so a verifier can ask which installed names are
 # byte copies without a hand-list of its own -- `settings_home_report.
 # _byte_copied_body_matches_source` is that reader, and `maximalist`'s Step
-# 3.5b derives its own ``wrapper_src`` from this same mapping so the source
-# path has one spelling. A new byte-copied member adds a row here and needs no
-# edit in either reader.
+# 3.5b derives its own ``wrapper_src`` via `_shared.claude_author_wrapper_source`
+# (published build first, this row's path as the fallback). A new byte-copied
+# member adds a row here for the verifier; the installer's source derivation is
+# claude-author-specific.
 BYTE_COPIED_BIN_SOURCES: "dict[str, tuple[str, ...]]" = {
     "claude-author": ("coordinator", "bin", "claude-author.py"),
 }

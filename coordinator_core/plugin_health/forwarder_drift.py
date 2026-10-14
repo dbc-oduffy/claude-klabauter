@@ -637,7 +637,14 @@ def _native_forwarder_names(bin_dir: Path) -> Set[str]:
     declared = raw.get("names") if isinstance(raw, dict) else None
     if not isinstance(declared, list):
         return set()
-    return {name for name in declared if isinstance(name, str) and (bin_dir / name).exists()}
+    from coordinator_core.install.door_install import named_forwarder_path
+
+    return {
+        name
+        for name in declared
+        if isinstance(name, str)
+        and (named_forwarder_path(bin_dir, name).exists() or (bin_dir / name).exists())
+    }
 
 
 def _derive_names(agent_bin: Path) -> Set[str]:

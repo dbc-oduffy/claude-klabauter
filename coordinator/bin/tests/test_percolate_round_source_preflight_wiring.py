@@ -51,13 +51,13 @@ def _source_with_origin(tmp_path: Path) -> Path:
     return repo
 
 
-def _run(monkeypatch, tmp_path, source: Path):
+def _run(monkeypatch, tmp_path, source: Path, *extra: str):
     reached = []
     monkeypatch.setattr(_mod, "_resolve_percolate_root", lambda override: str(tmp_path / "root"))
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "dest"))
     monkeypatch.setattr(_mod, "_cmd_round_default", lambda *a, **k: reached.append(a) or 0)
-    args = _mod._build_parser().parse_args(["alpha", "--percolate-root", str(tmp_path / "root")])
+    args = _mod._build_parser().parse_args(["alpha", "--percolate-root", str(tmp_path / "root"), *extra])
     return _mod._cmd_round(args), reached
 
 
@@ -76,6 +76,38 @@ def test_pushed_source_reaches_the_round(monkeypatch, tmp_path):
     source = _source_with_origin(tmp_path)
 
     rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == 0
+    assert len(reached) == 1
+
+
+def _stamp_mirror_with_foreign_head(tmp_path: Path) -> None:
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    _git(["init", "-q"], dest)
+    _git(["config", "user.email", "t@t.example"], dest)
+    _git(["config", "user.name", "t"], dest)
+    (dest / "f.txt").write_text("x", encoding="utf-8")
+    _git(["add", "--", "f.txt"], dest)
+    _git(["commit", "-q", "-m", "publish [source-head deadbeefcafe]"], dest)
+
+
+def test_source_lacking_the_mirror_stamp_refuses_before_the_round(monkeypatch, tmp_path, capsys):
+    source = _source_with_origin(tmp_path)
+    _stamp_mirror_with_foreign_head(tmp_path)
+
+    rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert "deadbeefcafe" in capsys.readouterr().err
+
+
+def test_allow_source_rollback_flag_reaches_the_round(monkeypatch, tmp_path):
+    source = _source_with_origin(tmp_path)
+    _stamp_mirror_with_foreign_head(tmp_path)
+
+    rc, reached = _run(monkeypatch, tmp_path, source, "--allow-source-rollback")
 
     assert rc == 0
     assert len(reached) == 1

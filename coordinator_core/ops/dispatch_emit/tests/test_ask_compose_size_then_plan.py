@@ -161,3 +161,22 @@ def test_stop_after_none_matches_head_for_a_sizing_input(tmp_path, monkeypatch):
         assert _compose(stop_after=None, **over) == _compose(compose=head_mod.compose_ask_script, **over)
     finally:
         sys.modules.pop("ask_compose_head", None)
+
+
+def test_scout_prompt_names_the_pm_turn_log_and_the_em_brief():
+    scout = next(ln for ln in _compose().splitlines() if "const _scouted" in ln)
+    assert "baton.pm_turns" in scout
+    assert "EM brief" in scout
+
+
+def test_pulled_plan_is_revised_once_and_regated_before_the_halt():
+    script = _compose()
+    pulled = script.index("_pulledEntry = ")
+    halt = script.index("plan-blitz reported no ready plan")
+    block = script[pulled:halt]
+    assert block.count("label: 'plan-revise'") == 1
+    assert block.count("await planBlitz(") == 1
+    assert "planPath: _revised?.plan_rel || _pulledEntry.planPath" in block
+    assert "_pulledEntry.prepGateReport" in block
+    assert "if (!_planRel && _pulledEntry)" in block
+    assert "_pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath)" in block

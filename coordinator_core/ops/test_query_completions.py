@@ -143,10 +143,32 @@ def test_root_flag_overrides_detected_root(tmp_path: Path):
     assert buf.getvalue() == "archive/completed/2026-07/g.md\n"
 
 
-def test_unsupported_flag_sort_fails_loud():
-    with mock.patch.object(query_completions, "_detect_root", return_value=Path(".")):
-        rc = query_completions.main(["--sort", "-created"])
-    assert rc == 1
+def test_sort_created_descending_orders_newest_first(tmp_path: Path):
+    _write_completion(tmp_path, "2026-07", "a", "title: A\nnature: fix\ncreated: 2026-01-01\n")
+    _write_completion(tmp_path, "2026-07", "b", "title: B\nnature: fix\ncreated: 2026-03-01\n")
+    _write_completion(tmp_path, "2026-07", "c", "title: C\nnature: fix\ncreated: 2026-02-01\n")
+    with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = query_completions.main(["--sort", "-created", "--format", "paths"])
+    assert rc == 0
+    assert buf.getvalue().splitlines() == [
+        "archive/completed/2026-07/b.md",
+        "archive/completed/2026-07/c.md",
+        "archive/completed/2026-07/a.md",
+    ]
+
+
+def test_sort_is_applied_before_limit(tmp_path: Path):
+    _write_completion(tmp_path, "2026-07", "a", "title: A\nnature: fix\ncreated: 2026-01-01\n")
+    _write_completion(tmp_path, "2026-07", "b", "title: B\nnature: fix\ncreated: 2026-03-01\n")
+    _write_completion(tmp_path, "2026-07", "c", "title: C\nnature: fix\ncreated: 2026-02-01\n")
+    with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = query_completions.main(["--sort=-created", "--limit", "1", "--format", "paths"])
+    assert rc == 0
+    assert buf.getvalue() == "archive/completed/2026-07/b.md\n"
 
 
 def test_unsupported_flag_older_than_fails_loud():

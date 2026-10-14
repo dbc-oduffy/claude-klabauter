@@ -354,12 +354,20 @@ def _derive_register_cli(
 
 
 def _read_path_or_stdin(path: str) -> str:
-    """The text of `path`, or of stdin when `path` is `-`."""
+    """The text of `path`, or of stdin when `path` is `-`. Stdin is decoded from raw bytes by BOM
+    sniff (UTF-16 BOM -> utf-16, else utf-8-sig) so a PowerShell pipe survives; a stdin without
+    `.buffer` falls back to its text read."""
     if path == "-":
         import sys
 
-        return sys.stdin.read()
-    return Path(path).read_text(encoding="utf-8")
+        buffer = getattr(sys.stdin, "buffer", None)
+        if buffer is None:
+            return sys.stdin.read().lstrip("﻿")
+        raw = buffer.read()
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return raw.decode("utf-16")
+        return raw.decode("utf-8-sig")
+    return Path(path).read_text(encoding="utf-8-sig")
 
 
 def _slug(text: str) -> str:
@@ -1195,8 +1203,8 @@ def route(
         # next_move is the line the EM pushes verbatim, so the no-ask rule lives here, not in prose.
         next_move = (
             f"Route to {resolved_route}. No PM ask at {resized_tshirt}: the engine has "
-            "accepted this sizing. Write it, then run emit-wave-fire --from-sizing <path> "
-            "and fire the Workflow line it prints, this turn."
+            "accepted this sizing. Write it with --write, then make the "
+            f"{_warp_fire.SUBMIT_WORKFLOW_NAME} submission call it prints, this turn."
         )
     else:
         next_move = f"Route to {resolved_route}."
@@ -2260,53 +2268,37 @@ def _open_routed_obligation(write_path: str) -> None:
     append_touch_claims([rel], session_id, root, kind=KIND_WRITE)
 
 
-def _load_emit_wave_fire():
-    """`coordinator/bin/emit-wave-fire.py`, loaded by path (its name is not importable)."""
-    import importlib.util
-    import sys
-
-    emitter = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "emit-wave-fire.py"
-    spec = importlib.util.spec_from_file_location("_emit_wave_fire", emitter)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {emitter}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _hand_to_plan_workflow(write_path: str, decision: dict[str, Any]) -> int:
-    """An accepted `route: plan` sizing at L or below fires its plan Workflow without an EM
-    step: run `emit-wave-fire --from-sizing` in-process and print only what it prints (the
-    one `Workflow` line). A refusal prints the decision JSON as before, the refusal on stderr,
-    and exits business-fail, so the sizing is never left routed with nothing fired silently."""
-    import contextlib
-    import io
+def _hand_to_engine_ask(write_path: str, decision: dict[str, Any]) -> int:
+    """An accepted plan/spec-dispatch sizing at S-L prints the one `coordinator:engine-ask`
+    submission call. A live run on the sizing refuses (decision JSON on stdout, the refusal
+    naming the call and the run on stderr, business-fail), the check the submit hook denies on (session id only; no transcript path here)."""
     import json
+    import os
     import sys
-    from datetime import datetime, timezone
+
+    from coordinator_core import warp_fire, warp_live
 
     repo_root = _cli_repo_root(write_path).resolve()
     target = Path(write_path) if Path(write_path).is_absolute() else repo_root / write_path
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     try:
-        module = _load_emit_wave_fire()
-    except (ImportError, OSError) as exc:
-        print(f"sizing-assemble: cannot load emit-wave-fire: {exc}", file=sys.stderr)
+        sizing_rel = target.resolve().relative_to(repo_root).as_posix()
+    except ValueError:
+        print(
+            f"sizing-assemble: {write_path} is outside {repo_root}; make the "
+            f"{warp_fire.SUBMIT_WORKFLOW_NAME} submission call by hand with a repo-relative sizing path",
+            file=sys.stderr,
+        )
         print(json.dumps(decision, indent=2, sort_keys=True))
         return EXIT_BUSINESS_FAIL
-    captured = io.StringIO()
-    with contextlib.redirect_stdout(captured):
-        rc = module.main([
-            "--from-sizing", target.resolve().relative_to(repo_root).as_posix(),
-            "--repo-root", str(repo_root),
-            "--trail-dir", str(repo_root / "state" / "plan-blitz" / run_id),
-        ])
-    if rc != 0:
-        print(captured.getvalue(), file=sys.stderr, end="")
+    fire = warp_fire.fire_command(sizing_rel)
+    live = warp_live.live_run_for_sizing(
+        repo_root, sizing_rel, session_id=os.environ.get("COORDINATOR_SESSION_ID") or None
+    )
+    if live:
+        print(f"sizing-assemble: run {live} is live on {sizing_rel}; not re-firing {fire}", file=sys.stderr)
         print(json.dumps(decision, indent=2, sort_keys=True))
         return EXIT_BUSINESS_FAIL
-    print(captured.getvalue(), end="")
+    print(fire)
     return EXIT_OK
 
 
@@ -2809,7 +2801,7 @@ def main(argv: list[str]) -> int:
             and decision["resolved_estimate"]["tshirt"] != "XS"
             and sizing_acceptance_skipped(decision["route"], decision["resolved_estimate"]["tshirt"])
         ):
-            return _hand_to_plan_workflow(write_path, decision)
+            return _hand_to_engine_ask(write_path, decision)
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK

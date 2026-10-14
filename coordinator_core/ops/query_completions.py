@@ -11,12 +11,10 @@ DoE ``query-records.js`` (``subprocess.run([*resolve_launchable(...), "--type",
 "completion", *argv])``, inheriting stdout). It now calls ``ceremony.records_query
 .query_records`` in-process — no ``node`` binary, no subprocess spawn, no
 ``resolve_launchable``/``_script_dir`` co-location lookup. Only the flag surface
-the old wrapper actually documented is supported: ``--since``, ``--where``,
-``--limit``, ``--format``, ``--root``. ``--sort`` and ``--older-than`` were listed
-in the bash oracle's usage banner but are NOT implemented by the native seam
-(``ceremony.records_query``'s own negative-spec) — passing either now fails loud
-with a clear message instead of silently behaving differently, per this repoint's
-brief.
+supported is ``--since``, ``--where``, ``--sort``, ``--limit``, ``--format``,
+``--root``. ``--older-than`` was listed in the bash oracle's usage banner but is
+NOT implemented by the native seam (``ceremony.records_query``'s own
+negative-spec) — passing it fails loud instead of silently behaving differently.
 
 Output parity:
     - ``--format json`` emits the bare ``json.dumps(records, indent=2)`` array
@@ -37,11 +35,11 @@ Output parity:
 Spec backlink: docs/plans/2026-05-19-completion-log-phase1-foundational-loop.md § Chunk 2
 
 Negative-spec:
-    - Does NOT implement ``--sort`` or ``--older-than`` -- the native seam this
-      module calls does not support either (see
-      ``coordinator_core.ops.ceremony.records_query``'s own negative-spec); a user
-      passing them gets a fail-loud stderr message and exit code 1, not a silent
-      behavioral difference from the old node-forwarding wrapper.
+    - Does NOT implement ``--older-than`` -- the native seam this module calls
+      does not support it (see ``coordinator_core.ops.ceremony.records_query``'s
+      own negative-spec); a user passing it gets a fail-loud stderr message and
+      exit code 1. ``--sort`` is passed through to the seam's ``sort``; this
+      module never sorts itself.
     - Does NOT implement ``--unattached``/``--fleet``/synthetic types -- out of
       scope, ``record_type`` is hard-pinned to ``"completion"``.
     - Does NOT reproduce query-records.js's end-of-run ``_printSkippedSummary()``
@@ -74,6 +72,7 @@ forwards to query-records.js.
 
 Usage:
   query-completions.sh [--since <date>] [--where "<expr>"]
+                       [--sort <field>|-<field>]
                        [--limit N] [--root <path>]
                        [--format markdown-list|json|paths]
 
@@ -82,12 +81,13 @@ Examples:
   query-completions.sh --where "status=pending-release"
   query-completions.sh --since 2026-05-01 --format json
 
-Unsupported (fails loud, does not silently differ): --sort, --older-than.
+--sort orders before --limit; a leading '-' sorts descending (newest first for -created).
+Unsupported (fails loud, does not silently differ): --older-than.
 Default --limit is 50 when omitted; pass --limit 0 for unlimited.
 """
 
-_SUPPORTED_FLAGS = {"--since", "--where", "--limit", "--format", "--root"}
-_UNSUPPORTED_FLAGS = {"--sort", "--older-than"}
+_SUPPORTED_FLAGS = {"--since", "--where", "--sort", "--limit", "--format", "--root"}
+_UNSUPPORTED_FLAGS = {"--older-than"}
 _VALID_FORMATS = ("markdown-list", "json", "paths")
 _DEFAULT_LIMIT = 50
 
@@ -180,14 +180,21 @@ def _parse_args(argv: List[str]) -> dict:
         else:
             normalized.append(a)
 
-    opts = {"since": None, "where": None, "limit": str(_DEFAULT_LIMIT), "format": "markdown-list", "root": None}
+    opts = {
+        "since": None,
+        "where": None,
+        "sort": None,
+        "limit": str(_DEFAULT_LIMIT),
+        "format": "markdown-list",
+        "root": None,
+    }
     i = 0
     while i < len(normalized):
         flag = normalized[i]
         if flag in _UNSUPPORTED_FLAGS:
             raise ValueError(
                 f"{flag} is not supported by the native records reader "
-                f"(query-records.js's --sort/--older-than have no seam equivalent yet). "
+                f"(query-records.js's --older-than has no seam equivalent yet). "
                 f"Supported flags: {', '.join(sorted(_SUPPORTED_FLAGS))}."
             )
         if flag not in _SUPPORTED_FLAGS:
@@ -239,6 +246,7 @@ def main(argv: List[str]) -> int:
             root,
             where=opts["where"],
             since=opts["since"],
+            sort=opts["sort"],
             limit=opts["limit"],
         )
     except SystemExit as exc:

@@ -42,6 +42,25 @@ from coordinator_core.content_root import read_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
 
+def claude_author_wrapper_source(own_root: Path) -> Path:
+    """The claude-author wrapper source both the Step 3.5b installer and doctor P-23 use.
+
+    The published engine's ``coordinator/bin/claude-author.py`` when a stamped
+    published root is registered and carries that file; otherwise ``own_root``'s.
+    Spawns nothing.
+    """
+    from coordinator_core.engine_root import published_engine_mirror_path
+    from coordinator_core.install.substrate import BYTE_COPIED_BIN_SOURCES
+
+    rel = BYTE_COPIED_BIN_SOURCES["claude-author"]
+    published = published_engine_mirror_path()
+    if published:
+        candidate = Path(published).joinpath(*rel)
+        if candidate.is_file():
+            return candidate
+    return Path(own_root).joinpath(*rel)
+
+
 @contextlib.contextmanager
 def env_overlay(overlay: Dict[str, str]) -> Iterator[None]:
     """Apply ``overlay`` onto ``os.environ`` for the duration of the block, then

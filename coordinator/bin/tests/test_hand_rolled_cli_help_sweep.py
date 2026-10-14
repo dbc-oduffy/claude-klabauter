@@ -299,6 +299,7 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "reap-sessions.py",
     "reaper-resting-batons.py",
     "reassess-goal-krs.py",
+    "reconcile-merge-conclude.py",
     "record-superseding-review.py",
     "refresh-queries.py",
     "refresh-roadmap-callout.py",

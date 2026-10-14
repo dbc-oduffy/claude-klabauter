@@ -365,6 +365,55 @@ def _final_assistant_text(transcript_path: str) -> str:
     return last_text
 
 
+_STEP0_RECONCILE_CONFLICT_RE = re.compile(
+    r"^RECONCILE-CONFLICT branch=\S+[ \t]*$", re.MULTILINE
+)
+
+
+def _block_strings(content) -> "list[str]":
+    if isinstance(content, str):
+        return [content]
+    out: "list[str]" = []
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                out.append(block["text"])
+            elif block.get("type") == "tool_result":
+                out.extend(_block_strings(block.get("content")))
+    return out
+
+
+def _is_tool_result_only(content) -> bool:
+    return (
+        isinstance(content, list)
+        and bool(content)
+        and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    )
+
+
+def _turn_has_step0_reconcile_conflict(transcript_path: str) -> bool:
+    """True when the current turn (after the last human user message) carries
+    the pinned Step 0 `RECONCILE-CONFLICT branch=<b>` outcome line; its
+    A/B/C ask is skill-mandated, never a manufactured blocker."""
+    turn: "list[str]" = []
+    for line in _tail_text(transcript_path).splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        msg = entry.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if entry.get("type") == "user" and not _is_tool_result_only(content):
+            turn = []
+            continue
+        turn.extend(_block_strings(content))
+    return any(_STEP0_RECONCILE_CONFLICT_RE.search(s) for s in turn)
+
+
 def _matches_manufactured_blocker(text: str) -> bool:
     return any(_any_pattern_matches(patterns, text) for patterns in _PATTERN_GROUPS)
 
@@ -692,6 +741,9 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     text = _strip_declared_operator_actions(text)
     if not text.strip():
+        return no_advisory()
+
+    if _turn_has_step0_reconcile_conflict(transcript_path):
         return no_advisory()
 
     if not _matches_manufactured_blocker(text):

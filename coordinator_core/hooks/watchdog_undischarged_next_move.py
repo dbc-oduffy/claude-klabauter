@@ -593,7 +593,8 @@ def _matches_next_action(next_action: str, tool_name, tool_input) -> bool:
         return False
     if kind == "Skill|Workflow":
         # Each arm checks its own ident: a routed sizing is discharged by the named skill or by
-        # the plan fire `emit-wave-fire --from-sizing` prints, never by an unrelated call.
+        # a Workflow whose script basename matches the route's `*.mjs` ident (`fire-*.mjs`), never by an
+        # unrelated call. Warp ask scripts are named `<run-id>.workflow.mjs` and do not match that ident.
         if not isinstance(tool_input, dict):
             return False
         idents = _ident.split("|")

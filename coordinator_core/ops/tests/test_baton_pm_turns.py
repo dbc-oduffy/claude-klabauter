@@ -109,6 +109,33 @@ def test_recent_window_defaults_to_the_session_mark_and_mark_never_lowers(tmp_pa
     assert [e["turn"] for e in PT.recent_window(session_id="sid-mark")] == [3]
 
 
+def test_bound_window_embeds_the_newest_quoted_turn_only(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-bw")
+    quoted = "please make the sizing embed one turn only"
+    PT.append_turn(quoted, session_id="sid-bw")
+    PT.append_turn("later unrelated chatter", session_id="sid-bw")
+    PT.append_turn("newest unrelated chatter", session_id="sid-bw")
+    win = PT.bound_window(f'the PM said "{quoted}"', session_id="sid-bw")
+    assert [e["turn"] for e in win] == [0] and win[0]["text"] == quoted
+
+
+def test_bound_window_falls_back_to_the_newest_turn_past_the_mark(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-bf")
+    for n in range(5):
+        PT.append_turn(f"turn number {n}", session_id="sid-bf")
+    assert [e["turn"] for e in PT.bound_window("a paraphrase", session_id="sid-bf")] == [4]
+    assert [e["turn"] for e in PT.bound_window(None, session_id="sid-bf")] == [4]
+    PT.mark_sized_through(4, session_id="sid-bf")
+    assert PT.bound_window("a paraphrase", session_id="sid-bf") == []
+
+
+def test_bound_window_head_cuts_an_oversized_turn(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-bc")
+    PT.append_turn("z" * (PT.SIZING_WINDOW_CHARS + 50), session_id="sid-bc")
+    win = PT.bound_window(None, session_id="sid-bc")
+    assert win[0]["text"] == "z" * PT.SIZING_WINDOW_CHARS and win[0]["truncated"] is True
+
+
 def test_unicode_line_separators_stay_inside_one_turn(tmp_path, monkeypatch):
     _session(tmp_path, monkeypatch, "sid-u")
     prompt = "a b c\u0085d"

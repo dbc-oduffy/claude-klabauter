@@ -121,3 +121,21 @@ def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkey
     assert not (records / ASK_TEXT_FILE).exists()
     assert not (run_dir / ASK_TEXT_FILE).exists()
     assert len(spawns) == _budget("raw_ask_submission"), [s.argv for s in spawns]
+
+
+def test_ask_with_inline_brief_reaches_the_real_emit(repo):
+    env = mod.evaluate(_payload(repo, {"ask": "add the widget", "brief": "BRIEF-MARK prefer small"}))
+    _assert_rewrite(env)
+    (run_dir,) = _run_dirs(repo)
+    assert any(
+        "BRIEF-MARK" in p.read_text(encoding="utf-8", errors="ignore")
+        for p in repo.rglob("*")
+        if p.is_file() and run_dir.name in str(p)
+    )
+
+
+def test_ask_with_a_missing_brief_file_is_denied_by_the_real_emit(repo):
+    env = mod.evaluate(_payload(repo, {"ask": "add the widget", "brief_file": "nope.md"}))
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "nope.md" in hso["permissionDecisionReason"]

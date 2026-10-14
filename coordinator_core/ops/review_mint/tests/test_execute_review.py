@@ -730,3 +730,76 @@ def test_small_diff_keeps_kira_and_delivery_verifier_in_the_wave():
     assert len(small) == len(large)
     assert any("delivery-verifier" in p for p in small)
 
+
+_OWNER_ROWS = [
+    {"id": "C9", "owner_repo": "coordinator-content-repo", "closure_key": "memo-1"},
+    {"id": "C8", "owner_repo": "ghost-repo"},
+]
+_OWNER_ROOTS = {"coordinator-content-repo": "/roots/doe"}
+
+
+def test_owner_repo_clause_names_registered_root_and_unregistered_not_met():
+    from coordinator_core.ops.review_mint.execute_review import owner_repo_clause
+
+    text = owner_repo_clause(_OWNER_ROWS, _OWNER_ROOTS)
+    assert "C9: owned by coordinator-content-repo, root /roots/doe (closure_key memo-1" in text
+    assert "at its HEAD" in text
+    assert "C8: owner ghost-repo is not on this machine" in text
+    assert "never report not_met for its absence" in text
+
+
+def test_owner_repo_clause_empty_rows_render_nothing():
+    from coordinator_core.ops.review_mint.execute_review import (
+        owner_repo_clause,
+        owner_repo_clause_js,
+    )
+
+    assert owner_repo_clause([], _OWNER_ROOTS) == ""
+    assert owner_repo_clause_js("[]").endswith("([])")
+
+
+def test_owner_repo_clause_js_carries_the_same_text_fragments():
+    from coordinator_core.ops import workflow_scaffold as ws
+    from coordinator_core.ops.review_mint import execute_review as er
+
+    js = er.owner_repo_clause_js("_rows")
+    for frag in (er._OWNER_HEAD, er._OWNER_OWNED, er._OWNER_ABSENT, er._OWNER_CLOSURE):
+        assert ws._js_string_literal(frag) in js
+    assert js.endswith("(_rows)")
+    assert "r.owner_root" in js
+
+
+def test_owner_repo_roots_maps_registry_keys_to_dashed_shortnames(monkeypatch):
+    from coordinator_core import machine_resolver
+    from coordinator_core.ops.review_mint.execute_review import owner_repo_roots
+
+    monkeypatch.setattr(
+        machine_resolver,
+        "merged_flat_registry",
+        lambda: {"repos.project_rag": "\\roots\\rag", "repos.empty": "", "coordinator.machine_slug": "m"},
+    )
+    assert owner_repo_roots() == {"project-rag": "/roots/rag"}
+
+
+def _delivery_and_review_prompts(**kw):
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    phases = compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["x.py"],
+        **kw,
+    )
+    return {t: b for t, b in phases}
+
+
+def test_delivery_prompt_carries_owner_clause_but_prep_and_reviewers_do_not():
+    with_rows = _delivery_and_review_prompts(owner_rows_js="_ownerRows")
+    without = _delivery_and_review_prompts()
+    assert "_ownerRows" in with_rows["Review wave"]
+    assert with_rows["Review wave"].count("_ownerRows") == 1
+    assert "_ownerRows" not in with_rows["Review prep"]
+    assert "_ownerRows" not in without["Review wave"]
+    assert with_rows["Review prep"] == without["Review prep"]
+

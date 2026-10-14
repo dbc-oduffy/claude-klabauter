@@ -22,6 +22,8 @@ from coordinator_core.git.run import GitResult, run_git
 
 from coordinator_core.ceremony_common.run import decide
 from coordinator_core.ceremony_common.run.decide import RECOMMENDATION, recommendation
+from coordinator_core.ceremony_common.run.runner import Hold
+from coordinator_core.git.reconcile_manifest import OUTCOME_CONFLICT_OPEN
 
 from .contract import DECISIONS_FILE, Decision
 
@@ -36,10 +38,13 @@ RECHECK_DAYS = 7
 
 _STALE_LINE = re.compile(r"^STALE-NEEDS-ABC branch=(?P<branch>\S+)", re.MULTILINE)
 _RECONCILE_LINE = re.compile(
-    r"^(?P<outcome>RECONCILE-CONFLICT|RECONCILE-MERGE-NOT-STARTED|RECONCILE-MERGE-COMMIT-REFUSED)"
+    r"^(?P<outcome>RECONCILE-CONFLICT-OPEN|RECONCILE-CONFLICT|RECONCILE-MERGE-NOT-STARTED"
+    r"|RECONCILE-MERGE-COMMIT-REFUSED)"
     r" branch=(?P<branch>\S+)\s*$"
 )
 _DEFERRABLE = frozenset({"RECONCILE-CONFLICT", "RECONCILE-MERGE-NOT-STARTED"})
+HOLD_REASON = "reconcile-open"
+HELD_STAGES: frozenset[str] = frozenset({"normalize", "triage", "memos"})
 _EVIDENCE_KEY = re.compile(r"branch=(?P<branch>\S+) outcome=(?P<outcome>\S+)")
 _PATH_MARKERS = ("CONFLICT-PATHS", "STAGED-PATHS")
 STALE_RULE_POINT = "step0-stale-branch"
@@ -162,16 +167,36 @@ def _previously_decided(run_dir: Path, branch: str, outcome: str) -> bool:
 def step0_reconcile_outcome(step: Any, result: Any, *, repo_root: Path, run_dir: Path) -> bool | str:
     """Step 0 exit 3: defer a conflict or a never-started merge once; the second sight fails the run.
 
+    An open merge is neither: the rule records `resolve-in-run` and returns a `Hold`, so the
+    committing stages wait while one resolver group edits the manifest's files and finish
+    concludes the merge.
+
     Writes no tracked file, starts no child and commits nothing.
     """
     last = next((ln for ln in reversed((result.stdout or "").splitlines()) if ln.strip()), "")
     match = _RECONCILE_LINE.match(last.strip())
-    if match is None or match["outcome"] not in _DEFERRABLE:
+    if match is None or (match["outcome"] not in _DEFERRABLE and match["outcome"] != OUTCOME_CONFLICT_OPEN):
         return False
     branch, outcome = match["branch"], match["outcome"]
     run_dir = Path(run_dir)
     paths = _paths_after_marker(result.stderr or "")
     evidence = f"branch={branch} outcome={outcome} paths={','.join(paths)}"
+    if outcome == OUTCOME_CONFLICT_OPEN:
+        decide.record(
+            run_dir,
+            [
+                Decision(
+                    point_id=RECONCILE_RULE_POINT,
+                    question=f"Reconcile of {branch} with origin/main left the merge open; what now?",
+                    decision="resolve-in-run",
+                    decided_by="rule",
+                    rule="step0-reconcile-outcome",
+                    rationale="A file-only resolver edits the listed paths; finish concludes the merge.",
+                    evidence=evidence,
+                )
+            ],
+        )
+        return Hold(HOLD_REASON)
     repeated = _previously_decided(run_dir, branch, outcome)
     decide.record(
         run_dir,

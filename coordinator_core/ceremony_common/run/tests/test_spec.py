@@ -46,6 +46,13 @@ def test_registry_keys_exact():
     assert set(spec.CEREMONY_SPECS) == {"workday_start", "workday_complete", "workweek_start"}
 
 
+@pytest.mark.parametrize("name", sorted(spec.CEREMONY_SPECS))
+def test_every_registered_spec_loads(name):
+    loaded = spec.load_spec(name)
+    assert isinstance(loaded, spec.CeremonySpec)
+    assert loaded.name.replace("-", "_") == name
+
+
 def test_absent_spec_module_is_a_named_error(monkeypatch):
     monkeypatch.setattr(spec, "CEREMONY_SPECS", {"ghost": "coordinator_core.no_such_ceremony.spec:SPEC"})
     with pytest.raises(spec.SpecUnavailable, match="ghost"):

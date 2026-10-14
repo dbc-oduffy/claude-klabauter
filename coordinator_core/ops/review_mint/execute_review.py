@@ -227,6 +227,78 @@ def em_owned_clause(em_owned_rows: Optional[List[str]]) -> str:
     )
 
 
+_OWNER_HEAD = (
+    "\nOwner-repo rows (delivered in another repo; this run's diff holds no hunk for them):"
+)
+_OWNER_OWNED = (
+    "\n- {id}: owned by {owner_repo}, root {root}{closure}. Judge the row with "
+    "`git -C {root}` at its HEAD (log and files), never from this repo's diff."
+)
+_OWNER_CLOSURE = (
+    " (closure_key {closure_key}: for a deliverable key, also the commits whose Deliverable-Id "
+    "trailer equals its id)"
+)
+_OWNER_ABSENT = (
+    "\n- {id}: owner {owner_repo} is not on this machine: its repo is unreadable here. Judge "
+    "nothing for the row and never report not_met for its absence."
+)
+
+
+def owner_repo_roots() -> Dict[str, str]:
+    """Registry ``repos.*`` map as ``{shortname: posix root}`` (underscores in the key become
+    dashes in the shortname). One registry read, no spawn; empty when no registry exists."""
+    from coordinator_core.machine_resolver import merged_flat_registry
+
+    return {
+        key[len("repos."):].replace("_", "-"): val.replace("\\", "/")
+        for key, val in merged_flat_registry().items()
+        if key.startswith("repos.") and isinstance(val, str) and val
+    }
+
+
+def owner_repo_clause(rows: List[dict], roots: Dict[str, str]) -> str:
+    """Prompt clause for rows owned by another repo (``{id, owner_repo, closure_key?}``): the
+    verifier judges them at the owner's HEAD, and an owner absent from ``roots`` is judged
+    nothing (never not_met). Mirrored text-for-text by ``owner_repo_clause_js``; the roots
+    lookup differs (here by lowercased ``owner_repo``, there by the stage-filled ``owner_root``)."""
+    if not rows:
+        return ""
+    out = _OWNER_HEAD
+    for row in rows:
+        owner = row["owner_repo"]
+        root = roots.get(owner.lower())
+        closure = (
+            _OWNER_CLOSURE.replace("{closure_key}", row["closure_key"])
+            if row.get("closure_key")
+            else ""
+        )
+        text = _OWNER_OWNED if root else _OWNER_ABSENT
+        out += (
+            text.replace("{closure}", closure)
+            .replace("{id}", row["id"])
+            .replace("{owner_repo}", owner)
+            .replace("{root}", root or "")
+        )
+    return out
+
+
+def owner_repo_clause_js(rows_js: str) -> str:
+    """JS expression yielding ``owner_repo_clause`` for the runtime array ``rows_js`` of
+    ``{id, owner_repo, owner_root, closure_key}``; an empty ``owner_root`` renders the
+    unreadable text."""
+    lit = _js_string_literal
+    return (
+        f"((rs) => rs.length ? {lit(_OWNER_HEAD)} + rs.map(r => "
+        f"(r.owner_root ? {lit(_OWNER_OWNED)} : {lit(_OWNER_ABSENT)})"
+        f".split('{{closure}}').join(r.closure_key ? "
+        f"{lit(_OWNER_CLOSURE)}.split('{{closure_key}}').join("
+        f"typeof r.closure_key === 'string' ? r.closure_key : JSON.stringify(r.closure_key)) : '')"
+        f".split('{{id}}').join(r.id).split('{{owner_repo}}').join(r.owner_repo)"
+        f".split('{{root}}').join(r.owner_root ?? '')).join('') : '')"
+        f"({rows_js})"
+    )
+
+
 _ANCESTRY_RULE = (
     " Decide ancestry with `git merge-base --is-ancestor <sha> <base>`: exit 0 is an ancestor, "
     "exit 1 is not, any other exit is unknown. Never infer non-ancestry from a sha's absence "
@@ -251,6 +323,7 @@ def compose_execute_review(
     host_degraded: bool = False,
     slice_key_js: Optional[str] = None,
     slice_identity_sha: Optional[str] = None,
+    owner_rows_js: Optional[str] = None,
     review_terminal_sha: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
@@ -561,6 +634,11 @@ def compose_execute_review(
             + (
                 " + '\\nsidecar_path: ' + (_reviewPrep?.whole_diff_sidecars?.delivery ?? 'NONE')"
                 if is_delivery_verifier
+                else ""
+            )
+            + (
+                f" + {owner_repo_clause_js(owner_rows_js)}"
+                if is_delivery_verifier and owner_rows_js
                 else ""
             )
         )

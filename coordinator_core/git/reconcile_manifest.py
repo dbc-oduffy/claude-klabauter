@@ -68,8 +68,12 @@ def write(
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {"schema": SCHEMA, "merge_head": merge_head, "branch": branch, "paths": norm}
     tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, target)
+    try:
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return target
 
 

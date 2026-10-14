@@ -1812,7 +1812,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                 try:
                     _scope.touch(
                         sid, abs_path, path_repo_root, root=path_repo_root,
-                        kind=_touch_record.KIND_WRITE,
+                        kind=_touch_record.KIND_WRITE, refresh_activity=False,
                     )
                 except Exception as exc:
                     _log().debug(
@@ -1820,6 +1820,22 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                         "%r: %s",
                         abs_path, exc,
                     )
+            # One last_activity meta.json rewrite for the whole batch, not one
+            # per path (the rewrite was ~half of each touch's cost).
+            # Paths may resolve to different repo roots (each its own session
+            # dir), so refresh once per distinct root.
+            try:
+                for batch_root in dict.fromkeys(r for r, _ in resolved_paths):
+                    batch_sdir = _session_core.session_dir(sid, batch_root)
+                    if batch_sdir:
+                        _session_core.update_meta_field(
+                            batch_sdir, "last_activity", _session_core.now_iso()
+                        )
+            except Exception as exc:
+                _log().debug(
+                    "coordinator_core.ipc: batch last_activity refresh failed: "
+                    "%s", exc,
+                )
 
         if not resolved_paths:
             return result

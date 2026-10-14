@@ -213,5 +213,31 @@ def test_help_prints_multiline_usage_with_register_shape(repo, capsys):
     assert "sources" in register_block and "{doc, ref}" in register_block
 
 
+class _ByteStdin:
+    def __init__(self, data: bytes):
+        import io
+
+        self.buffer = io.BytesIO(data)
+
+    def read(self):  # the pre-fix path: text read, BOM and code page unhandled
+        return self.buffer.read().decode("cp1252", errors="replace")
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16"])
+def test_derive_register_reads_powershell_piped_scout_register(turns_repo, monkeypatch, encoding):
+    phrase = "use the _shape_ that comes back from the hairless build"
+    text = (
+        f"register_rows:\r\n  - id: a\r\n    source_text: \"{phrase}\"\r\n    surface: cli\r\n"
+        "verbatim_accounting:\r\n  2: \"unrelated — chat\"\r\n"
+    )
+    monkeypatch.setattr("sys.stdin", _ByteStdin(text.encode(encoding)))
+    argv = ["--derive-register", "--scout-register", "-", "--write", _REL]
+    assert sa.main(argv) == 0
+    rows = _register_of(turns_repo)["rows"]
+    assert any(r["surface"] == "cli" and phrase in r["source_text"] for r in rows)
+    unrelated = _register_of(turns_repo).get("unrelated_turns", [])
+    assert [u["turn"] for u in unrelated] == [2]
+
+
 def test_derive_register_without_pm_words_is_refused(repo):
     assert sa.main(["--derive-register", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL

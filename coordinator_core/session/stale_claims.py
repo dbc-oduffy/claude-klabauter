@@ -37,16 +37,22 @@ enumerator's output. ``resolve_claim_state`` itself stays DR-084 dual-tolerant
 on the mirror side (``claimed_by`` canonical, ``consumed_by`` legacy fallback,
 ``claimed_by``-wins-on-both-present) — see that module's own docstring.
 
+Mirror claimers are read through ``handoff_claim_index`` (signature-revalidated); only
+ledger-named handoffs go through ``resolve_claim_state`` on every call.
+
 Spec backlink: cross-repo/inbox/2026-07-23-claude-klabauter-em-wsc-step0-fails-open-crash-recovery.md
 Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Set
 
-from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
+from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.fleet._common import collect_live_handoff_paths
+from coordinator_core.session import handoff_claim_index, record_homes
 from coordinator_core.session.liveness import session_live
 
 
@@ -59,6 +65,21 @@ class StaleClaimHandoff(NamedTuple):
 def _claimer_sid(handoff_path: str, repo_root: Optional[str] = None) -> str:
     state = resolve_claim_state(handoff_path, repo_root=repo_root)
     return state.holder or ""
+
+
+def _ledger_names(common_dir: Optional[Path]) -> Set[str]:
+    """Names of handoffs with a claim-ledger entry; empty set when the ledger dir is unreadable.
+
+    The ``Path("_")`` argument is a placeholder: only ``.parent`` (the ledger dir) is used.
+    """
+    if common_dir is None:
+        return set()
+    try:
+        ledger_dir = handoff_claim_dir(common_dir, Path("_")).parent
+        with os.scandir(ledger_dir) as it:
+            return {entry.name for entry in it}
+    except OSError:
+        return set()
 
 
 def list_stale_claim_handoffs(repo_root: Optional[str] = None) -> List[StaleClaimHandoff]:
@@ -89,8 +110,22 @@ def list_stale_claim_handoffs(repo_root: Optional[str] = None) -> List[StaleClai
     except OSError:
         return stale
 
+    try:
+        common_dir: Optional[Path] = git_common_dir(root)
+    except RuntimeError:
+        common_dir = None
+    ledger = _ledger_names(common_dir)
+    mirror = handoff_claim_index.mirror_holders(
+        [p for p in handoff_paths if p.name not in ledger],
+        handoffs_dir=Path(record_homes.home_dir(str(root), "handoffs")),
+        cache_path=handoff_claim_index.cache_path_for(common_dir) if common_dir else None,
+    )
+
     for p in handoff_paths:
-        sid = _claimer_sid(str(p), repo_root=cwd_str)
+        if p.name in ledger:
+            sid = _claimer_sid(str(p), repo_root=cwd_str)
+        else:
+            sid = mirror.get(p) or ""
         if not sid:
             continue
         if not session_live(sid, cwd_str):

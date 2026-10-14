@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.git.git_state import IndexParseError
+from coordinator_core.git.git_state import IndexParseError, UnmergedIndexEntryError, read_index
 from coordinator_core.ops import workday_start_step0_reconcile as mod
 
 
@@ -56,13 +56,13 @@ def _stub_probes(monkeypatch, merge_in_progress: bool, index_readable: bool, rec
             recorder.append("probe:_merge_in_progress")
         return merge_in_progress
 
-    def fake_index_readable(repo_root):
+    def fake_index_state(repo_root):
         if recorder is not None:
-            recorder.append("probe:_index_readable")
-        return index_readable
+            recorder.append("probe:_index_state")
+        return "readable" if index_readable else "unparseable"
 
     monkeypatch.setattr(mod, "_merge_in_progress", fake_merge_in_progress)
-    monkeypatch.setattr(mod, "_index_readable", fake_index_readable)
+    monkeypatch.setattr(mod, "_index_state", fake_index_state)
     monkeypatch.setattr(mod, "show_toplevel", lambda: str(Path.cwd()))
 
 
@@ -142,8 +142,9 @@ def test_non_spool_staged_path_commits_nothing_and_names_it(monkeypatch, capsys)
 
 
 def test_index_parse_error_inside_real_index_readable_classifies_as_conflict(monkeypatch, tmp_path, capsys):
-    """`_index_readable` itself must catch `IndexParseError` from
-    `read_index` and classify as `RECONCILE-CONFLICT`, not propagate."""
+    """`_index_state` itself must catch `IndexParseError` from
+    `read_index` and classify as `RECONCILE-CONFLICT`, not propagate; an
+    unparseable index still prints the splitIndex caveat."""
     _install_failing_merge_run(monkeypatch)
     monkeypatch.setattr(mod, "_merge_in_progress", lambda repo_root: True)
 
@@ -154,9 +155,60 @@ def test_index_parse_error_inside_real_index_readable_classifies_as_conflict(mon
     monkeypatch.setattr(mod, "show_toplevel", lambda: str(tmp_path))
 
     rc = mod.main([])
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert rc == 3
-    assert "RECONCILE-CONFLICT branch=work/testmachine/2026-01-01" in out
+    assert "RECONCILE-CONFLICT branch=work/testmachine/2026-01-01" in captured.out
+    assert "core.splitIndex" in captured.err
+
+
+def test_unmerged_entry_conflict_prints_no_splitindex_caveat(monkeypatch, tmp_path, capsys):
+    _install_failing_merge_run(monkeypatch)
+    monkeypatch.setattr(mod, "_merge_in_progress", lambda repo_root: True)
+
+    def raising_read_index(repo_root, fresh=True):
+        raise UnmergedIndexEntryError("entry 'a' is unmerged (stage 2)")
+
+    monkeypatch.setattr(mod, "read_index", raising_read_index)
+    monkeypatch.setattr(mod, "show_toplevel", lambda: str(tmp_path))
+
+    rc = mod.main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-CONFLICT branch=" in captured.out
+    assert "Branch Reconciliation Decision" in captured.err
+    assert "core.splitIndex" not in captured.err
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_real_conflicted_repo_raises_unmerged_subclass(tmp_path):
+    def git(*args, check=True):
+        return subprocess.run(
+            ["git", *args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=check,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (tmp_path / "f.txt").write_text("base\n")
+    git("add", "f.txt")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "other")
+    (tmp_path / "f.txt").write_text("other\n")
+    git("commit", "-q", "-am", "other")
+    git("checkout", "-q", "main")
+    (tmp_path / "f.txt").write_text("main\n")
+    git("commit", "-q", "-am", "main")
+    assert git("merge", "other", check=False).returncode != 0
+
+    with pytest.raises(UnmergedIndexEntryError):
+        read_index(tmp_path, fresh=True)
+    assert mod._index_state(tmp_path) == "unmerged"
 
 
 def test_root_resolution_from_subdirectory_classifies_identically(monkeypatch, tmp_path):
@@ -171,7 +223,7 @@ def test_root_resolution_from_subdirectory_classifies_identically(monkeypatch, t
         return True
 
     monkeypatch.setattr(mod, "_merge_in_progress", fake_merge_in_progress)
-    monkeypatch.setattr(mod, "_index_readable", lambda repo_root: False)
+    monkeypatch.setattr(mod, "_index_state", lambda repo_root: "unparseable")
     monkeypatch.setattr(mod, "show_toplevel", lambda: str(tmp_path))
 
     rc = mod.main([])

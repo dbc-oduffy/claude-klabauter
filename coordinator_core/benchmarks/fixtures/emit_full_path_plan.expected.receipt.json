@@ -1,0 +1,13 @@
+{
+  "emitted_at": "<EMITTED_AT>",
+  "findings": [
+    {
+      "code": "absent-edit-target",
+      "message": "21 edit-kind writes: path(s) absent from the tree -- each is either created by its row or a surface deleted since the row was authored; check the second kind before dispatching: C0: coordinator_core/git/reconcile_manifest.py, C0: coordinator_core/git/tests/test_reconcile_manifest.py, C1: coordinator_core/ops/workday_start_step0_reconcile.py, C1: coordinator_core/ops/test_workday_start_step0_reconcile.py, C1: coordinator_core/ops/test_workday_start_step0_reconcile_classify.py, C1: coordinator/bin/workday-start-step0-reconcile.py, C1: coordinator/bin/workday-start-step0.py, C2a: coordinator_core/ops/reconcile_merge_conclude.py, C2a: coordinator_core/ops/test_reconcile_merge_conclude.py, C2a: coordinator_core/tests/test_no_pathspec_less_commit.py (+11 more)",
+      "severity": "WARN"
+    }
+  ],
+  "plan": "emit-full-path-plan.md",
+  "session_id": "<SESSION_ID>",
+  "sha256": "55e75f6ffe937b60a34dc65801e05b1ebdbc5b8ea829fda944ef50da73b900c2"
+}

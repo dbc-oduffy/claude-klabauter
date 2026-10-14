@@ -421,3 +421,33 @@ def test_branch_scratch_allowed_but_its_push_denied(repo):
     assert _check(repo, "git branch scratch/safety-1") is None
     assert _denied(_check(repo, "git push origin scratch/safety-1"))
     assert _denied(_check(repo, "git branch fix/foo"))
+
+
+@pytest.fixture
+def scratch_clone(repo):
+    clone = repo / "scratch" / "clone"
+    (clone / ".git").mkdir(parents=True)
+    (clone / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    return clone
+
+
+@pytest.mark.parametrize(
+    "create",
+    ["git checkout -b feature-x", "git switch -c feature-x", "git branch feature-x"],
+)
+def test_scratch_clone_allows_branch_creation(repo, scratch_clone, create):
+    assert _check(scratch_clone, create) is None
+    assert _check(repo, f"cd scratch/clone && {create}") is None
+    assert _check(repo, create.replace("git ", "git -C scratch/clone ", 1)) is None
+
+
+def test_scratch_clone_push_still_denied(repo, scratch_clone):
+    assert _denied(_check(scratch_clone, "git push origin feature-x"))
+
+
+def test_scratch_dir_under_non_repo_still_denies(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "_machine", lambda: "machine-a")
+    proj = tmp_path / "scratch" / "proj"
+    (proj / ".git").mkdir(parents=True)
+    (proj / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    assert _denied(_check(proj, "git checkout -b feature-x"))

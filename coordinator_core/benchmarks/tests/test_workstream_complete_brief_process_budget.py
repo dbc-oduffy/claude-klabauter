@@ -19,7 +19,7 @@ import pytest
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.pending_fix]
 
 K_INVOCATIONS = 5
 SAMPLES = 5

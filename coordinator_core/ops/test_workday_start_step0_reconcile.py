@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git import reconcile_manifest
+from coordinator_core.ops import workday_start_step0_reconcile as step0
 from coordinator_core.ops.workday_start_step0_reconcile import main
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
@@ -108,7 +110,7 @@ def test_reconciled_merge_when_both_sides_advance_without_conflict(tmp_path, cap
     assert (clone / "local-only.txt").exists()
 
 
-def test_reconcile_conflict_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
+def test_reconcile_conflict_holds_merge_open_and_writes_manifest(tmp_path, capsys, monkeypatch):
     origin, clone = _make_origin_and_clone(tmp_path)
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
     (clone / "README.md").write_text("local edit\n")
@@ -129,13 +131,38 @@ def test_reconcile_conflict_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
     rc = main([])
     captured = capsys.readouterr()
     assert rc == 3
-    assert "RECONCILE-CONFLICT branch=work/testmachine/2026-01-01" in captured.out
-    assert "Branch Reconciliation Decision" in captured.err
+    assert captured.out.strip().splitlines()[-1] == (
+        "RECONCILE-CONFLICT-OPEN branch=work/testmachine/2026-01-01"
+    )
+    assert "CONFLICT-PATHS\nREADME.md" in captured.err
 
-    status = _git(clone, "status", "--porcelain=v1")
-    assert status.stdout.strip() == ""
     merge_head = clone / ".git" / "MERGE_HEAD"
-    assert not merge_head.exists()
+    assert merge_head.exists()
+    manifest = reconcile_manifest.read(clone)
+    assert manifest is not None
+    assert manifest.paths == ("README.md",)
+    assert manifest.merge_head == merge_head.read_text().strip()
+    assert manifest.branch == "work/testmachine/2026-01-01"
+
+
+def test_reconcile_conflict_without_parsed_paths_aborts(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "README.md", "upstream edit\n")
+    (clone / "README.md").write_text("local edit\n")
+    _git(clone, "add", "README.md")
+    _git(clone, "commit", "-q", "-m", "local conflicting edit")
+    monkeypatch.setattr(step0, "_conflict_paths", lambda _output: [])
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-CONFLICT branch=work/testmachine/2026-01-01" in captured.out
+    assert "RECONCILE-CONFLICT-OPEN" not in captured.out
+    assert "Branch Reconciliation Decision" in captured.err
+    assert not (clone / ".git" / "MERGE_HEAD").exists()
+    assert reconcile_manifest.read(clone) is None
+    assert _git(clone, "status", "--porcelain=v1").stdout.strip() == ""
 
 
 def _diverge(tmp_path: Path, origin: Path, clone: Path, filename: str, upstream: str) -> None:
@@ -244,7 +271,7 @@ def test_conflict_paths_are_listed_on_stderr(tmp_path, capsys, monkeypatch):
     rc = main([])
     captured = capsys.readouterr()
     assert rc == 3
-    assert "RECONCILE-CONFLICT" in captured.out
+    assert "RECONCILE-CONFLICT-OPEN" in captured.out
     assert captured.err.split("CONFLICT-PATHS\n", 1)[1].splitlines()[0] == "README.md"
 
 

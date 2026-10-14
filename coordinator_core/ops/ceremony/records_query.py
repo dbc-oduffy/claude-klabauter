@@ -38,9 +38,10 @@ Negative-spec:
     pair by construction, not by a parity test alone (see
     ``coordinator_core/ops/ceremony/tests/test_records_query.py``'s
     ``TestLegacyProseSignalParity`` for the drift-guard regardless).
-  - ``query_records`` does NOT implement ``--older-than`` or ``--sort`` — out of
-    scope for the single-type renderer call sites it serves; add if a caller needs
-    them (same ``coordinator_core.ops.records_query`` helpers back them already).
+  - ``query_records`` does NOT implement ``--older-than`` — out of scope for the
+    single-type renderer call sites it serves; add if a caller needs it (the same
+    ``coordinator_core.ops.records_query`` helpers back it already). ``sort`` is
+    supported via ``_sort_records``.
   - ``query_unattached_all`` (below) ports the ``--unattached`` multi-type union
     lens — ``coordinator_core.ops.records_query.UNATTACHED_TYPES`` /
     ``_query_unattached_all`` verbatim, same no-second-copy rationale as the rest
@@ -72,6 +73,7 @@ from coordinator_core.ops.records_query import (
     _parse_since,
     _parse_where,
     _query_unattached_all,
+    _sort_records,
 )
 
 
@@ -82,6 +84,7 @@ def query_records(
     where: Optional[str] = None,
     since: Optional[str] = None,
     limit: int = 0,
+    sort: Optional[str] = None,
 ) -> list[dict]:
     """Enumerate + since/where-filter ``record_type`` records under ``worktree_root``.
 
@@ -104,6 +107,8 @@ def query_records(
         limit: max records after since/where filtering. ``<= 0`` means unlimited —
                mirrors ``query-records.js``'s ``opts.limit && opts.limit > 0`` guard
                (query-records.js:1509-1511).
+        sort: optional field name (``-`` prefix = descending), applied after
+              filtering and before ``limit`` via ``_sort_records``.
 
     Returns:
         A list of ``{"path": <repo-relative str>, "frontmatter": <dict>}`` dicts.  Files
@@ -152,6 +157,9 @@ def query_records(
         return []
 
     results = filter_records(results, where, since)
+
+    if sort:
+        results = _sort_records(results, sort)
 
     if limit > 0:
         results = results[:limit]

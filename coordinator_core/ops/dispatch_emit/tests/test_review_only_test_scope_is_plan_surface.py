@@ -46,10 +46,20 @@ def test_review_applied_edits_stay_in_the_edited_set_scoped_to_the_surface():
     assert "git ls-files --others" not in prompt
 
 
-def test_normal_run_listing_keeps_the_unscoped_worktree_forms():
-    listing = _edited_set_listing(_BASE, ["a/b.py"])
+def test_a_path_outside_the_plan_is_in_no_listing_and_its_test_candidate_is():
+    prompt = _terminal_prompt()
 
-    assert "`git diff --name-only HEAD` and `git ls-files --others --exclude-standard`" in listing
+    assert "peer_module.py" not in prompt
+    assert "tests/test_spine_read.py" in prompt
+
+
+def test_normal_run_worktree_listings_carry_the_surface_pathspec():
+    listing = _edited_set_listing(_BASE, _WRITES)
+
+    for cmd in ("git diff --name-only HEAD", "git ls-files --others --exclude-standard"):
+        found = re.findall(rf"`{cmd} -- [^`]*`", listing)
+        assert found, listing
+        assert all(all(p in l for p in _WRITES) for l in found)
 
 
 def test_out_of_scope_failures_are_not_attributed_to_the_plan():
@@ -59,11 +69,12 @@ def test_out_of_scope_failures_are_not_attributed_to_the_plan():
     assert "never count it in tests_failed" in prompt
 
 
-def test_no_declared_surface_omits_the_committed_range_instead_of_widening_it():
+def test_no_declared_surface_emits_no_listing_at_all():
     listing = _edited_set_listing(_BASE, [])
 
     assert _BASE not in listing
-    assert listing.startswith("`git diff --name-only HEAD`")
+    assert "git diff" not in listing and "ls-files" not in listing
+    assert "No edited-set listing" in listing
 
 
 def test_review_only_no_surface_lists_only_the_committed_range():

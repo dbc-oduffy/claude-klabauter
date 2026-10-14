@@ -7,7 +7,10 @@ verification runs are capped at one (the falsifier run); a second routes through
 heredoc-fed (``python -``) code that imports a top-level package of the repo under
 test or loads one of its ``.py`` files by quoted path, or ``python <x>.py`` whose
 script sits outside the repo under a temp or scratch(pad) dir (a probe; installed
-tools outside the repo are not). A ``-c`` importing
+tools outside the repo are not). ``python -m
+coordinator_core.benchmarks.measure [opts] -- <argv>`` is a verification run only when
+``<argv>`` is itself a pytest run (the same scoped exemption applies); any other measured
+argv is neither counted nor denied. A ``-c`` importing
 only stdlib/third-party and an in-repo ``.py`` tool are not counted. Package
 detection is one ``os.scandir`` of the repo root, memoized per root for the
 process; a package added mid-process is not seen. The Write/Edit half (a ``.py`` file under
@@ -63,7 +66,8 @@ _DASH_M_BUNDLED_RE = re.compile(r"^-m(.+)$")
 
 _DENY_BODY = (
     "A second verification run after an executor is not the EM's. "
-    "Dispatch a coordinator:test-runner."
+    "Dispatch a coordinator:test-runner. "
+    "To measure, run python -m coordinator_core.benchmarks.measure -- <argv>."
 )
 
 
@@ -165,6 +169,21 @@ def _is_probe_script(path: str, repo_root: str, cwd: str) -> bool:
     return full.startswith(tmp + os.sep) or "scratchpad" in parts or "scratch" in parts
 
 
+_MEASURE_MODULE = "coordinator_core.benchmarks.measure"
+
+
+def _measure_tail(rest: List[str], start: int) -> Optional[List[str]]:
+    """Tokens after the first ``--`` at or past ``start`` (just after ``-m measure``), or None."""
+    for j in range(start, len(rest)):
+        if rest[j] == "--":
+            return rest[j + 1:]
+    return None
+
+
+def _measured_pytest(tail: Optional[List[str]]) -> bool:
+    return bool(tail) and _pytest_targets(tail) is not None
+
+
 def _python_verification(rest: List[str], repo_root: str, cwd: str, stdin_code: str = "") -> bool:
     i = 0
     while i < len(rest):
@@ -172,9 +191,13 @@ def _python_verification(rest: List[str], repo_root: str, cwd: str, stdin_code: 
         if tok == "-" or tok.startswith("<<"):
             return _code_imports_repo(stdin_code, repo_root)
         if tok == "-m":
+            if i + 1 < len(rest) and rest[i + 1] == _MEASURE_MODULE:
+                return _measured_pytest(_measure_tail(rest, i + 2))
             return i + 1 < len(rest) and rest[i + 1] == "pytest"
         m = _DASH_M_BUNDLED_RE.match(tok)
         if m:
+            if m.group(1) == _MEASURE_MODULE:
+                return _measured_pytest(_measure_tail(rest, i + 1))
             return m.group(1) == "pytest"
         if tok == "-c":
             return i + 1 < len(rest) and _code_imports_repo(rest[i + 1], repo_root)
@@ -258,6 +281,8 @@ def _pytest_targets(working: List[str]) -> Optional[List[str]]:
     elif _PYTHON_RE.match(head):
         rest = None
         for i, tok in enumerate(working[1:], 1):
+            if tok == "-m" and i + 1 < len(working) and working[i + 1] == _MEASURE_MODULE:
+                return _pytest_targets(_measure_tail(working, i + 2) or [])
             if tok == "-m" and i + 1 < len(working) and working[i + 1] == "pytest":
                 rest = working[i + 2:]
                 break
@@ -299,7 +324,7 @@ def _is_scoped_target(target: str, repo_root: str, cwd: str) -> bool:
         return False
     if path.endswith(".py"):
         return True
-    return os.path.isdir(full) and "tests" in full[len(root):].split(os.sep)
+    return os.path.isdir(full) and "tests" in Path(full).relative_to(root).parts
 
 
 def is_scoped_pytest(cmd: str, repo_root: str, cwd: str) -> bool:

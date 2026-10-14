@@ -145,6 +145,35 @@ def test_on_and_reads_never_refused(box, cmd):
     assert bash_guard.check(_bash(cmd, box[1])) is None
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "python -m pytest coordinator_core/tests/test_doctrine_edit_gate_opt_in.py -p no:cacheprovider -q > out.txt  # off",
+        "python -m pytest coordinator_core/tests/test_doctrine_gate_off_refused.py -p no:cacheprovider -q > out.txt",
+        "sed -i 's/a/b/' coordinator_core/tests/test_doctrine_edit_gate_opt_in.py  # 0 failures",
+        r"tee scratch\doctrine_edit_gate.log < coordinator_core\tests\test_doctrine_edit_gate_opt_in.py  # off",
+    ],
+)
+def test_command_naming_gate_test_path_never_refused(box, cmd):
+    assert bash_guard.check(_bash(cmd, box[1])) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "echo MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE=off > .env",
+        "sed -i 's/doctrine_edit_gate = \"on\"/doctrine_edit_gate = \"off\"/' registry.local.toml",
+        "echo doctrine_edit_gate=off >> registry.local.toml",
+        "echo 'feature.doctrine_edit_gate = \"off\"' >> registry.local.toml",
+        "printf '[coordinator]\\nfeature.doctrine_edit_gate = \"off\"\\n' >> registry.local.toml",
+        "registry set --coordinator.feature.doctrine_edit_gate=off",
+        "printf 'a\\ndoctrine_edit_gate=off\\n' >> registry.local.toml",
+    ],
+)
+def test_gate_key_spellings_still_refused(box, cmd):
+    assert _deny(bash_guard.check(_bash(cmd, box[1])))
+
+
 def _write(path, content):
     return {
         "tool_name": "Write",

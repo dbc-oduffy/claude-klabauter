@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import shutil
 import subprocess
 
@@ -76,7 +75,7 @@ def test_ask_route_terminal_test_covers_review_edits_too():
     ask = _compose_ask()
 
     assert ask.index("phase('review')") < ask.index("phase('Scoped test run')")
-    assert "git diff --name-only" in ask and "Review stages ran before this phase" in ask
+    assert "No edited-set listing" in ask and "Review stages ran before this phase" in ask
 
 
 # --- terminal_commit_cli ----------------------------------------------------
@@ -110,15 +109,24 @@ def _digest(tmp_path, *, inline_note: str = "") -> dict:
     return json.loads(proc.stdout)
 
 
+def _heredoc(line: str) -> tuple[str, str]:
+    head, _, rest = line.partition("\n")
+    body, _, tail = rest.rpartition("\n")
+    assert tail == "JSON"
+    return head, body
+
+
+_HEAD = "coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'"
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_digest_carries_a_terminal_commit_line_whose_params_equal_next_action_params(tmp_path):
     digest = _digest(tmp_path)
 
-    argv = shlex.split(digest["terminal_commit_cli"])
-    assert argv[:2] == ["coordinator-invoke", "dispatch.terminal_commit"]
-    assert len(argv) == 3
-    params = json.loads(argv[2])
+    head, body = _heredoc(digest["terminal_commit_cli"])
+    assert head == _HEAD
+    params = json.loads(body)
     assert params == digest["next_action"]["params"]
     assert params["inline_review"]["integration_stem"]
     assert wd.validate_digest(digest) == []
@@ -126,25 +134,47 @@ def test_digest_carries_a_terminal_commit_line_whose_params_equal_next_action_pa
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_apostrophe_in_the_params_survives_the_shell_quoting(tmp_path):
+def test_an_apostrophe_in_the_params_survives_the_heredoc(tmp_path):
     digest = _digest(tmp_path, inline_note="it's ")
 
-    argv = shlex.split(digest["terminal_commit_cli"])
+    _, body = _heredoc(digest["terminal_commit_cli"])
 
-    assert json.loads(argv[2]) == digest["next_action"]["params"]
-    assert "it's w.md" in argv[2]
+    assert json.loads(body) == digest["next_action"]["params"]
+    assert "it's w.md" in body
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_params_too_large_for_argv_go_through_a_stdin_heredoc(tmp_path):
-    digest = _digest(tmp_path, inline_note="x" * (wd.TERMINAL_COMMIT_CLI_ARGV_MAX + 1))
+def test_a_windows_path_in_the_params_round_trips_through_the_cli_line(tmp_path):
+    digest = _digest(tmp_path, inline_note="E:\\x\\.coordinator-local\\")
+    line = digest["terminal_commit_cli"]
 
-    head, _, rest = digest["terminal_commit_cli"].partition("\n")
-    body, _, tail = rest.rpartition("\n")
+    _, body = _heredoc(line)
+    assert json.loads(body) == digest["next_action"]["params"]
+    assert json.dumps("E:\\x\\.coordinator-local\\w.md")[1:-1] in body
 
-    assert head == "coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'"
-    assert tail == "JSON"
+    # The file route: the shell hands the heredoc to the CLI's `--params-file -` untouched.
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash unavailable to execute the heredoc")
+    shell_line = line.replace(
+        "coordinator-invoke dispatch.terminal_commit --params-file -", "cat", 1
+    )
+    proc = subprocess.run(
+        [bash, "-s"], input=shell_line, capture_output=True, text=True, timeout=30, **no_console_creationflags()
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == digest["next_action"]["params"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_large_params_use_the_same_heredoc(tmp_path):
+    digest = _digest(tmp_path, inline_note="x" * 20000)
+
+    head, body = _heredoc(digest["terminal_commit_cli"])
+
+    assert head == _HEAD
     assert json.loads(body) == digest["next_action"]["params"]
 
 

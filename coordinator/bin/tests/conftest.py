@@ -42,4 +42,4 @@ def _stub_source_preflight(request, monkeypatch):
         return
     from coordinator_core.percolate import source_preflight
 
-    monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir: None)
+    monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir, *_a, **_k: None)

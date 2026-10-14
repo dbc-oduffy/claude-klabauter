@@ -414,10 +414,9 @@ def _registry_get_for_check(key: str) -> Optional[str]:
     return registry_get(key)
 
 
-from coordinator_core.install._shared import RequireHomeError, require_home
+from coordinator_core.install._shared import RequireHomeError, claude_author_wrapper_source, require_home
 from coordinator_core.install._shared import env_overlay as _env_overlay
 from coordinator_core.install import substrate as _substrate_plane_check_module
-from coordinator_core.install.substrate import BYTE_COPIED_BIN_SOURCES
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -1415,17 +1414,18 @@ def _install_claude_author_wrapper(
     one source of truth for the settings-home ``bin/`` directory.
 
     Consequence of that symlink, named because a verifier has to know it:
-    ``coordinator_core.ops.install_claude_author_wrapper`` (the launcher-chain
-    step `scripts/setup.py :: install_claude_author_launcher_chain` runs after
-    the forwarder loop) ``shutil.copyfile``s ``wrapper_src`` onto
+    ``coordinator_core.ops.install_claude_author_wrapper`` (the
+    ``install-claude-author-wrapper`` forwarder, run by DoE's install chain at
+    Step 3.5b after the forwarder loop) ``shutil.copyfile``s ``wrapper_src`` onto
     ``~/.local/bin/claude-author`` -- i.e. THROUGH this symlink, onto the
     settings-home file. The final POSIX body at ``<settings_bin>/claude-author``
     is therefore the wrapper source's own bytes, not the generated
-    trampoline. `substrate.BYTE_COPIED_BIN_SOURCES` declares that shape (and
-    is where ``wrapper_src`` below is derived from), so
+    trampoline. `substrate.BYTE_COPIED_BIN_SOURCES` declares that shape, so
     `settings_home_report` can verify the member by byte comparison against
     this root's source instead of looking for a trampoline marker that a byte
-    copy can never carry.
+    copy can never carry. ``wrapper_src`` itself comes from
+    ``_shared.claude_author_wrapper_source`` (published build first), the same
+    function doctor P-23 calls.
 
     Windows has no equivalent-cost native symlink story -- ``os.symlink``
     there requires either elevated (Administrator) privileges or Developer
@@ -1455,7 +1455,7 @@ def _install_claude_author_wrapper(
     drift from the F2 PATH prepend.
     """
     orch.phase_header("claude-author wrapper install (Step 3.5b -- ~/.local/bin/claude-author)")
-    wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])
+    wrapper_src = str(claude_author_wrapper_source(Path(claude_klabauter_root)))
     wrapper_dst = os.path.join(claude_home_dir, ".local", "bin", "claude-author")
     local_bin = os.path.dirname(wrapper_dst)
 

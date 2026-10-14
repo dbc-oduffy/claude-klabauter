@@ -1220,3 +1220,29 @@ def test_a_done_row_that_declares_no_writes_closes_coded_beside_a_row_that_does(
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
     assert out["rows_coded"] == {"docs/plan.md": ["C3", "C4"]}
     assert "resolved as a no-op" in _show(repo, "HEAD:docs/plan.md")
+
+
+_FALSIFIER_PLAN = _SINGLE_ROW_PLAN.replace("disposition: open", "disposition: coded\n  disposition_ref: abc1234").replace(
+    "prime_exit_criterion:\n  text: a.py exists\n",
+    "prime_exit_criterion:\n  statement: a.py exists\n  falsifier:\n    how: ls a.py\n"
+    "    baseline_output: absent\n    baseline_ref: " + "d" * 40 + "\n    expected_when_true: present\n",
+)
+
+
+def test_a_goal_gate_refusal_keeps_its_cause_in_the_reported_text(repo):
+    """The refusal text leads with its cause; a tail slice kept only the override boilerplate."""
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_FALSIFIER_PLAN, encoding="utf-8")
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    plan = repo / "docs" / "plan.md"
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "---\n\n# Plan",
+            "review_stamp:\n  criterion:\n    status: met\n    observation: a.py exists\n---\n\n# Plan", 1),
+        encoding="utf-8")
+    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", "a" * 40)
+    assert out["plan_status"] == "refused", out
+    assert "refusing to stamp implemented" in out["plan_status_refusal"], out
+    assert "baseline_ref" in out["plan_status_refusal"], out

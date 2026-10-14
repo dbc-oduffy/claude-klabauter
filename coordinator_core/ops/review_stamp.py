@@ -43,6 +43,10 @@ against the reviewed tree.
          no prep sidecar or zero wave sidecars are discoverable.
     A run whose sidecar already carries `prep_sidecar` is unaffected by
     `--repair` -- it takes the normal path even with the flag set.
+  - `accept(plan_path, repo_root, pm_utterance=..., pm_utterance_ref=...)`: resolves exactly as
+    `mint`; when the verdict gate refuses, writes `review_stamp_acceptance:` (a top-level key,
+    bound to the stamp's terminal) and the stamp in one write. `criterion_refusal` honours an
+    acceptance of the criterion gate while the stamp's terminal still equals the bound one.
   - `mint_receipt(record_path, repo_root, resolved=...)`: the same stamp, assembled
     by the same `_assemble_stamp`, written onto a mise inventory record (`run_id`
     frontmatter, never the spine). No criterion block, no trailer-walk or repair
@@ -79,6 +83,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -612,12 +617,12 @@ def _count(value: Any) -> int:
     return len(value) if isinstance(value, (list, tuple)) else 0
 
 
-def _drop_review_stamp_block(fm_text: str) -> str:
-    """`fm_text` without any top-level `review_stamp:` block (the key line and its indented body)."""
+def _drop_review_stamp_block(fm_text: str, key: str = "review_stamp") -> str:
+    """`fm_text` without any top-level `<key>:` block (the key line and its indented body)."""
     kept: list[str] = []
     skipping = False
     for line in fm_text.split("\n"):
-        if line.startswith("review_stamp:"):
+        if line.startswith(f"{key}:"):
             skipping = True
             continue
         if skipping and (not line.strip() or line[0] in " \t"):
@@ -627,14 +632,25 @@ def _drop_review_stamp_block(fm_text: str) -> str:
     return "\n".join(kept)
 
 
-def _write_stamp(plan_path: Path, split: Any, stamp: Dict[str, Any]) -> None:
-    """Replace `plan_path`'s `review_stamp:` block with `stamp`, writing nothing else."""
-    raw_yaml = yaml.safe_dump({"review_stamp": stamp}, default_flow_style=False, sort_keys=False).strip()
-    # `review_stamp` is a nested mapping, so a block form is built by hand rather than
-    # routed through insert_fm_field_raw's single-line contract.
-    body_lines = raw_yaml.splitlines()[1:]
-    indented = "\n".join(f"  {ln}" for ln in body_lines)
-    new_fm = _drop_review_stamp_block(split.fm_text).rstrip() + "\n" + "review_stamp:\n" + indented + "\n"
+def _block_lines(key: str, value: Dict[str, Any]) -> str:
+    """`value` as a top-level `<key>:` frontmatter block, built by hand rather than routed
+    through insert_fm_field_raw's single-line contract."""
+    raw_yaml = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False).strip()
+    return f"{key}:\n" + "\n".join(f"  {ln}" for ln in raw_yaml.splitlines()[1:]) + "\n"
+
+
+def _write_stamp(
+    plan_path: Path, split: Any, stamp: Dict[str, Any], *, acceptance: Optional[Dict[str, Any]] = None
+) -> None:
+    """Replace `plan_path`'s `review_stamp:` block with `stamp` (and, when given, its
+    `review_stamp_acceptance:` block) in one write, changing nothing else."""
+    new_fm = _drop_review_stamp_block(split.fm_text).rstrip() + "\n" + _block_lines("review_stamp", stamp)
+    if acceptance is not None:
+        new_fm = (
+            _drop_review_stamp_block(new_fm, "review_stamp_acceptance").rstrip()
+            + "\n"
+            + _block_lines("review_stamp_acceptance", acceptance)
+        )
     replace_text(plan_path, rebuild(split, new_fm))
 
 
@@ -649,7 +665,35 @@ def _rel_or_abs(path: Any, root: Path) -> str:
         return str(path)
 
 
-def mint(
+@dataclass
+class _Resolved:
+    """What `mint` and `accept` share: the structural resolution and the verdict gate's answer.
+    `gate_refusal` is `mint_refusal`'s message (None: the stamp mints); `attestation_refusal`
+    is the unattested-indeterminate-criterion message `mint` raises ahead of it.
+    `judge_only_stamp` is set when the judge-only path already wrote the stamp."""
+
+    plan_path: Path = None  # type: ignore[assignment]
+    repo_root: Path = None  # type: ignore[assignment]
+    split: Any = None
+    plan_id: str = ""
+    terminal_sha: str = ""
+    terminal_tree_sha: Optional[str] = None
+    run_base_sha: Any = None
+    integration_path: Optional[Path] = None
+    integration_data: Dict[str, Any] = field(default_factory=dict)
+    prep_data: Dict[str, Any] = field(default_factory=dict)
+    slices: int = 0
+    delivery_verdict: Any = None
+    tests_status: str = ""
+    build_test_data: Dict[str, Any] = field(default_factory=dict)
+    build_test_sidecar: Any = None
+    criterion_block: Optional[Dict[str, Any]] = None
+    gate_refusal: Optional[str] = None
+    attestation_refusal: Optional[str] = None
+    judge_only_stamp: Optional[Dict[str, Any]] = None
+
+
+def _resolve_mint(
     plan_path: Path,
     repo_root: Path,
     *,
@@ -659,22 +703,11 @@ def mint(
     superseding_record: Optional[Path] = None,
     criterion_open_ok: bool = False,
     terminal_tree_sha: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
-    Returns the written stamp dict. Raises `MintRefusal` on any refusal
-    condition; writes nothing in that case. `repair=True` is the explicit,
-    never-default repair path for a pre-b' run -- see module docstring.
-
-    Reads the run's stage returns off the engine's own record (`prep`,
-    `delivery`, `tests`, `criterion` -- `wave_bookkeeping.bookkeep_wave`'s
-    `stage_returns`) and falls back to the prep/delivery sidecars' frontmatter
-    only for a record that predates them. `resolved` is `(terminal_sha,
-    record_path, record)` from a caller that just landed the terminal commit
-    itself (`dispatch.terminal_commit`): the trailer walk is skipped.
-    `criterion_open_ok` mints over a `not_met`/`indeterminate` criterion, recording its
-    status on the stamp (see `verdict.mint_refusal`). `terminal_tree_sha` is the
-    tree of the terminal commit when the caller already holds it (the commit
-    reply's `tree`); when given, the `log -1 --format=%T` read is skipped."""
+    judge_only_ok: bool = True,
+) -> _Resolved:
+    """Resolve the terminal commit, prep, delivery, build/test and criterion for `plan_path`
+    and run the verdict gate over them. Raises `MintRefusal` on a structural gap; a verdict
+    refusal is returned on the result, never raised. Writes nothing."""
     if not repo_root.exists():
         raise MintRefusal(f"review-stamp: repo root does not exist: {repo_root}")
 
@@ -717,9 +750,16 @@ def mint(
                 repo_root, plan_id, plan_path, repair=repair
             )
         except MintRefusal as no_trailer:
-            if repair or not str(no_trailer).startswith(_NO_TERMINAL_COMMIT) or _carries_stamp(split.fm_text):
+            if (
+                not judge_only_ok
+                or repair
+                or not str(no_trailer).startswith(_NO_TERMINAL_COMMIT)
+                or _carries_stamp(split.fm_text)
+            ):
                 raise
-            return _mint_judge_only(plan_path, repo_root, split, plan_id, build_test_path, no_trailer)
+            return _Resolved(
+                judge_only_stamp=_mint_judge_only(plan_path, repo_root, split, plan_id, build_test_path, no_trailer)
+            )
 
     prep_data = integration_data.get("prep")
     if not isinstance(prep_data, dict):
@@ -830,6 +870,7 @@ def mint(
             text, criterion, (newest or {}).get("recorded_at") or integration_data.get("recorded_at")
         )
     attestation_receipt = None
+    attestation_refusal = None
     if criterion_status == "indeterminate":
         from coordinator_core.ops.operator_attestation import attested
 
@@ -837,7 +878,7 @@ def mint(
             split.fm_text, run_git=lambda args: _run_git(args, cwd=str(repo_root))
         )
         if attestation_problem and not criterion_open_ok:
-            raise MintRefusal(
+            attestation_refusal = (
                 f"review-stamp: refusing to mint: exit criterion is indeterminate; {attestation_problem}"
             )
     gate_integration = {**integration_data, "delivery": delivery_data}
@@ -845,49 +886,9 @@ def mint(
         gate_integration["criterion"] = {**criterion, "status": "not_run"}
     if attestation_receipt:
         gate_integration["criterion"] = {**criterion, "status": "met"}
-    refusal = mint_refusal(
+    gate_refusal = mint_refusal(
         gate_integration, prep_data, build_test_data, criterion_open_ok=criterion_open_ok
     )
-    if refusal is not None:
-        if delivery_verdict == "FAIL":
-            from coordinator_core.ops.dispatch_emit.reverify_delivery import resolve_delivery_in_force
-
-            hint_path, _ = resolve_delivery_in_force(
-                repo_root, plan_id, str(plan_path) if plan_path else None,
-                str(integration_path) if integration_path is not None else None,
-            )
-            try:
-                hint = hint_path.relative_to(repo_root).as_posix() if hint_path is not None else '""'
-            except ValueError:
-                hint = hint_path.as_posix()
-            refusal += (
-                "; a fix-forward clears this by re-verifying delivery at HEAD: "
-                f"emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} --reverify-delivery {hint}, "
-                "then reverify-delivery record"
-            )
-        if "exit criterion is" in refusal:
-            refusal += (
-                f"; a re-judge clears this: emit-dispatch-workflow --plan {plan_path} --rejudge "
-                "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
-                "then mint again (a hand-run judge leaves no record mint can read)"
-            )
-        if (
-            "build/test verdict is" in refusal
-            and build_test_data.get("test_verdict") is None
-            and build_test_data.get("status") in _RUN_REPORT_LIFECYCLE
-        ):
-            from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
-
-            refusal += f"; record the runner's verdict: {RECORD_VERB} --result-json <runner result>"
-        elif "build/test verdict is" in refusal:
-            from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
-
-            refusal += (
-                "; re-run the plan's tests with the test-runner, record its verdict "
-                f"({RECORD_VERB} --result-json <runner result>), then re-mint with "
-                "--build-test <test-runner sidecar>"
-            )
-        raise MintRefusal(refusal)
 
     if not landed_here:
         # A caller-held tree describes the commit the caller just landed, not a
@@ -900,8 +901,11 @@ def mint(
             "observation": narrowing_receipt or attestation_receipt or criterion.get("observation"),
             "sidecar": criterion.get("sidecar"),
         }
-    stamp = _assemble_stamp(
-        repo_root,
+    return _Resolved(
+        plan_path=plan_path,
+        repo_root=repo_root,
+        split=split,
+        plan_id=plan_id,
         terminal_sha=terminal_sha,
         terminal_tree_sha=terminal_tree_sha,
         run_base_sha=run_base_sha,
@@ -914,12 +918,181 @@ def mint(
         build_test_data=build_test_data,
         build_test_sidecar=build_test_sidecar,
         criterion_block=criterion_block,
+        gate_refusal=gate_refusal,
+        attestation_refusal=attestation_refusal,
+    )
+
+
+def _stamp_of(r: _Resolved, superseding_record: Optional[Path]) -> Dict[str, Any]:
+    stamp = _assemble_stamp(
+        r.repo_root,
+        terminal_sha=r.terminal_sha,
+        terminal_tree_sha=r.terminal_tree_sha,
+        run_base_sha=r.run_base_sha,
+        integration_path=r.integration_path,
+        integration_data=r.integration_data,
+        prep_data=r.prep_data,
+        slices=r.slices,
+        delivery_verdict=r.delivery_verdict,
+        tests_status=r.tests_status,
+        build_test_data=r.build_test_data,
+        build_test_sidecar=r.build_test_sidecar,
+        criterion_block=r.criterion_block,
     )
     if superseding_record is not None:
         stamp["superseding_record"] = stamp["integration_sidecar"]
-
-    _write_stamp(plan_path, split, stamp)
     return stamp
+
+
+def _accept_hint(plan_path: Path, repo_root: Path) -> str:
+    return (
+        f"; PM-accepted: review-stamp accept --plan {_rel_or_abs(plan_path, repo_root)} "
+        "--pm-utterance <verbatim> --pm-utterance-ref <ref>"
+    )
+
+
+def _gate_refusal_with_hints(r: _Resolved) -> str:
+    """`r.gate_refusal` with the clearing route for each gate it names, ending in the accept alternative."""
+    refusal = r.gate_refusal
+    plan_path, repo_root = r.plan_path, r.repo_root
+    if r.delivery_verdict == "FAIL":
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import resolve_delivery_in_force
+
+        hint_path, _ = resolve_delivery_in_force(
+            repo_root, r.plan_id, str(plan_path) if plan_path else None,
+            str(r.integration_path) if r.integration_path is not None else None,
+        )
+        try:
+            hint = hint_path.relative_to(repo_root).as_posix() if hint_path is not None else '""'
+        except ValueError:
+            hint = hint_path.as_posix()
+        refusal += (
+            "; a fix-forward clears this by re-verifying delivery at HEAD: "
+            f"emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} --reverify-delivery {hint}, "
+            "then reverify-delivery record"
+        )
+    if "exit criterion is" in refusal:
+        refusal += (
+            f"; a re-judge clears this: emit-dispatch-workflow --plan {plan_path} --rejudge "
+            "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+            "then mint again (a hand-run judge leaves no record mint can read)"
+        )
+    if (
+        "build/test verdict is" in refusal
+        and r.build_test_data.get("test_verdict") is None
+        and r.build_test_data.get("status") in _RUN_REPORT_LIFECYCLE
+    ):
+        from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
+
+        refusal += f"; record the runner's verdict: {RECORD_VERB} --result-json <runner result>"
+    elif "build/test verdict is" in refusal:
+        from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
+
+        refusal += (
+            "; re-run the plan's tests with the test-runner, record its verdict "
+            f"({RECORD_VERB} --result-json <runner result>), then re-mint with "
+            "--build-test <test-runner sidecar>"
+        )
+    return refusal + _accept_hint(plan_path, repo_root)
+
+
+def mint(
+    plan_path: Path,
+    repo_root: Path,
+    *,
+    build_test_path: Optional[str],
+    repair: bool = False,
+    resolved: Optional[tuple] = None,
+    superseding_record: Optional[Path] = None,
+    criterion_open_ok: bool = False,
+    terminal_tree_sha: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
+    Returns the written stamp dict. Raises `MintRefusal` on any refusal
+    condition; writes nothing in that case. `repair=True` is the explicit,
+    never-default repair path for a pre-b' run -- see module docstring.
+
+    Reads the run's stage returns off the engine's own record (`prep`,
+    `delivery`, `tests`, `criterion` -- `wave_bookkeeping.bookkeep_wave`'s
+    `stage_returns`) and falls back to the prep/delivery sidecars' frontmatter
+    only for a record that predates them. `resolved` is `(terminal_sha,
+    record_path, record)` from a caller that just landed the terminal commit
+    itself (`dispatch.terminal_commit`): the trailer walk is skipped.
+    `criterion_open_ok` mints over a `not_met`/`indeterminate` criterion, recording its
+    status on the stamp (see `verdict.mint_refusal`). `terminal_tree_sha` is the
+    tree of the terminal commit when the caller already holds it (the commit
+    reply's `tree`); when given, the `log -1 --format=%T` read is skipped."""
+    r = _resolve_mint(
+        plan_path,
+        repo_root,
+        build_test_path=build_test_path,
+        repair=repair,
+        resolved=resolved,
+        superseding_record=superseding_record,
+        criterion_open_ok=criterion_open_ok,
+        terminal_tree_sha=terminal_tree_sha,
+    )
+    if r.judge_only_stamp is not None:
+        return r.judge_only_stamp
+    if r.attestation_refusal:
+        raise MintRefusal(r.attestation_refusal + _accept_hint(plan_path, repo_root))
+    if r.gate_refusal is not None:
+        raise MintRefusal(_gate_refusal_with_hints(r))
+    stamp = _stamp_of(r, superseding_record)
+    _write_stamp(plan_path, r.split, stamp)
+    return stamp
+
+
+def accept(
+    plan_path: Path,
+    repo_root: Path,
+    *,
+    pm_utterance: str,
+    pm_utterance_ref: str,
+    build_test_path: Optional[str] = None,
+    repair: bool = False,
+    resolved: Optional[tuple] = None,
+    superseding_record: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Record the PM's acceptance of the verdict refusal `mint` would raise, and write the stamp it
+    binds. Resolves exactly as `mint` does; when the verdict gate refuses, writes
+    `review_stamp_acceptance` and the `review_stamp` (verdicts as they are) in one frontmatter
+    write and returns both. Raises `MintRefusal`, writing nothing, on an empty utterance or ref, a
+    plan `mint` would stamp anyway, any structural gap, or an acceptance bound to another terminal."""
+    if not str(pm_utterance or "").strip() or not str(pm_utterance_ref or "").strip():
+        raise MintRefusal("review-stamp: refusing to accept: --pm-utterance and --pm-utterance-ref are both required")
+    r = _resolve_mint(
+        plan_path,
+        repo_root,
+        build_test_path=build_test_path,
+        repair=repair,
+        resolved=resolved,
+        superseding_record=superseding_record,
+        judge_only_ok=False,
+    )
+    refusal = r.gate_refusal
+    if refusal is None:
+        raise MintRefusal(f"review-stamp: nothing to accept for {plan_path}; run mint")
+    try:
+        existing = (yaml.safe_load(r.split.fm_text) or {}).get("review_stamp_acceptance")
+    except yaml.YAMLError:
+        existing = None
+    bound = existing.get("terminal_commit_sha") if isinstance(existing, dict) else None
+    if bound and bound != r.terminal_sha:
+        raise MintRefusal(
+            f"review-stamp: refusing to accept: an acceptance is already bound to {bound}, "
+            f"not the resolved terminal {r.terminal_sha}"
+        )
+    stamp = _stamp_of(r, superseding_record)
+    acceptance = {
+        "pm_utterance": str(pm_utterance),
+        "pm_utterance_ref": str(pm_utterance_ref),
+        "refusal": refusal,
+        "terminal_commit_sha": stamp["terminal_commit_sha"],
+        "accepted_at": stamp["stamped_at"],
+    }
+    _write_stamp(plan_path, r.split, stamp, acceptance=acceptance)
+    return {"review_stamp": stamp, "review_stamp_acceptance": acceptance}
 
 
 def _assemble_stamp(
@@ -1177,6 +1350,13 @@ def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
     status = criterion.get("status") if isinstance(criterion, dict) else None
     if status not in _UNMET_CRITERION:
         return None
+    acceptance = fm_data.get("review_stamp_acceptance")
+    if (
+        isinstance(acceptance, dict)
+        and acceptance.get("terminal_commit_sha") == stamp.get("terminal_commit_sha")
+        and "exit criterion is" in str(acceptance.get("refusal") or "")
+    ):
+        return None
     return (
         f"review_stamp criterion is {status}; emit-dispatch-workflow --plan {plan_path} --rejudge "
         "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
@@ -1321,6 +1501,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "wave_bookkeeping's fields (see module docstring mint(..., repair=True)).",
     )
 
+    acc_p = sub.add_parser(
+        "accept", help="Record a PM-accepted verdict refusal and write the stamp it binds."
+    )
+    acc_p.add_argument("--plan", required=True)
+    acc_p.add_argument("--pm-utterance", required=True)
+    acc_p.add_argument("--pm-utterance-ref", required=True)
+    acc_p.add_argument("--build-test", required=False, default=None)
+    acc_p.add_argument("--repo-root", required=False, default=None)
+    acc_p.add_argument("--superseding-record", required=False, default=None)
+    acc_p.add_argument("--repair", action="store_true")
+
     check_p = sub.add_parser("check", help="Check an existing review_stamp.")
     check_p.add_argument("--plan", required=True)
     check_p.add_argument("--repo-root", required=False, default=None)
@@ -1372,6 +1563,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         print(f"review-stamp: minted for {plan_path} at {stamp['terminal_commit_sha']}")
+        return 0
+
+    if args.verb == "accept":
+        try:
+            done = accept(
+                plan_path,
+                repo_root,
+                pm_utterance=args.pm_utterance,
+                pm_utterance_ref=args.pm_utterance_ref,
+                build_test_path=args.build_test,
+                repair=args.repair,
+                superseding_record=Path(args.superseding_record) if args.superseding_record else None,
+            )
+        except MintRefusal as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(
+            f"review-stamp: accepted for {plan_path} at {done['review_stamp']['terminal_commit_sha']}"
+        )
         return 0
 
     if args.verb == "rejudge":

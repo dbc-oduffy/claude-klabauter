@@ -14,15 +14,18 @@ halt that names the gap, never a run.
 
 `args` shape: `{ask: str}` | `{sizing: str}`, optional `repo` (absolute path; else the payload
 cwd's repo), optional `source: "pm" | "relayed"` (ask only; absent is `pm`; a relayed ask is
-forwarded to the engine as `ask_source: "relayed"`), optional `cross_repo_approved: true` (the
+forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
+(`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
+op's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the
 PM's local cross-repo assent; implied on a remote venue). A bare string `args` is the ask.
 Refusals deny with the engine's own reason; a submission for a sizing a live run is already
 working denies naming that run (`coordinator_core.warp_live`).
 
 Also here, `sizing_scout_deny`: the main loop's `Agent(sizing-scout)` is the hand route into the
-sizing agent the submission replaces, so it is denied while this session has a live run, naming
-that run. Called from `hooks.block_unenumerated_agent_type.check` (the engine leg DoE's
-PreToolUse(Agent) fan-in already runs). A Workflow's own `agent()` spawns raise no
+sizing agent the submission replaces, so it is always denied: naming the live run when this
+session has one, else the Workflow ask submission that carries sizing through to bookkeeping.
+Called from `hooks.block_unenumerated_agent_type.check` (the engine leg DoE's PreToolUse(Agent)
+fan-in already runs). A Workflow's own `agent()` spawns raise no
 PreToolUse(Agent), so a workflow that dispatches the sizing scout (plan-blitz) is untouched.
 
 Negative spec: never launches a process — the harness runs the rewritten call. Never edits
@@ -41,7 +44,10 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 GUARD_NAME = "submit-engine-ask"
 SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
 
-_ARGS_SHAPE = 'args: {ask: "<the PM\'s words, verbatim>"} or {sizing: "<state/sizings/x.yaml>"}'
+_ARGS_SHAPE = (
+    'args: {ask: "<the PM\'s words, verbatim>"} or {sizing: "<state/sizings/x.yaml>"}, '
+    'optional brief: "<your directives>" (or brief_file, context: [paths])'
+)
 
 EmitFn = Callable[[dict, Path], dict]
 
@@ -71,6 +77,31 @@ def _request(
         repo.strip() if isinstance(repo, str) and repo.strip() else None,
         args.get("source"),
     )
+
+
+def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
+    """(emit params, refusal) for the EM's optional `brief` / `brief_file` / `context` args."""
+    args = tool_input.get("args")
+    if not isinstance(args, dict):
+        return {}, None
+    params: dict = {}
+    for key, param in (("brief", "ask_brief"), ("brief_file", "ask_brief_file")):
+        value = args.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return {}, f"{key} must be a string."
+        if value.strip():
+            params[param] = value
+    context = args.get("context")
+    if context is not None:
+        items = [context] if isinstance(context, str) else context
+        if not isinstance(items, list) or not all(isinstance(c, str) for c in items):
+            return {}, "context must be a path or a list of paths."
+        paths = [c for c in items if c.strip()]
+        if paths:
+            params["ask_context"] = paths
+    return params, None
 
 
 def _repo_root(repo_arg: Optional[str], cwd: object) -> Optional[Path]:
@@ -112,6 +143,10 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
         if sizing_rel is not None:
             return _refuse("source marks an ask's text; a sizing submission carries none.")
 
+    brief, brief_refusal = _brief_params(payload["tool_input"])
+    if brief_refusal:
+        return _refuse(brief_refusal)
+
     root = _repo_root(repo_arg, payload.get("cwd"))
     if root is None:
         where = repo_arg or payload.get("cwd") or "the session cwd"
@@ -145,6 +180,7 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
         params["ask"] = ask
         if source == ASK_SOURCE_RELAYED:
             params["ask_source"] = ASK_SOURCE_RELAYED
+    params.update(brief)
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
 
     args = payload["tool_input"].get("args")
@@ -198,7 +234,7 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
 
 
 def sizing_scout_deny(payload: Mapping[str, Any]) -> Optional[dict]:
-    """Deny the main loop's hand dispatch of the sizing scout while this session has a live run.
+    """Deny the main loop's hand dispatch of the sizing scout; a live run is named when one exists.
 
     Order is load-bearing: tool, agent_id and resolved type are checked before any file is read, so
     no other Agent dispatch pays a launch-record directory listing.
@@ -212,26 +248,23 @@ def sizing_scout_deny(payload: Mapping[str, Any]) -> Optional[dict]:
 
     if resolve_subagent_type(tool_input) not in SIZING_SCOUT_TYPES:
         return None
+    live = None
     session_id = payload.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        return None
-    root = _repo_root(None, payload.get("cwd"))
-    if root is None:
-        return None
-    from coordinator_core import warp_live
+    root = _repo_root(None, payload.get("cwd")) if isinstance(session_id, str) and session_id else None
+    if root is not None:
+        from coordinator_core import warp_live
 
-    transcript = payload.get("transcript_path")
-    live = warp_live.live_run_for_session(
-        root, session_id, transcript_path=transcript if isinstance(transcript, str) else None
-    )
-    if not live:
-        return None
+        transcript = payload.get("transcript_path")
+        live = warp_live.live_run_for_session(
+            root, session_id, transcript_path=transcript if isinstance(transcript, str) else None
+        )
     from coordinator_core.machine_profile import apply_guard_level
 
-    return apply_guard_level(
-        GUARD_NAME,
-        deny("PreToolUse", f"Run {live} is already sizing; its completion is your one wake. End the turn."),
-    )
+    if live:
+        reason = f"Run {live} is already sizing; its completion is your one wake. End the turn."
+    else:
+        reason = f"Sizing runs inside the ask workflow, not by hand. Submit: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})."
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
 
 
 @register_op("hooks.submit_engine_ask")

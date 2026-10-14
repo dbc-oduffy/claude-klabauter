@@ -264,14 +264,10 @@ def _cli(params: Optional[dict]) -> Optional[str]:
     """Python port of the emitted ``_terminalCommitCli`` helper."""
     import json
 
-    from coordinator_core.ops.dispatch_emit.wake_digest import TERMINAL_COMMIT_CLI_ARGV_MAX
-
     if not params:
         return None
     s = json.dumps(params, separators=(",", ":"), ensure_ascii=False)
     head = "coordinator-invoke dispatch.terminal_commit"
-    if len(s) <= TERMINAL_COMMIT_CLI_ARGV_MAX:
-        return head + " '" + s.replace("'", "'\\''") + "'"
     return head + " --params-file - <<'JSON'\n" + s + "\nJSON"
 
 

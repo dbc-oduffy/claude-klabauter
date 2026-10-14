@@ -403,7 +403,35 @@ def test_pm_verbatims_round_trip_yaml_hostile_prompts_from_the_real_log(
     path = _sizing(repo)
     rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
     sizing_assemble.write_back(repo, rel, _decision("M"))
-    assert [e["text"] for e in _load(path)["pm_verbatims"]] == prompts[::-1]
+    assert [e["text"] for e in _load(path)["pm_verbatims"]] == [prompts[-1]]
+
+
+def test_a_one_turn_ask_in_a_many_turn_session_embeds_one_turn_and_clears_the_prep_gate(
+    repo: Path, monkeypatch
+) -> None:
+    import coordinator_core.ops.baton_pm_turns as pm_turns
+    from coordinator_core.roadmap import prep_gate
+    from coordinator_core.session_baton import store
+
+    sdir = repo / ".git" / "coordinator-sessions" / "sid-many"
+    sdir.mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-many")
+    for n in range(11):
+        pm_turns.append_turn(f"unrelated instruction number {n}", session_id="sid-many")
+
+    path = _sizing(repo)
+    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    sizing_assemble.write_back(repo, rel, _decision("M"))
+    doc = _load(path)
+    assert [e["turn"] for e in doc["pm_verbatims"]] == [10]
+    rows = doc["requirement_register"]["rows"]
+    assert len(rows) == 1
+
+    fm = {"sizing_object": rel,
+          "register_claims": {"sizing": rel, "rows": [rows[0]["id"]]}}
+    verdict = prep_gate._register(fm, repo)
+    assert verdict["status"] == "PASS", verdict["detail"]
 
 
 _NEW = "state/sizings/2026-10-11-named.yaml"

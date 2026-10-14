@@ -178,6 +178,36 @@ def _resolve_plan_slug_path(root: Optional[str], slug: str) -> str:
     return live
 
 
+#: How long after its last fire a plan claim keeps reserving its unfired rows'
+#: `writes:` against another plan's emit. Mirrors the brief-claim lease's 240
+#: minutes: a holder that has neither fired nor been claimed within the window
+#: is idle, not executing.
+PLAN_CLAIM_ACTIVE_WINDOW_MINUTES = 240
+
+#: Written by `claims.stamp_plan_claim_fired`; read here.
+_LAST_FIRED_AT = "last_fired_at"
+
+
+def plan_claim_is_active(claim_dir: Path) -> bool:
+    """Has this plan claim shown execution activity within the window?
+
+    Activity is the later of ``last_fired_at`` and ``claimed_at``, so a fresh
+    claim counts as active until it has had the window to fire. A claim with
+    neither timestamp readable is an evidence gap and counts as active: an
+    unreadable clock must never be what releases a hold.
+    """
+    latest = 0
+    for name in (_LAST_FIRED_AT, "claimed_at"):
+        try:
+            raw = (Path(claim_dir) / name).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        latest = max(latest, core.iso_to_epoch(raw))
+    if latest <= 0:
+        return True
+    return (core.now_epoch() - latest) <= PLAN_CLAIM_ACTIVE_WINDOW_MINUTES * 60
+
+
 def list_held_plan_claims(
     cwd: str | Path | None = None,
 ) -> list[tuple[str, Optional[str]]]:

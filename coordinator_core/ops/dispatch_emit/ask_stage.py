@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional, Sequence
 
@@ -26,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
     RUN_DIR_ROOT,
+    GatedRow,
     ManifestRow,
     StageManifest,
     record_dir,
@@ -237,6 +239,20 @@ def _discharge_clauses_for(plan_text: str, root: Path, raw_rows: list) -> dict[s
     return discharge_clauses(raw_rows, sizing)
 
 
+def _with_owner_roots(gated: Sequence[GatedRow]) -> list[GatedRow]:
+    """Fill each gated row's ``owner_root`` from the machine-local registry, one lookup per
+    distinct ``owner_repo``; ``""`` when unregistered. No process is spawned."""
+    gated = list(gated)
+    owners = {g.owner_repo for g in gated if g.owner_repo}
+    if not owners:
+        return gated
+    from coordinator_core.machine_resolver import registry_get
+    from coordinator_core.ops.fleet._memo_resolver import receiver_em_to_repo_key
+
+    roots = {o: registry_get(receiver_em_to_repo_key(o)) or "" for o in owners}
+    return [replace(g, owner_root=roots.get(g.owner_repo, "")) for g in gated]
+
+
 def stage(
     repo_root: Path,
     *,
@@ -295,7 +311,7 @@ def stage(
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []
     if _drift:
         raise AskStageError(pin_drift_reason(_drift))
-    gated = gated_rows(exclusions, raw_by_id)
+    gated = _with_owner_roots(gated_rows(exclusions, raw_by_id))
     try:
         check_cross_repo_writes(rows, root, approved=cross_repo_approved)
     except CrossRepoWriteError as exc:

@@ -167,6 +167,61 @@ def test_autonomous_sentinel_does_not_suppress(monkeypatch, repo_root):
         sentinel.unlink(missing_ok=True)
 
 
+def _open_merge(repo_root: Path, listed: list[str], head: str = "a" * 40) -> Path:
+    from coordinator_core.git import reconcile_manifest
+
+    merge_head = repo_root / ".git" / "MERGE_HEAD"
+    merge_head.write_text(head + "\n", encoding="utf-8")
+    reconcile_manifest.write(repo_root, merge_head=head, branch="b", paths=listed)
+    return merge_head
+
+
+def test_manifest_listed_path_allowed(monkeypatch, repo_root):
+    _stub_repo_root(monkeypatch, repo_root)
+    _stub_not_subagent(monkeypatch)
+    _stub_touched(monkeypatch, [])
+    _open_merge(repo_root, ["src/thing.py"])
+    assert guard.check(_payload(repo_root)) is None
+
+
+def test_manifest_unlisted_code_path_denied(monkeypatch, repo_root):
+    _stub_repo_root(monkeypatch, repo_root)
+    _stub_not_subagent(monkeypatch)
+    _stub_touched(monkeypatch, [])
+    _open_merge(repo_root, ["src/other.py"])
+    assert guard.check(_payload(repo_root)) is not None
+
+
+def test_manifest_listed_path_denied_after_merge_head_removed(monkeypatch, repo_root):
+    _stub_repo_root(monkeypatch, repo_root)
+    _stub_not_subagent(monkeypatch)
+    _stub_touched(monkeypatch, [])
+    _open_merge(repo_root, ["src/thing.py"]).unlink()
+    assert guard.check(_payload(repo_root)) is not None
+
+
+def test_stale_manifest_denied(monkeypatch, repo_root):
+    _stub_repo_root(monkeypatch, repo_root)
+    _stub_not_subagent(monkeypatch)
+    _stub_touched(monkeypatch, [])
+    merge_head = _open_merge(repo_root, ["src/thing.py"])
+    merge_head.write_text("b" * 40 + "\n", encoding="utf-8")
+    assert guard.check(_payload(repo_root)) is not None
+
+
+def test_manifest_read_error_falls_through_to_deny(monkeypatch, repo_root):
+    _stub_repo_root(monkeypatch, repo_root)
+    _stub_not_subagent(monkeypatch)
+    _stub_touched(monkeypatch, [])
+    _open_merge(repo_root, ["src/thing.py"])
+
+    def _boom(root):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(guard.reconcile_manifest, "read", _boom)
+    assert guard.check(_payload(repo_root)) is not None
+
+
 def test_unexpected_exception_returns_none(monkeypatch, repo_root):
     def _boom(*a, **k):
         raise RuntimeError("boom")

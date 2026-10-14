@@ -1161,10 +1161,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/workday_surface_auto_push_failure_stats.py",
         ("_surface_auto_push_failure_stats",),
     ),
-    "workflow.revise": (
-        "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
-        ("_handler",),
-    ),
     "workflow.scaffold": (
         "coordinator_core/ops/workflow_scaffold.py",
         ("_workflow_scaffold",),

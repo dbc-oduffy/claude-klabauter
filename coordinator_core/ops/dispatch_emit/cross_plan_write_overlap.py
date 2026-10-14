@@ -13,7 +13,10 @@ from coordinator_core.claim_state import _sessions_dir
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import _normalize_path
-from coordinator_core.session.claimed_plan import _resolve_plan_slug_path
+from coordinator_core.session.claimed_plan import (
+    _resolve_plan_slug_path,
+    plan_claim_is_active,
+)
 from coordinator_core.session.liveness import claim_holder_live
 
 #: Mirrors `ops.fleet._common._CLAIM_SUBDIRS[2]`; importing `_common` pulls
@@ -115,21 +118,40 @@ def _live_peer_plan_claims(
     return live
 
 
+def _stamp_own_claim(common_dir: Path, slug: str, session_id: Optional[str]) -> None:
+    """Stamp ``last_fired_at`` on this plan's claim only when this session is
+    its recorded holder: an emit from an unidentified session must not keep a
+    peer's idle claim looking active."""
+    if not session_id:
+        return
+    from coordinator_core.session.claims import stamp_plan_claim_fired
+
+    claim_dir = _sessions_dir(common_dir) / _PLAN_CLAIMS_SUBDIR / slug
+    if claim_dir.is_dir() and _claim_session_id(claim_dir) == session_id:
+        stamp_plan_claim_fired(claim_dir)
+
+
 def check_cross_plan_write_overlap(
     plan_path, rows, repo_root: Optional[Path], session_id: Optional[str] = None
 ) -> None:
     if repo_root is None:
         return
-    this_writes = _write_paths_from_rows(rows)
-    if not this_writes:
-        return
-
     repo_root = Path(repo_root)
     common_dir = resolve_git_common_dir(repo_root)
     this_slug = Path(plan_path).stem
     cwd = str(repo_root)
 
+    # An emit is this plan's fire: the stamp is what lets peers tell a claim
+    # that is executing from one that is merely held.
+    _stamp_own_claim(common_dir, this_slug, session_id)
+
+    this_writes = _write_paths_from_rows(rows)
+    if not this_writes:
+        return
+
     for claim_dir in _live_peer_plan_claims(common_dir, this_slug, cwd, session_id):
+        if not plan_claim_is_active(claim_dir):
+            continue
         other_rel = _resolve_plan_slug_path(str(repo_root), claim_dir.name)
         other_writes = _declared_write_paths(repo_root / other_rel)
         overlap = sorted(str(p) for p in (this_writes & other_writes))

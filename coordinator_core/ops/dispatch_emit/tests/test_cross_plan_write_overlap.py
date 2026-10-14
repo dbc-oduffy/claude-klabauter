@@ -234,3 +234,60 @@ def test_own_session_claim_is_not_a_peer(tmp_path, monkeypatch):
     check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="own-sid")
     with pytest.raises(CrossPlanWriteOverlap):
         check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="other-sid")
+
+
+def _stamp(claim_dir: Path, name: str, minutes_ago: int) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    when = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    (claim_dir / name).write_text(when.strftime("%Y-%m-%dT%H:%M:%SZ") + "\n", encoding="utf-8")
+
+
+def test_idle_peer_claim_past_the_window_does_not_block(tmp_path, monkeypatch):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    _stamp(claim, "claimed_at", 24 * 60)
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
+
+
+def test_recent_fire_keeps_an_old_claim_blocking(tmp_path, monkeypatch):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    _stamp(claim, "claimed_at", 24 * 60)
+    _stamp(claim, "last_fired_at", 5)
+    with pytest.raises(CrossPlanWriteOverlap):
+        check_cross_plan_write_overlap(plan_path, rows, tmp_path)
+
+
+def test_stale_fire_and_stale_claim_does_not_block(tmp_path, monkeypatch):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    _stamp(claim, "claimed_at", 48 * 60)
+    _stamp(claim, "last_fired_at", 24 * 60)
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
+
+
+def test_fresh_claim_without_a_fire_still_blocks(tmp_path, monkeypatch):
+    plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
+    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    _stamp(claim, "claimed_at", 1)
+    with pytest.raises(CrossPlanWriteOverlap):
+        check_cross_plan_write_overlap(plan_path, rows, tmp_path)
+
+
+def test_emit_stamps_last_fired_at_on_the_holders_own_claim(tmp_path):
+    _init_git_dir(tmp_path)
+    plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/a.md"])
+    own = _write_claim(tmp_path, "plan-a", sid="me-sid")
+    check_cross_plan_write_overlap(plan_path, read_spine(plan_path), tmp_path, session_id="me-sid")
+    assert (own / "last_fired_at").is_file()
+
+
+def test_emit_never_stamps_a_claim_held_by_another_session(tmp_path):
+    _init_git_dir(tmp_path)
+    plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/a.md"])
+    other = _write_claim(tmp_path, "plan-a", sid="peer-sid")
+    rows = read_spine(plan_path)
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="me-sid")
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
+    assert not (other / "last_fired_at").exists()

@@ -3074,16 +3074,17 @@ def _edited_set_listing(
 ) -> str:
     """The git listings whose union is this run's edited set, as prompt text.
 
-    Committed changes are read over ``base..HEAD`` limited to the plan's declared surface, since
-    that range on a shared branch also holds peers' commits; with no declared surface the
-    committed listing is omitted rather than widened. Review-applied edits are still uncommitted
-    when the test phase runs, so the worktree listings stay unscoped.
+    All listings carry the plan's surface pathspec: a shared branch's commits and worktree
+    hold peers' files, and an unscoped listing would put them in this run's test set. With no
+    declared surface no listing is emitted at all. Review-applied edits outside the surface are
+    out of the set by design (only the hook-confined reviewer is bound to it); a target the run
+    needs beyond it is added through the runner's ``targets_add``.
 
     ``review_terminal`` (a review-only run's pinned terminal sha) switches to the committed form:
     the range ends at that sha and reviewer-applied edits are read only inside the declared
     surface, so a peer's uncommitted file outside the surface never enters the set (a peer's
-    uncommitted edit to a surface file still does). With no surface only the
-    committed range is listed, since a worktree listing cannot be bounded.
+    uncommitted edit to a surface file still does). With no surface only the committed range is
+    listed, since a worktree listing cannot be bounded; no untracked listing is emitted.
     """
     spec = _surface_pathspec(surface)
     if review_terminal:
@@ -3091,10 +3092,11 @@ def _edited_set_listing(
         if not spec:
             return f"{committed} (no declared surface, so no worktree edits are listed)"
         return f"{committed} and `git diff --name-only HEAD{spec}` (their union)"
-    committed = f"`git diff --name-only {base} HEAD{spec}`, " if spec else ""
+    if not spec:
+        return "No edited-set listing: the plan declares no surface"
     return (
-        f"{committed}`git diff --name-only HEAD` and `git ls-files --others --exclude-standard`"
-        " (their union)"
+        f"`git diff --name-only {base} HEAD{spec}`, `git diff --name-only HEAD{spec}` and "
+        f"`git ls-files --others --exclude-standard{spec}` (their union)"
     )
 
 
@@ -5139,9 +5141,14 @@ def compose_script(
         plan_id_literal=_js_string_literal(plan_id or ""),
     )
 
-    _plan_surface = [p for row in flat_rows for p in _declared_paths(row)] + [
-        p for row in prior_landed_rows for p in _declared_paths(row)
-    ]
+    _plan_surface = _widen_with_test_candidates(
+        [
+            p
+            for row in [*flat_rows, *prior_landed_rows]
+            for p in [*_declared_paths(row), *row.writes_under]
+        ],
+        repo_root,
+    )
     _stage_edits_base = prior_run_base or (
         _run_base_marker() if runtime_base else (run_base_sha or "HEAD")
     )

@@ -12,17 +12,21 @@ Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c0929
 Port of: workday-start-step0-reconcile.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec: does NOT check out `main`, does NOT push, does NOT resolve
-merge conflicts itself — a conflict is left staged mid-merge-abort-cycle
-(aborted) and surfaced to the caller as exit code 3 for the PM's A/B/C
-Branch Reconciliation Decision.
+merge conflicts itself — a genuine conflict with parsed paths is held open
+(no abort), a conflict manifest is written to the gitdir, and exit code 3
+carries `RECONCILE-CONFLICT-OPEN`; a file-only resolver edits the listed
+paths and `reconcile-merge-conclude` commits the merge. A conflict with no
+parsed path still aborts and prints `RECONCILE-CONFLICT`.
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — already-includes (`ALREADY-CURRENT`) / fast-forward
         (`RECONCILED-FF`) / non-ff merge succeeded (`RECONCILED-MERGE`).
     3 — a failed `--no-ff` merge, discriminated by `_classify_failed_merge`
-        into one of three outcome strings: a genuine content conflict
-        (`RECONCILE-CONFLICT`, PM resolves first via the A/B/C Branch
-        Reconciliation Decision), the merge applying but its commit being
+        into one of four outcome strings: a genuine content conflict
+        (`RECONCILE-CONFLICT-OPEN`, merge held open with a manifest; or
+        `RECONCILE-CONFLICT` when no conflicted path was parsed, merge
+        aborted, PM resolves via the A/B/C Branch Reconciliation
+        Decision), the merge applying but its commit being
         refused (`RECONCILE-MERGE-COMMIT-REFUSED`, commonly a commit hook —
         not an A/B/C decision), or the merge never starting at all
         (`RECONCILE-MERGE-NOT-STARTED` — dirty worktree, unrelated
@@ -48,9 +52,10 @@ Behavior-preservation notes (read alongside the bash source):
     `COORDINATOR_OVERRIDE_BRANCH_REASON` in the subprocess environment,
     matching the oracle's per-attempt env-var scoping exactly (the reason
     string differs between the two attempts).
-  - On a conflicted `--no-ff` merge, `git merge --abort` is run and its
-    own exit code is unconditionally swallowed (bash oracle:
-    `git merge --abort >&2 || true`) — this port does the same.
+  - On a failed `--no-ff` merge other than a path-bearing conflict,
+    `git merge --abort` is run and its own exit code is unconditionally
+    swallowed (bash oracle: `git merge --abort >&2 || true`) — this port
+    does the same.
   - Before the merge attempts, ONE `git diff --cached --name-only -z` reads
     the staged path set (the single added spawn). Empty: nothing changes.
     Every path under `state/block-discharge/`: committed by one `git add`
@@ -71,8 +76,13 @@ import sys
 from pathlib import Path
 
 from coordinator_core.contract.apply_base import _mirror_session_env_for_subprocess
+from coordinator_core.git import reconcile_manifest
 from coordinator_core.git.git_dir import resolve_git_dir
-from coordinator_core.git.git_state import IndexParseError, read_index
+from coordinator_core.git.git_state import (
+    IndexParseError,
+    UnmergedIndexEntryError,
+    read_index,
+)
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.session.record_homes import home_dir
@@ -116,12 +126,16 @@ def _merge_in_progress(repo_root: Path) -> bool:
     return (resolve_git_dir(repo_root) / "MERGE_HEAD").exists()
 
 
-def _index_readable(repo_root: Path) -> bool:
+def _index_state(repo_root: Path) -> str:
+    """One `read_index(fresh=True)`: "readable", "unmerged" (parsed, a path
+    is conflicted) or "unparseable" (split, malformed or unsupported)."""
     try:
         read_index(repo_root, fresh=True)
+    except UnmergedIndexEntryError:
+        return "unmerged"
     except IndexParseError:
-        return False
-    return True
+        return "unparseable"
+    return "readable"
 
 
 def _staged_paths() -> tuple[int, list[str], str]:
@@ -270,34 +284,56 @@ def main(argv: list[str]) -> int:
         print(f"RECONCILED-MERGE branch={current}")
         return 0
 
-    # Both probes MUST be read strictly before the abort below — `git merge
+    # Both probes MUST be read strictly before any abort below — `git merge
     # --abort` clears unmerged index entries and removes MERGE_HEAD, and a
     # probe placed after it would read clean every time, inverting the
     # discrimination to "always RECONCILE-MERGE-NOT-STARTED".
     repo_root = Path(show_toplevel() or Path.cwd())
     merge_in_progress = _merge_in_progress(repo_root)
-    index_readable = _index_readable(repo_root)
-    outcome = _classify_failed_merge(merge_in_progress, index_readable)
+    index_state = _index_state(repo_root)
+    outcome = _classify_failed_merge(merge_in_progress, index_state == "readable")
 
-    abort = _run(["merge", "--abort"])
-    _echo_to_stderr(abort)
-    print(f"{outcome} branch={current}")
+    conflict_paths: list[str] = []
+    merge_head = None
     if outcome == "RECONCILE-CONFLICT":
-        # Byte-identical to today's text (AC3) — the conservative-arm note
-        # below is an ADDITION, never a replacement of this line.
+        conflict_paths = _conflict_paths(no_ff_merge.stdout + "\n" + no_ff_merge.stderr)
+        merge_head = reconcile_manifest.live_merge_head(repo_root)
+    hold_open = bool(conflict_paths) and merge_head is not None
+
+    if hold_open:
+        reconcile_manifest.write(
+            repo_root, merge_head=merge_head, branch=current, paths=conflict_paths
+        )
+        outcome = reconcile_manifest.OUTCOME_CONFLICT_OPEN
+    else:
+        abort = _run(["merge", "--abort"])
+        _echo_to_stderr(abort)
+    print(f"{outcome} branch={current}")
+    if hold_open:
+        print(
+            "Reconcile with origin/main hit a conflict — the merge is held "
+            "open; resolve the CONFLICT-PATHS files (edit only), then run "
+            f"`{reconcile_manifest.CONCLUDE_CLI}`. `git merge --abort` backs out.",
+            file=sys.stderr,
+        )
+        print("CONFLICT-PATHS", file=sys.stderr)
+        for path in conflict_paths:
+            print(path, file=sys.stderr)
+    elif outcome == "RECONCILE-CONFLICT":
         print(
             "Reconcile with origin/main hit a conflict — surface A/B/C Branch "
             "Reconciliation Decision.",
             file=sys.stderr,
         )
-        print(
-            "The index could not be confirmed readable when this was "
-            "classified — on a core.splitIndex box this arm fires for "
-            "every failed merge, not only a genuine conflict.",
-            file=sys.stderr,
-        )
+        if index_state == "unparseable":
+            print(
+                "The index could not be confirmed readable when this was "
+                "classified — on a core.splitIndex box this arm fires for "
+                "every failed merge, not only a genuine conflict.",
+                file=sys.stderr,
+            )
         print("CONFLICT-PATHS", file=sys.stderr)
-        for path in _conflict_paths(no_ff_merge.stdout + "\n" + no_ff_merge.stderr):
+        for path in conflict_paths:
             print(path, file=sys.stderr)
     elif outcome == "RECONCILE-MERGE-COMMIT-REFUSED":
         print(

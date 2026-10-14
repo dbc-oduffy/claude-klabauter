@@ -209,6 +209,76 @@ def test_step0_conflict_is_deferred_once_then_fails_the_second_run(box):
     assert "src/a.py,src/b.py" in out
 
 
+OPEN = "RECONCILE-CONFLICT-OPEN branch=work/test"
+
+
+def _open_merge_launch(box):
+    box.with_template()
+    box.outputs["step0-branch-setup"] = (3, OPEN + "\n", "CONFLICT-PATHS\nsrc/a.py\nsrc/b.py\n")
+    code, out, _ = box.launch()
+    return code, out
+
+
+def test_open_merge_halts_committing_stages_and_emits_one_reconcile_group(box):
+    code, out = _open_merge_launch(box)
+    assert code == 0 and out.count("Workflow(") == 1
+    rows = {r["id"]: r for r in box.rows()}
+    assert rows["step0-branch-setup"]["status"] == "ran" and rows["step0-branch-setup"]["reason"] == "held:reconcile-open"
+    halted = rows["step0-normalize-consumed-frontmatter"]
+    assert halted["status"] == "halted-by-gate" and halted["reason"] == "held:reconcile-open"
+    assert "step0-normalize-consumed-frontmatter" not in box.ran and cli.ORIENT_STEP in box.ran
+    digest = json.loads((box.runs()[-1] / cli.DIGEST_FILE).read_text(encoding="utf-8"))
+    (group,) = [g for g in digest["agent_work"]["groups"] if g["id"] == "reconcile"]
+    (entry,) = group["entries"]
+    assert group["phase"] == 0 and entry["argv"] is None
+    assert entry["inputs"]["paths"] == ["src/a.py", "src/b.py"]
+    assert "Run no git command" in entry["brief"]
+    assert not box.marker()
+
+
+def test_finish_concludes_the_open_merge_before_the_briefing_and_the_tail(box):
+    _, out = _open_merge_launch(box)
+    box.outputs["reconcile-conclude"] = (0, "RECONCILED-MERGE-CONCLUDED branch=work/test\n", "")
+    code, _, _ = _finish(box, box.digest_run_id(out), _results(reconcile=[{"key": "reconcile", "outcome": "done"}]))
+    ids = [r["id"] for r in box.rows()]
+    assert code == 0
+    row = next(r for r in box.rows() if r["id"] == "reconcile-conclude")
+    assert row["status"] == "ran" and "RECONCILED-MERGE-CONCLUDED" in row["stdout"]
+    assert ids.index("reconcile-conclude") < ids.index("marker-write-workday-start-marker")
+    assert box.marker()
+
+
+def test_conclude_refusal_is_a_failed_row_carrying_the_refusal_string(box):
+    _, out = _open_merge_launch(box)
+    box.outputs["reconcile-conclude"] = (3, "RECONCILE-CONCLUDE-MARKERS\nsrc/a.py\n", "")
+    _finish(box, box.digest_run_id(out), _results(reconcile=[{"key": "reconcile", "outcome": "done"}]))
+    row = next(r for r in box.rows() if r["id"] == "reconcile-conclude")
+    assert row["status"] == "failed" and "RECONCILE-CONCLUDE-MARKERS" in row["reason"]
+
+
+def test_conclude_step_runs_the_conclude_cli_and_leads_with_its_refusal_text(box, monkeypatch):
+    seen = {}
+
+    def fake(target, args, *, repo_root, deadline_s):
+        seen.update(target=target, args=tuple(args), repo_root=repo_root)
+        return ChildOutcome(3, 1.0, 2, "", "RECONCILE-CONCLUDE-UNMERGED\na.py\n")
+
+    monkeypatch.setattr("coordinator_core.workday_start.run_spec.run_bin_cold", fake)
+    from coordinator_core.workday_start import run_spec
+
+    code, text = run_spec.conclude_open_merge(box.root)
+    assert code == 3 and text.splitlines()[0] == "RECONCILE-CONCLUDE-UNMERGED"
+    assert seen == {"target": "reconcile-merge-conclude", "args": (), "repo_root": box.root}
+
+
+def test_a_clean_run_has_no_conclude_step(box):
+    box.with_template().inbox()
+    _, out, _ = box.launch()
+    _finish(box, box.digest_run_id(out), _results(inbox=[
+        {"key": "triage-all", "outcome": "done", "memos": ["state/cross-repo/inbox/a.md"]}]))
+    assert "reconcile-conclude" not in [r["id"] for r in box.rows()]
+
+
 def test_conflict_after_a_clean_step0_is_deferred_again(box):
     code, _, _ = box.launch(day=DAY1)
     assert code == 0

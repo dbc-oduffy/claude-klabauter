@@ -73,18 +73,14 @@ CAP_HELPER_JS = (
 )
 
 
-#: argv ceiling for the digest's inline `terminal_commit_cli`; larger params go through a
-#: stdin heredoc (`--params-file -`), which neither ARG_MAX nor an apostrophe can break.
-TERMINAL_COMMIT_CLI_ARGV_MAX = 8000
-
+#: Always a quoted stdin heredoc (`--params-file -`): no argv shell-quoting layer exists to
+#: lose a Windows path's backslash escaping, and neither ARG_MAX nor an apostrophe applies.
 TERMINAL_COMMIT_CLI_HELPER_JS = (
     "function _terminalCommitCli(p) { "
     "if (!p) return null; "
     "const s = JSON.stringify(p); "
     "const head = 'coordinator-invoke dispatch.terminal_commit'; "
-    f"return s.length <= {TERMINAL_COMMIT_CLI_ARGV_MAX} "
-    + r"""? head + " '" + s.split("'").join("'\\''") + "'" """
-    + r""": head + " --params-file - <<'JSON'\n" + s + "\nJSON"; """
+    + r"""return head + " --params-file - <<'JSON'\n" + s + "\nJSON"; """
     "}"
 )
 

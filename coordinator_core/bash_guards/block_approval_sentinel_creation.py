@@ -203,6 +203,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_
 from coordinator_core.bash_guards._command_tokenizer import (
     _SEPARATOR_TOKEN_RE,
     exceeds_tokenizable_ceiling,
+    tokenize_full_command,
 )
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
@@ -261,7 +262,7 @@ def _segments_with_background(tokens: List[str]) -> "list[tuple[list[str], bool,
     segment also carries whether IT ITSELF was launched backgrounded --
     terminated by a bare `&`, never `&&` (`_SEPARATOR_TOKEN_RE` matches
     both, so the separator token's exact text, not just its membership, is
-    what distinguishes them). Needed only by this override's readable-
+    what distinguishes them; a newline after `&` tokenizes as `&;`). Needed only by this override's readable-
     script branch ("no earlier segment is backgrounded" -- see class
     docstring "ITEM 33 NARROWING"); every other rule in this module uses
     the shared engine's own `pipe_before`-only segmenter unchanged."""
@@ -271,7 +272,7 @@ def _segments_with_background(tokens: List[str]) -> "list[tuple[list[str], bool,
     for tok in tokens:
         if _SEPARATOR_TOKEN_RE.match(tok):
             if current:
-                segments.append((current, pipe_before, tok == "&"))
+                segments.append((current, pipe_before, tok.rstrip(";") == "&"))
             current = []
             pipe_before = "|" in tok
             continue
@@ -396,14 +397,23 @@ _PARAM_EXPANSION_RE = re.compile(
 
 _UNRESOLVED_CWD = object()
 
+#: Heads allowed between a heredoc writer and the run of the file it wrote.
+#: None of them can alter a file or the working directory.
+_HARMLESS_BETWEEN_HEADS = frozenset(
+    {"echo", "printf", "true", "false", ":", "pwd", "ls", "sleep", "date"}
+)
+
 _STDIN_REDIRECT_RE = re.compile(r"^0?<(?![<(&])(.*)$")
 
 
-def _expand_from_env(token: str, assigned: "set[str]") -> Optional[str]:
+def _expand_from_env(
+    token: str, assigned: "set[str]", known: Optional["dict[str, str]"] = None
+) -> Optional[str]:
     """Expand `$VAR`, `${VAR}`, `${VAR:-default}` and a leading `~` in `token`
     against the guard process's environment and the inline default. Returns
     None when any reference stays unresolved or names a variable assigned
-    earlier in the same command (its shell value is not this process's env)."""
+    earlier in the same command (its shell value is not this process's env),
+    unless `known` holds that variable's literal in-command value."""
     unresolved = False
 
     def _sub(m: "re.Match[str]") -> str:
@@ -411,6 +421,8 @@ def _expand_from_env(token: str, assigned: "set[str]") -> Optional[str]:
         name = m.group(1) or m.group(3)
         default = m.group(2)
         if name in assigned:
+            if known is not None and name in known:
+                return known[name]
             unresolved = True
             return m.group(0)
         value = os.environ.get(name)
@@ -804,6 +816,19 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         #: Names assigned inside the command being evaluated: their shell
         #: value is unknown here, so env expansion skips them.
         self._assigned_vars: "set[str]" = set()
+        #: (POSIX tokens, backslash-preserving tokens) of the segment under
+        #: evaluation, or None when the two do not align token-for-token.
+        self._bs_pair: "Optional[Tuple[list[str], list[str]]]" = None
+        #: Literal values of variables assigned exactly once, by a standalone
+        #: assignment segment that precedes the segment under evaluation, so
+        #: `P=/abs/p.py; python3 $P` resolves to a readable path.
+        self._known_vars: "dict[str, str]" = {}
+        #: Assignment count per variable name across the whole command.
+        self._assign_counts: "dict[str, int]" = {}
+        #: Heredoc-body indexes (into `_heredoc_bodies`) owned by each
+        #: segment, or None when heredoc operators in the tokens do not
+        #: line up one-to-one with the bodies extracted from the raw text.
+        self._seg_heredocs: "Optional[list[list[int]]]" = None
 
     def _resolve_argv0(self, seg_tokens: "list[str]") -> "list[str]":
         """Replace an argv0 parameter expansion (`${COORDINATOR_PYTHON:-python3}`,
@@ -940,12 +965,29 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 )
             return False, "", ""
 
-        self._assigned_vars = {
-            m.group(1) for m in (_ASSIGN_RE.match(t) for t in tokens) if m
-        }
+        assign_matches = [m for m in (_ASSIGN_RE.match(t) for t in tokens) if m]
+        self._assigned_vars = {m.group(1) for m in assign_matches}
+        assign_counts: "dict[str, int]" = {}
+        for m in assign_matches:
+            assign_counts[m.group(1)] = assign_counts.get(m.group(1), 0) + 1
+        self._assign_counts = assign_counts
+        self._known_vars = {}
         prior_segments: "list[tuple[list[str], bool, bool]]" = []
-        for seg_tokens, pipe_before, backgrounded in _segments_with_background(tokens):
-            seg_tokens = self._resolve_argv0(seg_tokens)
+        segments = _segments_with_background(tokens)
+        self._seg_heredocs = self._map_segment_heredocs(segments)
+        bs_tokens = tokenize_full_command(cmd_norm, preserve_windows_backslashes=True)
+        bs_segments = _segments_with_background(bs_tokens) if bs_tokens else []
+        if len(bs_segments) != len(segments):
+            bs_segments = []
+        for seg_idx, (seg_tokens, pipe_before, backgrounded) in enumerate(segments):
+            resolved = self._resolve_argv0(seg_tokens)
+            bs_seg = bs_segments[seg_idx][0] if bs_segments else None
+            self._bs_pair = (
+                (seg_tokens, bs_seg)
+                if bs_seg is not None and resolved is seg_tokens and len(bs_seg) == len(seg_tokens)
+                else None
+            )
+            seg_tokens = resolved
             if self._segment_denies(seg_tokens):
                 return (
                     True,
@@ -959,7 +1001,120 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 msg, reason_class = verdict
                 return True, msg, reason_class
             prior_segments.append((seg_tokens, pipe_before, backgrounded))
+            if not pipe_before and not backgrounded and all(
+                _ASSIGN_RE.match(t) for t in seg_tokens
+            ):
+                for t in seg_tokens:
+                    m = _ASSIGN_RE.match(t)
+                    name, value = m.group(1), m.group(2)
+                    if assign_counts[name] == 1 and "$" not in value and "`" not in value:
+                        self._known_vars[name] = value
         return False, "", ""
+
+    def _map_segment_heredocs(
+        self, segments: "list[tuple[list[str], bool, bool]]"
+    ) -> "Optional[list[list[int]]]":
+        """Assign each extracted heredoc body to the segment whose tokens carry
+        its `<<` operator. None when the operator count disagrees with the
+        bodies found in the raw text (a `<<` inside a quoted string, say):
+        callers then fail closed rather than guess which body is whose."""
+        mapping: "list[list[int]]" = []
+        nxt = 0
+        for seg_tokens, _pipe, _bg in segments:
+            ops = sum(
+                1 for t in seg_tokens if t.startswith("<<") and not t.startswith("<<<")
+            )
+            mapping.append(list(range(nxt, nxt + ops)))
+            nxt += ops
+        if nxt != len(self._heredoc_bodies):
+            return None
+        return mapping
+
+    def _writer_context_unchanged(
+        self,
+        prior_segments: "list[tuple[list[str], bool, bool]]",
+        writer_idx: int,
+        path_token: str,
+    ) -> bool:
+        """True only when `path_token` provably names, at the run segment, the
+        file the heredoc writer wrote: the path is a plain literal or a
+        variable assigned at most once, and every segment between writer and
+        run is a harmless no-redirect builtin that neither changes the
+        directory (`cd`/`pushd`/`popd`) nor mentions the path, its basename or
+        a variable it uses. Anything else could swap the file or the
+        directory under the token, so the caller keeps the deny."""
+        if "`" in path_token or "$(" in path_token or any(c in path_token for c in "*?[{"):
+            return False
+        var_names = {m.group(1) for m in _VAR_REF_RE.finditer(path_token)}
+        if any(self._assign_counts.get(name, 0) > 1 for name in var_names):
+            return False
+        basename = re.split(r"[\/]", path_token)[-1]
+        needles = [path_token] + ([basename] if basename and not var_names else [])
+        var_res = [
+            re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(name))
+            for name in var_names
+        ]
+        for tokens, _pipe, _bg in prior_segments[writer_idx + 1 :]:
+            idx = self._env_skip_index(tokens)
+            if idx >= len(tokens) or idx != 0:
+                return False
+            if _normalize_executable_basename(tokens[0]) not in _HARMLESS_BETWEEN_HEADS:
+                return False
+            for tok in tokens:
+                if ">" in tok or "<" in tok or "$(" in tok or "`" in tok:
+                    return False
+                if any(n in tok for n in needles) or any(r.search(tok) for r in var_res):
+                    return False
+        return True
+
+    def _heredoc_written_body(
+        self,
+        writer_tokens: "list[str]",
+        writer_idx: int,
+        path_token: str,
+    ) -> Optional[str]:
+        """Body of the heredoc that a bare `cat > <path_token> <<DELIM`
+        segment writes to `path_token`: the exact content the later
+        interpreter invocation runs. None for any other writer shape (append,
+        extra operands, other redirects, piped input), so those keep the
+        unconditional deny."""
+        if self._seg_heredocs is None or writer_idx >= len(self._seg_heredocs):
+            return None
+        owned = self._seg_heredocs[writer_idx]
+        if len(owned) != 1:
+            return None
+        argv0_idx = self._env_skip_index(writer_tokens)
+        if argv0_idx >= len(writer_tokens):
+            return None
+        if _normalize_executable_basename(writer_tokens[argv0_idx]) != "cat":
+            return None
+        redirect_targets: "list[str]" = []
+        i = argv0_idx + 1
+        n = len(writer_tokens)
+        while i < n:
+            tok = writer_tokens[i]
+            if tok.startswith("<<") and not tok.startswith("<<<"):
+                i += 2 if tok in ("<<", "<<-") else 1
+                continue
+            m = _REDIR_PREFIX_RE.match(tok)
+            if m and m.group(0) in (">", "1>"):
+                attached = tok[m.end() :]
+                if attached:
+                    redirect_targets.append(attached)
+                    i += 1
+                elif i + 1 < n:
+                    redirect_targets.append(writer_tokens[i + 1])
+                    i += 2
+                else:
+                    return None
+                continue
+            return None
+        if redirect_targets != [path_token]:
+            return None
+        body = self._heredoc_bodies[owned[0]]
+        if len(body.encode("utf-8", "replace")) > _MAX_SCRIPT_READ_BYTES:
+            return None
+        return body
 
     def _indirection_verdict_with_reason(
         self,
@@ -1138,17 +1293,40 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             # from stdin via a heredoc, not a named file, so there is no
             # path to check against a prior writer. Consume the next
             # heredoc body in occurrence order instead of a file read.
-            body = self._next_heredoc_body()
+            body = self._current_segment_heredoc_body(len(prior_segments))
             if body is None or len(body.encode("utf-8", "replace")) > _MAX_SCRIPT_READ_BYTES:
                 return fallback
             mentions = self._text_mentions_target(body)
         else:
-            if any(
-                _segment_writes_target_path(prior_tokens, path_token)
-                for prior_tokens, _pipe_before, _backgrounded in prior_segments
-            ):
-                return fallback
-            read_path = _expand_from_env(path_token, self._assigned_vars)
+            writers = [
+                idx
+                for idx, (prior_tokens, _pipe_before, _backgrounded) in enumerate(prior_segments)
+                if _segment_writes_target_path(prior_tokens, path_token)
+            ]
+            if writers:
+                # The script is written by a heredoc in this same command and
+                # does not exist on disk yet: judge the heredoc body, which is
+                # the exact text that runs. Any other writer shape stays denied.
+                if len(writers) != 1:
+                    return fallback
+                if not self._writer_context_unchanged(prior_segments, writers[0], path_token):
+                    return fallback
+                written_body = self._heredoc_written_body(
+                    prior_segments[writers[0]][0], writers[0], path_token
+                )
+                if written_body is None:
+                    return fallback
+                if not self._text_mentions_target(written_body):
+                    return None
+                if norm_head == "python3" and not _PY_WRITE_HINT_RE.search(written_body):
+                    return None
+                return (
+                    "command shape that would create or overwrite %s" % self.target_basename,
+                    REASON_DIRECT,
+                )
+            read_path = _expand_from_env(
+                self._backslash_spelling(path_token), self._assigned_vars, self._known_vars
+            )
             if read_path is not None:
                 read_path = translate_msys_path(read_path)
             effective_cwd = self._cwd_after(prior_segments)
@@ -1169,6 +1347,19 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             )
         return None  # clean read -- allow this segment's indirection check
 
+    def _backslash_spelling(self, path_token: str) -> str:
+        """The operand as written with Windows backslashes intact (POSIX
+        tokenization strips them); `path_token` itself when no preserved
+        spelling aligns with the current segment. Used for the file read only."""
+        pair = self._bs_pair
+        if pair is None:
+            return path_token
+        posix_toks, bs_toks = pair
+        for posix_tok, bs_tok in zip(posix_toks, bs_toks):
+            if posix_tok == path_token:
+                return bs_tok
+        return path_token
+
     def _python_script_may_write(self, read_path: Optional[str], cwd: Any) -> bool:
         """True unless the (already read, mention-positive) python script has
         no file-writing, process-spawning or dynamic-execution token at all,
@@ -1184,6 +1375,16 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         except OSError:
             return True
         return bool(_PY_WRITE_HINT_RE.search(text))
+
+    def _current_segment_heredoc_body(self, seg_idx: int) -> Optional[str]:
+        """Body of the heredoc owned by segment `seg_idx` (the `<interp> -`
+        invocation under evaluation); falls back to occurrence order when the
+        operator-to-body mapping is unavailable."""
+        if self._seg_heredocs is None:
+            return self._next_heredoc_body()
+        if seg_idx >= len(self._seg_heredocs) or not self._seg_heredocs[seg_idx]:
+            return None
+        return self._heredoc_bodies[self._seg_heredocs[seg_idx][0]]
 
     def _next_heredoc_body(self) -> Optional[str]:
         """F3: pop the next not-yet-consumed heredoc body (left-to-right
@@ -1219,7 +1420,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             args = [t for t in tokens[idx + 1 :] if not t.startswith("-")]
             if len(args) != 1:
                 return _UNRESOLVED_CWD
-            target = _expand_from_env(args[0], self._assigned_vars)
+            target = _expand_from_env(args[0], self._assigned_vars, self._known_vars)
             # Bash hands `/x/repo` for `C:\repo`; os.path reads it as a rooted
             # path on the current drive, so the script read would miss.
             target = None if target is None else translate_msys_path(target)
@@ -1351,7 +1552,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return gate_disable_denial(payload) or check_ungated(payload)
 
 
-_GATE_KEY_RE = re.compile(r"doctrine_edit_gate", re.IGNORECASE)
+# The key as a setting name, never as a path or identifier component
+# (`test_doctrine_edit_gate_opt_in.py`, `scratch/doctrine_edit_gate.log`).
+# A preceding `.`, `-` or `/` stays a match: TOML dotted keys (`feature.<key>`
+# under `[coordinator]`) flatten to the same registry key, and `s/<key>/` is
+# sed. A literal `\n`/`\r`/`\t` escape ahead of the key is a line start, not
+# a word. The env spelling `..._FEATURE_DOCTRINE_EDIT_GATE` is the one
+# underscore-adjacent form kept. Path-ness is read off the following side
+# (`.log`, `_opt_in.py`).
+_GATE_KEY_RE = re.compile(
+    r"(?:(?<!\w)|(?<=\\[nrt])|(?<=FEATURE_))doctrine_edit_gate(?![\w-]|\.\w)",
+    re.IGNORECASE,
+)
 _OFF_VALUE_RE = re.compile(r"(?<![\w.-])(?:off|false|0|no)(?![\w.-])", re.IGNORECASE)
 _WRITE_VERB_RE = re.compile(
     r"(?<![\w-])(?:set|registry_set|set-content|add-content|out-file|tee|tee-object|sed)(?![\w-])|>",

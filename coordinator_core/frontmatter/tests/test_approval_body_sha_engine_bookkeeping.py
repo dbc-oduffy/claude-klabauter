@@ -87,8 +87,9 @@ def test_review_stamp_and_frontmatter_bookkeeping_is_invisible():
         lambda t: t.replace("```\n\nProse", "- id: C6\n  title: t6\n  change_kind: code-edit\n  surface: a.py\n```\n\nProse"),
         lambda t: t.replace("- id: C5\n  title: t5\n  change_kind: code-edit\n  surface: a.py\n  disposition: open\n  deferred: false\n", ""),
         lambda t: t.replace("disposition: open\n  deferred: false\n- id: C4", "disposition: backlogged\n  deferred: false\n- id: C4"),
+        lambda t: t.rstrip("\n") + "\n\n## Close-out note\n\nDone.\n",
     ],
-    ids=["prose", "row-field", "row-extra-key", "task-added", "task-removed", "closed-disposition"],
+    ids=["prose", "row-field", "row-extra-key", "task-added", "task-removed", "closed-disposition", "close-out-section"],
 )
 def test_a_real_body_edit_still_refuses(mutate):
     approved = _approved()
@@ -191,3 +192,46 @@ def test_clearing_an_external_gate_keeps_the_stamp_valid_and_real_edit_refuses(t
     assert "cleared: true" in cleared and cleared != approved
     assert check_approved_body(cleared)[0] == APPROVED_BODY_OK
     assert check_approved_body(cleared.replace("land the thing", "land another"))[0] == APPROVED_BODY_CHANGED
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_review_stamp_accept_keeps_a_sealed_plan_ok(tmp_path):
+    from coordinator_core.ops import review_stamp
+    from coordinator_core.ops.tests.test_review_stamp import _commit, _mint_success_fixture, _setup_repo
+    from coordinator_core.ops.tests.test_review_stamp_pm_acceptance import _fail_delivery_terminal
+
+    repo = _setup_repo(tmp_path)
+    plan = repo / "docs" / "plans" / "example.md"
+    sealed = stamp_approved_body_sha(plan.read_text(encoding="utf-8"))
+    plan.write_text(sealed, encoding="utf-8")
+    _commit(repo, "seal")
+    _, build_test = _mint_success_fixture(repo)
+    _fail_delivery_terminal(repo)
+    assert check_approved_body(plan.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+    done = review_stamp.accept(
+        plan, repo, pm_utterance="ship it", pm_utterance_ref="chat:1", build_test_path=str(build_test)
+    )
+    after = plan.read_text(encoding="utf-8")
+    assert "review_stamp_acceptance" in done and "review_stamp_acceptance:" in after
+    assert check_approved_body(after)[0] == APPROVED_BODY_OK
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_evidence_append_keeps_a_sealed_plan_ok(tmp_path):
+    import subprocess
+
+    from coordinator_core.ops.plan_tasks_mutate import _evidence_append
+    from coordinator_core.win_portability import no_console_creationflags
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    plan = tmp_path / "docs" / "plans" / "plan.md"
+    approved = _approved()
+    plan.write_text(approved, encoding="utf-8")
+    res = _evidence_append("docs/plans/plan.md", "C3", "ran the pin", tmp_path, tmp_path)
+    assert res.get("applied") is True, res
+    assert plan.read_text(encoding="utf-8") == approved
+    assert check_approved_body(plan.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK

@@ -67,10 +67,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from coordinator_core.backlog_grind_assemble.readers_blitz import (
-    bare_cited_surface,
-    is_item_live,
-)
 from coordinator_core.contract import grind_vocab
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.session import claims
@@ -777,6 +773,12 @@ def select_rows(
             )
             continue
         if profile in _LIVENESS_GATED_PROFILES:
+            # Trap: no cold-start saving while grind_stages (-> backlog_grind_assemble/__init__) still imports readers_blitz at module level.
+            from coordinator_core.backlog_grind_assemble.readers_blitz import (
+                bare_cited_surface,
+                is_item_live,
+            )
+
             bare_surface = bare_cited_surface(normalised.get("surface"))
             if bare_surface is not None and not is_item_live(repo_root, bare_surface):
                 declined.append(

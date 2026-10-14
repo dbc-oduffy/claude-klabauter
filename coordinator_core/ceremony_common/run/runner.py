@@ -47,8 +47,22 @@ class ChildOutcome:
     reason: str = ""
 
 
+HELD_PREFIX = "held:"
+
+
+@dataclass(frozen=True)
+class Hold:
+    """A rule's verdict that the gate is open but later steps must wait for a finish-time act.
+
+    The gating step's row is `ran` with reason `held:<reason>`; later steps in the held stages
+    (every later step when `RunHooks.held_stages` is None) get `halted-by-gate`.
+    """
+
+    reason: str
+
+
 Dispatcher = Callable[..., ChildOutcome]
-Rule = Callable[..., "bool | str"]
+Rule = Callable[..., "bool | str | Hold"]
 
 
 @dataclass
@@ -178,6 +192,17 @@ def _cold_cli(step: StepSpec, *, repo_root: Path, deadline_s: float, stdin_text:
     )
 
 
+def run_bin_cold(target: str, args: Sequence[str], *, repo_root: Path, deadline_s: float) -> ChildOutcome:
+    """Run `coordinator/bin/<target>.py` as one measured cold child, for a step whose bareword is outside the dispatch row."""
+    return _cold_cli(
+        StepSpec(
+            id=target, stage="", kind="cli", target=target, args=tuple(args), depends_on=None,
+            already_satisfied=False, detail="", heading="", cost_class="engine",
+        ),
+        repo_root=repo_root, deadline_s=deadline_s,
+    )
+
+
 def _dispatch_cli(
     step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float, stdin_text: str | None = None
 ) -> ChildOutcome:
@@ -271,7 +296,7 @@ def _apply_rule(
     *, run_dir: Path,
 ) -> StepResult:
     """Offer a gating step's non-zero exit to its rule; the rule's own children get their own rows."""
-    resolved: "bool | str" = False
+    resolved: "bool | str | Hold" = False
     token = _RULE_SCOPE.set(scope)
     try:
         if rule is not None:
@@ -293,6 +318,11 @@ def _apply_rule(
                 ),
             )
         scope.children.clear()
+    if isinstance(resolved, Hold):
+        return StepResult(
+            id=step.id, status="ran", reason=f"{HELD_PREFIX}{resolved.reason}", exit_code=result.exit_code,
+            process_ms=result.process_ms, spawns=result.spawns, stdout=result.stdout, stderr=result.stderr,
+        )
     if resolved is True:
         return StepResult(
             id=step.id, status="ran", reason=f"resolved-by:{rule_id}", exit_code=result.exit_code,
@@ -317,12 +347,15 @@ def run_stages(
     rules: Mapping[str, Rule] | None = None,
     allow_suite: bool = False,
     suite_grant: str | None = None,
+    held_stages: "frozenset[str] | None" = None,
 ) -> list[StepResult]:
     """Run `steps` in order, appending exactly one terminal ledger row per step.
 
     A raising step is a `failed` row and the run continues. A gating step that ends unresolved
     (failed, raised, deadline, not-composed) gives every remaining step `halted-by-gate`, unless
-    it is `best_effort`. A `suite` step starts only with `allow_suite=True` and a `ran` row for
+    it is `best_effort`. A gating step whose rule returned a `Hold` ends `ran` and gives the
+    remaining steps in `held_stages` (all of them when None) `halted-by-gate` with the hold's
+    reason. A `suite` step starts only with `allow_suite=True` and a `ran` row for
     the step id `suite_grant`. Raises before any child starts when a `cli` step's bareword is outside the dispatch row.
     """
     repo = Path(repo_root)
@@ -337,6 +370,7 @@ def run_stages(
     scope = _RuleScope(repo_root=repo, budget=owned_budget, measure=table["rule-child"])
     results: list[StepResult] = []
     halted_by: str | None = None
+    held_by: str | None = None
     done: dict[str, StepResult] = {}
     try:
         for step in steps:
@@ -344,6 +378,8 @@ def run_stages(
             try:
                 if halted_by is not None:
                     result = StepResult(id=step.id, status="halted-by-gate", reason=halted_by)
+                elif held_by is not None and (held_stages is None or step.stage in held_stages):
+                    result = StepResult(id=step.id, status="halted-by-gate", reason=held_by)
                 else:
                     result = _run_step(
                         step, table, rule_table, scope, run_dir=run_dir, done=done,
@@ -351,6 +387,11 @@ def run_stages(
                     )
                     if step.gates_next and not step.best_effort and result.status in ("failed", "not-composed"):
                         halted_by = step.id
+                    elif (
+                        step.gates_next and not step.best_effort
+                        and result.status == "ran" and result.reason.startswith(HELD_PREFIX)
+                    ):
+                        held_by = result.reason
             except Exception as exc:  # noqa: BLE001 -- the row is the report
                 result = StepResult(id=step.id, status="failed", reason=f"raised {type(exc).__name__}: {exc}")
                 if step.gates_next and not step.best_effort:

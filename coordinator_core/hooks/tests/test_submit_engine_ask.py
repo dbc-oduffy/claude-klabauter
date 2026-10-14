@@ -264,18 +264,33 @@ def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra
     return payload
 
 
-def test_sizing_scout_is_denied_only_while_a_run_is_live(tmp_path):
+def test_sizing_scout_is_denied_with_no_live_run_naming_the_ask_submission(tmp_path):
     root = _repo(tmp_path)
-    payload = _scout_payload(root)
-    assert mod.sizing_scout_deny(payload) is None
+    out = mod.sizing_scout_deny(_scout_payload(root))
+    assert _hso(out)["permissionDecision"] == "deny"
+    reason = _hso(out)["permissionDecisionReason"]
+    assert warp_fire.SUBMIT_WORKFLOW_NAME in reason
+    assert "ask:" in reason
+    bare = _scout_payload(root)
+    del bare["session_id"]
+    assert _hso(mod.sizing_scout_deny(bare))["permissionDecision"] == "deny"
+
+
+def test_sizing_scout_with_a_live_run_names_the_run(tmp_path):
+    root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
-    out = mod.sizing_scout_deny(payload)
+    out = mod.sizing_scout_deny(_scout_payload(root))
     assert _hso(out)["permissionDecision"] == "deny"
     assert "ask-20261013T000000-abcdef" in _hso(out)["permissionDecisionReason"]
     assert warp_fire.fire_command() not in _hso(out)["permissionDecisionReason"]
     padded = _scout_payload(root, " coordinator:sizing-scout ")
     assert _hso(mod.sizing_scout_deny(padded))["permissionDecision"] == "deny"
-    assert mod.sizing_scout_deny(_scout_payload(root, session_id="other")) is None
+    other = mod.sizing_scout_deny(_scout_payload(root, session_id="other"))
+    assert "ask-20261013T000000-abcdef" not in _hso(other)["permissionDecisionReason"]
+
+
+def test_a_scout_payload_with_an_agent_id_is_not_denied_without_a_run(tmp_path):
+    assert mod.sizing_scout_deny(_scout_payload(_repo(tmp_path), agent_id="a1")) is None
 
 
 def test_a_scout_payload_with_an_agent_id_is_not_denied_with_a_run_live(tmp_path):
@@ -438,3 +453,40 @@ def test_a_redeemed_token_is_not_live(tmp_path):
     mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=emit)
     assert run_token.redeem(root, "ask-20261013T000000-abcdef", emit.token, emit.script)
     assert warp_live.live_run_for_sizing(root, "state/sizings/a.yaml", tmpdir=str(tmp_path)) is None
+
+
+def test_an_em_brief_beside_the_ask_reaches_the_emit_params(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    args = {"ask": "a", "brief": "prefer X", "brief_file": "b.md", "context": "c.md"}
+    mod.evaluate(_payload(root, args), emit=emit)
+    params = emit.calls[0][0]
+    assert (params["ask_brief"], params["ask_brief_file"], params["ask_context"]) == ("prefer X", "b.md", ["c.md"])
+    mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml", "context": ["c.md", "d.md"]}), emit=_Emit())
+
+
+def test_a_submission_without_a_brief_adds_no_brief_params(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"ask": "a", "brief": "  ", "context": []}), emit=emit)
+    assert not any(k.startswith("ask_") for k in emit.calls[0][0])
+
+
+def test_a_malformed_brief_is_refused_not_dropped(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    for bad in ({"brief": 3}, {"context": [1]}):
+        out = mod.evaluate(_payload(root, {"ask": "a", **bad}), emit=emit)
+        assert _hso(out)["permissionDecision"] == "deny"
+    assert emit.calls == []
+
+
+def test_a_brief_the_engine_refuses_is_named_in_the_deny(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit(raises=ValueError("--brief-file nope.md: no such file"))
+    out = mod.evaluate(_payload(root, {"ask": "a", "brief_file": "nope.md"}), emit=emit)
+    assert "nope.md: no such file" in _hso(out)["permissionDecisionReason"]
+
+
+def test_the_deny_shape_names_the_brief_field():
+    assert "brief:" in mod._ARGS_SHAPE and "brief_file" in mod._ARGS_SHAPE

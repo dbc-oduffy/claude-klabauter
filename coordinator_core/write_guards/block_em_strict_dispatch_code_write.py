@@ -17,6 +17,10 @@ Deny conditions, once flagged and the caller is the main EM session:
      first-touch order, so its tail is not the newest) has `estimate.tshirt`
      S..XXL, or none parseable -> dispatch executors instead.
 
+Exemption: a path listed in the live reconcile conflict manifest (bound to the
+current MERGE_HEAD) passes before the sizing read; an unreadable, stale or
+unbound manifest exempts nothing.
+
 Subagents always pass: `agent_id` in the payload, or the house
 `em-session-id.txt` back-pointer test (`_is_subagent_session`). Ambiguity
 allows. Doc/data files always pass (`_DOC_DATA_EXTENSIONS`, imported).
@@ -33,6 +37,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core.git import reconcile_manifest
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.hooks.nudge_unrouted_sizing import (
     _is_subagent_session,
@@ -71,6 +76,17 @@ def _ext_of(file_path: str) -> str:
     if dot <= slash:
         return ""
     return file_path[dot:].lower()
+
+
+def _in_live_reconcile_manifest(repo_root: str, file_path: str) -> bool:
+    try:
+        manifest = reconcile_manifest.read(repo_root)
+        if manifest is None:
+            return False
+        rel = os.path.relpath(file_path, repo_root).replace("\\", "/")
+        return rel in manifest.paths
+    except Exception:
+        return False
 
 
 def _no_sizing_deny() -> Dict[str, Any]:
@@ -118,6 +134,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not file_path:
             return None
         if _ext_of(file_path) in _DOC_DATA_EXTENSIONS:
+            return None
+
+        if _in_live_reconcile_manifest(repo_root, file_path):
             return None
 
         touched = _session_touched_sizing_files(session_id, repo_root)

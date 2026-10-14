@@ -19,6 +19,9 @@ VERDICT line, and the verdict computation it wrapped is dead (WARN on 40 of
     - commit younger than 5 minutes halts (exit 1).
     - commit older than 5 minutes passes (exit 0).
     - gh failure (non-zero / empty output) halts (exit 1).
+  merge-pinned:
+    - a merge or an already-merged head prints MERGE_SHA/PR/MERGED_NOW and exits 0.
+    - a refusal prints the reason first and exits 1; a usage error exits 2.
 """
 from __future__ import annotations
 
@@ -611,3 +614,52 @@ def test_coverage_gate_diffs_and_validates_the_named_repo_root(tmp_path, monkeyp
     assert validated_roots == [str(fixture_repo)]
     assert os.getcwd() == str(unrelated.resolve())
     assert _mod._REPO_ROOT.get() is None
+
+
+def _stub_merge_pinned(monkeypatch, *, result=None, refusal=None):
+    from coordinator_core.workweek_complete.release import merge
+
+    seen: dict = {}
+
+    def _fake(repo_root, **kwargs):
+        seen.update(kwargs, repo_root=repo_root)
+        if refusal:
+            raise merge.MergeRefused(refusal, "gh said no")
+        return result
+
+    monkeypatch.setattr(merge, "merge_pinned", _fake)
+    return seen
+
+
+def _merge_argv(tmp_path):
+    body = tmp_path / "body.md"
+    body.write_text("the body", encoding="utf-8")
+    return ["merge-pinned", "--sha", "abc", "--branch", "rel/x", "--title", "T",
+            "--body-file", str(body), "--repo-root", str(tmp_path)]
+
+
+@pytest.mark.parametrize("merged_now", [True, False])
+def test_merge_pinned_prints_three_lines_and_exits_zero(monkeypatch, capsys, tmp_path, merged_now):
+    from coordinator_core.workweek_complete.release.contract import MergeResult
+
+    seen = _stub_merge_pinned(monkeypatch, result=MergeResult("f" * 40, 9, merged_now))
+    assert _mod.main(_merge_argv(tmp_path)) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"MERGE_SHA={'f' * 40}", "PR=9", f"MERGED_NOW={'true' if merged_now else 'false'}",
+    ]
+    assert seen["candidate"] == "abc" and seen["body"] == "the body"
+
+
+def test_merge_pinned_refusal_prints_reason_first_and_exits_one(monkeypatch, capsys, tmp_path):
+    _stub_merge_pinned(monkeypatch, refusal="push-rejected")
+    assert _mod.main(_merge_argv(tmp_path)) == 1
+    assert capsys.readouterr().out.splitlines()[0] == "push-rejected"
+
+
+def test_merge_pinned_usage_error_exits_two(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        _mod.main(["merge-pinned", "--sha", "abc"])
+    assert exc.value.code == 2
+    argv = _merge_argv(tmp_path)
+    argv[argv.index("--body-file") + 1] = str(tmp_path / "missing.md")
+    assert _mod.main(argv) == 2

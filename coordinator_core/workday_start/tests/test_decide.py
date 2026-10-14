@@ -204,3 +204,14 @@ def test_commit_refused_is_false_and_writes_nothing(repo, tmp_path):
     assert _git(repo, "rev-parse", "HEAD") == head
     unknown = SimpleNamespace(stdout="SOMETHING-ELSE branch=b\n", stderr="")
     assert rules.step0_reconcile_outcome(None, unknown, repo_root=repo, run_dir=runs / "r") is False
+
+
+def test_open_merge_holds_and_records_resolve_in_run_even_after_a_prior_conflict(repo, tmp_path):
+    runs = _runs(tmp_path)
+    _prior(runs, "20261011T000000Z-a", decision="deferred-once")
+    result = _reconcile("RECONCILE-CONFLICT-OPEN", paths=("a.py", "b.py"))
+    out = rules.step0_reconcile_outcome(None, result, repo_root=repo, run_dir=runs / "20261012T000000Z-b")
+    assert out == rules.Hold(rules.HOLD_REASON)
+    row = json.loads((runs / "20261012T000000Z-b" / DECISIONS_FILE).read_text())
+    assert row["decision"] == "resolve-in-run" and "paths=a.py,b.py" in row["evidence"]
+    assert "outcome=RECONCILE-CONFLICT-OPEN" in row["evidence"]

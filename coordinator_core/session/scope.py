@@ -2179,6 +2179,7 @@ def touch(
     root: Optional[str] = None,
     *,
     kind: Optional[str] = None,
+    refresh_activity: bool = True,
 ) -> None:
     """Port of ``cs_touch <session_id> <path>``: append a repo-relative file
     path to this session's ``touch-record.jsonl`` (C4 -- the writer flip;
@@ -2233,6 +2234,13 @@ def touch(
     normalization attempt (Python relpath failed, path outside repo), SKIP
     it — an absolute path in ``touched.txt`` corrupts the relative-path scope
     set. The guard is on a STILL-absolute path, NOT on an empty one.
+
+    ``refresh_activity=False`` skips the ``last_activity`` meta.json rewrite
+    (the dominant per-call cost on Windows). Only a caller that records a
+    BATCH passes it, and that caller owns the one
+    ``core.update_meta_field(sdir, "last_activity", core.now_iso())`` after
+    the batch (``ipc._record_self_reported_touches``); a single-path caller
+    keeps the default, else the session never reads as live.
 
     Raises ``ValueError`` if ``sid`` or ``path`` is empty (bash
     ``${1:?}``/``${2:?}`` required-arg contract).
@@ -2323,7 +2331,8 @@ def touch(
 
     # Update last_activity (best-effort, no failure on error). Unconditional
     # now that every call actually appends (no dedup-skip branch left).
-    core.update_meta_field(sdir, "last_activity", core.now_iso())
+    if refresh_activity:
+        core.update_meta_field(sdir, "last_activity", core.now_iso())
     return
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
+from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -50,10 +51,6 @@ from coordinator_core.ops.dispatch_emit.requirements_ledger import (
     POST_COMMIT_ACTS,
     STATUSES as LEDGER_STATUSES,
 )
-from coordinator_core.ops.dispatch_emit.pm_adjudication import (
-    ADJUDICATOR_AGENT_TYPE,
-    IRREVERSIBLE_GATE_SOURCE,
-)
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     ARM_ROADMAP,
@@ -75,12 +72,14 @@ from coordinator_core.ops.review_mint.execute_review import (
     NO_SLICES_HALT,
     compose_criterion_judge,
     compose_execute_review,
+    owner_repo_clause_js,
 )
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.session.record_homes import home_dir
 
+_OWNER_ROWS_JS = "_crossRepoRows"
 _SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
@@ -275,7 +274,7 @@ _MANIFEST_SCHEMA = _obj(
         "no_test_target": {"type": ["object", "null"]},
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
-        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "closure_key": {}})},
+        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "owner_root": _STR, "closure_key": {}})},
     },
 )
 
@@ -546,6 +545,12 @@ def compose_ask_script(
     On a raw ask in ceo mode an XL `pm-decision` sizing gets its exit picked in-run by the APM;
     `roadmap_blitz_text` (or the plugin asset) embeds the roadmap arm that pick can lead to.
     """
+    # Deferred: pm_adjudication pulls grind_stages, which a --plan emit must not load.
+    from coordinator_core.ops.dispatch_emit.pm_adjudication import (
+        ADJUDICATOR_AGENT_TYPE,
+        IRREVERSIBLE_GATE_SOURCE,
+    )
+
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
     if ask_source not in ASK_SOURCES:
@@ -652,6 +657,7 @@ def compose_ask_script(
         run_key=run_id,
         prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel)",
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
+        owner_rows_js=_OWNER_ROWS_JS,
     )
     review_titles = [title for title, _ in review_blocks]
     judge_expr = _criterion_judge_call(
@@ -673,6 +679,7 @@ def compose_ask_script(
     b.append("  let _planRel = null;")
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
+    b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append(_RUN_TOKEN_DECL_JS)
     b.append("  let _nextAction = null;")
@@ -711,6 +718,9 @@ def compose_ask_script(
             "`sizing-assemble`. "
             + SCOUT_RETURN_CLAUSE
             + ledger_clause
+            + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
+            f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
+            "which prior turns are pertinent."
             + (
                 "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
                 if relayed
@@ -950,15 +960,41 @@ def compose_ask_script(
         b.append("    phase('plan');")
         # gateReportPath binds from the runtime `_sizingRel`: a raw ask's sizing is minted in-run.
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
-        b.append(
-            f"    const _blitz = await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
-            "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
-            f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
-            "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
-            "planPath: _gate.resume_plan ?? null, executionOpen: true }] });"
-        )
+        def _blitz_call(plan_path_js: str) -> str:
+            return (
+                f"await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
+                "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
+                f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
+                "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
+                f"planPath: {plan_path_js}, executionOpen: true }}] }});"
+            )
+
+        b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? null')}")
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
+        b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
+        b.append("    if (!_planRel && _pulledEntry) {")
+        revise_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "plan-blitz pulled the plan at ",
+            "js:_pulledEntry.planPath",
+            " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
+            "change its path -- so every finding below is resolved, then return its repo-relative path "
+            "as plan_rel.\n\nPull reason:\n",
+            "js:String(_pulledEntry.reason ?? '')",
+            "\n\nGate report (read it first):\n",
+            "js:String(_pulledEntry.prepGateReport ?? '(none)')",
+            ledger_clause,
+            " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+        )
+        b.append(
+            f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_PLAN_SCHEMA, agent_model=_PLAN_AUTHOR_MODEL, effort=_PLAN_AUTHOR_EFFORT)};"
+        )
+        b.append(f"      const _reblitz = {_blitz_call('_revised?.plan_rel || _pulledEntry.planPath')}")
+        b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
+        b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
+        b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
+        b.append("    }")
         b.append(
             f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
@@ -1016,6 +1052,11 @@ def compose_ask_script(
         f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT)};"
     )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
+    b.append(
+        f"  if (!_manifest.error) {{ {_OWNER_ROWS_JS} = (_manifest.gated ?? []).filter((g) => g.owner_repo)"
+        ".map((g) => ({ id: g.id, owner_repo: g.owner_repo, owner_root: g.owner_root ?? '', "
+        "closure_key: g.closure_key ?? null })); }"
+    )
     b.append(
         "  if (_manifest.error || !(_manifest.rows ?? []).length) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
@@ -1106,7 +1147,9 @@ def compose_ask_script(
         + ", never against the "
         f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
         f"since the run started), then {record_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
-        "(`git status --porcelain` and `git diff`), the plan when one exists (",
+        "(`git status --porcelain` and `git diff`)",
+        "js:" + owner_repo_clause_js(_OWNER_ROWS_JS),
+        ", the plan when one exists (",
         "js:(_planRel ?? 'none')",
         f"), and the briefs under {run_dir}/briefs. Return one entry in items for EVERY ledger item, by "
         "its id (the sizing's requirement_register row id): status 'met' when the change makes the "
@@ -1146,11 +1189,38 @@ def compose_ask_script(
     b.append("  }")
     b.append(f"  {CAP_HELPER_JS}")
     b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
-    b.append(
-        "  _nextAction = (_manifest && !_manifest.error) "
-        f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
-        ": { kind: 'none', op: null, params: null };"
+    criterion_open = (
+        f" && !({_emit._FALSIFIER_RESULT_VAR} && {_emit._FALSIFIER_RESULT_VAR}.status === 'not_met')"
+        if judge_expr is not None
+        else ""
     )
+    b.append(
+        "  const _closeable = !!(!_halted && _manifest && !_manifest.error"
+        f"{criterion_open} && !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL'));"
+    )
+    b.append(
+        "  const _mkRevise = () => ({ run_id: _runId, sizing: _sizingRel, "
+        "reason: (_halted && _halted.halted) ? _halted.halted : (!_manifest || _manifest.error) ? 'manifest-error' : "
+        + (
+            f"({_emit._FALSIFIER_RESULT_VAR} && {_emit._FALSIFIER_RESULT_VAR}.status === 'not_met') ? 'criterion not_met' : "
+            if judge_expr is not None
+            else ""
+        )
+        + "'delivery verdict FAIL', "
+        f"revise: {_lit(f'{_INVOKE} workflow.revise (run_id, verbatim)')}, "
+        f"refire: {_refire_js(sizing_rel)} }});"
+    )
+    stopped_na = (
+        "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, sizing: _sizingRel, halted: _halted } }"
+        if in_run_commit
+        else "{ kind: 'none', op: null, params: null }"
+    )
+    b.append(
+        "  _nextAction = _closeable "
+        f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
+        f": {stopped_na};"
+    )
+    b.append("  let _reviseAndRefire = _closeable ? null : _mkRevise();")
     b.append(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
@@ -1174,8 +1244,13 @@ def compose_ask_script(
             "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, executed: _executed, workstream_complete: _complete } : null, "
             if rb_fn else ""
         )
-        + "ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, "
-        f"{TERMINAL_COMMIT_CLI_PROPERTY_JS} }};"
+        + "ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, revise_and_refire: _reviseAndRefire, "
+        + (
+            "get terminal_commit_cli() { return this.next_action.kind === 'terminal_commit' "
+            "? _terminalCommitCli(this.next_action.params) : null; }, };"
+            if in_run_commit
+            else f"{TERMINAL_COMMIT_CLI_PROPERTY_JS} }};"
+        )
     )
 
     return _finish_script(
@@ -1199,6 +1274,17 @@ def compose_ask_script(
                 *stage_titles,
             ],
         ),
+    )
+
+
+def _refire_js(sizing_rel: Optional[str]) -> str:
+    """JS expression for the engine-ask submission call, rendered by `warp_fire.fire_command`."""
+    if sizing_rel:
+        return _lit(fire_command(sizing_rel))
+    marker = "\u0000"
+    head, tail = fire_command(marker).split(json.dumps(marker))
+    return (
+        f"(_sizingRel ? {_lit(head)} + JSON.stringify(_sizingRel) + {_lit(tail)} : {_lit(fire_command(None))})"
     )
 
 
@@ -1233,7 +1319,7 @@ def _append_docs_and_commit(
     `block_subagent_commit` run-token leg admits nothing else.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
-    live = "!_halted && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
+    live = "_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
     docs_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: docs\n\nThis run's change is on disk, uncommitted. Read the sizing at ",
@@ -1264,8 +1350,10 @@ def _append_docs_and_commit(
     )
     commit_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
-        "phase: commit\n\nThen run exactly this one command as its own Bash call: no `cd &&`, no "
-        "wrapper, no env prefix, no edit to it.\n\n",
+        "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
+        "stage). Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env "
+        "prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the run's commit "
+        "request, so no `paths` array is owed.\n\n",
         "js:_terminalCommitCli({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
         "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped and close, verbatim "
         "(null where absent). Run nothing else.",
@@ -1284,5 +1372,11 @@ def _append_docs_and_commit(
     b.append(
         "    if (_commit && _commit.committed === true) { _nextAction = { kind: 'close_job', op: null, "
         "params: { run_id: _runId, close: _commit.close ?? null } }; }"
+    )
+    b.append(
+        "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
+        "error: _commit?.error ?? null }; "
+        "_nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
+        "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); }"
     )
     b.append("  }")

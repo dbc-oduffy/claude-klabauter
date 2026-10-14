@@ -102,6 +102,7 @@ def test_ac3_unclassified_coordinator_bin_name_is_refused(repo):
     msg = str(excinfo.value)
     assert "new_cli.py" in msg
     assert "claude-klabauter-coordinator-bin" in msg
+    assert "--pending coordinator/bin/new_cli.py" in msg
     assert _head(repo) == before
 
 
@@ -314,3 +315,64 @@ def test_ac8_zero_spawns_on_the_passing_and_deny_paths(repo):
         )
     assert out.sha
     assert counter.argvs == [], f"expected zero spawns, got {counter.argvs}"
+
+
+def _load_generator():
+    import importlib.util
+    from pathlib import Path
+
+    gen = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "publish-allowlist-generate.py"
+    spec = importlib.util.spec_from_file_location("_pag_c6", gen)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_c6_new_bin_cli_lands_in_one_commit_via_pending(repo):
+    (repo / "coordinator_core" / "denied_name.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
+    for rel in (
+        "coordinator_core/bash_guards/m.py",
+        "coordinator_core/hooks/m.py",
+        "coordinator_core/session/m.py",
+        "coordinator_core/write_guards/m.py",
+        "coordinator_core/frontmatter/schema_validate.py",
+        "coordinator_core/contract/cockpit_schema/emit_schema.py",
+    ):
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x = 1\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "track denied name and contract roots")
+    (repo / "coordinator" / "bin").mkdir(parents=True)
+    (repo / "coordinator" / "bin" / "new-tool.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
+    (repo / "coordinator" / "bin" / "new-tool.cmd").write_text(
+        "@echo off\n", encoding="utf-8", newline="\n"
+    )
+    paths = [
+        "coordinator/bin/new-tool.py",
+        "coordinator/bin/new-tool.cmd",
+        "setup/publish-targets.portable",
+    ]
+
+    gen = _load_generator()
+    # No --pending: the untracked names are invisible to `git ls-files`.
+    (repo / "setup" / "publish-targets.portable").write_text(
+        gen.regenerate_portable(repo), encoding="utf-8", newline="\n"
+    )
+    with pytest.raises(CommitRefused) as excinfo:
+        gcommit.commit_paths(repo, paths, "bin cli without pending")
+    msg = str(excinfo.value)
+    assert "--pending coordinator/bin/new-tool.py" in msg
+    assert "--pending coordinator/bin/new-tool.cmd" in msg
+
+    (repo / "setup" / "publish-targets.portable").write_text(
+        gen.regenerate_portable(repo, tuple(paths[:2])), encoding="utf-8", newline="\n"
+    )
+    out = gcommit.commit_paths(repo, paths, "bin cli with pending")
+    assert out.sha

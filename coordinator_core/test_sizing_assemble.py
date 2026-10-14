@@ -817,7 +817,8 @@ def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
     assert decision["route"] == "plan"
     assert "post_size_prompt_pending" not in decision["detents"]
     assert "?" not in decision["next_move"]
-    assert "emit-wave-fire" in decision["next_move"]
+    assert "coordinator:engine-ask" in decision["next_move"]
+    assert "emit-wave-fire" not in decision["next_move"]
 
 
 @pytest.mark.parametrize("tshirt", ["XL", "XXL"])

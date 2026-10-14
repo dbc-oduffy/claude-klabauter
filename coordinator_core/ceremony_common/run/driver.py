@@ -50,7 +50,7 @@ from .contract import (
     validate_agent_results,
     validate_digest,
 )
-from .runner import ChildOutcome, default_dispatch, run_stages
+from .runner import HELD_PREFIX, ChildOutcome, default_dispatch, run_stages
 
 FAILURE_ROWS_FILED_MAX = 10
 BACKLOG_PREFIX = "backlog:"
@@ -61,6 +61,7 @@ DECIDE_STEP = "decide-resolve"
 DECIDE_TARGET = "coordinator_core.ceremony_common.run.decide:resolve"
 EXHAUSTED_RULE = "no-live-disposition"
 RENDER_STAGE = "briefing"
+PRE_DIRECTIVE_STAGE = "pre-directives"
 
 SCRIPT_FILE = "workflow.mjs"
 STATE_FILE = "launch-state.json"
@@ -81,13 +82,16 @@ class RunHooks:
     `check_results(digest, results)` returns `(row id, reason)` failures found in the agents'
     results. `directive_wanted(directive)` is False for an envelope directive the spec's own
     steps already cover. `acting_dispositions` are the dispositions that must open at least one
-    envelope directive, else the decision has a `failed` row.
+    envelope directive, else the decision has a `failed` row. `held_stages` are the stages a
+    rule's `Hold` halts (None: every later stage). A finish step whose stage is
+    `PRE_DIRECTIVE_STAGE` runs once the agents' results are in, before the finish directives.
     """
 
     after_step: Callable[..., ChildOutcome] | None = None
     check_results: Callable[[Mapping[str, Any], Mapping[str, Any]], Sequence[tuple[str, str]]] | None = None
     directive_wanted: Callable[[Mapping[str, Any]], bool] | None = None
     acting_dispositions: frozenset[str] = frozenset()
+    held_stages: "frozenset[str] | None" = None
 
 
 @dataclass
@@ -111,6 +115,7 @@ class _Run:
     points: list[dict[str, Any]] = field(default_factory=list)
     resolution: "decide.Resolution | None" = None
     halted_by: "str | None" = None
+    held_by: "str | None" = None
 
 
 @dataclass(frozen=True)
@@ -344,18 +349,32 @@ def _run_batch(
 
     With `gating`, a gating step that ends unresolved halts every later batch of the run.
     """
+    held_stages = _hooks(spec).held_stages
     if gating and run.halted_by is not None:
         for step in owed:
             ledger.append(run.run_dir, _row(step.id, "halted-by-gate", run.halted_by))
     elif owed:
+        runnable = list(owed)
+        if gating and run.held_by is not None:
+            runnable = []
+            for step in owed:
+                if held_stages is None or step.stage in held_stages:
+                    ledger.append(run.run_dir, _row(step.id, "halted-by-gate", run.held_by))
+                else:
+                    runnable.append(step)
         results = run_stages(
-            list(owed), ceremony=spec.dispatch_key, repo_root=run.repo_root, run_dir=run.run_dir,
+            runnable, ceremony=spec.dispatch_key, repo_root=run.repo_root, run_dir=run.run_dir,
             dispatch=table, rules=rules, allow_suite=allow_suite, suite_grant=_suite_grant(owed),
-        )
+            held_stages=held_stages,
+        ) if runnable else []
         if gating:
             blocking = {s.id for s in owed if s.gates_next and not s.best_effort}
             run.halted_by = next(
                 (r.id for r in results if r.id in blocking and r.status in ("failed", "not-composed")), None
+            )
+            run.held_by = run.held_by or next(
+                (r.reason for r in results if r.id in blocking and r.status == "ran" and r.reason.startswith(HELD_PREFIX)),
+                None,
             )
     for step, reason in skipped:
         ledger.append(run.run_dir, _row(step.id, "cadence-skipped", reason))
@@ -653,16 +672,22 @@ def _chain_step(spec: Any) -> StepSpec:
     )
 
 
-def _tail(run: _Run, spec: Any, decisions: Sequence[Decision]) -> tuple[list[Any], list[Any]]:
-    """The spec's finish steps split into those before and after the first render."""
+def _tail(
+    run: _Run, spec: Any, decisions: Sequence[Decision]
+) -> tuple[list[Any], list[Any], list[Any]]:
+    """The spec's finish steps split into those before the finish directives, before the first render, and after it."""
     order = list(spec.finish_stages)
     cut = order.index(RENDER_STAGE) if RENDER_STAGE in order else len(order)
+    pre: list[Any] = []
     before: list[Any] = []
     after: list[Any] = []
     for item in spec.finish_steps(decisions, _rows(run), run=_lock_record(run)) or ():
         step = item if isinstance(item, StepSpec) else item[0]
-        (after if step.stage in order and order.index(step.stage) > cut else before).append(item)
-    return before, after
+        if step.stage == PRE_DIRECTIVE_STAGE:
+            pre.append(item)
+        else:
+            (after if step.stage in order and order.index(step.stage) > cut else before).append(item)
+    return pre, before, after
 
 
 def _finish_run(
@@ -686,6 +711,7 @@ def _finish_run(
     undecided: dict[str, str] = {}
     chained: "dict[str, Any] | None" = None
     chain_workflow = ""
+    tail: "tuple[list[Any], list[Any], list[Any]] | None" = None
     try:
         if results is None:
             for group in digest["agent_work"]["groups"]:
@@ -702,6 +728,10 @@ def _finish_run(
                 undecided[u["id"]] = u["reason"]
                 ledger.append(run.run_dir, _row(f"judgment:{u['id']}", "failed", u["reason"]))
             decisions = _read_decisions(run.run_dir)
+            tail = _tail(run, spec, decisions)
+            owed, skipped = _split(tail[0])
+            _run_batch(run, spec, owed, skipped, table, allow_suite=False, rules=None, gating=False)
+            render_steps += owed + [s for s, _ in skipped]
             mark = len(run.steps)
             opened = _finish_directives(run, spec, decisions, table)
             _check_acting(run, spec, decisions, opened)
@@ -711,7 +741,7 @@ def _finish_run(
                     ledger.append(run.run_dir, _row(row_id, "failed", reason))
         after: list[Any] = []
         if not gate_failed:
-            before, after = _tail(run, spec, _read_decisions(run.run_dir))
+            _, before, after = tail or _tail(run, spec, _read_decisions(run.run_dir))
             if spec.chain:
                 after.append(_chain_step(spec))
             owed, skipped = _split(before)

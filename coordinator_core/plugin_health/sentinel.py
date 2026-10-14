@@ -114,7 +114,7 @@ from coordinator_core.data_root import content_root_for
 from coordinator_core.content_root import POINTER_NAME, read_content_root, read_pointer_files
 from coordinator_core.git.run import _wall_bound
 from coordinator_core.install import check_install_singularity
-from coordinator_core.install._shared import require_home
+from coordinator_core.install._shared import claude_author_wrapper_source, require_home
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
 from coordinator_core.machine_resolver import merged_flat_registry
 from coordinator_core.ops import probe_onboarding_currency, verify_templates_setup_sync, verify_ue_overrides
@@ -690,22 +690,24 @@ def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
 # state/cross-repo/archive/2026-09-11-coordinator-content-repo-em-doctor-p5-probes-retired-whoami.md.
 
 
-def probe_p7(claude_home: Path) -> List[ProbeNote]:
+def read_claude_json_mcp_servers(claude_home: Path) -> Tuple[Path, object, bool]:
+    """`(config_path, mcpServers, parse_failed)` from the `<claude_home>.json` sibling config.
+
+    A missing file or key reads as `{}`. A failure on an EXISTING file is `parse_failed`, a
+    broken config rather than "no servers"; the value is returned unvalidated.
+    """
     cfg_path = Path(str(claude_home) + ".json")
-    mcp_servers: object = {}
-    cfg_parse_failed = False
-    if cfg_path.exists():
-        try:
-            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-            mcp_servers = cfg.get("mcpServers") or {}
-        except Exception:
-            # A parse/read failure on an
-            # EXISTING config file is a genuinely broken config, not "no
-            # MCP servers registered". Surface amber instead of silently
-            # falling back to {} (which the isinstance(dict) guard below
-            # can never catch, since {} passes the shape check).
-            mcp_servers = {}
-            cfg_parse_failed = True
+    if not cfg_path.exists():
+        return cfg_path, {}, False
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return cfg_path, cfg.get("mcpServers") or {}, False
+    except Exception:
+        return cfg_path, {}, True
+
+
+def probe_p7(claude_home: Path) -> List[ProbeNote]:
+    cfg_path, mcp_servers, cfg_parse_failed = read_claude_json_mcp_servers(claude_home)
 
     settings_path = claude_home / "settings.json"
     enabled_plugins: object = {}
@@ -1637,7 +1639,7 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
     registry entry that would otherwise misreport an unrelated resolver gap as
     wrapper drift.
     """
-    wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-author.py"
+    wrapper_src = claude_author_wrapper_source(claude_klabauter_root)
     wrapper_dst = wrapper_home / ".local" / "bin" / "claude-author"
     # `wrapper_home` MUST reach here via the
     # installer's own require_home() ladder (see _resolve_wrapper_home
@@ -1696,8 +1698,8 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
             "amber",
             f"claude-author wrapper at {wrapper_dst} has drifted from its repo source "
             f"{wrapper_src} — Windows has no symlink equivalent, so edits to "
-            "claude-author.py are inert until the wrapper is re-published (Step 3.5b, "
-            "python scripts/setup.py)",
+            "claude-author.py are inert until the wrapper is re-published: run "
+            f"install-claude-author-wrapper --wrapper-src {wrapper_src}",
         )
     ]
 

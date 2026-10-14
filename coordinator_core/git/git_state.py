@@ -150,6 +150,10 @@ class IndexParseError(ValueError):
     """
 
 
+class UnmergedIndexEntryError(IndexParseError):
+    """The index parsed, but a path holds a conflict stage (`stage > 0`)."""
+
+
 #: Scoped-to-one-call `read_index` cache. `None` outside any
 #: `index_read_cache_scope()` -- the ordinary, still-default, fully-fresh
 #: path. A `contextvars.ContextVar` rather than a module global so an async/
@@ -380,7 +384,7 @@ def _parse_index_bytes(raw: bytes, *, index_path: Path) -> Dict[str, IndexEntry]
             offset = nul + 1 + padding
 
         if stage != 0:
-            raise IndexParseError(
+            raise UnmergedIndexEntryError(
                 f"{index_path}: entry {name!r} is unmerged (stage {stage}); "
                 "a conflicted path must never read as staged"
             )

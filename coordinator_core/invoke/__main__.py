@@ -220,6 +220,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--from-task-output",
+        metavar="PATH",
+        default=None,
+        help=(
+            "dispatch.terminal_commit only: a Workflow task-output file, "
+            "resolved against the caller's cwd and passed as "
+            "params.task_output_path."
+        ),
+    )
+    p.add_argument(
         "--repo",
         metavar="PATH",
         default=None,
@@ -758,6 +768,21 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         _fatal_stderr(
             f"params_json must be a JSON object (dict); got {type(params).__name__}"
         )
+
+    if args.from_task_output is not None:
+        if args.op != "dispatch.terminal_commit":
+            parser.error("--from-task-output applies only to dispatch.terminal_commit")
+        resolved_output = str(Path(cwd, args.from_task_output).resolve())
+        existing = params.get("task_output_path")
+        if existing is not None and (
+            not isinstance(existing, str)
+            or str(Path(cwd, existing).resolve()) != resolved_output
+        ):
+            parser.error(
+                "--from-task-output conflicts with params.task_output_path "
+                f"{existing!r}"
+            )
+        params["task_output_path"] = resolved_output
 
     # 3. Determine op scope before resolving repo_root — none/central-scoped ops
     #    (e.g. ping, advisory hooks) must work outside any git working tree, so

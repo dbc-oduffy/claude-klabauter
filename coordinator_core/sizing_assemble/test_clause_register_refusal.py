@@ -50,7 +50,7 @@ def _sizing(repo: Path, text: str = _DRAFT) -> Path:
 def _write(repo: Path, window, **kw) -> dict:
     import coordinator_core.ops.baton_pm_turns as pm_turns
 
-    pm_turns.recent_window = lambda **_: list(window)
+    pm_turns.bound_window = lambda *_a, **_k: list(window)
     decision = sa.route(estimate={"tshirt": "M"}, intent="Ship the thing")
     return sa.write_back(repo, f"state/sizings/{_NAME}", decision, **kw)
 
@@ -59,9 +59,9 @@ def _write(repo: Path, window, **kw) -> dict:
 def _restore_window():
     import coordinator_core.ops.baton_pm_turns as pm_turns
 
-    original = pm_turns.recent_window
+    original = pm_turns.bound_window
     yield
-    pm_turns.recent_window = original
+    pm_turns.bound_window = original
 
 
 def _load(path: Path) -> dict:
@@ -164,7 +164,7 @@ def test_pm_verbatim_intent_list_mints_intent_rows(repo, monkeypatch):
     path = _sizing(repo)
     import coordinator_core.ops.baton_pm_turns as pm_turns
 
-    monkeypatch.setattr(pm_turns, "recent_window", lambda **_: [])
+    monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: [])
     decision = sa.route(estimate={"tshirt": "M"}, intent="Ship:\n1. a\n2. b")
     sa.write_back(repo, f"state/sizings/{_NAME}", decision, intent_verbatim=True)
     reg = _load(path)["requirement_register"]

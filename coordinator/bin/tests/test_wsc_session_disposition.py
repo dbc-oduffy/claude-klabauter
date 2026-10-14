@@ -2386,5 +2386,18 @@ class TestInjectedSessionHistory(unittest.TestCase):
             self.assertTrue(any("session history unresolved" in d for d in resolution.diagnostics))
 
 
+def test_floor_helpers_degrade_to_unfloored_walk_without_scan_floor(tmp_path, monkeypatch):
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "coordinator_core.session.scan_floor", None)
+    monkeypatch.delattr(sys.modules["coordinator_core.session"], "scan_floor", raising=False)
+    assert wsc._session_floor(tmp_path, "sid") is None
+    flat = sorted(p.name for p in wsc._iter_floored(tmp_path, 1e18, frozenset(), recursive=False))
+    deep = sorted(p.name for p in wsc._iter_floored(tmp_path, 1e18, frozenset(), recursive=True))
+    assert flat == ["a.md"]
+    assert deep == ["a.md", "b.txt"]
+
+
 if __name__ == "__main__":
     unittest.main()

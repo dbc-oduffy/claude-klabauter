@@ -90,7 +90,6 @@ from coordinator_core.ops.dispatch_emit.grind_admission import (
     admit,
     receipt_block,
 )
-from coordinator_core.ops.dispatch_emit.grind_compose import _group_into_batches, compose_grind_script
 from coordinator_core.ops.dispatch_emit.grind_profile import (
     load_profile,
     resolve_appetite,
@@ -167,6 +166,9 @@ def emit_queue_script(
 ) -> QueueEmission:
     """Both review kwargs thread to compose_grind_script; either being None
     raises NoReviewStageError."""
+    # Deferred: grind_compose pulls the grind chain, which a --plan emit must not load.
+    from coordinator_core.ops.dispatch_emit.grind_compose import _group_into_batches, compose_grind_script
+
     repo_root = Path(repo_root).resolve()
 
     guarded_run_dir = contained_path(Path(run_dir), [repo_root])

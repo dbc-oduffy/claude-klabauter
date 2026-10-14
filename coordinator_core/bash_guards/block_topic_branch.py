@@ -19,6 +19,9 @@ branch, so any `work/<this-machine>/<YYYY-MM-DD[toDD]>[-N]` ref is a day
 branch. `git push <remote> HEAD` resolves HEAD from `.git/HEAD` (no spawn);
 an unresolvable HEAD or ref name allows.
 
+Creation inside a scratch clone (an ancestor dir named `scratch` whose parent holds a
+`.git`) is exempt; a push from it is still judged.
+
 A push of the checked-out `work/*` branch is allowed whatever its date span, and
 `git branch scratch/<name>` (a local-only ref) is allowed; pushing it is not.
 
@@ -169,6 +172,21 @@ def _push_targets(args: List[str]) -> List[str]:
             continue
         targets.append(dst if sep else spec)
     return targets
+
+
+def _is_scratch_clone(git_root: Optional[str]) -> bool:
+    """True when an ancestor of `git_root` is a `scratch` dir whose parent holds a `.git`
+    entry, i.e. the clone sits under a repo's own scratch/."""
+    if not git_root:
+        return False
+    current = os.path.dirname(os.path.normpath(git_root))
+    while True:
+        parent = os.path.dirname(current)
+        if os.path.basename(current) == "scratch" and os.path.exists(os.path.join(parent, ".git")):
+            return True
+        if parent == current:
+            return False
+        current = parent
 
 
 def _head_branch(git_root: Optional[str]) -> Optional[str]:
@@ -414,6 +432,8 @@ def _offending_ref(
         return None
 
     git_root = _git_root(cwd, c_dirs)
+    if sub != "push" and _is_scratch_clone(git_root):
+        return None
     configured = read_configured_day_branch(git_root) if git_root else None
     machine: Optional[str] = None
     for ref in refs:

@@ -261,7 +261,6 @@ from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
 from coordinator_core.ops.dispatch_emit.grind_admission import NOT_ADMITTED_EXTRA_KEY
-from coordinator_core.ops.dispatch_emit.grind_stages import STAGE_MODELS
 from coordinator_core.ops.dispatch_emit.emission_receipt import (
     _load_review_inputs,
     _receipt_session_id,
@@ -777,6 +776,9 @@ def _validated_stage_models(value: Any) -> Optional[dict]:
     """The queue route's ``stage_models`` mapping, or ValueError naming the bad key and the valid ones."""
     if not value:
         return None
+    # Trap: deferral saves nothing while any module-level import in this package still reaches grind_stages.
+    from coordinator_core.ops.dispatch_emit.grind_stages import STAGE_MODELS
+
     valid = sorted(STAGE_MODELS)
     for kind, model in value.items():
         if kind not in STAGE_MODELS:
