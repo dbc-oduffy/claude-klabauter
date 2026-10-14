@@ -225,12 +225,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "is 'shipped' and this op never overwrites one with the other"
             )
 
-        if requirement_register.read_register(old_text) is not None:
-            raise MutateAbort(
-                f"refusing to ship {p}: the sizing carries a requirement register; "
-                "the register rollup via deliverable.cascade_terminal is its only "
-                "writer of shipped"
-            )
+        register = requirement_register.read_register(old_text)
+        refusal = requirement_register.ship_refusal(register) if register is not None else None
+        if refusal:
+            # The register's own rule decides, as in deliverable.cascade_terminal: every row
+            # met and wired, or deferred/waived with a ruling.
+            raise MutateAbort(f"refusing to ship {p}: its requirement register is not met: {refusal}")
 
         route = read_fm_field_unquoted(old_text, "route")
         if route in _CASCADE_ONLY_ROUTES:

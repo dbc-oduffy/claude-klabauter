@@ -91,8 +91,11 @@ def test_rows_without_review_only_is_a_usage_error(tmp_path):
     assert cli.main(["--plan", str(_plan_file(tmp_path)), "--rows", "C1"]) == cli.EXIT_USAGE
 
 
-def test_review_only_script_composes_over_a_coded_row(tmp_path):
+def test_review_only_script_composes_over_a_coded_row(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import emit as emit_mod
     from coordinator_core.ops.dispatch_emit.emit import emit_script
+
+    monkeypatch.setattr(emit_mod, "_pin_review_terminal", lambda base, root: "f" * 40)
 
     script = emit_script(
         _plan_file(tmp_path),

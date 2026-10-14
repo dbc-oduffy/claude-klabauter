@@ -84,6 +84,73 @@ def test_missing_inputs_are_a_structured_error(repo):
     assert partition_slices(repo, "", ["a.py"], "p")["error"]
 
 
+def _peer_tree(repo: Path):
+    """Commit base..terminal over declared paths, then leave a peer's uncommitted edit and an
+    untracked file under a declared directory in the shared tree."""
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "work")
+    terminal = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / rels[0]).write_text("v = 1\n" * 30 + "peer_edit = 1\n", encoding="utf-8")
+    (repo / "pkg0" / "sub0").mkdir(parents=True, exist_ok=True)
+    (repo / "pkg0" / "sub0" / "peer_untracked.py").write_text("p = 1\n" * 40, encoding="utf-8")
+    declared = rels + ["pkg0/sub0"]
+    return base, terminal, rels, declared
+
+
+def test_range_mode_omits_a_peers_uncommitted_and_untracked_files(repo):
+    base, terminal, rels, declared = _peer_tree(repo)
+    result = partition_slices(repo, base, declared, "rng", head=terminal)
+    assert result["error"] is None
+    assert result["verdict"] == "PARTITION-MANDATORY"
+    assert "pkg0/sub0/peer_untracked.py" not in result["product_paths"]
+    assert sorted(result["product_paths"]) == sorted(rels)
+    assert result["slices"]
+    for s in result["slices"]:
+        text = Path(s["diff_path"]).read_text(encoding="utf-8")
+        assert "peer_untracked" not in text
+        assert "peer_edit" not in text
+        assert set(s["paths"]) <= set(rels)
+
+
+def test_worktree_mode_still_reports_the_peers_files(repo):
+    base, _terminal, rels, declared = _peer_tree(repo)
+    result = partition_slices(repo, base, declared, "wt")
+    assert result["error"] is None
+    assert "pkg0/sub0/peer_untracked.py" in result["product_paths"]
+
+
+def test_handler_requires_exactly_one_of_head_and_worktree(repo):
+    from coordinator_core.ops.review_partition_slices import _handler  # noqa: PLC0415
+
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    common = {"base": base, "paths": ["seed.py"], "slice_prefix": "p"}
+    both = _handler({**common, "head": base, "worktree": True}, repo)
+    neither = _handler(dict(common), repo)
+    assert both.get("error") and neither.get("error")
+    assert "exactly one" in both["error"] and "exactly one" in neither["error"]
+
+
+def test_range_mode_numstat_failure_is_returned_as_error_not_raised(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    result = partition_slices(repo, base, ["seed.py"], "bad", head="no-such-ref-xyz")
+    assert result["error"]
+    assert "numstat" in result["error"]
+    assert result["slices"] == [] and result["verdict"] is None
+
+
+def test_range_mode_freezes_each_partition_slice_with_only_its_own_paths(repo):
+    base, terminal, rels, _declared = _peer_tree(repo)
+    result = partition_slices(repo, base, rels, "own", head=terminal)
+    assert result["error"] is None and len(result["slices"]) > 1
+    for s in result["slices"]:
+        text = Path(s["diff_path"]).read_text(encoding="utf-8")
+        for other in rels:
+            assert (f"b/{other}" in text) == (other in s["paths"])
+
+
 def test_op_is_registered_with_a_handler_and_complete_registration():
     from coordinator_core.ipc import get_op_handler  # noqa: PLC0415
     import coordinator_core.ops  # noqa: F401, PLC0415

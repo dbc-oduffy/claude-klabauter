@@ -1168,8 +1168,8 @@ def test_consumed_run_still_fires(repo):
     from coordinator_core.ops.dispatch_emit import run_token
 
     rel, transcript = _incident(repo, "sess-warp")
-    run_token.mint(repo, "warp-x-2", "scratch/warp/y.mjs", session_id="sess-warp", sizing_rel=rel)
-    run_token.consume(repo, "warp-x-2")
+    token = run_token.mint(repo, "warp-x-2", "scratch/warp/y.mjs", session_id="sess-warp", sizing_rel=rel)
+    assert run_token.redeem(repo, "warp-x-2", token, "scratch/warp/y.mjs")
     assert m.op(_payload(repo, session_id="sess-warp", transcript_path=transcript)) is not None
 
 

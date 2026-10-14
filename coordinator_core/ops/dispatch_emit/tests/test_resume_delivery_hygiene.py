@@ -139,6 +139,67 @@ def test_reverify_credit_note_names_own_commits_with_repo_key_and_one_batch(tmp_
     assert len(calls) <= 2
 
 
+def _dag(repo: Path):
+    """root -> a; side branch s from root; merge m (a + s); base = m; later = after base."""
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "root").write_text("root")
+    _git(repo, "add", "root")
+    _git(repo, "commit", "-qm", "root")
+    root = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / "s").write_text("s")
+    _git(repo, "add", "s")
+    _git(repo, "commit", "-qm", "s")
+    side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "a").write_text("a")
+    _git(repo, "add", "a")
+    _git(repo, "commit", "-qm", "a")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "m", "side")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "later").write_text("l")
+    _git(repo, "add", "later")
+    _git(repo, "commit", "-qm", "later")
+    later = _git(repo, "rev-parse", "HEAD")
+    blob = _git(repo, "rev-parse", "HEAD:later")
+    return root, side, base, later, blob
+
+
+@pytest.mark.spawns_process
+def test_ancestor_refs_parity_with_merge_base_is_ancestor(tmp_path):
+    from coordinator_core.git_ancestry import is_ancestor
+
+    root, side, base, later, blob = _dag(tmp_path)
+    refs = [root[:10], side, base, later, blob]
+    ancestors, unknown = delivery_credit.ancestor_refs(tmp_path, refs, base)
+    assert unknown == set()
+    for ref in (root[:10], side, base, later):
+        assert (ref in ancestors) == (is_ancestor(ref, base, cwd=str(tmp_path)) == (True, True)), ref
+    assert side in ancestors and later not in ancestors
+    assert blob not in ancestors and blob not in unknown
+
+
+@pytest.mark.spawns_process
+def test_ancestor_refs_git_failure_is_unknown_not_empty_ancestry(tmp_path):
+    refs = ["a" * 40, "b" * 10]
+    ancestors, unknown = delivery_credit.ancestor_refs(tmp_path / "no-such-repo", refs, "c" * 40)
+    assert ancestors == set()
+    assert unknown == set(refs)
+
+
+@pytest.mark.spawns_process
+def test_credit_note_never_names_unknown_ref_as_own_commit(tmp_path):
+    from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+
+    sha = "a" * 40
+    plan = tmp_path / "plan.md"
+    plan.write_text(_plan(f"- id: r-x\n  disposition: coded\n  disposition_ref: '{sha}'\n"), encoding="utf-8")
+    note = rd._commit_credit_note(tmp_path / "no-such-repo", str(plan), "c" * 40)
+    assert "could not be read" in note and sha in note
+    assert "merge-base --is-ancestor" in note
+    assert "The plan's own commits" not in note
+
+
 def test_prep_slice_id_differs_per_run_key_for_planless_routes():
     a = prep_slice_id_for("", "1" * 40, "run-a")
     assert a != prep_slice_id_for("", "1" * 40, "run-b")

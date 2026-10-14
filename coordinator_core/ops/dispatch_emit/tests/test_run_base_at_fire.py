@@ -72,6 +72,7 @@ def test_explicit_review_only_base_wins_and_is_never_re_read():
         description="d",
         run_base_sha=EMIT,
         review_only=True,
+        review_terminal_sha="b" * 40,
         **REVIEW_KW,
     )
 

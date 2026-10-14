@@ -365,9 +365,10 @@
         "value": 0.2
       },
       "spawn_count_budget": {
-        "plan_route_gitignore_filter": 1
+        "plan_route_gitignore_filter": 1,
+        "review_only_terminal_pin": 2
       },
-      "_rationale": "One `git check-ignore -z --stdin` over the whole run's declared-write union (dispatch_emit/emit.py::_gitignored_paths via git/run.py::run_git), batched so the count does not grow with rows or waves; a gitignored write path can never be committed and would otherwise halt the run at preflight. The host commit-trailer read (commit_trailers.read_host_commit_trailers) parses the git config files and starts no process. Counted by coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py with exact equality."
+      "_rationale": "One `git check-ignore -z --stdin` over the whole run's declared-write union (dispatch_emit/emit.py::_gitignored_paths via git/run.py::run_git), batched so the count does not grow with rows or waves; a gitignored write path can never be committed and would otherwise halt the run at preflight. The host commit-trailer read (commit_trailers.read_host_commit_trailers) parses the git config files and starts no process. The review-only route adds exactly two run_git spawns (`rev-parse`, `merge-base`) to pin the terminal commit and its ancestry, on top of the check-ignore count. Counted by coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py with exact equality."
     },
     "hooks.submit_engine_ask": {
       "target_ms": 500,

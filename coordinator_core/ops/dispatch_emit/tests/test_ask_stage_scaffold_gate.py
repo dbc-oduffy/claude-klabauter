@@ -43,6 +43,6 @@ def test_ask_arm_script_has_a_test_stage_wired_to_the_digest(monkeypatch):
     )
     assert "_testResult = await agent(" in script
     assert "test:terminal" in script
-    assert "_manifest.review_declared_paths.join(', ')" in script
+    assert "_manifest.test_targets.join(', ')" in script
     assert "_gate.arm !== 'xs'" in script
     assert "_testResult.status" in script and "(_testResult ? (" in script

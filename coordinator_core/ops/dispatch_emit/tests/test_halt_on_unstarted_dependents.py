@@ -81,7 +81,8 @@ def test_halt_precedes_the_review_and_terminal_test_block():
 
 
 def test_review_only_composes_no_halt():
-    script = _compose([[_row("A", "a.py")]], run_base_sha="a" * 40, review_only=True)
+    script = _compose([[_row("A", "a.py")]], run_base_sha="a" * 40, review_only=True,
+                       review_terminal_sha="b" * 40)
     assert _HALT not in script
 
 

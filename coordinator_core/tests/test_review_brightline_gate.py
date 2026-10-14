@@ -777,3 +777,26 @@ def test_a_prose_only_commit_still_discloses_the_basis(tmp_path, capsys, monkeyp
     main(["HEAD~1..HEAD"])
 
     assert "basis=code-only" in capsys.readouterr().out
+
+
+def test_range_measure_raises_when_numstat_fails_instead_of_measuring_zero(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    with pytest.raises(review_brightline_gate.RangeMeasureError):
+        review_brightline_gate.range_measure(
+            "no-such-base", "HEAD", ["a.py"], str(repo)
+        )
+
+
+def test_range_measure_measures_a_good_range(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 1\nz = 2\n", "add b")
+
+    loc, _surfaces, files = review_brightline_gate.range_measure(
+        "HEAD~1", "HEAD", ["b.py"], str(repo)
+    )
+
+    assert loc == 2
+    assert files == {"b.py"}

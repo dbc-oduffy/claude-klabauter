@@ -1,13 +1,17 @@
 """Run-scoped commit authorization for a warp `--ask` Workflow's in-run terminal commit.
 
-The emit mints one token per run and embeds it in the script; the run's final stage hands it to
-`dispatch.terminal_commit` through a `coordinator:git-commit-agent`. `block_subagent_commit` admits
-that one invocation when the token matches an unconsumed record for the run; the op consumes the
-record on admit, so a failed commit needs a re-mint. Every other subagent commit stays denied.
+The emit mints one token per run and returns it in the fire args, never in the script's bytes:
+the harness hands it to the run as `args.runToken`, so no file a peer or a run agent can read
+carries it. The run's final stage hands it to `dispatch.terminal_commit` through a
+`coordinator:git-commit-agent`. `block_subagent_commit` admits that one invocation through
+`admits`, which claims the record atomically (exactly one caller wins); the op then `redeem`s the
+claimed record before it commits. A token admits one commit attempt, never two. Every other
+subagent commit stays denied.
 
 Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
-it); only a sha256 of the token is stored; a record older than `TTL_SECONDS` admits nothing.
-In-process file I/O only: no spawn.
+it); only a sha256 of the token is stored; the record names the run's script and a token admits
+nothing without that script; a record older than `TTL_SECONDS` admits nothing. In-process file
+I/O only: no spawn.
 """
 
 from __future__ import annotations
@@ -20,10 +24,12 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 TTL_SECONDS = 24 * 3600
 _DIR = "coordinator-warp-run-tokens"
+#: Where `admits` moves a record it claimed; the op redeems it from here.
+_CLAIMED = "claimed"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -47,15 +53,33 @@ def _common_dir(repo_root: Path) -> Optional[Path]:
     return None
 
 
-def _record_path(repo_root: Path, run_id: str) -> Optional[Path]:
+def _record_path(repo_root: Path, run_id: str, *, claimed: bool = False) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
     common = _common_dir(repo_root)
-    return None if common is None else common / _DIR / f"{run_id}.json"
+    if common is None:
+        return None
+    base = common / _DIR
+    return (base / _CLAIMED if claimed else base) / f"{run_id}.json"
 
 
 def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+def _read(path: Optional[Path]) -> Optional[dict]:
+    if path is None:
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _fresh(record: dict) -> bool:
+    minted = record.get("minted_at")
+    return isinstance(minted, (int, float)) and time.time() - minted <= TTL_SECONDS
 
 
 def mint(
@@ -66,11 +90,12 @@ def mint(
     session_id: Optional[str] = None,
     sizing_rel: Optional[str] = None,
 ) -> str:
-    """Write the run's record and return the token. Raises ValueError when no git dir resolves.
+    """Write the run's record and return the token. Raises ValueError when no git dir resolves,
+    the run id is malformed, or `script_path` is empty: an unbound token is never minted.
 
-    `session_id` and `sizing_rel` let `warp_live` tell an in-flight run's sizing from an
-    abandoned one. Minting again for the same `run_id` overwrites the record (re-mint on retry)."""
-    if not isinstance(script_path, str) or not script_path:
+    `session_id` and `sizing_rel` (None for a raw ask until its gate binds the sizing it minted,
+    `bind_sizing`) let `run_owns_sizing` tell an in-flight run's sizing from an abandoned one."""
+    if not isinstance(script_path, str) or not script_path.strip():
         raise ValueError("run token: script_path is required")
     path = _record_path(repo_root, run_id)
     if path is None:
@@ -85,73 +110,120 @@ def mint(
         "session_id": session_id,
         "sizing_rel": sizing_rel,
     }
+    stale = _record_path(repo_root, run_id, claimed=True)
+    if stale is not None:
+        stale.unlink(missing_ok=True)
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     return token
 
 
-def _live_record(repo_root: Path, run_id: object, token: object, script_path: object) -> Optional[Path]:
-    """The record path when `token` matches the live record for `run_id` and its recorded script.
-
-    A missing or mismatched `script_path`, or a record with no script, is refused."""
-    if not isinstance(run_id, str) or not isinstance(token, str) or not TOKEN_RE.match(token):
-        return None
-    path = _record_path(repo_root, run_id)
-    if path is None or not path.is_file():
-        return None
-    try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(record, dict) or record.get("run_id") != run_id:
-        return None
-    minted = record.get("minted_at")
-    if not isinstance(minted, (int, float)) or time.time() - minted > TTL_SECONDS:
-        return None
+def _matches(record: Optional[dict], run_id: object, token: object, script_path: object) -> bool:
+    if record is None or record.get("run_id") != run_id or not _fresh(record):
+        return False
     recorded_script = record.get("script_path")
-    if not recorded_script or not isinstance(script_path, str) or script_path != recorded_script:
-        return None
-    if not hmac.compare_digest(str(record.get("sha256") or ""), _digest(str(token))):
-        return None
-    return path
-
-
-def verifies(repo_root: Path, run_id: object, token: object, script_path: object = None) -> bool:
-    """`admits` without consuming: the commit guard's check ahead of the op that consumes.
-
-    Trap: the guard must never consume -- `dispatch.terminal_commit` admits the same token
-    moments later, and a record the guard burned refuses every in-run commit."""
-    return _live_record(repo_root, run_id, token, script_path) is not None
-
-
-def admits(repo_root: Path, run_id: object, token: object, script_path: object = None) -> bool:
-    """True once for a `token` matching the live record for `run_id` and its recorded script.
-
-    Success consumes the record by renaming it to a unique claim name: of two racing admits only
-    the rename winner returns True. Verification precedes the claim, so a wrong token never burns
-    a live record."""
-    path = _live_record(repo_root, run_id, token, script_path)
-    if path is None:
+    if not isinstance(recorded_script, str) or not recorded_script or script_path != recorded_script:
         return False
-    claim = path.with_name(f"{path.name}.claim.{os.getpid()}.{secrets.token_hex(4)}")
-    try:
-        os.replace(path, claim)
-    except OSError:
+    return hmac.compare_digest(str(record.get("sha256") or ""), _digest(str(token)))
+
+
+def _well_formed(run_id: object, token: object, script_path: object) -> bool:
+    return (
+        isinstance(run_id, str) and isinstance(token, str) and bool(TOKEN_RE.match(token))
+        and isinstance(script_path, str) and bool(script_path)
+    )
+
+
+def admits(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """Claim the run's live record for this one invocation: True for exactly one caller whose
+    `token` and `script_path` match it. The claim is an exclusive create of the claimed record
+    (a rename of one source can succeed for several racing callers on Windows), so a concurrent
+    second invocation, or a retry, is refused."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    live = _record_path(repo_root, run_id)
+    claimed = _record_path(repo_root, run_id, claimed=True)
+    if live is None or claimed is None:
+        return False
+    record = _read(live)
+    if not _matches(record, run_id, token, script_path):
         return False
     try:
-        claim.unlink()
+        claimed.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except OSError:
-        pass
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, sort_keys=True)
+    for _ in range(50):
+        try:
+            live.unlink(missing_ok=True)
+            break
+        except PermissionError:  # a racing reader holds the live record open (Windows)
+            time.sleep(0.005)
     return True
 
 
+def redeem(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """The op's side: remove the record this invocation claimed through the guard (or, called
+    without one, claim the live record first). True for exactly one caller; nothing is left that
+    admits again."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    claimed = _record_path(repo_root, run_id, claimed=True)
+    if claimed is None:
+        return False
+    if not _matches(_read(claimed), run_id, token, script_path):
+        if not admits(repo_root, run_id, token, script_path):
+            return False
+    spent = claimed.with_name(f"{claimed.name}.{secrets.token_hex(4)}.spent")
+    try:
+        os.rename(claimed, spent)
+    except OSError:
+        return False
+    spent.unlink(missing_ok=True)
+    return True
+
+
+def is_live(repo_root: Path, run_id: str) -> bool:
+    """True while the run's record is unclaimed and inside its TTL."""
+    record = _read(_record_path(repo_root, run_id))
+    return record is not None and _fresh(record)
+
+
+def live_records(repo_root: Path) -> Iterator[dict]:
+    """Every unclaimed, unexpired record, in path order."""
+    common = _common_dir(repo_root)
+    if common is None:
+        return
+    try:
+        paths = sorted((common / _DIR).glob("*.json"))
+    except OSError:
+        return
+    for path in paths:
+        record = _read(path)
+        if record is not None and isinstance(record.get("run_id"), str) and _fresh(record):
+            yield record
+
+
 def consume(repo_root: Path, run_id: str) -> None:
-    """Remove the run's record; a missing record is already consumed."""
+    """Remove the run's live record; a missing record is already consumed."""
     path = _record_path(repo_root, run_id)
     if path is not None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        path.unlink(missing_ok=True)
+
+
+def bind_sizing(repo_root: Path, run_id: str, sizing_rel: str) -> bool:
+    """Record the sizing a raw ask's run minted on its live record (the gate calls this once the
+    sizing exists). A record already naming a sizing is left as it is. True on a write."""
+    path = _record_path(repo_root, run_id)
+    record = _read(path)
+    if record is None or not _fresh(record) or record.get("sizing_rel"):
+        return False
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    record["sizing_rel"] = sizing_rel
+    atomic_write_bytes(path, json.dumps(record, sort_keys=True).encode("utf-8"), preserve_mode=False)
+    return True
 
 
 def normalize_sizing_rel(repo_root: Path, sizing_path: str) -> str:
@@ -167,6 +239,18 @@ def normalize_sizing_rel(repo_root: Path, sizing_path: str) -> str:
         except (ValueError, OSError):
             return text
     return os.path.normpath(text).replace("\\", "/")
+def run_owns_sizing(repo_root: Path, session_id: str, sizing_rel: str) -> bool:
+    """True when a live run this session emitted names `sizing_rel`: from its emit (a `--sizing`
+    run) or from its gate's bind (a raw ask). A sizing the session merely wrote while a raw ask
+    was being sized is not the run's until the gate binds it. Reads only the token dir."""
+    if not session_id or not sizing_rel:
+        return False
+    want = sizing_rel.replace("\\", "/")
+    return any(
+        record.get("session_id") == session_id
+        and str(record.get("sizing_rel") or "").replace("\\", "/") == want
+        for record in live_records(repo_root)
+    )
 
 
 def token_params_from_command(raw_cmd: str) -> Optional[dict]:

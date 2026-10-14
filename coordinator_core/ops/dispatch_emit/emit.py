@@ -2940,6 +2940,7 @@ def _test_agent_call_expr(
     prompt_head: Optional[str] = None,
     owed_gates: Optional[dict] = None,
     surface: Optional[Sequence[str]] = None,
+    review_terminal: Optional[str] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -2968,10 +2969,14 @@ def _test_agent_call_expr(
         f"{prompt_head or ''}{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         f"{run_clause}"
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
-        + (f"{_review_edits_clause(review_edits_base, surface)} " if review_edits_base else "")
+        + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
         + f"{_test_runner_clause()} "
         + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
-        + (f"{_baseline_context_clause(review_edits_base, surface)} " if _is_full_sha(review_edits_base) else "")
+        + (
+            f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
+            if _is_full_sha(review_edits_base)
+            else ""
+        )
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
     if plan_path:
@@ -3034,7 +3039,9 @@ _OUT_OF_SCOPE_CLAUSE = (
 )
 
 
-def _baseline_context_clause(run_base_sha: str, surface: Optional[Sequence[str]] = None) -> str:
+def _baseline_context_clause(
+    run_base_sha: str, surface: Optional[Sequence[str]] = None, review_terminal: Optional[str] = None
+) -> str:
     """The `BASELINE_CONTEXT` block that turns on the runner's baseline attribution.
 
     DoE's test-runner re-runs its own failures in an export of `run_base_sha` and buckets them
@@ -3044,20 +3051,33 @@ def _baseline_context_clause(run_base_sha: str, surface: Optional[Sequence[str]]
     block = json.dumps({"run_base_sha": run_base_sha, "diff_files": [], "failing_ids": []})
     return (
         "Attribute every failure per coordinator/docs/wiki/reviewer-pipeline/test-runner-baseline-attribution.md; "
-        f"fill diff_files from {_edited_set_listing(run_base_sha, surface)}.\n"
+        f"fill diff_files from {_edited_set_listing(run_base_sha, surface, review_terminal)}.\n"
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
     )
 
 
-def _edited_set_listing(base: str, surface: Optional[Sequence[str]]) -> str:
+def _edited_set_listing(
+    base: str, surface: Optional[Sequence[str]], review_terminal: Optional[str] = None
+) -> str:
     """The git listings whose union is this run's edited set, as prompt text.
 
     Committed changes are read over ``base..HEAD`` limited to the plan's declared surface, since
     that range on a shared branch also holds peers' commits; with no declared surface the
     committed listing is omitted rather than widened. Review-applied edits are still uncommitted
     when the test phase runs, so the worktree listings stay unscoped.
+
+    ``review_terminal`` (a review-only run's pinned terminal sha) switches to the committed form:
+    the range ends at that sha and reviewer-applied edits are read only inside the declared
+    surface, so a peer's uncommitted file outside the surface never enters the set (a peer's
+    uncommitted edit to a surface file still does). With no surface only the
+    committed range is listed, since a worktree listing cannot be bounded.
     """
     spec = _surface_pathspec(surface)
+    if review_terminal:
+        committed = f"`git diff --name-only {base} {review_terminal}{spec}`"
+        if not spec:
+            return f"{committed} (no declared surface, so no worktree edits are listed)"
+        return f"{committed} and `git diff --name-only HEAD{spec}` (their union)"
     committed = f"`git diff --name-only {base} HEAD{spec}`, " if spec else ""
     return (
         f"{committed}`git diff --name-only HEAD` and `git ls-files --others --exclude-standard`"
@@ -3065,7 +3085,9 @@ def _edited_set_listing(base: str, surface: Optional[Sequence[str]]) -> str:
     )
 
 
-def _review_edits_clause(base: str, surface: Optional[Sequence[str]] = None) -> str:
+def _review_edits_clause(
+    base: str, surface: Optional[Sequence[str]] = None, review_terminal: Optional[str] = None
+) -> str:
     """The prompt sentences that widen the terminal phase to review-applied edits.
 
     Review stages run before this phase and apply their own fixes, so the rows'
@@ -3074,7 +3096,7 @@ def _review_edits_clause(base: str, surface: Optional[Sequence[str]] = None) -> 
     """
     return (
         "Review stages ran before this phase and may have edited files beyond the "
-        f"rows' writes. From the repo root run {_edited_set_listing(base, surface)}: that is the "
+        f"rows' writes. From the repo root run {_edited_set_listing(base, surface, review_terminal)}: that is the "
         f"edited set; a peer's commit in the range is never part of it. {_OUT_OF_SCOPE_CLAUSE} "
         "For every edited source file not already covered above, add its test target "
         "to the run, and for every edited `.ts`/`.tsx` file whose governing tsconfig "
@@ -4507,6 +4529,7 @@ def compose_script(
     split_note: Optional[dict] = None,
     prior_run_base: Optional[str] = None,
     prior_landed_rows: Sequence[WaveRow] = (),
+    review_terminal_sha: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -5062,6 +5085,7 @@ def compose_script(
         precredited_rows=precredited_rows,
         em_owned_rows=em_owned_rows(excluded_rows),
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
+        review_terminal_sha=review_terminal_sha if review_only else None,
     ):
         phase_titles.append(title)
         review_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
@@ -5108,6 +5132,9 @@ def compose_script(
     _stage_edits_base = prior_run_base or (
         _run_base_marker() if runtime_base else (run_base_sha or "HEAD")
     )
+    if review_only and not review_terminal_sha:
+        raise ValueError("a review_only compose needs a pinned review_terminal_sha")
+    _review_terminal = review_terminal_sha if review_only else None
     test_var: Optional[str] = None
     falsifier_var: Optional[str] = None
     test_absent_status = "not_run"
@@ -5165,7 +5192,7 @@ def compose_script(
                     f"  if (Object.keys({GATE_OWED_VAR}).length) {{\n"
                     f"    phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                     f"    {_TEST_RESULT_VAR} = await "
-                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface)};\n"
+                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};\n"
                     "  }"
                 )
                 test_var = _TEST_RESULT_VAR
@@ -5182,7 +5209,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface)},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -5193,7 +5220,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};"
             )
             test_var = _TEST_RESULT_VAR
 
@@ -5769,6 +5796,25 @@ def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
     return checkpoint_landed_state(repo_root, plan)[0]
 
 
+def _pin_review_terminal(run_base_sha: str, repo_root: Optional[Path]) -> str:
+    """The emit-time HEAD sha a review-only run reviews up to, after checking ``run_base_sha``
+    reaches it. Two spawns; refuses on a non-ancestor and on an unreadable answer."""
+    from coordinator_core.git.run import run_git
+    from coordinator_core.git_ancestry import is_ancestor
+
+    cwd = str(repo_root) if repo_root is not None else None
+    head = run_git(["rev-parse", "--verify", "HEAD^{commit}"], cwd=cwd)
+    terminal = head.stdout.strip()
+    if head.returncode != 0 or not _FULL_SHA_RE.fullmatch(terminal):
+        raise ValueError("review-only: HEAD unreadable, no terminal sha to pin")
+    read_ok, observed = is_ancestor(run_base_sha, terminal, cwd=cwd)
+    if not read_ok:
+        raise ValueError(f"review-only: ancestry of {run_base_sha} to {terminal} unreadable")
+    if not observed:
+        raise ValueError(f"review-only: base {run_base_sha} is not an ancestor of HEAD {terminal}")
+    return terminal
+
+
 def emit_script(
     plan_path,
     *,
@@ -5905,12 +5951,14 @@ def emit_script(
         plan_path, exclusions=exclusions, keep_coded=frozenset(review_only_rows or ())
     )
     review_only = bool(review_only_rows)
+    review_terminal_sha: Optional[str] = None
     if review_only:
         if landed_rows:
             raise ValueError("review_only_rows and landed_rows are mutually exclusive")
         if not run_base_sha or not _RUN_BASE_RE.fullmatch(run_base_sha):
             raise ValueError("review-only requires run_base_sha matching ^[0-9a-f]{7,40}$")
         rows = _keep_landed_rows(rows, review_only_rows)
+        review_terminal_sha = _pin_review_terminal(run_base_sha, repo_root)
     elif run_base_sha is not None or review_only_rows is not None:
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
     # `landed_rows is not None` is the --only-incomplete request: a run text naming no rows
@@ -6100,6 +6148,7 @@ def emit_script(
         commit_scope=commit_scope_rows,
         prior_run_base=prior_run_base,
         prior_landed_rows=prior_landed_rows,
+        review_terminal_sha=review_terminal_sha,
         split_note=None if sibling is None else {
             k: sibling[k]
             for k in ("index", "count", "stage", "stages", "cap", "plan_width", "achieved_width")

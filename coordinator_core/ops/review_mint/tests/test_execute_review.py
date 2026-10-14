@@ -155,25 +155,6 @@ def test_review_wave_is_one_parallel_with_slice_map_and_whole_diff_calls():
     assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in wave_block
 
 
-def test_delivery_skip_js_gates_only_the_delivery_verifier_at_run_time():
-    review, phases = _compose()
-    gated = compose_execute_review(
-        review,
-        stage_schemas=_STAGE_SCHEMAS,
-        plan_path="docs/plans/example.md",
-        run_base_sha="a" * 40,
-        declared_paths=["coordinator_core/ops/review_mint/execute_review.py"],
-        prompt_head="BRIEF PRECEDENCE CLAUSE",
-        delivery_skip_js="_ledgerCloses",
-    )
-    wave_block = gated[1][1]
-    assert wave_block.count("() => (_ledgerCloses) ? null : (") == 1
-    assert wave_block.count("() => _verifyOnly ? null : (") == phases[1][1].count("() => _verifyOnly ? null : (")
-    # The delivery verifier keeps its end-anchored slot, so the rebind still reads it (null when skipped).
-    assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in wave_block
-    assert "_ledgerCloses" not in phases[1][1]
-
-
 def test_every_wave_call_carries_its_roster_model_effort_and_schema():
     _, phases = _compose()
     _, wave_block = phases[1]
@@ -319,6 +300,51 @@ def test_prep_prompt_names_the_worktree_freeze_not_a_committed_range():
     assert "freeze-review-diff" in prep_block
     assert "--worktree" in prep_block
     assert "whole_diff_path" in prep_block
+
+
+def _compose_prep(**extra) -> str:
+    review = parse_execute_review(
+        _v5_fragment(), signals={"named": ["coordinator:staff-eng"]}
+    )
+    phases = compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["coordinator_core/ops/review_mint/execute_review.py"],
+        prompt_head="BRIEF PRECEDENCE CLAUSE",
+        **extra,
+    )
+    return "\n".join(block for _, block in phases)
+
+
+def test_review_only_prep_freezes_and_partitions_the_committed_range_never_the_worktree():
+    sha = "b" * 40
+    prep = _compose_prep(review_terminal_sha=sha, precredited_rows=["C0"])
+    assert f"freeze-review-diff --range {'a' * 40}..{sha} --slice-id" in prep
+    assert "--worktree" not in prep
+    assert "UNCOMMITTED" not in prep
+    assert '\\"worktree\\"' not in prep and '"worktree"' not in prep
+    assert f'\\"head\\":\\"{sha}\\"' in prep or f'"head":"{sha}"' in prep
+    assert f"{'a' * 40}..{sha} also changed" in prep
+    assert "..HEAD" not in prep
+
+
+def test_prep_without_terminal_sha_keeps_the_worktree_prompt():
+    prep = _compose_prep(precredited_rows=["C0"])
+    assert "freeze-review-diff --worktree --range " + "a" * 40 + " --slice-id" in prep
+    assert "worktree" in prep and "land UNCOMMITTED" in prep
+    assert f"{'a' * 40}..HEAD also changed" in prep
+    assert "head" not in prep.split("review.partition_slices", 1)[1].split("its ", 1)[0]
+    assert "merge-base --is-ancestor" not in prep
+
+
+def test_ancestry_rule_appears_only_in_the_review_only_prompt():
+    review_only = _compose_prep(review_terminal_sha="b" * 40, precredited_rows=["C0"])
+    normal = _compose_prep(precredited_rows=["C0"])
+    assert "git merge-base --is-ancestor <sha> <base>" in review_only
+    assert "any other exit is unknown" in review_only
+    assert "merge-base" not in normal
 
 
 def test_whole_diff_agents_are_handed_the_frozen_diff_path_at_run_time():

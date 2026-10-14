@@ -265,7 +265,8 @@ def build_ask_fixture(parent: Path) -> tuple[Path, str]:
     (repo / script).write_text(
         f"// emitted script\n{ASK_MANIFEST_MARKER}{run_rel}/manifest.json\n", encoding="utf-8"
     )
-    rl.seed(repo / run_rel, ASK_RUN, ["ship a.py"], origin=rl.ORIGIN_PM_VERBATIMS, all_of_pm_ask=False)
+    rl.start(repo, ASK_RUN, all_of_pm_ask=False)
+    rl.bind(repo, ASK_RUN, ASK_SIZING_REL, ask_text="ship a.py")
     (repo / ASK_DELIVERY_REL).parent.mkdir(parents=True)
     (repo / ASK_DELIVERY_REL).write_text("# delivered\n", encoding="utf-8")
     return repo, script
@@ -332,8 +333,6 @@ def _run_full_path(repo: Path, script: str, kind: str = "plan") -> dict:
     }
     if kind == "ask":
         params["ledger_verdict"] = {"items": [{"id": "R1", "status": "met"}]}
-        params["doc_paths"] = [ASK_DELIVERY_REL]
-        params["doc_writes"] = [ASK_DELIVERY_REL]
     return terminal_commit._handler(params, repo_root=repo / ".git")
 
 

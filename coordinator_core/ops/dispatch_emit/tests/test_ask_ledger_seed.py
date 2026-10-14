@@ -1,4 +1,4 @@
-"""The ask emit seeds the run's requirements ledger; the stage folds in an in-run sizing's PM words."""
+"""The ask emit makes the run ledger-bearing; the rows live in the bound sizing's requirement_register."""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
-from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import op
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RECORD_DIR_ROOT, RELAYED_ASK_FILE, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RECORD_DIR_ROOT, RELAYED_ASK_FILE
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 
 _DRAFT = """schema: sizing-object
@@ -35,6 +36,7 @@ _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: 
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -56,39 +58,53 @@ def _put(repo):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def _ledgers(repo):
-    return sorted((repo / RECORD_DIR_ROOT).glob(f"*/{rl.LEDGER_FILE}"))
+def _runs(repo):
+    return sorted((repo / RECORD_DIR_ROOT).glob(f"*/{rl.RUN_FILE}"))
 
 
-def test_raw_ask_seeds_the_ask_and_the_flag(repo, capsys):
+def _rows(repo):
+    return rr.read_register((repo / REL).read_text(encoding="utf-8")).rows
+
+
+def test_raw_ask_is_ledger_bearing_and_unbound_until_its_gate(repo, capsys):
     assert cli.main(["--ask", "add a thing", "--all-of-pm-ask", "--repo-root", str(repo)]) == 0
-    (path,) = _ledgers(repo)
-    ledger = rl.read_ledger(path.parent)
-    assert [(i.text, i.origin) for i in ledger.items] == [("add a thing", "ask")]
-    assert ledger.all_of_pm_ask is True
+    (path,) = _runs(repo)
+    ledger = rl.read_ledger(repo, path.parent)
+    assert not ledger.items and ledger.sizing_rel is None and ledger.all_of_pm_ask is True
     assert (path.parent / rl.LEDGER_VIEW_FILE).is_file()
+    _put(repo)
+    rl.bind(repo, path.parent.name, REL, ask_text="add a thing")
+    assert [(r["source_text"], r["anchor"]) for r in _rows(repo)] == [
+        ("make the seed verbatim", "pm_verbatims"), ("add a thing", "ask"),
+    ]
 
 
 def test_ask_sizing_seeds_the_pm_verbatims(repo, capsys):
     _put(repo)
     assert cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo)]) == 0
-    (path,) = _ledgers(repo)
-    ledger = rl.read_ledger(path.parent)
+    (path,) = _runs(repo)
+    ledger = rl.read_ledger(repo, path.parent)
     assert [i.text for i in ledger.items] == ["make the seed verbatim"] and ledger.all_of_pm_ask is False
+    assert ledger.sizing_rel == REL and [r["id"] for r in _rows(repo)] == ["R1"]
 
 
-def test_relayed_ask_is_seeded_relayed_and_written_beside_no_ask_md(repo, capsys):
+def test_relayed_ask_is_written_beside_no_ask_md_and_bound_as_relayed(repo, capsys):
     assert cli.main(["--ask", "RELAYED-MARK add a thing", "--ask-source", "relayed", "--repo-root", str(repo)]) == 0
-    (path,) = _ledgers(repo)
-    ledger = rl.read_ledger(path.parent)
-    assert [(i.text, i.origin) for i in ledger.items] == [("RELAYED-MARK add a thing", "relayed")]
+    (path,) = _runs(repo)
     assert (path.parent / RELAYED_ASK_FILE).read_text(encoding="utf-8") == "RELAYED-MARK add a thing"
     assert not (path.parent / ASK_TEXT_FILE).exists()
+    _put(repo)
+    rl.bind(repo, path.parent.name, REL, relayed_text="RELAYED-MARK add a thing")
+    assert [(r["source_text"], r["anchor"]) for r in _rows(repo)] == [
+        ("make the seed verbatim", "pm_verbatims"), ("RELAYED-MARK add a thing", "relayed"),
+    ]
+    ledger = rl.read_ledger(repo, path.parent)
+    assert [(i.text, i.origin) for i in ledger.items][-1] == ("RELAYED-MARK add a thing", "relayed")
 
 
 def test_an_unmarked_ask_still_writes_ask_md(repo, capsys):
     assert cli.main(["--ask", "add a thing", "--repo-root", str(repo)]) == 0
-    (path,) = _ledgers(repo)
+    (path,) = _runs(repo)
     assert (path.parent / ASK_TEXT_FILE).is_file() and not (path.parent / RELAYED_ASK_FILE).exists()
 
 
@@ -132,11 +148,11 @@ def test_all_of_pm_ask_is_an_ask_route_flag(repo, capsys):
     assert cli.main(["--plan", "docs/plans/x.md", "--all-of-pm-ask", "--repo-root", str(repo)]) == cli.EXIT_USAGE
 
 
-def test_stage_folds_the_sizing_words_into_an_existing_ledger_only(repo):
+def test_stage_binds_a_ledger_bearing_run_only(repo):
     _put(repo)
     stage(repo, run_id="noledger", sizing_rel=REL, writes=["pkg/a.py"])
-    assert not (repo / RECORD_DIR_ROOT / "noledger" / rl.LEDGER_FILE).exists()
-    run_dir = repo / RECORD_DIR_ROOT / "ledgered"
-    rl.seed(run_dir, "ledgered", ["the raw ask"], origin=rl.ORIGIN_ASK)
+    assert rr.read_register((repo / REL).read_text(encoding="utf-8")) is None
+    run_dir = rl.start(repo, "ledgered")
+    (run_dir / "ask.md").write_text("the raw ask", encoding="utf-8")
     stage(repo, run_id="ledgered", sizing_rel=REL, writes=["pkg/a.py"])
-    assert [i.text for i in rl.read_ledger(run_dir).items] == ["the raw ask", "make the seed verbatim"]
+    assert [i.text for i in rl.read_ledger(repo, run_dir).items] == ["make the seed verbatim", "the raw ask"]

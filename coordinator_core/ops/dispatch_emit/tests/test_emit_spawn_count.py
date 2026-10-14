@@ -35,3 +35,27 @@ def test_plan_route_spawns_exactly_the_budgeted_check_ignore(tmp_path, monkeypat
     assert len(spawns) == _budget()["plan_route_gitignore_filter"], [s.argv for s in spawns]
     assert [s.origin for s in spawns] == ["run_git"] * len(spawns)
     assert all("check-ignore" in s.argv for s in spawns), [s.argv for s in spawns]
+
+
+def test_review_only_route_spawns_exactly_the_budgeted_terminal_pin(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.emit import emit_script
+    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+    from coordinator_core.ops.dispatch_emit.tests.test_review_only_emit import _real_repo
+
+    repo, base, _ = _real_repo(tmp_path)
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        emit_script(
+            repo / "p.md",
+            repo_root=repo,
+            review_only_rows=frozenset({"C1"}),
+            run_base_sha=base,
+            review_roster_fragment=REVIEW_KW["review_roster_fragment"],
+            review_stage_schemas=REVIEW_KW["review_stage_schemas"],
+        )
+
+    pin = [s for s in spawns if "check-ignore" not in s.argv]
+    assert len(pin) == _budget()["review_only_terminal_pin"], [s.argv for s in spawns]
+    assert len(spawns) - len(pin) == _budget()["plan_route_gitignore_filter"]
+    assert all(s.origin == "run_git" for s in spawns)
+    assert [s.argv[1] for s in pin] == ["rev-parse", "merge-base"], [s.argv for s in pin]

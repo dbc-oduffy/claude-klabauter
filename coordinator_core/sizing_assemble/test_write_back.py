@@ -348,7 +348,7 @@ def test_write_embeds_pm_verbatims_once_and_keeps_em_curation(repo: Path, monkey
 
     window = [{"turn": 1, "ts": "2026-10-08T10:00:00Z", "text": "the real ask:\nship it"},
               {"turn": 0, "ts": "2026-10-08T09:00:00Z", "text": "hi"}]
-    monkeypatch.setattr(pm_turns, "recent_window", lambda **_: list(window))
+    monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: list(window))
     path = _sizing(repo)
     rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
     sizing_assemble.write_back(repo, rel, _decision("M"))

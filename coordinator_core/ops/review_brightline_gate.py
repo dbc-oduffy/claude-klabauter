@@ -942,6 +942,54 @@ def _session_scoped(range_: str, session_id: str) -> int:
     return 0
 
 
+def _count_measured_row(
+    path: str, row_loc: int, surfaces: Set[str], files: Set[str]
+) -> int:
+    """LOC one measured row contributes after the noise/prose/ceremony-exhaust
+    filters and planning-artifact de-weight; records survivors in `surfaces`/
+    `files`. Shared by `worktree_measure` and `range_measure` so they cannot drift."""
+    if (
+        _is_noise_path(path)
+        or _is_prose_bearing_path(path)
+        or _is_ceremony_exhaust_path(path)
+    ):
+        return 0
+    if _is_planning_artifact_path(path):
+        row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
+    surfaces.add(_classify_surface(path))
+    files.add(path)
+    return row_loc
+
+
+class RangeMeasureError(RuntimeError):
+    """The range numstat could not be read; a caller must report it, never treat it as loc=0."""
+
+
+def range_measure(
+    base: str, head: str, paths: List[str], cwd: Optional[str] = None
+) -> Tuple[int, Set[str], Set[str]]:
+    """Return `(loc, surfaces, product_files)` of committed `base..head` over
+    exactly `paths`, under the same filters as `worktree_measure`. One spawn
+    (`git diff --numstat <base> <head>`); reads committed objects only, so
+    uncommitted or untracked bytes can never enter the measure. Raises
+    `RangeMeasureError` when git fails."""
+    loc = 0
+    surfaces: Set[str] = set()
+    files: Set[str] = set()
+    numstat_out, rc = _run_git(["diff", "--numstat", base, head, "--", *paths], cwd)
+    if rc != 0:
+        raise RangeMeasureError(f"git diff --numstat {base} {head} failed (rc={rc})")
+    for line in numstat_out.splitlines():
+        m = _CHAIN_NUMSTAT_RE.match(line)
+        if not m:
+            continue
+        added, deleted, raw_path = m.group(1), m.group(2), m.group(3)
+        a = int(added) if added.isdigit() else 0
+        d = int(deleted) if deleted.isdigit() else 0
+        loc += _count_measured_row(_resolve_numstat_row_path(raw_path), a + d, surfaces, files)
+    return loc, surfaces, files
+
+
 def worktree_measure(
     base: str, paths: List[str], cwd: Optional[str] = None
 ) -> Tuple[int, Set[str], Set[str]]:
@@ -964,17 +1012,7 @@ def worktree_measure(
 
     def _apply(path: str, row_loc: int) -> None:
         nonlocal loc
-        if (
-            _is_noise_path(path)
-            or _is_prose_bearing_path(path)
-            or _is_ceremony_exhaust_path(path)
-        ):
-            return
-        if _is_planning_artifact_path(path):
-            row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
-        loc += row_loc
-        surfaces.add(_classify_surface(path))
-        files.add(path)
+        loc += _count_measured_row(path, row_loc, surfaces, files)
 
     if tracked_paths:
         numstat_out, rc = _run_git(["diff", "--numstat", base, "--", *tracked_paths], cwd)

@@ -36,21 +36,25 @@ Negative-spec:
     ``state/handoffs/`` baton that sizing names as ``baton:``. Never for an
     anchor-only run, never outside those dirs.
   - A warp ask run (its script carries the ask-run-manifest marker) lands
-    PRODUCT plus its record directory: its declared writes, docs output
-    (``docs/delivery/``, a wiki, a README, and the cited sizing's
-    ``doc_consumers``/``ask_conflicts``), and the changed files in
+    PRODUCT plus its record directory: its declared writes, including the stage's
+    ``docs`` chunk (the delivery note and the cited sizing's
+    ``doc_consumers``/``ask_conflicts``), under the same in-scope and
+    ``undeclared_dirty`` test as every code row, and the changed files in
     ``state/warp/<run_id>/`` (nothing from an in-flight run's ``scratch/warp``
     directory), plus its own ``docs/delivery/<run_id>.md`` when that file is on disk
-    (no ``doc_writes`` needed). When its plan is stageable (set, not gitignored) a second,
+    (declared by no chunk). The commit takes no caller-named doc list. When its plan is stageable (set, not gitignored) a second,
     plan-only stamp commit lands the plan, completion entry and shipped sizing; a
     gitignored plan keeps the stamps on disk and the run makes one commit. Sidecars and
     completion receipts stay on disk (receipts under ``.coordinator-local/``) and are
     named by trailers (``Completion-Receipt``, ``Review``, ``Falsifier``,
-    ``Resolves-Sizing``). When the run dir holds a
-    requirements ledger, the commit refuses unless ``ledger_verdict`` passes
-    ``requirements_ledger.judge`` against the live ledger, in addition to
-    the delivery, criterion and falsifier gates at every size. Any other docs path
-    rides the commit only if ``params.doc_writes`` declares it.
+    ``Resolves-Sizing``). When the run is
+    ledger-bearing, the commit refuses unless ``ledger_verdict`` passes
+    ``requirements_ledger.judge`` against the live rows of the sizing's
+    ``requirement_register``, and writes that verdict back onto the rows once it
+    lands. The ledger is an extra gate: it never stands in for the delivery
+    verdict, the terminal judge or falsifier integrity, at any size.
+  - A ``run_token`` is redeemed (single use) before anything else is read: a
+    refused or failed commit spends it as surely as a landed one.
   - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine.
   - Does NOT write a receipt when there is nothing to commit.
@@ -84,7 +88,7 @@ import ast
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Optional, Sequence
 
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.run import run_git
@@ -95,6 +99,7 @@ from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import gate_owed  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
     SPINE_SUFFIX as _SPINE_SUFFIX,
@@ -125,17 +130,9 @@ _PARAM_FIELDS = (
     Field("held", "list"),
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
-    Field("doc_paths", "str_list"),
-    Field("doc_writes", "str_list"),
     Field("ledger_verdict", "dict"),
 )
 
-#: Where a run's docs stage may write and have the terminal commit carry it: product docs and
-#: the run's delivery note, never run residue under `scratch/`.
-_DOC_PATH_PREFIX = "docs/"
-_DOC_SUFFIX = ".md"
-#: An ask run's product commit admits only these docs: the delivery note, a wiki, a README.
-_ASK_DOC_PREFIXES = ("docs/delivery/", "docs/wiki/", "wiki/")
 _PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
 
 
@@ -345,12 +342,16 @@ def _register_target(
     return target, ids, target == own
 
 
-def _register_gate(worktree_root: Path, plan_path: Optional[str], inline_review: dict) -> Optional[str]:
+def _register_gate(
+    worktree_root: Path, plan_path: Optional[str], inline_review: dict, ledger_judged: Sequence[str] = (),
+) -> Optional[str]:
     """Demote a ``met`` criterion to ``not_met`` when a row this plan claims in its
     cited register-bearing sizing is not judged met, wired, on its register surface
     with an observed entry point. Returns the failure reason (also set on the criterion),
     or ``None`` when the gate does not apply or every claimed row passes. Reads the
     judge's returned ``criterion.register_rows`` and the register on disk; never inspects code.
+    ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
+    not owed to a plan.
     """
     criterion = inline_review.get("criterion")
     if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
@@ -399,7 +400,7 @@ def _register_gate(worktree_root: Path, plan_path: Optional[str], inline_review:
         criterion["observation"] = reason
         return reason
     if is_own and register is not None:
-        orphan = rr.blocking_unclaimed(register, [r.get(rr.ROW_ID) for r in claimed])
+        orphan = rr.blocking_unclaimed(register, [r.get(rr.ROW_ID) for r in claimed] + list(ledger_judged))
         if orphan is not None:
             reason = f"register row {orphan}: owed and claimed by no plan"
             criterion["status"] = "not_met"
@@ -892,74 +893,6 @@ def _review_only_coding(
     return coded, no_delta
 
 
-def _is_ask_doc(rel: str) -> bool:
-    return rel.endswith(_DOC_SUFFIX) and (
-        rel.startswith(_ASK_DOC_PREFIXES) or PurePosixPath(rel).name.upper().startswith("README")
-    )
-
-
-_DOC_TARGET_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?|#.*)$")
-
-
-def _sizing_doc_targets(worktree_root: Path, plan_path: Optional[str]) -> frozenset:
-    """Paths the cited sizing names in ``doc_consumers`` and ``ask_conflicts`` (a ``:<line>`` or
-    ``#<anchor>`` suffix stripped): the docs stage's mandate beyond README and wiki pages.
-    A sizing or plan path is never a target -- those stay process records. In-process only."""
-    sizing_rel = _cited_sizing(worktree_root, plan_path)
-    text = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
-    if text is None:
-        return frozenset()
-    import yaml
-
-    try:
-        doc = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return frozenset()
-    if not isinstance(doc, dict):
-        return frozenset()
-    raw = [p for p in doc.get("doc_consumers") or [] if isinstance(p, str)]
-    raw += [c.get("path") for c in doc.get("ask_conflicts") or [] if isinstance(c, dict) and isinstance(c.get("path"), str)]
-    process = (PurePosixPath(home_dir(".", "sizings").replace("\\", "/")).as_posix(), "docs/plans/")
-    out = set()
-    for entry in raw:
-        rel = PurePosixPath(_DOC_TARGET_SUFFIX.sub("", entry.strip()).replace("\\", "/")).as_posix()
-        if rel and not any(rel.startswith(PurePosixPath(h).as_posix().rstrip("/") + "/") for h in process):
-            out.add(rel)
-    return frozenset(out)
-
-
-def _fold_doc_paths(
-    worktree_root: Path, doc_paths: list, plan_path: Optional[str], session_id: Optional[str],
-    product_only: bool = False, doc_writes: Optional[list] = None,
-) -> tuple:
-    """(kept, dropped) of a docs stage's reported writes: a kept path is an existing ``.md``
-    under ``docs/`` (or the run's own plan), inside the worktree, and held by no peer's touch
-    claim; for an ask run (``product_only``) only a delivery note, wiki page, README, or a
-    path the cited sizing names in ``doc_consumers``/``ask_conflicts``, and only when it is also in
-    ``doc_writes`` (the docs stage's declared set). In-process only: no spawn."""
-    kept: list = []
-    dropped: list = []
-    targets = _sizing_doc_targets(worktree_root, plan_path) if product_only else frozenset()
-    declared = {PurePosixPath(p.replace("\\", "/")).as_posix() for p in doc_writes or ()}
-    for raw in doc_paths:
-        rel = PurePosixPath(raw.replace("\\", "/")).as_posix()
-        admitted = (
-            rel in declared and (_is_ask_doc(rel) or rel in targets)
-        ) if product_only else (
-            rel == plan_path or (rel.startswith(_DOC_PATH_PREFIX) and rel.endswith(_DOC_SUFFIX))
-        )
-        ok = (
-            not PurePosixPath(rel).is_absolute()
-            and ".." not in PurePosixPath(rel).parts
-            and admitted
-            and contained_path(worktree_root / rel, [worktree_root]) is not None
-            and (worktree_root / rel).is_file()
-        )
-        (kept if ok else dropped).append(rel)
-    peer = _peer_held(worktree_root, session_id, kept)
-    return [p for p in kept if p not in peer], dropped + sorted(peer)
-
-
 #: The engine's resolution ledger: one row per sizing a run landed whole, never committed.
 SIZING_LEDGER_REL = ".coordinator-local/sizings.jsonl"
 
@@ -1277,32 +1210,48 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
     return out
 
 
-def _ledger_gate(run_dir: Path, verdict: object) -> Optional[dict]:
-    """The refusal when the run's requirements ledger is not met by ``verdict``, else None.
-    A run emitted before the ledger existed (no ledger file) is not gated."""
+def _ledger_gate(worktree_root: Path, run_dir: Path, verdict: object) -> tuple[Optional[dict], object]:
+    """(refusal or None, ledger) for a ledger-bearing ask run: the refusal when ``verdict`` does not
+    pass ``requirements_ledger.judge`` against the live register rows. A run emitted without a
+    ledger is not gated (``(None, None)``). The pass is one gate among the review stage's; it
+    discharges none of them."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
-    ledger = requirements_ledger.read_ledger(run_dir)
+    ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
     if ledger is None:
-        return None
+        return None, None
     if not isinstance(verdict, dict):
         return _error(
-            "the run keeps a requirements ledger but params.ledger_verdict is absent: the final "
-            "ledger checker's verdict gates this commit. Re-run the run's ledger check and pass "
-            "its verdict, or revise the ledger with workflow.revise and re-run the check",
+            "the run is ledger-bearing but params.ledger_verdict is absent: the final ledger "
+            "checker's verdict gates this commit. Re-run the run's ledger check and pass its "
+            "verdict, or revise with workflow.revise and re-run the check",
             refused="ledger-unjudged",
-        )
+        ), ledger
     result = requirements_ledger.judge(ledger, verdict)
     if result["pass"]:
-        return None
+        return None, ledger
     return _error(
-        "the requirements ledger is not met: "
+        "the requirements are not met: "
         + "; ".join(f"{f['id']}: {f['reason']}" for f in result["failures"][:10]),
         refused="ledger-unmet",
         ledger_failures=result["failures"],
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
-    )
+    ), ledger
+
+
+def _ledger_writeback(worktree_root: Path, ledger, verdict: object, run_id: str, sha: str) -> dict:
+    """Write the passed verdict onto the bound sizing's register rows; never raises -- the
+    product commit stands. ``{}`` or ``{"requirements_writeback_error": reason}``."""
+    if ledger is None or not ledger.sizing_rel or not isinstance(verdict, dict):
+        return {}
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+    try:
+        requirements_ledger.apply_verdict(worktree_root, ledger.sizing_rel, verdict, run_id=run_id, sha=sha)
+    except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
+        return {"requirements_writeback_error": str(exc)}
+    return {}
 
 
 def _ask_trailers(
@@ -2179,11 +2128,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              when canonical-UUID shaped.
         ledger_verdict (dict, optional)  -- an ask run's final ledger-checker
                                              verdict ``{items: [{id, status,
-                                             essential?, superseded_by?}]}``;
-                                             required when the run dir holds a
-                                             requirements ledger, re-judged
-                                             against it (``refused`` is
-                                             ``ledger-unjudged`` / ``ledger-unmet``).
+                                             essential?, wired?, superseded_by?}]}``;
+                                             required when the run is
+                                             ledger-bearing, re-judged against
+                                             the sizing's register rows
+                                             (``refused`` is ``ledger-unjudged``
+                                             / ``ledger-unmet``).
+        run_id, run_token (str, optional) -- a warp run's in-run commit:
+                                             the token is redeemed once, here
+                                             (``refused="run-token"`` otherwise).
 
     Returns: ``ceremony.commit_v2``'s reply dict plus ``chunks_committed``
     (ids), ``dropped_absent`` (paths dropped as absent-and-untracked) and
@@ -2415,9 +2368,10 @@ def _terminal_commit(
     if params.get("run_token") is not None:
         from coordinator_core.ops.dispatch_emit import run_token
 
-        if not run_token.admits(worktree_root, params.get("run_id"), params["run_token"], script_path_raw):
+        if not run_token.redeem(worktree_root, params.get("run_id"), params["run_token"], script_path_raw):
             return _error(
-                "params.run_token does not match a live token minted for params.run_id and this script",
+                "params.run_token does not match a live, unspent token minted for params.run_id and "
+                "this script (a token admits one commit attempt)",
                 refused="run-token",
             )
 
@@ -2534,8 +2488,9 @@ def _terminal_commit(
             "Use the digest's `terminal_commit_cli` line verbatim",
             refused="unreviewed",
         )
+    ledger = None
     if ask_run_dir is not None:
-        unmet = _ledger_gate(ask_run_dir, params.get("ledger_verdict"))
+        unmet, ledger = _ledger_gate(worktree_root, ask_run_dir, params.get("ledger_verdict"))
         if unmet is not None:
             return unmet
 
@@ -2605,7 +2560,10 @@ def _terminal_commit(
     # (review_mint/wave_bookkeeping.py's own module docstring).
     bookkeeping_record_path: Optional[str] = None
     register_failure = (
-        None if anchor_only else _register_gate(worktree_root, request.plan_path, inline_review)
+        None if anchor_only else _register_gate(
+            worktree_root, request.plan_path, inline_review,
+            [i.id for i in ledger.items] if ledger is not None else (),
+        )
     )
     record_abs: Optional[Path] = None
     record: Optional[dict] = None
@@ -2672,7 +2630,7 @@ def _terminal_commit(
         ask_baton = _cited_baton(worktree_root, cited_sizing if not anchor_only else None)
         if ask_baton:
             companions.append(ask_baton)
-        candidate = f"{_ASK_DOC_PREFIXES[0]}{ask_run_dir.name}.md"
+        candidate = f"{DELIVERY_NOTE_DIR}/{ask_run_dir.name}.md"
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
     snapshot = _worktree_snapshot(
@@ -2805,21 +2763,12 @@ def _terminal_commit(
             if seam_rel not in all_paths:
                 all_paths.append(seam_rel)
 
-    doc_dropped: list = []
-    doc_kept: list = []
-    if not anchor_only and params.get("doc_paths"):
-        doc_kept, doc_dropped = _fold_doc_paths(
-            worktree_root, params["doc_paths"], request.plan_path, session_id, product_only,
-            params.get("doc_writes"),
-        )
-        all_paths.extend(p for p in doc_kept if p not in all_paths)
     if (
         ask_note_rel is not None
         and ask_note_rel not in all_paths
         and not (snapshot is not None and snapshot.ignored_among([ask_note_rel]))
     ):
         all_paths.append(ask_note_rel)
-        doc_dropped = [p for p in doc_dropped if p != ask_note_rel]
     else:
         ask_note_rel = None
 
@@ -2857,12 +2806,9 @@ def _terminal_commit(
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     scope_request = request
-    docs_declared = list(params.get("doc_writes") or ())
-    if ask_note_rel is not None and ask_note_rel not in docs_declared:
-        docs_declared.append(ask_note_rel)
-    if product_only and docs_declared:
+    if product_only and ask_note_rel is not None:
         scope_request = CommitRequest(
-            chunks=request.chunks + (ChunkCommit(id="docs", title="docs", paths=tuple(docs_declared)),),
+            chunks=request.chunks + (ChunkCommit(id="run-note", title="run note", paths=(ask_note_rel,)),),
             deliverable_id=request.deliverable_id, plan_path=request.plan_path,
             session_id=request.session_id,
         )
@@ -3098,6 +3044,11 @@ def _terminal_commit(
                     tree=reply.get("tree"),
                 )
             )
+        if ledger is not None:
+            reply.update(_ledger_writeback(
+                worktree_root, ledger, params.get("ledger_verdict"),
+                str(params.get("run_id") or ask_run_dir.name), str(reply["sha"]),
+            ))
         shipped_sizing = None
         if not anchor_only and not incomplete_chunks and not register_sizing:
             shipped = _ship_cited_sizing(worktree_root, repo_root, request.plan_path)
@@ -3224,8 +3175,6 @@ def _terminal_commit(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
-    if doc_dropped:
-        reply["doc_paths_dropped"] = doc_dropped
     if reply.get("committed") or reply.get("nothing_to_commit"):
         _with_siblings(reply)
     elif sibling_paths:

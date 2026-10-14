@@ -1752,12 +1752,13 @@ def _write_back(
     record_premise = premise_provenance not in (None, "unrecorded")
     if record_premise and not (premise_evidence or "").strip():
         raise SizingAssembleError("--premise-provenance given without --premise-evidence")
-    from coordinator_core.ops.baton_pm_turns import recent_window
+    from coordinator_core.ops.baton_pm_turns import bound_window
 
     if not embed_verbatims:
         pm_verbatims = []
     elif verbatim_turns is None:
-        pm_verbatims = recent_window(cwd=str(root))
+        # Bound by content: the turns the intent quotes, whatever their age, then recent ones.
+        pm_verbatims = bound_window(decision.get("intent"), cwd=str(root))
     else:
         from coordinator_core.ops.baton_pm_turns import read_turns
 

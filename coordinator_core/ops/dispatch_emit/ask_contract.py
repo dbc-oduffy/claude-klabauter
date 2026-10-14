@@ -114,6 +114,7 @@ SPINE_SUFFIX = ".spine.md"
 #: Fixed record names a run's record directory holds, plus any `*SPINE_SUFFIX` file.
 RUN_RECORD_FILES = (
     "requirements.jsonl",
+    "run.json",
     "requirements.md",
     "manifest.json",
     ASK_TEXT_FILE,
@@ -141,6 +142,9 @@ def record_dir(repo_root: Path, run_id: str) -> Path:
         ):
             return scratch
     return state
+#: The run's delivery note (`<dir>/<run_id>.md`): what was asked, what shipped, review findings,
+#: judge verdict. The first of an ask run's declared doc writes.
+DELIVERY_NOTE_DIR = "docs/delivery"
 
 
 @dataclass(frozen=True)
@@ -234,7 +238,11 @@ class GatedRow:
 @dataclass(frozen=True)
 class StageManifest:
     """dispatch.ask_stage reply, also written as manifest.json in the run dir.
-    ``gated`` lists rows withheld, never staged; an absent key reads as ``()``."""
+    ``gated`` lists rows withheld, never staged; an absent key reads as ``()``.
+    ``test_targets`` is the spine's terminal test scope; ``no_test_target`` is set (``{reason,
+    unmapped_paths, testable_omissions}``) when the locator found no runnable target for a
+    testable write -- the run's tests read degraded, never pass. ``doc_writes`` is the docs
+    stage's declared write set, carried in the commit request's ``docs`` chunk."""
 
     run_dir: str
     rows: tuple[ManifestRow, ...]
@@ -242,6 +250,9 @@ class StageManifest:
     marker_path: str
     plan_id: str | None = None
     gated: tuple[GatedRow, ...] = ()
+    test_targets: tuple[str, ...] = ()
+    no_test_target: dict[str, Any] | None = None
+    doc_writes: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -251,6 +262,9 @@ class StageManifest:
             "review_declared_paths": list(self.review_declared_paths),
             "marker_path": self.marker_path,
             "gated": [g.to_json() for g in self.gated],
+            "test_targets": list(self.test_targets),
+            "no_test_target": self.no_test_target,
+            "doc_writes": list(self.doc_writes),
         }
 
     @classmethod
@@ -262,4 +276,7 @@ class StageManifest:
             marker_path=data["marker_path"],
             plan_id=data.get("plan_id"),
             gated=tuple(GatedRow.from_json(g) for g in data.get("gated") or ()),
+            test_targets=tuple(data.get("test_targets") or ()),
+            no_test_target=data.get("no_test_target"),
+            doc_writes=tuple(data.get("doc_writes") or ()),
         )

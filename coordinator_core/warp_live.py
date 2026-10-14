@@ -2,17 +2,18 @@
 second entry to the same work read.
 
 A run is live while its run-token record (`ops.dispatch_emit.run_token`: minted at emit,
-consumed on admit (`run_token.admits`), inert after `TTL_SECONDS`) is present AND the submitting
+redeemed when the in-run commit is attempted, inert after `TTL_SECONDS`) is present AND the submitting
 session's transcript carries no terminal task notification for the harness task that ran it. The
 token alone over-reports: a run that halts at a gate never commits, so its record outlives it.
 The task is found through the submission record this module writes beside the run's briefs and
 the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) capture
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
-A token owns a sizing only when its record names it; a raw ask's run is reachable through
-`live_run_for_session`. `unlaunched_run_for_sizing` names this session's token whose submitting
-call was refused (a non-launch result for the stored `tool_use_id`). Launch records are read from
-the managed temp dir and the legacy top-level dir.
+A token owns a sizing only when its record names it: from the emit (a `--sizing` run) or from the
+gate's `bind_sizing` (a raw ask). A raw ask's run is also reachable through `live_run_for_session`.
+`unlaunched_run_for_sizing` names this session's token whose submitting call was refused (a
+non-launch result for the stored `tool_use_id`). Launch records are read from the managed temp dir
+and the legacy top-level dir.
 
 Read-only except `record_submission` and the `managed_tempdir` mkdir on an unscoped lookup. No spawn. Every read failure answers "not live": a wrong
 "live" refuses a legitimate fire, a wrong "not live" costs at most a duplicate run.
@@ -74,26 +75,7 @@ def record_submission(
 
 
 def _token_records(repo_root: Path) -> Iterator[dict]:
-    common = _run_token._common_dir(repo_root)
-    if common is None:
-        return
-    directory = common / _run_token._DIR
-    try:
-        paths = sorted(directory.glob("*.json"))
-    except OSError:
-        return
-    now = time.time()
-    for path in paths:
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(record, dict) or not isinstance(record.get("run_id"), str):
-            continue
-        minted = record.get("minted_at")
-        if not isinstance(minted, (int, float)) or now - minted > _run_token.TTL_SECONDS:
-            continue
-        yield record
+    yield from _run_token.live_records(repo_root)
 
 
 def _read_json(path: Path) -> Optional[dict]:

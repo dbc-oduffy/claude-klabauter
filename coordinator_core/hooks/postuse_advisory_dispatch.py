@@ -1270,6 +1270,11 @@ def _workflow_run_record_path(tmpdir: str, session_id: str, task_id: str) -> str
 def _write_workflow_run_record(path: str, record: dict) -> None:
     """Best-effort, fail-open write of one run record; overwrites in place."""
     try:
+        args = record.get("args")
+        if isinstance(args, dict) and "runToken" in args:
+            # A warp run's commit token lives in no file a peer can read; a run resumed
+            # without it hands its terminal commit back to the EM.
+            record = {**record, "args": {k: v for k, v in args.items() if k != "runToken"}}
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(record, fh)
     except Exception:

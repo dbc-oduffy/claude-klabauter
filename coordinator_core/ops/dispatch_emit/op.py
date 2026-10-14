@@ -146,7 +146,7 @@ Reply fields:
      "findings": [{"severity","code","message","line"?}, ...],
      "error_count": int, "warn_count": int,
      "receipt": "<written receipt path>" | None,
-     "fire_args": {"repoRoot": "<posix root>"} | absent,
+     "fire_args": {"repoRoot": "<posix root>", "runToken"?: "<hex>"} | absent,
      "run_id", "scratch_dir": ask/pipeline routes (scratch_dir: pipeline only)}
     ``receipt`` names the provenance sidecar written beside the script, or is
     ``None`` when it could not be written — receipt writing is best-effort and
@@ -171,7 +171,9 @@ Reply fields:
     independent of ``fire.py``'s own root binding at fire time (which
     resolves and binds its own root regardless of whether this reply carries
     the key) — backward compatible, and a script emitted before this field
-    existed still fires by ignoring an absent ``args``.
+    existed still fires by ignoring an absent ``args``. On the ask route, when the emit minted
+    the run's commit token, ``fire_args.runToken`` carries it: the launch args are the token's
+    only carrier, never the script's bytes or a file under the repo.
 
 The receipt is a property of emitting, not of one repo's wrapper:
     Every emission route writes a provenance sidecar at
@@ -516,27 +518,24 @@ class FiredDriftError(ValueError):
     """
 
 
-def _seed_requirements_ledger(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
-    """Seed the run's requirements ledger with the sizing's PM words and the raw ask, verbatim.
+def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
+    """Make the run ledger-bearing and, for a `--sizing` run, seed that sizing's
+    requirement_register with its PM words and the ask now; a raw ask's sizing is minted in-run and
+    its gate binds it (the ask itself, verbatim in ask.md or relayed-ask.md, joins then).
 
-    Every stage reads it, `workflow.revise` grows it, and the terminal commit judges against it.
+    Every stage reads the rows, `workflow.revise` grows them, and the terminal commit judges against them.
     """
     from coordinator_core.ops.dispatch_emit import requirements_ledger as ledger
 
     root = Path(ask_ctx["root"])
-    run_dir = ledger.run_dir(root, ask_ctx["run_id"])
-    words: list = []
+    ledger.start(root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask)
     if ask_ctx.get("sizing_rel"):
-        from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
-
-        try:
-            words = ledger.pm_words(load_sizing(root, ask_ctx["sizing_rel"]))
-        except (SizingFireRefused, OSError, ValueError):
-            words = []
-    ledger.seed(run_dir, ask_ctx["run_id"], words, origin=ledger.ORIGIN_PM_VERBATIMS, all_of_pm_ask=all_of_pm_ask)
-    if ask_ctx.get("prompt"):
-        origin = ledger.ORIGIN_RELAYED if ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED else ledger.ORIGIN_ASK
-        ledger.seed(run_dir, ask_ctx["run_id"], [ask_ctx["prompt"]], origin=origin)
+        prompt = ask_ctx.get("prompt")
+        relayed = ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED
+        ledger.bind(
+            root, ask_ctx["run_id"], ask_ctx["sizing_rel"],
+            ask_text=None if relayed else prompt, relayed_text=prompt if relayed else None,
+        )
 
 
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
@@ -1641,11 +1640,12 @@ def _dispatch_emit(
 
         try:
             ask_run_token = _run_token.mint(
-                Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path,
+                Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path or "",
                 session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"],
             )
         except (OSError, ValueError):
-            # No git dir to hold the record: the run hands its commit back to the EM.
+            # No git dir to hold the record, or no repo-relative script to bind it to: the run
+            # hands its commit back to the EM.
             ask_run_token = None
         ask_ctx["run_token"] = ask_run_token
         script = compose_ask_script(
@@ -1675,7 +1675,7 @@ def _dispatch_emit(
             ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
             ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
-        _seed_requirements_ledger(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
+        _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
         receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
@@ -1878,8 +1878,9 @@ def _dispatch_emit(
         )
         if anchor_root is not None:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
-            if plan_path is None and ask_ctx is not None and ask_ctx.get("run_token"):
-                reply["fire_args"]["runToken"] = ask_ctx["run_token"]
+        if ask_ctx is not None and ask_ctx.get("run_token"):
+            # The run's commit token rides the launch args only: never the script's bytes.
+            reply.setdefault("fire_args", {})["runToken"] = ask_ctx["run_token"]
 
     return reply
 

@@ -154,7 +154,10 @@ def _review_loaders(monkeypatch):
     monkeypatch.setattr(op_mod.review_mint_op, "load_stage_schemas", lambda: _V5_STAGE_SCHEMAS)
 
 
-def test_inventory_review_only_emits_review_without_rows(tmp_path, _review_loaders):
+def test_inventory_review_only_emits_review_without_rows(tmp_path, _review_loaders, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import emit as emit_mod
+
+    monkeypatch.setattr(emit_mod, "_pin_review_terminal", lambda base, root: "f" * 40)
     inv = _repo(tmp_path, {"a": _n_rows("A", 3)}, [("a", "—")])
     result = _dispatch_emit(
         {

@@ -52,7 +52,8 @@ class _Emit:
         script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text("export const meta = {}\n", encoding="utf-8")
-        run_token.mint(
+        self.script = str(script)
+        self.token = run_token.mint(
             root, run_id, str(script), session_id=params.get("session_id"),
             sizing_rel=params.get("sizing_path"),
         )
@@ -431,8 +432,9 @@ def test_a_raw_ask_run_owns_no_sizing_but_is_live_for_its_session(tmp_path):
     assert warp_live.live_run_for_session(root, "other", tmpdir=str(scratch)) is None
 
 
-def test_a_consumed_token_is_not_live(tmp_path):
+def test_a_redeemed_token_is_not_live(tmp_path):
     root = _repo(tmp_path)
-    mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=_Emit())
-    run_token.consume(root, "ask-20261013T000000-abcdef")
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=emit)
+    assert run_token.redeem(root, "ask-20261013T000000-abcdef", emit.token, emit.script)
     assert warp_live.live_run_for_sizing(root, "state/sizings/a.yaml", tmpdir=str(tmp_path)) is None

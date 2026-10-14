@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional, Sequence
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
@@ -21,6 +21,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
+    DELIVERY_NOTE_DIR,
     PM_INTENT_FILE,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
@@ -52,15 +53,15 @@ from coordinator_core.ops.dispatch_emit.emit import (
     check_unschedulable_rows,
     derive_plan_context,
 )
-from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec_or_none
+from coordinator_core.ops.dispatch_emit.pathspec import (
+    NoTestTargetError,
+    NoWritesDeclaredError,
+    commit_pathspec_or_none,
+    terminal_test_scope,
+)
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit.requirements_ledger import (
-    LEDGER_FILE,
-    ORIGIN_PM_VERBATIMS,
-    pm_words,
-    seed as seed_ledger,
-)
+from coordinator_core.ops.dispatch_emit import requirements_ledger
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
@@ -92,7 +93,7 @@ def pm_intent_block(sizing: Optional[Mapping], ask_text: Optional[str]) -> str:
     plus the ask as submitted), the exit criterion, and the precedence rule. Never the EM's
     paraphrase: an `em-elaborated` intent is left out. Empty when no PM words are on record."""
     sizing = sizing or {}
-    quotes = pm_words(sizing)
+    quotes = requirements_ledger.pm_words(sizing)
     if ask_text and ask_text.strip() and ask_text.strip() not in quotes:
         quotes.append(ask_text.strip())
     if not quotes:
@@ -130,17 +131,63 @@ def relayed_ask_block(relayed_text: Optional[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _run_sizing(root: Path, sizing_rel: Optional[str], plan_text: str) -> Optional[dict]:
-    rel = sizing_rel
-    if not rel:
-        split = split_frontmatter(plan_text)
-        rel = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+def _run_sizing_rel(sizing_rel: Optional[str], plan_text: str) -> Optional[str]:
+    if sizing_rel:
+        return sizing_rel
+    split = split_frontmatter(plan_text)
+    return read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+
+
+def _run_sizing(root: Path, rel: Optional[str]) -> Optional[dict]:
     if not rel:
         return None
     try:
         return load_sizing(root, rel)
     except (SizingFireRefused, OSError, ValueError):
         return None
+
+
+_DOC_TARGET_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?|#.*)$")
+
+
+def doc_writes(run_id: str, sizing: Optional[Mapping]) -> tuple[str, ...]:
+    """The docs stage's declared write set: the run's delivery note, then every path the sizing
+    names in `doc_consumers` and `ask_conflicts` (a `:<line>` or `#<anchor>` suffix stripped).
+    A sizing or plan path is never one -- those stay process records."""
+    sizing = sizing or {}
+    raw = [p for p in sizing.get("doc_consumers") or [] if isinstance(p, str)]
+    raw += [
+        c.get("path") for c in sizing.get("ask_conflicts") or []
+        if isinstance(c, Mapping) and isinstance(c.get("path"), str)
+    ]
+    from coordinator_core.session.record_homes import home_dir
+
+    process = (PurePosixPath(home_dir(".", "sizings")).as_posix() + "/", "docs/plans/")
+    out = [f"{DELIVERY_NOTE_DIR}/{run_id}.md"]
+    for entry in raw:
+        rel = PurePosixPath(_DOC_TARGET_SUFFIX.sub("", entry.strip()).replace("\\", "/")).as_posix()
+        if (
+            rel and rel != "." and not PurePosixPath(rel).is_absolute() and ".." not in PurePosixPath(rel).parts
+            and not rel.startswith(process) and rel not in out
+        ):
+            out.append(rel)
+    return tuple(out)
+
+
+def _test_scope(waves, root: Path) -> tuple[tuple[str, ...], Optional[dict]]:
+    """(test targets, None), or ((), the typed no-target record) when the locator maps no
+    testable write to a runnable target -- e.g. a .ts-only spine in a repo whose tests it cannot
+    see. Never a crash and never a silent pass: the run reads its tests as degraded."""
+    try:
+        return tuple(terminal_test_scope(waves, repo_root=root)), None
+    except NoTestTargetError as exc:
+        return (), {
+            "reason": str(exc),
+            "unmapped_paths": list(exc.unmapped_paths),
+            "testable_omissions": list(exc.testable_omissions),
+        }
+    except NoWritesDeclaredError as exc:
+        return (), {"reason": str(exc), "unmapped_paths": [], "testable_omissions": []}
 
 # Mirrors DoE's coordinator/lib/plan_scaffold_markers.py; claude-klabauter never imports DoE's tree.
 _SCAFFOLD_MARKERS = (
@@ -261,16 +308,22 @@ def stage(
 
     ask_file = record / ASK_TEXT_FILE
     ask_text = ask_file.read_text(encoding="utf-8") if ask_file.is_file() else None
-    run_sizing = _run_sizing(root, sizing_rel or commit_sizing_rel, plan_text)
+    run_sizing_rel = _run_sizing_rel(sizing_rel or commit_sizing_rel, plan_text)
+    run_sizing = _run_sizing(root, run_sizing_rel)
     pm_block = pm_intent_block(run_sizing, ask_text)
     if pm_block:
         _write(record / PM_INTENT_FILE, pm_block)
     relayed_file = record / RELAYED_ASK_FILE
-    relayed = relayed_ask_block(relayed_file.read_text(encoding="utf-8") if relayed_file.is_file() else None)
+    relayed_text = relayed_file.read_text(encoding="utf-8") if relayed_file.is_file() else None
+    relayed = relayed_ask_block(relayed_text)
     intent = pm_block + ("\n" if pm_block and relayed else "") + relayed
-    if (record / LEDGER_FILE).is_file():
-        # A raw ask's sizing is minted in-run: its PM words join the ledger the emit seeded.
-        seed_ledger(record, run_id, pm_words(run_sizing), origin=ORIGIN_PM_VERBATIMS)
+    if run_sizing_rel:
+        # The gate bound it already; idempotent, and it folds in a revision queued since.
+        try:
+            requirements_ledger.bind(root, run_id, run_sizing_rel, ask_text=ask_text, relayed_text=relayed_text)
+        except requirements_ledger.LedgerRefused as exc:
+            raise AskStageError(f"requirements: {exc}") from exc
+    test_targets, no_test_target = _test_scope(waves, root)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     manifest_rows: list[ManifestRow] = []
@@ -313,6 +366,9 @@ def stage(
                 )
             )
 
+    docs = doc_writes(run_id, run_sizing)
+    # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
+    chunks.append(ChunkCommit(id="docs", title="run docs", paths=docs))
     carried_sizing = sizing_rel or commit_sizing_rel
     if carried_sizing:
         # The run flips the sizing to routed and links its plan; no row declares it.
@@ -340,6 +396,9 @@ def stage(
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
+        test_targets=test_targets,
+        no_test_target=no_test_target,
+        doc_writes=docs,
     )
     _write(record / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
     if session_id:

@@ -65,8 +65,60 @@ def _log_escape(payload: dict, session_id: str, file_path: str, reason: str) -> 
 _FAILED_STATUSES = frozenset({"blocked", "thrashing", "aborted", "failed"})
 
 
+_RUNS_DIR = ("scratch", "warp")
+_DISPATCH_REPORTS_DIR = (".coordinator-local", "subagent-share", "dispatch-reports")
+
+
+def _first_line_failed(path: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+    except OSError:
+        return False
+    key, _, val = first.partition(":")
+    return key.strip().casefold() == "status" and val.strip().strip("'\"").casefold() in _FAILED_STATUSES
+
+
+def _in_run_report_failed(repo_root: str, session_id: str) -> bool:
+    """True iff a run this session submitted left a failed dispatch report.
+
+    A run belongs to the session through its ``submission.json`` session_id; its report
+    rows come from ``manifest.json`` and only reports written after submission count.
+    """
+    reports = os.path.join(repo_root, *_DISPATCH_REPORTS_DIR)
+    try:
+        plan_dirs = [e.path for e in os.scandir(reports) if e.is_dir()]
+        runs = [e.path for e in os.scandir(os.path.join(repo_root, *_RUNS_DIR)) if e.is_dir()]
+    except OSError:
+        return False
+    for run in runs:
+        try:
+            with open(os.path.join(run, "submission.json"), "r", encoding="utf-8") as fh:
+                sub = json.load(fh)
+            if sub.get("session_id") != session_id:
+                continue
+            submitted = float(sub.get("submitted_at") or 0)
+            with open(os.path.join(run, "manifest.json"), "r", encoding="utf-8") as fh:
+                rows = json.load(fh).get("rows") or []
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+        for row in rows:
+            row_id = row.get("id") if isinstance(row, dict) else None
+            if not isinstance(row_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", row_id):
+                continue
+            for plan_dir in plan_dirs:
+                report = os.path.join(plan_dir, f"{row_id}.md")
+                try:
+                    fresh = os.path.getmtime(report) >= submitted
+                except OSError:
+                    continue
+                if fresh and _first_line_failed(report):
+                    return True
+    return False
+
+
 def _executor_failed(payload: dict, session_id: str) -> bool:
-    """True iff a run-report sidecar of this session names a failed executor."""
+    """True iff a run-report sidecar of this session, or an in-run dispatch report, names a failed executor."""
     try:
         from coordinator_core.hooks import nudge_unrouted_sizing as sizing
         from coordinator_core.session.machinery_paths import share_dirs
@@ -95,6 +147,7 @@ def _executor_failed(payload: dict, session_id: str) -> bool:
                         agent = val.strip().strip("'\"").casefold()
                 if status in _FAILED_STATUSES and agent.endswith("executor"):
                     return True
+        return _in_run_report_failed(repo_root, session_id)
     except Exception:
         return False
     return False

@@ -6843,7 +6843,7 @@ def _warp_run_token_admits(
     from coordinator_core.ops.dispatch_emit import run_token
 
     params = run_token.token_params_from_command(raw_cmd)
-    return params is not None and run_token.verifies(
+    return params is not None and run_token.admits(
         git_root, params["run_id"], params["run_token"], params["script_path"]
     )
 

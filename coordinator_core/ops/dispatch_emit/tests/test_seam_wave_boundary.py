@@ -156,6 +156,7 @@ def test_the_review_only_compose_emits_no_leg():
         plan_path="state/mise-inventory/x.spine.md",
         run_base_sha="a" * 40,
         review_only=True,
+        review_terminal_sha="b" * 40,
         seam=ABSENT_EDGES,
         **REVIEW_KW,
     )

@@ -190,14 +190,20 @@ def _run_rel(repo_root: Path, record_path: Path) -> str:
 def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) -> str:
     """Brief text crediting the plan's `coded` rows: those at an ancestor of `base` are backed by
     construction; the rest name the plan's own commits, so a peer's commit in `base..HEAD` is not
-    judged as the plan's. Two git spawns total; empty when the spine names no coded SHA."""
+    judged as the plan's; refs whose ancestry git could not read are named apart, never as the
+    plan's own. Two git spawns total; empty when the spine names no coded SHA."""
     by_ref = coded_row_refs(plan_path)
     if not by_ref or repo_root is None:
         return ""
-    ok = ancestor_refs(repo_root, list(by_ref), base)
+    ok, unknown = ancestor_refs(repo_root, list(by_ref), base)
     before = [i for ref, ids in by_ref.items() if ref in ok for i in ids]
-    own = [ref for ref in by_ref if ref not in ok]
+    own = [ref for ref in by_ref if ref not in ok and ref not in unknown]
     note = ""
+    if unknown:
+        note += (
+            "Ancestry of " + ", ".join(sorted(unknown)) + " to run_base_sha could not be read; "
+            "decide it by the ancestry rule below and never judge them against base..HEAD.\n"
+        )
     if before:
         note += (
             "Delivered before this run's base: rows " + ", ".join(before) + " are `coded` at an "
@@ -209,6 +215,12 @@ def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) ->
             + ". Judge those commits (`git show <sha>`), never the raw base..HEAD range: other "
             "sessions' commits and uncommitted edits in the shared tree are not this plan's "
             "delivery and are never a claim against it.\n"
+        )
+    if note:
+        note += (
+            "Ancestry rule: `git merge-base --is-ancestor <sha> <base>`; exit 0 is an ancestor, "
+            "exit 1 is not, any other exit is unknown. Never infer non-ancestry from a sha's "
+            "absence in a log range.\n"
         )
     return note
 

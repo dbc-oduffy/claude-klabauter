@@ -2264,11 +2264,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
     "dispatch.ask_stage": OpClass.MUTATING,
-    # workflow.revise — MUTATING: appends one line to state/warp/<run_id>/requirements.jsonl and
-    # rewrites requirements.md beside it, a tracked record dir (ops/dispatch_emit/requirements_ledger.py); nothing else.
+    # workflow.revise — MUTATING: appends a PM verbatim row to the run's sizing requirement_register (or
+    # queues it in the record dir's inbox until the sizing exists) and rewrites the record dir's
+    # (state/warp/<run_id>/) requirements view (ops/dispatch_emit/requirements_ledger.py); nothing else.
     # DR-208 five-question affirmation (citing workflow.revise handler):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      The run dir's ledger files only; no git object, no queue.
+    #      The sizing's register rows and the run dir's view files; no git object.
     #   2. Writes into rag's relational store?                                 No.
     #   3. Opens any file for write (including sentinel creation)?             YES.
     #      Ledger files, contained by _path_guard.contained_path before any write.

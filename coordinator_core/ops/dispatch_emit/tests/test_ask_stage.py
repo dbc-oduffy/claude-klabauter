@@ -85,7 +85,7 @@ def test_manifest_round_trips_and_request_names_every_row(repo):
     assert m.run_dir == f"{RUN_DIR_ROOT}/r1"
     assert not (repo / m.run_dir / "manifest.json").exists()
     req = parse_marker((repo / m.marker_path).read_text(encoding="utf-8"))
-    assert {c.id for c in req.chunks} == {"C1", "C2", "C3"}
+    assert {c.id for c in req.chunks} == {"C1", "C2", "C3", "docs"}
     assert req.deliverable_id == "dlv-fixture-abc123"
     assert req.plan_path == PLAN_REL
 

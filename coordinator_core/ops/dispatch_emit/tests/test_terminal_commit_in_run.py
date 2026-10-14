@@ -65,8 +65,11 @@ def repo(tmp_path):
     return root
 
 
-def _call(repo: Path, **extra) -> dict:
-    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("a.py",)),), plan_path=_PLAN)
+def _call(repo: Path, docs: tuple = (), **extra) -> dict:
+    chunks = (ChunkCommit(id="C1", title="t1", paths=("a.py",)),)
+    if docs:
+        chunks += (ChunkCommit(id="docs", title="run docs", paths=docs),)
+    request = CommitRequest(chunks=chunks, plan_path=_PLAN)
     (repo / "run.mjs").write_text(render_marker(request) + "\n", encoding="utf-8")
     (repo / "a.py").write_text("a\n", encoding="utf-8")
     params = {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, **extra}
@@ -79,25 +82,34 @@ def test_a_token_not_minted_for_the_run_refuses_before_any_write(repo):
     assert "a.py" not in _git(repo, "log", "--stat", "-1")
 
 
-def test_minted_token_commits_and_is_consumed(repo):
+def test_minted_token_commits_and_is_redeemed(repo):
     token = run_token.mint(repo, "ask-1", "run.mjs")
     out = _call(repo, run_id="ask-1", run_token=token)
     assert out["committed"] is True, out
     assert run_token.admits(repo, "ask-1", token, "run.mjs") is False
+    assert run_token.redeem(repo, "ask-1", token, "run.mjs") is False
 
 
-def test_docs_stage_files_ride_the_commit_and_residue_does_not(repo):
+def test_a_token_the_guard_already_claimed_still_redeems_once(repo):
+    token = run_token.mint(repo, "ask-1", "run.mjs")
+    assert run_token.admits(repo, "ask-1", token, "run.mjs")
+    assert _call(repo, run_id="ask-1", run_token=token)["committed"] is True
+    assert _call(repo, run_id="ask-1", run_token=token)["refused"] == "run-token"
+
+
+def test_declared_doc_writes_ride_the_commit_and_residue_does_not(repo):
     note = repo / "docs" / "delivery" / "ask-1.md"
     note.parent.mkdir(parents=True)
     note.write_text("# delivered\n", encoding="utf-8")
     residue = repo / "scratch" / "warp" / "ask-1" / "briefs" / "C1.md"
     residue.parent.mkdir(parents=True)
     residue.write_text("brief\n", encoding="utf-8")
-    out = _call(repo, doc_paths=["docs/delivery/ask-1.md", "scratch/warp/ask-1/briefs/C1.md", "../x.md"])
+    out = _call(repo, docs=("docs/delivery/ask-1.md",))
     assert out["committed"] is True, out
     landed = _git(repo, "show", "--name-only", "--format=", out["sha"])
     assert "docs/delivery/ask-1.md" in landed and "scratch/" not in landed
-    assert sorted(out["doc_paths_dropped"]) == ["../x.md", "scratch/warp/ask-1/briefs/C1.md"]
+    # The commit takes no caller-named doc list: only the stage's declared writes land.
+    assert "doc_paths" not in {f.name for f in terminal_commit._PARAM_FIELDS}
 
 
 def test_landed_run_ships_its_sizing_with_the_sha_in_a_trailer(repo):

@@ -227,6 +227,13 @@ def em_owned_clause(em_owned_rows: Optional[List[str]]) -> str:
     )
 
 
+_ANCESTRY_RULE = (
+    " Decide ancestry with `git merge-base --is-ancestor <sha> <base>`: exit 0 is an ancestor, "
+    "exit 1 is not, any other exit is unknown. Never infer non-ancestry from a sha's absence "
+    "in a log range."
+)
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -244,7 +251,7 @@ def compose_execute_review(
     host_degraded: bool = False,
     slice_key_js: Optional[str] = None,
     slice_identity_sha: Optional[str] = None,
-    delivery_skip_js: Optional[str] = None,
+    review_terminal_sha: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -277,8 +284,9 @@ def compose_execute_review(
     variable resolved at fire. The slice id is an identity, not content, so it stays on
     ``slice_identity_sha`` (the emit-time sha) while every prompt reads the fire-time base.
 
-    ``delivery_skip_js`` is a JS boolean expression: when it holds at run time the delivery
-    verifier is not dispatched and ``_deliveryVerdict`` reads null (a close-out another stage owns).
+    ``review_terminal_sha`` marks a review-only run: the prep prompt freezes and partitions the
+    committed range ``run_base_sha..review_terminal_sha`` and never the working tree. ``None``
+    keeps the worktree prompt byte-identical.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -320,25 +328,48 @@ def compose_execute_review(
         + ", ".join(precredited_rows)
         + " are `coded` at a commit that is an ancestor of run_base_sha; the diff holds no hunk "
         "for them by construction. Count them backed; never list them in claims_unbacked."
+        + (_ANCESTRY_RULE if review_terminal_sha else "")
         if precredited_rows
         else ""
     ) + em_owned_clause(em_owned_rows)
+    base_ref = run_base_sha or "run_base_sha"
+    if review_terminal_sha:
+        freeze_clause = (
+            f"`freeze-review-diff --range {base_ref}..{review_terminal_sha} --slice-id "
+            f"{prep_slice_id} --paths <every declared path>`. This run reviews committed work "
+            f"only: the diff is {base_ref}..{review_terminal_sha}, never the working tree, so "
+            f"a peer's uncommitted file is never in it."
+        )
+        foreign_range = f"{base_ref}..{review_terminal_sha}"
+        partition_args = (
+            f"{{\"base\":\"{base_ref}\",\"head\":\"{review_terminal_sha}\","
+            f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>]}}"
+        )
+    else:
+        freeze_clause = (
+            f"`freeze-review-diff --worktree --range {base_ref} --slice-id {prep_slice_id} "
+            f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
+            f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
+            f"`git diff base..HEAD` is never the run's diff."
+        )
+        foreign_range = f"{base_ref}..HEAD"
+        partition_args = (
+            f"{{\"worktree\":true,\"base\":\"{base_ref}\","
+            f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>]}}"
+        )
     prep_type, prep_role = _host_native(review.prep.agent_type, host_degraded)
     prep_prompt = (
         f"{prompt_head}\n\n{prep_role}"
         f"Freeze and characterise this run's diff for review. Freeze it with the "
         f"`freeze-review-diff` launcher on PATH (the settings-home bin; the "
         f"`review.freeze_diff` op's entrypoint -- this repo need not carry "
-        f"coordinator/bin, so never look for it here): `freeze-review-diff --worktree --range "
-        f"{run_base_sha or 'run_base_sha'} --slice-id {prep_slice_id} "
-        f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
-        f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
-        f"`git diff base..HEAD` is never the run's diff. Return its single stdout "
+        f"coordinator/bin, so never look for it here): "
+        f"{freeze_clause} Return its single stdout "
         f"line as whole_diff_path, verbatim; never write or edit a diff yourself. Report "
         f"product_files as the `product_files: N` line the launcher prints on stderr, verbatim; "
         f"never a count of your own. Under "
         f"foreign_claims list ONLY declared paths that a commit in "
-        f"{run_base_sha or 'run_base_sha'}..HEAD also changed: a peer landed inside this "
+        f"{foreign_range} also changed: a peer landed inside this "
         f"run's footprint. Peers' work elsewhere in the shared tree is normal and is never "
         f"a foreign claim, and so is any write by this run itself: its executors', reviewers' "
         f"and EM's own commits, and every `.coordinator-local/subagent-share/` sidecar. Count a "
@@ -346,8 +377,7 @@ def compose_execute_review(
         f"(`session-claim-cli who-claims-path <path>`, on the settings-home bin); "
         f"an empty list is the usual answer. Take the verdict and the slices from ONE engine call, "
         f"never your own grouping: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
-        f"review.partition_slices '{{\"worktree\":true,\"base\":\"{run_base_sha or 'run_base_sha'}\","
-        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>]}}'`, its "
+        f"review.partition_slices '{partition_args}'`, its "
         f"command word exactly as written (a guard denies the prefix moved into a shell variable) -- it returns "
         f"verdict, product_paths and slices already frozen as [{{slice_id, paths, diff_path}}]. "
         f"Report its verdict as verdict. When the verdict is single-reviewer-ok its slices is empty: "
@@ -536,12 +566,9 @@ def compose_execute_review(
         )
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
         degraded = _degrading(call)
-        if is_delivery_verifier:
-            item_lines.append(
-                f"    () => ({delivery_skip_js}) ? null : ({degraded})()" if delivery_skip_js else f"    {degraded}"
-            )
-        else:
-            item_lines.append(f"    () => _verifyOnly ? null : ({degraded})()")
+        item_lines.append(
+            f"    {degraded}" if is_delivery_verifier else f"    () => _verifyOnly ? null : ({degraded})()"
+        )
 
     map_lines = ",\n".join(item_lines)
 

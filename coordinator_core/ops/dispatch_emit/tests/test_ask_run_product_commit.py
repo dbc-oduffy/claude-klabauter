@@ -1,5 +1,6 @@
 """dispatch.terminal_commit on a warp ask run: a product commit carrying the run's delivery note,
-a stamp commit for a stageable plan, and the requirements ledger's verdict gating the commit."""
+a stamp commit for a stageable plan, and the requirements ledger's verdict gating the commit and
+written back onto the register."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import pytest
 
 from coordinator_core.benchmarks.terminal_commit_full_path import INLINE_REVIEW, PLAN_ID
 from coordinator_core.completion_receipts import store
+from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit
@@ -61,7 +63,7 @@ def repo(tmp_path, monkeypatch):
         root, SIZING,
         "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: S\n  provisional: true\n"
         "route: spec-dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\n"
-        "premise:\n  provenance: read\n  evidence: fixture\n",
+        "premise:\n  provenance: read\n  evidence: fixture\npm_verbatims:\n- turn: 1\n  text: ship a.py\n",
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "seed")
@@ -72,11 +74,7 @@ def repo(tmp_path, monkeypatch):
         f"  statement: done\n  falsifier:\n    how: pytest {NODE} -q\n    expected_when_true: passes\n---\n\n"
         "## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: t\n  disposition: open\n  body: |\n    b\n```\n",
     )
-    run_dir = root / RUN_DIR_ROOT / RUN
-    request = CommitRequest(
-        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), deliverable_id=DLV, plan_path=PLAN
-    )
-    _write(root, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
+    _request(root)
     manifest = StageManifest(
         run_dir=f"{RUN_DIR_ROOT}/{RUN}", rows=(), review_declared_paths=(),
         marker_path=f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt",
@@ -84,7 +82,8 @@ def repo(tmp_path, monkeypatch):
     _write(root, f"{RUN_DIR_ROOT}/{RUN}/manifest.json", json.dumps(manifest.to_json()))
     _write(root, "run.mjs", f"// emitted\n{ASK_MANIFEST_MARKER}{RUN_DIR_ROOT}/{RUN}/manifest.json\n")
     _write(root, "a.py", "a\n")
-    rl.seed(run_dir, RUN, ["ship a.py"], origin=rl.ORIGIN_PM_VERBATIMS, all_of_pm_ask=False)
+    rl.start(root, RUN, all_of_pm_ask=False)
+    rl.bind(root, RUN, SIZING)
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr(
         "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
@@ -92,10 +91,18 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
+def _request(repo: Path, docs: tuple = ()) -> None:
+    chunks = (ChunkCommit(id="C1", title="t", paths=("a.py",)),)
+    if docs:
+        chunks += (ChunkCommit(id="docs", title="run docs", paths=docs),)
+    request = CommitRequest(chunks=chunks, deliverable_id=DLV, plan_path=PLAN)
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
+
+
 def _call(repo: Path, **extra) -> dict:
     params = {
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, "session_id": _SID,
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met"}]}, **extra,
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]}, **extra,
     }
     return terminal_commit._handler(params, repo_root=repo / ".git")
 
@@ -136,11 +143,8 @@ def test_ask_run_stamps_its_plan_in_a_second_commit_and_its_note_rides_the_first
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/reference/x.md", "# ref\n")
     calls = _count_commit_v2(monkeypatch)
-    out = _call(
-        repo, inline_review=_MINTING_REVIEW,
-        doc_paths=["docs/delivery/run1.md", PLAN, "docs/reference/x.md"],
-        doc_writes=[PLAN, "docs/reference/x.md"],
-    )
+    _request(repo, docs=("docs/delivery/run1.md",))
+    out = _call(repo, inline_review=_MINTING_REVIEW)
     assert out["committed"] is True, out
     assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented", out
     assert "coded_stamp_error" not in out, out
@@ -148,7 +152,6 @@ def test_ask_run_stamps_its_plan_in_a_second_commit_and_its_note_rides_the_first
     assert set(calls[0]["paths"]) >= {"a.py", "docs/delivery/run1.md"}
     landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
     assert landed == {"a.py", "docs/delivery/run1.md"}
-    assert sorted(out["doc_paths_dropped"]) == [PLAN, "docs/reference/x.md"]
     stamp = set(_git(repo, "show", "--name-only", "--format=", "HEAD").split())
     entries = [f for f in stamp if f.startswith("archive/completed/")]
     assert PLAN in stamp and SIZING in stamp and len(entries) == 1
@@ -233,7 +236,7 @@ def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo):
 
 
 def test_a_run_emitted_before_the_ledger_is_not_gated(repo):
-    (repo / RUN_DIR_ROOT / RUN / rl.LEDGER_FILE).unlink()
+    (repo / RUN_DIR_ROOT / RUN / rl.RUN_FILE).unlink()
     assert _call(repo, ledger_verdict=None)["committed"] is True
 
 
@@ -254,11 +257,11 @@ def test_the_sizings_doc_consumers_and_ask_conflicts_ride_the_product_commit(rep
     for rel in ("docs/reference/x.md", "docs/decisions/DR-1.md", "docs/reference/y.md", "state/sizings/other.yaml"):
         _write(repo, rel, "# doc\n")
     every = ["docs/reference/x.md", "docs/decisions/DR-1.md", "docs/reference/y.md", "state/sizings/other.yaml"]
-    out = _call(repo, doc_paths=every, doc_writes=every)
+    _request(repo, docs=tuple(every[:2]))
+    out = _call(repo)
     assert out["committed"] is True, out
     landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
     assert landed == {"a.py", "docs/reference/x.md", "docs/decisions/DR-1.md"}
-    assert sorted(out["doc_paths_dropped"]) == ["docs/reference/y.md", "state/sizings/other.yaml"]
 
 
 _L_REVIEW = {
@@ -299,24 +302,21 @@ def test_an_l_run_with_ledger_delivery_and_criterion_passing_commits(repo):
     assert out["close"]["legs"]["completion-entry"]["detail"] != "criterion absent"
 
 
-def test_a_peer_dirty_wiki_page_outside_doc_writes_is_not_committed(repo):
+def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo):
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/wiki/peer.md", "# peer wip\n")
-    out = _call(
-        repo, doc_paths=["docs/delivery/run1.md", "docs/wiki/peer.md"], doc_writes=["docs/delivery/run1.md"]
-    )
+    _request(repo, docs=("docs/delivery/run1.md",))
+    out = _call(repo)
     assert out["committed"] is True, out
     landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
     assert landed == {"a.py", "docs/delivery/run1.md"}
-    assert out["doc_paths_dropped"] == ["docs/wiki/peer.md"]
 
 
-def test_the_runs_own_delivery_note_lands_without_doc_writes_and_other_docs_drop(repo):
+def test_the_runs_own_delivery_note_lands_without_a_docs_chunk_and_other_docs_stay_out(repo):
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/reference/x.md", "# ref\n")
-    out = _call(repo, doc_paths=["docs/reference/x.md"])
+    out = _call(repo)
     assert out["committed"] is True, out
-    assert out["doc_paths_dropped"] == ["docs/reference/x.md"]
     landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
     assert landed == {"a.py", "docs/delivery/run1.md"}
 
@@ -342,7 +342,7 @@ def _into_record_dir(repo: Path) -> str:
     )
     _write(repo, f"{rel}/manifest.json", json.dumps(manifest.to_json()))
     _write(repo, f"{rel}/pm-intent.md", "intent\n")
-    for name in ("requirements.jsonl", "requirements.md"):
+    for name in (rl.RUN_FILE, "requirements.md"):
         src = repo / RUN_DIR_ROOT / RUN / name
         if src.is_file():
             _write(repo, f"{rel}/{name}", src.read_text(encoding="utf-8"))
@@ -368,7 +368,7 @@ def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatc
     landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
     assert landed == {
         "a.py", f"{rel}/manifest.json", f"{rel}/pm-intent.md",
-        f"{rel}/requirements.jsonl", f"{rel}/requirements.md",
+        f"{rel}/{rl.RUN_FILE}", f"{rel}/requirements.md",
     }
 
 
@@ -415,14 +415,14 @@ def _printed_params(digest: dict) -> dict:
 def test_the_printed_terminal_commit_params_carry_the_ledger_verdict_top_level(repo):
     digest = _composed_digest("{items:[{id:'R1',status:'met'}],verdict:'pass'}")
     params = _printed_params(digest)
-    assert params["ledger_verdict"] == {"items": [{"id": "R1", "status": "met", "essential": True}]}
+    assert params["ledger_verdict"] == {"items": [{"id": "R1", "status": "met", "essential": True, "wired": False}]}
     assert "ledger_verdict" not in params["inline_review"]
     out = _call(repo, **{k: v for k, v in params.items() if k in ("ledger_verdict",)})
     assert out["committed"] is True, out
 
 
-def test_a_digest_whose_ledger_check_never_returned_prints_a_verdict_the_gate_judges(repo):
+def test_a_digest_whose_ledger_check_never_returned_prints_no_verdict_and_the_gate_refuses(repo):
     params = _printed_params(_composed_digest("null"))
-    assert params["ledger_verdict"] == {"items": []}
-    out = _call(repo, ledger_verdict=params["ledger_verdict"])
-    assert out["refused"] == "ledger-unmet"
+    assert "ledger_verdict" not in params
+    out = _call(repo, ledger_verdict=None)
+    assert out["refused"] == "ledger-unjudged"

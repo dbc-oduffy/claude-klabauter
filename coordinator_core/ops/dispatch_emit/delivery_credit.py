@@ -5,13 +5,18 @@ A run's delivery diff starts at `run_base_sha`, so a row coded before a resume (
 machine, in an earlier run) has no hunk in it and reads as unbacked. `rows_backed_before_base`
 names those rows: `disposition: coded` whose `disposition_ref` commit exists and is an ancestor
 of `run_base_sha` (a `repo_key:` prefix on the ref is stripped). Two git spawns for the whole spine, never one per row.
+
+Failure contract: `ancestor_refs` returns `(ancestors, unknown)`. A failed git spawn or a
+line-count mismatch puts every given ref in `unknown`, never in a silent "no ancestors" set;
+a ref git answered as missing or non-commit is in neither set. Membership in `ancestors` is
+parity-tested against `git merge-base --is-ancestor`.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.plan_tasks_render import load_rows
@@ -20,12 +25,14 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus
 _SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 
 
-def ancestor_refs(repo_root: Path, refs: List[str], base: str) -> set:
-    """The subset of `refs` (as given) naming a commit reachable from `base`. Unknown refs and
-    non-commits are absent; any git failure yields the empty set."""
+def ancestor_refs(repo_root: Path, refs: List[str], base: str) -> Tuple[set, set]:
+    """`(ancestors, unknown)` over `refs` (as given). `ancestors` names a commit reachable from
+    `base`; `unknown` is every ref when git could not answer (failed spawn or line mismatch).
+    A ref git answered as missing or non-commit is in neither set."""
     if not refs or not base:
-        return set()
+        return set(), set()
     cwd = str(repo_root)
+    everything = set(refs)
     checked = run_git(
         ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
         cwd=cwd,
@@ -33,19 +40,19 @@ def ancestor_refs(repo_root: Path, refs: List[str], base: str) -> set:
     )
     lines = checked.stdout.splitlines()
     if checked.returncode != 0 or len(lines) != len(refs):
-        return set()
+        return set(), everything
     oid_of = {}
     for ref, line in zip(refs, lines):
         parts = line.split()
         if len(parts) == 2 and parts[1] == "commit":
             oid_of[ref] = parts[0].lower()
     if not oid_of:
-        return set()
+        return set(), set()
     ahead = run_git(["rev-list", *sorted(set(oid_of.values())), "--not", base], cwd=cwd)
     if ahead.returncode != 0:
-        return set()
+        return set(), everything
     not_ancestors = {ln.strip().lower() for ln in ahead.stdout.splitlines()}
-    return {ref for ref, oid in oid_of.items() if oid not in not_ancestors}
+    return {ref for ref, oid in oid_of.items() if oid not in not_ancestors}, set()
 
 
 def coded_row_refs(plan_path: str) -> dict:
@@ -70,11 +77,13 @@ def coded_row_refs(plan_path: str) -> dict:
 
 def rows_backed_before_base(repo_root: Path, plan_path: str, run_base_sha: Optional[str]) -> List[str]:
     """Ids of the plan's `coded` rows whose `disposition_ref` commit is an ancestor of
-    `run_base_sha`; `[]` when the spine is unreadable or `run_base_sha` is empty."""
+    `run_base_sha`; `[]` when the spine is unreadable or `run_base_sha` is empty. Refs whose
+    ancestry git could not read are omitted (read as unbacked here); only the reverify credit
+    note reports them as unknown."""
     if not run_base_sha:
         return []
     by_ref = coded_row_refs(plan_path)
     if not by_ref:
         return []
-    ok = ancestor_refs(repo_root, list(by_ref), run_base_sha)
+    ok, _unknown = ancestor_refs(repo_root, list(by_ref), run_base_sha)
     return [i for ref, ids in by_ref.items() if ref in ok for i in ids]

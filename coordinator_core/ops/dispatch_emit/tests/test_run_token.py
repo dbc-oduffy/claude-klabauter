@@ -1,8 +1,9 @@
-"""run_token: mint, admit, consume, and sizing path normalising."""
+"""run_token: mint, the atomic admit, redeem, consume, sizing path normalising, and which sizings an in-flight run owns."""
 
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -20,26 +21,42 @@ def test_normalize_sizing_rel_spellings_agree(tmp_path):
     want = "state/sizings/mine.yaml"
     assert run_token.normalize_sizing_rel(repo, want) == want
     assert run_token.normalize_sizing_rel(repo, "./" + want) == want
-    assert run_token.normalize_sizing_rel(repo, "state\\sizings\\mine.yaml") == want
+    assert run_token.normalize_sizing_rel(repo, "state\sizings\mine.yaml") == want
     assert run_token.normalize_sizing_rel(repo, str(repo / want)) == want
     assert run_token.normalize_sizing_rel(repo, "") == ""
 
 
-def test_admits_only_the_minted_token_once(tmp_path):
+def test_a_raw_ask_run_owns_only_the_sizing_its_gate_bound(tmp_path):
+    repo = _repo(tmp_path)
+    run_token.mint(repo, "ask-1", "scratch/warp/ask-1.workflow.mjs", session_id="s1")
+    for name in ("mine.yaml", "unrelated.yaml"):
+        (repo / "state" / "sizings" / name).write_text("x", encoding="utf-8")
+    assert not run_token.run_owns_sizing(repo, "s1", "state/sizings/unrelated.yaml")
+    assert not run_token.run_owns_sizing(repo, "s1", "state/sizings/mine.yaml")
+    assert run_token.bind_sizing(repo, "ask-1", "state/sizings/mine.yaml")
+    assert run_token.run_owns_sizing(repo, "s1", "state/sizings/mine.yaml")
+    assert not run_token.run_owns_sizing(repo, "s1", "state/sizings/unrelated.yaml")
+    assert not run_token.run_owns_sizing(repo, "s2", "state/sizings/mine.yaml")
+    assert not run_token.bind_sizing(repo, "ask-1", "state/sizings/unrelated.yaml")
+
+
+def test_admits_claims_the_record_once(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     assert not run_token.admits(repo, "ask-1", token, "b.mjs")
     assert not run_token.admits(repo, "../x", token, "a.mjs")
     assert run_token.admits(repo, "ask-1", token, "a.mjs")
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.is_live(repo, "ask-1")
 
 
-def test_admit_without_script_path_is_refused_and_does_not_burn_the_record(tmp_path):
+@pytest.mark.parametrize("script", [None, "", 7])
+def test_script_path_is_required_to_mint_and_to_admit(tmp_path, script):
     repo = _repo(tmp_path)
+    with pytest.raises(ValueError):
+        run_token.mint(repo, "ask-1", script)
     token = run_token.mint(repo, "ask-1", "a.mjs")
-    assert not run_token.admits(repo, "ask-1", token)
-    assert not run_token.admits(repo, "ask-1", token, None)
-    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.admits(repo, "ask-1", token, script)
 
 
 def test_wrong_token_does_not_burn_a_live_record(tmp_path):
@@ -47,12 +64,6 @@ def test_wrong_token_does_not_burn_a_live_record(tmp_path):
     token = run_token.mint(repo, "ask-1", "a.mjs")
     assert not run_token.admits(repo, "ask-1", "f" * 32, "a.mjs")
     assert run_token.admits(repo, "ask-1", token, "a.mjs")
-
-
-def test_mint_requires_a_script_path(tmp_path):
-    repo = _repo(tmp_path)
-    with pytest.raises(ValueError):
-        run_token.mint(repo, "ask-1", None)  # type: ignore[arg-type]
 
 
 def test_record_with_a_null_script_is_never_admitted(tmp_path):
@@ -73,11 +84,42 @@ def test_remint_after_admit_admits_once_more(tmp_path):
     assert not run_token.admits(repo, "ask-1", second, "a.mjs")
 
 
+def test_redeem_spends_a_claimed_or_a_live_record_exactly_once(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", "f" * 32, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
+    other = run_token.mint(repo, "ask-2", "b.mjs")
+    assert run_token.redeem(repo, "ask-2", other, "b.mjs")
+    assert not run_token.admits(repo, "ask-2", other, "b.mjs")
+    assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
+
+
+def test_an_expired_record_admits_nothing(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    later = time.time() + run_token.TTL_SECONDS + 5
+    monkeypatch.setattr(run_token.time, "time", lambda: later)
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.is_live(repo, "ask-1")
+
+
 def test_consume_makes_the_token_inert(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     run_token.consume(repo, "ask-1")
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.is_live(repo, "ask-1")
+
+
+def test_live_records_skip_claimed_and_expired(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.mint(repo, "ask-2", "b.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert [r["run_id"] for r in run_token.live_records(repo)] == ["ask-2"]
 
 
 def test_racing_admits_yield_exactly_one_true(tmp_path):

@@ -3632,6 +3632,7 @@ _hooks_asyncio = _HooksAsyncioShim()
 
 from coordinator_core.hooks import block_unenumerated_agent_type as _hook_block_unenumerated_agent_type
 from coordinator_core.hooks import cater_subagent_start as _hook_cater_subagent_start
+from coordinator_core.hooks import submit_engine_ask as _hook_submit_engine_ask
 from coordinator_core.hooks import nudge_autonomous_askuserquestion as _hook_nudge_autonomous_askuserquestion
 from coordinator_core.hooks import plan_persistence_check as _hook_plan_persistence_check
 from coordinator_core.hooks import watchdog_undischarged_next_move as _hook_watchdog_undischarged_next_move
@@ -3855,6 +3856,18 @@ def _fire_block_unenumerated_agent_type() -> Optional[Dict[str, Any]]:
 def _fire_block_unenumerated_agent_type_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Bash", "tool_input": {"command": "git status"}}
     return _to_envelope_or_none(_hook_block_unenumerated_agent_type.check(payload))
+
+
+def _fire_submit_engine_ask_scout_deny() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:sizing-scout"}}
+    return _to_envelope_or_none(_hook_submit_engine_ask.sizing_scout_deny(payload))
+
+
+def _fire_submit_engine_ask_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent", "agent_id": "a1", "tool_input": {"subagent_type": "coordinator:sizing-scout"},
+    }
+    return _to_envelope_or_none(_hook_submit_engine_ask.sizing_scout_deny(payload))
 
 
 def _fire_context_pressure_precompact_noop() -> Optional[Dict[str, Any]]:
@@ -5833,6 +5846,8 @@ HOOK_ROWS: List[HookRow] = [
         False,
         _fire_block_unenumerated_agent_type_control,
     ),
+    HookRow("submit_engine_ask", "fire-sizing-scout-deny", True, _fire_submit_engine_ask_scout_deny),
+    HookRow("submit_engine_ask", "control-subagent-caller", False, _fire_submit_engine_ask_control),
     HookRow(
         "context_pressure_precompact", "noop-control", False, _fire_context_pressure_precompact_noop
     ),

@@ -40,7 +40,6 @@ def test_raw_ask_accept_phase_follows_gate():
     assert "sizing.accept_exit_criterion" not in section and "accept-record" not in section
     assert "label: 'gate'" not in section and "_gate = await" not in section
     assert section.count("await agent(") == 2 and "await agent(" in section.split("phase('xl-exit')")[0]
-    assert "run_id" not in section
     assert "pm_quote" not in section
     assert "'accept'" in script.split("phases: [", 1)[1].split("]", 1)[0]
 

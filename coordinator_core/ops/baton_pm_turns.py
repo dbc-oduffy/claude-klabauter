@@ -40,6 +40,7 @@ NEGATIVE SPEC:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -250,6 +251,73 @@ def mark_sized_through(turn: int, session_id: Optional[str] = None,
     if not sid:
         return False
     return store.merge_baton(sid, cwd, sized_through_turn=turn) is not None
+
+
+#: A turn is quoted by an intent when they share a run of this many words (or the intent holds
+#: the whole turn, for a turn at least `_QUOTE_MIN_WORDS` long).
+_QUOTE_RUN_WORDS = 6
+_QUOTE_MIN_WORDS = 3
+
+
+def _words(text: str) -> List[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def quotes_turn(intent: str, turn_text: str) -> bool:
+    """True when `intent` quotes `turn_text`: the whole turn, or a run of `_QUOTE_RUN_WORDS`
+    words of it, appears in the intent (case and punctuation ignored)."""
+    have, turn = _words(intent), _words(turn_text)
+    if len(turn) < _QUOTE_MIN_WORDS or not have:
+        return False
+    joined = " " + " ".join(have) + " "
+    if " " + " ".join(turn) + " " in joined:
+        return True
+    n = _QUOTE_RUN_WORDS
+    runs = {" ".join(have[i:i + n]) for i in range(len(have) - n + 1)}
+    return any(" ".join(turn[i:i + n]) in runs for i in range(len(turn) - n + 1))
+
+
+def bound_window(intent: Optional[str], session_id: Optional[str] = None, cwd: Optional[str] = None,
+                 budget: int = SIZING_WINDOW_CHARS) -> List[Dict[str, Any]]:
+    """The turns a sizing embeds, bound to its ask by content: every turn `intent` quotes comes
+    first, whatever its age (one over the budget left is cut and marked `truncated`), then the
+    newest unquoted turns past the session's ``sized_through_turn`` mark fill what budget is left,
+    stopping before the first whole turn that would overrun it. Returned newest first. An intent that quotes no turn (the EM's paraphrase)
+    falls back to `recent_window`, as does a missing intent."""
+    if not intent or not intent.strip():
+        return recent_window(session_id, cwd)
+    sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
+    path = log_path(sid, cwd) if sid else None
+    if path is None or not path.is_file():
+        return []
+    turns = list(reversed(_load(path)))
+    quoted = [t for t in turns if quotes_turn(intent, t["prompt"])]
+    if not quoted:
+        return recent_window(session_id, cwd)
+    window: List[Dict[str, Any]] = []
+    used = 0
+    for entry in quoted:
+        text = entry["prompt"]
+        room = budget - used
+        if len(text) > room:
+            if room > 0:
+                window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": text[:room], "truncated": True})
+                used = budget
+            continue
+        window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": text})
+        used += len(text)
+    taken = {t["turn"] for t in quoted}
+    mark = store.read_baton(sid, cwd).get("sized_through_turn")
+    for entry in turns:
+        if entry["turn"] in taken or (
+            isinstance(mark, int) and not isinstance(mark, bool) and entry["turn"] <= mark
+        ):
+            continue
+        if used + len(entry["prompt"]) > budget:
+            break
+        window.append({"turn": entry["turn"], "ts": entry.get("ts"), "text": entry["prompt"]})
+        used += len(entry["prompt"])
+    return sorted(window, key=lambda t: t["turn"], reverse=True)
 
 
 def _int_param(params: dict, key: str) -> Optional[int]:

@@ -47,6 +47,7 @@ _PARAMS = (
     Field("writes", "str_list"),
     Field("baton", "nonempty_str"),
     Field("record", "dict"),
+    Field("run_id", "nonempty_str"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit")
 _XL_PICKS = ("roadmap", "accept_multi_session")
@@ -228,9 +229,11 @@ def _write_record(repo_root: Path, sizing_rel: str, record: dict) -> dict:
 @register_op("dispatch.ask_gate")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]), `baton` (str),
-    `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?).
+    `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?),
+    `run_id` (str: the warp run asking).
 
-    With `record`, writes that ruling through its single writer, then gates the sizing as it stands and
+    With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict. With
+    `record`, writes that ruling through its single writer, then gates the sizing as it stands and
     adds `recorded` {ok, error?} to the reply; a refused write still returns the verdict. Replies
     `GateVerdict.to_json()`; a malformed request replies `{"error": str}` and writes nothing.
     """
@@ -247,6 +250,34 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
+    if params.get("run_id"):
+        refused = _bind_run(root, params["run_id"], sizing_rel)
+        if refused is not None:
+            return _halt(HALT_REFUSAL, refused).to_json()
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
     verdict = gate(root, sizing_rel, writes=writes, baton=params.get("baton"))
     return (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+
+
+def _bind_run(root: Path, run_id: str, sizing_rel: str) -> Optional[str]:
+    """Bind the run to the sizing it is gating: the sizing's requirement_register takes the PM's
+    words, the raw ask (a relayed ask under its own origin) and any queued revision
+    (`requirements_ledger.bind`), and the run's token record names the sizing, so
+    `run_token.run_owns_sizing` claims it and nothing else. The refusal text when the
+    requirements cannot be recorded, else None."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE
+
+    def _text(path: Path) -> Optional[str]:
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+    try:
+        run_dir = requirements_ledger.run_dir(root, run_id)
+        requirements_ledger.bind(
+            root, run_id, sizing_rel,
+            ask_text=_text(run_dir / ASK_TEXT_FILE), relayed_text=_text(run_dir / RELAYED_ASK_FILE),
+        )
+    except (requirements_ledger.LedgerRefused, OSError) as exc:
+        return f"requirements: {exc}"
+    run_token.bind_sizing(root, run_id, sizing_rel)
+    return None

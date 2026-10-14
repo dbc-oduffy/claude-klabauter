@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
     ASK_SOURCES,
+    DELIVERY_NOTE_DIR,
     PM_INTENT_FILE,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
@@ -132,8 +133,6 @@ _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 #: The git-commit-agent definition pins haiku; one fixed command needs nothing more.
 _COMMIT_MODEL = "haiku"
 _DOCS_MODEL = "sonnet"
-#: The run's delivery note: what was asked, what shipped, review findings, judge verdict.
-DELIVERY_NOTE_DIR = "docs/delivery"
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
 _KEEP_THE_ASK = (
@@ -194,18 +193,8 @@ _XL_SCHEMA = _obj(
     },
 )
 _DOCS_SCHEMA = _obj(
-    ["doc_paths", "doc_writes"],
-    {
-        "doc_paths": {"type": "array", "items": _STR},
-        "doc_writes": {"type": "array", "items": _STR},
-        "note_path": _STR,
-    },
-)
-
-# Mirrors emit.py::_REPO_ROOT_DECLARATION: the token arrives as a fire arg, never as script bytes.
-_RUN_TOKEN_DECLARATION = (
-    "  const _RUN_TOKEN = (typeof args !== 'undefined' && args && typeof args.runToken === 'string' "
-    "&& args.runToken) ? args.runToken : null;"
+    ["doc_paths"],
+    {"doc_paths": {"type": "array", "items": _STR}, "note_path": _STR, "stale_docs": {"type": "array", "items": _STR}},
 )
 _COMMIT_SCHEMA = _obj(
     ["committed"],
@@ -231,6 +220,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "id": _STR,
                     "status": {"type": "string", "enum": list(LEDGER_STATUSES)},
                     "essential": {"type": "boolean"},
+                    "wired": {"type": "boolean"},
                     "superseded_by": _STR,
                     "evidence": _STR,
                 },
@@ -279,6 +269,9 @@ _MANIFEST_SCHEMA = _obj(
             ),
         },
         "review_declared_paths": {"type": "array", "items": _STR},
+        "test_targets": {"type": "array", "items": _STR},
+        "no_test_target": {"type": ["object", "null"]},
+        "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
         "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "closure_key": {}})},
     },
@@ -286,6 +279,31 @@ _MANIFEST_SCHEMA = _obj(
 
 
 _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
+
+#: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
+#: script's bytes never hold it (any agent or peer can read the script).
+_RUN_TOKEN_DECL_JS = (
+    "  const _RUN_TOKEN = (() => { try { const a = (typeof args === 'string') ? JSON.parse(args) : "
+    "(typeof args === 'undefined' ? null : args); return (a && typeof a.runToken === 'string' "
+    "&& /^[0-9a-f]{32}$/.test(a.runToken)) ? a.runToken : null; } catch (_e) { return null; } })();"
+)
+
+#: A dispatched agent runs the definition loaded at session start, so a run that edits an
+#: `agents/*.md` file would review or verify against stale text. Every prompt names the run's
+#: edited definitions and has the agent read its own from disk.
+_AGENT_DEFS_FN = "_agentDefsClause"
+_AGENT_DEFS_MARKER = f"{_emit._SHARED_PATH_MARKER_DELIM}{_AGENT_DEFS_FN}(){_emit._SHARED_PATH_MARKER_DELIM}"
+_AGENT_DEFS_HELPER_JS = (
+    f"  function {_AGENT_DEFS_FN}() {{\n"
+    "    const _edited = [...new Set([...(_writes ?? []), ...((_manifest && !_manifest.error && "
+    "_manifest.review_declared_paths) || [])])].filter((p) => /(^|\\/)agents\\/[^/]+\\.md$/.test(String(p)));\n"
+    "    if (!_edited.length) return '';\n"
+    "    return 'Agent definitions this run edits: ' + _edited.join(', ') + '. The definition you were "
+    "started with was loaded before this run and can be stale: if your own agent type is defined by "
+    "one of those files, read that file from disk under the repo root now and follow its current text "
+    "wherever it differs.\\n\\n';\n"
+    "  }"
+)
 
 
 def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
@@ -296,7 +314,7 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
     return (
         "  const _outerAgent = agent;\n"
         f"  const {_PLAN_BLITZ_FN} = (() => {{\n"
-        f"    const agent = (p, o) => _outerAgent({_LEDGER_PREFIX_VAR} + p, o);\n"
+        f"    const agent = (p, o) => _outerAgent({_LEDGER_PREFIX_VAR} + {_AGENT_DEFS_FN}() + p, o);\n"
         f"{rebind}{blitz_fn}\n"
         f"    return {_PLAN_BLITZ_FN};\n"
         "  })();"
@@ -310,16 +328,16 @@ _ROW_VERIFY_PROMPT_OPEN = "`Run and report on the scoped test target(s) for ${id
 def _scoped_test_call(
     agent_type_host: Optional[str], review_edits_base: str = "HEAD", prompt_head: Optional[str] = None
 ) -> str:
-    """The plan route's terminal test agent call, scoped at run time to the manifest's declared paths.
+    """The plan route's terminal test agent call, scoped at run time to the manifest's test targets.
 
-    The plan is authored inside the run, so the scope cannot resolve at compose time; the
-    stage's `review_declared_paths` stand in. Trap: no falsifier leg -- the plan's falsifier
-    is unknown until the plan exists.
+    The plan is authored inside the run, so the scope cannot resolve at compose time; the stage
+    resolves `test_targets` through `pathspec.terminal_test_scope`. Trap: no falsifier leg -- the
+    plan's falsifier is unknown until the plan exists.
     """
     call = _emit._test_agent_call_expr(
         [_SCOPE_SLOT], agent_type_host=agent_type_host, review_edits_base=review_edits_base, prompt_head=prompt_head
     )
-    return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
+    return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.test_targets.join(', ') + ']")
 
 
 _USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
@@ -600,7 +618,7 @@ def compose_ask_script(
     manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
     brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
-    head = brief_prefix + _emit._BRIEF_PRECEDENCE_CLAUSE
+    head = brief_prefix + _AGENT_DEFS_MARKER + _emit._BRIEF_PRECEDENCE_CLAUSE
     session_tail = _emit._dispatching_session_id_paragraph(session_id)
     agent_type = _emit._EXECUTOR_AGENT_TYPE
 
@@ -654,13 +672,12 @@ def compose_ask_script(
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
     b.append("  let _viaRoadmap = false;")
-    if in_run_commit:
-        b.append(_RUN_TOKEN_DECLARATION)
-        b.append("  let _docWrites = [];")
+    b.append(_RUN_TOKEN_DECL_JS)
     b.append("  let _nextAction = null;")
     b.append("  let _docs = null;")
     b.append("  let _commit = null;")
     b.append("  let _ledger = null;")
+    b.append(_AGENT_DEFS_HELPER_JS)
     if rb_fn:
         from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS
 
@@ -748,7 +765,7 @@ def compose_ask_script(
     b.append("  phase('gate');")
     def _gate_payload(record_js: str = "") -> str:
         return (
-            "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes"
+            "js:JSON.stringify({ sizing_path: _sizingRel, run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (f", record: {record_js}" if record_js else "")
             + " })"
@@ -1009,7 +1026,7 @@ def compose_ask_script(
     b.append("  for (const w of _waves) {")
     b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
     row_prompt = _cat(
-        f"{brief_prefix}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
+        f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.{ledger_clause}{session_tail}",
@@ -1034,8 +1051,14 @@ def compose_ask_script(
     )
     b.append("  phase('review');")
     b.append("  if (!_halted) {\n" + review_text + "\n  }")
-    test_call = _scoped_test_call(agent_type_host, run_base_sha or "HEAD", brief_prefix or None)
-    test_guard = f"_gate.arm !== {_lit(ARM_XS)} && (_manifest.review_declared_paths ?? []).length"
+    test_call = _scoped_test_call(agent_type_host, run_base_sha or "HEAD", brief_prefix + _AGENT_DEFS_MARKER)
+    test_guard = f"_gate.arm !== {_lit(ARM_XS)} && (_manifest.test_targets ?? []).length"
+    # A spine whose writes map to no runnable test target (`pathspec.NoTestTargetError`, e.g. a
+    # .ts-only change in a repo the locator cannot see tests for) is degraded, never a pass.
+    no_target = (
+        f"  if (!_halted && _manifest && _manifest.no_test_target) {{ {_emit._TEST_RESULT_VAR} = "
+        "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }; }"
+    )
     if judge_expr is None:
         b.append(f"  if (!_halted && {test_guard}) {{")
         b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
@@ -1055,6 +1078,7 @@ def compose_ask_script(
         )
         b.append("    } catch (e) { _haltOnUsageLimit(e); }")
         b.append("  }")
+    b.append(no_target)
     review_vars = _emit.review_stage_vars(
         review,
         bookkeeping_stem_literal=_lit(review_wave_bookkeeping_stem(run_id, None)),
@@ -1081,7 +1105,9 @@ def compose_ask_script(
         "(`git status --porcelain` and `git diff`), the plan when one exists (",
         "js:(_planRel ?? 'none')",
         f"), and the briefs under {run_dir}/briefs. Return one entry in items for EVERY ledger item, by "
-        "its id (R1, R2, ...): status 'met' when the change makes the item literally true; 'drifted' "
+        "its id (the sizing's requirement_register row id): status 'met' when the change makes the "
+        "item literally true, and wired true when the product actually reaches it (an entry a user, "
+        "caller or the engine runs leads to it), not only when code for it exists; 'drifted' "
         "when it was lost or reinterpreted in transit -- a brief, plan, memo or stage narrowed, "
         "softened or re-read it (name where in evidence); 'superseded' only when a LATER revision item "
         "replaces it, named as superseded_by; otherwise 'not_met'. Set essential false only for an "
@@ -1118,8 +1144,8 @@ def compose_ask_script(
         ": { kind: 'none', op: null, params: null };"
     )
     b.append(
-        "  if (_nextAction.params) { _nextAction.params.ledger_verdict = { items: (_ledger?.items ?? [])"
-        ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, "
+        "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
+        ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}) })) }; }"
     )
     stage_titles: list[str] = []
@@ -1187,11 +1213,12 @@ def _append_docs_and_commit(
     b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str
 ) -> None:
     """The run's last two stages, under a live terminal-commit `_nextAction` and no halt: a Sonnet
-    docs stage (stale README and wiki pages, the delivery note) whose reported files ride the
-    commit as `doc_paths`, then a git-commit-agent running `dispatch.terminal_commit` with the run
-    token. The product commit lands the product files and the delivery note; a second commit
-    stamps the plan and the completion entry unless the plan is gitignored. Briefs and
-    sidecars stay on disk. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has no commit to run.
+    docs stage that edits only the run's declared doc writes (`_manifest.doc_writes`, which the
+    stage put in the commit request's `docs` chunk: the delivery note and the sizing's
+    `doc_consumers`/`ask_conflicts` paths), then a git-commit-agent running
+    `dispatch.terminal_commit` with the run token. The commit lands product only: plans, sizings,
+    briefs and sidecars are process records it never carries, and a doc no chunk declares stays
+    out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run.
 
     Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
     `block_subagent_commit` run-token leg admits nothing else.
@@ -1206,24 +1233,21 @@ def _append_docs_and_commit(
         f", and the run manifest at {manifest_rel}. The run's verdicts, verbatim:\n",
         "js:_cap(JSON.stringify({ ledger: _ledger, delivery: _deliveryVerdict, integration: _reviewIntegration, "
         f"wave: _reviewWave, tests: {_emit._TEST_RESULT_VAR}, criterion: (typeof {_emit._FALSIFIER_RESULT_VAR} === 'undefined' ? null : {_emit._FALSIFIER_RESULT_VAR}) }}), 12000)",
-        "\n\n(0) Before you edit anything, decide the complete set of repo-relative paths you will write "
-        "(the sizing's `doc_consumers` targets, the `ask_conflicts` paths, stale README and wiki pages, "
-        "and the delivery note); that set is your doc_writes, and you write nothing outside it. "
-        "(1) Update every README and wiki page (docs/wiki/, wiki/) that the change makes stale "
-        "(list the change with `git status --porcelain`); edit only what the change truly alters. "
-        "Then update every path the sizing's `doc_consumers` lists (each restates the rule this ask "
-        "changes; a `:<line>` or `#<anchor>` suffix names where), and amend or supersede the text at "
-        "each `ask_conflicts` path so it no longer contradicts the ask -- the ask outranks it. "
-        f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/{run_id}/{LEDGER_VIEW_FILE})"
-        f" with the ledger checker's status for it, what shipped (files "
+        "\n\nThe files you may write are exactly this run's declared doc writes: ",
+        "js:JSON.stringify(_manifest.doc_writes ?? [])",
+        ". Edit no other file: a README or wiki page the change makes stale that is not in that list "
+        "goes in stale_docs, unedited. (1) Update every path the sizing's `doc_consumers` lists (each "
+        "restates the rule this ask changes; a `:<line>` or `#<anchor>` suffix names where), and amend "
+        "or supersede the text at each `ask_conflicts` path so it no longer contradicts the ask -- the "
+        "ask outranks it. "
+        f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/"
+        f"{run_id}/{LEDGER_VIEW_FILE}) with the ledger checker's status for it, what shipped (files "
         "and why), each review finding and how it was resolved, the test result, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
         f"{RUN_DIR_ROOT}/{run_id}/briefs",
-        ", which are never committed. The commit carries product files plus the delivery note, "
-        "README and wiki pages, and the sizing's doc_consumers and ask_conflicts paths only: never edit a plan, sizing or other process record to carry "
-        "this. Never write under scratch/, never stage or commit. Return as doc_writes the set "
-        "you declared in (0), as doc_paths every repo-relative file you wrote or edited, and the note's "
-        "path as note_path.",
+        ", which are never committed. Never edit a plan, sizing or other process record to carry "
+        "this. Never write under scratch/, never stage or commit. Return as doc_paths every "
+        "repo-relative file you wrote or edited, the note's path as note_path, and stale_docs.",
     )
     docs_call = _agent(
         docs_prompt, label="docs", phase="docs", agent_type=_emit._EXECUTOR_AGENT_TYPE,
@@ -1233,7 +1257,7 @@ def _append_docs_and_commit(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThen run exactly this one command as its own Bash call: no `cd &&`, no "
         "wrapper, no env prefix, no edit to it.\n\n",
-        "js:_terminalCommitCli({ ..._nextAction.params, doc_paths: (_docs?.doc_paths ?? []), doc_writes: _docWrites, run_id: _runId, run_token: _RUN_TOKEN })",
+        "js:_terminalCommitCli({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
         "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped and close, verbatim "
         "(null where absent). Run nothing else.",
     )
@@ -1244,7 +1268,6 @@ def _append_docs_and_commit(
     b.append(f"  if ({live}) {{")
     b.append("    phase('docs');")
     b.append(f"    try {{ _docs = await {docs_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
-    b.append("    _docWrites = _docs?.doc_writes ?? [];")
     b.append("  }")
     b.append(f"  if ({live}) {{")
     b.append("    phase('commit');")

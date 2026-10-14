@@ -236,7 +236,7 @@ def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
 
 def test_the_judge_leg_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
-    assert "() => (_gate.arm !== 'xs' && (_manifest.review_declared_paths ?? []).length) ? agent(" in script
+    assert "() => (_gate.arm !== 'xs' && (_manifest.test_targets ?? []).length) ? agent(" in script
 
 
 def test_a_roster_without_a_judge_leaves_the_criterion_unrun():

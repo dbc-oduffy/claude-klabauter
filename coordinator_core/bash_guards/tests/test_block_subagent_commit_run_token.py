@@ -81,26 +81,23 @@ def test_wrong_token_run_script_or_shape_is_denied(repo, mutate):
     assert _check(mutate(token)) is not None
 
 
-def test_params_without_script_path_are_denied_and_do_not_burn_the_token(repo):
+def test_a_token_admits_one_invocation_only(repo):
     token = run_token.mint(repo, "ask-1", _SCRIPT)
-    params = _params(token)
-    del params["script_path"]
+    assert _check(_cmd(_params(token))) is None
+    # The admit claimed the record: a concurrent second invocation, or a retry, is denied.
+    assert _check(_cmd(_params(token))) is not None
+
+
+def test_redeemed_token_no_longer_admits(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    assert run_token.redeem(repo, "ask-1", token, _SCRIPT)
+    assert _check(_cmd(_params(token))) is not None
+
+
+def test_params_without_the_script_are_denied(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    params = {k: v for k, v in _params(token).items() if k != "script_path"}
     assert _check(_cmd(params)) is not None
-    assert _check(_cmd(_params(token))) is None
-
-
-def test_guard_admit_leaves_the_token_for_the_op_which_consumes_it(repo):
-    token = run_token.mint(repo, "ask-1", _SCRIPT)
-    assert _check(_cmd(_params(token))) is None
-    assert run_token.admits(repo, "ask-1", token, _SCRIPT)
-    assert not run_token.admits(repo, "ask-1", token, _SCRIPT)
-    assert _check(_cmd(_params(token))) is not None
-
-
-def test_consumed_token_no_longer_admits(repo):
-    token = run_token.mint(repo, "ask-1", _SCRIPT)
-    run_token.consume(repo, "ask-1")
-    assert _check(_cmd(_params(token))) is not None
 
 
 def test_expired_token_no_longer_admits(repo, monkeypatch):

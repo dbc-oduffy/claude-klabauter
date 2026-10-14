@@ -63,13 +63,12 @@ def test_every_composed_agent_call_is_modeled(em_brief):
     assert agent_n > 0 and modeled_n == agent_n
 
 
-def test_no_run_token_leaves_the_commit_to_the_em():
+def test_no_in_run_commit_leaves_the_commit_to_the_em():
     script = _compose()
     assert "phase('commit')" not in script and "phase('docs')" not in script
-    assert "_RUN_TOKEN" not in script
 
 
-def test_run_token_composes_docs_then_commit_before_the_one_return():
+def test_in_run_commit_composes_docs_then_commit_before_the_one_return():
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     docs, commit, ret = (
         script.index("phase('docs')"),
@@ -79,10 +78,11 @@ def test_run_token_composes_docs_then_commit_before_the_one_return():
     assert script.index("  _nextAction = ") < docs < commit < ret
     opts = _agent_opts(script, "commit")
     assert "agentType: 'coordinator:git-commit-agent'" in opts and "model: 'haiku'" in opts
-    assert "args.runToken" in script and "_RUN_TOKEN = \"" not in script and "_RUN_TOKEN = '" not in script
+    assert "a.runToken" in script and "_RUN_TOKEN = \"" not in script and "_RUN_TOKEN = '" not in script
     assert not re.search(r"[0-9a-f]{32,}", script)
-    assert "run_token: _RUN_TOKEN" in script and "doc_paths: (_docs?.doc_paths ?? [])" in script
-    assert "doc_writes: _docWrites" in script and "_docWrites = _docs?.doc_writes" in script
+    assert "run_token: _RUN_TOKEN" in script and "doc_paths" not in script.split("phase('commit')")[1]
+    # The docs stage edits only the stage's declared doc writes.
+    assert "JSON.stringify(_manifest.doc_writes ?? [])" in script
     assert "_nextAction = { kind: 'close_job', op: null," in script
     assert f"{ask_compose.DELIVERY_NOTE_DIR}/run-1.md" in script
     assert "_nextAction.kind === 'terminal_commit' && _RUN_TOKEN" in script
@@ -124,6 +124,13 @@ def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path):
     assert "phase('xl-exit')" not in script and "_gate.arm === 'roadmap'" not in script
 
 
+def test_the_run_token_is_read_from_args_never_written_into_the_script():
+    script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
+    assert "a.runToken" in script and "typeof args === 'string'" in script
+    assert not re.search(r"_RUN_TOKEN = '[0-9a-f]{32}'", script)
+    assert not re.search(r"\b[0-9a-f]{32}\b", script)
+
+
 @pytest.mark.parametrize("over", [{}, {"in_run_commit": True, "roadmap_blitz_text": _RB_TEXT}])
 def test_script_is_valid_and_parses(over, tmp_path):
     script = _compose(**over)
@@ -158,17 +165,41 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start():
     rows = script[script.index("phase('execute');", script.index("phase('stage')")) :]
     assert view in rows[: rows.index("stallMs")]
     # plan-blitz is shadowed: every prompt it composes opens with the ledger clause.
-    assert "const agent = (p, o) => _outerAgent(_LEDGER_PREFIX + p, o);" in script
+    assert "const agent = (p, o) => _outerAgent(_LEDGER_PREFIX + _agentDefsClause() + p, o);" in script
     assert script.index("const _LEDGER_PREFIX = ") < script.index("const planBlitz = (() => {")
 
 
-def test_at_l_and_up_verifier_judge_and_falsifier_compose_with_the_ledger_check():
-    script = _compose(**_JUDGE_KW)
+def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier():
+    script = _compose(in_run_commit=True)
     assert "_ledgerCloses" not in script
-    assert "label: 'ledger-check'" in script
-    assert "[_testResult, _falsifierResult] = await parallel([" in script
-    assert "_deliveryVerdict" in script
-    assert "phase('review')" in script
+    wave = script[script.index("phase('review')"):script.index("phase('ledger-check')")]
+    # Nothing in the review stage (delivery verifier, terminal judge, falsifier) reads the ledger:
+    # the ledger check runs after it as one more gate, at every size.
+    assert not re.search(r"_ledger\w*", wave)
+    assert "delivery: _deliveryVerdict" in script
+
+
+def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk():
+    script = _compose(in_run_commit=True)
+    assert "function _agentDefsClause()" in script
+    assert "agents\\/[^/]+\\.md$" in script
+    # Every agent prompt after the helper opens through it: review, judge, ledger, docs, rows.
+    for label in ("ledger-check", "docs", "commit", "gate", "stage"):
+        call = script[: script.index(f"label: '{label}'")]
+        assert "_agentDefsClause()" in call[call.rindex("agent(") :], label
+    rows = script[script.index("phase('execute');", script.index("phase('stage')")) :]
+    assert "_agentDefsClause()" in rows[: rows.index("stallMs")]
+
+
+def test_the_gate_binds_the_run_to_its_sizing():
+    assert "JSON.stringify({ sizing_path: _sizingRel, run_id: _runId, writes: _writes" in _compose()
+
+
+def test_a_spine_with_no_test_target_reads_degraded_never_passed():
+    script = _compose()
+    assert "(_manifest.test_targets ?? []).length" in script
+    assert "_manifest.test_targets.join(', ')" in script
+    assert "_manifest.no_test_target) {" in script and "status: 'degraded'" in script
 
 
 def test_reviewers_and_judge_read_the_pm_intent_and_apm_keeps_the_ask():

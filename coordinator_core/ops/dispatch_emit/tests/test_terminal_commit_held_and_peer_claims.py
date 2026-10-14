@@ -96,7 +96,7 @@ def test_held_spine_writes_are_subtracted_even_when_the_marker_lacks_the_chunk(r
     )
     out = _run(
         repo, request, held=[{"chunk": "H1", "reason": "halted"}],
-        doc_paths=["docs/held.md"], plan_path="docs/plan.md",
+        plan_path="docs/plan.md",
     )
     assert out["committed"] is True, out
     assert "docs/held.md" not in _committed(repo)

@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import PLAN_HELD_VAR, RUNTIM
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
 
 _BASE = "abc1234def"
+_TERMINAL = "fed4321cba"
 _SESSION = "9d860631-c114-462a-a6ee-f685cc671ced"
 _FORBIDDEN = (
     "_runRow",
@@ -38,9 +39,18 @@ def _script(host):
         session_id=_SESSION,
         agent_type_host=host,
         review_only=True,
+        review_terminal_sha=_TERMINAL,
         plan_path="docs/plans/p.md",
         **REVIEW_KW,
     )
+
+
+def test_review_only_compose_without_a_pinned_terminal_sha_raises():
+    with pytest.raises(ValueError, match="pinned review_terminal_sha"):
+        compose_script(
+            [[_write_row("C1")]],
+            name="wf", description="d", run_base_sha=_BASE, review_only=True, **REVIEW_KW,
+        )
 
 
 @pytest.mark.parametrize("host", ["coordinator", "host"])
@@ -78,7 +88,8 @@ def test_given_base_reaches_the_prep_prompt():
 def test_unnamed_spine_row_appears_nowhere():
     script = compose_script(
         [[_write_row("C1")]],
-        name="wf", description="d", run_base_sha=_BASE, review_only=True, **REVIEW_KW,
+        name="wf", description="d", run_base_sha=_BASE, review_only=True,
+        review_terminal_sha=_TERMINAL, **REVIEW_KW,
     )
 
     assert "C2" not in script and "pkg/C2.py" not in script
@@ -190,3 +201,103 @@ def test_review_only_marker_tells_the_terminal_commit_to_leave_rows_alone():
     chunk = ChunkCommit(id="C1", title="t", paths=("a.py",), prefixes=(), report="")
     plain = render_marker(CommitRequest(chunks=(chunk,)))
     assert "review_only" not in plain and parse_marker(plain).review_only is False
+
+
+# --- committed-range pin: a review-only emit never reads the shared working tree ---
+
+_SPINE_TEXT = (
+    "---\nplan_id: pln-x\nstatus: executing\n---\n\n# P\n\n## Tasks\n\n```yaml plan-tasks\n"
+    "- id: C1\n  title: one\n  writes: [a.py]\n  disposition: coded\n```\n"
+)
+
+
+def _g(repo, *args):
+    from coordinator_core.git.run import run_git
+
+    done = run_git(list(args), cwd=str(repo))
+    assert done.returncode == 0, (args, done.stderr)
+    return done.stdout.strip()
+
+
+def _real_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _g(repo, "init", "-q")
+    _g(repo, "config", "user.email", "t@example.com")
+    _g(repo, "config", "user.name", "t")
+    _g(repo, "config", "commit.gpgsign", "false")
+    (repo / "a.py").write_text("one\n", encoding="utf-8")
+    (repo / "p.md").write_text(_SPINE_TEXT, encoding="utf-8")
+    _g(repo, "add", "a.py", "p.md")
+    _g(repo, "commit", "-q", "-m", "base")
+    base = _g(repo, "rev-parse", "HEAD")
+    (repo / "a.py").write_text("two\n", encoding="utf-8")
+    _g(repo, "commit", "-q", "-am", "landed")
+    return repo, base, _g(repo, "rev-parse", "HEAD")
+
+
+def _emit_review_only(repo, base):
+    from coordinator_core.ops.dispatch_emit.emit import emit_script
+
+    return emit_script(
+        repo / "p.md",
+        repo_root=repo,
+        review_only_rows=frozenset({"C1"}),
+        run_base_sha=base,
+        review_roster_fragment=REVIEW_KW["review_roster_fragment"],
+        review_stage_schemas=REVIEW_KW["review_stage_schemas"],
+    )
+
+
+@pytest.mark.spawns_process
+def test_review_only_emit_pins_the_terminal_sha_and_omits_a_peers_uncommitted_file(tmp_path):
+    repo, base, head = _real_repo(tmp_path)
+    (repo / "peer_uncommitted.py").write_text("x\n", encoding="utf-8")
+    (repo / "a.py").write_text("peer edit\n", encoding="utf-8")
+
+    script = _emit_review_only(repo, base)
+
+    assert f"{base}..{head}" in script
+    assert "peer_uncommitted" not in script
+    assert "--worktree" not in script and '"worktree":true' not in script
+    assert "git ls-files --others" not in script
+
+
+@pytest.mark.spawns_process
+def test_review_only_emit_refuses_a_base_that_is_not_an_ancestor_of_head(tmp_path):
+    repo, base, head = _real_repo(tmp_path)
+    _g(repo, "checkout", "-q", "-b", "side", base)
+    (repo / "side.py").write_text("s\n", encoding="utf-8")
+    _g(repo, "add", "side.py")
+    _g(repo, "commit", "-q", "-m", "side")
+    side = _g(repo, "rev-parse", "HEAD")
+    _g(repo, "checkout", "-q", "-")
+
+    with pytest.raises(ValueError, match=f"{side}.*not an ancestor of HEAD {head}"):
+        _emit_review_only(repo, side)
+
+
+@pytest.mark.spawns_process
+def test_review_only_emit_refuses_an_unreadable_ancestry_instead_of_proceeding(tmp_path):
+    repo, _, _ = _real_repo(tmp_path)
+
+    with pytest.raises(ValueError, match="unreadable"):
+        _emit_review_only(repo, "0" * 40)
+
+
+@pytest.mark.spawns_process
+def test_normal_run_emit_does_not_pin_a_terminal_sha(tmp_path):
+    from coordinator_core.ops.dispatch_emit.emit import emit_script
+
+    repo, _, head = _real_repo(tmp_path)
+    (repo / "p.md").write_text(_SPINE_TEXT.replace("coded", "open"), encoding="utf-8")
+
+    script = emit_script(
+        repo / "p.md",
+        repo_root=repo,
+        review_roster_fragment=REVIEW_KW["review_roster_fragment"],
+        review_stage_schemas=REVIEW_KW["review_stage_schemas"],
+    )
+
+    assert f"..{head}" not in script
+    assert "--worktree --range" in script
