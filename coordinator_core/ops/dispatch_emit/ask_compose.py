@@ -208,9 +208,8 @@ _COMMIT_SCHEMA = _obj(
     },
 )
 _LEDGER_CHECK_SCHEMA = _obj(
-    ["verdict", "items"],
+    ["items"],
     {
-        "verdict": {"type": "string", "enum": ["pass", "fail"]},
         "all_of_pm_ask": {"type": "boolean"},
         "items": {
             "type": "array",
@@ -223,6 +222,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
+                    "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
                 },
             ),
@@ -1164,10 +1164,12 @@ def compose_ask_script(
         "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. Set essential false only for an "
         "item that is an aside rather than something the PM asked to have delivered; when the ledger "
         "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
-        "or two sentences naming the file or behaviour. Return all_of_pm_ask as the ledger states it, "
-        "and list any in-repo memo or doctrine that conflicts with the ask as conflicts. verdict is "
-        "'pass' only when every item is judged, none drifted, and no mandatory or essential item is "
-        "not_met; otherwise 'fail'.",
+        "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
+        "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
+        "and any other gap in plain words. The commit stage runs after this check, so an uncommitted "
+        "change is expected here and 'commit' alone in remaining is not a reason to block. Return "
+        "all_of_pm_ask as the ledger states it, and list any in-repo memo or doctrine that conflicts "
+        "with the ask as conflicts.",
     )
     ledger_call = _agent(
         ledger_prompt, label="ledger-check", phase="ledger-check",
@@ -1179,8 +1181,24 @@ def compose_ask_script(
     b.append("    phase('ledger-check');")
     b.append(f"    try {{ _ledger = await {ledger_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(
-        "    if (!_halted && (!_ledger || _ledger.verdict !== 'pass')) { _halted = { halted: 'ledger-check', "
-        "items: (_ledger?.items ?? []).filter((i) => i && i.status !== 'met' && i.status !== 'post_commit'), "
+        f"    const _postCommitActs = {json.dumps(list(POST_COMMIT_ACTS))};\n"
+        "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
+        "      if (!i) return false;\n"
+        "      const rem = Array.isArray(i.remaining) ? i.remaining : [];\n"
+        "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
+        "? 'post_commit' : i.status;\n"
+        "      const acts = status === 'post_commit' && i.status === 'not_met' ? rem : i.post_commit_acts;\n"
+        "      if (status === 'drifted') return true;\n"
+        "      if (status === 'not_met') return l.all_of_pm_ask === true || i.essential !== false;\n"
+        "      if (status === 'post_commit') return !Array.isArray(acts) || !acts.length "
+        "|| acts.some((a) => !_postCommitActs.includes(a));\n"
+        "      return false;\n"
+        "    });"
+    )
+    b.append(
+        "    if (!_halted && (!_ledger || !(_ledger.items ?? []).length || _ledgerBlocking(_ledger).length)) "
+        "{ _halted = { halted: 'ledger-check', "
+        "items: _ledger ? _ledgerBlocking(_ledger) : [], "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         "next_action: 'Revise the ask with coordinator-invoke workflow.revise (run_id, verbatim), or fix the "
         "change, then re-fire.' }; }"
@@ -1225,7 +1243,8 @@ def compose_ask_script(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}), "
-        "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}) })) }; }"
+        "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
+        "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
     )
     stage_titles: list[str] = []
     if in_run_commit:

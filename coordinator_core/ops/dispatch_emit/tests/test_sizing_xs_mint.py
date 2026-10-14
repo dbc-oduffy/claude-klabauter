@@ -29,6 +29,35 @@ def test_mint_round_trips_to_one_dispatchable_row(tmp_path):
     assert "the thing passes" in rows[0].body
 
 
+def test_plan_body_beside_code_routes_to_sidecar_and_body_says_so(tmp_path):
+    text, path = mint_xs_spine(
+        SIZING,
+        sizing_rel=SIZING_REL,
+        writes=["src/x.py", "docs/plans/2026-10-14-p.md", "docs/plans/2026-10-14-p.md"],
+        out_dir=tmp_path,
+    )
+    path.write_text(text, encoding="utf-8", newline="\n")
+    row = read_spine(path)[0]
+    assert list(row.writes) == ["src/x.py", "docs/plans/2026-10-14-p.evidence.yaml"]
+    assert (
+        "docs/plans/2026-10-14-p.md is routed to docs/plans/2026-10-14-p.evidence.yaml: "
+        "record plan evidence with coordinator-invoke plan.tasks.mutate evidence-append"
+    ) in row.body
+
+
+def test_problems_body_and_plans_only_sets_are_left_as_declared(tmp_path):
+    text, path = mint_xs_spine(
+        SIZING, sizing_rel=SIZING_REL, writes=["src/x.py", "docs/problems/2026-10-14-q.md"], out_dir=tmp_path
+    )
+    path.write_text(text, encoding="utf-8", newline="\n")
+    assert list(read_spine(path)[0].writes) == ["src/x.py", "docs/problems/2026-10-14-q.md"]
+    text, path = mint_xs_spine(
+        SIZING, sizing_rel=SIZING_REL, writes=["docs/plans/2026-10-14-p.md"], out_dir=tmp_path
+    )
+    assert "routed to" not in text
+    assert "docs/plans/2026-10-14-p.md" in text
+
+
 def test_frontmatter_cites_sizing_and_statement(tmp_path):
     text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.md"], out_dir=tmp_path)
     assert f"sizing_object: {SIZING_REL}" in text

@@ -249,6 +249,16 @@ def test_a_post_commit_ledger_item_commits_and_reports_what_is_owed(repo):
     assert rows["R2"]["status"] == "partial"
 
 
+def test_a_not_met_item_remaining_only_the_commit_commits_and_lands_met(repo):
+    verdict = {"items": [
+        {"id": "R1", "status": "not_met", "essential": True, "wired": True, "remaining": ["commit"]},
+    ]}
+    out = _call(repo, ledger_verdict=verdict)
+    assert out["committed"] is True
+    rows = {r["id"]: r for r in rr.read_register((repo / SIZING).read_text(encoding="utf-8")).rows}
+    assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@{out['sha']}"]
+
+
 def test_a_post_commit_item_naming_no_act_is_refused_unmet(repo):
     verdict = {"items": [{"id": "R1", "status": "post_commit", "post_commit_acts": []}]}
     out = _call(repo, ledger_verdict=verdict)

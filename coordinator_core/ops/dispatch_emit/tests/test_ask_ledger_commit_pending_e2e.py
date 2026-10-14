@@ -1,0 +1,173 @@
+"""The composed ask script's ledger-check halt, run under node: a not_met item whose only remaining
+acts follow the commit must not stop the run before its docs and commit stages, and the composed
+blocking rule must agree with `requirements_ledger.judge`."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit.requirements_ledger import Item, Ledger, judge
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+from coordinator_core.win_portability import no_console_creationflags
+
+_RUN_TOKEN = "a" * 32
+
+_STUBS = r"""
+const _seen = { phases: [], labels: [] };
+const phase = (name) => { _seen.phases.push(name); };
+const agent = async (_prompt, opts) => {
+  _seen.labels.push(opts.label);
+  if (opts.label === 'ledger-check') return _LEDGER_STUB;
+  if (opts.label === 'docs') return { doc_paths: [], note_path: 'n.md', stale_docs: [] };
+  if (opts.label === 'commit') return { committed: true, sha: 'abc', close: null };
+  throw new Error('unstubbed agent label ' + opts.label);
+};
+let _halted = null;
+let _manifest = { plan_id: 'p', rows: [], gated: [], doc_writes: [] };
+let _docs = null, _commit = null, _nextAction = null;
+let _incompleteChunks = [], _notStarted = [], _blockedChunks = [], _heldBy = [], _unansweredBriefs = [];
+let _stoppedBy = [], _verifications = [], _planHeld = {};
+let _reviewIntegration = { fixes_applied: 0, sidecar_path: 'x' }, _reviewPrep = { slices: [1] };
+let _reviewWave = [], _deliveryVerdict = null, _testResult = null;
+let _ledger = null;
+const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings/x.yaml', _planRel = null;
+const _gate = { arm: 'xs' }, _runId = 'run-1';
+let _writes = [];
+let %(owner_rows)s = [];
+%(agent_defs)s
+%(helper)s
+"""
+
+
+def _node() -> str:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    return node
+
+
+def _segment(in_run_commit: bool = True) -> str:
+    """The composed script from the ledger-check block through the terminal return."""
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", in_run_commit=in_run_commit)
+    start = script.index("  if (!_halted && _manifest && !_manifest.error) {\n    phase('ledger-check');")
+    ret = script.index("  return { arm:", start)
+    stop = script.index("};", script.index("get terminal_commit_cli", ret)) + 2
+    return "if (true) {\n" + script[start:stop]
+
+
+def _run(stubs: list[dict], in_run_commit: bool = True) -> list[dict]:
+    """One result per ledger-check reply in `stubs`: halted_by, phases run, and the verdict handed to the commit."""
+    prelude = _STUBS % {
+        "token": _RUN_TOKEN,
+        "owner_rows": ask_compose._OWNER_ROWS_JS,
+        "agent_defs": ask_compose._AGENT_DEFS_HELPER_JS,
+        "helper": ask_compose._usage_limit_helper_js(),
+    }
+    body = _segment(in_run_commit).replace("  return { arm:", "  return { phases: _seen.phases, arm:", 1)
+    program = (
+        "const _CASES = JSON.parse(process.env.CASES);\n"
+        "async function _once(_LEDGER_STUB) {\n" + prelude + body + "\n}\n"
+        "(async () => { const out = []; for (const c of _CASES) out.push(await _once(c));"
+        " console.log(JSON.stringify(out)); })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
+    )
+    proc = subprocess.run(
+        [_node(), "-e", program],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "CASES": json.dumps(stubs)},
+        **no_console_creationflags(),
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.fixture(autouse=True)
+def _xs_arm(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
+
+
+def _item(id_: str, status: str, **extra) -> dict:
+    return {"id": id_, "status": status, "essential": True, "wired": True, "evidence": "e", **extra}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_commit_only_not_met_item_reaches_docs_and_commit():
+    item = _item("R1", "not_met", remaining=["commit"], evidence="uncommitted")
+    (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}])
+    assert out["halted_by"] is None, out["halted_by"]
+    assert [p for p in out["phases"] if p in ("docs", "commit")] == ["docs", "commit"]
+    judged = out["ledger"]["items"]
+    assert judged[0]["remaining"] == ["commit"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_verdict_handed_to_the_commit_carries_remaining():
+    item = _item("R1", "not_met", remaining=["commit"])
+    (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}], in_run_commit=False)
+    assert out["next_action"]["op"] == "dispatch.terminal_commit"
+    handed = out["next_action"]["params"]["ledger_verdict"]["items"]
+    assert [i["id"] for i in handed] == ["R1"]
+    assert handed[0].get("remaining") == ["commit"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_an_all_post_commit_ledger_does_not_halt_on_a_fail_verdict():
+    item = _item("R1", "post_commit", post_commit_acts=["commit"])
+    (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}])
+    assert out["halted_by"] is None, out["halted_by"]
+    assert [p for p in out["phases"] if p in ("docs", "commit")] == ["docs", "commit"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_pre_commit_gap_still_halts_and_is_listed():
+    item = _item("R1", "not_met", remaining=["the test is red"], evidence="red")
+    (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}])
+    halted = out["halted_by"]
+    assert halted and halted["halted"] == "ledger-check"
+    assert [i["id"] for i in halted["items"]] == ["R1"]
+    assert "docs" not in out["phases"] and "commit" not in out["phases"]
+
+
+_PARITY_ITEMS = {
+    "met": _item("R1", "met"),
+    "drifted": _item("R1", "drifted"),
+    "not_met_essential": _item("R1", "not_met"),
+    "not_met_non_essential": _item("R1", "not_met", essential=False),
+    "not_met_commit_only": _item("R1", "not_met", remaining=["commit"]),
+    "not_met_mixed_remaining": _item("R1", "not_met", remaining=["commit", "the test is red"]),
+    "not_met_empty_remaining": _item("R1", "not_met", remaining=[]),
+    "post_commit_with_acts": _item("R1", "post_commit", post_commit_acts=["commit", "sha_reply"]),
+    "post_commit_no_acts": _item("R1", "post_commit"),
+    "post_commit_unknown_act": _item("R1", "post_commit", post_commit_acts=["tweet"]),
+}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_composed_halt_matches_the_ledger_judge_whatever_the_checker_verdict_says():
+    ledger = Ledger((Item("R1", "text", "ask", ""),), all_of_pm_ask=False)
+    names = list(_PARITY_ITEMS)
+    cases = [
+        {"verdict": verdict, "items": [_PARITY_ITEMS[name]], "conflicts": []}
+        for name in names
+        for verdict in ("pass", "fail")
+    ]
+    results = _run(cases)
+    mismatches = []
+    for n, name in enumerate(names):
+        failed = [f["id"] for f in judge(ledger, {"items": [_PARITY_ITEMS[name]]})["failures"]]
+        for verdict, out in zip(("pass", "fail"), results[2 * n : 2 * n + 2]):
+            halted = out["halted_by"]
+            blocked = [i["id"] for i in halted["items"]] if halted else []
+            if blocked != failed:
+                mismatches.append((name, verdict, blocked, failed))
+    assert not mismatches, mismatches

@@ -96,7 +96,7 @@ def test_relayed_ask_is_written_beside_no_ask_md_and_bound_as_relayed(repo, caps
     _put(repo)
     rl.bind(repo, path.parent.name, REL, relayed_text="RELAYED-MARK add a thing")
     assert [(r["source_text"], r["anchor"]) for r in _rows(repo)] == [
-        ("make the seed verbatim", "pm_verbatims"), ("RELAYED-MARK add a thing", "relayed"),
+        ("RELAYED-MARK add a thing", "relayed"),
     ]
     ledger = rl.read_ledger(repo, path.parent)
     assert [(i.text, i.origin) for i in ledger.items][-1] == ("RELAYED-MARK add a thing", "relayed")

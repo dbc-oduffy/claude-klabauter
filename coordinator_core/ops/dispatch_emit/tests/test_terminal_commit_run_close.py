@@ -131,7 +131,7 @@ def test_inline_legs_ride_the_coded_stamp_commit(env):
 
 
 def test_judge_without_summary_fails_completion_entry_and_writes_none(env):
-    out = _fire(env, _judge(drop=("completion_summary",)))
+    out = _fire(env, _judge(drop=("completion_summary", "observation")))
 
     close = out["close"]
     assert close["legs"]["completion-entry"] == {"status": "failed", "detail": "no judge summary"}

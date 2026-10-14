@@ -79,6 +79,27 @@ def test_stopped_marker_yields_nothing(tmp_path, tdir):
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
+def _transcript(tmp_path, text):
+    p = tmp_path / "session.jsonl"
+    p.write_text(text + "\n", encoding="utf-8")
+    return str(p)
+
+
+def test_reaped_task_reported_once_then_silent(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"))
+    tp = _transcript(tmp_path, json.dumps({"content": "Error: No task found with ID: t1"}))
+    first = mod.workflow_stall_resume_text(SID, tp, NOW)
+    assert "abandoned" in first and "wf_1" in first
+    assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
+
+
+def test_other_tasks_no_task_found_leaves_live_run_advised(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"))
+    tp = _transcript(tmp_path, json.dumps({"content": "Error: No task found with ID: zzz"}))
+    text = mod.workflow_stall_resume_text(SID, tp, NOW)
+    assert "abandoned" not in text and 'TaskStop({"task_id": "t1"})' in text
+
+
 def test_another_sessions_record_yields_nothing(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"), session="other")
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""

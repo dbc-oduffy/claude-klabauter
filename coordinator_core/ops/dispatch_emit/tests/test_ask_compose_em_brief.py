@@ -62,9 +62,25 @@ def test_every_agent_prompt_on_a_sized_xs_script_carries_the_brief(monkeypatch):
 def test_brief_is_declared_once_before_use_with_ask_agent_alias():
     script, seen = _compose(em_brief=_BRIEF)
     assert script.count("const _EM_BRIEF = ") == 1
-    assert script.count("const _askAgent = agent;") == 1
+    alias = "const _askAgent = agent;"
+    iife = script.index("const planBlitz = (() => {")
+    assert script[:iife].count(alias) == 1
+    assert script[iife:].count(alias) == 1
     assert script.index("const _EM_BRIEF = ") < script.index("phase('size')")
     assert seen == [{"agent_prefix_var": EM_BRIEF_VAR}]
+
+
+def test_a_brief_script_with_no_blitz_fn_has_one_alias_and_no_rebind(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
+    script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF, preamble="pre")
+    assert script.count("const _askAgent = agent;") == 1
+    assert "const planBlitz = (() => {" not in script
+
+
+def test_a_blitz_script_without_a_brief_carries_no_alias_or_rebind():
+    script, _ = _compose()
+    assert "const planBlitz = (() => {" in script
+    assert "const _askAgent = agent;" not in script
 
 
 def test_brief_literal_round_trips_quotes_backslashes_and_newlines():

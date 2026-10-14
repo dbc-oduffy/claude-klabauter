@@ -1470,14 +1470,27 @@ def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, too
     resolve_workflow_run_records(session_id, transcript_path, _managed_tmpdir())
 
 
+def _task_gone_in_tail(transcript_path: str, task_id: str) -> bool:
+    """True when a transcript-tail line holds both `No task found` and `task_id`
+    (a TaskStop on a reaped task). Reads the tail only; never raises."""
+    try:
+        from coordinator_core.workflow_watch.tail import TailReader
+
+        text = TailReader(transcript_path, seek_to_tail=True).poll()
+    except Exception:
+        return False
+    return any("No task found" in ln and task_id in ln for ln in (text or "").split("\n"))
+
+
 def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float) -> str:
     """One register-shaped line naming this session's first stalled Workflow run
     and the exact resume call, or "" when none is stalled.
 
     Reads the session's run records, one journal tail and file stats; spawns
-    nothing and never writes the journal. Its only record writes are
-    `resolve_workflow_run_records`', and only while a pending record exists.
-    Never raises.
+    nothing and never writes the journal. Its only writes are
+    `resolve_workflow_run_records`' (while a pending record exists) and the
+    stopped marker, touched once when the transcript tail shows the run's task
+    is gone (reported once as abandoned, then silent). Never raises.
     """
     if not session_id or not isinstance(session_id, str) or not _SAFE_ID_RE.fullmatch(session_id):
         return ""
@@ -1522,6 +1535,14 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
             stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)
             if stalled is None:
                 continue
+            if transcript_path and _task_gone_in_tail(transcript_path, task_id):
+                with open(marker, "a"):
+                    pass
+                return (
+                    f"Workflow run {run_id} abandoned: task {task_id} no longer exists "
+                    f"(TaskStop: No task found). Resume: Workflow resumeFromRunId={run_id}, "
+                    "or ignore."
+                )
             call = stall.render_resume_call(
                 run_id, record.get("scriptPath"), record.get("args"), task_id
             )

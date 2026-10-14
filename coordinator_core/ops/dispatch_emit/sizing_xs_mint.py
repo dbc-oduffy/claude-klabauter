@@ -8,6 +8,7 @@ Writes come from the operator because a sizing carries no footprint.
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
@@ -46,6 +47,38 @@ def _landed_work_closure_key(gate: Mapping, sizing: Mapping, stem: str, gid: str
     return {"kind": "deliverable", "id": f"{base}-{gid.lower()}"}
 
 
+def _route_plan_bodies(paths: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """`(paths, [(body, sidecar)])` with each `docs/plans/*.md` body replaced by its evidence sidecar
+    when the write set also holds a non-body path.
+
+    Trap: an executor never writes a plan body, so on a mixed set the sidecar is the only meaning
+    the declaration can have. A plans-only set and any `docs/problems/*.md` body stay as declared."""
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+    from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
+
+    def norm(p: str) -> str:
+        return posixpath.normpath(p.replace("\\", "/"))
+
+    def is_body(p: str) -> bool:
+        return bool(_PLAN_BODY_RE.search(norm(p).lower()))
+
+    def is_plan_body(p: str) -> bool:
+        return is_body(p) and "/plans/" in "/" + norm(p).lower()
+
+    if all(is_body(p) for p in paths) or not any(is_plan_body(p) for p in paths):
+        return paths, []
+    routed: list[tuple[str, str]] = []
+    out: list[str] = []
+    for p in paths:
+        if is_plan_body(p):
+            sidecar = evidence_sidecar_path(Path(norm(p))).as_posix()
+            routed.append((p, sidecar))
+            out.append(sidecar)
+        else:
+            out.append(p)
+    return list(dict.fromkeys(out)), routed
+
+
 def mint_xs_spine(
     sizing: Mapping,
     *,
@@ -68,6 +101,8 @@ def mint_xs_spine(
     for path in paths:
         _refuse_if_glob(XS_ROW_ID, path, path)
         _refuse_if_directory_shaped(XS_ROW_ID, path, path)
+
+    paths, routed = _route_plan_bodies(paths)
 
     criterion = sizing.get("exit_criterion")
     statement = str(criterion.get("statement") or "").strip() if isinstance(criterion, Mapping) else ""
@@ -93,6 +128,11 @@ def mint_xs_spine(
             f"Spec: {sizing_rel} ({XS_ROW_ID})\n"
             f"Intent:\n{intent}\n"
             f"Verification (this row is DONE only when this holds): {statement}\n"
+            + "".join(
+                f"{body} is routed to {sidecar}: record plan evidence with coordinator-invoke "
+                "plan.tasks.mutate evidence-append; an executor row never edits a plan body.\n"
+                for body, sidecar in routed
+            )
         ),
         "writes": paths,
     }

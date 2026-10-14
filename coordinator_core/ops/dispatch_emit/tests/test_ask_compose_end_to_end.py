@@ -150,7 +150,9 @@ def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
     assert "ask-fidelity" not in script
     opts = _agent_opts(script, "ledger-check")
     assert "agentType: 'coordinator:code-reviewer'" in opts and "model: 'sonnet'" in opts
-    assert "_ledger.verdict !== 'pass')) { _halted = { halted: 'ledger-check'" in script
+    assert "_ledgerBlocking(_ledger).length)) { _halted = { halted: 'ledger-check'" in script
+    assert "_ledger.verdict" not in script
+    assert '"verdict":' not in opts
     assert "_gate.arm !== 'xs'" not in script[check - 200 : check]
     assert script.index("phase('ledger-check')") < script.index("_nextAction.params.ledger_verdict = ")
     assert "ledger: _ledger, docs: _docs" in script
@@ -164,7 +166,9 @@ def test_ledger_check_admits_post_commit_items():
     assert "post_commit_acts from (commit, sha_reply, sha_memo)" in script
     assert '"post_commit"' in opts and '"post_commit_acts"' in opts
     assert '"enum": ["commit", "sha_reply", "sha_memo"]' in opts
-    assert "i.status !== 'met' && i.status !== 'post_commit'" in script
+    assert "const _ledgerBlocking = (l) =>" in script
+    assert '"remaining"' in opts
+    assert "remaining: i.remaining" in script
     assert "post_commit_acts: i.post_commit_acts" in script
 
 

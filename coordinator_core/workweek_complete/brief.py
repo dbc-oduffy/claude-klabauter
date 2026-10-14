@@ -74,8 +74,6 @@ window, no back-compat/dual-spelling transition.
 from __future__ import annotations
 
 import re
-import sys
-from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -91,8 +89,11 @@ from coordinator_core.contract.decision_object.judgment import (
     partition_reportable,
 )
 from coordinator_core.git.repo_root import git_common_dir
-from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.resolution.facade import resolve_operator_config
+from coordinator_core.workweek_complete.brief_inputs import compute_brief_inputs
+
+_ROOT_UNSET: Any = object()
 
 WorkweekExitCode = extend_exit_codes(
     "WorkweekExitCode",
@@ -177,61 +178,6 @@ def _resolve_repo_root_for_doc_staleness(start: Optional[Path] = None) -> Option
         return None
 
 
-def _compute_doc_staleness_report() -> list[dict[str, Any]]:
-    repo_root = _resolve_repo_root_for_doc_staleness()
-    if repo_root is None:
-        return []
-    try:
-        from coordinator_core.ops.doc_staleness import (  # noqa: PLC0415
-            build_doc_staleness_report_from_registry,
-        )
-
-        report = build_doc_staleness_report_from_registry(repo_root)
-        return list(report.get("docs", []))
-    except Exception as exc:  # noqa: BLE001 - never fail the ceremony
-        print(
-            "workweek_complete.brief: doc-staleness report unavailable, "
-            f"degrading to zero stale docs: {exc}",
-            file=sys.stderr,
-        )
-        return []
-
-
-def _compute_register_stall() -> Any:
-    """The requirement-register stall report for the main worktree; empty on any failure."""
-    from coordinator_core.ops import requirement_register  # noqa: PLC0415
-
-    try:
-        repo_root = _resolve_repo_root_for_doc_staleness()
-        if repo_root is None:
-            return requirement_register.StallReport()
-        return requirement_register.stall_report(Path(repo_root), date.today())
-    except Exception as exc:  # noqa: BLE001 - never fail the ceremony
-        print(
-            f"workweek_complete.brief: register stall scan unavailable: {exc}",
-            file=sys.stderr,
-        )
-        return requirement_register.StallReport()
-
-
-def _compute_version_recommendation() -> Optional[dict[str, str]]:
-    repo_root = _resolve_repo_root_for_doc_staleness()
-    if repo_root is None:
-        return None
-    try:
-        from coordinator_core.workweek_complete.release.version_rule import (  # noqa: PLC0415
-            recommend_level,
-        )
-
-        return recommend_level(Path(repo_root))
-    except Exception:  # noqa: BLE001 - never fail the ceremony
-        return None
-
-
-def _stale_doc_entries(report: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [entry for entry in report if entry.get("stale") and entry.get("path")]
-
-
 def _doc_staleness_slug(path: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
 
@@ -253,38 +199,6 @@ def _doc_staleness_evidence(entry: dict[str, Any]) -> str:
         f"last_touch={entry.get('last_touch_sha')}@{entry.get('last_touch_date')}, "
         f"changed_areas={entry.get('changed_areas')}"
     )
-
-
-def _compute_doc_verify_findings() -> list[dict[str, Any]]:
-    repo_root = _resolve_repo_root_for_doc_staleness()
-    if repo_root is None:
-        return []
-    try:
-        from coordinator_core.ops.doc_content_verify import (  # noqa: PLC0415
-            build_findings_report_from_registry,
-        )
-
-        report = build_findings_report_from_registry(repo_root)
-        return list(report.get("findings", []))
-    except Exception as exc:  # noqa: BLE001 - never fail the ceremony
-        print(
-            "workweek_complete.brief: doc-verify findings unavailable, "
-            f"degrading to zero findings: {exc}",
-            file=sys.stderr,
-        )
-        return []
-
-
-def _verify_findings_by_doc(
-    findings: list[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for finding in findings:
-        doc = finding.get("doc")
-        if not doc:
-            continue
-        grouped.setdefault(doc, []).append(finding)
-    return grouped
 
 
 def _doc_verify_slug(path: str) -> str:
@@ -311,6 +225,7 @@ def _doc_verify_evidence(path: str, findings: list[dict[str, Any]]) -> str:
 def _build_directives(
     stale_docs: Optional[list[dict[str, Any]]] = None,
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
+    repo_root: Optional[str] = _ROOT_UNSET,
 ) -> list[dict[str, Any]]:
     """Tier-1 (mechanical, no open question) directive entries — one per
     collapsed workweek-complete.md step: 1a/1b/2/2.5/3.5/4-counts/
@@ -365,7 +280,7 @@ def _build_directives(
           singular per directive (contract, `_directive`), which is why
           this is one directive per doc rather than N judgment points
           fanning into a single shared directive. `stale_docs` is
-          `_compute_doc_staleness_report`'s report, pre-filtered to
+          `BriefInputs.stale_docs`, pre-filtered to
           `stale` entries by `brief()` before being threaded into both
           this function and `_build_judgment_points`.
 
@@ -381,15 +296,21 @@ def _build_directives(
       (d) One per-doc follow-on directive (`d_doc_verify_ack_<slug>`), gated
           via `depends_on` on that doc's judgment point, ONLY for docs that
           actually carry findings — `doc_verify_findings_by_doc` is
-          `_compute_doc_verify_findings`'s findings grouped by doc
-          (`_verify_findings_by_doc`), never one directive per individual
+          `BriefInputs`'s findings grouped by doc, never one directive per individual
           finding (AC14 cardinality bound: findings are per-citation and
           unbounded, so the fan-out is bounded by doc count, not finding
           count).
     """
     stale_docs = stale_docs or []
     doc_verify_findings_by_doc = doc_verify_findings_by_doc or {}
-    _repo_root = _resolve_repo_root_for_doc_staleness()
+    _repo_root = (
+        _resolve_repo_root_for_doc_staleness() if repo_root is _ROOT_UNSET else repo_root
+    )
+    _fire_log = (
+        f"{Path(_repo_root).as_posix()}/state/runtime-tripwire-fire-log.tsv"
+        if _repo_root
+        else "state/runtime-tripwire-fire-log.tsv"
+    )
     directives = [
         _directive(
             "d_step0_9_tier_u_grant_write",
@@ -415,9 +336,15 @@ def _build_directives(
         ),
         _directive("d_step2_5_lint_frontmatter", cli="lint-frontmatter", args=[]),
         _directive(
-            "d_step3_5_advisories", cli="workweek-complete-advisories", args=[]
+            "d_step3_5_advisories",
+            cli="workweek-complete-advisories",
+            args=["tripwire-summary", _fire_log],
         ),
-        _directive("d_step4_counts_query_records", cli="query-records", args=[]),
+        _directive(
+            "d_step4_counts_query_records",
+            cli="query-records",
+            args=["--type", "improvement", "--format", "json"],
+        ),
         _directive(
             "d_step4_counts_initiative_candidates",
             cli="detect-initiative-candidates",
@@ -430,7 +357,7 @@ def _build_directives(
         _directive(
             "d_step4_counts_coordinator_initiative",
             cli="coordinator-initiative",
-            args=["--list"],
+            args=["list-unattached"],
         ),
         _directive(
             "d_step4_counts_cruft_sweep",
@@ -887,14 +814,15 @@ def brief(
     except Exception as exc:  # noqa: BLE001 - mirrors workday_complete.brief's own backstop
         return int(WorkweekExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
-    stale_docs = _stale_doc_entries(_compute_doc_staleness_report())
-    doc_verify_findings_by_doc = _verify_findings_by_doc(_compute_doc_verify_findings())
-    directives = _build_directives(stale_docs, doc_verify_findings_by_doc)
+    inputs = compute_brief_inputs()
+    directives = _build_directives(
+        inputs.stale_docs, inputs.doc_verify_findings_by_doc, inputs.repo_root
+    )
     all_judgment_points = _build_judgment_points(
-        stale_docs,
-        doc_verify_findings_by_doc,
-        _compute_register_stall(),
-        _compute_version_recommendation(),
+        inputs.stale_docs,
+        inputs.doc_verify_findings_by_doc,
+        inputs.register_stall,
+        inputs.version_recommendation,
     )
 
     recommendation_carrying = [

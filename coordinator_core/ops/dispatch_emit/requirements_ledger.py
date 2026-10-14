@@ -387,15 +387,36 @@ def revise(
     return ledger or Ledger((), bool(run.get("all_of_pm_ask"))), dir_, added
 
 
+def normalize_verdict(verdict: object) -> object:
+    """A copy of `verdict` in which every `not_met` item whose non-empty `remaining` list holds only
+    `POST_COMMIT_ACTS` reads `post_commit` with those acts; every other item and a shapeless
+    verdict come back unchanged."""
+    items = verdict.get("items") if isinstance(verdict, Mapping) else None
+    if not isinstance(items, list):
+        return verdict
+    out = []
+    for item in items:
+        remaining = item.get("remaining") if isinstance(item, Mapping) else None
+        if (
+            isinstance(item, Mapping) and item.get("status") == "not_met"
+            and isinstance(remaining, list) and remaining
+            and all(isinstance(a, str) and a in POST_COMMIT_ACTS for a in remaining)
+        ):
+            item = {**item, "status": "post_commit", "post_commit_acts": list(remaining)}
+        out.append(item)
+    return {**verdict, "items": out}
+
+
 def judge(ledger: Ledger, verdict: object) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}]}` for a checker `verdict`
-    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?}]}`) against
-    the live register.
+    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?, "remaining"?}]}`,
+    read through `normalize_verdict`) against the live register.
 
     Every row needs exactly one judgment. `drifted` (lost or reinterpreted) always fails;
     `superseded` passes only when it names a later revision row; `not_met` fails when
     `all_of_pm_ask` is set or the row is essential (the default); `post_commit` passes only when
     `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`."""
+    verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
         return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}]}
@@ -447,7 +468,10 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
     `met` with `<run_id>@<sha>` in met_by; met alone -> `partial`; superseded -> `waived` with the
     PM's superseding words as the ruling. A `post_commit` item whose acts are within
     `{commit, sha_reply}` is written as `met` (the landed commit is the act); one naming
-    `sha_memo` is `partial`, the engine sending no memo. Every judged row gets `last_progress_at`."""
+    `sha_memo` is `partial`, the engine sending no memo. A `not_met` item whose `remaining` is only
+    post-commit acts reads as `post_commit` (`normalize_verdict`). Every judged row gets
+    `last_progress_at`."""
+    verdict = normalize_verdict(verdict)
     judged = {str(r.get("id")): r for r in verdict.get("items") or [] if isinstance(r, Mapping)}
     stamp = _now()
 
@@ -487,6 +511,7 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
 def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
     """What the run still owes once `sha` exists: `{id, acts, sha}` per `post_commit` item that
     names `sha_memo`, which the engine never sends."""
+    verdict = normalize_verdict(verdict)
     owed = []
     for r in verdict.get("items") or []:
         if not isinstance(r, Mapping) or r.get("status") != "post_commit":

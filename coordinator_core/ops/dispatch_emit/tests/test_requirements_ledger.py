@@ -249,6 +249,44 @@ def test_a_sha_memo_item_is_written_partial_and_owed(run):
     ]
 
 
+def test_not_met_with_only_a_commit_remaining_passes_and_lands_met(run):
+    repo, _d = run
+    verdict = _verdict(
+        ("R1", "not_met", {"essential": True, "remaining": ["commit"], "wired": True}),
+        ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
+    )
+    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": []}
+    assert verdict["items"][0]["status"] == "not_met"
+    rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
+    rows = {r["id"]: r for r in _rows(repo)}
+    assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@abc1234"]
+
+
+def test_not_met_with_a_sha_memo_remaining_lands_partial_and_owed(run):
+    repo, _d = run
+    verdict = _verdict(
+        ("R1", "not_met", {"remaining": ["commit", "sha_memo"], "wired": True}),
+        ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
+    )
+    assert rl.judge(_ledger(run), verdict)["pass"]
+    rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
+    assert {r["id"]: r for r in _rows(repo)}["R1"]["status"] == "partial"
+    assert rl.post_commit_owed(verdict, "abc1234") == [
+        {"id": "R1", "acts": ["commit", "sha_memo"], "sha": "abc1234"}
+    ]
+
+
+@pytest.mark.parametrize("extra", [
+    {"remaining": ["commit", "the test is red"]},
+    {"remaining": []},
+    {},
+])
+def test_not_met_with_a_pre_commit_gap_or_no_remaining_stays_not_met(run, extra):
+    verdict = _verdict(("R1", "not_met", extra), ("R2", "met"), ("R3", "met"))
+    assert rl.normalize_verdict(verdict)["items"][0]["status"] == "not_met"
+    assert [f["id"] for f in rl.judge(_ledger(run), verdict)["failures"]] == ["R1"]
+
+
 def test_pm_words_prefers_verbatims_and_never_takes_an_em_paraphrase():
     assert rl.pm_words({"pm_verbatims": [{"text": " a "}, {"text": ""}], "intent": "x"}) == ["a"]
     assert rl.pm_words({"intent": "do x", "intent_source": "pm-verbatim"}) == ["do x"]

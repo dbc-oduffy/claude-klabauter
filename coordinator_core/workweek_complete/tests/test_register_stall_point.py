@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.ops.requirement_register import StallReport
 from coordinator_core.workweek_complete import brief as brief_mod
+from coordinator_core.workweek_complete.brief_inputs import BriefInputs
 
 _ID = "jp_requirement_register_stall"
 
@@ -42,7 +43,9 @@ def test_point_absent_when_report_empty_or_omitted():
 
 
 def test_brief_reports_stall_in_narration_not_asked(operator_env, monkeypatch):
-    monkeypatch.setattr(brief_mod, "_compute_register_stall", lambda: _FULL)
+    monkeypatch.setattr(
+        brief_mod, "compute_brief_inputs", lambda *a, **k: BriefInputs(register_stall=_FULL)
+    )
     exit_code, envelope = brief_mod.brief(env=operator_env)
     assert exit_code == 0, envelope
     assert _ID not in {p["id"] for p in envelope["judgment_points"]}
@@ -50,7 +53,9 @@ def test_brief_reports_stall_in_narration_not_asked(operator_env, monkeypatch):
 
 
 def test_brief_omits_stall_when_report_empty(operator_env, monkeypatch):
-    monkeypatch.setattr(brief_mod, "_compute_register_stall", lambda: StallReport())
+    monkeypatch.setattr(
+        brief_mod, "compute_brief_inputs", lambda *a, **k: BriefInputs(register_stall=StallReport())
+    )
     exit_code, envelope = brief_mod.brief(env=operator_env)
     assert exit_code == 0, envelope
     assert _ID not in envelope["narration"]

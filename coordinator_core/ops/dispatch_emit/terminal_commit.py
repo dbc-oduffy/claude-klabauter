@@ -2152,7 +2152,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         ledger_verdict (dict, optional)  -- an ask run's final ledger-checker
                                              verdict ``{items: [{id, status,
                                              essential?, wired?, superseded_by?,
-                                             post_commit_acts?}]}``; the reply
+                                             post_commit_acts?, remaining?}]}``; the reply
                                              carries ``post_commit_owed`` for
                                              each ``sha_memo`` item;
                                              required when the run is
