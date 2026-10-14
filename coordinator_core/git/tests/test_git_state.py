@@ -37,6 +37,7 @@ from coordinator_core.git.git_state import (  # noqa: E402
     index_read_cache_scope,
     read_index,
     read_index_stat_identity,
+    ref_tips_digest,
 )
 
 _SIGNATURE = b"DIRC"
@@ -577,3 +578,101 @@ def test_linked_worktree_head_symref_resolves_loose_ref_from_common_dir(tmp_path
 @pytest.mark.cadence
 def test_head_blobs_empty_paths_returns_empty_dict_no_spawn():
     assert head_blobs(".", []) == {}
+
+
+def _git(repo: Path, *args: str) -> None:
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        check=True,
+        capture_output=True,
+        **no_console_creationflags(),
+    )
+
+
+@pytest.fixture
+def real_repo(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "f.txt").write_text("a", encoding="utf-8")
+    _git(tmp_path, "add", "f.txt")
+    _git(tmp_path, "commit", "-q", "-m", "one")
+    return tmp_path
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_stable_across_reads(real_repo):
+    first = ref_tips_digest(real_repo)
+    assert first and first == ref_tips_digest(real_repo)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_changes_on_commit(real_repo):
+    before = ref_tips_digest(real_repo)
+    (real_repo / "g.txt").write_text("b", encoding="utf-8")
+    _git(real_repo, "add", "g.txt")
+    _git(real_repo, "commit", "-q", "-m", "two")
+    assert ref_tips_digest(real_repo) != before
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_changes_on_branch_create_and_delete(real_repo):
+    base = ref_tips_digest(real_repo)
+    _git(real_repo, "branch", "side")
+    created = ref_tips_digest(real_repo)
+    assert created != base
+    _git(real_repo, "branch", "-D", "side")
+    assert ref_tips_digest(real_repo) == base
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_changes_on_pack_refs(real_repo):
+    _git(real_repo, "branch", "side")
+    loose = ref_tips_digest(real_repo)
+    _git(real_repo, "pack-refs", "--all")
+    assert (real_repo / ".git" / "packed-refs").exists()
+    assert ref_tips_digest(real_repo) != loose
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_loose_ref_shadows_packed(real_repo):
+    _git(real_repo, "branch", "side")
+    _git(real_repo, "pack-refs", "--all")
+    packed = ref_tips_digest(real_repo)
+    (real_repo / "g.txt").write_text("b", encoding="utf-8")
+    _git(real_repo, "add", "g.txt")
+    _git(real_repo, "commit", "-q", "-m", "two")
+    _git(real_repo, "branch", "-f", "side", "HEAD")
+    assert ref_tips_digest(real_repo) != packed
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_detached_head(real_repo):
+    symbolic = ref_tips_digest(real_repo)
+    _git(real_repo, "checkout", "-q", "--detach")
+    assert ref_tips_digest(real_repo) != symbolic
+
+
+def test_ref_tips_digest_none_when_git_dir_unresolved(tmp_path):
+    assert ref_tips_digest(tmp_path) is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ref_tips_digest_makes_no_spawn(real_repo, monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    assert ref_tips_digest(real_repo)

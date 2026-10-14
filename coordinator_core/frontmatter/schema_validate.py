@@ -7298,8 +7298,8 @@ def _is_plan_dir_index_routing_excluded(normalised_repo_rel_path: str, frontmatt
     an `INDEX.md`/`README.md` directory index in one of
     `_RECORD_DIR_INDEX_PREFIXES` with no declared `kind:` — see `match_schema`'s
     second-amendment docstring.
-    Shared by `match_schema` (per-file resolution) and `_run_tree_walk`'s
-    whole-tree collection loop (:6519 area), which otherwise falls back to
+    Shared by `match_schema` (per-file resolution) and `lint_tree`'s
+    whole-tree collection loop, which otherwise falls back to
     validating an unresolved file against whichever schema's glob collected
     it — a fallback that would silently defeat this exclusion for the
     whole-tree lint if the two call sites diverged.
@@ -8319,68 +8319,7 @@ def _lint_is_sidecar_file(repo_rel: str) -> bool:
     return bool(_LINT_SIDECAR_RE.search(repo_rel))
 
 
-def _lint_find_repo_root(hint: str | None) -> str:
-    """Port of lint-frontmatter.js findRepoRoot: explicit --root, else
-    `git rev-parse --show-toplevel`, else cwd."""
-    if hint:
-        return str(Path(hint).resolve())
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=15,
-            stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return os.getcwd()
-
-
-def _lint_collect_files_for_glob(repo_root: str, glob: str) -> list[tuple[str, str]]:
-    """Port of lint-frontmatter.js collectFilesForGlob/walkDir.
-
-    Returns [(abs_path, repo_rel_path), ...]. Walks only as deep as the glob's
-    fixed (non-wildcard) prefix, recursing further only when the glob contains
-    '**' — mirrors the oracle's walk depth exactly (a bare '*.md' glob like
-    handoff.schema.json's applies_to is single-level, not recursive).
-    """
-    parts = glob.split('/')
-    fixed_parts: list[str] = []
-    for p in parts:
-        if '*' in p or '?' in p:
-            break
-        fixed_parts.append(p)
-    base_dir = os.path.join(repo_root, *fixed_parts) if fixed_parts else repo_root
-    if not os.path.isdir(base_dir):
-        return []
-    recursive = '**' in glob
-    results: list[tuple[str, str]] = []
-    glob_re = _glob_to_regex(glob)
-
-    def walk(dir_path: str, rel_prefix: str) -> None:
-        try:
-            entries = sorted(os.scandir(dir_path), key=lambda e: e.name)
-        except OSError:
-            return
-        for entry in entries:
-            repo_rel = rel_prefix + entry.name
-            if entry.is_dir(follow_symlinks=False):
-                if recursive:
-                    walk(entry.path, repo_rel + '/')
-            elif entry.is_file(follow_symlinks=False):
-                if glob_re.match(repo_rel):
-                    results.append((entry.path, repo_rel))
-
-    walk(base_dir, '/'.join(fixed_parts) + '/' if fixed_parts else '')
-    return results
-
-
-def _build_handoff_id_index(repo_root: str, memo: '_LintResultCache | None' = None) -> dict[str, str]:
+def _build_handoff_id_index(repo_root: str) -> dict[str, str]:
     """Build a handoff_id -> logical repo-relative path index.
 
     Byte-faithful port of buildHandoffIdIndex (coordinator-content-repo
@@ -8422,9 +8361,45 @@ def _build_handoff_id_index(repo_root: str, memo: '_LintResultCache | None' = No
       buildHandoffIdIndex (pre-deletion; git show
       c79e66cd~1:coordinator/bin/lint-frontmatter.js)
     """
+    def index_dir(abs_dir: str, recursive: bool, is_archive_entry: bool) -> None:
+        try:
+            entries = sorted(os.scandir(abs_dir), key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in entries:
+            full_path = entry.path
+            if entry.is_dir(follow_symlinks=False):
+                if recursive:
+                    index_dir(full_path, recursive, is_archive_entry)
+                continue
+            if not entry.is_file(follow_symlinks=False) or not entry.name.endswith('.md'):
+                continue
+            try:
+                content = Path(full_path).read_text(encoding='utf-8')
+            except OSError:
+                continue
+            parsed = parse_frontmatter(content)
+            frontmatter = parsed['frontmatter']
+            hid = frontmatter.get('handoff_id') if frontmatter else None
+            if not hid or not isinstance(hid, str):
+                continue
+            key = f'state/handoffs/{entry.name}' if is_archive_entry else (
+                os.path.relpath(full_path, repo_root).replace('\\', '/')
+            )
+            claims.append((hid, key, is_archive_entry))
+
+    claims: list[tuple[str, str, bool]] = []
+    index_dir(os.path.join(repo_root, 'state', 'handoffs'), False, False)
+    index_dir(os.path.join(repo_root, 'archive', 'handoffs'), True, True)
+    return _resolve_handoff_id_claims(claims)
+
+
+def _resolve_handoff_id_claims(claims) -> dict[str, str]:
+    """handoff_id -> logical key from (hid, key, is_archive) claims in scan
+    order: live outranks archived, else first seen; each collision warns on
+    stderr. Shared by `_build_handoff_id_index` and `lint_tree`."""
     index: dict[str, str] = {}
     origin: dict[str, str] = {}  # handoff_id -> 'live' | 'archived'
-    live_memo_keys = memo.live_keys if memo else set()
 
     def claim(hid: str, key: str, is_archive_entry: bool) -> None:
         existing_key = index.get(hid)
@@ -8465,50 +8440,8 @@ def _build_handoff_id_index(repo_root: str, memo: '_LintResultCache | None' = No
             file=sys.stderr,
         )
 
-    def index_dir(abs_dir: str, recursive: bool, is_archive_entry: bool) -> None:
-        try:
-            entries = sorted(os.scandir(abs_dir), key=lambda e: e.name)
-        except OSError:
-            return
-        for entry in entries:
-            full_path = entry.path
-            if entry.is_dir(follow_symlinks=False):
-                if recursive:
-                    index_dir(full_path, recursive, is_archive_entry)
-                continue
-            if not entry.is_file(follow_symlinks=False) or not entry.name.endswith('.md'):
-                continue
-            hid_key = f'hid\0{full_path}'
-            try:
-                st = os.stat(full_path)
-                stamp = (st.st_size, st.st_mtime_ns)
-            except OSError:
-                continue
-            hit = memo.get(hid_key, stamp) if memo else None
-            if hit is not None:
-                hid = hit[2]
-            else:
-                try:
-                    content = Path(full_path).read_text(encoding='utf-8')
-                except OSError:
-                    continue
-                parsed = parse_frontmatter(content)
-                frontmatter = parsed['frontmatter']
-                hid = frontmatter.get('handoff_id') if frontmatter else None
-                if memo:
-                    memo.put(hid_key, stamp, hid if isinstance(hid, str) else None)
-                    live_memo_keys.add(hid_key)
-            if hit is not None and memo:
-                live_memo_keys.add(hid_key)
-            if not hid or not isinstance(hid, str):
-                continue
-            key = f'state/handoffs/{entry.name}' if is_archive_entry else (
-                os.path.relpath(full_path, repo_root).replace('\\', '/')
-            )
-            claim(hid, key, is_archive_entry)
-
-    index_dir(os.path.join(repo_root, 'state', 'handoffs'), False, False)
-    index_dir(os.path.join(repo_root, 'archive', 'handoffs'), True, True)
+    for hid, key, is_archive_entry in claims:
+        claim(hid, key, is_archive_entry)
     return index
 
 
@@ -8761,7 +8694,7 @@ def _dup_key_errors(parsed: dict[str, Any]) -> list[ErrorDict]:
     (the `parse_frontmatter` result) — YAML last-key-wins silently
     discards the earlier value, so this is a defect independent of
     whether any schema matches the file. Shared by `_run_single_file_check`
-    and `_run_tree_walk`; both fed the same `parsed['duplicate_keys']`
+    and `lint_tree`; both fed the same `parsed['duplicate_keys']`
     list through an identical comprehension before this was factored out.
     """
     return [
@@ -8903,7 +8836,7 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
         # 'warnings' (not 'refWarnings') here is intentional, not an
         # inconsistency — verified 2026-07-24 against the deleted oracle:
         # runSingleFileCheck's --json payload used the key 'warnings' while
-        # main()'s whole-tree --json payload (see _run_tree_walk below) used
+        # main()'s whole-tree --json payload (see lint_tree.run) used
         # 'refWarnings'. The two modes genuinely had separate code paths in
         # the original too; this port mirrors that asymmetry byte-for-byte.
         if as_json:
@@ -8918,283 +8851,6 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
 
     _print_single_file_violation(repo_rel, schema_name, combined_errors, as_json, ref_warnings)
     return 1
-
-
-_LINT_CACHE_NAME = 'claude-klabauter-lint-frontmatter-cache.json'
-
-
-def _lint_cache_fingerprint() -> str:
-    """Identity of everything a non-handoff verdict is computed from besides the
-    file itself: this module and the modules it validates through, the vendored
-    schemas, and the roadmap-graph override env var."""
-    here = Path(__file__).resolve().parent
-    deps = [Path(__file__).resolve()]
-    deps += [here / 'baton_class.py', here / 'body_blocks.py', here / 'schema_shape.py']
-    deps.append(here.parent / 'ops' / 'fleet' / 'memo_kinds.py')
-    try:
-        deps += sorted(_SCHEMAS_DIR.iterdir())
-    except OSError:
-        pass
-    h = hashlib.sha1(os.environ.get(_ROADMAP_GRAPH_OVERRIDE_ENV_VAR, '0').encode())
-    for d in deps:
-        try:
-            st = d.stat()
-        except OSError:
-            continue
-        h.update(f'{d.name}\0{st.st_size}\0{st.st_mtime_ns}\0'.encode())
-    return h.hexdigest()
-
-
-class _LintResultCache:
-    """Per-file verdicts kept in `.git/` keyed on (size, mtime_ns), so an unchanged
-    file is neither read nor parsed. Handoff-class files are never stored: their
-    verdict depends on other files and git history. Inert when `.git` is not a
-    directory."""
-
-    def __init__(self, repo_root: str) -> None:
-        git_dir = os.path.join(repo_root, '.git')
-        self._path = os.path.join(git_dir, _LINT_CACHE_NAME) if os.path.isdir(git_dir) else None
-        self._fp = _lint_cache_fingerprint() if self._path else ''
-        self._files: dict[str, list] = {}
-        self._dirty = False
-        self.live_keys: set[str] = set()
-        if self._path:
-            try:
-                with open(self._path, encoding='utf-8') as f:
-                    data = json.load(f)
-                if data.get('fp') == self._fp:
-                    self._files = data['files']
-            except (OSError, ValueError, KeyError, AttributeError):
-                self._files = {}
-
-    def get(self, key: str, stamp: tuple[int, int]) -> list | None:
-        if not self._path:
-            return None
-        entry = self._files.get(key)
-        if entry and entry[0] == stamp[0] and entry[1] == stamp[1]:
-            return entry
-        return None
-
-    def put(self, key: str, stamp: tuple[int, int], outcome: Any) -> None:
-        if self._path:
-            self._files[key] = [stamp[0], stamp[1], outcome]
-            self._dirty = True
-
-    def save(self) -> None:
-        live_keys = self.live_keys
-        if not self._path or not (self._dirty or len(self._files) != len(live_keys)):
-            return
-        kept = {k: v for k, v in self._files.items() if k in live_keys}
-        try:
-            tmp = f'{self._path}.{os.getpid()}.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump({'fp': self._fp, 'files': kept}, f, separators=(',', ':'))
-            os.replace(tmp, self._path)
-        except (OSError, TypeError, ValueError):
-            pass
-
-
-class _LazyHandoffIdIndex(dict):
-    """`_build_handoff_id_index` deferred to the first `get`, so a walk whose
-    handoffs carry no ID-field ref never parses the handoff corpus for it."""
-
-    def __init__(self, repo_root: str, memo: '_LintResultCache') -> None:
-        super().__init__()
-        self._repo_root: str | None = repo_root
-        self._memo = memo
-
-    def get(self, key, default=None):
-        if self._repo_root is not None:
-            root, self._repo_root = self._repo_root, None
-            self.update(_build_handoff_id_index(root, self._memo))
-        return super().get(key, default)
-
-
-class _LazyHistorySet(set):
-    """Membership set whose history build runs on the first lookup, so a tree with
-    no dangling handoff ref never pays for it. `complete` is only True once a build
-    has produced a whole-history snapshot; a failed build leaves the set empty and
-    `complete` False, which sends every lookup to the per-call git check."""
-
-    def __init__(self, build) -> None:
-        super().__init__()
-        self._build = build
-        self.complete = False
-
-    def __contains__(self, item) -> bool:
-        if self._build is not None:
-            build, self._build = self._build, None
-            cache = build()
-            if cache is not None:
-                self.update(cache)
-                self.complete = cache.complete
-        return super().__contains__(item)
-
-
-def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
-    """Port of lint-frontmatter.js main()'s whole-tree walk branch (--schema/
-    --list-schemas/--lint-existing modes excluded — see _lint_parse_args)."""
-    from coordinator_core.dag import build_persisted_git_history_cache
-
-    schemas = load_schemas(_SCHEMAS_DIR)
-    # Built at the first miss and persisted under .git, so the snapshot's trusted
-    # `.complete` only spans the remainder of this walk (sub-second), not a run
-    # that started before the miss; per-call `git log --all -- <path>` for every
-    # dangling ref cost seconds each on a 40k-commit history.
-    git_history_cache = _LazyHistorySet(lambda: build_persisted_git_history_cache(repo_root))
-    result_cache = _LintResultCache(repo_root)
-    handoff_id_index = _LazyHandoffIdIndex(repo_root, result_cache)  # built once, on first lookup — see _build_handoff_id_index docstring
-
-    violations: list[dict] = []
-    ref_warnings: list[dict] = []
-    seen_files: set[str] = set()
-
-    schema_names = [k for k in schemas if k not in ('_byGlob', '_byKind')]
-    for name in schema_names:
-        schema = schemas[name]
-        # Collection-glob override, scoped to handoff-archived ONLY (2026-07-26,
-        # PM-ratified): the vendored applies_to on disk is 'archive/handoffs/*.md'
-        # (single star — DoE-owned SSOT, claude-klabauter only vendors it, see
-        # check_schema_drift's tamper-check; editing the vendored copy directly
-        # here would diverge from DoE HEAD and requires an upstream coordinator-content-repo
-        # schema edit + re-vendor, out of scope for this fix). _GLOB_OVERRIDES
-        # already carries the recursive 'archive/handoffs/**/*.md' the registry
-        # needs (build_type_to_glob above uses the SAME dict for the same
-        # reason) — reused here rather than re-derived, so nested
-        # archive/handoffs/<month>/*.md records are walked instead of silently
-        # skipped by the whole-tree collector.
-        # This loop previously indexed
-        # _GLOB_OVERRIDES by `name` (every loaded schema, not just
-        # handoff-archived), so a future schema literally named
-        # 'cross-repo-memo' would silently pick up the memo-inbox glob here
-        # with no negative-spec covering the switch. Scoped by literal
-        # equality to match match_schema()'s own archive-path-check
-        # discipline (which reads _GLOB_OVERRIDES by fixed key, not by
-        # iterating schema names).
-        glob = _GLOB_OVERRIDES.get('handoff-archived') if name == 'handoff-archived' else schema.get('applies_to')
-        if not glob:
-            continue
-        if schema.get('match_mode') == 'inline-tag-per-entry':
-            continue  # unported — see _run_single_file_check note
-
-        for full_path, repo_rel in _lint_collect_files_for_glob(repo_root, glob):
-            if _lint_is_sidecar_file(repo_rel):
-                continue
-            if re.search(r'\.(ya?ml|json)$', repo_rel):
-                continue
-            if repo_rel in seen_files:
-                continue
-
-            cache_key = f'{name}\0{repo_rel}'
-            result_cache.live_keys.add(cache_key)
-            try:
-                st = os.stat(full_path)
-                stamp = (st.st_size, st.st_mtime_ns)
-            except OSError:
-                stamp = None
-            hit = result_cache.get(cache_key, stamp) if stamp else None
-            if hit is not None:
-                seen_files.add(repo_rel)
-                outcome = hit[2]
-                if outcome is not None:
-                    violations.append({'file': repo_rel, 'schema': outcome[0], 'errors': outcome[1]})
-                continue
-
-            try:
-                content = Path(full_path).read_text(encoding='utf-8')
-            except OSError as exc:
-                seen_files.add(repo_rel)
-                violations.append({
-                    'file': repo_rel, 'schema': name,
-                    'errors': [{'field': '(read)', 'error': 'could not read file', 'hint': str(exc)}],
-                })
-                continue
-
-            parsed = parse_frontmatter(content)
-            frontmatter = parsed['frontmatter']
-            dup_errors = _dup_key_errors(parsed)
-
-            declares_unregistered_kind = (
-                frontmatter is not None
-                and frontmatter.get('kind') is not None
-                and _schema_name_for_kind(schemas, str(frontmatter['kind'])) is None
-            )
-            seen_files.add(repo_rel)
-            if declares_unregistered_kind:
-                if stamp:
-                    result_cache.put(cache_key, stamp, None)
-                continue
-
-            # docs/plans/INDEX.md and docs/plans/README.md route to no
-            # schema (match_schema returns None below for the same reason)
-            # — but the fallback two lines down ("resolved is None -> use
-            # the CURRENT glob-iteration schema/name") exists for other
-            # legitimate no-better-match cases and would silently re-adopt
-            # this glob's schema (`plan`) for these two files, defeating
-            # the exclusion for exactly the whole-tree lint this fix is
-            # for. Skip explicitly rather than falling through.
-            if _is_plan_dir_index_routing_excluded(repo_rel.replace('\\', '/'), frontmatter):
-                if stamp:
-                    result_cache.put(cache_key, stamp, None)
-                continue
-
-            resolved = match_schema(repo_rel, frontmatter, schemas)
-            effective_name = resolved['schemaName'] if resolved else name
-            effective_schema = resolved['schema'] if resolved else schema
-
-            result = _tolerate_handoff_kind_aliases_in_result(
-                validate_frontmatter_obj(frontmatter, effective_schema),
-                effective_name, effective_schema, frontmatter,
-            )
-            base_errors = (result.get('errors') or []) if not result.get('ok') else []
-
-            ref_errors: list[ErrorDict] = []
-            ref_field_warnings: list[ErrorDict] = []
-            if effective_name == 'handoff':
-                ref_errors, ref_field_warnings = _check_handoff_refs(
-                    frontmatter, repo_root, full_path, repo_rel, git_history_cache,
-                    handoff_id_index, strict_refs,
-                )
-
-            # _check_handoff_refs already applied the strict_refs split
-            # internally (dangling refs land in errors when strict, warnings
-            # otherwise; never-silently-disagree divergences always land in
-            # errors) — the caller just combines and reports, it does not
-            # re-derive the split.
-            combined_errors = dup_errors + list(base_errors) + ref_errors
-            for e in ref_field_warnings:
-                ref_warnings.append({'file': repo_rel, 'schema': effective_name, 'warning': e})
-
-            if combined_errors:
-                violations.append({'file': repo_rel, 'schema': effective_name, 'errors': combined_errors})
-            if stamp and effective_name != 'handoff':
-                result_cache.put(cache_key, stamp, [effective_name, combined_errors] if combined_errors else None)
-
-    result_cache.save()
-
-    if as_json:
-        print(json.dumps({'ok': len(violations) == 0, 'violations': violations, 'refWarnings': ref_warnings}, indent=2))
-    else:
-        if not violations:
-            print(f'lint-frontmatter: all files valid (root: {repo_root})')
-        else:
-            print(f'lint-frontmatter: {len(violations)} violation(s) (root: {repo_root})\n')
-            for v in violations:
-                print(f"  {v['file']}  [{v['schema']}]")
-                for e in v['errors']:
-                    print(f"    - {e['field']}: {e['error']}")
-                    if e.get('hint'):
-                        print(f"      hint: {e['hint']}")
-        if ref_warnings:
-            print(f"\nlint-frontmatter: {len(ref_warnings)} dangling handoff-DAG ref warning(s) "
-                  "(non-blocking; pass --strict-refs at a cadence gate to escalate)\n")
-            for rw in ref_warnings:
-                print(f"  {rw['file']}  [{rw['schema']}]")
-                print(f"    - {rw['warning']['field']}: {rw['warning']['error']}")
-                if rw['warning'].get('hint'):
-                    print(f"      hint: {rw['warning']['hint']}")
-
-    return 1 if violations else 0
 
 
 def main(argv: list[str]) -> int:
@@ -9215,16 +8871,15 @@ def main(argv: list[str]) -> int:
     if args is None:
         return 2
 
-    repo_root = _lint_find_repo_root(args['root'])
+    if args['root']:
+        repo_root = str(Path(args['root']).resolve())
+    else:
+        from coordinator_core.git import repo_root as _repo_root_mod
+        top = _repo_root_mod.show_toplevel()
+        repo_root = top.replace('\\', '/') if top else os.getcwd()
 
-    # Fail loud (rc 2) on an explicit --root that doesn't resolve to a real
-    # directory, rather than silently walking zero files and reporting "all
-    # files valid" — a false-green result for the cadence gates (--strict-refs
-    # whole-tree walk) this tool exists to protect. This is a defensive
-    # addition beyond the deleted oracle (which also silently no-oped on a
-    # bad --root — verified against the pre-deletion .js); it never fires for
-    # a --root that resolves correctly, so it does not affect AC1 parity for
-    # any currently-passing invocation.
+    # Fail loud (rc 2) on an explicit --root that isn't a directory, rather
+    # than reporting "all files valid" over zero files.
     if args['root'] and not os.path.isdir(repo_root):
         print(f'lint-frontmatter: --root does not resolve to a directory: {repo_root}', file=sys.stderr)
         return 2
@@ -9232,7 +8887,8 @@ def main(argv: list[str]) -> int:
     if args['file'] is not None:
         return _run_single_file_check(repo_root, args['file'], args['json'])
 
-    return _run_tree_walk(repo_root, args['json'], args['strict_refs'])
+    from coordinator_core.frontmatter import lint_tree
+    return lint_tree.run(repo_root, as_json=args['json'], strict_refs=args['strict_refs'])
 
 
 if __name__ == '__main__':

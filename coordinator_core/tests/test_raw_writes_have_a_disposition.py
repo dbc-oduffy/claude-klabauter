@@ -620,7 +620,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/architecture_survey/health_ledger.py': ('in-repo-non-state', 'restamps the full-audit date in the atlas health ledger under docs/architecture/'),
     'coordinator_core/architecture_survey/render.py': ('in-repo-non-state', 'atlas matrix and file-index pages under docs/architecture/'),
     'coordinator_core/dag.py': ('git-internal', 'history-paths cache <git-dir>/claude-klabauter-history-paths.json'),
-    'coordinator_core/frontmatter/schema_validate.py': ('git-internal', 'lint cache under <git-dir>'),
+    'coordinator_core/frontmatter/lint_tree.py': ('git-internal', 'lint verdict store under <git-dir>'),
     'coordinator_core/housekeeping/cycle.py': ('in-repo-non-state', 'rollback only: restores the exact pre-release bytes of a record whose gate clear did not land in a commit, under the record lock'),
     'coordinator_core/ops/records_query.py': ('git-internal', 'per-record-type cache under <git-dir>'),
     'coordinator_core/sidecar_reap.py': ('outside-repo', 'reap pathspec file in managed_tempdir()'),

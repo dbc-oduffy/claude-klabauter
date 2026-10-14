@@ -71,6 +71,7 @@ Negative-spec:
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import os
 import re
 import struct
@@ -93,6 +94,7 @@ __all__ = [
     "index_read_cache_scope",
     "head_branch",
     "head_sha",
+    "ref_tips_digest",
     "head_tree_sha",
     "source_sha_suffix",
     "format_source_sha_suffix",
@@ -558,6 +560,67 @@ def head_sha(repo: Union[str, Path]) -> Optional[str]:
         if ref_name == ref:
             return sha
     return None
+
+
+def ref_tips_digest(repo: Union[str, Path]) -> Optional[str]:
+    """A sha256 hex digest over every ref tip: HEAD's raw value (symbolic or
+    detached), each loose ref under `<common-dir>/refs/` (name and content),
+    and the `packed-refs` entries, with a packed ref (and its `^` peel line)
+    dropped when a loose ref of the same name shadows it. Moves when a commit
+    lands, a ref is created, deleted or moved, or `git pack-refs` rewrites
+    storage. File reads only; zero spawns. Transient `*.lock` files are
+    ignored. Files-backend repos only: under the reftable backend refs live
+    outside `refs/` and the digest does not move on a commit.
+
+    `None` when HEAD is unreadable (git dir does not resolve). A caller treats
+    `None` as "changed", never as a stable value.
+    """
+    try:
+        head = (resolve_git_dir(repo) / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    common_dir = resolve_git_common_dir(repo)
+
+    loose: Dict[str, str] = {}
+    refs_root = common_dir / "refs"
+    for dirpath, _dirs, files in os.walk(refs_root):
+        for name in files:
+            if name.endswith(".lock"):
+                continue
+            full = Path(dirpath) / name
+            try:
+                content = full.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            loose[full.relative_to(common_dir).as_posix()] = content
+
+    packed: Dict[str, str] = {}
+    try:
+        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        packed_text = ""
+    shadowed = False
+    for line in packed_text.splitlines():
+        if not line or line[0] == "#":
+            continue
+        if line[0] == "^":
+            if not shadowed and packed:
+                last = next(reversed(packed))
+                packed[last] += line
+            continue
+        sha, _, ref_name = line.partition(" ")
+        shadowed = ref_name in loose
+        if not shadowed:
+            packed[ref_name] = sha
+
+    digest = hashlib.sha256()
+    digest.update(b"HEAD\0" + head.encode("utf-8") + b"\n")
+    entries = [("L", n, v) for n, v in loose.items()] + [("P", n, v) for n, v in packed.items()]
+    for kind, name, value in sorted(entries, key=lambda e: (e[1], e[0])):
+        digest.update(
+            kind.encode() + name.encode("utf-8", "surrogateescape") + b"\0" + value.encode("utf-8") + b"\n"
+        )
+    return digest.hexdigest()
 
 
 def source_sha_suffix(repo: Union[str, Path]) -> str:

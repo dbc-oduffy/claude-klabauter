@@ -328,7 +328,6 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator/bin/coordinator-prepare-commit-msg.py:_resolve_git_dir",
         "coordinator/bin/coordinator-prepare-commit-msg:_resolve_git_dir",
         "coordinator/bin/cross-repo-memo.py:_receiver_repo_unusable_reason",
-        "coordinator_core/frontmatter/schema_validate.py:_lint_find_repo_root",
         "coordinator_core/git_scope.py:foreign_repo_unusable_reason",
         "coordinator_core/subagent_sandbox/engine.py:_resolve_git_root_uncached",
     }

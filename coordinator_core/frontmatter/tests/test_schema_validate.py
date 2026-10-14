@@ -51,7 +51,6 @@ from coordinator_core.frontmatter.schema_validate import (
     _cf_plan_tasks_disposition_shape,
     _cf_plan_tasks_writes_declared,
     _GLOB_OVERRIDES,
-    _lint_collect_files_for_glob,
     _lint_is_sidecar_file,
     _plan_tasks_schema_without_pm_approved_required,
     _PLAN_TASKS_SCHEMA,
@@ -3513,21 +3512,20 @@ class TestPlansIndexRoutingExclusion:
 
 
 class TestTreeWalkArchiveGlobCollection:
-    """_run_tree_walk's collection-glob override (_GLOB_OVERRIDES) reaches
+    """lint_tree's collection-glob override (_GLOB_OVERRIDES) reaches
     nested archive/handoffs/<month>/*.md files that the vendored
-    single-star applies_to glob cannot — exercised directly at the
-    _lint_collect_files_for_glob level (the exact helper _run_tree_walk
-    calls per schema/glob pair), avoiding a full git-repo + schema-registry
-    fixture for what is fundamentally a glob-collection-depth assertion."""
+    single-star applies_to glob cannot."""
 
-    def test_nested_month_dir_reached_by_override_glob(self, tmp_path):
+    def test_nested_month_dir_reached_by_override_glob(self, tmp_path, capsys):
+        from coordinator_core.frontmatter import lint_tree
+
         nested = tmp_path / 'archive' / 'handoffs' / '2026-07'
         nested.mkdir(parents=True)
         (nested / 'foo.md').write_text('---\ntitle: x\n---\n', encoding='utf-8')
 
-        results = _lint_collect_files_for_glob(str(tmp_path), _GLOB_OVERRIDES['handoff-archived'])
-        repo_rels = {repo_rel for _, repo_rel in results}
-        assert 'archive/handoffs/2026-07/foo.md' in repo_rels
+        lint_tree.run(str(tmp_path), as_json=True, strict_refs=False)
+        out = json.loads(capsys.readouterr().out)
+        assert 'archive/handoffs/2026-07/foo.md' in {v['file'] for v in out['violations']}
 
     def test_vendored_glob_now_matches_override(self, tmp_path):
         """Schema 2.1.0 widened the vendored (DoE-owned SSOT) applies_to
@@ -3551,7 +3549,7 @@ class TestTreeWalkArchiveGlobCollection:
         literally named 'cross-repo-memo' must not silently inherit the
         memo-inbox glob here. This asserts the dict itself still carries
         exactly the two documented keys (the scoping discipline lives in
-        _run_tree_walk's `if name == 'handoff-archived'` guard, which has
+        lint_tree's `if name == 'handoff-archived'` guard, which has
         no independent unit surface — this pins the data half of that
         contract so a future key addition is a deliberate, reviewed edit)."""
         assert set(_GLOB_OVERRIDES.keys()) == {'handoff-archived', 'cross-repo-memo'}
@@ -4345,8 +4343,6 @@ _QUEUE_SCHEMA_PINS = {
 # byte-pin call below — that is the designed exit path, not a place to leave
 # this parked indefinitely.
 # Schemas where claude-klabauter deliberately leads DoE, awaiting their upward vendor.
-# Current entry: `plan` (2.38.0 adds register_claims.pins). Exit: DoE vendors
-# 2.38.0, then delete the entry via bin/claude-klabauter-revendor-schema.py.
 # EMPTY IS THE HEALTHY STATE — an entry here is a temporary divergence with a
 # named reason, not a resting place, and `check_schema_ahead_of_doe` fails the
 # moment DoE moves so the entry cannot quietly outlive its justification.
@@ -8079,7 +8075,9 @@ class TestTreeWalkResultCache:
         plan.write_text('---\nstatus: bogus\n---\nbody\n', encoding='utf-8')
 
         first = self._walk(tmp_path, capsys)
-        cache = tmp_path / '.git' / 'claude-klabauter-lint-frontmatter-cache.json'
+        from coordinator_core.frontmatter import lint_tree
+
+        cache = tmp_path / '.git' / lint_tree._STORE_NAME
         assert cache.is_file()
         assert [v['file'] for v in first['violations']] == ['docs/plans/2026-10-12-x.md']
         assert self._walk(tmp_path, capsys) == first
