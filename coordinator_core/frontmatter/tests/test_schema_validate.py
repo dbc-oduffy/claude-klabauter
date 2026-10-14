@@ -4345,6 +4345,8 @@ _QUEUE_SCHEMA_PINS = {
 # byte-pin call below — that is the designed exit path, not a place to leave
 # this parked indefinitely.
 # Schemas where claude-klabauter deliberately leads DoE, awaiting their upward vendor.
+# Current entry: `plan` (2.38.0 adds register_claims.pins). Exit: DoE vendors
+# 2.38.0, then delete the entry via bin/claude-klabauter-revendor-schema.py.
 # EMPTY IS THE HEALTHY STATE — an entry here is a temporary divergence with a
 # named reason, not a resting place, and `check_schema_ahead_of_doe` fails the
 # moment DoE moves so the entry cannot quietly outlive its justification.

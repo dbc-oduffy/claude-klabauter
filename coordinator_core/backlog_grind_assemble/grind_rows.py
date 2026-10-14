@@ -33,7 +33,10 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   result is validated against the profile's schema (a bare name resolves to
   the engine's vendored `frontmatter/schemas/`), written to
   `<archive_path>/<YYYY-MM>/`, and only then is the source removed. Prints
-  `{"old": ..., "new": ...}`.
+  `{"old": ..., "new": ...}`. After a successful close (fresh or
+  crash-reconcile) the closer's own row claim (`claims.ROW_CLAIM_CLASS`) is
+  released; the release is holder-checked, so a peer's claim is untouched,
+  and filesystem-only. A refused or failed close releases nothing.
 - `settle --profile P --row-id R`: deletes
   `state/queue-grind/<P>/<R>.jsonl` if present — idempotent (already-settled
   is not an error). Only the committer calls this, immediately before the
@@ -68,8 +71,8 @@ Exit codes (locally scoped, matching the row's own contract):
   3 — manifest-stale (digest mismatch or vanished row)
 
 Negative-spec:
-    - Does NOT shell out to git anywhere in this module — `os.replace` is a
-      plain filesystem rename, not `git mv`, and is exactly what leaves the
+    - Does NOT shell out to git anywhere in this module (the claim release is
+      spawn-free) — `os.replace` is a plain filesystem rename, not `git mv`, and is exactly what leaves the
       index untouched (an unstaged delete at the old path, an untracked add
       at the new one).
     - Does NOT reflow or re-serialize the whole YAML document on `close` —
@@ -104,6 +107,7 @@ from coordinator_core.frontmatter import primitives as fm_primitives
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import grind_profile
+from coordinator_core.session import claims
 from coordinator_core.session.declared_writes import declare_write
 
 EXIT_OK = 0
@@ -569,6 +573,7 @@ def cmd_close(rest: list[str]) -> int:
             _declare_before_unlink(row_path, repo_root)
             row_path.unlink()
             _declare_under_repo_root(new_path, repo_root)
+            _release_row_claim(row_path, repo_root)
             print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
             return EXIT_OK
         print(f"grind-row close: destination already exists: {new_path}", file=sys.stderr)
@@ -587,9 +592,18 @@ def cmd_close(rest: list[str]) -> int:
     _declare_before_unlink(row_path, repo_root)
     row_path.unlink()
     _declare_under_repo_root(new_path, repo_root)
+    _release_row_claim(row_path, repo_root)
 
     print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
     return EXIT_OK
+
+
+def _release_row_claim(row_path: Path, repo_root: Path) -> None:
+    """Give up the closer's own row claim; holder-checked, a no-op for a peer's or absent claim."""
+    try:
+        claims.release_artifact(claims.ROW_CLAIM_CLASS, str(row_path), cwd=str(repo_root))
+    except ValueError:
+        pass  # not a <queue-dir>/<row>.yaml path: no row claim can exist for it
 
 
 # ---------------------------------------------------------------------------

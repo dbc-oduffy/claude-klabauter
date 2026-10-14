@@ -516,3 +516,108 @@ def test_applies_false_reads_differently_across_gates_because_each_reader_reads_
     assert checklist_reading.status == "not-applicable"
     assert spine_reading.status == "indeterminate"
     assert checklist_reading.status != spine_reading.status
+
+
+# =========================================================================
+# Close-residue readers: owned_uncommitted / unstamped_run_batons
+# (composition into `incomplete` / `complete` is pinned at the end)
+# =========================================================================
+
+_RESIDUE_READERS = (cv.owned_uncommitted, cv.unstamped_run_batons)
+
+
+@pytest.mark.parametrize("reader", _RESIDUE_READERS)
+@pytest.mark.parametrize("verdict", ["clean", "open", "indeterminate", "not-applicable"])
+def test_residue_readers_map_every_declared_verdict(reader, verdict):
+    reading = reader({"verdict": verdict, "items": ["x"], "contested": [], "reason": None})
+    assert reading.status == verdict
+
+
+@pytest.mark.parametrize("reader", _RESIDUE_READERS)
+def test_residue_readers_open_emits_one_item_per_path(reader):
+    reading = reader({"verdict": "open", "items": ["a", "b"], "contested": ["c"], "reason": None})
+    assert [item["reference"] for item in reading.residue_items] == ["a", "b"]
+    assert {item["gate"] for item in reading.residue_items} == {reader.__name__}
+    assert all("co-claimed" in item["summary"] for item in reading.residue_items)
+
+
+@pytest.mark.parametrize("reader", _RESIDUE_READERS)
+@pytest.mark.parametrize("verdict", ["bogus", None, True, ["open"]])
+def test_residue_readers_unknown_value_is_indeterminate(reader, verdict):
+    reading = reader({"verdict": verdict, "items": [], "contested": [], "reason": None})
+    assert reading.status == "indeterminate"
+    assert "verdict" in reading.reason
+
+
+@pytest.mark.parametrize("reader", _RESIDUE_READERS)
+def test_residue_readers_missing_key_is_indeterminate(reader):
+    reading = reader({"items": ["x"]})
+    assert reading.status == "indeterminate"
+    assert "verdict" in reading.reason
+
+
+@pytest.mark.parametrize("reader", _RESIDUE_READERS)
+def test_residue_readers_pass_the_payload_reason_through(reader):
+    reading = reader({"verdict": "indeterminate", "items": [], "contested": [], "reason": "degraded"})
+    assert reading.reason == "degraded"
+
+
+def test_census_has_six_gates_including_both_residue_names():
+    assert len(cv._CENSUS_GATE_NAMES) == 6
+    assert cv.OWNED_UNCOMMITTED in cv._CENSUS_GATE_NAMES
+    assert cv.UNSTAMPED_RUN_BATONS in cv._CENSUS_GATE_NAMES
+
+
+def _clean():
+    return cv.GateReading("clean", (), None)
+
+
+def _four_clean():
+    return {
+        "completeness_checklist": _clean(),
+        "open_spine_row_worklist": _clean(),
+        "consumed_handoff_completeness": _clean(),
+        "landed_reconciliation": _clean(),
+    }
+
+
+def test_open_owned_uncommitted_makes_the_verdict_incomplete():
+    readings = _four_clean()
+    readings[cv.OWNED_UNCOMMITTED] = cv.owned_uncommitted(
+        {"verdict": "open", "items": ["a.py"], "contested": [], "reason": None}
+    )
+    out = cv.compose_completion_verdict(readings)
+    assert out["verdict"] == "incomplete"
+    assert [r["reference"] for r in out["residue"]] == ["a.py"]
+
+
+def test_open_unstamped_run_batons_makes_the_verdict_incomplete():
+    readings = _four_clean()
+    readings[cv.UNSTAMPED_RUN_BATONS] = cv.unstamped_run_batons(
+        {"verdict": "open", "items": ["b.md"], "contested": [], "reason": None}
+    )
+    assert cv.compose_completion_verdict(readings)["verdict"] == "incomplete"
+
+
+def test_indeterminate_residue_reading_blocks_complete():
+    readings = _four_clean()
+    readings[cv.OWNED_UNCOMMITTED] = cv.owned_uncommitted({"verdict": "indeterminate"})
+    out = cv.compose_completion_verdict(readings)
+    assert out["verdict"] == "indeterminate"
+    assert out["indeterminate_gates"] == [cv.OWNED_UNCOMMITTED]
+
+
+def test_clean_residue_readings_keep_complete():
+    readings = _four_clean()
+    readings[cv.OWNED_UNCOMMITTED] = cv.owned_uncommitted({"verdict": "clean"})
+    readings[cv.UNSTAMPED_RUN_BATONS] = cv.unstamped_run_batons({"verdict": "not-applicable"})
+    out = cv.compose_completion_verdict(readings)
+    assert out["verdict"] == "complete"
+    assert out["clean_count"] == 5
+
+
+def test_composition_without_residue_readings_is_unchanged():
+    out = cv.compose_completion_verdict(_four_clean())
+    assert out["verdict"] == "complete"
+    assert out["clean_count"] == 4
+    assert [r["gate"] for r in out["readings"]] == list(_four_clean())

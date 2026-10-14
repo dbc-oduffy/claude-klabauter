@@ -327,6 +327,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/sizing_assemble/__init__.py': ('claims-explicitly', 'exclusive-create sizing scaffold under state/sizings/, declared through declare_write: _scaffold_missing'),
     'coordinator_core/completion_receipts/store.py': ('claims-explicitly', 'exclusive-create receipt under state/completion-receipts/, declared through declare_write: write_receipt'),
     'coordinator_core/contract/cockpit_schema/entities/completion_receipt.py': ('in-repo-non-state', 'no write: the vocabulary hit is pydantic\'s model_validator(mode="after")'),
+    'coordinator_core/git/reconcile_manifest.py': ('git-internal', 'conflict manifest tmp-then-replace under <git-dir>/coordinator-reconcile/conflict-manifest.json: write'),
     'coordinator_core/git/hook_dispositions.py': ('git-internal', 'hook backup and in-place hook rewrite under <git-common-dir>/hooks: _write_backup, _replace_file'),
     'coordinator_core/hooks/postuse_subagent_compaction_warning.py': ('outside-repo', 'per-agent band marker under settings_home()/state/compaction-warned, outside every repo'),
     'coordinator_core/ops/discover_working_repos.py': ('outside-repo', 'tmp-then-replace of <home>/.claude/working-repos.yaml: write_working_repos_yaml'),

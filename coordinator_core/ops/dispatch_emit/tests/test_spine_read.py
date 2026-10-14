@@ -26,6 +26,35 @@ def _write_plan(tmp_path, body: str):
     return path
 
 
+def _plan_in(tmp_path, body: str):
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    path = plans / "2026-10-14-own.md"
+    path.write_text(_HEADER + "```yaml plan-tasks\n" + body + "\n```\n", encoding="utf-8")
+    return path
+
+
+def _writes_of(tmp_path, writes: list):
+    listed = "".join(f"    - {w}\n" for w in writes)
+    body = f"- id: C1\n  title: t\n  surface: s\n  writes:\n{listed}"
+    return read_spine(_plan_in(tmp_path, body))[0].writes
+
+
+def test_own_plan_body_write_on_a_mixed_row_routes_to_the_evidence_sidecar(tmp_path):
+    writes = _writes_of(tmp_path, ["docs/plans/2026-10-14-own.md", "some/code.py"])
+    assert writes == ["docs/plans/2026-10-14-own.evidence.yaml", "some/code.py"]
+
+
+def test_a_row_writing_only_its_own_plan_body_is_left_alone(tmp_path):
+    writes = _writes_of(tmp_path, ["docs/plans/2026-10-14-own.md"])
+    assert writes == ["docs/plans/2026-10-14-own.md"]
+
+
+def test_another_plans_body_on_a_mixed_row_is_left_alone(tmp_path):
+    writes = _writes_of(tmp_path, ["docs/plans/2026-10-14-other.md", "some/code.py"])
+    assert writes == ["docs/plans/2026-10-14-other.md", "some/code.py"]
+
+
 def test_writes_declared_vs_undeclared(tmp_path):
     body = """\
 - id: C1

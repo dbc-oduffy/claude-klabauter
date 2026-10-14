@@ -733,6 +733,10 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 
     `pm_approved` and `signoff` are likewise refused for the whole batch:
     sign-off provenance (PM or APM) is recorded only through plan.signoff.
+
+    `authorization` is accepted only as the em-inferred record; any other
+    value (a signoff arm, a scalar) refuses the whole batch, so an EM op
+    cannot self-grant a PM-grade signoff.
     """
     try:
         path = _resolve_path(plan_path, worktree)
@@ -765,6 +769,18 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
                 f"stamp: update entry {u.get('id')!r} carries sign-off field(s) "
                 f"{fields} — use plan.signoff, which records whether the PM or "
                 "the APM signed. Refusing the whole batch — no writes applied."
+            )
+
+    for u in updates:
+        if "authorization" not in u:
+            continue
+        auth = u["authorization"]
+        if not (isinstance(auth, dict) and auth.get("source") == "em-inferred"):
+            return _err(
+                f"stamp: update entry {u.get('id')!r} carries an authorization that is "
+                "not the em-inferred record {source: em-inferred, rationale, on} — "
+                "a pm/apm/g-em/uhura signoff is recorded only through plan.signoff. "
+                "Refusing the whole batch — no writes applied."
             )
 
     _state: dict = {"applied": False, "message": "", "warnings": []}

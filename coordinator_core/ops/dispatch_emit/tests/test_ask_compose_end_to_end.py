@@ -156,6 +156,18 @@ def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
     assert "ledger: _ledger, docs: _docs" in script
 
 
+def test_ledger_check_admits_post_commit_items():
+    script = _compose(in_run_commit=True)
+    opts = script[script.index("label: 'ledger-check'"):]
+    opts = opts[: opts.index("\n")]
+    assert "post_commit' when everything the item asks" in script.replace("\\'", "'")
+    assert "post_commit_acts from (commit, sha_reply, sha_memo)" in script
+    assert '"post_commit"' in opts and '"post_commit_acts"' in opts
+    assert '"enum": ["commit", "sha_reply", "sha_memo"]' in opts
+    assert "i.status !== 'met' && i.status !== 'post_commit'" in script
+    assert "post_commit_acts: i.post_commit_acts" in script
+
+
 def test_every_judgment_stage_reads_the_ledger_at_its_start():
     script = _compose()
     view = f"{RECORD_DIR_ROOT}/run-1/requirements.md"

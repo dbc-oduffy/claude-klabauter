@@ -141,9 +141,7 @@ def test_memo_in_neither_place_is_failed_by_name(tmp_path):
     assert result.status == "failed" and "gone.md" in result.detail
 
 
-def test_post_close_names_the_skipped_chain_closure_and_is_failed(tmp_path, monkeypatch):
-    calls = []
-
+def _chain_stub(calls, verdicts=None, raises=None):
     class Stub:
         @staticmethod
         def refresh(root, timeout):
@@ -153,11 +151,61 @@ def test_post_close_names_the_skipped_chain_closure_and_is_failed(tmp_path, monk
         def run(ceremony, root):
             calls.append("scip")
 
-    monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
+        @staticmethod
+        def chain_verdicts(root, paths):
+            calls.append(("chain", list(paths)))
+            if raises:
+                raise raises
+            return verdicts or []
+
+    return Stub
+
+
+def _verdict(chain, closed):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(chain=chain, closed=closed)
+
+
+BATONS = ("state/handoffs/a.md", "state/handoffs/b.md")
+
+
+def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path, monkeypatch):
+    calls = []
+    stub = _chain_stub(calls, [_verdict("dlv-x", True), _verdict("dlv-x", True)])
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
+    result = cb._post_close(_ctx(tmp_path, batons=BATONS))
+    assert calls == ["structural", "scip", ("chain", list(BATONS))]
+    assert result.status == "ran"
+    assert "2 baton(s), 1 chain(s) closed: dlv-x" in result.detail
+
+
+def test_post_close_open_chain_is_ran_with_zero_closed(tmp_path, monkeypatch):
+    stub = _chain_stub([], [_verdict("dlv-x", False)])
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
+    result = cb._post_close(_ctx(tmp_path, batons=BATONS[:1]))
+    assert result.status == "ran" and "0 chain(s) closed" in result.detail
+
+
+def test_post_close_with_no_claimed_baton_never_loads_the_chain_script(tmp_path, monkeypatch):
+    loaded = []
+    stub = _chain_stub([])
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: (loaded.append(name), stub)[1])
     result = cb._post_close(_ctx(tmp_path))
-    assert calls == ["structural", "scip"]
-    assert result.status == "failed"
-    assert "baton-chain-closure" in result.detail and "206ms" in result.detail
+    assert "run claims no baton" in result.detail and result.status == "ran"
+    assert "baton-chain-closure" not in loaded
+
+
+def test_post_close_names_a_raising_chain_closure_and_still_runs_launchers(tmp_path, monkeypatch):
+    calls = []
+    stub = _chain_stub(calls, raises=RuntimeError("boom"))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
+    result = cb._post_close(_ctx(tmp_path, batons=BATONS))
+    assert calls[:2] == ["structural", "scip"]
+    assert result.status == "failed" and "baton-chain-closure RuntimeError" in result.detail
 
 
 def test_post_close_survives_a_failing_launcher(tmp_path, monkeypatch):
@@ -204,6 +252,10 @@ def _stub_launchers(monkeypatch):
         @staticmethod
         def run(ceremony, root):
             return None
+
+        @staticmethod
+        def chain_verdicts(root, paths):
+            return []
 
     monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
 

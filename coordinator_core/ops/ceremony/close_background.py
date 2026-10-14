@@ -14,10 +14,10 @@ Negative-spec:
   - One leg's exception is recorded ``failed`` and the next leg still runs.
   - A leg is not started once the job's cumulative process time reaches ``JOB_BUDGET_MS``; it is
     recorded ``failed`` with that reason, never dropped.
-  - ``sweep-terminal-sizings`` (638ms cold) and ``baton-chain-closure signal`` (206ms cold) are
-    over the job's budget (docs/research/2026-10-13-run-close-ws1-headroom-spike.md): neither
-    runs. The sizings sweep is left out of ``baton-drain``; ``post-close`` is recorded ``failed``
-    naming ``baton-chain-closure`` and its cost, after the index launchers have run.
+  - ``sweep-terminal-sizings`` (638ms cold) is over the job's budget
+    (docs/research/2026-10-13-run-close-ws1-headroom-spike.md) and is left out of ``baton-drain``.
+  - ``post-close`` runs the index launchers, then ``baton-chain-closure``'s ``chain_verdicts``
+    for the claimed batons; it is ``failed`` only when a launcher failed or that call raised.
   - The handoff sweep is scoped to the run's claimed batons (``plan_sweep(candidate_ids=...)``).
   - No leg detail carries an absolute or backslashed path; exception text is scrubbed first.
   - Imports are lazy inside each leg; the op module itself stays cheap to load at server start.
@@ -53,7 +53,6 @@ BACKGROUND_LEGS: tuple[str, ...] = (
 
 _HANDOFF_SWEEP_CAP = 150
 _SIZINGS_SWEEP_NOTE = "sweep-terminal-sizings not run: 638ms cold, over the 500ms bar"
-_CHAIN_CLOSURE_NOTE = "baton-chain-closure not run: 206ms cold, over the job budget"
 _CEREMONY_NAME = "run-close"
 _ENSURE_WAIT_SECS = 5.0
 _DETAIL_MAX = 160
@@ -186,8 +185,8 @@ def _launch_close_review(ctx: JobContext) -> bool:
 
 
 def _post_close(ctx: JobContext) -> LegResult:
-    """Fire the structural-index and scip launchers and the detached ``close.review`` job;
-    ``baton-chain-closure`` is reported, not run."""
+    """Fire the structural-index and scip launchers and the detached ``close.review`` job, then
+    run ``baton-chain-closure`` for the claimed batons and record its outcome."""
     launched: list[str] = []
     problems: list[str] = []
     for label, call in (
@@ -207,10 +206,25 @@ def _post_close(ctx: JobContext) -> LegResult:
                 problems.append("close.review not started")
     except Exception as exc:  # the review leg then reads failed at the deadline
         problems.append(f"close.review {type(exc).__name__}")
-    detail = f"{_CHAIN_CLOSURE_NOTE}; launched: {', '.join(launched) or 'none'}"
+    chain_note = _chain_closure_note(ctx, problems)
+    detail = f"{chain_note}; launched: {', '.join(launched) or 'none'}"
     if problems:
-        detail += f"; launcher failed: {', '.join(problems)}"
-    return LegResult("failed", _scrub(detail))
+        detail += f"; failed: {', '.join(problems)}"
+    return LegResult("failed" if problems else "ran", _scrub(detail))
+
+
+def _chain_closure_note(ctx: JobContext, problems: list[str]) -> str:
+    """Run ``chain_verdicts`` for the claimed batons; a raise is appended to ``problems``."""
+    if not ctx.claimed_batons:
+        return "chain-closure: run claims no baton"
+    try:
+        verdicts = _bin_script("baton-chain-closure").chain_verdicts(ctx.root, list(ctx.claimed_batons))
+    except Exception as exc:  # the launchers already ran; the leg is recorded failed
+        problems.append(f"baton-chain-closure {type(exc).__name__}")
+        return "chain-closure: not run"
+    closed = sorted({v.chain for v in verdicts if v.closed and v.chain})
+    note = f"chain-closure: {len(verdicts)} baton(s), {len(closed)} chain(s) closed"
+    return f"{note}: {', '.join(closed)}" if closed else note
 
 
 DEFAULT_RUNNERS: Mapping[str, Runner] = {

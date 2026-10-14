@@ -1708,6 +1708,50 @@ def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_either_way(tm
     assert rc == 2
 
 
+def test_cli_status_alive_without_unknown_for_a_fresh_cron_stamp(tmp_path, capsys):
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, tick_source="cron", writer_session_id="w1",
+    )
+    with mock.patch.object(
+        watch_heartbeat, "process_confirmed_alive", return_value=False
+    ):
+        rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.startswith("ALIVE")
+    assert "UNKNOWN" not in out and "cannot be confirmed" not in out
+
+
+def test_cli_status_reports_stale_for_an_overdue_cron_stamp(tmp_path, capsys):
+    import time as _time
+
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, tick_source="cron", now_epoch=_time.time() - 3600,
+        writer_session_id="w1",
+    )
+    assert watch._cli(["--repo-root", str(tmp_path), "--status"]) == 1
+    assert capsys.readouterr().out.startswith("NOT RUNNING")
+
+
+def test_cli_status_after_tick_once_is_alive_exit_zero(tmp_path, capsys):
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(2.0, [])
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        watch.tick_once(
+            str(tmp_path), caller_session_id="c1", group_em_session_id="group-em-1",
+            tick_interval_seconds=30.0,
+        )
+    capsys.readouterr()
+    assert watch._cli(["--repo-root", str(tmp_path), "--status"]) == 0
+    assert "UNKNOWN" not in capsys.readouterr().out
+
+
 def test_cli_status_exits_two_on_a_repo_no_watch_ever_covered(tmp_path, capsys):
     # UNKNOWN gets its own code: a caller that reads 0 as "fine" must not read
     # "nobody ever looked" as fine, which is the collapse this flag exists for.
@@ -2347,3 +2391,90 @@ def test_a_real_wait_after_a_negated_one_still_counts(tmp_path):
     ))
     assert line.startswith("WAITING session=peer-1 ")
     assert 'waiting_on="Waiting on coordinator-content-repo-65' in line
+
+
+# --- `--until-event` -------------------------------------------------------
+
+
+def _until_event(repo_root, candidates, max_iterations=5):
+    """Run `until_event` over one peer whose parked verdict follows `candidates` tick by tick."""
+    sleeps: list[float] = []
+    stream = io.StringIO()
+    verdicts = iter(candidates)
+
+    def classify(*_a, **_k):
+        return {"state": "PAUSED", "reason": "turn-ended", "candidate": next(verdicts)}
+
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=[_agent()]
+    ), mock.patch.object(
+        watch.read_pass, "enumerate_repo_peers", side_effect=lambda agents, sid: agents
+    ), mock.patch.object(
+        watch.read_pass, "classify_peer", side_effect=classify
+    ), mock.patch.object(
+        watch, "_cooldown_active", return_value=False
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=42.0
+    ), mock.patch.object(
+        watch, "_transcript_idle_seconds", return_value=None
+    ), mock.patch.object(
+        watch.obligations, "for_peer", return_value=None
+    ):
+        rc = watch.until_event(
+            str(repo_root),
+            caller_session_id="waker-1",
+            group_em_session_id="group-em-1",
+            stream=stream,
+            tick_interval_seconds=30.0,
+            sleep_fn=sleeps.append,
+            max_iterations=max_iterations,
+        )
+    lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+    return rc, lines, sleeps
+
+
+def test_until_event_keeps_looping_on_silent_ticks_and_exits_0_on_the_first_line(tmp_path):
+    rc, lines, sleeps = _until_event(tmp_path, [False, False, True, True])
+    assert rc == 0
+    assert len(lines) == 1 and lines[0].startswith("PARKED session=peer-1")
+    assert sleeps == [30.0, 30.0]
+
+
+def test_until_event_carries_state_across_restarts_and_does_not_re_emit(tmp_path):
+    _until_event(tmp_path, [False, True])
+    assert watch.load_prev_parked(str(tmp_path)) == {"peer-1": True}
+    rc, lines, _sleeps = _until_event(tmp_path, [True, True], max_iterations=2)
+    assert rc == 0
+    assert lines == []
+
+
+def test_until_event_stamps_the_cron_word_with_its_own_cadence(tmp_path):
+    _until_event(tmp_path, [False], max_iterations=1)
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["tick_source"] == "cron"
+    last = datetime.strptime(record["last_tick_at"], "%Y-%m-%dT%H:%M:%SZ")
+    nxt = datetime.strptime(record["next_expected_by"], "%Y-%m-%dT%H:%M:%SZ")
+    assert (nxt - last).total_seconds() < watch._CRON_FLOOR_INTERVAL_SECONDS
+
+
+def test_until_event_exits_0_on_a_poll_error_line(tmp_path):
+    stream = io.StringIO()
+    with mock.patch.object(watch, "poll_once", side_effect=RuntimeError("registry gone")):
+        rc = watch.until_event(
+            str(tmp_path),
+            caller_session_id="w",
+            group_em_session_id="c",
+            stream=stream,
+            sleep_fn=lambda _s: None,
+            max_iterations=3,
+        )
+    assert rc == 0
+    assert stream.getvalue().startswith("POLL-ERROR")
+
+
+def test_cli_until_event_dispatches_to_until_event(tmp_path):
+    with mock.patch.object(watch, "until_event", return_value=0) as ue:
+        rc = watch._cli(["--repo-root", str(tmp_path), "--until-event", "--tick-interval-seconds", "30"])
+    assert rc == 0
+    assert ue.call_args.kwargs["tick_interval_seconds"] == 30.0

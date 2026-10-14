@@ -35,6 +35,28 @@ def test_no_summary_fails_and_writes_nothing(root):
     assert paths == [] and _entries(root) == []
 
 
+def test_met_observation_is_the_prose_when_no_summary(root):
+    result, paths = rcc.completion_entry_leg(
+        root, "r1", PLAN, {"status": "met", "observation": "Now true on disk."}
+    )
+    assert result.status == "ran" and len(paths) == 1
+    assert "Now true on disk." in (root / paths[0]).read_text(encoding="utf-8")
+
+
+def test_summary_wins_over_observation(root):
+    crit = {"status": "met", "completion_summary": "The summary.", "observation": "The obs."}
+    _, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)
+    text = (root / paths[0]).read_text(encoding="utf-8")
+    assert "The summary." in text and "The obs." not in text
+
+
+def test_not_met_with_observation_still_fails(root):
+    crit = {"status": "not_met", "observation": "nope"}
+    result, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)
+    assert (result.status, result.detail) == ("failed", "criterion not_met")
+    assert paths == [] and _entries(root) == []
+
+
 def test_not_met_fails_and_writes_nothing(root):
     crit = {"status": "not_met", "completion_summary": "It shipped."}
     result, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)

@@ -7,15 +7,19 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops import queue_family
 from coordinator_core.ops.dispatch_emit.queue_select import (
+    ClaimedEntry,
     DuplicateStemError,
     Manifest,
     MissingRowIdError,
     RouteToRefusedError,
     WhereTermError,
+    live_row_ids,
     select_rows,
 )
+from coordinator_core.session import claims, liveness
 
 
 def _write_row(path: Path, **fields) -> None:
@@ -462,3 +466,114 @@ def test_manifest_digest_is_deterministic(tmp_path):
     m2 = _select(queue=[queue_dir], repo_root=tmp_path)
     assert m1.digest == m2.digest
     assert isinstance(m1, Manifest)
+
+
+@pytest.fixture
+def claim_env(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+    live: set = set()
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid in live)
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    class Env:
+        root = tmp_path
+        queue = queue_dir
+        live_set = live
+
+        @staticmethod
+        def add_rows(*stems):
+            for stem in stems:
+                _write_row(queue_dir / f"{stem}.yaml", **_base_row())
+
+        @staticmethod
+        def claim_as(sid, stem, alive=True):
+            monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+            if alive:
+                live.add(sid)
+            assert claims.claim_artifact(
+                "row",
+                f"state/bug-backlog/{stem}.yaml",
+                baton_repo_root=str(tmp_path),
+                cwd=str(tmp_path),
+            )
+
+        @staticmethod
+        def select(**kw):
+            return _select(queue=[queue_dir], repo_root=tmp_path, **kw)
+
+    return Env
+
+
+def test_row_claimed_live_by_another_sid_is_skipped_and_recorded(claim_env):
+    claim_env.add_rows("a", "b")
+    claim_env.claim_as("sid-a", "a")
+    m = claim_env.select(claimant_sid="sid-b")
+    assert [e.row_id for e in m.entries] == ["b"]
+    assert m.claimed == (ClaimedEntry(row_id="a", holder_session="sid-a"),)
+    assert "a" not in m.unselected
+
+
+def test_limit_applies_after_the_claim_drop(claim_env):
+    claim_env.add_rows("a", "b", "c")
+    claim_env.claim_as("sid-a", "a")
+    m = claim_env.select(claimant_sid="sid-b", limit=1)
+    assert [e.row_id for e in m.entries] == ["b"]
+
+
+def test_row_claimed_by_claimant_itself_is_selected(claim_env):
+    claim_env.add_rows("a")
+    claim_env.claim_as("sid-a", "a")
+    m = claim_env.select(claimant_sid="sid-a")
+    assert [e.row_id for e in m.entries] == ["a"]
+    assert m.claimed == ()
+
+
+def test_dead_holder_and_expired_lease_do_not_block(claim_env, monkeypatch):
+    claim_env.add_rows("a", "b")
+    claim_env.claim_as("sid-a", "a")
+    claim_env.claim_as("sid-c", "b")
+    claim_env.live_set.discard("sid-a")
+    monkeypatch.setattr(claims, "brief_lease_expired", lambda d: Path(d).name.endswith("--b"))
+    m = claim_env.select(claimant_sid="sid-b")
+    assert [e.row_id for e in m.entries] == ["a", "b"]
+    assert m.claimed == ()
+
+
+def test_claimant_none_blocks_on_any_live_claim(claim_env):
+    claim_env.add_rows("a", "b")
+    claim_env.claim_as("sid-a", "a")
+    m = claim_env.select(claimant_sid=None)
+    assert [e.row_id for e in m.entries] == ["b"]
+    assert [c.row_id for c in m.claimed] == ["a"]
+
+
+def test_claimed_row_stays_live(claim_env):
+    claim_env.add_rows("a", "b")
+    claim_env.claim_as("sid-a", "a")
+    ids = live_row_ids([claim_env.queue], row_id_key="@stem", repo_root=claim_env.root)
+    assert ids == {"a", "b"}
+
+
+def test_select_over_20_rows_with_5_claimed_spawns_nothing(claim_env, monkeypatch):
+    # Liveness is stubbed here; the real probe's spawn cost is bounded in test_row_claims_perf.py.
+    stems = [f"r{i:02d}" for i in range(20)]
+    claim_env.add_rows(*stems)
+    for stem in stems[:5]:
+        claim_env.claim_as("sid-a", stem)
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        m = claim_env.select(claimant_sid="sid-b")
+    assert spawns == []
+    assert len(m.entries) == 15 and len(m.claimed) == 5
+
+
+def test_claimed_is_not_in_the_digest(claim_env):
+    claim_env.add_rows("a", "b")
+    claim_env.claim_as("sid-a", "a")
+    with_claim = claim_env.select(claimant_sid="sid-b")
+    (claim_env.queue / "a.yaml").unlink()
+    without_row = claim_env.select(claimant_sid="sid-b")
+    assert with_claim.claimed and not without_row.claimed
+    assert with_claim.digest == without_row.digest

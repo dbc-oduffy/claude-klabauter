@@ -322,13 +322,14 @@ def _sizing_file_rel(worktree_root: Path, cited: str) -> Optional[str]:
 
 def _register_target(
     worktree_root: Path, plan_path: Optional[str]
-) -> tuple[Optional[str], frozenset, bool]:
-    """``(register_sizing_rel, claimed_row_ids, is_own)``: the register sizing is the plan's
+) -> tuple[Optional[str], frozenset, bool, dict]:
+    """``(register_sizing_rel, claimed_row_ids, is_own, pins)``: the register sizing is the plan's
     ``register_claims.sizing`` when it names an existing sizing, else the cited ``sizing_object``;
-    ``is_own`` is True when that is the plan's own ``sizing_object``."""
+    ``is_own`` is True when that is the plan's own ``sizing_object``; ``pins`` is the plan's
+    ``register_claims.pins`` (empty when absent)."""
     text = _read_rel(worktree_root, plan_path) if plan_path else None
     if text is None:
-        return None, frozenset(), True
+        return None, frozenset(), True, {}
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
     from coordinator_core.ops import requirement_register as rr
 
@@ -337,9 +338,10 @@ def _register_target(
     own = _sizing_file_rel(worktree_root, cited) if cited else None
     claims_rel, ids = rr.plan_claims(split.fm_text) if split else (None, frozenset())
     target = _sizing_file_rel(worktree_root, claims_rel) if claims_rel else None
+    pins = rr.plan_pins(split.fm_text) if split else {}
     if target is None:
-        return own, ids, True
-    return target, ids, target == own
+        return own, ids, True, pins
+    return target, ids, target == own, pins
 
 
 def _register_gate(
@@ -356,7 +358,7 @@ def _register_gate(
     criterion = inline_review.get("criterion")
     if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
         return None
-    sizing_rel, claim_ids, is_own = _register_target(worktree_root, plan_path)
+    sizing_rel, claim_ids, is_own, pins = _register_target(worktree_root, plan_path)
     if sizing_rel is None:
         return None
     from coordinator_core.ops import requirement_register as rr
@@ -367,6 +369,13 @@ def _register_gate(
     if register is None and not gaps:
         return None
     claimed = rr.claimed_rows(register, plan_path, claim_ids) if register is not None else []
+    drift = rr.pin_drift(register, pins) if register is not None and pins else []
+    if drift:
+        reason = rr.pin_drift_reason(drift)
+        criterion["status"] = "not_met"
+        criterion["reason"] = reason
+        criterion["observation"] = reason
+        return reason
     judged = {
         str(r.get(rr.ROW_ID)): r
         for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
@@ -381,11 +390,17 @@ def _register_gate(
             why = f"judged status {got.get(rr.ROW_STATUS)!r}, not met"
         elif got.get(rr.ROW_WIRED) is not True:
             why = "judged wired: false"
-        elif got.get(rr.ROW_SURFACE) != surface:
-            why = f"judged surface {got.get(rr.ROW_SURFACE)!r} differs from register surface {surface!r}"
         elif not str(got.get(rr.JUDGE_OBSERVED_REF) or "").strip():
             why = "no observed entry point (observed_ref is empty)"
         else:
+            if got.get(rr.ROW_SURFACE) != surface:
+                note = (
+                    f"register row {rid}: judged surface {got.get(rr.ROW_SURFACE)!r} "
+                    f"differs from register surface {surface!r} (met and wired; reported, not refused)"
+                )
+                prior = criterion.get("observation") or ""
+                if note not in prior:
+                    criterion["observation"] = f"{prior}\n{note}".strip()
             continue
         reason = f"register row {rid} (surface {surface}): {why}"
         criterion["status"] = "not_met"
@@ -429,7 +444,9 @@ def _register_writeback(
         r for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
         if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
     ]
-    sizing_rel, claim_ids, _ = _register_target(worktree_root, plan_path) if judged else (None, frozenset(), True)
+    sizing_rel, claim_ids, _, _ = (
+        _register_target(worktree_root, plan_path) if judged else (None, frozenset(), True, {})
+    )
     if sizing_rel is None:
         return {}
     from datetime import datetime, timezone
@@ -1242,16 +1259,21 @@ def _ledger_gate(worktree_root: Path, run_dir: Path, verdict: object) -> tuple[O
 
 def _ledger_writeback(worktree_root: Path, ledger, verdict: object, run_id: str, sha: str) -> dict:
     """Write the passed verdict onto the bound sizing's register rows; never raises -- the
-    product commit stands. ``{}`` or ``{"requirements_writeback_error": reason}``."""
+    product commit stands. ``{}`` or ``{"requirements_writeback_error": reason}``, plus
+    ``post_commit_owed`` (``[{id, acts, sha}]``) when a ``post_commit`` item still owes a sha memo."""
     if ledger is None or not ledger.sizing_rel or not isinstance(verdict, dict):
         return {}
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
+    out: dict = {}
     try:
         requirements_ledger.apply_verdict(worktree_root, ledger.sizing_rel, verdict, run_id=run_id, sha=sha)
     except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
-        return {"requirements_writeback_error": str(exc)}
-    return {}
+        out["requirements_writeback_error"] = str(exc)
+    owed = requirements_ledger.post_commit_owed(verdict, sha)
+    if owed:
+        out["post_commit_owed"] = owed
+    return out
 
 
 def _ask_trailers(
@@ -2128,7 +2150,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              when canonical-UUID shaped.
         ledger_verdict (dict, optional)  -- an ask run's final ledger-checker
                                              verdict ``{items: [{id, status,
-                                             essential?, wired?, superseded_by?}]}``;
+                                             essential?, wired?, superseded_by?,
+                                             post_commit_acts?}]}``; the reply
+                                             carries ``post_commit_owed`` for
+                                             each ``sha_memo`` item;
                                              required when the run is
                                              ledger-bearing, re-judged against
                                              the sizing's register rows

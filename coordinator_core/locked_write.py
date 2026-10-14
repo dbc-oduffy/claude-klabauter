@@ -664,6 +664,9 @@ def locked_rmw(
     str
         The new file text after mutation (same as what was written, or old text on
         no-op).
+
+    Side effect: a real write to a sizings-home target is recorded via
+    `declared_writes.declare_write` (no-op outside an open collection).
     """
     if not _LOCKING_AVAILABLE:
         raise RuntimeError(
@@ -747,6 +750,16 @@ def locked_rmw(
                         # failure (os.replace didn't run); must not raise here and
                         # mask the original exception already propagating.
                         pass
+
+            # Only the sizings home declares: a generic declaration would make
+            # every locked_rmw caller claim shared files. Function-local imports
+            # are budgeted by `coordinator_core/benchmarks/import-budget-manifest.json`.
+            from coordinator_core.session import record_homes
+
+            if record_homes.home_pattern("sizings").search(str(target_path)):
+                from coordinator_core.session import declared_writes
+
+                declared_writes.declare_write(target_path)
 
             return new_text
 

@@ -187,6 +187,63 @@ def test_seed_plan_subset_claims_on_other_root_still_pass(tmp_path):
     assert _gate(tmp_path, plan)["classes"]["REGISTER"]["status"] == "PASS"
 
 
+def _text_register(*rows: tuple[str, str]) -> str:
+    out = ["title: fixture-sizing", "requirement_register:", "  rows:"]
+    for rid, text in rows:
+        out += [f"  - id: {rid}", "    status: open", f"    source_text: {text}"]
+    return "\n".join(out) + "\n"
+
+
+def _pins(*rows: tuple[str, str]) -> str:
+    from coordinator_core.ops import requirement_register as rr
+
+    body = ", ".join(f'"{rid}": "{rr.row_pin(text)}"' for rid, text in rows)
+    return "  pins: {" + body + "}"
+
+
+def _pinned(root: Path, pin_rows, sizing_rows, claim_rows: str = "[R1]") -> dict:
+    return _reg(root, _claims(claim_rows) + "\n" + _pins(*pin_rows), _text_register(*sizing_rows))
+
+
+def test_pinned_and_matching_passes(tmp_path):
+    rows = [("R1", "keep the words")]
+    assert _pinned(tmp_path, rows, rows)["status"] == "PASS"
+
+
+def test_edited_source_text_is_pin_drift(tmp_path):
+    reg = _pinned(tmp_path, [("R1", "keep the words")], [("R1", "change the words")])
+    assert reg["status"] == "DEFECT" and reg["kind"] == "register-pin-drift"
+    assert "R1" in reg["detail"] and "source_text changed" in reg["detail"]
+
+
+def test_whitespace_only_edit_passes(tmp_path):
+    reg = _pinned(tmp_path, [("R1", "keep the words")], [("R1", "keep   the  words ")])
+    assert reg["status"] == "PASS"
+
+
+def test_pins_omitting_a_claimed_row_is_missing(tmp_path):
+    rows = [("R1", "a"), ("R2", "b")]
+    reg = _pinned(tmp_path, [("R1", "a")], rows, "[R1, R2]")
+    assert reg["kind"] == "register-pin-missing" and "R2" in reg["detail"]
+
+
+def test_malformed_pins_is_not_a_silent_pass(tmp_path):
+    reg = _reg(tmp_path, _claims() + "\n  pins: [R1]", _text_register(("R1", "a")))
+    assert reg["kind"] == "register-pin-missing"
+
+
+def test_multiple_drifted_rows_report_remainder(tmp_path):
+    reg = _pinned(
+        tmp_path, [("R1", "a"), ("R2", "b")], [("R1", "x"), ("R2", "y")], "[R1, R2]"
+    )
+    assert reg["kind"] == "register-pin-drift" and "+1 more" in reg["detail"]
+
+
+def test_no_pins_is_legacy_pass(tmp_path):
+    reg = _reg(tmp_path, _claims(), _text_register(("R1", "a")))
+    assert reg["status"] == "PASS"
+
+
 def test_register_in_class_order_and_authoring_lines():
     assert pg.CLASS_ORDER[-1] == "REGISTER"
     assert any("sizing-assemble --register" in ln for ln in pg._authoring_fix_lines({"REGISTER"}))

@@ -130,12 +130,24 @@ def test_a_row_the_emitter_would_refuse_to_route_is_withheld(tmp_path):
     (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
     spine = _CLEAN_SPINE.replace(
         "  writes: [coordinator_core/roadmap/prep_gate.py]\n",
-        "  writes: [coordinator_core/roadmap/prep_gate.py, docs/plans/2026-09-07-fixture.md]\n",
+        "  writes: [coordinator_core/roadmap/prep_gate.py, docs/plans/2026-09-07-other.md]\n",
     )
     report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
     assert report["verdict"] == pg.NOT_PREPPED
     assert report["classes"]["SPINE"]["kind"] == "MixedAgentTypeRowError"
     assert report["withheld_rows"] == ["C1"]
+
+
+def test_an_own_plan_evidence_row_is_prepped_and_routes_to_the_executor(tmp_path):
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = _CLEAN_SPINE.replace(
+        "  writes: [coordinator_core/roadmap/prep_gate.py]\n",
+        "  writes: [coordinator_core/roadmap/prep_gate.py, docs/plans/2026-09-07-fixture.md]\n",
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.PREPPED
+    assert report["classes"]["SPINE"]["status"] == "PASS"
+    assert report["withheld_rows"] == []
 
 
 def test_every_class_is_reported_even_when_it_passes(tmp_path):

@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,10 @@ def test_write_mode_process_time_under_budget(fixture_repo: Path, tmp_path: Path
     assert child["rc"] == 0
 
     total = parent["process_time_ms"] + child["process_time_ms"]
+    print(
+        f"release-stamp process time: parent {parent['process_time_ms']}ms"
+        f" + child {child['process_time_ms']}ms = {total}ms ({sys.platform})"
+    )
     assert total < _BUDGET_MS, (
         f"parent {parent['process_time_ms']}ms + child {child['process_time_ms']}ms = {total}ms"
     )

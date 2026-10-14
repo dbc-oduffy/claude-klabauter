@@ -12,6 +12,7 @@ decision_object`; `yaml` and `frontmatter.primitives` are imported inside functi
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -31,6 +32,13 @@ ROWS_KEY = "rows"
 UNRELATED_TURNS_KEY = "unrelated_turns"
 ROLLUP_KEY = "rollup"
 COVERAGE_KEY = "coverage"
+PINS_KEY = "pins"
+PIN_PREFIX = "sha256:"
+PIN_DRIFT_REMEDY = (
+    "restore the row's source_text, or re-plan against the changed row (claim the "
+    "workflow.revise revision row, or re-scaffold after a sizing.record_register "
+    "amend/supersede); never hand-edit register_claims.pins"
+)
 
 ROW_ID = "id"
 ROW_TEXT = "source_text"
@@ -219,6 +227,76 @@ def plan_claims(plan_fm_text: str) -> tuple[Optional[str], frozenset[str]]:
     rows = claims.get(ROWS_KEY)
     ids = frozenset(str(i) for i in rows) if isinstance(rows, list) else frozenset()
     return (_plan_key(sizing) if isinstance(sizing, str) and sizing else None), ids
+
+
+def row_pin(text: Any) -> str:
+    """`sha256:<hex>` over the whitespace-normalised row text."""
+    return PIN_PREFIX + hashlib.sha256(_norm(text).encode("utf-8")).hexdigest()
+
+
+def register_pins(register: Register, ids: Sequence[Any]) -> dict[str, str]:
+    """`{id: row_pin(source_text)}` for the named ids present in `register`, in `ids` order."""
+    by_id = {str(r.get(ROW_ID)): r for r in register.rows}
+    return {
+        str(i): row_pin(by_id[str(i)].get(ROW_TEXT, ""))
+        for i in ids if str(i) in by_id
+    }
+
+
+def plan_pins(plan_fm_text: str) -> dict[str, str]:
+    """`register_claims.pins` from a plan's frontmatter; `{}` when absent or malformed."""
+    try:
+        fm = _load(plan_fm_text)
+    except Exception:  # noqa: BLE001 - tolerant reader
+        return {}
+    claims = fm.get("register_claims") if isinstance(fm, Mapping) else None
+    pins = claims.get(PINS_KEY) if isinstance(claims, Mapping) else None
+    if not isinstance(pins, Mapping):
+        return {}
+    return {str(k): v if isinstance(v, str) else str(v) for k, v in pins.items()}
+
+
+def pin_drift(register: Register, pins: Mapping[str, str]) -> list[dict[str, Any]]:
+    """Rows whose current text no longer matches their pin, in `pins` order.
+
+    Takes a `Register` and a plain id-to-pin mapping and knows nothing about plans, so any pin
+    source can call it. One `{"id", "pinned", "current"}` per drifted pin: `current` is None
+    when the row is gone. A pin that is not `sha256:<64 hex>` is drift. Unpinned rows are
+    ignored.
+    """
+    by_id = {str(r.get(ROW_ID)): r for r in register.rows}
+    drift: list[dict[str, Any]] = []
+    for rid, pinned in pins.items():
+        row = by_id.get(str(rid))
+        current = row_pin(row.get(ROW_TEXT, "")) if row is not None else None
+        if pinned != current:
+            drift.append({"id": str(rid), "pinned": pinned, "current": current})
+    return drift
+
+
+def pin_drift_reason(drift: Sequence[Mapping[str, Any]]) -> str:
+    """The refusal text for the first drifted pin in `drift`."""
+    return (
+        f"register row {drift[0]['id']}: source_text changed since the plan pinned it; "
+        + PIN_DRIFT_REMEDY
+    )
+
+
+def plan_pin_drift(plan_fm_text: str, repo_root: Path) -> list[dict[str, Any]]:
+    """`pin_drift` for a plan's own `register_claims`; `[]` when the plan has no pins, or the
+    sizing is unreadable or carries no register."""
+    sizing_rel, _ = plan_claims(plan_fm_text)
+    pins = plan_pins(plan_fm_text)
+    if not sizing_rel or not pins:
+        return []
+    path = _sizing_path(Path(repo_root), sizing_rel)
+    if path is None:
+        return []
+    try:
+        register = read_register(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
+    return pin_drift(register, pins) if register is not None else []
 
 
 def blocking_unclaimed(register: Register, claimed_ids: Sequence[Any]) -> Optional[str]:

@@ -41,7 +41,9 @@ INBOX_FILE = "revisions.jsonl"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
-STATUSES = ("met", "not_met", "drifted", "superseded")
+STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
+#: Acts that can only exist after the terminal commit; a `post_commit` item names which remain.
+POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo")
 VERBATIM_BYTE_CAP = 16 * 1024
 #: Every seeded row's surface: a PM sentence names no entry kind, so the checker judges `wired`
 #: as reachable from the product at all.
@@ -383,11 +385,13 @@ def revise(
 
 def judge(ledger: Ledger, verdict: object) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}]}` for a checker `verdict`
-    (`{"items": [{"id", "status", "essential"?, "superseded_by"?}]}`) against the live register.
+    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?}]}`) against
+    the live register.
 
     Every row needs exactly one judgment. `drifted` (lost or reinterpreted) always fails;
     `superseded` passes only when it names a later revision row; `not_met` fails when
-    `all_of_pm_ask` is set or the row is essential (the default)."""
+    `all_of_pm_ask` is set or the row is essential (the default); `post_commit` passes only when
+    `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`."""
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
         return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}]}
@@ -416,6 +420,14 @@ def judge(ledger: Ledger, verdict: object) -> dict:
             target = next((i for i in ledger.items if i.id == later), None)
             if target is None or target.origin != ORIGIN_REVISION or order[target.id] <= order[item.id]:
                 failures.append({"id": item.id, "reason": f"superseded_by {later!r} names no later revision"})
+        elif status == "post_commit":
+            acts = row.get("post_commit_acts")
+            if not isinstance(acts, list) or not acts:
+                failures.append({"id": item.id, "reason": "post_commit names no post-commit act"})
+            else:
+                bad = next((a for a in acts if a not in POST_COMMIT_ACTS), None)
+                if bad is not None:
+                    failures.append({"id": item.id, "reason": f"post_commit act {bad!r} is not one of {POST_COMMIT_ACTS}"})
         elif status == "not_met" and (ledger.all_of_pm_ask or row.get("essential", True) is not False):
             failures.append({
                 "id": item.id,
@@ -429,7 +441,9 @@ def judge(ledger: Ledger, verdict: object) -> dict:
 def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:
     """Write a passed verdict onto the register once the commit `sha` landed: met and wired ->
     `met` with `<run_id>@<sha>` in met_by; met alone -> `partial`; superseded -> `waived` with the
-    PM's superseding words as the ruling. Every judged row gets `last_progress_at`."""
+    PM's superseding words as the ruling. A `post_commit` item whose acts are within
+    `{commit, sha_reply}` is written as `met` (the landed commit is the act); one naming
+    `sha_memo` is `partial`, the engine sending no memo. Every judged row gets `last_progress_at`."""
     judged = {str(r.get("id")): r for r in verdict.get("items") or [] if isinstance(r, Mapping)}
     stamp = _now()
 
@@ -440,9 +454,12 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
             if got is None or row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
                 continue
             status, wired = got.get("status"), got.get("wired") is True
-            if status == "met":
+            memo_owed = status == "post_commit" and "sha_memo" in (got.get("post_commit_acts") or [])
+            if status == "post_commit" and not memo_owed:
+                status = "met"
+            if status == "met" or memo_owed:
                 row[rr.ROW_WIRED] = wired
-                if wired:
+                if wired and not memo_owed:
                     row[rr.ROW_STATUS] = rr.STATUS_MET
                     ref = f"{run_id}@{sha}"
                     met_by = [m for m in row.get(rr.ROW_MET_BY) or [] if isinstance(m, str)]
@@ -461,6 +478,19 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
         return rows
 
     return _mutate_register(Path(repo_root), sizing_rel, edit)
+
+
+def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
+    """What the run still owes once `sha` exists: `{id, acts, sha}` per `post_commit` item that
+    names `sha_memo`, which the engine never sends."""
+    owed = []
+    for r in verdict.get("items") or []:
+        if not isinstance(r, Mapping) or r.get("status") != "post_commit":
+            continue
+        acts = [a for a in r.get("post_commit_acts") or [] if isinstance(a, str)]
+        if "sha_memo" in acts:
+            owed.append({"id": str(r.get("id")), "acts": acts, "sha": sha})
+    return owed
 
 
 @register_op("workflow.revise")

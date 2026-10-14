@@ -6,8 +6,10 @@ once per run id, for ``dispatch.terminal_commit``'s close block.
 
 Negative-spec:
   - No process spawn. File writes only, through ``completion_entry``'s locked helpers.
-  - No fallback prose: no summary, or a criterion that is not ``met``, is ``failed`` and writes
-    nothing. The summary is copied verbatim, never composed from the plan or the verdict.
+  - No composed prose: the prose is the judge's ``completion_summary``, else a ``met``
+    criterion's ``observation`` (a recorded re-judge carries only that), copied verbatim, never
+    composed from the plan or the verdict. Neither, or a criterion that is not ``met``, is
+    ``failed`` and writes nothing.
   - The returned paths are for the caller's ``also_commit``; a caller whose commit does not
     land removes them.
 """
@@ -76,7 +78,8 @@ def completion_entry_leg(
 ) -> tuple[LegResult, list[str]]:
     """Return ``(LegResult, written_paths)`` for the completion-entry leg.
 
-    ``failed`` when *criterion* is not ``met`` or carries no ``completion_summary``;
+    ``failed`` when *criterion* is not ``met`` or carries neither a ``completion_summary`` nor
+    an ``observation``;
     ``discharged`` when this run id's entry already exists; otherwise ``ran`` naming the
     new entry, which is also the single written path.
     """
@@ -85,6 +88,8 @@ def completion_entry_leg(
     summary = criterion.get("completion_summary")
     if status != "met":
         return LegResult("failed", f"criterion {status}"), []
+    if not isinstance(summary, str) or not summary.strip():
+        summary = criterion.get("observation")
     if not isinstance(summary, str) or not summary.strip():
         return LegResult("failed", "no judge summary"), []
 

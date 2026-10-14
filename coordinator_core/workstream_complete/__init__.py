@@ -315,6 +315,7 @@ from coordinator_core.session.machinery_paths import (
     share_roots as _share_roots,
 )
 
+from coordinator_core.workstream_complete import close_residue as _close_residue
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_completion
@@ -5681,7 +5682,44 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # `_completeness_item_field` in that module tolerate nested NamedTuples
     # either way. AC7: reads already-computed payloads only, calls no
     # gate-computation function.
+    _stage_paths_for_residue = decisions.get("stage_paths")
+    if _stage_paths_for_residue is None:
+        owned_uncommitted_payload = {
+            "verdict": "indeterminate",
+            "items": [],
+            "contested": [],
+            "reason": "stage_paths unresolved",
+        }
+        _residue_snapshot = None
+    else:
+        _residue_snapshot = _close_residue.snapshot(root, gate.sid)
+        _peer_claimed: set[str] = set()
+        _foldable_sizings: list[str] = []
+        if _residue_snapshot.owned_paths:
+            try:
+                _peer_claimed = directives_commit_tail.live_peer_touch_claimed_paths(root, gate.sid)
+                # The close commit folds owned sizings only when the peer read
+                # succeeds, so the exclusion follows the same condition.
+                _foldable_sizings = _close_residue.owned_dirty_sizing_paths(
+                    root, _residue_snapshot, peer_claimed=_peer_claimed
+                )
+            except directives_commit_tail.PeerAttributionUnavailable:
+                _peer_claimed = set()
+        owned_uncommitted_payload = _close_residue.owned_uncommitted_payload(
+            root,
+            _residue_snapshot,
+            excluded=[*_stage_paths_for_residue, *_foldable_sizings],
+            peer_claimed=_peer_claimed,
+        )
+    if _residue_snapshot is None:
+        _residue_snapshot = _close_residue.snapshot(root, gate.sid)
+    unstamped_run_batons_payload = _close_residue.unstamped_run_batons_payload(
+        root, _residue_snapshot, dispositions=decisions.get("handoff_dispositions") or {}
+    )
+
     _completion_verdict_readings = {
+        "owned_uncommitted": _completion_verdict.owned_uncommitted(owned_uncommitted_payload),
+        "unstamped_run_batons": _completion_verdict.unstamped_run_batons(unstamped_run_batons_payload),
         "completeness_checklist": _completion_verdict.completeness_checklist(completeness_gate._asdict()),
         "open_spine_row_worklist": _completion_verdict.open_spine_row_worklist(open_spine_row_gate._asdict()),
         "consumed_handoff_completeness": _completion_verdict.consumed_handoff_completeness(
@@ -5716,6 +5754,8 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "review_scale": review_scale_payload,
             "repo_identity": repo_identity_gate,
             "completion_verdict": completion_verdict_payload,
+            "owned_uncommitted": owned_uncommitted_payload,
+            "unstamped_run_batons": unstamped_run_batons_payload,
             "run_close": run_close_payload,
             "plugin_cli_reachability": _plugin_cli_payload,
         },

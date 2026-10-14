@@ -1999,6 +1999,28 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
         if unruled:
             parts.append(f"deferred/waived row(s) with no ruling: {', '.join(unruled)}")
         return _defect("register-row-unknown" if unknown else "register-row-unruled", "; ".join(parts))
+    pins = claims.get(rr.PINS_KEY)
+    if rr.PINS_KEY in claims and pins is not None and not isinstance(pins, dict):
+        return _defect(
+            "register-pin-missing",
+            "register_claims.pins is not an id-to-pin mapping; re-scaffold the plan",
+        )
+    if isinstance(pins, dict) and pins:
+        unpinned = [str(r) for r in rows if str(r) not in {str(k) for k in pins}]
+        if unpinned:
+            return _defect(
+                "register-pin-missing",
+                f"register_claims.pins omit {len(unpinned)} claimed row(s): {', '.join(unpinned)}; "
+                "re-scaffold the plan",
+            )
+        drift = rr.pin_drift(register, pins)
+        if drift:
+            more = f" (+{len(drift) - 1} more)" if len(drift) > 1 else ""
+            return _defect(
+                "register-pin-drift",
+                f"register row {drift[0]['id']}: source_text changed since the plan pinned it"
+                f"{more}; {rr.PIN_DRIFT_REMEDY}",
+            )
     if sizing == cited:
         claimed = {str(r) for r in rows}
         missing = [str(r[rr.ROW_ID]) for r in register.rows if str(r[rr.ROW_ID]) not in claimed]

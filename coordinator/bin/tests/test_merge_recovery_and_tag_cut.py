@@ -55,7 +55,9 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
     _git(["config", "user.name", "Test User"], cwd=work)
     _git(["checkout", "-b", "main"], cwd=work)
     (work / "f.txt").write_text("hello\n", encoding="utf-8")
-    _git(["add", "f.txt"], cwd=work)
+    sections = "".join(f"## [{v}] - 2026-10-09\n\n" for v in ("1.0.0", "2.0.0", "0.6.9", "0.6.11"))
+    (work / "CHANGELOG.md").write_text("# Changelog\n\n" + sections, encoding="utf-8")
+    _git(["add", "f.txt", "CHANGELOG.md"], cwd=work)
     _git(["commit", "-m", "initial"], cwd=work)
     _git(["remote", "add", "origin", str(origin)], cwd=work)
     _git(["push", "-u", "origin", "main"], cwd=work)
@@ -78,6 +80,48 @@ def test_cut_tag_creates_and_pushes_annotated_tag(tmp_path: Path) -> None:
 
     origin_tags = _git(["ls-remote", "--tags", "origin"], cwd=work).stdout
     assert "refs/tags/v1.0.0" in origin_tags
+
+
+def _assert_refused_without_tag(work: Path, tag: str, version: str, capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cut_tag(work, tag)
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1
+    assert "CHANGELOG.md" in err and f"[{version}]" in err
+    assert _run_git_allow_fail(["tag", "-l", tag], cwd=work).strip() == ""
+    assert tag not in _git(["ls-remote", "--tags", "origin"], cwd=work).stdout
+
+
+def test_cut_tag_refuses_version_with_no_changelog_section(tmp_path: Path, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    _assert_refused_without_tag(work, "v9.9.9", "9.9.9", capsys)
+
+
+def test_cut_tag_refuses_when_changelog_is_absent_at_merge_commit(tmp_path: Path, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    _git(["rm", "CHANGELOG.md"], cwd=work)
+    _git(["commit", "-m", "drop changelog"], cwd=work)
+    _git(["push", "origin", "main"], cwd=work)
+    _assert_refused_without_tag(work, "v1.0.0", "1.0.0", capsys)
+
+
+def test_cut_tag_reads_changelog_from_merge_commit_not_working_tree(
+    tmp_path: Path, capsys
+) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    (work / "CHANGELOG.md").write_text("## [9.9.9] - 2026-10-14\n", encoding="utf-8")
+    _assert_refused_without_tag(work, "v9.9.9", "9.9.9", capsys)
+
+
+def test_cut_tag_accepts_crlf_changelog(tmp_path: Path) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    (work / "CHANGELOG.md").write_bytes(b"# Changelog\r\n\r\n## [3.0.0] - 2026-10-14\r\n")
+    _git(["add", "CHANGELOG.md"], cwd=work)
+    _git(["commit", "-m", "crlf"], cwd=work)
+    _git(["push", "origin", "main"], cwd=work)
+    cut, _ = cut_tag(work, "v3.0.0")
+    assert cut is True
 
 
 def test_cut_tag_is_idempotent_on_retry(tmp_path: Path) -> None:

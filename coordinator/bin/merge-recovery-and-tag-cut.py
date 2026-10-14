@@ -113,6 +113,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -434,6 +435,29 @@ def _next_free_hint(
     return f"Next free patch tag: {free}. Rerun: {' '.join(parts)}"
 
 
+def _assert_changelog_section(repo_root: Path, merge_sha: str, tag: str) -> None:
+    """Refuse unless CHANGELOG.md at `merge_sha` has a `## [<version>]` heading.
+
+    The version is the tag with any prefix before its first digit stripped.
+    Reads the commit's tree (one git spawn), never the working tree; tolerates CRLF.
+    """
+    match = re.search(r"\d.*$", tag)
+    version = match.group(0) if match else tag
+    shown = subprocess.run(
+        ["git", "show", f"{merge_sha}:CHANGELOG.md"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        **_no_console_flags(),
+    )
+    heading = re.compile(rf"^## \[{re.escape(version)}\]", re.MULTILINE)
+    if shown.returncode != 0 or not heading.search(shown.stdout):
+        _die(f"REFUSED: CHANGELOG.md at {merge_sha} has no `## [{version}]` section.")
+
+
 def cut_tag(
     repo_root: Path,
     tag: str,
@@ -467,6 +491,8 @@ def cut_tag(
 
     if must_contain is not None:
         _assert_is_ancestor(repo_root, merge_sha, must_contain)
+
+    _assert_changelog_section(repo_root, merge_sha, tag)
 
     remote = _remote_tag_sha(repo_root, tag)
     if remote is not None and remote != merge_sha:

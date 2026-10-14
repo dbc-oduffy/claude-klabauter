@@ -9,8 +9,9 @@ of the job is `full - setup-only`.
 
 The index launchers run with their detached-child spawn stubbed (`_spawn_detached`,
 `spawn_ensure`): that child is the launcher's own cost, not the job's (run-close WS1 spike,
-background-leg caveats). Their registry lookup spawn stays real. The handoff
-sweep archives nothing in this fixture, so that leg is a lower bound.
+background-leg caveats). Their registry lookup spawn stays real. The fixture also holds a
+two-member closed chain (shipped handoffs sharing a deliverable_id, one fully coded plan) whose
+first member is a claimed baton: the sweep archives it and post-close must report one chain closed.
 """
 
 from __future__ import annotations
@@ -32,6 +33,23 @@ BATON = "state/handoffs/h1.md"
 MEMO = "m1.md"
 
 _HANDOFF = "---\ntitle: h1\nstatus: open\ndeployment_state: unshipped\n---\n\nbody\n"
+CHAIN_PLAN_ID = "pln-bench-close-chain"
+CHAIN_BATON = "state/handoffs/2026-10-13-chain-a.md"
+CHAIN_PEER = "state/handoffs/2026-10-13-chain-b.md"
+_PLAN = (
+    f"---\ntitle: p\nplan_id: {CHAIN_PLAN_ID}\nstatus: implemented\n---\n\n"
+    "```yaml plan-tasks\n- id: C1\n  disposition: coded\n- id: C2\n  disposition: coded\n```\n"
+)
+
+
+def _chain_handoff(name: str, predecessor: str, shipped_in: str = "") -> str:
+    return (
+        f"---\ntitle: {name}\nstatus: open\ndeployment_state: shipped\n"
+        f"handoff_id: hnd-{name}\ndeliverable_id: dlv-bench-close-chain\n"
+        f"predecessor: {predecessor}\nplan_ids: ['{CHAIN_PLAN_ID}']\n{shipped_in}---\n\nbody\n"
+    )
+
+
 _MEMO = (
     "---\ntitle: m\nfrom: a\nto: b\ncreated: 2026-10-13\nstatus: open\n"
     "delivery_mode: receiver-repo\nsummary: s\nkind: fyi\n---\n\nbody\n"
@@ -58,6 +76,9 @@ def build_fixture(parent: Path) -> Path:
         (BATON, _HANDOFF),
         (f"state/cross-repo/inbox/{MEMO}", _MEMO),
         ("state/orientation_cache.md", _CACHE),
+        (CHAIN_BATON, _chain_handoff("chain-a", "none")),
+        (CHAIN_PEER, _chain_handoff("chain-b", "2026-10-13-chain-a.md")),
+        ("docs/plans/2026-10-13-bench-chain.md", _PLAN),
     ):
         path = repo / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,7 +109,7 @@ def _run_job(repo: Path) -> dict:
             module.spawn_ensure = lambda *a, **k: _Child()
         return module
 
-    ctx = cb.JobContext(repo, repo / ".git", RUN_ID, (BATON,), MEMO)
+    ctx = cb.JobContext(repo, repo / ".git", RUN_ID, (BATON, CHAIN_BATON), MEMO)
     with mock.patch.object(cb, "_bin_script", launcher_without_detached_child):
         return cb.run_background(ctx)
 
@@ -107,10 +128,10 @@ def main(argv: list[str]) -> int:
     if "--setup-only" in argv:
         return 0
     outcomes = _run_job(repo)
-    must_run = ("baton-drain", "orientation-refresh", "memo-lifecycle")
+    must_run = ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
     bad = {leg: outcomes.get(leg) for leg in must_run if getattr(outcomes.get(leg), "status", None) != "ran"}
-    # post-close is recorded `failed` by design (it names the over-budget chain-closure signal); only its presence is checked.
-    if bad or "post-close" not in outcomes:
+    post_close = getattr(outcomes.get("post-close"), "detail", "")
+    if bad or "1 chain(s) closed" not in post_close:
         print(f"job did not complete: {outcomes!r}", file=sys.stderr)
         return 1
     return 0

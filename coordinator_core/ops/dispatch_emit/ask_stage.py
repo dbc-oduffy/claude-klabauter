@@ -59,6 +59,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_pathspec_or_none,
     terminal_test_scope,
 )
+from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit import requirements_ledger
@@ -290,6 +291,10 @@ def stage(
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
     check_unschedulable_rows(rows, raw_by_id)
+    _split = split_frontmatter(plan_text)
+    _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []
+    if _drift:
+        raise AskStageError(pin_drift_reason(_drift))
     gated = gated_rows(exclusions, raw_by_id)
     try:
         check_cross_repo_writes(rows, root, approved=cross_repo_approved)

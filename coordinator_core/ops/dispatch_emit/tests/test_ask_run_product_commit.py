@@ -235,6 +235,26 @@ def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo):
     assert out["refused"] == "ledger-unmet" and out["all_of_pm_ask"] is True
 
 
+def test_a_post_commit_ledger_item_commits_and_reports_what_is_owed(repo):
+    rl.revise(repo, RUN, verbatim="send a memo naming the landed sha")
+    verdict = {"items": [
+        {"id": "R1", "status": "post_commit", "wired": True, "post_commit_acts": ["commit", "sha_reply"]},
+        {"id": "R2", "status": "post_commit", "wired": True, "post_commit_acts": ["sha_memo"]},
+    ]}
+    out = _call(repo, ledger_verdict=verdict)
+    assert out["committed"] is True
+    assert out["post_commit_owed"] == [{"id": "R2", "acts": ["sha_memo"], "sha": out["sha"]}]
+    rows = {r["id"]: r for r in rr.read_register((repo / SIZING).read_text(encoding="utf-8")).rows}
+    assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@{out['sha']}"]
+    assert rows["R2"]["status"] == "partial"
+
+
+def test_a_post_commit_item_naming_no_act_is_refused_unmet(repo):
+    verdict = {"items": [{"id": "R1", "status": "post_commit", "post_commit_acts": []}]}
+    out = _call(repo, ledger_verdict=verdict)
+    assert out["committed"] is False and out["refused"] == "ledger-unmet"
+
+
 def test_a_run_emitted_before_the_ledger_is_not_gated(repo):
     (repo / RUN_DIR_ROOT / RUN / rl.RUN_FILE).unlink()
     assert _call(repo, ledger_verdict=None)["committed"] is True

@@ -390,7 +390,9 @@ def test_recorded_rejudge_replaces_an_unmet_verdict(env, with_summary):
     assert out["criterion_status"] == "met" and out["rejudged_by"] == rec
     assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented"
     leg = out["close"]["legs"]["completion-entry"]["status"]
-    assert leg == ("ran" if with_summary else "failed")
+    assert leg == "ran"
+    if not with_summary:
+        assert any("now true" in p.read_text(encoding="utf-8") for p in env.entries())
 
 
 def test_unmet_verdict_with_no_review_record_stands(env):

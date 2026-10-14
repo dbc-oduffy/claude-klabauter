@@ -211,6 +211,44 @@ def test_apply_verdict_writes_met_wired_and_superseded_rows(run):
     assert [i.id for i in _ledger(run).items] == ["R1", "R3", "R4"]
 
 
+def test_judge_passes_a_post_commit_item_and_the_landing_writes_it_back(run):
+    repo, _d = run
+    assert "post_commit" in rl.STATUSES and rl.POST_COMMIT_ACTS == ("commit", "sha_reply", "sha_memo")
+    verdict = _verdict(
+        ("R1", "post_commit", {"post_commit_acts": ["commit", "sha_reply"], "wired": True}),
+        ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
+    )
+    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": []}
+    rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
+    rows = {r["id"]: r for r in _rows(repo)}
+    assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@abc1234"]
+
+
+@pytest.mark.parametrize("extra,needle", [
+    ({}, "no post-commit act"),
+    ({"post_commit_acts": []}, "no post-commit act"),
+    ({"post_commit_acts": ["push"]}, "'push'"),
+])
+def test_judge_refuses_a_post_commit_item_without_a_valid_act(run, extra, needle):
+    out = rl.judge(_ledger(run), _verdict(("R1", "post_commit", extra), ("R2", "met"), ("R3", "met")))
+    assert not out["pass"] and needle in out["failures"][0]["reason"]
+
+
+def test_a_sha_memo_item_is_written_partial_and_owed(run):
+    repo, _d = run
+    verdict = _verdict(
+        ("R1", "post_commit", {"post_commit_acts": ["commit", "sha_memo"], "wired": True}),
+        ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
+    )
+    assert rl.judge(_ledger(run), verdict)["pass"]
+    rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
+    rows = {r["id"]: r for r in _rows(repo)}
+    assert rows["R1"]["status"] == "partial" and not rows["R1"].get("met_by")
+    assert rl.post_commit_owed(verdict, "abc1234") == [
+        {"id": "R1", "acts": ["commit", "sha_memo"], "sha": "abc1234"}
+    ]
+
+
 def test_pm_words_prefers_verbatims_and_never_takes_an_em_paraphrase():
     assert rl.pm_words({"pm_verbatims": [{"text": " a "}, {"text": ""}], "intent": "x"}) == ["a"]
     assert rl.pm_words({"intent": "do x", "intent_source": "pm-verbatim"}) == ["do x"]

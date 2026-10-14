@@ -1106,7 +1106,10 @@ def _row_agent_type(row: WaveRow) -> str:
             raise MixedAgentTypeRowError(
                 f"row {row.id!r} declares writes spanning both an immutable "
                 "docs/plans/*.md or docs/problems/*.md body and an ordinary "
-                "path — split the row instead of guessing an agentType"
+                "path — split the row instead of guessing an agentType. "
+                "Row evidence goes to docs/plans/<stem>.evidence.yaml via "
+                "plan.tasks.mutate evidence-append, which an executor row "
+                "may declare"
             )
 
         if immutable_body and row.change_kind in _EXECUTION_TIER_CHANGE_KINDS:
@@ -2606,6 +2609,16 @@ def _row_prompt(
         body += (
             f"\n\nCreate {', '.join(new_module_paths)} before editing any file "
             "that imports them."
+        )
+    if row.writes is not UNDECLARED and any(
+        str(p).replace("\\", "/").startswith("docs/plans/")
+        and str(p).endswith(".evidence.yaml")
+        for p in row.writes
+    ):
+        body += (
+            "\n\nRecord row evidence with `coordinator-invoke plan.tasks.mutate` "
+            "(verb evidence-append, plan_path, id, text); never edit the "
+            "evidence sidecar by hand."
         )
     if plan_context is not None:
         if is_slot_row:
@@ -5403,6 +5416,11 @@ _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 _FIDELITY_MARKER_ENV = "COORDINATOR_SUBSESSION_FIDELITY"
 
 
+class RegisterPinDriftError(ValueError):
+    """Raised when a claimed requirement-register row's source_text no longer matches the
+    pin its plan recorded -- refuses the emit before any wave/prompt composition runs."""
+
+
 class FidelityBarRefusalError(ValueError):
     """Raised when ``$COORDINATOR_SUBSESSION_FIDELITY`` is set and
     ``plan_path`` fails the mise-prep authoring bar -- refuses the emit
@@ -6042,6 +6060,13 @@ def emit_script(
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
     check_unschedulable_rows(rows, raw_by_id)
+    if repo_root is not None and plan_text is not None:
+        from coordinator_core.ops import requirement_register as _rr
+
+        _split = split_frontmatter(plan_text)
+        _drift = _rr.plan_pin_drift(_split.fm_text, repo_root) if _split is not None else []
+        if _drift:
+            raise RegisterPinDriftError(_rr.pin_drift_reason(_drift))
     slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)

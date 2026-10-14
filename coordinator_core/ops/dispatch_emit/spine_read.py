@@ -141,6 +141,7 @@ Negative-spec:
 from __future__ import annotations
 
 import logging
+import posixpath
 import re
 from pathlib import Path
 from types import MappingProxyType
@@ -372,6 +373,41 @@ def unlanded_plan_edges(
         hold = resolve_plan_edge(owner, edge, repo_root, plan_cache).hold
         held = held or hold
     return held
+
+
+def _route_own_plan_body_write(writes: list, plan_path) -> list:
+    """``writes`` with the plan's own body entry replaced by its evidence sidecar
+    when the row also writes a non-body path.
+
+    Trap: an executor may never write a plan body, so on a mixed row the sidecar
+    is the only meaning that declaration can have. A row writing only a plan
+    body, and any other plan's or problem-set's body, are left as declared.
+    """
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+    from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
+
+    own = Path(plan_path).resolve().as_posix().lower()
+
+    def is_body(entry) -> bool:
+        return isinstance(entry, str) and bool(
+            _PLAN_BODY_RE.search(posixpath.normpath(entry.replace("\\", "/")).lower())
+        )
+
+    def is_own_body(entry) -> bool:
+        if not is_body(entry):
+            return False
+        norm = posixpath.normpath(entry.replace("\\", "/")).lower()
+        return own == norm or own.endswith("/" + norm)
+
+    if not any(is_own_body(p) for p in writes) or all(is_body(p) for p in writes):
+        return writes
+    routed = [
+        evidence_sidecar_path(Path(posixpath.normpath(p.replace("\\", "/")))).as_posix()
+        if is_own_body(p)
+        else p
+        for p in writes
+    ]
+    return list(dict.fromkeys(routed))
 
 
 def _is_operator_row(raw: dict) -> bool:
@@ -1014,6 +1050,8 @@ def read_spine(
             raise InvalidFieldTypeError(
                 f"row {row_id!r} declares writes: as {writes!r}, not a list"
             )
+        else:
+            writes = _route_own_plan_body_write(writes, plan_path)
         writes_under = raw.get("writes_under")
         if writes_under is None:
             writes_under = ()

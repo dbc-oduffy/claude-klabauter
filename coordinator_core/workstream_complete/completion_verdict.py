@@ -324,13 +324,63 @@ def review_scale(payload: Mapping[str, Any]) -> GateReading:
     return _unrecognised_value("review_scale", "resolved", resolved)
 
 
+# --- close residue readers --------------------------------------------------
+#
+# Payload (both): {"verdict", "items": [str, ...], "contested": [str, ...],
+# "reason": str | None}, built by `close_residue`. `contested` names paths a
+# live peer also claims: reported in the summary, never a residue item.
+
+OWNED_UNCOMMITTED = "owned_uncommitted"
+UNSTAMPED_RUN_BATONS = "unstamped_run_batons"
+
+_RESIDUE_STATUSES = frozenset({"clean", "open", "indeterminate", "not-applicable"})
+
+
+def _residue_reading(gate: str, payload: Mapping[str, Any], noun: str) -> GateReading:
+    if "verdict" not in payload:
+        return _unrecognised_shape(gate, "verdict")
+
+    verdict = payload["verdict"]
+    if not isinstance(verdict, str) or verdict not in _RESIDUE_STATUSES:
+        return _unrecognised_value(gate, "verdict", verdict)
+    status = verdict
+
+    reason = payload.get("reason")
+    residue: tuple[Mapping[str, Any], ...] = ()
+    if status == "open":
+        contested = tuple(payload.get("contested") or ())
+        summary = f"session-owned {noun} still open"
+        if contested:
+            summary += f" ({len(contested)} co-claimed by a live peer, not counted)"
+        residue = tuple(
+            {"gate": gate, "reference": str(item), "summary": summary}
+            for item in (payload.get("items") or ())
+        )
+    return GateReading(status=status, residue_items=residue, reason=reason)
+
+
+def owned_uncommitted(payload: Mapping[str, Any]) -> GateReading:
+    """Reader for `close_residue.owned_uncommitted_payload`. TOTAL over
+    `payload["verdict"]` in {clean, open, indeterminate, not-applicable};
+    missing key or any other value -> `indeterminate`."""
+    return _residue_reading(OWNED_UNCOMMITTED, payload, "files")
+
+
+def unstamped_run_batons(payload: Mapping[str, Any]) -> GateReading:
+    """Reader for `close_residue.unstamped_run_batons_payload`. TOTAL over
+    `payload["verdict"]` in {clean, open, indeterminate, not-applicable};
+    missing key or any other value -> `indeterminate`."""
+    return _residue_reading(UNSTAMPED_RUN_BATONS, payload, "batons")
+
+
 # --- C2: composition -------------------------------------------------------
 #
 # Spec backlink: pln-one-completion-verdict-for-wor-ea96e2, chunk C2.
 #
-# The census/verdict axis is computed over exactly FOUR of the five
-# readings — `completeness_checklist`, `open_spine_row_worklist`,
-# `consumed_handoff_completeness`, `landed_reconciliation`. `review_scale`
+# The census/verdict axis is computed over exactly SIX readings — the four
+# older gates (`completeness_checklist`, `open_spine_row_worklist`,
+# `consumed_handoff_completeness`, `landed_reconciliation`) plus the two
+# close-residue readings; a caller supplying neither composes as before. `review_scale`
 # answers a different question (F5: how much review a close owes, never
 # "is there outstanding completeness work" — see that reader's own
 # CALLER CONTRACT paragraph above) and is carried in `readings[]` for
@@ -343,6 +393,8 @@ _CENSUS_GATE_NAMES: tuple[str, ...] = (
     "open_spine_row_worklist",
     "consumed_handoff_completeness",
     "landed_reconciliation",
+    OWNED_UNCOMMITTED,
+    UNSTAMPED_RUN_BATONS,
 )
 
 
@@ -407,11 +459,14 @@ def compose_completion_verdict(readings: Mapping[str, GateReading]) -> dict[str,
     its producing reader owns (gate, an owned reference, the gate's own
     summary text) — no next-step verb (AC4).
 
-    `readings[]`: one entry per gate in `readings` (all five, `review_
+    `readings[]`: one entry per gate in `readings` (`review_
     scale` included for narration per F5), `{"gate", "status", "reason"}`.
 
-    AC6: this function gates nothing — no `depends_on` edge, no judgment
-    point, no halt, no block. Advisory-only emission.
+    AC6 (amended): this function itself gates
+    nothing — no `depends_on` edge, no judgment point, no halt, no block.
+    Enforcement lives in `apply()`: an `open` `owned_uncommitted` or
+    `unstamped_run_batons` reading is a close failure there. The four
+    older census gates stay advisory.
     """
     census_statuses = [readings[name].status for name in _CENSUS_GATE_NAMES if name in readings]
 

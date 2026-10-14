@@ -196,6 +196,7 @@ reintroducing the by-path resolver this note retires.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -1044,6 +1045,50 @@ def tick_once(
     return 0
 
 
+def until_event(
+    repo_root: str,
+    caller_session_id: Optional[str] = None,
+    group_em_session_id: Optional[str] = None,
+    stream: Optional[TextIO] = None,
+    tick_interval_seconds: float = _CRON_FLOOR_INTERVAL_SECONDS,
+    box_wide: bool = False,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    max_iterations: Optional[int] = None,
+) -> int:
+    """Poll with `tick_once` every `tick_interval_seconds`; exit 0 after the first tick that emits a line.
+
+    Every line `tick_once` can emit (PARKED, WAITING, GONE, POLL-ERROR) is
+    actionable, so "emitted anything" is the exit condition. State is loaded and
+    saved per tick exactly as `--once` does, so a restart re-emits nothing, and
+    the heartbeat is stamped "cron" with this cadence as its deadline. A
+    POLL-ERROR tick is an event, not a failure of this wrapper: exit 0.
+    `max_iterations` bounds the loop for tests; exhausting it exits 0 silently.
+    """
+    out = sys.stdout if stream is None else stream
+    iterations = 0
+    while max_iterations is None or iterations < max_iterations:
+        buffer = io.StringIO()
+        tick_once(
+            repo_root,
+            caller_session_id=caller_session_id,
+            group_em_session_id=group_em_session_id,
+            stream=buffer,
+            tick_interval_seconds=tick_interval_seconds,
+            box_wide=box_wide,
+        )
+        lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
+        if lines:
+            emit = _emit_for(out)
+            for line in lines:
+                emit(line)
+            return 0
+        iterations += 1
+        if max_iterations is not None and iterations >= max_iterations:
+            break
+        sleep_fn(tick_interval_seconds)
+    return 0
+
+
 def main(
     repo_root: str,
     caller_session_id: Optional[str] = None,
@@ -1400,13 +1445,22 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "tick_source=cron.",
     )
     parser.add_argument(
+        "--until-event",
+        dest="until_event",
+        action="store_true",
+        help="Poll every --tick-interval-seconds like --once (state loaded and saved per tick, "
+             "tick_source=cron) and exit 0 right after the first tick that emits a PARKED, "
+             "WAITING, GONE or POLL-ERROR line. Run it as a background command; it wakes the "
+             "caller once on exit.",
+    )
+    parser.add_argument(
         "--tick-interval-seconds",
         type=float,
         default=_CRON_FLOOR_INTERVAL_SECONDS,
-        help="With --once: the CALLER's cadence, which sets the staleness deadline the heartbeat "
+        help="With --once or --until-event: the cadence, which sets the staleness deadline the heartbeat "
              f"promises. Defaults to the group-em entry sequence's own cron floor "
-             f"({_CRON_FLOOR_INTERVAL_SECONDS/60:.0f} minutes). Ignored without --once, where the "
-             "interval is measured at arm time.",
+             f"({_CRON_FLOOR_INTERVAL_SECONDS/60:.0f} minutes). Ignored without --once or "
+             "--until-event, where the interval is measured at arm time.",
     )
     parser.add_argument(
         "--max-iterations",
@@ -1440,6 +1494,11 @@ def _cli(argv: "list[str] | None" = None) -> int:
             # question -- see that function's own docstring); anything short
             # of a confirmed-alive answer must not report ALIVE on
             # arithmetic alone.
+            # A "cron" stamp (--once / --until-event) is written by a process
+            # that exits between ticks; its pid can never be confirmed, so the
+            # deadline alone is the verdict.
+            if liveness.get("tick_source") == "cron":
+                return 0
             if watch_heartbeat.process_confirmed_alive(liveness) is not True:
                 print(
                     "  (the record is fresh, but the process that wrote it "
@@ -1449,6 +1508,19 @@ def _cli(argv: "list[str] | None" = None) -> int:
                 return 2
             return 0
         return 1 if liveness["verdict"] == watch_heartbeat.VERDICT_STALE else 2
+
+    if args.until_event:
+        try:
+            return until_event(
+                args.repo_root,
+                caller_session_id=args.caller_session_id,
+                group_em_session_id=args.group_em_session_id,
+                tick_interval_seconds=args.tick_interval_seconds,
+                box_wide=args.scope == "box",
+                max_iterations=args.max_iterations,
+            )
+        except KeyboardInterrupt:
+            return 0
 
     if args.once:
         return tick_once(

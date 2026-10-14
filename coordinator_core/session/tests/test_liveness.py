@@ -3316,3 +3316,7 @@ class TestPreexistingHubLitterAppendGuard:
 
     def test_missing_hub_is_a_no_op(self, tmp_path):
         self._watch(tmp_path / "nope", lambda: None)
+
+
+def test_row_claims_dir_is_denylisted_as_a_non_session_dir():
+    assert "row-claims" in liveness._NON_SESSION_DIR_NAMES

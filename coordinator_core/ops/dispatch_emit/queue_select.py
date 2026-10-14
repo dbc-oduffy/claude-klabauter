@@ -51,7 +51,9 @@ Negative-spec:
     evaluated once, before the manifest freezes, never re-evaluated after.
   - Does NOT spawn a subprocess anywhere in its read/where/batch/ledger path
     — `is_item_live` is itself spawn-free (path-exists plus an in-process
-    read, per its own docstring).
+    read, per its own docstring). The row-claim check reads the claim store
+    under `<repo_root>/.git/coordinator-sessions/row-claims/` (one stat per
+    row, a liveness read only for a row with a claim dir): filesystem only.
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
 § Selector, Tasks § C2.
@@ -71,6 +73,7 @@ from coordinator_core.backlog_grind_assemble.readers_blitz import (
 )
 from coordinator_core.contract import grind_vocab
 from coordinator_core.frontmatter import schema_validate
+from coordinator_core.session import claims
 
 # Writes per-run queue row files under a caller-supplied row dir, not a stamped artifact.
 GENERATES = []
@@ -78,6 +81,7 @@ GENERATES = []
 __all__ = [
     "ManifestEntry",
     "DeclinedEntry",
+    "ClaimedEntry",
     "SourceOpResult",
     "Manifest",
     "select_rows",
@@ -167,6 +171,15 @@ class DeclinedEntry:
 
 
 @dataclass(frozen=True)
+class ClaimedEntry:
+    """One row SKIPPED because another live session holds its row claim. Not a
+    decline: the row stays live and the next emit reconsiders it."""
+
+    row_id: str
+    holder_session: str
+
+
+@dataclass(frozen=True)
 class SourceOpResult:
     """`{source op, args, output sha256}` — recorded only when `source` is set."""
 
@@ -184,7 +197,8 @@ class Manifest:
     records instead of the manifest itself (§ Design § Selector, "Frozen
     means frozen"). `declined` is every row EXCLUDED for carrying a
     `route-to-*` mark, sorted by `row_id` for determinism — never raised
-    (DR-404).
+    (DR-404). `claimed` is every row skipped for a live peer row claim; like
+    `unselected` it is not in the digest (claim state is time-varying).
     """
 
     entries: tuple[ManifestEntry, ...]
@@ -193,6 +207,7 @@ class Manifest:
     digest: str
     declined: tuple[DeclinedEntry, ...] = ()
     unselected: tuple[str, ...] = ()
+    claimed: tuple[ClaimedEntry, ...] = ()
 
 
 def _repo_relative(path: Path, repo_root: Path, resolved: Optional[dict] = None) -> str:
@@ -602,6 +617,7 @@ def select_rows(
     source: Optional[Mapping[str, Any]] = None,
     absent_sentinels: Optional[Mapping[str, Sequence[Any]]] = None,
     source_row_dir: Optional[Path] = None,
+    claimant_sid: Optional[str] = None,
 ) -> Manifest:
     """Turn one or more queue directories into a frozen `Manifest`.
 
@@ -628,6 +644,9 @@ def select_rows(
     each record is materialised as one row file under `source_row_dir`
     (required with `source`) so every row has a file `grind-row close` can
     archive, and runs through the same where/order/limit/ledger pipeline.
+    A row another session holds a live row claim on (`claims.row_claim_blocker`)
+    is dropped after `where`/`order` and before `limit`, and listed in
+    `Manifest.claimed`; `claimant_sid=None` treats every live claim as blocking.
     """
     absent_sentinels = absent_sentinels or {}
     repo_root = Path(repo_root)
@@ -712,11 +731,32 @@ def select_rows(
                 key=lambda item: order_index.get(item[3].get(order_field), len(ordered_values)),
             )
 
+    claimed: list[ClaimedEntry] = []
+    sessions_dir = repo_root / ".git" / "coordinator-sessions"
+    if (sessions_dir / f"{claims.ROW_CLAIM_CLASS}-claims").is_dir():
+        unclaimed = []
+        for item in filtered:
+            try:
+                key = claims.row_claim_key(str(item[1]))
+            except ValueError:
+                # Row paths are always <dir>/<name>.yaml, so no key means no claim is possible.
+                unclaimed.append(item)
+                continue
+            holder = claims.row_claim_blocker(sessions_dir, key, claimant_sid, str(repo_root))
+            if holder is None:
+                unclaimed.append(item)
+            else:
+                claimed.append(ClaimedEntry(row_id=item[0], holder_session=holder))
+        filtered = unclaimed
+
     if limit is not None:
         filtered = filtered[:limit]
 
     selected_ids = {r[0] for r in filtered}
-    unselected = tuple(sorted(r[0] for r in rows if r[0] not in selected_ids))
+    claimed_ids = {c.row_id for c in claimed}
+    unselected = tuple(
+        sorted(r[0] for r in rows if r[0] not in selected_ids and r[0] not in claimed_ids)
+    )
 
     ledger_by_row = _read_ledger_lines(profile, repo_root)
     handback_marks = _read_handback_marks(profile, repo_root)
@@ -773,6 +813,7 @@ def select_rows(
         digest=_manifest_digest(entries, batch_sizes, source_result, declined_sorted),
         declined=declined_sorted,
         unselected=unselected,
+        claimed=tuple(sorted(claimed, key=lambda c: c.row_id)),
     )
 
 
@@ -821,4 +862,5 @@ def restrict_manifest(manifest: Manifest, row_ids: Sequence[str]) -> Manifest:
         digest=_manifest_digest(entries, manifest.batch_sizes, manifest.source, manifest.declined),
         declined=manifest.declined,
         unselected=manifest.unselected,
+        claimed=manifest.claimed,
     )

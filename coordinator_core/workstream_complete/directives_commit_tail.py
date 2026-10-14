@@ -1390,6 +1390,51 @@ def _release_governing_plan_claim(
         pass
 
 
+def live_peer_touch_claimed_paths(repo_root: "Union[Path, str]", session_id: str) -> "set[str]":
+    """Paths every live peer of `session_id` touch-claims. Raises
+    `PeerAttributionUnavailable` when the peer read is unavailable."""
+    root = Path(repo_root)
+    peer_sids, _reliable = _enumerate_peer_session_ids(root, session_id)
+    live = [s for s in peer_sids if _session_live_conservative(root, s)]
+    return _peer_touch_claimed_paths(root, live)
+
+
+def _fold_owned_dirty_sizings(
+    worktree_root: "Union[Path, str]",
+    session_id: str,
+    stage_paths: "Sequence[str]",
+    residue_snapshot: "Optional[Any]",
+) -> "tuple[list[str], list[str], list[str], list[tuple[str, str]]]":
+    """`(stage_paths + folded sizings, owned added, orphans added, orphans refused)`.
+
+    Folds the session's own dirty sizings and the untracked orphan sizings no
+    live session owns; never a sizing a live peer claims. An unresolvable peer
+    claim read adds nothing: folding a co-held file is the worse error."""
+    base = list(stage_paths)
+    if not session_id:
+        return base, [], [], []
+    from coordinator_core.workstream_complete import close_residue
+
+    snap = residue_snapshot or close_residue.snapshot(worktree_root, session_id)
+    root = Path(worktree_root)
+    try:
+        peer_claimed = live_peer_touch_claimed_paths(root, session_id)
+    except PeerAttributionUnavailable:
+        return base, [], [], []
+    added: list[str] = []
+    if snap.owned_paths:
+        added = [
+            rel
+            for rel in close_residue.owned_dirty_sizing_paths(root, snap, peer_claimed=peer_claimed)
+            if rel not in base
+        ]
+    folded = base + added
+    sweepable, refused = close_residue.orphan_sizing_paths(
+        root, exclude=[*folded, *snap.owned_paths], peer_claimed=peer_claimed
+    )
+    return folded + sweepable, added, sweepable, refused
+
+
 def run_close_commit_and_release_claims(
     worktree_root: "Union[Path, str]",
     *,
@@ -1405,6 +1450,7 @@ def run_close_commit_and_release_claims(
     deliverable_id: Optional[str] = None,
     attributed_session_id: Optional[str] = None,
     governing_plan_slug: Optional[str] = None,
+    residue_snapshot: "Optional[Any]" = None,
 ) -> Any:
     """C5's route: `run_close_commit` wrapped with BOTH claim-release
     mechanisms hard constraint 4 and AC5 each require — two SEPARATE claim
@@ -1448,7 +1494,10 @@ def run_close_commit_and_release_claims(
     for what it does not do.
     """
     try:
-        return run_close_commit(
+        stage_paths, owned_sizings, orphan_sizings, orphans_refused = _fold_owned_dirty_sizings(
+            worktree_root, session_id, stage_paths, residue_snapshot
+        )
+        result = run_close_commit(
             worktree_root,
             session_id=session_id,
             subject=subject,
@@ -1462,6 +1511,13 @@ def run_close_commit_and_release_claims(
             deliverable_id=deliverable_id,
             attributed_session_id=attributed_session_id,
         )
+        for rel in owned_sizings:
+            result.diagnostics.append(f"owned sizing staged: {rel}")
+        for rel in orphan_sizings:
+            result.diagnostics.append(f"orphan sizing staged: {rel}")
+        for rel, reason in orphans_refused:
+            result.diagnostics.append(f"orphan sizing refused: {rel}: {reason}")
+        return result
     finally:
         _release_committed_path_claims(worktree_root, session_id, stage_paths)
         _release_governing_plan_claim(worktree_root, governing_plan_slug)

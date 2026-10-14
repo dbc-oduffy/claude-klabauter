@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.ops.requirement_register import row_pin as _row_pin
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -379,7 +380,11 @@ def test_plan_carries_pm_brief_and_register_claims(repo):
     out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
     fm = yaml.safe_load(out.split("---")[1])
     assert fm["pm_brief"] == {"source": "pm-verbatim", "ref": _SIZING_REL}
-    assert fm["register_claims"] == {"sizing": _SIZING_REL, "rows": ["R1", "R2"]}
+    assert fm["register_claims"] == {
+        "sizing": _SIZING_REL,
+        "rows": ["R1", "R2"],
+        "pins": {"R1": _row_pin("x"), "R2": _row_pin("y")},
+    }
     assert "## PM brief\n\n> newest ask\n> second line\n>\n> launch ask\n\n## Problem" in out
 
 
@@ -390,9 +395,19 @@ def test_plan_without_register_carries_brief_only(repo):
     assert fm["pm_brief"]["source"] == "pm-verbatim" and "register_claims" not in fm
 
 
-def test_plan_without_pm_verbatims_is_byte_identical_to_uncarried(repo):
+def test_plan_without_pm_verbatims_carries_register_claims_only(repo):
     _put(repo, _sizing_text() + "requirement_register:\n  rows:\n    - {id: R1, source_text: x, status: open}\n")
+    out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+    fm = yaml.safe_load(out.split("---")[1])
+    assert fm["register_claims"] == {
+        "sizing": _SIZING_REL, "rows": ["R1"], "pins": {"R1": _row_pin("x")},
+    }
+    assert "pm_brief" not in fm and "## PM brief" not in out
+
+
+def test_plan_without_register_or_verbatims_is_byte_identical_to_uncarried(repo):
+    _put(repo, _sizing_text())
     carried = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
     baseline = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=None)
     assert carried == baseline
-    assert "pm_brief" not in carried and "## PM brief" not in carried and "register_claims" not in carried
+    assert "pm_brief" not in carried and "register_claims" not in carried

@@ -1632,3 +1632,70 @@ def test_who_claims_path_live_read_holder_does_not_block(
     assert _cli.main(["who-claims-path", "some/path.txt"]) == 0
     cols = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
     assert [(c[0], c[-1]) for c in cols] == [("sess-r", "no"), ("sess-w", "yes")]
+
+
+class _RowStubClaims(_StubClaims):
+    """Stub claims module that also carries the real ``row_claim_key``."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        import coordinator_core.session.claims as _real
+
+        self.row_claim_key = _real.row_claim_key
+
+
+_ROW_PATH = "state/bug-backlog/2026-10-14-r.yaml"
+_ROW_KEY = "bug-backlog--2026-10-14-r"
+
+
+@pytest.mark.parametrize("verb", ["claim-artifact", "release-artifact", "clear-claim-if-dead"])
+def test_row_class_is_accepted_with_a_row_path(stub_import_module, verb):
+    seen = []
+    fn = lambda *a, **k: seen.append(a) or True
+    kw = {verb.replace("-", "_"): fn}
+    stub_import_module(_RowStubClaims(**kw))
+    assert _cli.main([verb, "row", _ROW_PATH]) == 0
+    assert seen[0][:2] == ("row", _ROW_PATH)
+
+
+def test_release_row_not_found_note_names_the_row_key(stub_import_module, tmp_path, capsys):
+    stub_import_module(_RowStubClaims(claim_dir_for=lambda c, b, r="": tmp_path / c / b))
+    assert _cli.main(["release-artifact", "row", _ROW_PATH]) == 0
+    assert _ROW_KEY in capsys.readouterr().err
+
+
+def test_row_round_trip_against_the_real_claims_module(tmp_path, monkeypatch):
+    import coordinator_core.session.claims as real
+    from coordinator_core.session import liveness as real_liveness
+
+    (tmp_path / ".git").mkdir()
+    live = {"sid-a", "sid-b"}
+    monkeypatch.setattr(real_liveness, "session_live", lambda sid, cwd=None: sid in live)
+    monkeypatch.setattr(_cli, "_import_module", lambda: real)
+    claim = ["claim-artifact", "row", _ROW_PATH, str(tmp_path)]
+    release = ["release-artifact", "row", _ROW_PATH, str(tmp_path)]
+    clear = ["clear-claim-if-dead", "row", _ROW_PATH, str(tmp_path)]
+    cdir = tmp_path / ".git" / "coordinator-sessions" / "row-claims" / _ROW_KEY
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-a")
+    assert _cli.main(claim) == 0 and cdir.is_dir()
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-b")
+    assert _cli.main(claim) == 1
+    assert _cli.main(clear) == 1
+    assert _cli.main(release) == 0 and cdir.is_dir()
+    live.discard("sid-a")
+    assert _cli.main(clear) == 0 and not cdir.exists()
+    assert _cli.main(claim) == 0
+    assert _cli.main(release) == 0 and not cdir.exists()
+
+
+def test_row_class_malformed_path_exits_1_with_one_line_not_a_traceback(
+    tmp_path, monkeypatch, capsys
+):
+    import coordinator_core.session.claims as real
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(_cli, "_import_module", lambda: real)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-a")
+    assert _cli.main(["claim-artifact", "row", "not-a-row.txt", str(tmp_path)]) == 1
+    assert "row claim key" in capsys.readouterr().err

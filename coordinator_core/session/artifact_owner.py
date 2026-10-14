@@ -151,7 +151,7 @@ from coordinator_core.session import claims, liveness, machinery_paths, reachabi
 
 _SCALAR_OWNER_FIELDS = ("authoring_session", "created_by_session")
 
-_CLAIM_DIR_CLASSES = ("handoff", "memo", "plan")
+_CLAIM_DIR_CLASSES = ("handoff", "memo", "plan", "row")
 
 _STEM_KEYED_CLAIM_CLASSES = frozenset({"plan"})
 
@@ -224,8 +224,10 @@ def _extract_subagent_share_dir_id(artifact_path: str) -> Optional[str]:
 
 def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> List[OwnerRecord]:
     """Every `claim_dir`-tagged owner recorded for `artifact_path`'s
-    BASENAME, probed across all three claim classes in fixed order
-    (`handoff`, `memo`, `plan`) -- the second recording convention (module
+    BASENAME, probed across all four claim classes in fixed order
+    (`handoff`, `memo`, `plan`, `row`; a row keys on `row_claim_key` of the
+    artifact path and is skipped when the path is not under a queue dir) --
+    the second recording convention (module
     docstring). Basename-only, per `claims.claim_artifact`'s own claim
     identity -- never inferred from `artifact_path`'s directory.
 
@@ -249,7 +251,13 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
         return owners
     stem = basename[:-3] if basename.endswith(".md") else basename
     for class_ in _CLAIM_DIR_CLASSES:
-        key = stem if class_ in _STEM_KEYED_CLAIM_CLASSES else basename
+        if class_ == claims.ROW_CLAIM_CLASS:
+            try:
+                key = claims.row_claim_key(artifact_path)
+            except ValueError:
+                continue
+        else:
+            key = stem if class_ in _STEM_KEYED_CLAIM_CLASSES else basename
         claim_dir = Path(base) / f"{class_}-claims" / key
         if not claim_dir.is_dir():
             continue

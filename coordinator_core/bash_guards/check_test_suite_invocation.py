@@ -911,6 +911,13 @@ def _base(token: str) -> str:
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
+#: ``baseline-export --sha S [--link P]... -- <runner argv>`` runs the runner
+#: itself; the argv after the first ``--`` is classified as a bare command.
+#: Without a ``--`` nothing is peeled.
+_BASELINE_EXPORT_BASENAMES = frozenset({
+    "baseline-export", "baseline-export.py", "baseline-export.cmd", "baseline-export.ps1",
+})
+
 #: BX-13's `sh -c` unwrap set (`_SHELL_C_INTERPRETERS`) is defined near
 #: `_WRAPPER_WORDS` above, not here -- see that constant's own comment.
 
@@ -982,6 +989,11 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
             i += 1
             if "--" in tokens[i:]:
                 i = tokens.index("--", i) + 1
+            continue
+        if base in _BASELINE_EXPORT_BASENAMES:
+            if "--" not in tokens[i + 1:]:
+                break
+            i = tokens.index("--", i + 1) + 1
             continue
         if base in _PM_EXEC_SUBCOMMANDS:
             if i + 2 < n and tokens[i + 1] in _PM_EXEC_SUBCOMMANDS[base]:

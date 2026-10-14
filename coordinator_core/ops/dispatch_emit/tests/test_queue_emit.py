@@ -152,6 +152,41 @@ def test_emit_queue_script_end_to_end(tmp_path):
     assert "plan" not in extras
 
 
+def test_receipt_claimed_block_names_rows_a_live_peer_holds(tmp_path, monkeypatch):
+    from coordinator_core.session import claims, liveness
+
+    repo_root, _queue, _run = _setup_repo(tmp_path)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: True)
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-peer")
+    assert claims.claim_artifact(
+        "row", "state/bug-backlog/row0.yaml", baton_repo_root=str(repo_root), cwd=str(repo_root)
+    )
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-me")
+    emission = emit_queue_script(
+        "fixture",
+        "standard",
+        None,
+        queue=[repo_root / "state" / "bug-backlog"],
+        profile_dir=_FIXTURE_PROFILE_DIR,
+        repo_root=repo_root,
+        run_dir=repo_root / "state" / "queue-grind" / "fixture" / "run-1",
+        session_id="sess1",
+        **REVIEW_KW,
+    )
+    assert emission.receipt_extras["claimed"] == {
+        "count": 1,
+        "rows": [{"row_id": "row0", "holder_session": "sid-peer"}],
+    }
+    assert "row0" not in _batched_row_ids(emission.script)
+
+
+def test_receipt_claimed_block_is_empty_without_claims(tmp_path):
+    emission = _emit(tmp_path)
+    assert emission.receipt_extras["claimed"] == {"count": 0, "rows": []}
+
+
 def test_21_row_emit_at_standard_ceiling_admits_12_and_names_9(tmp_path):
     emission = _emit(tmp_path, n_rows=21)
     not_admitted = emission.receipt_extras["not_admitted"]

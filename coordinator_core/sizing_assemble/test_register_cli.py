@@ -178,6 +178,33 @@ def test_derive_register_backfills_a_sizing_that_embeds_turns(turns_repo, capsys
     assert sa.main(["--derive-register", "--write", _REL]) == 0  # identical: idempotent
 
 
+_RELAYED = (
+    _SIZING.replace(
+        "intent: Test intent, verbatim.",
+        "intent_source: em-elaborated\n"
+        "intent: the tag-cut op refuses a version with no CHANGELOG section",
+    )
+    + "pm_verbatims:\n"
+    "  - turn: 11\n    text: \"I don't want to leave things still open\"\n"
+    "  - turn: 12\n    text: \"make the tag-cut refusal name the CHANGELOG file\"\n"
+)
+
+
+def test_derive_register_keeps_a_differently_worded_pm_turn_as_a_row_on_relayed_ask(repo):
+    (repo / _REL).write_text(_RELAYED, encoding="utf-8")
+    assert sa.main(["--derive-register", "--write", _REL]) == 0
+    reg = _register_of(repo)
+    assert [r["id"] for r in reg["rows"]] == ["T11", "T12"]
+    assert "unrelated_turns" not in reg
+
+
+def test_derive_register_keeps_every_turn_as_a_row_when_intent_is_pm_verbatim():
+    doc = yaml.safe_load(_RELAYED)
+    doc["intent_source"] = "pm-verbatim"
+    rows, unrelated, _, _ = sa.derive_register(doc)
+    assert [r["id"] for r in rows] == ["T11", "T12", "I"] and unrelated == []
+
+
 def test_help_prints_multiline_usage_with_register_shape(repo, capsys):
     assert sa.main(["--help"]) == 0
     out = capsys.readouterr().out

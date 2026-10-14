@@ -45,6 +45,28 @@ def test_all_rows_met_and_wired_passes(repo):
     assert review["criterion"]["status"] == "met"
 
 
+def test_surface_only_mismatch_on_met_wired_row_is_reported_not_refused(repo):
+    review = _review([_good(surface="api")])
+    assert _register_gate(repo, _PLAN, review) is None
+    crit = review["criterion"]
+    assert crit["status"] == "met"
+    assert "differs from register surface" in crit["observation"]
+
+
+def test_repeated_judge_leaves_one_surface_mismatch_note(repo):
+    review = _review([_good(surface="api")])
+    assert _register_gate(repo, _PLAN, review) is None
+    assert _register_gate(repo, _PLAN, review) is None
+    assert review["criterion"]["observation"].count("differs from register surface") == 1
+
+
+def test_surface_mismatch_with_empty_observed_ref_still_refuses(repo):
+    review = _review([_good(surface="api", observed_ref="")])
+    reason = _register_gate(repo, _PLAN, review)
+    assert reason is not None and "observed_ref is empty" in reason
+    assert review["criterion"]["status"] == "not_met"
+
+
 @pytest.mark.parametrize(
     "rows,fragment",
     [
@@ -52,7 +74,6 @@ def test_all_rows_met_and_wired_passes(repo):
         ([_good(status="partial")], "judged status 'partial', not met"),
         ([_good(claim="other-plan")], "not judged"),
         ([_good(wired=False)], "wired: false"),
-        ([_good(surface="api")], "differs from register surface"),
         ([_good(observed_ref="")], "observed_ref is empty"),
         ([_good(observed_ref=None)], "observed_ref is empty"),
     ],
@@ -207,3 +228,42 @@ def test_seed_plan_is_not_demoted_by_root_turns(repo):
     )
     _own_plan(repo, f"register_claims:\n  sizing: {root}\n  rows: [mine]\n")
     assert _register_gate(repo, _PLAN, _review([_good(id="mine")])) is None
+
+
+def _pinned_plan(repo, text="shape back"):
+    from coordinator_core.ops import requirement_register as rr
+
+    _own_plan(
+        repo,
+        f"register_claims:\n  sizing: {_SIZING}\n  rows: [z]\n  pins: {{z: \"{rr.row_pin(text)}\"}}\n",
+    )
+
+
+def test_pinned_row_with_matching_text_passes(repo):
+    _set_register(repo, _ROW_T)
+    _pinned_plan(repo)
+    assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None
+
+
+def test_pinned_row_whose_source_text_changed_demotes_naming_row(repo):
+    _set_register(repo, _ROW_T)
+    _pinned_plan(repo)
+    _set_register(repo, _ROW_T.replace("shape back", "something else"))
+    review = _review([_good(id="z")])
+    reason = _register_gate(repo, _PLAN, review)
+    assert reason is not None and "register row z" in reason and "source_text changed" in reason
+    assert review["criterion"]["status"] == "not_met"
+    assert review["criterion"]["reason"] == reason
+
+
+def test_pinned_row_with_whitespace_only_edit_passes(repo):
+    _set_register(repo, _ROW_T)
+    _pinned_plan(repo)
+    _set_register(repo, _ROW_T.replace("shape back", "shape   back"))
+    assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None
+
+
+def test_plan_without_pins_ignores_a_source_text_edit(repo):
+    _set_register(repo, _ROW_T.replace("shape back", "edited"))
+    _own_plan(repo, f"register_claims:\n  sizing: {_SIZING}\n  rows: [z]\n")
+    assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None

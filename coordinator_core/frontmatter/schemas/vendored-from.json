@@ -36,8 +36,8 @@
     "doe_commit": "03e24d12e57e871b5040394774c4a684a7920dc6"
   },
   "decision.schema.json": {
-    "blob": "8d0e7b0b05df02de55e663df16fc34519a95e2fe",
-    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+    "blob": "d0e386d282a20f8078b536dd0c1fa37d60a15d01",
+    "doe_commit": "5fcbaa85e4e42bbe168c31e918a68e7587af1639"
   },
   "docs-check-sidecar.schema.json": {
     "blob": "1510b28ef08266b87f27f16eec01963f78b02393",
@@ -92,8 +92,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "plan-tasks.schema.json": {
-    "blob": "a3e1e7ffeda32e6463c0529d79ad93df6bbd8efe",
-    "doe_commit": "c01e16d913a048c8ce6bfbbbfa8a64007b4119ef"
+    "blob": "a69630d1d079c6843ab67fda3a1178705ba06cc6",
+    "doe_commit": "d80e5515f5ba55e7c782fdfc983e344853aa1599"
   },
   "plan.schema.json": {
     "blob": "0c0d77aa047229003e77c63d46691176c5383599",

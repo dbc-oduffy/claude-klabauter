@@ -32,7 +32,9 @@ not the whole profile), `appetite`, `resolved_knobs`, `manifest_digest`
 § Design § Selector, "Frozen means frozen"), `not_admitted` (`{count, row_ids,
 arithmetic}`: selected rows the emit-time ceilings (`grind_admission.admit`) did
 not cover, left out of the manifest; distinct from `unselected`, which is rows
-filtered by `where`/`limit`), `source` (the manifest's own `SourceOpResult`, JSON-shaped, or
+filtered by `where`/`limit`), `claimed` (`{count, rows: [{row_id,
+holder_session}]}`: rows skipped because another live session holds their row
+claim), `source` (the manifest's own `SourceOpResult`, JSON-shaped, or
 `None`), and `reemit` -- the argv list a caller re-runs
 (`emit-dispatch-workflow.py --queue ... --profile ... --appetite ... [...]`)
 to re-derive this same script from the same queue/profile/appetite/overrides
@@ -96,6 +98,7 @@ from coordinator_core.ops.dispatch_emit.grind_profile import (
 )
 from coordinator_core.ops.dispatch_emit.queue_select import restrict_manifest, select_rows
 from coordinator_core.ops.dispatch_emit.receipt_extras_guard import refuse_colliding_receipt_extras
+from coordinator_core.session import core
 
 __all__ = ["QueueEmission", "QueuePathEscapeError", "emit_queue_script"]
 
@@ -201,6 +204,7 @@ def emit_queue_script(
         source=loaded_profile.source,
         absent_sentinels=loaded_profile.absent_sentinels,
         source_row_dir=Path(guarded_run_dir) / "source-rows",
+        claimant_sid=core.resolve_session_id(str(repo_root)) or None,
     )
 
     run_order = [
@@ -249,6 +253,12 @@ def emit_queue_script(
         "resolved_knobs": dict(resolved_knobs),
         "manifest_digest": manifest.digest,
         "unselected": {"count": len(manifest.unselected), "row_ids": list(manifest.unselected)},
+        "claimed": {
+            "count": len(manifest.claimed),
+            "rows": [
+                {"row_id": c.row_id, "holder_session": c.holder_session} for c in manifest.claimed
+            ],
+        },
         NOT_ADMITTED_EXTRA_KEY: receipt_block(admission),
         "source": source_extra,
         "reemit": _reemit_argv(profile, appetite, Path(profile_dir), queue, overrides, stage_models),

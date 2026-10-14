@@ -413,3 +413,14 @@ def test_claimed_by_with_quoted_yaml_scalar_resolves_unquoted_session_id(tmp_pat
     claimed_by_owners = [o for o in owners if o.source_field == "claimed_by"]
     assert len(claimed_by_owners) == 1
     assert claimed_by_owners[0].session_id == "sid-quoted"
+
+
+def test_claim_dir_row_claim_resolves_by_row_key_and_is_skipped_outside_a_queue_dir(tmp_path):
+    repo = _make_repo(tmp_path)
+    key = claims.row_claim_key("state/bug-backlog/r1.yaml")
+    _write_claim_dir(repo, "row", key, "sid-row-holder", stage=claims.CLAIM_STAGE_BRIEF)
+
+    owners = artifact_owner._extract_claim_dir_owners("state/bug-backlog/r1.yaml", cwd=str(repo))
+    assert [(o.session_id, o.claim_stage) for o in owners] == [("sid-row-holder", claims.CLAIM_STAGE_BRIEF)]
+
+    assert artifact_owner._extract_claim_dir_owners("r1.yaml", cwd=str(repo)) == []

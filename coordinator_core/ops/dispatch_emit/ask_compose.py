@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
     LEDGER_VIEW_FILE,
+    POST_COMMIT_ACTS,
     STATUSES as LEDGER_STATUSES,
 )
 from coordinator_core.ops.dispatch_emit.pm_adjudication import (
@@ -222,6 +223,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "essential": {"type": "boolean"},
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
+                    "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
                     "evidence": _STR,
                 },
             ),
@@ -1110,7 +1112,11 @@ def compose_ask_script(
         "caller or the engine runs leads to it), not only when code for it exists; 'drifted' "
         "when it was lost or reinterpreted in transit -- a brief, plan, memo or stage narrowed, "
         "softened or re-read it (name where in evidence); 'superseded' only when a LATER revision item "
-        "replaces it, named as superseded_by; otherwise 'not_met'. Set essential false only for an "
+        "replaces it, named as superseded_by; 'post_commit' when everything the item asks that can be "
+        "true before the commit is met and what remains is only an act that exists after the terminal "
+        "commit -- the commit itself, reporting the landed sha, or a memo naming it -- named in "
+        "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
+        "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. Set essential false only for an "
         "item that is an aside rather than something the PM asked to have delivered; when the ledger "
         "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
         "or two sentences naming the file or behaviour. Return all_of_pm_ask as the ledger states it, "
@@ -1129,7 +1135,7 @@ def compose_ask_script(
     b.append(f"    try {{ _ledger = await {ledger_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(
         "    if (!_halted && (!_ledger || _ledger.verdict !== 'pass')) { _halted = { halted: 'ledger-check', "
-        "items: (_ledger?.items ?? []).filter((i) => i && i.status !== 'met'), "
+        "items: (_ledger?.items ?? []).filter((i) => i && i.status !== 'met' && i.status !== 'post_commit'), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         "next_action: 'Revise the ask with coordinator-invoke workflow.revise (run_id, verbatim), or fix the "
         "change, then re-fire.' }; }"
@@ -1146,7 +1152,8 @@ def compose_ask_script(
     b.append(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
-        "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}) })) }; }"
+        "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}), "
+        "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}) })) }; }"
     )
     stage_titles: list[str] = []
     if in_run_commit:

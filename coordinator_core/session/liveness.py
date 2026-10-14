@@ -273,6 +273,7 @@ _NON_SESSION_DIR_NAMES = frozenset(
         "handoff-claims",
         "memo-claims",
         "plan-claims",
+        "row-claims",
         # The fourth member of the `f"{class_}-claims"` family the three
         # entries above belong to (`pickup_assemble/__init__.py`,
         # `ops/ceremony/tail_ops.py`, `session-claim-cli claim-artifact`):

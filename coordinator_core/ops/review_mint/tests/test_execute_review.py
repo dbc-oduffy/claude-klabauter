@@ -422,6 +422,13 @@ def test_judge_prompt_asks_for_the_boolean_comparison():
     assert "differs_from_baseline" in call and "baseline_output" in call
 
 
+def test_judge_prompt_treats_landed_sha_and_sha_memo_clauses_as_post_commit_acts():
+    call = _compose_judge({**_STAGE_SCHEMAS, "judge-result": {"type": "object"}})
+    assert "never a reason for not_met" in call
+    assert "landed sha" in call and "a memo naming it" in call
+    assert "post-commit act" in call
+
+
 def test_judge_prompt_and_schema_carry_completion_summary_and_lesson_candidates():
     call = _compose_judge({**_STAGE_SCHEMAS, "judge-result": {"type": "object"}})
     assert "`completion_summary`" in call and "`lesson_candidates`" in call

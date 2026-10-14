@@ -927,3 +927,93 @@ class TestAppendEvidenceFileRefusal:
 def test_evidence_rel_rejects_unknown_kind():
     with pytest.raises(ValueError):
         grind_rows.evidence_rel("bug", "r1", "i1", "notes")
+
+
+class TestCloseReleasesRowClaim:
+    @pytest.fixture
+    def claimed(self, close_fixture, tmp_path, monkeypatch):
+        from coordinator_core.session import claims, liveness
+        from coordinator_core.tests.git_seed import seeded_repo
+
+        seeded_repo(tmp_path, readme="x")
+        live: set = set()
+        monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid in live)
+        for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+
+        def as_session(sid):
+            monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+            live.add(sid)
+
+        key = claims.row_claim_key(close_fixture["row_rel"])
+        close_fixture.update(
+            claims=claims,
+            as_session=as_session,
+            claim_dir=tmp_path / ".git" / "coordinator-sessions" / "row-claims" / key,
+            root=tmp_path,
+        )
+        return close_fixture
+
+    def _close(self, fx, *, digest=None):
+        return grind_rows.main(
+            [
+                "close",
+                "--profile-dir", str(fx["profile_dir"]),
+                "--profile", "bug",
+                "--row", fx["row_rel"],
+                "--digest", digest or fx["digest"],
+                "--verdict", "fix",
+                "--evidence-file", str(fx["evidence_file"]),
+                "--closed-by", "test-session",
+                "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(fx["root"]),
+            ]
+        )
+
+    def _claim(self, fx):
+        return fx["claims"].claim_artifact(
+            "row", fx["row_rel"], baton_repo_root=str(fx["root"]), cwd=str(fx["root"])
+        )
+
+    def test_closers_own_claim_is_released(self, claimed):
+        claimed["as_session"]("sid-a")
+        assert self._claim(claimed)
+        assert claimed["claim_dir"].is_dir()
+        assert self._close(claimed) == grind_rows.EXIT_OK
+        assert not claimed["claim_dir"].exists()
+
+    def test_reconcile_path_also_releases(self, claimed):
+        claimed["as_session"]("sid-a")
+        assert self._close(claimed) == grind_rows.EXIT_OK
+        claimed["row_path"].write_text(claimed["row_text"], encoding="utf-8", newline="\n")
+        assert self._claim(claimed)
+        assert self._close(claimed) == grind_rows.EXIT_OK
+        assert not claimed["claim_dir"].exists()
+
+    def test_peer_live_claim_is_untouched(self, claimed):
+        claimed["as_session"]("sid-a")
+        assert self._claim(claimed)
+        claimed["as_session"]("sid-b")
+        assert self._close(claimed) == grind_rows.EXIT_OK
+        assert (claimed["claim_dir"] / "session_id").read_text().strip() == "sid-a"
+
+    def test_digest_mismatch_refusal_keeps_claim(self, claimed):
+        claimed["as_session"]("sid-a")
+        assert self._claim(claimed)
+        assert self._close(claimed, digest="0" * 64) == grind_rows.EXIT_MANIFEST_STALE
+        assert claimed["claim_dir"].is_dir()
+
+    def test_close_without_claim_succeeds(self, claimed):
+        claimed["as_session"]("sid-a")
+        assert self._close(claimed) == grind_rows.EXIT_OK
+        assert not claimed["claim_dir"].exists()
+
+    def test_close_records_zero_spawns(self, claimed, monkeypatch):
+        from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+
+        claimed["as_session"]("sid-a")
+        assert self._claim(claimed)
+        with _count_spawns_attributed(monkeypatch) as spawns:
+            assert self._close(claimed) == grind_rows.EXIT_OK
+        assert list(spawns) == []
+        assert not claimed["claim_dir"].exists()

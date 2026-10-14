@@ -192,3 +192,27 @@ def test_a_row_waits_on_its_own_predecessors_never_on_wave_siblings(repo):
     m = stage(repo, run_id="r1", plan_rel=PLAN_REL)
     deps = {r.id: r.deps for r in m.rows}
     assert deps == {"C1": (), "C2": ("C1",), "C3": ()}
+
+
+def _pinned_plan(repo, pinned_text, sizing_text):
+    from coordinator_core.ops import requirement_register as rr
+
+    doc = {"requirement_register": {"sources": [{"kind": "pm"}],
+                                    "rows": [{"id": "R1", "source_text": sizing_text}]}}
+    (repo / "state" / "sizings" / "pinned.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    claims = (
+        "register_claims:\n  sizing: state/sizings/pinned.yaml\n  rows: [R1]\n"
+        f"  pins:\n    R1: '{rr.row_pin(pinned_text)}'\n"
+    )
+    (repo / PLAN_REL).write_text(PLAN.replace("---\n#", f"{claims}---\n#", 1), encoding="utf-8", newline="\n")
+
+
+def test_drifted_pin_refuses_naming_the_row(repo):
+    _pinned_plan(repo, "original words", "edited words")
+    with pytest.raises(AskStageError, match="register row R1"):
+        stage(repo, run_id="r1", plan_rel=PLAN_REL)
+
+
+def test_matching_pin_stages_normally(repo):
+    _pinned_plan(repo, "same words", "same   words")
+    assert {r.id for r in stage(repo, run_id="r1", plan_rel=PLAN_REL).rows} == {"C1", "C2", "C3"}

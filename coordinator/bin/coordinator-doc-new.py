@@ -1813,12 +1813,12 @@ def _resolve_cited_sizing_exit_criterion(
 
 def _resolve_cited_sizing_pm_carry(
     sizing_object_relpath: str, repo_root: str,
-) -> tuple[list[str], list[str]]:
-    """A cited sizing's `pm_verbatims` texts (stored order) and requirement-register row ids.
+) -> tuple[list[str], dict[str, str]]:
+    """A cited sizing's `pm_verbatims` texts (stored order) and `{row id: pin}` for its register.
 
-    Both empty on an absent field or any read failure, so a sizing without
-    `pm_verbatims` scaffolds exactly as before. Row ids come from
-    `requirement_register.read_register`; pure read, never raises.
+    The pins are read whether or not the sizing has `pm_verbatims`. Both empty on
+    an absent field or any read failure, so a sizing with neither scaffolds exactly
+    as before. Pure read, never raises.
     """
     try:
         import yaml  # noqa: PLC0415
@@ -1827,6 +1827,7 @@ def _resolve_cited_sizing_pm_carry(
         from coordinator_core.ops.requirement_register import (  # noqa: PLC0415
             ROW_ID,
             read_register,
+            register_pins,
         )
 
         with open(
@@ -1840,13 +1841,15 @@ def _resolve_cited_sizing_pm_carry(
             for v in (_verbatims if isinstance(_verbatims, list) else [])
             if isinstance(v, dict) and isinstance(v.get("text"), str) and v["text"].strip()
         ]
-        if not _texts:
-            return [], []
         _register = read_register(_text)
-        _ids = [str(r[ROW_ID]) for r in _register.rows] if _register else []
-        return _texts, _ids
+        _pins = (
+            register_pins(_register, [str(r[ROW_ID]) for r in _register.rows])
+            if _register
+            else {}
+        )
+        return _texts, _pins
     except Exception:  # noqa: BLE001 -- unreadable sizing degrades to no carry, never blocks scaffolding
-        return [], []
+        return [], {}
 
 
 def _pm_brief_blockquote(texts: list[str]) -> list[str]:
@@ -4092,9 +4095,9 @@ def _scaffold_plan(
             sizing_object, sizing_repo_root
         )
     _pm_texts: list[str] = []
-    _register_ids: list[str] = []
+    _register_pins: dict[str, str] = {}
     if sizing_object and sizing_object != "null" and sizing_repo_root:
-        _pm_texts, _register_ids = _resolve_cited_sizing_pm_carry(
+        _pm_texts, _register_pins = _resolve_cited_sizing_pm_carry(
             sizing_object, sizing_repo_root
         )
     lines = [
@@ -4118,12 +4121,15 @@ def _scaffold_plan(
         lines.append(_sizing_object_line(sizing_object))
     if _pm_texts:
         lines.append(f"pm_brief: {{source: pm-verbatim, ref: {_yaml_quote(sizing_object)}}}")
-        if _register_ids:
-            lines += [
-                "register_claims:",
-                f"  sizing: {_yaml_quote(sizing_object)}",
-                "  rows: [" + ", ".join(_yaml_quote(i) for i in _register_ids) + "]",
-            ]
+    if _register_pins:
+        lines += [
+            "register_claims:",
+            f"  sizing: {_yaml_quote(sizing_object)}",
+            "  rows: [" + ", ".join(_yaml_quote(i) for i in _register_pins) + "]",
+            "  pins: {"
+            + ", ".join(f"{_yaml_quote(i)}: {_yaml_quote(p)}" for i, p in _register_pins.items())
+            + "}",
+        ]
     lines += [
         "# Optional keys — uncomment and fill as needed (promoted de-facto keys, D1):",
         "# scope_mode: additive-only         # planning posture",

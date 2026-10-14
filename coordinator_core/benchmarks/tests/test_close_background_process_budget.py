@@ -1,7 +1,8 @@
 """Standing gate: the close.background job under the 500ms bar, by tree process time.
 
 The job is the handoff sweep for the claimed batons, the pinboard-only orientation refresh,
-the source memo's resolve (one commit) and the two index launchers, run in one interpreter.
+the source memo's resolve (one commit), the two index launchers and baton-chain closure over a
+real closed chain (post-close must report it `ran`), run in one interpreter.
 Same method as `test_terminal_commit_process_budget.py`: net = (setup + job) minus the
 setup-only run of the same driver, each the min over SAMPLES samples of K_INVOCATIONS runs.
 

@@ -1079,7 +1079,7 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
 # from this module for backward-compatible test imports.
 
 # Claim class subdirectory names (mirrors cs_reap_stale_claims no-arg coverage).
-_CLAIM_SUBDIRS: tuple = ("handoff-claims", "memo-claims", "plan-claims")
+_CLAIM_SUBDIRS: tuple = ("handoff-claims", "memo-claims", "plan-claims", "row-claims")
 
 # `_sessions_dir` / `handoff_claim_dir` re-homed to `coordinator_core.claim_state`
 # (2026-08-07, claim-state-ledger-first-authoritative-read plan, C1) — that leaf

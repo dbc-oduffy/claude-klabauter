@@ -272,13 +272,6 @@ from coordinator_core.ceremony_common.cli_rejection import (
 )
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
 from coordinator_core.git.commit import CommitRefused, _index_key
-from coordinator_core.git.content_hash import content_matches_index_sha
-from coordinator_core.git.divergence import _run_git
-from coordinator_core.git.git_index import IndexParseError as _IndexStatParseError
-from coordinator_core.git.git_index import scoped_status as _scoped_worktree_status
-from coordinator_core.git.git_state import IndexParseError as _IndexParseError
-from coordinator_core.git.git_state import head_blobs as _head_blobs
-from coordinator_core.git.git_state import read_index as _read_index
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
 from coordinator_core.telemetry.composition_record import (
@@ -286,6 +279,8 @@ from coordinator_core.telemetry.composition_record import (
     make_fleet_budget,
 )
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
+from coordinator_core.workstream_complete import close_residue
+from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_completion
 from coordinator_core.workstream_complete import directives_lessons_plan
@@ -1188,7 +1183,12 @@ def _execute_directives(
             "landed": [],
             "blocked": [],
             "blocked_remedy": {},
-            "failed": [],
+            "failed": [
+                {
+                    "id": "budget-breach:pre-mutation",
+                    "error": pre_mutation_breach,
+                }
+            ],
             "degraded": [],
             "results": [],
             "budget_breach": pre_mutation_breach,
@@ -1528,6 +1528,7 @@ def _run_close_commit_tail(
     sid: Optional[str],
     completion_entry_path: Optional[str] = None,
     extra_stage_paths: "Sequence[str]" = (),
+    residue_snapshot: "Optional[close_residue.ResidueSnapshot]" = None,
 ) -> Optional[dict[str, Any]]:
     """Invokes `directives_commit_tail.run_close_commit_and_release_claims`
     -- never bare `run_close_commit`, which releases neither claim (see that
@@ -1675,7 +1676,9 @@ def _run_close_commit_tail(
             ],
         }
     try:
-        result = directives_commit_tail.run_close_commit_and_release_claims(worktree_root, **kwargs)
+        result = directives_commit_tail.run_close_commit_and_release_claims(
+            worktree_root, residue_snapshot=residue_snapshot, **kwargs
+        )
     except Exception as exc:  # noqa: BLE001 - closed call, fold rather than crash
         # WRITE-LANDS-THEN-COMMIT-FAILS: a raise here means the commit's own
         # outcome is unknown/failed -- any ship-stamp write already landed on
@@ -1748,6 +1751,21 @@ def _run_close_commit_tail(
         "skipped": list(close_outcome.skipped_paths),
         "diagnostics": list(close_outcome.diagnostics),
     }
+    if not result.commit_failed and not result.committed_sha:
+        # Read after the stamp reverts above. No sha is a landed close only
+        # when every stage path already matches HEAD (an idempotent re-close);
+        # a path still dirty means the commit did not land what it meant to.
+        stage_paths = [str(p).replace("\\", "/") for p in kwargs.get("stage_paths") or ()]
+        states = close_residue.landing_states(worktree_root, stage_paths)
+        not_landed = [
+            p
+            for p, state in states.items()
+            if state not in (close_residue.LANDED, close_residue.ABSENT)
+        ]
+        if not_landed:
+            report["not_landed"] = not_landed
+        elif stage_paths:
+            report["already_landed"] = True
     return report
 
 
@@ -1771,39 +1789,77 @@ def _check_completion_entry_landed(
     rel = _completion_entry_stage_path(worktree_root, entry_path)
     if rel is None:
         return None
-    root = Path(worktree_root)
-    report = {"path": rel, "state": "unverified"}
+    state = close_residue.landing_states(worktree_root, [rel])[rel]
+    if state == close_residue.DELETED:
+        state = close_residue.DIRTY
+    elif state == close_residue.ABSENT:
+        state = close_residue.UNVERIFIED
+    return {"path": rel, "state": state}
+
+
+def _fold_failure(report: dict[str, Any], failure_id: str, error: str, **detail: Any) -> None:
+    """Appends one `failed` entry. Every non-success downgrade of apply's exit
+    goes through here, so `failed` is never empty beside a non-success exit."""
+    report.setdefault("failed", []).append({"id": failure_id, "error": error, **detail})
+
+
+def _post_close_peer_claimed(worktree_root: "Union[Path, str]", sid: str) -> set[str]:
+    """Paths a live peer touch-claims, for the residue reading's `contested`
+    split. Empty when the peer read is unavailable: an unreadable peer set
+    must not hide the session's own residue."""
     try:
-        index_entry = _read_index(root, fresh=True).get(rel)
-        head_entry = _head_blobs(root, [rel]).get(rel)
-        if index_entry is None:
-            report["state"] = "untracked" if (root / rel).exists() else "unverified"
-            return report
-        if head_entry is None:
-            report["state"] = "uncommitted"
-            return report
-        if (index_entry.mode, index_entry.sha) != head_entry:
-            report["state"] = "dirty"
-            return report
-        verdict = _scoped_worktree_status(root, [rel]).get(rel)
-        if verdict == "candidate":
-            matches = content_matches_index_sha(root, rel, index_entry.sha)
-            if matches is not None:
-                verdict = "clean" if matches else "dirty"
-            else:
-                # The normalizer declined (filters or attributes in play): one
-                # scoped `git status` for this one path, the same escape hatch
-                # `divergence.diverging_paths` keeps, rather than a
-                # silently-unverified dirty entry.
-                rc, out = _run_git(["status", "--porcelain", "--", rel], cwd=str(root))
-                verdict = None if rc != 0 else ("dirty" if out.strip() else "clean")
-        if verdict == "clean":
-            report["state"] = "landed"
-        elif verdict in ("dirty", "deleted"):
-            report["state"] = "dirty"
-    except (OSError, ValueError, _IndexParseError, _IndexStatParseError):
-        pass
-    return report
+        return directives_commit_tail.live_peer_touch_claimed_paths(worktree_root, sid)
+    except directives_commit_tail.PeerAttributionUnavailable:
+        return set()
+
+
+def _fold_close_residue(
+    report: dict[str, Any],
+    envelope: dict[str, Any],
+    worktree_root: "Union[Path, str]",
+    sid: Optional[str],
+    snap: "close_residue.ResidueSnapshot",
+) -> None:
+    """Sets `report["completion_verdict"]` from the post-close residue readings
+    plus the brief envelope's census gates, and folds an `open` residue reading
+    into `report["failed"]`. `snap` was taken before the close commit released
+    the session's claims; `excluded` is empty because anything owned and still
+    dirty after the commit is residue."""
+    owned = close_residue.owned_uncommitted_payload(worktree_root, snap)
+    if owned["verdict"] == "open" and sid:
+        owned = close_residue.owned_uncommitted_payload(
+            worktree_root, snap, peer_claimed=_post_close_peer_claimed(worktree_root, sid)
+        )
+    batons = close_residue.unstamped_run_batons_payload(worktree_root, snap)
+
+    gates = envelope.get("gates") or {}
+    readers = {
+        "completeness_checklist": _completion_verdict.completeness_checklist,
+        "open_spine_row_worklist": _completion_verdict.open_spine_row_worklist,
+        "consumed_handoff_completeness": _completion_verdict.consumed_handoff_completeness,
+        "landed_reconciliation": _completion_verdict.landed_reconciliation,
+        "review_scale": _completion_verdict.review_scale,
+    }
+    readings = {name: reader(gates[name]) for name, reader in readers.items() if name in gates}
+    readings[_completion_verdict.OWNED_UNCOMMITTED] = _completion_verdict.owned_uncommitted(owned)
+    readings[_completion_verdict.UNSTAMPED_RUN_BATONS] = _completion_verdict.unstamped_run_batons(batons)
+    report["completion_verdict"] = _completion_verdict.compose_completion_verdict(readings)
+
+    if readings[_completion_verdict.OWNED_UNCOMMITTED].status == "open":
+        _fold_failure(
+            report,
+            "close-residue:owned-uncommitted",
+            f"session still owns {len(owned['items'])} file(s) not committed",
+            paths=list(owned["items"]),
+            contested=list(owned["contested"]),
+        )
+    if readings[_completion_verdict.UNSTAMPED_RUN_BATONS].status == "open":
+        _fold_failure(
+            report,
+            "close-residue:unstamped-baton",
+            f"session still holds {len(batons['items'])} run baton(s) not stamped",
+            batons=list(batons["items"]),
+        )
 
 
 def _run_completion_entry_fold(
@@ -2134,19 +2190,32 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             report["waiver_receipt"] = waiver_receipt
             if waiver_errors:
                 report["waiver_receipt_error"] = waiver_errors[0]
+            # Taken BEFORE the close commit: its `finally` releases the
+            # session's whole claim surface, which is the set being measured.
+            residue_snapshot = close_residue.snapshot(worktree_root, sid)
             close_commit_report = _run_close_commit_tail(
                 worktree_root,
                 _undischarged_ship_dispositions(effective_decisions, report.get("discharged") or {}),
                 sid,
                 completion_entry_path,
                 extra_stage_paths=[waiver_receipt] if waiver_receipt else (),
+                residue_snapshot=residue_snapshot,
             )
             if close_commit_report is not None:
                 report["close_commit"] = close_commit_report
-                if close_commit_report.get("commit_failed") and exit_code == int(
-                    WorkstreamApplyExitCode.SUCCESS
-                ):
-                    exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
+                if close_commit_report.get("commit_failed"):
+                    _fold_failure(
+                        report,
+                        "close-commit:commit-failed",
+                        str(close_commit_report.get("error") or "close commit failed"),
+                    )
+                elif close_commit_report.get("not_landed"):
+                    _fold_failure(
+                        report,
+                        "close-commit:not-landed",
+                        "close commit produced no commit and stage paths are still not in HEAD",
+                        paths=list(close_commit_report["not_landed"]),
+                    )
 
             # The completion-entry commit-ledger fold -- see
             # `_run_completion_entry_fold`'s own docstring for why this seam
@@ -2169,10 +2238,17 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             landing = _check_completion_entry_landed(worktree_root, completion_entry_path)
             if landing is not None:
                 report["completion_entry_landing"] = landing
-                if landing["state"] in _ENTRY_NOT_LANDED_STATES and exit_code == int(
-                    WorkstreamApplyExitCode.SUCCESS
-                ):
-                    exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
+                if landing["state"] in _ENTRY_NOT_LANDED_STATES:
+                    _fold_failure(
+                        report,
+                        f"completion-entry:{landing['state']}",
+                        f"completion entry {landing['path']} is {landing['state']}, not committed",
+                        path=landing["path"],
+                    )
+
+            _fold_close_residue(report, envelope, worktree_root, sid, residue_snapshot)
+            if report.get("failed") and exit_code == int(WorkstreamApplyExitCode.SUCCESS):
+                exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
 
             # C4b (2026-08-25): the push leg `run_close_commit` itself never
             # attempts (push_mode=PUSH_MODE_NEVER, hard constraints 5/6) --

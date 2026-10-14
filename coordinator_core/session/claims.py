@@ -1068,10 +1068,14 @@ def claim_artifact(
             f"Nothing was claimed. This class is valid on release-artifact "
             f"and clear-claim-if-dead, which is how a path claim "
             f"who-claims-path reports gets released. To claim a RECORD, pass "
-            f"handoff, memo, or plan with a basename.",
+            f"handoff, memo, plan, or row (a queue row path).",
             file=sys.stderr,
         )
         return False
+
+    if class_ == ROW_CLAIM_CLASS:
+        basename = row_claim_key(basename)
+        stage = CLAIM_STAGE_BRIEF
 
     # Canonical 4-tier resolution; sid is a property of the running (cwd)
     # session — only the lock LOCATION follows the baton. Empty -> FAIL LOUD.
@@ -1173,6 +1177,13 @@ def claim_artifact(
         _report_claim_neighbours(class_, basename, cwd)
         return True
 
+    if class_ == ROW_CLAIM_CLASS and (
+        liveness.claim_held_by_me(str(claim_dir), sid, cwd)
+        or (held_sid and held_sid in core.session_env_candidates())
+    ):
+        touch_brief_claim(class_, basename, baton_repo_root, cwd)
+        return True
+
     lease_expired = brief_lease_expired(claim_dir)
 
     if liveness.claim_holder_live(str(claim_dir), cwd) and not lease_expired:
@@ -1200,6 +1211,8 @@ def claim_artifact(
             f", or, if that session has handed this off, session-claim-cli "
             f"take-over-claim plan {basename} --justification <why>"
             if class_ == "plan"
+            else f"; the holder frees it with release-artifact row <row path>"
+            if class_ == ROW_CLAIM_CLASS
             else ""
         )
         print(
@@ -2106,7 +2119,52 @@ ARTIFACT_CLASS_PATH = "artifact"
 #: ``<class>-claims`` directory -- that directory NAME is the attractor a
 #: caller reaches for instead of the class token (``plan-claims`` for
 #: ``plan``), so ``_class_token_hint`` defuses it in the fail-loud text.
-_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan", "artifact")
+_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan", "artifact", "row")
+
+#: Queue-row claim class (claims subdir ``row-claims``). Always written at
+#: ``brief`` stage and never promoted: no frontmatter stamp backs it, so the
+#: brief lease is its TTL.
+ROW_CLAIM_CLASS = "row"
+
+_ROW_SUFFIXES = (".yaml", ".yml")
+
+
+def row_claim_key(row: str) -> str:
+    """Claim key ``<queue-dir>--<stem>`` for a queue row path (``/`` and ``\\``
+    both split, whatever the host). ValueError on a path with no parent dir
+    or a non-yaml name. Every row claim, release, clear and lookup derives
+    its key here."""
+    parts = [p for p in row.replace("\\", "/").split("/") if p]
+    if len(parts) < 2 or not parts[-1].endswith(_ROW_SUFFIXES) or parts[-2] in (".", ".."):
+        raise ValueError(
+            f"row claim key: {row!r} is not <queue-dir>/<row>.yaml"
+        )
+    name = parts[-1]
+    return f"{parts[-2]}--{name[: name.rindex('.')]}"
+
+
+def row_claim_blocker(
+    sessions_dir: "Path | str",
+    row_key: str,
+    my_sid: Optional[str],
+    cwd: Optional[str] = None,
+) -> Optional[str]:
+    """Holder session id when another session holds ``row_key`` live and
+    unexpired, else ``None``. No claim dir costs one stat. A holder reading
+    live inherits ``liveness.claim_holder_live``'s answer; the brief lease
+    bounds a live holder that walked away."""
+    claim_dir = Path(sessions_dir) / f"{ROW_CLAIM_CLASS}-claims" / row_key
+    if not claim_dir.is_dir():
+        return None
+    held_sid = _read_claim_field(claim_dir, "session_id")
+    if held_sid:
+        if held_sid == my_sid:
+            return None
+        if my_sid and my_sid in core.session_env_candidates() and held_sid in core.session_env_candidates():
+            return None
+    if not liveness.claim_holder_live(str(claim_dir), cwd) or brief_lease_expired(claim_dir):
+        return None
+    return held_sid or _read_holder(claim_dir)
 
 
 def _class_token_hint(class_: str) -> str:
@@ -2637,11 +2695,14 @@ def release_artifact(
     if class_ not in _CLASSED_CLAIM_CLASSES:
         print(
             f"cs_release_artifact: invalid class '{class_}' "
-            f"(must be handoff, memo, plan, or {ARTIFACT_CLASS_PATH})"
+            f"(must be handoff, memo, plan, row, or {ARTIFACT_CLASS_PATH})"
             f"{_class_token_hint(class_)}",
             file=sys.stderr,
         )
         return False
+
+    if class_ == ROW_CLAIM_CLASS:
+        basename = row_claim_key(basename)
 
     if baton_repo_root:
         if not (Path(baton_repo_root) / ".git").is_dir():
@@ -2843,7 +2904,7 @@ def clear_claim_if_dead(
       - False on an invalid class, a bad/absent baton root, or a refusal
         because the holder is (or became) live.
 
-    Class validation: restrict to ``{handoff, memo, plan, artifact}`` (invalid
+    Class validation: restrict to ``{handoff, memo, plan, row, artifact}`` (invalid
     -> False + stderr). Empty ``class_`` / ``basename`` raise ValueError first
     (bash ``${1:?}`` / ``${2:?}``).
 
@@ -2893,11 +2954,14 @@ def clear_claim_if_dead(
     if class_ not in _CLASSED_CLAIM_CLASSES:
         print(
             f"cs_clear_claim_if_dead: invalid class '{class_}' "
-            f"(must be handoff, memo, plan, or {ARTIFACT_CLASS_PATH})"
+            f"(must be handoff, memo, plan, row, or {ARTIFACT_CLASS_PATH})"
             f"{_class_token_hint(class_)}",
             file=sys.stderr,
         )
         return False
+
+    if class_ == ROW_CLAIM_CLASS:
+        basename = row_claim_key(basename)
 
     if baton_repo_root and not (Path(baton_repo_root) / ".git").is_dir():
         print(
@@ -3708,7 +3772,7 @@ def list_claims_by_session_checked(
 ) -> "Tuple[List[Tuple[str, str]], List[str]]":
     """Return ``([(class_, basename), ...], errors)`` for every claim dir under this
     repo's ``<sessions_dir>`` whose recorded ``session_id`` == ``sid``, across
-    all three claim classes (``_CLAIM_SUBDIRS``). Reads the CLAIM-RECORD STORE
+    all four claim classes (``_CLAIM_SUBDIRS``: handoff, memo, plan, row). Reads the CLAIM-RECORD STORE
     directly (the ``session_id`` file inside each ``<class>-claims/<basename>/``
     dir) — NEVER the ``claimed_by``/``consumed_by`` frontmatter mirror. An
     unreadable or absent ``session_id`` file is "not a match", not an error —

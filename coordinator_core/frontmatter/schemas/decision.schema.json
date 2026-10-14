@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/decision.schema.json",
   "x-schema-name": "decision",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 adds the optional `edited` date property (last in-place edit); no required list changed.",
   "applies_to": "docs/decisions/*.md",
   "description": "Decision record (DR) — records an architectural or process decision. Spec backlink: pln-example-initiative-tc-1-records-consolidation-9668e7 § D3, § D4",
   "type": "object",
@@ -16,6 +18,12 @@
       "type": "string",
       "format": "date",
       "description": "Canonical temporal key (YYYY-MM-DD). Use 'created', not 'date'."
+    },
+    "edited": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "Date (YYYY-MM-DD) of the last in-place edit. Absent until the DR is first edited."
     },
     "status": {
       "enum": ["proposed", "accepted", "deprecated", "superseded"],
@@ -40,7 +48,7 @@
     },
     "id": {
       "type": "string",
-      "description": "Canonical DR number string, e.g. 'DR-042'. Dominant spelling; do not use decision_id in new records."
+      "description": "Canonical DR number string, e.g. 'DR-047'. Dominant spelling; do not use decision_id in new records."
     }
   }
 }

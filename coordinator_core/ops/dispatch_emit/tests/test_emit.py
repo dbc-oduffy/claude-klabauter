@@ -201,8 +201,31 @@ def test_mixed_plan_body_and_code_row_raises_mixed_agent_type_error():
             )
         ]
     ]
-    with pytest.raises(MixedAgentTypeRowError):
+    with pytest.raises(MixedAgentTypeRowError, match="evidence-append"):
         compose_script(waves, name="wf", description="mixed row", **REVIEW_KW)
+
+
+def test_evidence_sidecar_row_routes_to_executor_and_brief_names_evidence_append():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "docs/plans/2026-08-13-example.evidence.yaml",
+                    "coordinator_core/ops/dispatch_emit/spine_read.py",
+                ],
+            )
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="evidence row", **REVIEW_KW)
+    assert "agentType: 'coordinator:executor'" in script
+    prompt = emit._row_prompt(waves[0][0], "docs/plans/2026-08-13-example.md")
+    assert "evidence-append" in prompt
+    plain = emit._row_prompt(
+        _wave_row("C2", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
+        "docs/plans/2026-08-13-example.md",
+    )
+    assert "evidence-append" not in plain
 
 
 def test_problem_set_write_row_derives_enricher_agent_type():
