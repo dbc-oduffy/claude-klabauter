@@ -4,8 +4,8 @@ plan `register_claims` and the terminal judge already read.
 
 A run is ledger-bearing once the emit writes `RECORD_DIR_ROOT/<run_id>/run.json` (`start`):
 `{sizing_rel, all_of_pm_ask}`, the run's binding and flag, never a requirement. `bind` seeds the
-bound sizing's register with the PM's words (`pm_verbatims`, else a PM-verbatim intent) and the
-raw ask (`ask`, or `relayed` when an EM relayed it: never the PM's words), one row each, and drains `revisions.jsonl` -- the transport for a revision sent before a
+bound sizing's register with the PM's words (`pm_verbatims`, else a PM-verbatim intent; none for a
+relayed run, whose session turns the sizing lists as `unrelated_turns`) and the raw ask (`ask`, or `relayed` when an EM relayed it: never the PM's words), one row each, and drains `revisions.jsonl` -- the transport for a revision sent before a
 raw ask's sizing exists -- into rows. Once bound, `workflow.revise` appends its row straight onto
 the register. A row's `anchor` carries its origin (`pm_verbatims`, `ask`, `revision@<UTC>`); row
 order is arrival order. `requirements.md` beside run.json is the view every stage prompt reads,
@@ -333,7 +333,11 @@ def bind(
         sizing = yaml.safe_load(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
-    entries = [(t, ORIGIN_PM_VERBATIMS) for t in pm_words(sizing if isinstance(sizing, dict) else {})]
+    entries = (
+        []
+        if relayed_text and relayed_text.strip()
+        else [(t, ORIGIN_PM_VERBATIMS) for t in pm_words(sizing if isinstance(sizing, dict) else {})]
+    )
     if ask_text and ask_text.strip():
         entries.append((ask_text, ORIGIN_ASK))
     if relayed_text and relayed_text.strip():

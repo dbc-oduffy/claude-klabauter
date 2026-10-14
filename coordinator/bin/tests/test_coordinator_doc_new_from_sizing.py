@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -402,12 +403,62 @@ def test_plan_without_pm_verbatims_carries_register_claims_only(repo):
     assert fm["register_claims"] == {
         "sizing": _SIZING_REL, "rows": ["R1"], "pins": {"R1": _row_pin("x")},
     }
-    assert "pm_brief" not in fm and "## PM brief" not in out
+    assert fm["pm_brief"] == {"source": "baton-originating-ask", "ref": _SIZING_REL}
+    assert "## PM brief" not in out
 
 
-def test_plan_without_register_or_verbatims_is_byte_identical_to_uncarried(repo):
+def test_plan_without_register_or_verbatims_cites_sizing_as_brief_only(repo):
     _put(repo, _sizing_text())
     carried = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
-    baseline = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=None)
-    assert carried == baseline
-    assert "pm_brief" not in carried and "register_claims" not in carried
+    fm = yaml.safe_load(carried.split("---")[1])
+    assert fm["pm_brief"] == {"source": "baton-originating-ask", "ref": _SIZING_REL}
+    assert "register_claims" not in fm and "## PM brief" not in carried
+
+
+def test_plan_with_baton_and_no_verbatims_refs_the_baton(repo):
+    """The baton, not the sizing path, is the ref when the sizing names one."""
+    baton = "state/handoffs/2026-10-01-fixture.md"
+    _put(repo, _sizing_text(baton=baton))
+    fm = yaml.safe_load(_cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo)).split("---")[1])
+    assert fm["pm_brief"] == {"source": "baton-originating-ask", "ref": baton}
+
+
+def test_unrelated_turns_are_not_pasted_and_fall_to_baton_branch(repo):
+    _put(repo, _sizing_text() + (
+        "pm_verbatims:\n"
+        '  - {turn: 4, text: "resume the fleet drive"}\n'
+        "requirement_register:\n"
+        "  unrelated_turns:\n"
+        "  - {turn: 4, reason: other work}\n"
+        "  rows:\n"
+        "    - {id: R1, source_text: x, status: open}\n"
+    ))
+    out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+    fm = yaml.safe_load(out.split("---")[1])
+    assert fm["pm_brief"] == {"source": "baton-originating-ask", "ref": _SIZING_REL}
+    assert "resume the fleet drive" not in out and "## PM brief" not in out
+
+
+def test_related_turn_survives_alongside_an_unrelated_one(repo):
+    _put(repo, _sizing_text() + (
+        "pm_verbatims:\n"
+        '  - {turn: 1, text: "the real ask"}\n'
+        '  - {turn: 4, text: "resume the fleet drive"}\n'
+        "requirement_register:\n"
+        "  unrelated_turns:\n"
+        "  - {turn: 4, reason: other work}\n"
+        "  rows:\n"
+        "    - {id: R1, source_text: x, status: open}\n"
+    ))
+    out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+    assert yaml.safe_load(out.split("---")[1])["pm_brief"]["source"] == "pm-verbatim"
+    assert "> the real ask" in out and "fleet drive" not in out
+
+
+def test_every_emitted_pm_brief_source_is_in_the_vendored_enum(repo):
+    schema = Path(__file__).resolve().parents[3] / "coordinator_core/frontmatter/schemas/plan.schema.json"
+    enum = set(json.loads(schema.read_text(encoding="utf-8"))["properties"]["pm_brief"]["properties"]["source"]["enum"])
+    for text in (_sizing_text(), _carry_sizing_text(), _sizing_text(baton="state/handoffs/x.md")):
+        _put(repo, text)
+        out = _cli._scaffold_plan(**_PLAN_KW, sizing_repo_root=str(repo))
+        assert yaml.safe_load(out.split("---")[1])["pm_brief"]["source"] in enum

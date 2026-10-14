@@ -1773,7 +1773,10 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
         )
         return ""
     q_watcher, q_repo_root = formatted
-    monitor_command = f"{q_watcher} --repo-root {q_repo_root}"
+    watch_command = (
+        f"{q_watcher} --repo-root {q_repo_root}"
+        " --until-event --tick-interval-seconds 30"
+    )
 
     # Sentinel LAST, after the advisory is fully composed -- same reasoning
     # as _check_workflow_monitor_arm_sync's own sentinel placement: anything
@@ -1794,9 +1797,9 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
         " and no watch on the standing peer registry has been armed this"
         " session -- arm it now rather than depending on a tick you remember"
         " to re-run."
-        f' Paste: Monitor(command="{monitor_command}", persistent=true).'
-        " Armed persistent, the watch runs for the life of this session and"
-        " never needs re-arming."
+        f' Run: Bash(command="{watch_command}", run_in_background=true).'
+        " It exits on each peer event: relaunch it on every completion."
+        " Never wrap it in a Monitor."
     )
 
 

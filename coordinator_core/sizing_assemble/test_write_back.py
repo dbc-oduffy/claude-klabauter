@@ -136,7 +136,7 @@ def _engine_record(**over) -> dict:
 
 
 @pytest.mark.parametrize("tshirt,route", [("XS", "dispatch"), ("S", "spec-dispatch"), ("M", "plan"), ("L", "plan")])
-@pytest.mark.parametrize("mode", ["pm", "ceo"])
+@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 def test_size_rule_skip_is_recorded_on_the_sizing(repo: Path, tshirt: str, route: str, mode: str) -> None:
     path = _sizing(repo)
     decision = _decision(tshirt)
@@ -149,12 +149,14 @@ def test_size_rule_skip_is_recorded_on_the_sizing(repo: Path, tshirt: str, route
     assert validate_frontmatter(_load(path), SCHEMA) == []
 
 
-def test_hands_on_keeps_its_acceptance_ask(repo: Path) -> None:
+def test_hands_on_below_xl_records_the_engine_skip(repo: Path) -> None:
     path = _sizing(repo)
     sizing_assemble.write_back(
         repo, str(path), _decision("M"), exit_criterion="Ship it", interaction_mode="hands-on"
     )
-    assert _load(path)["exit_criterion"]["accepted"] is None
+    assert _load(path)["exit_criterion"]["accepted"] == _engine_record(
+        route="plan", tshirt="M", mode="hands-on"
+    )
 
 
 @pytest.mark.parametrize("tshirt,kwargs", [("XL", {}), ("XL", {"jtbd_unclear": True}), ("L", {"jtbd_unclear": True})])
@@ -358,6 +360,30 @@ def test_write_embeds_pm_verbatims_once_and_keeps_em_curation(repo: Path, monkey
     path.write_text(curated, encoding="utf-8")
     sizing_assemble.write_back(repo, rel, _decision("M"))
     assert [e["turn"] for e in _load(path)["pm_verbatims"]] == [1, 9]
+
+
+def test_relayed_ask_registers_only_its_text_and_lists_every_turn_unrelated(
+    repo: Path, monkeypatch
+) -> None:
+    import coordinator_core.ops.baton_pm_turns as pm_turns
+    from coordinator_core.ops import requirement_register as rr
+
+    window = [{"turn": n, "ts": "2026-10-08T10:00:00Z", "text": f"session chatter {n}"}
+              for n in range(44, 48)]
+    monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: list(window))
+    path = _sizing(repo)
+    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    sizing_assemble.write_back(repo, rel, _decision("M"), relayed_ask_text="  fix the relayed thing\n")
+    doc = _load(path)
+    register = doc["requirement_register"]
+    assert [r["source_text"] for r in register["rows"]] == ["fix the relayed thing"]
+    assert register["rows"][0]["id"] == "R1"
+    assert register["rows"][0]["anchor"] == "relayed"
+    assert [e["turn"] for e in register["unrelated_turns"]] == [44, 45, 46, 47]
+    assert all(e["reason"] for e in register["unrelated_turns"])
+    assert [e["turn"] for e in doc["pm_verbatims"]] == [44, 45, 46, 47]
+    assert rr.coverage_gaps(doc) == []
+    assert rr.unrelated_turn_errors(doc, register) == []
 
 
 def test_pm_verbatims_round_trip_yaml_hostile_prompts_from_the_real_log(

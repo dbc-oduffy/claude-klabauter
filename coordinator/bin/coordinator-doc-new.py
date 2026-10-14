@@ -1813,12 +1813,13 @@ def _resolve_cited_sizing_exit_criterion(
 
 def _resolve_cited_sizing_pm_carry(
     sizing_object_relpath: str, repo_root: str,
-) -> tuple[list[str], dict[str, str]]:
-    """A cited sizing's `pm_verbatims` texts (stored order) and `{row id: pin}` for its register.
+) -> tuple[list[str], dict[str, str], str | None]:
+    """A cited sizing's related `pm_verbatims` texts (stored order), `{row id: pin}` and `baton:`.
 
-    The pins are read whether or not the sizing has `pm_verbatims`. Both empty on
-    an absent field or any read failure, so a sizing with neither scaffolds exactly
-    as before. Pure read, never raises.
+    A verbatim whose `turn` is named in the register's `unrelated_turns` is dropped. The pins
+    are read whether or not the sizing has `pm_verbatims`. Empty/None on an absent field or
+    any read failure. Pure read, never raises. `baton:` feeds the `pm_brief` ref when no related
+    verbatim remains.
     """
     try:
         import yaml  # noqa: PLC0415
@@ -1826,6 +1827,7 @@ def _resolve_cited_sizing_pm_carry(
         _ensure_engine_on_path()
         from coordinator_core.ops.requirement_register import (  # noqa: PLC0415
             ROW_ID,
+            UNRELATED_TURNS_KEY,
             read_register,
             register_pins,
         )
@@ -1835,21 +1837,29 @@ def _resolve_cited_sizing_pm_carry(
         ) as _fh:
             _text = _fh.read()
         _data = yaml.safe_load(_text)
+        _register = read_register(_text)
+        _unrelated_entries = (_register.raw.get(UNRELATED_TURNS_KEY) if _register else None) or []
+        _unrelated = {
+            e.get("turn")
+            for e in (_unrelated_entries if isinstance(_unrelated_entries, list) else [])
+            if isinstance(e, dict) and e.get("turn") is not None
+        }
         _verbatims = _data.get("pm_verbatims") if isinstance(_data, dict) else None
         _texts = [
             v["text"]
             for v in (_verbatims if isinstance(_verbatims, list) else [])
             if isinstance(v, dict) and isinstance(v.get("text"), str) and v["text"].strip()
+            and v.get("turn") not in _unrelated
         ]
-        _register = read_register(_text)
         _pins = (
             register_pins(_register, [str(r[ROW_ID]) for r in _register.rows])
             if _register
             else {}
         )
-        return _texts, _pins
+        _baton = _data.get("baton") if isinstance(_data, dict) else None
+        return _texts, _pins, (_baton if isinstance(_baton, str) and _baton.strip() else None)
     except Exception:  # noqa: BLE001 -- unreadable sizing degrades to no carry, never blocks scaffolding
-        return [], {}
+        return [], {}, None
 
 
 def _pm_brief_blockquote(texts: list[str]) -> list[str]:
@@ -4096,8 +4106,10 @@ def _scaffold_plan(
         )
     _pm_texts: list[str] = []
     _register_pins: dict[str, str] = {}
-    if sizing_object and sizing_object != "null" and sizing_repo_root:
-        _pm_texts, _register_pins = _resolve_cited_sizing_pm_carry(
+    _pm_baton: str | None = None
+    _sizing_cited = bool(sizing_object and sizing_object != "null" and sizing_repo_root)
+    if _sizing_cited:
+        _pm_texts, _register_pins, _pm_baton = _resolve_cited_sizing_pm_carry(
             sizing_object, sizing_repo_root
         )
     lines = [
@@ -4119,8 +4131,16 @@ def _scaffold_plan(
         # every other --sizing-object-accepting arm — see
         # `_sizing_object_line`'s docstring for the unquoted-null rationale.
         lines.append(_sizing_object_line(sizing_object))
-    if _pm_texts:
-        lines.append(f"pm_brief: {{source: pm-verbatim, ref: {_yaml_quote(sizing_object)}}}")
+    if _sizing_cited:
+        _ensure_bin_lib_bootstrapped()
+        import pm_brief as _pm_brief_lib  # noqa: PLC0415
+
+        if _pm_texts:
+            _pb_source, _pb_ref = _pm_brief_lib.SOURCE_PM_VERBATIM, sizing_object
+        else:
+            _pb_source = _pm_brief_lib.SOURCE_BATON_ORIGINATING_ASK
+            _pb_ref = _pm_baton or sizing_object
+        lines.append(f"pm_brief: {{source: {_pb_source}, ref: {_yaml_quote(_pb_ref)}}}")
     if _register_pins:
         lines += [
             "register_claims:",

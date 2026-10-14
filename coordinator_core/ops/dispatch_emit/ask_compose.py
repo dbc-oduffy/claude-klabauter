@@ -736,7 +736,9 @@ def compose_ask_script(
         b.append(
             f"  const _assembleCmd = {_lit(SIZING_ASSEMBLE_CMD)}"
             + scout_assemble_flags_js("_scouted", "_q", deliverable)
-            + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)};"
+            + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
+            + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
+            + ";"
         )
         assemble_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",

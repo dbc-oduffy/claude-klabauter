@@ -1556,8 +1556,13 @@ def _scout_unrelated(accounting: Any) -> dict[int, str]:
     return out
 
 
+RELAYED_TURN_REASON = "relayed ask: session PM turn, not the relayed ask's text"
+
+
 def derive_register(
-    doc: dict[str, Any], scout: Optional[dict[str, Any]] = None
+    doc: dict[str, Any],
+    scout: Optional[dict[str, Any]] = None,
+    relayed_ask: Optional[str] = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[str]]:
     """The requirement register a sizing's PM words imply: `(rows, unrelated_turns, refs, dropped)`.
 
@@ -1569,10 +1574,21 @@ def derive_register(
       - an uncovered text with two or more enumerated lines: one row per clause;
       - any other uncovered text: one row per PM-worded segment between `<agent-message>`
         blocks; a turn with none is `unrelated` (relayed agent message only).
-    Rows are `open`, unclaimed, `surface` the scout's when valid else `internal`. Pure."""
+    Rows are `open`, unclaimed, `surface` the scout's when valid else `internal`.
+    With `relayed_ask` text: exactly one row `R1` carrying that text, every embedded `T<n>` turn
+    listed unrelated, and the scout's rows not admitted. Pure."""
     from coordinator_core.ops import requirement_register as rr
 
     texts = _pm_texts(doc)
+    if relayed_ask is not None and relayed_ask.strip():
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import ORIGIN_RELAYED
+
+        row = {
+            rr.ROW_ID: "R1", rr.ROW_TEXT: relayed_ask.strip(), rr.ROW_ANCHOR: ORIGIN_RELAYED,
+            rr.ROW_SURFACE: "internal", rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
+        }
+        turns = sorted(int(k[1:]) for k, _ in texts if k.startswith("T"))
+        return [row], [{"turn": t, "reason": RELAYED_TURN_REASON} for t in turns], ["relayed ask"], []
     normed = {key: rr._norm(text) for key, text in texts}
     rows: list[dict[str, Any]] = []
     refs: list[str] = []
@@ -1697,6 +1713,7 @@ def _write_back(
     doc_consumers: Optional[list[str]] = None,
     ask_conflicts: Optional[list[dict[str, str]]] = None,
     embed_verbatims: bool = True,
+    relayed_ask_text: Optional[str] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1707,7 +1724,7 @@ def _write_back(
     `draft`/`sized` -> `routed` (terminal statuses are never regressed); a
     scaffold-placeholder `intent` is replaced by the computed one. exit_criterion.statement is written only while
     `accepted` is null or the engine's own record; interaction_mode only while absent. Where
-    the size rule skips the acceptance ask (pm/ceo only) and a statement exists, `accepted` is
+    the size rule skips the acceptance ask and a statement exists, `accepted` is
     the engine-size-rule record; a re-size out of the rule clears it. Raises
     `SizingAssembleError` on any refusal, with nothing written. `verbatim_turns=(A, B)` embeds
     exactly turns A..B (unbudgeted) instead of the recent window, and refuses a missing index or
@@ -1860,10 +1877,7 @@ def _write_back(
                     existing["click_paths"] = click_paths
             mode = doc.get("interaction_mode") or interaction_mode
             route_now, tshirt_now = decision["route"], decision["resolved_estimate"]["tshirt"]
-            # hands-on joins once the vendored schema's engine-size-rule mode enum admits it.
-            skipped = bool(statement) and mode in ("pm", "ceo") and sizing_acceptance_skipped(
-                route_now, tshirt_now
-            )
+            skipped = bool(statement) and sizing_acceptance_skipped(route_now, tshirt_now)
             accepted = (
                 {
                     "source": ENGINE_SIZE_RULE,
@@ -1920,7 +1934,9 @@ def _write_back(
             ruled = new_doc.get("pm_resolution")
             ruled = isinstance(ruled, dict) and REGISTER_KEY in ruled
             if REGISTER_KEY not in new_doc and not ruled:
-                rows, unrelated, refs, dropped[:] = derive_register(new_doc, scout_register)
+                rows, unrelated, refs, dropped[:] = derive_register(
+                    new_doc, scout_register, relayed_ask_text
+                )
                 if rows:
                     text = _mint_register(
                         text, rows, unrelated, refs, sizing_rel, datetime.now(timezone.utc)
@@ -2166,7 +2182,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-target <source>=<ref> ...]\n"
         "    [--research-question <text> ...]\n"
         "    [--research-destination repo|local-only]\n"
-        "    [--write <state/sizings/x.yaml> [--verbatim-turns A-B | --no-verbatims]]\n"
+        "    [--write <state/sizings/x.yaml> [--verbatim-turns A-B | --no-verbatims]\n"
+        "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block)\n"
         "or: --xl-exit shape|roadmap|accept_multi_session --pm-quote <str>\n"
         "    [--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>\n"
@@ -2341,6 +2358,7 @@ def main(argv: list[str]) -> int:
     verbatim_turns_raw = None
     intent_turn_raw = None
     no_verbatims = False
+    relayed_ask_file = None
 
     i = 0
     while i < len(argv):
@@ -2381,6 +2399,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--no-verbatims":
             no_verbatims = True
             i += 1
+        elif tok == "--relayed-ask-file" and i + 1 < len(argv):
+            relayed_ask_file = argv[i + 1]
+            i += 2
         elif tok == "--verbatim-turns" and i + 1 < len(argv):
             verbatim_turns_raw = argv[i + 1]
             i += 2
@@ -2502,6 +2523,32 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE
+
+    relayed_ask_text = None
+    if relayed_ask_file is not None:
+        if write_path is None or no_verbatims:
+            print(
+                f"{prog}: --relayed-ask-file needs --write and excludes --no-verbatims",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops._path_guard import contained_path
+
+        try:
+            ask_root = _cli_repo_root(write_path)
+            ask_candidate = Path(relayed_ask_file)
+            if not ask_candidate.is_absolute():
+                ask_candidate = ask_root / ask_candidate
+            ask_path = contained_path(ask_candidate, [ask_root])
+            if ask_path is None:
+                raise ValueError("path is outside the repo root")
+            relayed_ask_text = ask_path.read_text(encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            print(f"{prog}: --relayed-ask-file unreadable: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        if not relayed_ask_text.strip():
+            print(f"{prog}: --relayed-ask-file is empty", file=sys.stderr)
+            return EXIT_USAGE
 
     verbatim_turns = None
     if verbatim_turns_raw is not None:
@@ -2736,6 +2783,7 @@ def main(argv: list[str]) -> int:
                 doc_consumers=doc_consumers,
                 ask_conflicts=ask_conflicts,
                 embed_verbatims=not no_verbatims,
+                relayed_ask_text=relayed_ask_text,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)

@@ -1481,6 +1481,43 @@ def _exit_criterion_met_block(opts: _Opts) -> str:
     return "".join("  " + line + "\n" for line in dumped.splitlines())
 
 
+def _with_register_tally(fm_text: str, worktree_root: Path, plan_display: str) -> str:
+    """`fm_text` with `review_stamp.register` set to the plan's register tally; unchanged when
+    the plan carries no `register_claims`. Raises `MutateAbort` on a non-zero count or an
+    unreadable register."""
+    from coordinator_core.locked_write import MutateAbort
+    from coordinator_core.ops.requirement_register import (
+        plan_claims,
+        plan_register_tally,
+        register_owed,
+    )
+
+    sizing_rel, _ = plan_claims(fm_text)
+    if not sizing_rel:
+        return fm_text
+    tally = plan_register_tally(fm_text, worktree_root)
+    if tally is None:
+        raise MutateAbort(
+            f"{_PROG}: refusing to stamp implemented: {plan_display}: "
+            f"register_claims.sizing {sizing_rel} has no readable requirement_register"
+        )
+    owed = register_owed(tally)
+    if owed:
+        counts = ", ".join(f"{k}={v}" for k, v in owed.items())
+        raise MutateAbort(
+            f"{_PROG}: refusing to stamp implemented: {plan_display}: "
+            f"review_stamp.register tally is non-zero ({counts}) against {sizing_rel}"
+        )
+    parsed = yaml.safe_load(fm_text)
+    existing = parsed.get("review_stamp") if isinstance(parsed, dict) else None
+    stamp = dict(existing) if isinstance(existing, dict) else {}
+    stamp["register"] = tally
+    dumped = yaml.safe_dump(
+        stamp, default_flow_style=False, sort_keys=False, allow_unicode=True, width=10**6
+    )
+    return write_fm_nested_field(fm_text, "review_stamp", "".join("  " + l + "\n" for l in dumped.splitlines()))
+
+
 def _stamp_implemented(opts: _Opts) -> int:
     """Perform the stamp-implemented verb; returns the exit code.
 
@@ -1787,6 +1824,9 @@ def _stamp_implemented(opts: _Opts) -> int:
                 raise MutateAbort(
                     f"{_PROG}: refusing to stamp implemented: {opts.plan}: {review_refusal}"
                 )
+
+        if worktree_root is not None:
+            recorded_fm = _with_register_tally(recorded_fm, worktree_root, opts.plan)
 
         fm_text = replace_fm_field(recorded_fm, "status", "implemented")
 

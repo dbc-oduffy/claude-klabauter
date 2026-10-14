@@ -259,12 +259,22 @@ def test_a_relayed_row_is_a_requirement_and_never_supersedes_a_pm_verbatim(repo)
     rl.start(repo, RUN, all_of_pm_ask=False)
     rl.bind(repo, RUN, REL, relayed_text="relayed words")
     rows = _rows(repo)
-    assert [(r["source_text"], r["anchor"]) for r in rows] == [
-        ("build the op", "pm_verbatims"), ("keep it under 500ms", "pm_verbatims"), ("relayed words", "relayed"),
-    ]
+    assert [(r["source_text"], r["anchor"]) for r in rows] == [("relayed words", "relayed")]
     ledger = rl.read_ledger(repo, repo / RECORD_DIR_ROOT / RUN)
     assert ledger.items[-1].origin == "relayed"
     assert "relayed" in (repo / RECORD_DIR_ROOT / RUN / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
+
+
+def test_a_relayed_bind_seeds_no_pm_verbatim_rows(repo):
+    rl.start(repo, RUN, all_of_pm_ask=False)
+    rl.bind(repo, RUN, REL, relayed_text="relayed words")
+    assert not [r for r in _rows(repo) if r["anchor"] == "pm_verbatims"]
+    assert len(rl.read_ledger(repo, repo / RECORD_DIR_ROOT / RUN).items) == 1
+
+
+def test_a_relayed_row_never_supersedes_a_pm_verbatim_row(run):
+    repo, d = run
+    ledger = rl.read_ledger(repo, d)
     out = rl.judge(ledger, {"items": [
         {"id": "R1", "status": "superseded", "superseded_by": "R3"},
         {"id": "R2", "status": "met"}, {"id": "R3", "status": "met"},

@@ -166,7 +166,7 @@ def test_silent_without_transcript_path(tmp_path, _group_em_repo, _installed_gro
     assert pad._check_group_em_watch_arm_sync(SESSION, "") == ""
 
 
-def test_advisory_names_persistent_true_never_false(
+def test_advisory_names_background_bash_until_event_never_monitor(
     tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
@@ -174,8 +174,12 @@ def test_advisory_names_persistent_true_never_false(
     result = pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
 
     assert result != ""
-    assert "persistent=true" in result
-    assert "persistent=false" not in result
+    assert "run_in_background=true" in result
+    assert "--until-event --tick-interval-seconds 30" in result
+    assert "relaunch it on every completion" in result
+    assert "Never wrap it in a Monitor" in result
+    for stale in ("Monitor(command", "persistent=true", "never needs re-arming"):
+        assert stale not in result
 
 
 def test_fires_once_per_session_via_sentinel(
@@ -249,7 +253,7 @@ def test_the_launcher_probe_resolves_nothing_from_an_empty_settings_home(tmp_pat
 
 
 def _emitted_command(advisory):
-    return re.search(r'command="(.*?)", persistent=true', advisory).group(1)
+    return re.search(r'command="(.*?)", run_in_background=true', advisory).group(1)
 
 
 def test_emitted_args_carry_no_posix_only_quoting(

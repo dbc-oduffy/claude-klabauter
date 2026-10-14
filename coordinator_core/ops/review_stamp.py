@@ -1273,6 +1273,33 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     return out
 
 
+def write_register(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
+    """Write `review_stamp.register` from the plan's current register tally. Returns
+    `{"status": "registered"|"unchanged", "reason": ...}`; refuses (MintRefusal, no write) with
+    no stamp, no tally, or a non-zero count."""
+    from coordinator_core.ops.requirement_register import plan_register_tally, register_owed
+
+    _, split = _read_plan_frontmatter(plan_path)
+    fm_data = yaml.safe_load(split.fm_text) or {}
+    stamp = fm_data.get("review_stamp") if isinstance(fm_data, dict) else None
+    if not isinstance(stamp, dict):
+        raise MintRefusal(f"review-stamp: {plan_path} has no review_stamp; run review-stamp mint")
+    tally = plan_register_tally(split.fm_text, repo_root)
+    if tally is None:
+        raise MintRefusal(f"review-stamp: {plan_path} has no resolvable register_claims sizing")
+    owed = register_owed(tally)
+    if owed:
+        counts = ", ".join(f"{k}={v}" for k, v in owed.items())
+        raise MintRefusal(
+            f"review-stamp: register {counts} in {tally['sizing']}; settle those rows, then re-run"
+        )
+    if stamp.get("register") == tally:
+        return {"status": "unchanged", "reason": "register already recorded"}
+    stamp["register"] = tally
+    _write_stamp(plan_path, split, stamp)
+    return {"status": "registered", "reason": f"register tally recorded for {tally['sizing']}"}
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="review-stamp")
     sub = parser.add_subparsers(dest="verb", required=True)
@@ -1304,6 +1331,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     rj_p.add_argument("--plan", required=True)
     rj_p.add_argument("--repo-root", required=False, default=None)
+
+    rg_p = sub.add_parser("register", help="Write review_stamp.register from the plan's register tally.")
+    rg_p.add_argument("--plan", required=True)
+    rg_p.add_argument("--repo-root", required=False, default=None)
 
     pf_p = sub.add_parser("product-files", help="Print the product-file count of a diff.")
     pf_p.add_argument("--diff", required=True)
@@ -1351,6 +1382,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         print(f"review-stamp: {result['status']}: {result['reason']}")
         return 0 if result["status"] == "rejudged" or result["reason"] == "criterion already met" else 1
+
+    if args.verb == "register":
+        try:
+            result = write_register(plan_path, repo_root)
+        except MintRefusal as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"review-stamp: {result['status']}: {result['reason']}")
+        return 0
 
     if args.verb == "check":
         reason = check(plan_path, repo_root, supersession=args.supersession)

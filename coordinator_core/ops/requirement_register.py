@@ -304,15 +304,69 @@ def blocking_unclaimed(register: Register, claimed_ids: Sequence[Any]) -> Option
     deferred or waived with a ruling, and listed in no plan's `claimed_by`. None when none does."""
     claimed = {str(i) for i in claimed_ids}
     for row in register.rows:
-        if str(row.get(ROW_ID)) in claimed or claimants(row):
+        if str(row.get(ROW_ID)) not in claimed and _owes_unclaimed_work(row):
+            return str(row.get(ROW_ID))
+    return None
+
+
+def _owes_unclaimed_work(row: Mapping[str, Any]) -> bool:
+    """True for a claimant-less row that is not met-and-wired and not deferred/waived with a ruling."""
+    if claimants(row):
+        return False
+    status = row.get(ROW_STATUS)
+    if status == STATUS_MET and row.get(ROW_WIRED) is True:
+        return False
+    if status in (STATUS_DEFERRED, STATUS_WAIVED) and not _unruled(row):
+        return False
+    return True
+
+
+def register_tally(register: Register, claimed_ids: Sequence[Any]) -> dict[str, int]:
+    """`{unclaimed, open, partial, unwired}` for a plan claiming `claimed_ids`.
+
+    `open`/`partial` count claimed rows by status; `unwired` counts claimed rows that are met
+    but not `wired: true`; `unclaimed` counts the rows `blocking_unclaimed` would name. This is
+    deliberately NOT `rollup()`'s `unclaimed`, which counts every claimant-less row, met ones
+    included.
+    """
+    claimed = {str(i) for i in claimed_ids}
+    tally = {"unclaimed": 0, STATUS_OPEN: 0, STATUS_PARTIAL: 0, "unwired": 0}
+    for row in register.rows:
+        if str(row.get(ROW_ID)) not in claimed:
+            tally["unclaimed"] += _owes_unclaimed_work(row)
             continue
         status = row.get(ROW_STATUS)
-        if status == STATUS_MET and row.get(ROW_WIRED) is True:
-            continue
-        if status in (STATUS_DEFERRED, STATUS_WAIVED) and not _unruled(row):
-            continue
-        return str(row.get(ROW_ID))
-    return None
+        if status == STATUS_OPEN or status == STATUS_PARTIAL:
+            tally[status] += 1
+        elif status == STATUS_MET and row.get(ROW_WIRED) is not True:
+            tally["unwired"] += 1
+    return tally
+
+
+def register_owed(tally: Mapping[str, Any]) -> dict[str, int]:
+    """The non-zero work-owing counts of a `register_tally`; empty means the register is settled."""
+    return {k: tally[k] for k in ("unclaimed", STATUS_OPEN, STATUS_PARTIAL, "unwired") if tally.get(k)}
+
+
+def plan_register_tally(plan_fm_text: str, repo_root: Path) -> Optional[dict[str, Any]]:
+    """`{"sizing": <cited path as written>, **register_tally}` for a plan's `register_claims`;
+    None when the plan carries none, the sizing does not resolve (live, then archive), or it has
+    no register. Pure file reads."""
+    from coordinator_core.ops._sizing_citation import resolve_sizing_citation
+
+    sizing_rel, ids = plan_claims(plan_fm_text)
+    if not sizing_rel:
+        return None
+    path = resolve_sizing_citation(repo_root, sizing_rel)
+    if path is None:
+        return None
+    try:
+        register = read_register(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    if register is None:
+        return None
+    return {"sizing": sizing_rel, **register_tally(register, ids)}
 
 
 def rollup(rows: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, Any]:

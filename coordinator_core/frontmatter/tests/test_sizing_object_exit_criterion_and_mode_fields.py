@@ -176,8 +176,9 @@ class TestApmAcceptanceShape:
     def test_apm_amendment_with_pm_quote_is_rejected(self):
         assert _ec_errors(_APM, [{**_APM, "statement": "T", "pm_quote": "q"}])
 
-    def test_apm_hands_on_acceptance_is_rejected(self):
-        assert _ec_errors({**_APM, "mode": "hands-on"})
+    def test_apm_hands_on_acceptance_is_valid(self):
+        """sizing-object 1.38.0 admits hands-on on an APM acceptance (memo sizing-schema-hands-on-engine-acceptance.md)."""
+        assert not _ec_errors({**_APM, "mode": "hands-on"})
 
     def test_apm_hands_on_amendment_is_rejected(self):
         assert _ec_errors(_APM, [{**_APM, "mode": "hands-on", "statement": "T"}])
@@ -190,8 +191,9 @@ _ENGINE = {
 
 
 class TestEngineSizeRuleAcceptanceShape:
-    @pytest.mark.parametrize("extra", [{}, {"route": "spec-dispatch", "tshirt": "XS"}, {"mode": "pm"}])
+    @pytest.mark.parametrize("extra", [{}, {"route": "spec-dispatch", "tshirt": "XS"}, {"mode": "pm"}, {"mode": "hands-on"}])
     def test_engine_record_is_valid(self, extra):
+        """sizing-object 1.38.0 admits hands-on on an engine-size-rule record (memo sizing-schema-hands-on-engine-acceptance.md)."""
         assert not _ec_errors({**_ENGINE, **extra})
 
     def test_route_and_tshirt_are_optional(self):
@@ -200,7 +202,6 @@ class TestEngineSizeRuleAcceptanceShape:
     @pytest.mark.parametrize(
         "bad",
         [
-            {"mode": "hands-on"},
             {"tshirt": "XL"},
             {"route": "shape"},
             {"rule": ""},
