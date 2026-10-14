@@ -10,7 +10,9 @@ shared two-hop index/HEAD/worktree landing check.
 
 Never imports apply.py (it imports this module). Residue is measured over the
 session's own snapshot only, never the shared dirty set. Spawns: none, except
-one batched `git check-ignore` when an owned untracked path exists.
+one batched `git check-ignore` when an owned untracked file exists, and one
+batched `git status` when an owned untracked directory exists (a directory
+claim with nothing committable beneath it is dropped, never expanded).
 """
 
 import os
@@ -162,6 +164,23 @@ def _ignored(worktree_root: Union[Path, str], rels: list[str]) -> Optional[set[s
     return {match[3] for match in git_native.parse_check_ignore_stdin_z(result.stdout)}
 
 
+def _porcelain_paths(stdout: str) -> list[str]:
+    """Paths from `status --porcelain=v1 -z` output; a rename/copy record's
+    second NUL field (the origin path) is skipped."""
+    fields = stdout.split("\0")
+    paths: list[str] = []
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC":
+            i += 1
+    return paths
+
+
 def _under_dot_git(rel: str) -> bool:
     """Paths inside `.git/` can never be committed, so they are never residue."""
     return rel.replace("\\", "/").split("/", 1)[0] == ".git"
@@ -185,6 +204,18 @@ def owned_uncommitted_payload(
     candidates = [rel for rel in snap.owned_paths if rel not in skip and not _under_dot_git(rel)]
     states = landing_states(worktree_root, candidates)
     untracked = [rel for rel in candidates if states[rel] == UNTRACKED]
+    root = Path(worktree_root)
+    dirs = [rel for rel in untracked if (root / rel).is_dir()]
+    if dirs:
+        status = git_native.status_porcelain_scoped(worktree_root, dirs)
+        if status.returncode != 0:
+            return _payload("indeterminate", reason="git status failed for directory claim(s)")
+        dirty_paths = _porcelain_paths(status.stdout)
+        for rel in dirs:
+            prefix = rel.rstrip("/") + "/"
+            if not any(path.startswith(prefix) for path in dirty_paths):
+                states.pop(rel, None)
+        untracked = [rel for rel in untracked if rel not in dirs]
     if untracked:
         ignored = _ignored(worktree_root, untracked)
         if ignored is None:

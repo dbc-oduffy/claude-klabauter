@@ -230,6 +230,68 @@ def test_check_ignore_spawns_only_when_an_untracked_owned_path_exists(repo: Path
     assert len(calls) == 1
 
 
+def _dir_claim_repo(repo: Path) -> Path:
+    (repo / ".gitignore").write_text("ignored/\n*.log\n", encoding="utf-8")
+    plans = repo / "docs" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "a.md").write_text("a\n", encoding="utf-8")
+    _git(["add", ".gitignore", "docs/plans/a.md"], repo)
+    _git(["commit", "-q", "-m", "plans"], repo)
+    return plans
+
+
+def test_directory_claim_with_only_ignored_untracked_contents_is_clean(repo: Path) -> None:
+    plans = _dir_claim_repo(repo)
+    (plans / "x.log").write_text("noise\n", encoding="utf-8")
+    _claim(repo, "docs/plans")
+    assert cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))["verdict"] == "clean"
+
+
+def test_directory_claim_with_a_committable_untracked_file_stays_open(repo: Path) -> None:
+    plans = _dir_claim_repo(repo)
+    (plans / "x.log").write_text("noise\n", encoding="utf-8")
+    (plans / "y.md").write_text("y\n", encoding="utf-8")
+    _claim(repo, "docs/plans")
+    payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert payload["verdict"] == "open" and payload["items"] == ["docs/plans"]
+
+
+def test_directory_claim_with_a_dirty_tracked_file_stays_open(repo: Path) -> None:
+    plans = _dir_claim_repo(repo)
+    (plans / "a.md").write_text("edited\n", encoding="utf-8")
+    _claim(repo, "docs/plans")
+    payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert payload["verdict"] == "open" and payload["items"] == ["docs/plans"]
+
+
+def test_directory_status_failure_is_indeterminate(repo: Path, monkeypatch) -> None:
+    _dir_claim_repo(repo)
+    _claim(repo, "docs/plans")
+    real = cr.git_native.status_porcelain_scoped
+    failed = real(repo / "nonexistent", ["docs/plans"])
+    monkeypatch.setattr(cr.git_native, "status_porcelain_scoped", lambda *a, **k: failed)
+    payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert payload["verdict"] == "indeterminate" and "status" in payload["reason"]
+
+
+def test_directory_status_spawns_once_and_only_for_directories(repo: Path, monkeypatch) -> None:
+    calls: list = []
+    real = cr.git_native.status_porcelain_scoped
+    monkeypatch.setattr(cr.git_native, "status_porcelain_scoped", lambda *a, **k: calls.append(a) or real(*a, **k))
+
+    (repo / "fresh.txt").write_text("f\n", encoding="utf-8")
+    _claim(repo, "fresh.txt")
+    cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert calls == []
+
+    for name in ("d1", "d2"):
+        (repo / name).mkdir()
+        (repo / name / "n.md").write_text("n\n", encoding="utf-8")
+        _claim(repo, name)
+    cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert len(calls) == 1
+
+
 # --- unstamped_run_batons_payload ----------------------------------------------
 
 
