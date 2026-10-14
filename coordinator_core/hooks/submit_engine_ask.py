@@ -13,7 +13,7 @@ notification is the EM's one wake. The stub only ever runs when this hook did no
 halt that names the gap, never a run.
 
 `args` shape: `{ask: str}` | `{sizing: str}`, optional `repo` (absolute path; else the payload
-cwd's repo), optional `source: "pm" | "relayed"` (ask only; absent is `pm`; a relayed ask is
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (ask only; absent is `pm`; a relayed ask is
 forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
 (`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
 op's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the
@@ -115,6 +115,28 @@ def _repo_root(repo_arg: Optional[str], cwd: object) -> Optional[Path]:
     return Path(top) if top else None
 
 
+def _context_home(root: Path, paths: list[str]) -> Path:
+    """The registered repo holding the first absolute context path that lies outside `root`; else `root`."""
+    resolved_root = root.resolve()
+    for raw in paths:
+        p = Path(raw.replace("\\", "/"))
+        if not p.is_absolute():
+            continue
+        try:
+            p.resolve().relative_to(resolved_root)
+            continue
+        except ValueError:
+            pass
+        from coordinator_core.bash_guards._write_bump_applicability import target_is_registered_repo
+        from coordinator_core.git.repo_root import show_toplevel
+
+        top = show_toplevel(str(p.parent))
+        if top and target_is_registered_repo(top):
+            return Path(top)
+        return root
+    return root
+
+
 def _default_emit(params: dict, repo_root: Path) -> dict:
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
@@ -151,6 +173,9 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
     if root is None:
         where = repo_arg or payload.get("cwd") or "the session cwd"
         return _refuse(f"{where} is in no git repo. Add `repo: \"<absolute repo path>\"` to args.")
+
+    if ask is not None and repo_arg is None and brief.get("ask_context"):
+        root = _context_home(root, brief["ask_context"])
 
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
