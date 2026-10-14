@@ -82,7 +82,6 @@ POPULATION: Mapping[str, tuple] = {
     "workday-start-advisory-counters": ("not_a_gate", "emits advisory counters"),
     "workweek-complete-advisories": ("not_a_gate", "emits advisories"),
     "workweek-complete-close": ("not_a_gate", "closes the week"),
-    "workweek-complete-doc-staleness": ("pending_replay", "staleness verdict vs exit unreplayed"),
     "workweek-complete-doc-verify": ("pending_replay", "doc verify verdict vs exit unreplayed"),
     "workweek-complete-drift-guards": ("pending_replay", "drift guard verdict vs exit unreplayed"),
     "workweek-complete-reverse-drift-gate": ("pending_replay", "reverse drift gate verdict vs exit unreplayed"),
@@ -90,4 +89,4 @@ POPULATION: Mapping[str, tuple] = {
     "wsc-coverage-gate-runner": ("pending_replay", "coverage gate verdict vs exit unreplayed"),
 }
 
-PENDING_REPLAY_CEILING = 20
+PENDING_REPLAY_CEILING = 19

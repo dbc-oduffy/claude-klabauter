@@ -389,3 +389,46 @@ def test_unrelated_turn_errors_refuses_unembedded_turn_and_empty_reason():
     errs = rr.unrelated_turn_errors(doc, reg)
     assert len(errs) == 2 and "turn 9" in errs[0] and "turn 1" in errs[1]
     assert rr.unrelated_turn_errors(doc, {"rows": []}) == []
+
+
+_LOADER_DOC = (
+    "stamp: 2026-10-14T10:00:00Z\n"
+    "day: 2026-10-14\n"
+    "quoted: '2026-10-14T10:00:00Z'\n"
+    "block: |\n  line one\n  line two\n"
+    "rows:\n- id: R1\n  met_by: [a, b]\n- id: R2\n  met_by: []\n"
+)
+_LOADER_EXPECT = {
+    "stamp": "2026-10-14T10:00:00Z",
+    "day": "2026-10-14",
+    "quoted": "2026-10-14T10:00:00Z",
+    "block": "line one\nline two\n",
+    "rows": [{"id": "R1", "met_by": ["a", "b"]}, {"id": "R2", "met_by": []}],
+}
+
+
+@pytest.fixture
+def _fresh_loader():
+    rr._str_loader_cache.clear()
+    yield
+    rr._str_loader_cache.clear()
+
+
+def test_loader_uses_c_base_when_libyaml_present(_fresh_loader):
+    if not getattr(yaml, "__with_libyaml__", False):
+        pytest.skip("libyaml not available")
+    assert issubclass(rr._loader(), yaml.CSafeLoader)
+
+
+def test_loader_falls_back_to_safeloader_without_libyaml(_fresh_loader, monkeypatch):
+    monkeypatch.setattr(yaml, "__with_libyaml__", False, raising=False)
+    cls = rr._loader()
+    assert issubclass(cls, yaml.SafeLoader) and not issubclass(cls, yaml.CSafeLoader)
+
+
+@pytest.mark.parametrize("libyaml", [True, False])
+def test_loader_parses_identically_on_both_bases(_fresh_loader, monkeypatch, libyaml):
+    if libyaml and not getattr(yaml, "__with_libyaml__", False):
+        pytest.skip("libyaml not available")
+    monkeypatch.setattr(yaml, "__with_libyaml__", libyaml, raising=False)
+    assert rr._load(_LOADER_DOC) == _LOADER_EXPECT

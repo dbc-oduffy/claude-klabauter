@@ -10,10 +10,8 @@ fixture is built once before sampling, so setup-only is interpreter start plus d
 UNIT: process time and spawn count from `batched_process_time_ms`, never wall clock (CLAUDE.md,
 The brightline). THRESHOLD: 500ms is the brightline bar itself (DR-344), not a derived ratchet.
 
-pending_fix: the brief is over the bar at HEAD (step_costs.json `workweek_complete_brief`:
-6921.9ms median process time, 27 spawns, doc_staleness 5.9s of it), so this gate is excluded from
-both tiers until the rebuilt brief and the rebuilt doc-staleness step land and the row re-measures
-at or under 500ms.
+pending_fix: the brief is over the bar (figures live in step_costs.json `workweek_complete_brief`),
+so this gate is excluded from both tiers until a new spiked plan lands.
 """
 
 from __future__ import annotations

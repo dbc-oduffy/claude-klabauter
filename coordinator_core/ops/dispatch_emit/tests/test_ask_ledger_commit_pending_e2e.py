@@ -29,7 +29,7 @@ const agent = async (_prompt, opts) => {
   throw new Error('unstubbed agent label ' + opts.label);
 };
 let _halted = null;
-let _manifest = { plan_id: 'p', rows: [], gated: [], doc_writes: [] };
+let _manifest = { plan_id: 'p', rows: [], gated: %(gated)s, doc_writes: [] };
 let _docs = null, _commit = null, _nextAction = null;
 let _incompleteChunks = [], _notStarted = [], _blockedChunks = [], _heldBy = [], _unansweredBriefs = [];
 let _stoppedBy = [], _verifications = [], _planHeld = {};
@@ -61,9 +61,10 @@ def _segment(in_run_commit: bool = True) -> str:
     return "if (true) {\n" + script[start:stop]
 
 
-def _run(stubs: list[dict], in_run_commit: bool = True) -> list[dict]:
+def _run(stubs: list[dict], in_run_commit: bool = True, gated: tuple[str, ...] = ()) -> list[dict]:
     """One result per ledger-check reply in `stubs`: halted_by, phases run, and the verdict handed to the commit."""
     prelude = _STUBS % {
+        "gated": json.dumps([{"id": g, "owner_repo": "sibling", "closure_key": None} for g in gated]),
         "token": _RUN_TOKEN,
         "owner_rows": ask_compose._OWNER_ROWS_JS,
         "agent_defs": ask_compose._AGENT_DEFS_HELPER_JS,
@@ -171,3 +172,51 @@ def test_the_composed_halt_matches_the_ledger_judge_whatever_the_checker_verdict
             if blocked != failed:
                 mismatches.append((name, verdict, blocked, failed))
     assert not mismatches, mismatches
+
+
+_WITHHELD_ITEMS = {
+    "withheld_by_gated": _item("R1", "not_met", withheld_by="C9", remaining=["C9 is gated"]),
+    "withheld_by_unknown": _item("R1", "not_met", withheld_by="C7", remaining=["C7 is gated"]),
+    "withheld_by_gated_non_essential": _item("R1", "not_met", withheld_by="C9", essential=False),
+}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("all_of", [False, True])
+def test_the_composed_halt_matches_the_ledger_judge_on_a_withheld_row(all_of):
+    ledger = Ledger((Item("R1", "text", "ask", ""),), all_of_pm_ask=all_of)
+    names = list(_WITHHELD_ITEMS)
+    results = _run(
+        [{"verdict": "fail", "all_of_pm_ask": all_of, "items": [_WITHHELD_ITEMS[n]], "conflicts": []} for n in names],
+        gated=("C9",),
+    )
+    mismatches = []
+    for name, out in zip(names, results):
+        failed = [f["id"] for f in judge(ledger, {"items": [_WITHHELD_ITEMS[name]]}, gated={"C9"})["failures"]]
+        halted = out["halted_by"]
+        blocked = [i["id"] for i in halted["items"]] if halted else []
+        if blocked != failed:
+            mismatches.append((name, blocked, failed))
+    assert not mismatches, mismatches
+    assert results[0]["halted_by"] is None and results[1]["halted_by"] is not None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_withheld_only_ledger_reaches_docs_and_commit_and_hands_withheld_by_on():
+    item = _item("R1", "not_met", withheld_by="C9", remaining=["C9 is gated"])
+    (out,) = _run(
+        [{"verdict": "fail", "all_of_pm_ask": True, "items": [item], "conflicts": []}],
+        in_run_commit=False, gated=("C9",),
+    )
+    assert out["halted_by"] is None, out["halted_by"]
+    handed = out["next_action"]["params"]["ledger_verdict"]["items"]
+    assert handed[0]["withheld_by"] == "C9"
+
+
+def test_the_ledger_check_names_the_gated_ids_and_the_schema_carries_withheld_by():
+    item = ask_compose._LEDGER_CHECK_SCHEMA["properties"]["items"]["items"]
+    assert "withheld_by" in item["properties"]
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", in_run_commit=True)
+    assert "withheld_by set to that chunk id" in script and "_manifest?.gated" in script

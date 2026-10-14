@@ -219,6 +219,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "id": _STR,
                     "status": {"type": "string", "enum": list(LEDGER_STATUSES)},
                     "essential": {"type": "boolean"},
+                    "withheld_by": _STR,
                     "root_read": {"type": ["string", "array"], "items": _STR},
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
@@ -1195,7 +1196,10 @@ def compose_ask_script(
         "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
         "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
         "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
-        "and any other gap in plain words. The commit stage runs after this check, so an uncommitted "
+        "and any other gap in plain words. The stage manifest withheld these chunks (gated): ",
+        "js:(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')",
+        ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
+        "that chunk id exactly; set withheld_by on no other item. The commit stage runs after this check, so an uncommitted "
         "change is expected here and 'commit' alone in remaining is not a reason to block. Return "
         "all_of_pm_ask as the ledger states it, and list any in-repo memo or doctrine that conflicts "
         "with the ask as conflicts.",
@@ -1218,6 +1222,8 @@ def compose_ask_script(
         "? 'post_commit' : i.status;\n"
         "      const acts = status === 'post_commit' && i.status === 'not_met' ? rem : i.post_commit_acts;\n"
         "      if (status === 'drifted') return true;\n"
+        "      if (status === 'not_met' && typeof i.withheld_by === 'string' && i.withheld_by) "
+        "return !(_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by);\n"
         "      if (status === 'not_met') return l.all_of_pm_ask === true || i.essential !== false;\n"
         "      if (status === 'post_commit') return !Array.isArray(acts) || !acts.length "
         "|| acts.some((a) => !_postCommitActs.includes(a));\n"
@@ -1272,6 +1278,7 @@ def compose_ask_script(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}), "
+        "...(i.withheld_by ? { withheld_by: i.withheld_by } : {}), "
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
     )

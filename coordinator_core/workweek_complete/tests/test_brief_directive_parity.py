@@ -17,7 +17,6 @@ from typing import Any
 
 import pytest
 
-from coordinator_core.ops.requirement_register import StallReport
 from coordinator_core.workweek_complete import brief as brief_mod
 from coordinator_core.workweek_complete.brief_inputs import BriefInputs
 
@@ -76,12 +75,6 @@ _VERIFY_FINDINGS = [
     },
 ]
 
-_STALL = StallReport(
-    stale_rows=["state/sizings/s.yaml row r1 (partial, claimed by p1, no progress since 2026-09-01)"],
-    stuck_plans=["docs/plans/p.md (executing, untouched 20d, sizing state/sizings/s.yaml)"],
-    unclaimed_rows=["state/sizings/s.yaml row r2 (ui)"],
-)
-
 _VERSION = {"disposition": "minor", "rationale": "fixed-input minor recommendation"}
 
 _DIRECTIVE_FIELDS = (
@@ -129,7 +122,6 @@ def capture(patch: Any, env: dict[str, str], *, populated: bool) -> dict[str, An
         repo_root=_FIXED_ROOT,
         stale_docs=stale if populated else [],
         doc_verify_findings_by_doc=grouped if populated else {},
-        register_stall=_STALL if populated else StallReport(),
         version_recommendation=dict(_VERSION) if populated else None,
     )
     patch.setattr(brief_mod, "compute_brief_inputs", lambda *a, **k: inputs)
@@ -190,9 +182,9 @@ def test_populated_baseline_carries_per_doc_points_and_acks():
     d_ids = {d["id"] for d in populated["directives"]}
     assert "jp_doc_staleness_docs_guides_alpha_md" in jp_ids
     assert "jp_doc_verify_docs_guides_beta_md" in jp_ids
-    assert "d_doc_staleness_ack_readme_md" in d_ids
+    assert "d_doc_staleness_ack_readme_md" not in d_ids
     assert "d_doc_verify_ack_docs_guides_beta_md" in d_ids
-    assert "jp_requirement_register_stall" in populated["narration"]
+    assert "jp_requirement_register_stall" not in populated["narration"]
 
 
 if __name__ == "__main__":

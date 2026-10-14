@@ -8,9 +8,8 @@ under assembly, at very different cost.
 
   Leg 1 (cheap) — SCOPE-PATH staleness: for each `scope:` entry in the
   plan's own frontmatter, has the path gone missing since the plan cited
-  it? Composed directly over `coordinator_core.ops.doc_staleness.
-  _log_follow_records` (the shipped `git log --follow` reader) — this
-  module does not re-derive rename-aware history walking.
+  it? One `git log -1 --format=%H -- <path>` probe per absent path,
+  read for truthiness only (history exists or not).
 
   Leg 2 (the hard one) — CITED-LINE staleness: the plan's own prose cites
   specific `` `path/to/file.py:N` `` targets (the same backtick
@@ -86,17 +85,15 @@ Negative-spec:
     `doc_content_verify` does not extract at all. This module owns its
     own small extractor instead of bending that one to a shape it was
     not built for.
-  - Does NOT re-derive `_log_follow_records`'s `git log --follow` walk,
-    its whitespace/link-only diff classification, or its sweep-drive-by
-    filter — Leg 1 composes over the shipped reader for existence-of-
-    history evidence only, it does not re-implement `doc_staleness.py`'s
-    content-modifying-commit discrimination.
+  - Does NOT walk rename-aware history or classify diffs — Leg 1 probes
+    existence-of-history only, with no content-modifying-commit
+    discrimination.
   - Does NOT guess a `stale` verdict for a citation whose anchor text
     could not be extracted from the surrounding prose at all — that is
     `undetermined`, never a coin-flip `False`.
   - Does NOT mutate any file, and does NOT shell out for Leg 2 — Leg 2 is
     a pure current-tree read (`Path.read_text`); only Leg 1 shells to git,
-    via the composed `_log_follow_records`.
+    via `_has_git_history`.
 
 Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C11
 """
@@ -105,12 +102,18 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from coordinator_core.ops.doc_staleness import _log_follow_records as _doc_staleness_log_follow_records
+from coordinator_core.git.run import run_git
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
 
 
-def _history_records(repo_root, rel_path):
-    return _doc_staleness_log_follow_records(repo_root, rel_path)
+def _has_git_history(repo_root, rel_path) -> bool:
+    """True iff git has any commit touching `rel_path`. Called only for a
+    path absent on disk, where `--follow` could add nothing but older names."""
+    result = run_git(
+        ["log", "-1", "--format=%H", "--", rel_path], cwd=str(repo_root)
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
 
 _CITATION_RE = re.compile(
     r"`([A-Za-z0-9_./\-]+\.[A-Za-z0-9_]+):(\d+)(?:-\d+)?`"
@@ -206,14 +209,14 @@ def scope_paths_staleness(context: PredicateContext) -> dict[str, Any]:
         rel_path = str(rel_path)
         if (context.repo_root / rel_path).exists():
             continue
-        records = _history_records(context.repo_root, rel_path)
+        has_history = _has_git_history(context.repo_root, rel_path)
         stale_paths.append(
             {
                 "path": rel_path,
                 "reason": (
                     "absent on disk but has prior git history "
                     "(deleted or renamed away)"
-                    if records
+                    if has_history
                     else "absent on disk, no git history found for this path"
                 ),
             }

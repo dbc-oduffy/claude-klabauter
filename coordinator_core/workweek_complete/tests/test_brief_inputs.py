@@ -106,12 +106,22 @@ def test_outside_a_repo_every_field_is_empty(tmp_path, monkeypatch):
     assert got.repo_root is None
     assert got.stale_docs == []
     assert got.doc_verify_findings_by_doc == {}
-    assert not got.register_stall
     assert got.version_recommendation is None
 
 
+def test_compute_brief_inputs_never_runs_the_register_stall_scan(repo, monkeypatch):
+    from coordinator_core.ops import requirement_register
+
+    calls = []
+    monkeypatch.setattr(
+        requirement_register, "stall_report", lambda *a, **kw: calls.append(a)
+    )
+    bi.compute_brief_inputs()
+    assert calls == []
+
+
 def test_degraded_values_on_injected_failure(repo, monkeypatch, capsys):
-    from coordinator_core.ops import doc_content_verify, doc_staleness, requirement_register
+    from coordinator_core.ops import doc_content_verify, doc_staleness
     from coordinator_core.workweek_complete.release import version_rule
 
     def boom(*a, **kw):
@@ -119,7 +129,6 @@ def test_degraded_values_on_injected_failure(repo, monkeypatch, capsys):
 
     monkeypatch.setattr(doc_staleness, "build_doc_staleness_report", boom)
     monkeypatch.setattr(doc_content_verify, "verify_doc_on_disk", boom)
-    monkeypatch.setattr(requirement_register, "stall_report", boom)
     monkeypatch.setattr(version_rule, "recommend_level", boom)
 
     got = bi.compute_brief_inputs()
@@ -127,11 +136,9 @@ def test_degraded_values_on_injected_failure(repo, monkeypatch, capsys):
 
     assert got.stale_docs == []
     assert got.doc_verify_findings_by_doc == {}
-    assert not got.register_stall
     assert got.version_recommendation is None
     assert "doc-staleness report unavailable, degrading to zero stale docs: injected" in err
     assert "doc-verify findings unavailable, degrading to zero findings: injected" in err
-    assert "register stall scan unavailable: injected" in err
 
 
 def test_registry_failure_degrades_both_doc_signals(repo, monkeypatch, capsys):

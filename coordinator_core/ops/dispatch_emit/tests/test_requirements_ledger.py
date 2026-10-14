@@ -157,7 +157,7 @@ def _ledger(run):
 
 
 def test_judge_passes_every_item_met(run):
-    assert rl.judge(_ledger(run), _verdict(("R1", "met"), ("R2", "met"), ("R3", "met"))) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), _verdict(("R1", "met"), ("R2", "met"), ("R3", "met"))) == {"pass": True, "failures": [], "open": []}
 
 
 def test_judge_fails_drift_and_an_unjudged_revision(run):
@@ -186,6 +186,43 @@ def test_all_of_pm_ask_makes_an_inessential_item_mandatory(run):
 
 def test_not_met_defaults_to_essential(run):
     assert not rl.judge(_ledger(run), _verdict(("R1", "met"), ("R2", "not_met"), ("R3", "met")))["pass"]
+
+
+@pytest.mark.parametrize("all_of", [False, True])
+def test_a_not_met_row_withheld_by_a_gated_chunk_passes_and_is_open(run, all_of):
+    if all_of:
+        _revise(run[0], all_of_pm_ask=True)
+    verdict = _verdict(("R1", "met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated={"C9"})
+    assert out == {"pass": True, "failures": [], "open": [{"id": "R2", "reason": "withheld_by C9"}]}
+
+
+@pytest.mark.parametrize("gated", [None, [], {"C1"}])
+def test_withheld_by_naming_no_gated_chunk_fails(run, gated):
+    verdict = _verdict(("R1", "met"), ("R2", "not_met", {"withheld_by": "C7"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated=gated)
+    assert not out["pass"] and out["open"] == []
+    assert out["failures"] == [
+        {"id": "R2", "reason": "withheld_by C7 names no gated chunk of the run's manifest"}
+    ]
+
+
+def test_an_essential_not_met_row_still_fails_beside_a_withheld_one(run):
+    verdict = _verdict(("R1", "not_met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated={"C9"})
+    assert [f["id"] for f in out["failures"]] == ["R1"]
+    assert out["open"] == [{"id": "R2", "reason": "withheld_by C9"}]
+
+
+def test_open_lists_withheld_and_non_essential_rows_in_ledger_order(run):
+    verdict = _verdict(
+        ("R3", "not_met", {"essential": False}), ("R2", "not_met", {"withheld_by": "C9"}), ("R1", "met")
+    )
+    out = rl.judge(_ledger(run), verdict, gated=("C9",))
+    assert out["pass"] is True
+    assert out["open"] == [
+        {"id": "R2", "reason": "withheld_by C9"}, {"id": "R3", "reason": "non-essential"},
+    ]
 
 
 def test_judge_refuses_unknown_and_duplicate_ids_and_a_shapeless_verdict(run):
@@ -218,7 +255,7 @@ def test_judge_passes_a_post_commit_item_and_the_landing_writes_it_back(run):
         ("R1", "post_commit", {"post_commit_acts": ["commit", "sha_reply"], "wired": True}),
         ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
     )
-    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": [], "open": []}
     rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
     rows = {r["id"]: r for r in _rows(repo)}
     assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@abc1234"]
@@ -255,7 +292,7 @@ def test_not_met_with_only_a_commit_remaining_passes_and_lands_met(run):
         ("R1", "not_met", {"essential": True, "remaining": ["commit"], "wired": True}),
         ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
     )
-    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": [], "open": []}
     assert verdict["items"][0]["status"] == "not_met"
     rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
     rows = {r["id"]: r for r in _rows(repo)}
@@ -337,4 +374,4 @@ def test_routed_item_must_name_the_engine_root_it_read(run, tmp_path):
 
 def test_unrouted_judgment_ignores_root_read(run):
     verdict = _verdict(("R1", "met", {"root_read": "anywhere"}), ("R2", "met"), ("R3", "met"))
-    assert rl.judge(_ledger(run), verdict) == rl.judge(_ledger(run), verdict, {}) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), verdict) == rl.judge(_ledger(run), verdict, {}) == {"pass": True, "failures": [], "open": []}

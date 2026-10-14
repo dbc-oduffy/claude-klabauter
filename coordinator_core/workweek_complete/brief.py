@@ -32,7 +32,7 @@ drawn from exactly this set):
     workweek-trail-scope, check-arch-audit-staleness,
     check-atlas-watch-drift, query-completions, workweek-complete-close,
     check-version-consistency, coordinator-ceremony-hook, emit-cadence,
-    workweek-complete-doc-staleness, workweek-complete-doc-verify
+    workweek-complete-doc-verify
 
 Negative-spec:
     - Does NOT reimplement `build_envelope`/`emit`/`build_judgment_point`/
@@ -127,7 +127,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workweek-complete-close",
     "check-version-consistency",
     "coordinator-ceremony-hook",
-    "workweek-complete-doc-staleness",
     "workweek-complete-doc-verify",
     "tier-u-grant-cli",
 )
@@ -186,18 +185,13 @@ def _doc_staleness_jp_id(path: str) -> str:
     return f"jp_doc_staleness_{_doc_staleness_slug(path)}"
 
 
-def _doc_staleness_ack_directive_id(path: str) -> str:
-    return f"d_doc_staleness_ack_{_doc_staleness_slug(path)}"
-
-
 def _doc_staleness_evidence(entry: dict[str, Any]) -> str:
     return (
         f"{entry.get('path')}: commits_since={entry.get('commits_since')} "
         f"(threshold {entry.get('threshold_commits')}), "
         f"days_since={entry.get('days_since')} "
         f"(threshold {entry.get('threshold_days')}), "
-        f"last_touch={entry.get('last_touch_sha')}@{entry.get('last_touch_date')}, "
-        f"changed_areas={entry.get('changed_areas')}"
+        f"last_touch={entry.get('last_touch_sha')}@{entry.get('last_touch_date')}"
     )
 
 
@@ -265,35 +259,26 @@ def _build_directives(
 
     Doc-staleness gate (plan `docs/plans/2026-07-28-human-facing-doc-
     staleness-detector.md`, chunk C5) — composes the two existing
-    primitives, adding ONE advisory entry to the battery (now eleven) and
-    leaving the existing hard-blocking-three/advisory-seven split
-    otherwise untouched (B1 anti-scope):
-      (a) `d_step4b_4k_doc_staleness` — ordinary advisory entry
-          (`hard_block=False`), ungated, always runs; its own CLI output
-          carries the AC6 evidence per doc into the Step 5 render, same
-          shape as `d_step4b_4k_arch_audit_staleness`.
-      (b) One per-stale-doc follow-on directive
-          (`d_doc_staleness_ack_<slug>`), gated via `depends_on` on that
-          doc's judgment point (`_build_judgment_points`) — reuses the
-          same CLI scoped to one doc (`--doc <path> --ack`), never fires
-          until the EM records an explicit disposition. `depends_on` is
-          singular per directive (contract, `_directive`), which is why
-          this is one directive per doc rather than N judgment points
-          fanning into a single shared directive. `stale_docs` is
-          `BriefInputs.stale_docs`, pre-filtered to
-          `stale` entries by `brief()` before being threaded into both
-          this function and `_build_judgment_points`.
+    primitives, leaving the existing hard-blocking-three/advisory-seven
+    split untouched (B1 anti-scope):
+      (a) No staleness directive and no per-doc ack directive: each stale
+          doc reaches the Step 5 render through its `jp_doc_staleness_<slug>`
+          judgment point's evidence, and the disposition is recorded on
+          that point (`_build_judgment_points`); nothing else needs to run.
+          `stale_docs` is `BriefInputs.stale_docs`, pre-filtered to `stale`
+          entries by `brief()`.
 
-    Doc-content-verification gate (chunk C6c) — same delivery shape as (a)/
-    (b) above, ONE gate with TWO signal types (AC14): staleness asks "has
-    this doc moved recently", verification asks "is what it says still
-    true" (the `b644d5a9` incident shape). Adds ONE further advisory entry
-    to the battery (now twelve):
-      (c) `d_step4b_4k_doc_verify` — ordinary advisory entry
+    Doc-content-verification gate (chunk C6c) — same delivery shape as
+    `d_step4b_4k_arch_audit_staleness` and (a) above, ONE gate with TWO
+    signal types (AC14): staleness asks "has this doc moved recently",
+    verification asks "is what it says still true" (the `b644d5a9` incident
+    shape). Adds ONE advisory entry to the battery (now eleven):
+      (b) `d_step4b_4k_doc_verify` — ordinary advisory entry
           (`hard_block=False`), ungated, always runs; its CLI output
           carries every citation finding across the declared doc registry
-          into the Step 5 render, same shape as (a).
-      (d) One per-doc follow-on directive (`d_doc_verify_ack_<slug>`), gated
+          into the Step 5 render, same shape as
+          `d_step4b_4k_arch_audit_staleness`.
+      (c) One per-doc follow-on directive (`d_doc_verify_ack_<slug>`), gated
           via `depends_on` on that doc's judgment point, ONLY for docs that
           actually carry findings — `doc_verify_findings_by_doc` is
           `BriefInputs`'s findings grouped by doc, never one directive per individual
@@ -422,11 +407,6 @@ def _build_directives(
             args=[],
         ),
         _directive(
-            "d_step4b_4k_doc_staleness",
-            cli="workweek-complete-doc-staleness",
-            args=[],
-        ),
-        _directive(
             "d_step4b_4k_doc_verify",
             cli="workweek-complete-doc-verify",
             args=[],
@@ -439,15 +419,6 @@ def _build_directives(
         _directive("d_step6_query_completions", cli="query-completions", args=[]),
         _directive("d_step7_6_trail_scope", cli="workweek-trail-scope", args=[]),
         _directive("d_step13_archive_close", cli="workweek-complete-close", args=[]),
-        *(
-            _directive(
-                _doc_staleness_ack_directive_id(entry["path"]),
-                cli="workweek-complete-doc-staleness",
-                args=["--doc", entry["path"], "--ack"],
-                depends_on=_doc_staleness_jp_id(entry["path"]),
-            )
-            for entry in stale_docs
-        ),
         *(
             _directive(
                 _doc_verify_ack_directive_id(doc_path),
@@ -503,7 +474,6 @@ def _build_directives(
 def _build_judgment_points(
     stale_docs: Optional[list[dict[str, Any]]] = None,
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
-    register_stall: Any = None,
     version_recommendation: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """Tier-2 (judgment, recommendation required) and Tier-3 (your-call, no
@@ -532,8 +502,7 @@ def _build_judgment_points(
     for docs the op actually marked stale — a repo with a clean report
     emits none, mirroring `jp_step2_5_dirty_tree_ambiguous`'s
     only-when-live conditional shape in the sibling workday assembler.
-    `resolves` on each disposition names that doc's own follow-on
-    directive (`d_doc_staleness_ack_<slug>`) — never auto-resolved.
+    Dispositions resolve no directive; the choice is recorded only.
 
     Doc-content-verification gate (C6c, see `_build_directives` for the
     paired directive shape): one `jp_doc_verify_<slug>` per doc that carries
@@ -570,14 +539,8 @@ def _build_judgment_points(
                 "an update?"
             ),
             dispositions=[
-                build_disposition(
-                    "reviewed_ok",
-                    resolves=[_doc_staleness_ack_directive_id(entry["path"])],
-                ),
-                build_disposition(
-                    "queued_for_update",
-                    resolves=[_doc_staleness_ack_directive_id(entry["path"])],
-                ),
+                build_disposition("reviewed_ok"),
+                build_disposition("queued_for_update"),
             ],
             evidence=_doc_staleness_evidence(entry),
             reason="pm-scoped-tradeoff",
@@ -781,16 +744,6 @@ def _build_judgment_points(
             round_trip="terminal",
         ),
     ] + doc_staleness_points + doc_verify_points
-    if register_stall is not None:
-        from coordinator_core.ops.requirement_register import (  # noqa: PLC0415
-            stall_judgment_point,
-        )
-
-        stall_point = stall_judgment_point(
-            register_stall, id="jp_requirement_register_stall"
-        )
-        if stall_point is not None:
-            points.append(stall_point)
     return points
 
 
@@ -821,7 +774,6 @@ def brief(
     all_judgment_points = _build_judgment_points(
         inputs.stale_docs,
         inputs.doc_verify_findings_by_doc,
-        inputs.register_stall,
         inputs.version_recommendation,
     )
 

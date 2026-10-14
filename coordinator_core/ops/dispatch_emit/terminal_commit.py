@@ -1322,28 +1322,33 @@ def _routed_from_manifest(manifest_path: Optional[Path]) -> dict:
 
 
 def _ledger_gate(
-    worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None
-) -> tuple[Optional[dict], object]:
-    """(refusal or None, ledger) for a ledger-bearing ask run: the refusal when ``verdict`` does not
-    pass ``requirements_ledger.judge`` against the live register rows, an engine-routed item
-    (``manifest_path``'s ``engine_rows``) included when it names another root than the one owed.
-    A run emitted without a ledger is not gated (``(None, None)``). The pass is one gate among
+    worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
+    gated: Optional[Sequence[str]] = None,
+) -> tuple[Optional[dict], object, list]:
+    """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
+    does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
+    item (``manifest_path``'s ``engine_rows``) included when it names another root than the one
+    owed. ``gated`` is the manifest's gated chunk ids; a ``not_met`` row whose ``withheld_by`` names
+    one passes and comes back in ``open`` (``[{id, reason}]``), as does a non-essential one.
+    A run emitted without a ledger is not gated (``(None, None, [])``). The pass is one gate among
     the review stage's; it discharges none of them."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
     ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
     if ledger is None:
-        return None, None
+        return None, None, []
     if not isinstance(verdict, dict):
         return _error(
             "the run is ledger-bearing but params.ledger_verdict is absent: the final ledger "
             "checker's verdict gates this commit. Re-run the run's ledger check and pass its "
             "verdict, or revise with workflow.revise and re-run the check",
             refused="ledger-unjudged",
-        ), ledger
-    result = requirements_ledger.judge(ledger, verdict, _routed_from_manifest(manifest_path))
+        ), ledger, []
+    result = requirements_ledger.judge(
+        ledger, verdict, _routed_from_manifest(manifest_path), gated=gated
+    )
     if result["pass"]:
-        return None, ledger
+        return None, ledger, result.get("open") or []
     return _error(
         "the requirements are not met: "
         + "; ".join(f"{f['id']}: {f['reason']}" for f in result["failures"][:10]),
@@ -1351,7 +1356,7 @@ def _ledger_gate(
         ledger_failures=result["failures"],
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
-    ), ledger
+    ), ledger, []
 
 
 def _ledger_writeback(worktree_root: Path, ledger, verdict: object, run_id: str, sha: str) -> dict:
@@ -2248,7 +2253,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              when canonical-UUID shaped.
         ledger_verdict (dict, optional)  -- an ask run's final ledger-checker
                                              verdict ``{items: [{id, status,
-                                             essential?, wired?, superseded_by?,
+                                             essential?, wired?, withheld_by?
+                                             (a gated chunk id of the run's
+                                             manifest: the not_met row passes,
+                                             stays open and is named by a
+                                             ``Requirement-Open`` trailer),
+                                             superseded_by?,
                                              post_commit_acts?, remaining?}]}``; the reply
                                              carries ``post_commit_owed`` for
                                              each ``sha_memo`` item;
@@ -2612,9 +2622,11 @@ def _terminal_commit(
             refused="unreviewed",
         )
     ledger = None
+    open_rows: list = []
     if ask_run_dir is not None:
-        unmet, ledger = _ledger_gate(
-            worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs
+        unmet, ledger, open_rows = _ledger_gate(
+            worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
+            [g.id for g in manifest.gated],
         )
         if unmet is not None:
             return unmet
@@ -3035,6 +3047,10 @@ def _terminal_commit(
     resolves = None if anchor_only or incomplete_chunks else _resolving_sizing(worktree_root, request.plan_path)
     if resolves is not None:
         trailers.append(f"Resolves-Sizing: {resolves['id']} {resolves['tshirt']}")
+    trailers.extend(
+        "Requirement-Open: " + " ".join((str(row["id"]) + " " + str(row["reason"])).split())
+        for row in open_rows
+    )
     trailers.append(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"

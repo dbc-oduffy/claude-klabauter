@@ -1,0 +1,98 @@
+{
+  "docs": [
+    {
+      "changed_areas": [],
+      "commits_since": 14,
+      "days_since": 100,
+      "last_touch_date": "2026-02-21T12:00:00Z",
+      "last_touch_sha": "023a0cabe628a3477a9929820a128d59f0e0a82e",
+      "path": "stale.md",
+      "stale": true,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    },
+    {
+      "changed_areas": [],
+      "commits_since": 4,
+      "days_since": 8,
+      "last_touch_date": "2026-05-24T12:00:00Z",
+      "last_touch_sha": "a355ca3ebe02aecbe245b133f171cef347360a48",
+      "path": "commits.md",
+      "stale": false,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    },
+    {
+      "changed_areas": [],
+      "commits_since": 14,
+      "days_since": 100,
+      "last_touch_date": "2026-02-21T12:00:00Z",
+      "last_touch_sha": "023a0cabe628a3477a9929820a128d59f0e0a82e",
+      "path": "sweep.md",
+      "stale": true,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    },
+    {
+      "changed_areas": [],
+      "commits_since": 14,
+      "days_since": 100,
+      "last_touch_date": "2026-02-21T12:00:00Z",
+      "last_touch_sha": "023a0cabe628a3477a9929820a128d59f0e0a82e",
+      "path": "ws.md",
+      "stale": true,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    },
+    {
+      "changed_areas": [],
+      "commits_since": 14,
+      "days_since": 100,
+      "last_touch_date": "2026-02-21T12:00:00Z",
+      "last_touch_sha": "023a0cabe628a3477a9929820a128d59f0e0a82e",
+      "path": "link.md",
+      "stale": true,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    },
+    {
+      "changed_areas": [],
+      "commits_since": 5,
+      "days_since": 22,
+      "last_touch_date": "2026-05-10T12:00:00Z",
+      "last_touch_sha": "b1fe1501a522a3d2b9523c13bf9a5115128a8c3c",
+      "path": "RENAMED.md",
+      "stale": true,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    },
+    {
+      "path": "missing.md",
+      "stale": false,
+      "status": "absent"
+    },
+    {
+      "path": "sweeponly.md",
+      "stale": false,
+      "status": "no_content_modifying_history"
+    },
+    {
+      "changed_areas": [],
+      "commits_since": 2,
+      "days_since": 90,
+      "last_touch_date": "2026-03-03T12:00:00Z",
+      "last_touch_sha": "bdd471c74758290d42d6c0dcd9472dc063c74335",
+      "path": "days.md",
+      "stale": false,
+      "status": "ok",
+      "threshold_commits": 3,
+      "threshold_days": 21
+    }
+  ]
+}

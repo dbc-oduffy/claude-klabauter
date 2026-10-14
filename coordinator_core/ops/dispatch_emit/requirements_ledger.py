@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -256,44 +256,81 @@ def _session_turns(root: Path) -> list[tuple[int, str]]:
     return [(t["turn"], str(t.get("prompt") or "")) for t in found if isinstance(t.get("turn"), int)]
 
 
-def foreign_turn(
+def _norm(text: object) -> str:
+    return " ".join(str(text).split())
+
+
+_MIN_FOREIGN_MATCH = 12  # a shorter turn ("ok", "do it") sits inside too many texts to prove identity
+
+
+def _int_turn(value: object) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def foreign_turns(
     root: Path, sizing: Optional[Mapping], ask_text: Optional[str], relayed_text: Optional[str]
-) -> Optional[int]:
-    """The turn number of a one-turn sizing's lone embedded PM turn when the run's raw ask is
-    provably a different session turn: the sizing embedded the session's newest turn by recency,
-    which belongs to another run. None for a relayed run, a run without an ask, a multi-turn
-    sizing, a turn the ask quotes, or an ask no recorded session turn quotes."""
+) -> dict[int, str]:
+    """`{turn: normalised text}` of the sizing's embedded PM turns that provably belong to another
+    run. One-turn sizing: the lone turn, when the ask does not quote it and quotes a different
+    recorded session turn (the sizing embedded the newest turn by recency). Multi-turn sizing: an
+    embedded turn the ask does not quote that matches a recorded session turn preceding every
+    session turn the ask quotes; a later turn (a follow-up) is never foreign. Empty for a relayed
+    run, a run without an ask, or an ask no recorded session turn quotes."""
     if (relayed_text and relayed_text.strip()) or not (ask_text and ask_text.strip()):
-        return None
-    turns = [v for v in (sizing or {}).get("pm_verbatims") or [] if isinstance(v, Mapping)]
-    if len(turns) != 1 or not isinstance(turns[0].get("turn"), int) or isinstance(turns[0].get("turn"), bool):
-        return None
-    lone = turns[0]["turn"]
-    if _quotes(ask_text, str(turns[0].get("text") or "")):
-        return None
+        return {}
+    embedded = [
+        (n, str(v.get("text") or ""))
+        for v in (sizing or {}).get("pm_verbatims") or []
+        if isinstance(v, Mapping) and (n := _int_turn(v.get("turn"))) is not None
+    ]
+    turns = [(n, t) for n, t in embedded if not _quotes(ask_text, t)]
+    if not turns:
+        return {}
     from coordinator_core.ops.baton_pm_turns import quotes_turn
 
     # Proof of "another run's turn" uses the word-run rule only: a short turn ("ok", "do it")
-    # that happens to sit inside the ask must not prove the lone turn foreign.
-    return lone if any(n != lone and quotes_turn(ask_text, text) for n, text in _session_turns(root)) else None
+    # that happens to sit inside the ask must not prove a turn foreign.
+    session = _session_turns(root)
+    quoted = [n for n, text in session if quotes_turn(ask_text, text)]
+    if not quoted:
+        return {}
+    if len(embedded) == 1:
+        lone, text = turns[0]
+        return {lone: _norm(text)} if any(n != lone for n in quoted) else {}
+    earliest = min(quoted)
+    recorded = {n: _norm(text) for n, text in session}
+    out: dict[int, str] = {}
+    for n, text in turns:
+        mine, theirs = _norm(text), recorded.get(n, "")
+        if n < earliest and min(len(mine), len(theirs)) >= _MIN_FOREIGN_MATCH and (mine in theirs or theirs in mine):
+            out[n] = mine
+    return out
 
 
 FOREIGN_TURN_REASON = "another run's PM turn: the run's ask does not quote it"
 
 
 def _append_rows(
-    root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turn: Optional[int] = None,
+    root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
-    (same verbatim text) is not added twice, a revision always is. `drop_turn` removes the open,
-    unclaimed rows derived from that PM turn and lists it in `unrelated_turns`."""
+    (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
+    removes the open, unclaimed rows derived from those PM turns and lists them in
+    `unrelated_turns`."""
+
+    drop_turns = drop_turns or {}
 
     def edit(rows: list[dict]) -> list[dict]:
-        if drop_turn is not None:
+        if drop_turns:
+            anchors = {f"{ORIGIN_PM_VERBATIMS} turn {n}" for n in drop_turns}
+            texts = set(drop_turns.values())
             rows = [
                 r for r in rows
                 if not (
-                    str(r.get(rr.ROW_ANCHOR) or "") == f"{ORIGIN_PM_VERBATIMS} turn {drop_turn}"
+                    (
+                        str(r.get(rr.ROW_ANCHOR) or "") in anchors
+                        or (r.get(rr.ROW_ANCHOR) == ORIGIN_PM_VERBATIMS and _norm(r.get(rr.ROW_TEXT) or "") in texts)
+                    )
                     and r.get(rr.ROW_STATUS) == rr.STATUS_OPEN and not r.get(rr.ROW_CLAIMED_BY)
                 )
             ]
@@ -309,7 +346,7 @@ def _append_rows(
             })
         return rows
 
-    unrelated = [{"turn": drop_turn, "reason": FOREIGN_TURN_REASON}] if drop_turn is not None else []
+    unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted(drop_turns)]
     return _mutate_register(root, sizing_rel, edit, unrelated=unrelated)
 
 
@@ -374,6 +411,27 @@ def start(repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False) -> Path:
     return dir_
 
 
+def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
+    """`pm_words` minus the turns bind must not seed: a turn the sizing's register lists in
+    `unrelated_turns`, one proven foreign this bind, and one an existing register row covers
+    (the `requirement_register.coverage_gaps` rule)."""
+    register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
+    skip = {n for e in register.get(rr.UNRELATED_TURNS_KEY) or [] if isinstance(e, Mapping) and (n := _int_turn(e.get("turn"))) is not None}
+    skip.update(foreign)
+    needles = [n for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping) and (n := _norm(r.get(rr.ROW_TEXT) or ""))]
+    verbatims = [v for v in sizing.get("pm_verbatims") or [] if isinstance(v, Mapping)]
+    if not any(isinstance(v.get("text"), str) and v["text"].strip() for v in verbatims):
+        return [t for t in pm_words(sizing) if not any(n in _norm(t) for n in needles)]
+    out = []
+    for v in verbatims:
+        text = v.get("text")
+        if not (isinstance(text, str) and text.strip()) or _int_turn(v.get("turn")) in skip:
+            continue
+        if not any(n in _norm(text) for n in needles):
+            out.append(text.strip())
+    return out
+
+
 def bind(
     repo_root: Path, run_id: str, sizing_rel: str, *, ask_text: Optional[str] = None,
     relayed_text: Optional[str] = None,
@@ -396,11 +454,11 @@ def bind(
     except (OSError, yaml.YAMLError) as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     sizing = sizing if isinstance(sizing, dict) else {}
-    foreign = foreign_turn(root, sizing, ask_text, relayed_text)
+    foreign = foreign_turns(root, sizing, ask_text, relayed_text)
     entries = (
         []
-        if foreign is not None or (relayed_text and relayed_text.strip())
-        else [(t, ORIGIN_PM_VERBATIMS) for t in pm_words(sizing)]
+        if relayed_text and relayed_text.strip()
+        else [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
     )
     if ask_text and ask_text.strip():
         entries.append((ask_text, ORIGIN_ASK))
@@ -408,8 +466,8 @@ def bind(
         entries.append((relayed_text, ORIGIN_RELAYED))
     queued = _inbox(dir_)
     entries.extend((e["text"], f"{ORIGIN_REVISION}@{e.get('at') or _now()}") for e in queued)
-    if entries or foreign is not None:
-        _append_rows(root, sizing_rel, entries, drop_turn=foreign)
+    if entries or foreign:
+        _append_rows(root, sizing_rel, entries, drop_turns=foreign)
     if not bound:
         _write_run(dir_, {**run, "sizing_rel": sizing_rel})
     if queued:
@@ -488,10 +546,19 @@ def _misrouted(row: Mapping, owed: str) -> Optional[str]:
     return f"judged at {', '.join(read) or 'no root named'}, owed the engine root {owed or '(unresolved)'}"
 
 
-def judge(ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None) -> dict:
-    """`{"pass": bool, "failures": [{"id", "reason"}]}` for a checker `verdict`
-    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?, "remaining"?,
-    "root_read"?}]}`, read through `normalize_verdict`) against the live register.
+def judge(
+    ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
+    gated: Optional[Iterable[str]] = None,
+) -> dict:
+    """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
+    `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
+    "post_commit_acts"?, "remaining"?, "root_read"?}]}`, read through `normalize_verdict`) against
+    the live register. `open` lists every `not_met` row let through (never passed as met).
+
+    `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
+    nothing. A `not_met` row whose `withheld_by` is in `gated` passes and is listed open
+    (`withheld_by <id>`), whatever `all_of_pm_ask` or `essential` say; a `withheld_by` outside
+    `gated` fails.
 
     `routed` maps an engine-routed item id to the engine root it was owed: a met/not_met/post_commit
     item whose `root_read` (string or list) does not include that root adds a failure. It never
@@ -499,14 +566,17 @@ def judge(ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] =
 
     Every row needs exactly one judgment. `drifted` (lost or reinterpreted) always fails;
     `superseded` passes only when it names a later revision row; `not_met` fails when
-    `all_of_pm_ask` is set or the row is essential (the default); `post_commit` passes only when
+    `all_of_pm_ask` is set or the row is essential (the default), else it passes listed open as
+    `non-essential`; `post_commit` passes only when
     `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`."""
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
-        return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}]}
+        return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}], "open": []}
+    gated_ids = set(gated or ())
     by_id: dict[str, Mapping] = {}
     failures: list[dict] = []
+    open_rows: list[dict] = []
     for row in rows:
         rid = row.get("id") if isinstance(row, Mapping) else None
         if not isinstance(rid, str):
@@ -542,14 +612,26 @@ def judge(ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] =
                 bad = next((a for a in acts if a not in POST_COMMIT_ACTS), None)
                 if bad is not None:
                     failures.append({"id": item.id, "reason": f"post_commit act {bad!r} is not one of {POST_COMMIT_ACTS}"})
-        elif status == "not_met" and (ledger.all_of_pm_ask or row.get("essential", True) is not False):
-            failures.append({
-                "id": item.id,
-                "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask else ""),
-            })
+        elif status == "not_met":
+            withheld = row.get("withheld_by")
+            if isinstance(withheld, str) and withheld:
+                if withheld in gated_ids:
+                    open_rows.append({"id": item.id, "reason": f"withheld_by {withheld}"})
+                else:
+                    failures.append({
+                        "id": item.id,
+                        "reason": f"withheld_by {withheld} names no gated chunk of the run's manifest",
+                    })
+            elif ledger.all_of_pm_ask or row.get("essential", True) is not False:
+                failures.append({
+                    "id": item.id,
+                    "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask else ""),
+                })
+            else:
+                open_rows.append({"id": item.id, "reason": "non-essential"})
     unknown = sorted(set(by_id) - set(order))
     failures.extend({"id": rid, "reason": "names no requirement row"} for rid in unknown)
-    return {"pass": not failures, "failures": failures}
+    return {"pass": not failures, "failures": failures, "open": open_rows}
 
 
 def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:
