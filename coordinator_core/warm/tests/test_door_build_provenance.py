@@ -31,7 +31,7 @@ def test_write_provenance_records_image_sha256_matching_the_output_exe(tmp_path)
     record = json.loads(provenance_path.read_text(encoding="utf-8"))
     assert record["image_sha256"] == hashlib.sha256(output_exe.read_bytes()).hexdigest()
     # Existing fields stay load-bearing -- unchanged by this addition.
-    assert record["door_c_sha256"] == hashlib.sha256(door_build._SOURCE.read_bytes()).hexdigest()
+    assert record["door_c_sha256"] == door_build.source_sha256(door_build._SOURCE)
 
 
 def test_write_provenance_posix_records_image_sha256_matching_the_output(tmp_path):

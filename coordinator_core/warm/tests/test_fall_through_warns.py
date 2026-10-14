@@ -1,33 +1,26 @@
-"""C4b -- the door's fall-through is no longer silent by contract.
+"""C4b -- the door's fall-through diagnostic is opt-in, never default.
 
-WHAT REGRESSED, AND WHY THIS FILE EXISTS. `door.c :: fall_through` printed
-NOTHING on the ordinary degrade-to-cold path (README.md's own "the ordinary
-fallback path prints nothing" line) and emitted a diagnostic in exactly two
-genuinely fatal cases: no Python interpreter reachable at all, and no
-published engine resolvable by any means. The original baton for this
-workstream named that silence as the root cause of the whole gap it exists
-to close: "The door's fall-through prints nothing by contract. That is
-defensible for a fast path and indefensible as the only signal." The 13x
-slow-path gap went unnoticed for as long as it did because the slow path
-announced nothing.
+`door.c :: fall_through` degrades to cold silently on the ordinary path. The
+original gap (a 13x slow path that went unnoticed because it announced
+nothing) is closed by a diagnostic channel, not by default output: with
+`COORDINATOR_DOOR_DEBUG=1` the door prints one "falling through" line to
+STDERR (never stdout -- a programmatic consumer parsing the relayed CLI's own
+stdout as data must not see it corrupted) before spawning the fallback.
+Without the var the ordinary degrade prints nothing: a native stderr line is
+a terminating error under Windows PowerShell 5.1 (commit c25b589251), so the
+debug var is the diagnostic channel. Two genuinely fatal cases
+(no Python interpreter reachable, no published engine resolvable) diagnose
+regardless. In every case the exit code stays exactly the dispatched CLI's.
 
-THE FIX proved here: every ordinary degrade to cold now prints one line to
-STDERR (never stdout -- a programmatic consumer parsing the relayed CLI's
-own stdout as data must not see it corrupted) before spawning the fallback,
-and the exit code stays exactly the dispatched CLI's own -- a warn is not a
-failure. Telemetry (`op_latency`) was considered and rejected as the venue:
+Telemetry (`op_latency`) was considered and rejected as the venue:
 `door_route_signal.py`'s own docstring records that the door protocol
 carries neither `_origin_worktree` nor `_caller_cwd`, so a degrade recorded
 there lands wherever the EXECUTING process's cwd happens to resolve the sink
-to -- not somewhere an operator watching stderr can find it. This is a
-positive assertion, not omission: `test_pre_delivery_failure_still_falls_
-through` (test_door_read_deadline.py) already proves a fall-through reaches
-the fallback and produces no ENVELOPE of its own; this file proves the NEW
-stderr line is actually present on that same ordinary path, and that the
-exit code is untouched by adding it.
-
-NEGATIVE SPEC: this is not a rate limiter, a suppression flag, or a
-"once per session" cleverness. Every degrade prints, unconditionally.
+to -- not somewhere an operator can find it. `test_pre_delivery_failure_still_
+falls_through` (test_door_read_deadline.py) proves a fall-through reaches the
+fallback and produces no ENVELOPE of its own; this file proves the debug line
+is present on that same ordinary path, absent by default, and that neither
+touches the exit code.
 
 NO LIVE WARM SERVER IS INVOLVED. Nothing listens on the derived pipe name
 for this throwaway stub engine root, so the connect fails before any byte
@@ -94,9 +87,14 @@ def _default_named_door(tmp_path: Path) -> Path:
     return named
 
 
-def _run_door(engine_root: Path, door_exe: Path) -> subprocess.CompletedProcess:
+def _run_door(
+    engine_root: Path, door_exe: Path, *, debug: bool = False
+) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
+    env.pop("COORDINATOR_DOOR_DEBUG", None)
+    if debug:
+        env["COORDINATOR_DOOR_DEBUG"] = "1"
     return subprocess.run(
         [str(door_exe), "ping"],
         capture_output=True,
@@ -111,7 +109,7 @@ def _run_door(engine_root: Path, door_exe: Path) -> subprocess.CompletedProcess:
 def test_ordinary_fall_through_warns_on_stderr(tmp_path: Path) -> None:
     root = _make_stub_engine_root(tmp_path)
 
-    proc = _run_door(root, _default_named_door(tmp_path))
+    proc = _run_door(root, _default_named_door(tmp_path), debug=True)
 
     assert _FALLBACK_MARKER in proc.stdout, (
         "the fallback must actually have run for this test to prove anything"
@@ -127,6 +125,15 @@ def test_ordinary_fall_through_warns_on_stderr(tmp_path: Path) -> None:
         "the warn must never corrupt a programmatic consumer's stdout -- "
         "it belongs on stderr only, distinct from the relayed CLI's own output"
     )
+
+
+def test_ordinary_fall_through_is_silent_by_default(tmp_path: Path) -> None:
+    root = _make_stub_engine_root(tmp_path)
+
+    proc = _run_door(root, _default_named_door(tmp_path))
+
+    assert "falling through" not in proc.stderr
+    assert proc.returncode == _FALLBACK_EXIT
 
 
 def test_warn_does_not_leak_onto_stdout(tmp_path: Path) -> None:

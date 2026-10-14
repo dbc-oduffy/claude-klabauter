@@ -41,16 +41,12 @@ behind a drain-armed idle gate:
 
   2. Secondary (source-level, server-side only, `ServerVersionState`):
      catches a bare editor save or other uncommitted edit that never moves
-     `.git/HEAD` or its ref, so axis 1 alone would miss it. Throttled to
-     `_REFRESH_INTERVAL_SECS` -- a full source hash is not cheap enough to
-     pay per request -- using `max(st_mtime)` over non-test
-     `coordinator_core/**.py` as a prefilter and falling through to
-     `coordinator_core.lifecycle._compute_core_version()` (reused as-is;
-     it survived the daemon teardown) only on a prefilter miss, plus
-     `coordinator_core.engine_version.resolve_engine_dirty()` -- the
-     purpose-built DR-313 check -- rather than rolling a bespoke
-     mtime-based dirty approximation, per the plan body's explicit
-     negative spec.
+     `.git/HEAD` or its ref, so axis 1 alone would miss it. Request-driven only
+     (`is_skewed`, never a timer or watchdog -- DR-315 section 4) and
+     throttled to `_REFRESH_INTERVAL_SECS`: a stat stamp over non-test
+     `coordinator_core/**.py` (`_source_stamp`) is compared, and
+     `coordinator_core.lifecycle._compute_core_version()` re-hashes only
+     when the stamp moved. No git spawn after boot.
 
 Deliberately NOT `resolve_engine_sha()` per request: that is a
 `git rev-parse` at ~5-15ms, and paying a subprocess per request to avoid a
@@ -790,26 +786,54 @@ def _source_pkg_dir() -> Path:
     """The exact directory `lifecycle._compute_core_version()` hashes --
     that function takes no root argument and is hardcoded to its own
     `Path(__file__).parent` (i.e. this running process's `coordinator_core`
-    package dir), so the axis-2 prefilter below walks the same directory
-    rather than an arbitrary `repo_root`, to stay a true prefilter for it."""
+    package dir), so the axis-2 stamp below walks the same directory
+    rather than an arbitrary `repo_root`."""
     return Path(lifecycle.__file__).resolve().parent
 
 
-def _max_source_mtime(pkg_dir: Path) -> float:
-    """Cheap prefilter: the latest mtime among non-test `.py` files under
-    `pkg_dir`, mirroring `lifecycle._compute_core_version`'s own walk
-    (same `tests/` pruning) without hashing any file content."""
-    latest = 0.0
-    for dirpath, dirnames, filenames in os.walk(pkg_dir):
-        dirnames[:] = [d for d in dirnames if d != "tests"]
-        for fn in filenames:
-            if not fn.endswith(".py"):
-                continue
-            try:
-                latest = max(latest, (Path(dirpath) / fn).stat().st_mtime)
-            except OSError:
-                continue
-    return latest
+def _source_stamp(pkg_dir: Path) -> str:
+    """Answers "has any engine source file been added, removed or rewritten
+    since the last check?" without reading content or spawning a process.
+
+    A digest over (relative path, st_mtime_ns, st_size) of every non-test
+    `.py` file under `pkg_dir`, plus st_ctime_ns on POSIX (on Windows st_ctime
+    is creation time and adds nothing). `os.scandir` serves `DirEntry.stat()`
+    from the directory read on Windows, so the walk costs no per-file stat
+    syscall. Same `tests/` pruning as `lifecycle._compute_core_version`.
+
+    TRAP: the stamp is only as good as stat data. A same-size rewrite that
+    restores the prior mtime_ns (`cp -p`, `rsync -t`, `os.utime`) is invisible
+    on Windows; the retired git leg's dirty-tree re-hash caught it.
+    """
+    posix = os.name != "nt"
+    rows: list = []
+    stack = [(Path(pkg_dir), "")]
+    while stack:
+        directory, rel = stack.pop()
+        try:
+            it = os.scandir(directory)
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name != "tests":
+                            stack.append((Path(entry.path), rel + entry.name + "/"))
+                    elif entry.name.endswith(".py"):
+                        st = entry.stat()
+                        rows.append(
+                            (
+                                rel + entry.name,
+                                st.st_mtime_ns,
+                                st.st_size,
+                                st.st_ctime_ns if posix else 0,
+                            )
+                        )
+                except OSError:
+                    continue
+    rows.sort()
+    return hashlib.sha1(repr(rows).encode("utf-8")).hexdigest()
 
 
 class ServerVersionState:
@@ -829,8 +853,8 @@ class ServerVersionState:
         self._root = Path(repo_root) if repo_root is not None else _default_engine_clone()
         self._clock = clock
         self.server_sha = engine_version.resolve_engine_sha()
+        self._last_stamp = _source_stamp(_source_pkg_dir())
         self._boot_hash = lifecycle._compute_core_version()
-        self._last_mtime_prefilter = _max_source_mtime(_source_pkg_dir())
         self._last_refresh = self._clock()
         self._source_stale = False
         self._last_skew_axes: tuple = ()
@@ -839,16 +863,9 @@ class ServerVersionState:
         """Run the throttled axis-2 check if `_REFRESH_INTERVAL_SECS` has
         elapsed since the last run (or unconditionally when `force`).
 
-        Order per check: the mtime prefilter first. On NO change from the
-        last run, falls through to `engine_version.resolve_engine_dirty()`
-        -- the purpose-built DR-313 check -- and only re-hashes when dirty
-        is truthy or unresolvable (None); dirty=False with an unchanged
-        prefilter means nothing moved, so re-hashing would just re-pay the
-        walk-and-hash cost this axis is throttled to avoid. On a prefilter
-        miss (mtime changed), always re-hashes via
-        `lifecycle._compute_core_version()` regardless of dirty, since a
-        changed mtime with a clean git status is exactly the "edit that
-        got committed between checks" case this axis exists to catch.
+        Spawns no process, ever. The stamp is taken first, then, only when it
+        differs from the last one, the content is re-hashed via
+        `lifecycle._compute_core_version()` and compared to `_boot_hash`.
         Once flagged stale, `_source_stale` is sticky for this server's
         lifetime -- a fresh hash matching `_boot_hash` again would mean the
         edit was reverted, not that the server that already served stale
@@ -859,44 +876,14 @@ class ServerVersionState:
             return
         self._last_refresh = now
 
-        pkg_dir = _source_pkg_dir()
-        prefilter = _max_source_mtime(pkg_dir)
-        prefilter_changed = prefilter != self._last_mtime_prefilter
-        self._last_mtime_prefilter = prefilter
-
-        if not prefilter_changed:
-            dirty = engine_version.resolve_engine_dirty()
-            if dirty is False:
-                return
+        stamp = _source_stamp(_source_pkg_dir())
+        if stamp == self._last_stamp:
+            return
+        self._last_stamp = stamp
 
         current_hash = lifecycle._compute_core_version()
         if current_hash != self._boot_hash:
             self._source_stale = True
-
-    def is_source_stale(self) -> bool:
-        """Axis 2 alone, traffic-independent: True iff this server's own
-        engine source has changed since boot, per the same throttled
-        prefilter-then-hash check `is_skewed` already runs.
-
-        EXISTS FOR A BACKGROUND WATCHDOG, not the request path. `is_skewed`
-        is reachable only from `_serve_line`, which runs once per REQUEST --
-        so a source edit lands invisibly until the next caller happens to
-        dial in with a valid `_engine_token`. Both `warm.server`'s idle
-        watchdog and `warm.supervisor`'s skew watchdog already poll on a
-        fixed interval with no traffic required (mirroring the token-axis
-        "superseded generation" check each already runs there); this method
-        gives them the identical question for axis 2, at the identical cost
-        -- `refresh()`'s own throttle -- so calling it every watchdog tick
-        is exactly one `os.stat` per un-elapsed interval, never a rehash per
-        tick.
-
-        Calls `refresh()` first, same as `is_skewed`, so a caller needs no
-        separate timer of its own. Does not touch or report axis 1 (token) --
-        a caller wanting both compares this alongside its own token check,
-        exactly as `is_skewed` compares both internally for the request path.
-        """
-        self.refresh()
-        return self._source_stale
 
     def is_skewed(self, client_token: str) -> bool:
         """True iff this request should be treated as version-skewed --

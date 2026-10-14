@@ -877,17 +877,10 @@ class _ServerContext:
         succession-advisory.md` section 6, whose `ServerTelemetry` and
         `transport` tag landed while this call did not.
 
-        ALSO checks `version_state.is_source_stale()` (axis 2) --
-        BV-20260927-06. `_token_is_stale` (axis 1) only fires on a publish
-        rotating the engine token; a bare on-disk source edit in the serving
-        clone (no publish) never moves it, and `skew.ServerVersionState.
-        is_skewed`'s own axis-2 check is reachable only from the request path
-        (`_serve_line`, `supervisor.py`'s `do_POST`), so it never runs for a
-        listener that answers `/health` but otherwise sees no traffic. This
-        watchdog already polls without traffic for axis 1; the same tick now
-        asks axis 2 the identical question, at `is_source_stale`'s own
-        throttled cost (one stat on most ticks, a rehash only when it moved)."""
-        if self._token_is_stale() or self.version_state.is_source_stale():
+        Axis 1 only (one stat, no spawn). Axis 2 is request-driven
+        (`skew.ServerVersionState.is_skewed` from `do_POST`, DR-315 section
+        4: "never timer-adjudicated"), so this tick never asks it."""
+        if self._token_is_stale():
             self.record_exit(telemetry.EXIT_REASON_SUPERSEDED)
             self.stop()
 

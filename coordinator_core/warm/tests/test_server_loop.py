@@ -82,18 +82,12 @@ class _FakeIO:
 
 
 class _FakeVersionState:
-    def __init__(
-        self, *, skewed: bool = False, server_sha: str = "deadbeef", source_stale: bool = False
-    ):
+    def __init__(self, *, skewed: bool = False, server_sha: str = "deadbeef"):
         self._skewed = skewed
         self.server_sha = server_sha
-        self._source_stale_value = source_stale
 
     def is_skewed(self, client_token: str) -> bool:
         return self._skewed
-
-    def is_source_stale(self) -> bool:
-        return self._source_stale_value
 
 
 def _frame(*, id_, method="noop", extra=None, token="client-token") -> bytes:
@@ -1284,19 +1278,17 @@ def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path
     assert ctx.telemetry.snapshot()["exit_reason"] == telemetry.EXIT_REASON_SUPERSEDED
 
 
-def test_idle_tick_retires_on_source_staleness_alone_with_no_token_rotation(tmp_path):
-    """BV-20260927-06: a bare on-disk source edit that never rewrites the
-    engine stamp (no publish, so `_token_is_stale` stays False the whole
-    time) still retires this server via the idle watchdog -- with no
-    request ever arriving, exactly the population the reactive per-request
-    `is_skewed` check cannot see until a caller happens to dial in."""
+def test_idle_tick_does_not_retire_on_a_bare_source_edit(tmp_path):
+    """Axis 2 is request-driven (DR-315 section 4): a bare on-disk source
+    edit that never rewrites the engine stamp leaves the idle watchdog's
+    verdict at not-stale; the next request retires the server instead."""
     skew.write_engine_stamp(tmp_path, "sha-current")
     boot_token = skew.compute_client_token(tmp_path)
 
     ctx = server._ServerContext(
         name="pipe-source-stale",
         sid="sid-x",
-        version_state=_FakeVersionState(source_stale=True),
+        version_state=_FakeVersionState(),
         engine_root=tmp_path,
         boot_token=boot_token,
     )
@@ -1318,9 +1310,9 @@ def test_idle_tick_retires_on_source_staleness_alone_with_no_token_rotation(tmp_
     finally:
         idle.demote_if_idle = monkey_target
 
-    assert calls, "source staleness alone must reach demote_if_idle"
-    assert calls[0]["token_stale"]() is True
-    assert ctx.telemetry.snapshot()["exit_reason"] == telemetry.EXIT_REASON_SUPERSEDED
+    assert calls, "every tick reaches demote_if_idle"
+    assert calls[0]["token_stale"]() is False
+    assert ctx.telemetry.snapshot()["exit_reason"] != telemetry.EXIT_REASON_SUPERSEDED
 
 
 def test_healthy_server_is_not_retired_by_the_superseded_arm(tmp_path):

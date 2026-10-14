@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -240,8 +241,8 @@ def test_is_skewed_true_on_axis2_secondary_staleness_via_dirty(monkeypatch, tmp_
 
     hashes = iter(["hash-0", "hash-1"])
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
-    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: True)
+    stamps = iter(["stamp-0", "stamp-1"])
+    monkeypatch.setattr(skew, "_source_stamp", lambda pkg_dir: next(stamps))
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
@@ -252,14 +253,14 @@ def test_is_skewed_true_on_axis2_secondary_staleness_via_dirty(monkeypatch, tmp_
     assert state.is_skewed(client_token) is True
 
 
-def test_axis2_does_not_rehash_when_prefilter_unchanged_and_not_dirty(monkeypatch, tmp_path):
+def test_axis2_does_not_rehash_when_the_stamp_is_unchanged(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
     skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
-    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
-    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: False)
+    hashes = iter(["hash-0"])
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
+    monkeypatch.setattr(skew, "_source_stamp", lambda pkg_dir: "stamp-0")
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
@@ -279,12 +280,11 @@ def test_axis2_refresh_throttled_to_interval(monkeypatch, tmp_path):
 
     calls = {"n": 0}
 
-    def counting_prefilter(pkg_dir):
+    def counting_stamp(pkg_dir):
         calls["n"] += 1
-        return 123.0
+        return "stamp-0"
 
-    monkeypatch.setattr(skew, "_max_source_mtime", counting_prefilter)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: False)
+    monkeypatch.setattr(skew, "_source_stamp", counting_stamp)
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
@@ -309,8 +309,8 @@ def test_source_stale_is_sticky(monkeypatch, tmp_path):
 
     hashes = iter(["hash-0", "hash-1", "hash-0"])
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
-    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: True)
+    stamps = iter(["stamp-0", "stamp-1", "stamp-2"])
+    monkeypatch.setattr(skew, "_source_stamp", lambda pkg_dir: next(stamps))
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
@@ -392,64 +392,116 @@ def test_engine_skew_constant_matches_client_module():
     assert skew.ENGINE_SKEW == client.ENGINE_SKEW == -32002
 
 
-# --- is_source_stale (BV-20260927-06): axis 2, traffic-independent -----------
+# --- axis 2 is request-driven: stat stamp, no spawn ---------------------------
 
 
-def test_is_source_stale_false_when_nothing_changed(monkeypatch, tmp_path):
-    root = tmp_path / "clone"
-    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
-    skew.write_engine_stamp(root, "sha:" + "1" * 40)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
-    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
-    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: False)
-
-    fake_now = [0.0]
-    state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
-
-    fake_now[0] = skew._REFRESH_INTERVAL_SECS + 1.0
-    assert state.is_source_stale() is False
-
-
-def test_is_source_stale_true_on_a_bare_source_edit_with_no_request_ever_arriving(
+def test_a_bare_source_edit_leaves_the_server_running_until_a_request_asks(
     monkeypatch, tmp_path
 ):
-    """THE GAP THIS CLOSES (BV-20260927-06). `is_skewed` -- axis 2's other
-    caller -- is reached only from the request path (`_serve_line`,
-    `supervisor.do_POST`), so a hand-applied source edit that never rotates
-    the engine token is invisible until the next caller happens to dial in.
-    `is_source_stale` is the identical check, reachable from a background
-    watchdog that polls with no request required -- this test calls it with
-    no `client_token` and no `is_skewed` call anywhere in the test."""
+    """Axis 2 is request-driven (DR-315 section 4): no method but `is_skewed`
+    consults it, so an edit with no request arriving retires nothing, and the
+    first `is_skewed` call after it reports SKEW_AXIS_SOURCE."""
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
     skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
-
     hashes = iter(["hash-0", "hash-1"])
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
-    monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
-    monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: True)
+    stamps = iter(["stamp-0", "stamp-1"])
+    monkeypatch.setattr(skew, "_source_stamp", lambda pkg_dir: next(stamps))
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
-    assert state.is_source_stale() is False
-
     fake_now[0] = skew._REFRESH_INTERVAL_SECS + 1.0
-    assert state.is_source_stale() is True
+    assert state._source_stale is False
+
+    assert state.is_skewed(skew.compute_client_token(root)) is True
+    assert state.last_skew_axes == (skew.SKEW_AXIS_SOURCE,)
 
 
-def test_is_source_stale_never_reports_token_axis(monkeypatch, tmp_path):
-    """`is_source_stale` answers axis 2 alone -- a live token mismatch (no
-    source edit at all) must not make it True; that is `is_skewed`'s job,
-    not this one's."""
+def _no_spawn(monkeypatch):
+    from coordinator_core.git import run as git_run
+
+    def boom(*a, **k):
+        raise AssertionError("axis-2 refresh spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(git_run, "run_git", boom)
+
+
+def _make_pkg(tmp_path, names):
+    pkg = tmp_path / "pkg"
+    (pkg / "tests").mkdir(parents=True)
+    for n in names:
+        f = pkg / n
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x = 1\n", encoding="utf-8")
+    (pkg / "tests" / "test_x.py").write_text("y = 1\n", encoding="utf-8")
+    return pkg
+
+
+def test_refresh_spawns_nothing_on_an_unchanged_and_a_changed_tree(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
     skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
-    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+    pkg = _make_pkg(tmp_path, ["a.py"])
+    monkeypatch.setattr(skew, "_source_pkg_dir", lambda: pkg)
+    hashes = iter(["hash-0", "hash-1"])
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
 
-    state = skew.ServerVersionState(root)
-    # A stale client token, never passed to is_source_stale at all.
-    assert state.is_skewed("a-stale-client-token") is True
-    assert state.is_source_stale() is False
+    fake_now = [0.0]
+    state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
+    _no_spawn(monkeypatch)
+
+    fake_now[0] += skew._REFRESH_INTERVAL_SECS + 1.0
+    state.refresh()
+    assert state._source_stale is False
+
+    (pkg / "a.py").write_text("x = 22\n", encoding="utf-8")
+    fake_now[0] += skew._REFRESH_INTERVAL_SECS + 1.0
+    state.refresh()
+    assert state._source_stale is True
+
+
+def test_stamp_detects_a_deleted_and_an_added_file_that_leave_max_mtime_unchanged(tmp_path):
+    pkg = _make_pkg(tmp_path, ["a.py", "b.py"])
+    newest = pkg / "b.py"
+    older = pkg / "a.py"
+    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(newest, ns=(2_000_000_000, 2_000_000_000))
+    base = skew._source_stamp(pkg)
+
+    older.unlink()
+    assert skew._source_stamp(pkg) != base
+
+    older.write_text("x = 1\n", encoding="utf-8")
+    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+    assert skew._source_stamp(pkg) == base
+
+    extra = pkg / "c.py"
+    extra.write_text("z = 1\n", encoding="utf-8")
+    os.utime(extra, ns=(1_500_000_000, 1_500_000_000))
+    assert skew._source_stamp(pkg) != base
+
+
+def test_stamp_ignores_tests_dir_and_non_python_files(tmp_path):
+    pkg = _make_pkg(tmp_path, ["a.py"])
+    base = skew._source_stamp(pkg)
+    (pkg / "tests" / "test_x.py").write_text("changed = 1\n", encoding="utf-8")
+    (pkg / "notes.txt").write_text("n\n", encoding="utf-8")
+    assert skew._source_stamp(pkg) == base
+
+
+def test_stamp_taken_before_the_boot_hash(monkeypatch, tmp_path):
+    """An edit landing between the stamp and the hash must move the next
+    stamp, so the stamp is read first."""
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    order = []
+    monkeypatch.setattr(skew, "_source_stamp", lambda d: order.append("stamp") or "s")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: order.append("hash") or "h")
+    skew.ServerVersionState(root)
+    assert order == ["stamp", "hash"]
