@@ -405,10 +405,10 @@ def _selected_disposition(args: argparse.Namespace) -> tuple[str, str | None]:
     """Return (disposition, disposition_ref) for whichever exit flag was given.
 
     The mutually exclusive group (required=True) already guarantees exactly
-    one of the five was supplied.
+    one of the six exits was supplied.
     """
     if args.delivered_elsewhere:
-        return "delivered_elsewhere", args.ref
+        return "delivered_elsewhere", (args.ref.strip() if args.ref else args.ref)
     if args.coded is not None:
         return "coded", args.coded
     if args.spun_off is not None:

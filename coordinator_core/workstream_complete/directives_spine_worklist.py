@@ -153,7 +153,7 @@ Six honest ends, via `python3 coordinator/bin/plan-tasks-resolve --id <row-id> .
   - move it    : --moved-to <plan-path> (disposition: spun_off   -- no PM word needed)
   - done elsewhere: --delivered-elsewhere --via <direct-message|memo|other> --ref <ref>
                                         (disposition: delivered_elsewhere -- asserted, not commit-proven)
-  - backlog it : --backlogged          (disposition: backlogged -- PM word required)
+  - backlog it : --backlogged           (disposition: backlogged -- PM word required)
   - won't do   : --wont-do              (disposition: wont_do    -- PM word required)
 Or leave it open and carried on the successor baton -- that is still a legitimate close.
 

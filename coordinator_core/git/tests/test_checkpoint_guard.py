@@ -68,10 +68,11 @@ def test_a_clean_checkpoint_lands(repo):
     assert gcommit.commit_paths(repo, ["src/a.py"], _message(base))
 
 
-def test_a_row_closed_on_the_spine_is_refused(repo):
+@pytest.mark.parametrize("status", ["wont_do", "delivered_elsewhere"])
+def test_a_row_closed_on_the_spine_is_refused(repo, status):
     base = gcommit.head_sha(repo)
-    _write(repo, "docs/p.md", _PLAN.format(a1="wont_do"))
-    gcommit.commit_paths(repo, ["docs/p.md"], "plan: A1 wont_do")
+    _write(repo, "docs/p.md", _PLAN.format(a1=status))
+    gcommit.commit_paths(repo, ["docs/p.md"], f"plan: A1 {status}")
     _write(repo, "src/a.py", "v1\n")
     with pytest.raises(CommitRefused, match="closed on the spine: A1"):
         gcommit.commit_paths(repo, ["src/a.py"], _message(base))

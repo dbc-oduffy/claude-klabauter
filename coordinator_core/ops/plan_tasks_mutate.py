@@ -704,7 +704,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
 
 
 _STAMP_RESERVED_DISPOSITION_FIELDS = frozenset(
-    {"disposition", "disposition_ref", "disposition_detail"}
+    {"disposition", "disposition_ref", "disposition_detail", "delivered_via"}
 )
 
 

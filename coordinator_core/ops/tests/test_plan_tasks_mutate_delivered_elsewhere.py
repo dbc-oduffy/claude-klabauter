@@ -142,5 +142,5 @@ def test_blank_ref_detail_or_bad_via_is_refused_and_writes_nothing(tmp_path, ove
     result = _delivered(repo, plan, **overrides)
 
     assert result["exit_code"] != 0, result
-    assert "delivered_elsewhere" in result["error"] or "delivered_via" in result["error"]
+    assert "delivered_elsewhere requires" in result["error"] or "delivered_via must be" in result["error"]
     assert plan.read_bytes() == original
