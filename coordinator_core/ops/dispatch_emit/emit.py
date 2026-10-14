@@ -5180,6 +5180,17 @@ def compose_script(
                 owed_gates[row.id] = cmds
     try:
         scope = terminal_test_scope(waves, repo_root=repo_root)
+        if _review_terminal:
+            _gone = deleted_in_range(
+                [*scope, *_plan_surface], run_base_sha or "", _review_terminal, repo_root
+            )
+            if _gone:
+                scope = [p for p in scope if p not in _gone]
+                if not scope:
+                    raise NoTestTargetError(
+                        "every test target in the plan's scope was deleted by the reviewed range"
+                    )
+            _plan_surface = [p for p in _plan_surface if p not in _gone]
     except NoTestTargetError as exc:
         if criterion_expr is not None:
             phase_titles.append(_TEST_PHASE_TITLE)
@@ -5819,6 +5830,27 @@ def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
     """Row ids named by commits whose ``Checkpoint-Plan:`` trailer names ``plan`` (checkpoint
     subjects and leading ``<id>:`` subjects alike)."""
     return checkpoint_landed_state(repo_root, plan)[0]
+
+
+def deleted_in_range(
+    paths: Sequence[str], base: str, terminal: str, repo_root: Optional[Path]
+) -> set[str]:
+    """The entries of ``paths`` that ``base..terminal`` deleted. One spawn; an unreadable
+    answer is the empty set, so a brief is never narrowed on a guess."""
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
+
+    bare = {p: strip_literal_pathspec(p) for p in paths}
+    if not bare:
+        return set()
+    result = run_git(
+        ["diff", "--name-only", "-z", "--diff-filter=D", base, terminal, "--", *bare.values()],
+        cwd=str(repo_root) if repo_root is not None else None,
+    )
+    if result.returncode != 0:
+        return set()
+    gone = set(result.stdout.split("\0"))
+    return {p for p, b in bare.items() if b in gone}
 
 
 def _pin_review_terminal(run_base_sha: str, repo_root: Optional[Path]) -> str:

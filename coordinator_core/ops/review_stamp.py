@@ -272,15 +272,26 @@ def _receipt_session_id(plan_path: Path) -> Optional[str]:
     return session_id if isinstance(session_id, str) and session_id else None
 
 
-def _reviewed_file_count(repo_root: Path, integration_data: Dict[str, Any]) -> Optional[int]:
-    """Product files the run's prep recorded; `None` when no prep record is readable."""
+def _prep_record(repo_root: Path, integration_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     prep = integration_data.get("prep")
     if not isinstance(prep, dict):
         prep_rel = integration_data.get("prep_sidecar")
         prep = _load_sidecar(repo_root / prep_rel, prep=True) if prep_rel else None
-    if not isinstance(prep, dict):
-        return None
-    return _count(prep.get("product_files"))
+    return prep if isinstance(prep, dict) else None
+
+
+def _reviewed_file_count(repo_root: Path, integration_data: Dict[str, Any]) -> Optional[int]:
+    """Product files the run's prep recorded; `None` when no prep record is readable."""
+    prep = _prep_record(repo_root, integration_data)
+    return None if prep is None else _count(prep.get("product_files"))
+
+
+def _based_at(repo_root: Path, integration_data: Dict[str, Any], sha: str) -> bool:
+    """True when the run's recorded `run_base_sha` prefix-matches `sha` (>= 7 chars)."""
+    prep = _prep_record(repo_root, integration_data)
+    base = str((prep or {}).get("run_base_sha") or "").strip().lower()
+    sha = sha.lower()
+    return len(base) >= 7 and len(sha) >= 7 and (sha.startswith(base) or base.startswith(sha))
 
 
 def _delivery_verdict(integration_data: Dict[str, Any]) -> Optional[str]:
@@ -498,7 +509,9 @@ def _resolve_terminal_commit(
                 continue
             # ...unless that older trailer FAILed delivery: then the newer zero-file run is the
             # verify-only re-run that supersedes it.
-            if empty_match is not None and _delivery_verdict(data) == "FAIL":
+            if empty_match is not None and (
+                _delivery_verdict(data) == "FAIL" or _based_at(repo_root, empty_match[2], sha)
+            ):
                 return empty_match
             return sha, sidecar_path, data
     if empty_match is not None:
