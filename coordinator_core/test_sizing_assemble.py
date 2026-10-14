@@ -1115,7 +1115,9 @@ def test_sizing_object_schema_version_and_bump_class():
     # `pm_verbatims`. All additive; nothing joined `required`.
     # Moved 1.36.0 -> 1.37.0 (2026-10-12): DoE c01e16d913 `unrelated_turns` + `visual` surface. Additive.
     # Moved 1.37.0 -> 1.38.0 (2026-10-13): APM-ruling `accepted` arm admits `hands-on` mode (below XL).
-    assert schema["x-schema-version"] == "1.38.0"
+    # Moved 1.38.0 -> 1.38.1 (2026-10-14): DoE 550f72bc20, description only -- `superseded`
+    # covers a refused or abandoned run with no successor and no decision record (sizing.supersede).
+    assert schema["x-schema-version"] == "1.38.1"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

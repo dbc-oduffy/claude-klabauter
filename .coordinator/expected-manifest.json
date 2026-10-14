@@ -2075,8 +2075,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "0b294ea220123267a95f92ce951e1c3d3b19253c",
-    "coordinator_core/_engine_stamp": "1195935bf05db77d84baaa98959f0d9b56ef899a",
+    "coordinator_core/_engine_published_at": "3895ca855a7a01ffbf1e328f34bf965c11a481b0",
+    "coordinator_core/_engine_stamp": "e5c84d382a824206b05118fdc2d69a3d8d9dd46b",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3146,11 +3146,11 @@
     "coordinator_core/frontmatter/schemas/roadmap.schema.json": "89ecc9a724a5567af062b005c0819ec725918fca",
     "coordinator_core/frontmatter/schemas/run-report.schema.json": "cdf831d739af01f56c3c2b24138046881d830096",
     "coordinator_core/frontmatter/schemas/seam-check.schema.json": "989bd28055942d54c6a5cff6d491cd011acd70eb",
-    "coordinator_core/frontmatter/schemas/sizing-object.schema.json": "612f1538aca5e5fe19aa3363cac94e88f06991ca",
+    "coordinator_core/frontmatter/schemas/sizing-object.schema.json": "3c5935000a56b2802a120e933b8a459bce7cc359",
     "coordinator_core/frontmatter/schemas/spike-result.schema.json": "16517aac6822aeecaaa34398370e2e2363877b7a",
     "coordinator_core/frontmatter/schemas/spine.schema.json": "229b83d4739a065bb8b181ca305b6b8bf42051d6",
     "coordinator_core/frontmatter/schemas/strategic-self-description.schema.json": "c799c2a5a45b449766afdabd3ff74c162a3a38c5",
-    "coordinator_core/frontmatter/schemas/vendored-from.json": "205032033b753a448587e190b39a410363260d1d",
+    "coordinator_core/frontmatter/schemas/vendored-from.json": "9e0862e13c896a88b611fcac0701d350a79ea00a",
     "coordinator_core/frontmatter/schemas/workstream-event.schema.json": "b797cbcee7fb46fce5fde0935d921bd6841a8b40",
     "coordinator_core/frontmatter/schemas/workstream.schema.json": "571a9cb0085c3e78b51ba25756b5f841298bef98",
     "coordinator_core/frontmatter/sentinel_blocks.py": "a09f63c6acc9ed66029574dba851aa1cf75e82ee",
@@ -6545,7 +6545,7 @@
     "coordinator_core/test_quick_wrap_assemble.py": "84383d4ac92c3a647cdb16b6d8eda37a5cbfdd68",
     "coordinator_core/test_resolve_coordinator_clone.py": "ffb61060a1d9c70d7b681d17a9ab8f0fa6a6fc04",
     "coordinator_core/test_resolve_validation_cmd.py": "f9af3c6ed1d8341722321fb8fa44a1bf59942c34",
-    "coordinator_core/test_sizing_assemble.py": "b0627e97e5cf37e428c25d44c426d5683c8dd14f",
+    "coordinator_core/test_sizing_assemble.py": "22b2aa189b4d82d7172ce539a8525726fc83fd1b",
     "coordinator_core/test_staff_session_assemble.py": "23054f0017664869a49f00f76538478c9249873b",
     "coordinator_core/test_state_root.py": "9c608ad04197d8b8addf3dd9235b1ad055dede0b",
     "coordinator_core/test_trusted_root_guard.py": "9c0746868c6d2a64f2e6277aeb1d0b650f711462",
@@ -7649,5 +7649,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "32629c054691c31f37a71cf49bf760d1fd8278d2"
+  "source_head": "3beba6658b77af3551452fe250d04af47d9e4457"
 }
