@@ -75,8 +75,9 @@ _REVIEW_ROLES = (
 )
 
 
-def _review_legs(workflow: str, *, prep: LegDecl) -> tuple[LegDecl, ...]:
-    return (prep, *(_earns(workflow, label, reason) for label, reason in _REVIEW_ROLES))
+def _review_legs(workflow: str, *, prep: Optional[LegDecl] = None) -> tuple[LegDecl, ...]:
+    """The review roles every workflow composes; `prep` is absent where the wave runs `review.prep` itself."""
+    return (*((prep,) if prep else ()), *(_earns(workflow, label, reason) for label, reason in _REVIEW_ROLES))
 
 
 REGISTER: tuple[LegDecl, ...] = (
@@ -92,17 +93,20 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "execute", "executes the rows"),
     _earns("ask", "work:", "executes one row"),
     _earns("ask", "verify:", "runs a row's scoped tests and reports"),
-    _earns("ask", "test:terminal", "runs the terminal scoped tests and reports"),
-    _earns("ask", "docs", "writes the run's docs"),
+    _earns(
+        "ask", "verify",
+        "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "
+        "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs",
+    ),
     _earns("ask", "workstream-complete", "closes the workstream's records"),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "stage", "fallback only when no fold staged a manifest (stop_after, failed fold); no preceding agent"),
-    _earns("ask", "ledger-check", "rules each requirement on a tail shape with no preceding agent to carry the ledger verdict"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
-    *_review_legs("ask", prep=_floor("ask", "review:coordinator:review-prep", "mechanical review.prep, first review call")),
+    *_review_legs("ask"),
     _earns("emit", "work:", "executes one row"),
-    _earns("emit", "seam:wave-", "checks a wave seam"),
+    _earns("emit", "seam:wave-", "relays the wave's seam record and runs reachability over its landed range; "
+          "runs the landed python test files when any landed"),
     _earns("emit", "verify:", "runs a row's scoped tests and reports"),
     _earns("emit", "check:", "runs a row's pre-dispatch command and judges its baseline"),
     _earns("emit", "falsifier-integrity:", "judges whether the falsifier can report red; absorbed the verdict-cache write"),
@@ -130,10 +134,6 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("review", "review:coordinator:staff-eng", "reviews the diff as staff engineer"),
     _earns("review", "review:coordinator:test-runner", "freezes the diff, runs tests and reports"),
     _earns("review", "review:general-purpose", "reviews the diff as a general reviewer"),
-    *_review_legs(
-        "review-mechanical-prep",
-        prep=_floor("review-mechanical-prep", "review:coordinator:review-prep", "mechanical review.prep, first review call"),
-    ),
 )
 
 _STRING_START = re.compile(r"""\s*(['"`])""")

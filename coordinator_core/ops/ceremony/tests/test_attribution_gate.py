@@ -240,3 +240,64 @@ def test_attribution_gate_spawns_no_subprocess(tmp_path):
 
     assert not outcome.passed
     assert after == before
+
+
+def _raise_read_index(*_a, **_k):
+    raise AssertionError("read_index called on the vacated path")
+
+
+def test_vacated_path_never_reads_the_index(tmp_path, monkeypatch):
+    from coordinator_core.ops.ceremony import commit_gates
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "foo.py", "x = 1\n")
+    _commit(repo, ["foo.py"])
+    _seed_file(repo, "foo.py", f"x = 1\n{_ATTR_LINE}\n")
+    monkeypatch.setattr(commit_gates, "read_index", _raise_read_index)
+
+    outcome = attribution_gate(repo, ["foo.py"], vacated=[])
+
+    assert not outcome.passed
+
+
+def test_vacated_declared_rename_with_existing_attribution_passes(tmp_path, monkeypatch):
+    from coordinator_core.ops.ceremony import commit_gates
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "old_path.py", f"{_ATTR_LINE}\nkeep\n")
+    _commit(repo, ["old_path.py"])
+    _git(["mv", "old_path.py", "new_path.py"], repo)
+    _seed_file(repo, "new_path.py", f"{_ATTR_LINE}\nkeep\nunrelated new line\n")
+    monkeypatch.setattr(commit_gates, "read_index", _raise_read_index)
+
+    outcome = attribution_gate(
+        repo, ["old_path.py", "new_path.py"], vacated=["old_path.py"]
+    )
+
+    assert outcome.passed
+    assert outcome.diagnostics == []
+
+
+def test_vacated_without_the_source_still_refuses_moved_attribution(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "old_path.py", f"{_ATTR_LINE}\n")
+    _commit(repo, ["old_path.py"])
+    _git(["mv", "old_path.py", "new_path.py"], repo)
+
+    outcome = attribution_gate(repo, ["old_path.py", "new_path.py"], vacated=[])
+
+    assert not outcome.passed
+
+
+def test_vacated_gate_spawns_no_subprocess(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "foo.py", "x = 1\n")
+    _commit(repo, ["foo.py"])
+    _seed_file(repo, "foo.py", f"x = 1\n{_ATTR_LINE}\n")
+
+    before = spawn_counter.spawn_count()
+    outcome = attribution_gate(repo, ["foo.py"], vacated=[])
+    after = spawn_counter.spawn_count()
+
+    assert not outcome.passed
+    assert after == before

@@ -2393,6 +2393,33 @@ def test_a_real_wait_after_a_negated_one_still_counts(tmp_path):
     assert 'waiting_on="Waiting on coordinator-content-repo-65' in line
 
 
+def test_a_gated_wait_names_answering_the_gate(tmp_path):
+    line = _line_for(_transcript_ending_on(
+        tmp_path, "Plan is ready. Waiting on coordinator-content-repo-65 for a slot before I fire it."
+    ))
+    assert line.startswith("WAITING session=peer-1 ")
+    assert 'next="answer the gate it names"' in line
+
+
+def test_a_named_non_gate_wait_names_the_unrelated_blocker_remedy(tmp_path):
+    line = _line_for(_transcript_ending_on(
+        tmp_path, "Blocked: waiting on the CI build to finish."
+    ))
+    assert line.startswith("PARKED session=peer-1 ")
+    assert (
+        'next="tell it to continue work not behind this wait and raise the wait as an ask"'
+        in line
+    )
+
+
+def test_an_unnamed_or_unknown_wait_names_asking(tmp_path):
+    done = _line_for(_transcript_ending_on(tmp_path, "Landed; nothing left open."))
+    unknown = _line_for(str(tmp_path / "absent.jsonl"))
+    for line in (done, unknown):
+        assert line.startswith("PARKED session=peer-1 ")
+        assert 'next="ask what it is waiting on"' in line
+
+
 # --- `--until-event` -------------------------------------------------------
 
 

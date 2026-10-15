@@ -101,6 +101,7 @@ def test_ordinary_commit_passes_both_gates(tmp_path: Path):
         "registration_quad_gate",
         "claude_md_budget_gate",
         "machine_path_leak_gate",
+        "attribution_gate",
     ],
 )
 def test_a_failing_gate_refuses_and_nothing_lands(tmp_path: Path, monkeypatch, gate_name):

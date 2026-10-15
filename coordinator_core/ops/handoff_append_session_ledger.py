@@ -10,7 +10,9 @@ is the APPEND half of AC-5,
 `state/handoffs/2026-08-21-handoffs-and-spinoffs-minimal-for-hand-rolling.md`
 ("The Session Ledger row is machine-appended wherever the appending
 ceremony knows the values") — the CATCH half already shipped as
-`handoff.author_lint`'s `LEDGER_ROW_UNPARSEABLE` finding.
+`handoff.author_lint`'s `LEDGER_ROW_UNPARSEABLE` finding. A body with no
+`## Session Ledger` heading, or with several, is refused: `handoff.correct_body`
+rejects any new heading line, so this op never writes a heading without a row.
 
 Of the row's five fields (`YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> |
 <summary>`), FOUR are machine-resolvable at append time and this op

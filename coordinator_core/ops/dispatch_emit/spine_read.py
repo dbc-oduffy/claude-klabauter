@@ -895,7 +895,10 @@ def contradictory_read_paths(reads, reads_at_head) -> list:
 
 
 #: Exclusion reasons whose row is still owed, by the EM or an operator, outside the run.
-EM_OWNED_REASONS = frozenset({"memo-send", "em-performed", "operator"})
+#: ``withheld_by_owed_dependency`` is a row transitively behind such a root.
+_OWNED_ROOT_REASONS = frozenset({"memo-send", "em-performed", "operator"})
+
+EM_OWNED_REASONS = _OWNED_ROOT_REASONS | {"withheld_by_owed_dependency"}
 
 
 def em_owned_rows(exclusions: Optional[list]) -> list[str]:
@@ -1378,14 +1381,25 @@ def read_spine(
                     }
                 )
                 continue
+            root_entry = root_entries.get(chain[-1])
+            root_reason = root_entry.get("reason") if root_entry else None
+            if root_reason in _OWNED_ROOT_REASONS:
+                reason = "withheld_by_owed_dependency"
+            elif root_reason == "external_gate":
+                reason = "transitive_gate_closure"
+            else:
+                # depends_on_plan roots (or an unresolved root): reaches neither `gated` nor `owed`.
+                reason = "withheld_by_held_dependency"
             exclusions.append(
                 {
                     "id": row_id,
-                    "reason": "transitive_gate_closure",
+                    "reason": reason,
+                    "root": chain[-1],
+                    "root_reason": root_reason,
                     "detail": (
                         "transitively gated via depends_on -> "
                         + " -> ".join(chain[1:])
-                        + _closure_root_tail(chain[-1], root_entries.get(chain[-1]))
+                        + _closure_root_tail(chain[-1], root_entry)
                     ),
                 }
             )

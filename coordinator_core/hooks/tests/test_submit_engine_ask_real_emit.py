@@ -4,6 +4,7 @@ envelope, the run records, and an exact spawn count (the submission starts no pr
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,31 @@ def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch):
     assert (run_dir / "submission.json").is_file()
     assert (record_dir(repo, run_dir.name) / ASK_TEXT_FILE).read_text(encoding="utf-8") == "add the widget"
     assert len(spawns) == _budget("raw_ask_submission"), [s.argv for s in spawns]
+    _all_git_run(spawns)
+
+
+def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch):
+    from coordinator_core.ops import baton_pm_turns as PT
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.session_baton import store
+
+    hub = repo.parent / "hub" / "sess-real-emit"
+    hub.mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: repo.parent / "hub" / s)
+    assert PT.append_turn("do these budget-many separable jobs", session_id="sess-real-emit")["ok"]
+    count = max(2, contract.concurrent_run_budget())
+    asks = [{"ask": f"job {i}", "label": f"job-{i}", "writes": [f"pkg/m{i}.py"]} for i in range(count)]
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        env = mod.evaluate(_payload(repo, {"asks": asks}))
+
+    _assert_rewrite(env)
+    (parent_dir,) = (repo / "scratch" / "warp").glob("ask-parent-*")
+    record = contract.ParentRecord.from_json(
+        json.loads((parent_dir / "parent.json").read_text(encoding="utf-8"))
+    )
+    assert len(record.runs) == count
+    assert len(spawns) == _budget("asks_submission"), [s.argv for s in spawns]
     _all_git_run(spawns)
 
 

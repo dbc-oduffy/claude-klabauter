@@ -16,11 +16,18 @@ Wire params:
                                 BLOCKED review is clear only when that sidecar carries a
                                 ``findings_ledger:`` stamp and every row is ``verified: true``
                                 with status absent or ``applied``.
+    premise  (object, optional) — {rows: [{verdict, citation, ...}]}; verdict is RESOLVES |
+                                  UNRESOLVED | CONTRADICTED | UNCHECKABLE. Only UNRESOLVED and
+                                  CONTRADICTED rows pull; UNCHECKABLE is a note on a ready reply.
+                                  Refused together with a ``premise-check`` reviews entry.
+
+A coverage verdict that is not clear but carries zero findings gives the plan nothing to fix:
+it is a note on a ready reply, never a pull.
 
 Reply: see coordinator_core/contract/readiness-verdict.schema.json (the schema wins).
 
 Negative-spec:
-  - Takes no skip, force or override parameter; any key outside the four above is refused.
+  - Takes no skip, force or override parameter; any key outside the five above is refused.
   - Does NOT write, stamp or mutate anything, and does NOT sweep the corpus. It reads a review's
     ledger sidecar through ``review_findings_ledger.read_ledger`` and never calls ``verify``.
   - Spawns nothing of its own; the prep gate's one batched ``git ls-files`` for python census
@@ -42,7 +49,11 @@ from coordinator_core.ops.review_findings_ledger import read_ledger
 
 GENERATES: list = []
 
-_KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews"})
+_KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews", "premise"})
+# Mirrors DoE plan-blitz.mjs PREMISE_REVIEWER.
+_PREMISE_REVIEWER = "premise-check"
+_PREMISE_VERDICTS = frozenset({"RESOLVES", "UNRESOLVED", "CONTRADICTED", "UNCHECKABLE"})
+_PREMISE_BLOCKING = frozenset({"UNRESOLVED", "CONTRADICTED"})
 _CLEAR_VERDICTS = frozenset(
     {
         "approve", "approved", "pass", "passed", "clear", "clean", "ready", "ok", "accept",
@@ -111,7 +122,7 @@ def _check_params(params: dict) -> tuple:
     if extra:
         raise ValueError(
             f"unknown param(s): {', '.join(repr(k) for k in extra)}. "
-            f"Valid: {spellings('plan', 'plan_path')}, coverage, reviews"
+            f"Valid: {spellings('plan', 'plan_path')}, coverage, reviews, premise"
         )
     raw_plan = aliased_param(params, "plan", "plan_path")
     if not isinstance(raw_plan, str) or not raw_plan.strip():
@@ -125,7 +136,24 @@ def _check_params(params: dict) -> tuple:
     if reviews is not None:
         if not isinstance(reviews, list) or not all(isinstance(r, dict) for r in reviews):
             raise ValueError("reviews must be a list of {reviewer, verdict} objects")
-    return raw_plan.strip(), coverage, reviews or []
+    premise = params.get("premise")
+    rows: List[dict] = []
+    if premise is not None:
+        if not isinstance(premise, dict) or not isinstance(premise.get("rows"), list):
+            raise ValueError("premise must be an object {rows: [{verdict, citation}]}")
+        for i, row in enumerate(premise["rows"]):
+            if not isinstance(row, dict) or row.get("verdict") not in _PREMISE_VERDICTS:
+                raise ValueError(
+                    f"premise.rows[{i}].verdict must be one of {', '.join(sorted(_PREMISE_VERDICTS))}"
+                )
+            if not isinstance(row.get("citation"), str):
+                raise ValueError(f"premise.rows[{i}].citation must be a string")
+        rows = premise["rows"]
+        if any(r.get("reviewer") == _PREMISE_REVIEWER for r in reviews or []):
+            raise ValueError(
+                f"premise and a {_PREMISE_REVIEWER!r} reviews entry are mutually exclusive; pass the rows once"
+            )
+    return raw_plan.strip(), coverage, reviews or [], rows
 
 
 def readiness_verdict(
@@ -133,9 +161,12 @@ def readiness_verdict(
     coverage: Optional[dict],
     reviews: List[dict],
     repo_root: Optional[Path] = None,
+    premise_rows: Optional[List[dict]] = None,
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
-    them is a review's ledger sidecar, resolved against ``repo_root``."""
+    them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
+    CONTRADICTED premise rows block; UNCHECKABLE and RESOLVES rows never do."""
+    notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
     judgment: List[str] = []
@@ -165,10 +196,26 @@ def readiness_verdict(
                 )
             )
         if not _clear(coverage.get("verdict")) and not mechanical and not judged:
-            judgment.append(f"coverage verdict {coverage.get('verdict')!r} carries no findings")
+            notes.append(f"coverage verdict {coverage.get('verdict')!r} carries no findings")
     for review in reviews:
         if not _clear(review.get("verdict")) and not _ledger_clear(review, repo_root):
             judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
+
+    uncheckable = 0
+    blocking: List[str] = []
+    for row in premise_rows or []:
+        if row["verdict"] in _PREMISE_BLOCKING:
+            blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
+        elif row["verdict"] == "UNCHECKABLE":
+            uncheckable += 1
+    for i, entry in enumerate(blocking):
+        if len("; ".join(judgment + blocking[: i + 1])) > _INSTRUCTION_MAX - 40:
+            tail = len(blocking) - i
+            blocking = blocking[:i] + [f"+{tail} more premise row(s)"]
+            break
+    judgment.extend(blocking)
+    if uncheckable:
+        notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
 
     if substantive:
         verdict, pull_class, repairs = "pulled", "substantive", []
@@ -182,6 +229,8 @@ def readiness_verdict(
     else:
         verdict, pull_class = "ready", "none"
         reason = "prep gate passes with no outstanding findings"
+        if notes:
+            reason += "; " + "; ".join(notes)
     return {
         "verdict": verdict,
         "pull_class": pull_class,
@@ -195,7 +244,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.readiness_verdict" handler. See module docstring."""
     if repo_root is None:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
-    raw_plan, coverage, reviews = _check_params(params)
+    raw_plan, coverage, reviews, premise_rows = _check_params(params)
     prep_gate = _prep_gate_handler({"plan": raw_plan}, repo_root)
-    out = readiness_verdict(prep_gate, coverage, reviews, repo_root)
+    out = readiness_verdict(prep_gate, coverage, reviews, repo_root, premise_rows)
     return {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}

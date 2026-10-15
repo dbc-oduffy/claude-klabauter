@@ -1007,6 +1007,9 @@ def _evidence_append(
 
     import datetime
 
+    from coordinator_core.repo_relative_text import relativize_text
+
+    text = relativize_text(text, [(str(worktree), "")])
     entry = {
         "recorded_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "text": text,
@@ -1601,6 +1604,80 @@ def _coded_sha_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> O
     return None
 
 
+def _gate_blocks_execution(g: object) -> bool:
+    """Mirror of `spine_read._has_uncleared_execution_gate`'s per-entry test: a non-mapping
+    entry always blocks; a mapping blocks unless `cleared: true` or `blocks: ac-closure`."""
+    if not isinstance(g, dict):
+        return True
+    return g.get("cleared") is not True and g.get("blocks") in (None, "execution")
+
+
+def _frontmatter_row_gate_hits(old_text: str) -> tuple:
+    """`(split, fm_lines, hits)`: the plan's frontmatter `external_gate` items bound to a row
+    (`row: <id>`), each hit `(row_id, start, end, indent, item)`."""
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    split = split_frontmatter(old_text)
+    fm_lines: list = split.fm_text.splitlines(keepends=True) if split else []
+    located = _frontmatter_gate_items(fm_lines) if split else None
+    hits: list = []
+    for start, end in (located[0] if located else ()):
+        block = "".join(ln[located[1]:] for ln in fm_lines[start:end])
+        try:
+            item = yaml.safe_load(block)
+        except yaml.YAMLError:
+            continue
+        if isinstance(item, list) and item and isinstance(item[0], dict) and isinstance(item[0].get("row"), str):
+            hits.append((item[0]["row"], start, end, located[1], item[0]))
+    return split, fm_lines, hits
+
+
+def _clear_own_gates_for_coded_ref(
+    row: dict, ref: Optional[str], worktree: Path, fm_open_rows: frozenset = frozenset()
+) -> Optional[str]:
+    """Clear the row's own uncleared execution-blocking `external_gate` entries, naming `ref`
+    as closure evidence, when `ref` is a commit reachable from HEAD (the proof close-out
+    demands). A string-form entry is rewritten as a cleared mapping (a string cannot carry
+    `cleared`). Returns the verified sha when the row's id is in `fm_open_rows` (it owns an open
+    frontmatter gate, cleared by `_clear_frontmatter_gates`), else None. An unverifiable ref
+    leaves every gate open."""
+    gates = row.get("external_gate")
+    open_idx = (
+        [i for i, g in enumerate(gates) if _gate_blocks_execution(g)] if isinstance(gates, list) else []
+    )
+    if not open_idx and row.get("id") not in fm_open_rows:
+        return None
+    from coordinator_core.execute_plan_assemble.close_out_and_stamp import _verify_disposition_ref
+
+    sha, _ = _verify_disposition_ref(worktree, ref)
+    if sha is None:
+        return None
+    for i in open_idx:
+        g = gates[i]
+        if not isinstance(g, dict):
+            g = gates[i] = {"owner_repo": "unspecified", "condition": str(g)}
+        g["cleared"] = True
+        g["closure_evidence"] = f"row resolved coded with verified ref {sha}"
+    return sha
+
+
+def _clear_frontmatter_gates(old_text: str, sha_by_row: dict) -> str:
+    """`old_text` with every execution-blocking frontmatter `external_gate` item bound to a row
+    in `sha_by_row` marked cleared; plan-wide items and other rows' items are untouched."""
+    from coordinator_core.frontmatter.primitives import rebuild
+
+    split, fm_lines, hits = _frontmatter_row_gate_hits(old_text)
+    targets = [h for h in hits if h[0] in sha_by_row and _gate_blocks_execution(h[4])]
+    if not targets:
+        return old_text
+    for row_id, start, end, indent, item in reversed(targets):
+        item["cleared"] = True
+        item["closure_evidence"] = f"row resolved coded with verified ref {sha_by_row[row_id]}"
+        dumped = yaml.safe_dump([item], sort_keys=False, allow_unicode=True, width=10_000).splitlines(keepends=True)
+        fm_lines[start:end] = [" " * indent + ln for ln in dumped]
+    return rebuild(split, "".join(fm_lines))
+
+
 def _uses_crlf(path: Path) -> bool:
     """True when every line break in the file is CRLF (a mixed file is not)."""
     try:
@@ -1994,6 +2071,10 @@ def _resolve(
             )
 
         resolved_ids: list = []
+        fm_sha_by_row: dict = {}
+        fm_open_rows = frozenset(
+            h[0] for h in _frontmatter_row_gate_hits(old_text)[2] if _gate_blocks_execution(h[4])
+        )
         delivered_warnings: list = []
         for r in resolutions:
             task_id = r["id"]
@@ -2015,6 +2096,10 @@ def _resolve(
                 row["disposition_ref"] = effective_ref
             if disposition_detail is not None:
                 row["disposition_detail"] = disposition_detail
+            if disposition == "coded":
+                fm_sha = _clear_own_gates_for_coded_ref(row, effective_ref, worktree, fm_open_rows)
+                if fm_sha is not None:
+                    fm_sha_by_row[task_id] = fm_sha
             if disposition == _DELIVERED_ELSEWHERE:
                 row["delivered_via"] = r["delivered_via"]
                 delivered_warnings.append(
@@ -2032,7 +2117,7 @@ def _resolve(
 
         body_yaml = _patch_body(result.body, original_rows, rows)
         start, end = result.span
-        new_text = old_text[:start] + body_yaml + old_text[end:]
+        new_text = _clear_frontmatter_gates(old_text[:start] + body_yaml + old_text[end:], fm_sha_by_row)
 
         _state["all_resolved"] = all(
             _plan_tasks_row_disposition(row) != "open"

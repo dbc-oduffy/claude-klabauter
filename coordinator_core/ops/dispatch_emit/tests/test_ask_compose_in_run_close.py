@@ -43,7 +43,7 @@ def test_closeable_predicate_gates_next_action_and_both_commit_stages(monkeypatc
 
 
 def test_criterion_not_met_blocks_close_when_a_judge_runs(monkeypatch):
-    monkeypatch.setattr(ask_compose, "_criterion_judge_call", lambda *a, **k: "agent('judge')")
+    monkeypatch.setattr(ask_compose, "_criterion_judge_brief", lambda *a, **k: ("judge brief", {"type": "object"}))
     script = _script(monkeypatch)
     var = ask_compose._emit._FALSIFIER_RESULT_VAR
     pred = script[script.index("const _closeable = ") :].split("\n", 1)[0]

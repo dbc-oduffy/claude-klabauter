@@ -10,6 +10,43 @@ history before that point, inside a private working tree; that history is not re
 here, and nothing before 0.1.0 was ever published under this name. Entries below describe
 what the published artifact contains, not the order in which it was built.
 
+## [Unreleased]
+
+Engine levers since 0.3.0: dispatch and review are cheaper and stricter, and the Group EM
+watch can be run as a single blocking wait.
+
+### Added
+
+- **Strict dispatch at every size.** After sizing, the dispatching session's inline code
+  write is denied with a route to the executor, at every task size, rather than advised.
+- **The EM verification cap.** The post-executor verification guard bounds what the
+  dispatching session may run itself: a scoped run is admitted, and the mutex suite is
+  admitted only under a live Tier-U grant.
+- **`group-em watch --until-event`.** A portable polling mode that persists its state and
+  exits 0 on the first actionable line, so one background invocation replaces a poll loop.
+  `--status` judges a polled-mode stamp by `next_expected_by` alone.
+- **A remedy on each parked-session line.** The watch's PARKED and WAITING lines carry a
+  `next=` field naming the action for a session parked on a blocker: answer the gate,
+  continue unrelated work and raise the wait as an ask, or ask what it is waiting on.
+- **Reviewer scaling.** A review roster honours rows-per-reviewer and minimum-size bounds
+  per agent, and an unrostered agent counts as not run.
+
+### Changed
+
+- **The XS arm skips post-execute review** and commits straight after execute.
+- **The foreground reroute passes synchronous-return agent types through** in the engine, as
+  the plugin hook already does; a parity test reads the plugin's set instead of copying it.
+- **Memory-cap resolution is strict by default**, so a box-wide warn no longer opens it.
+- **The ask workflow has fewer serial phases:** no readiness gate, no standalone stage or
+  review-prep agent, and the criterion judge and docs run as one verify agent.
+
+### Fixed
+
+- **The watch's gate-holder pattern matches the Group EM handle again** (for example
+  `<name>-e4`). The handle now resolves at runtime, so it survives the publish scrub.
+- **Run-close and publish stamps** name the root's own source head rather than another
+  repo's.
+
 ## [0.3.0] — 2026-10-01
 
 Consumer-install fixes: a fresh install on a machine that only consumes the engine now runs

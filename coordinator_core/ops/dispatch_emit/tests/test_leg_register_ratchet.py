@@ -3,6 +3,7 @@ leg whose whole job is one op or a verdict read is on the closed haiku floor."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -44,17 +45,15 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("ask", "commit"),
         ("ask", "halt-commit"),
         ("ask", "stage"),
-        ("ask", "review:coordinator:review-prep"),
         ("emit", "run-base"),
         ("emit", "commit:wave-"),
         ("grind", "commit"),
         ("grind", "review-fix-commit"),
         ("grind", "verify-op"),
         ("grind", "ledger-sweep:drain"),
-        ("review-mechanical-prep", "review:coordinator:review-prep"),
     }
 )
-_RUNTIME_FLOOR_MAX = 12
+_RUNTIME_FLOOR_MAX = 10
 
 #: Judgment legs that sit on the mechanical haiku type; every other such leg is refused.
 _JUDGMENT_ON_MECHANICAL_TYPE: frozenset[Key] = frozenset({("grind", "triage")})
@@ -100,10 +99,14 @@ def _ask_scripts(repo: Path) -> list[str]:
         _ask(stop_after=STOP_AFTER_PLAN),
         _ask(in_run_commit=True, stop_after=STOP_AFTER_PLAN),
     ]
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW
+
+    scripts += [_ask(**_JUDGE_KW), _ask(in_run_commit=True, **_JUDGE_KW)]
     for arm in _ARM_SIZING:
         rel = _put_sizing(repo, arm)
         scripts.append(_ask(repo_root=repo.as_posix(), prompt=None, sizing_rel=rel))
         scripts.append(_ask(repo_root=repo.as_posix(), prompt=None, sizing_rel=rel, in_run_commit=True))
+        scripts.append(_ask(repo_root=repo.as_posix(), prompt=None, sizing_rel=rel, in_run_commit=True, **_JUDGE_KW))
     return scripts
 
 
@@ -134,6 +137,10 @@ def _emit_scripts() -> list[str]:
             plan_path="docs/plans/p.md", predispatch=True, review_specs=_review_spec_for(), **REVIEW_KW,
         ),
         emit.compose_script(waves, name="wf", description="d", chatty=True, **REVIEW_KW),
+        emit.compose_script(
+            [[_wave_row("C1", ["a.py"])], [_wave_row("C2", ["b.py"], ["C1"])]], name="wf", description="d",
+            plan_path="docs/plans/p.md", run_base_sha="a" * 40, seam=emit.SeamInputs({}, False), **REVIEW_KW,
+        ),
     ]
 
 
@@ -155,11 +162,11 @@ def _grind_scripts() -> list[str]:
     ]
 
 
-def _review_block(fragment: dict, schemas: dict, *, mechanical: bool) -> str:
+def _review_block(fragment: dict, schemas: dict) -> str:
     phases = compose_execute_review(
         parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]}),
         stage_schemas=schemas, plan_path="docs/plans/example.md", run_base_sha="a" * 40,
-        declared_paths=["x.py"], mechanical_prep=mechanical,
+        declared_paths=["x.py"],
     )
     return "\n".join(block for _, block in phases)
 
@@ -170,10 +177,9 @@ def _review_scripts() -> dict[str, list[str]]:
     fragment, schemas = REVIEW_KW["review_roster_fragment"], REVIEW_KW["review_stage_schemas"]
     return {
         "review": [
-            _review_block(fragment, schemas, mechanical=False),
-            _review_block(_v5_fragment(), _STAGE_SCHEMAS, mechanical=False),
+            _review_block(fragment, schemas),
+            _review_block(_v5_fragment(), _STAGE_SCHEMAS),
         ],
-        "review-mechanical-prep": [_review_block(fragment, schemas, mechanical=True)],
     }
 
 
@@ -223,9 +229,59 @@ def test_a_deleted_register_entry_names_its_leg(tmp_path):
 
 def test_the_composed_set_reaches_every_workflow_and_the_hidden_legs(tmp_path):
     emitted = _emitted(tmp_path)
-    assert {wf for wf, _ in emitted} == {"ask", "emit", "grind", "review", "review-mechanical-prep"}
+    assert {wf for wf, _ in emitted} == {"ask", "emit", "grind", "review"}
     for key in (("ask", "size-reword"), ("ask", "gate"), ("ask", "commit"), ("emit", "run-base"), ("grind", "verify-op")):
         assert key in emitted, f"{key} is no longer composed: the ratchet fixtures lost it"
+
+
+#: Plan-blitz and roadmap-blitz titles are DoE's, passed through as given.
+_PASSED_THROUGH_TITLES = frozenset({"Size", "Plan", "Synthesize", "roadmap-blitz"})
+_RETIRED_ASK_LEGS = ("test:terminal", "docs", "ledger-check", "review:coordinator:review-prep")
+
+
+def _meta_titles(script: str) -> list[str]:
+    import re
+
+    return re.findall(r"'([^']*)'", script.split("phases: [", 1)[1].split("]", 1)[0])
+
+
+def _parallel_blocks(script: str) -> list[str]:
+    scrubbed = lr.scrub(lr._mask_regex_literals(script))
+    blocks = []
+    for m in re.finditer(r"\bawait\s+parallel\s*\(", scrubbed):
+        open_paren = m.end() - 1
+        blocks.append(script[open_paren : lr._find_matching_paren(scrubbed, open_paren)])
+    return blocks
+
+
+def test_the_ask_tail_composes_one_verify_leg_and_none_of_the_legs_it_absorbed(tmp_path):
+    for script in _ask_scripts(tmp_path):
+        labels = [leg.label for leg in lr.emitted_legs(script)]
+        assert not set(labels) & set(_RETIRED_ASK_LEGS), set(labels) & set(_RETIRED_ASK_LEGS)
+        if "Verify" in _meta_titles(script):
+            assert labels.count("verify") == 1
+    retired = {("ask", label) for label in _RETIRED_ASK_LEGS} | {("review-mechanical-prep", "review:coordinator:review-prep")}
+    assert not retired & {(d.workflow, d.label) for d in lr.REGISTER}
+    assert lr.lookup("ask", "verify").cls is lr.LegClass.EARNS_ITS_COST
+
+
+def test_phase_titles_show_concurrency_truthfully(tmp_path):
+    for script in _ask_scripts(tmp_path):
+        for block in _parallel_blocks(script):
+            phases = {leg.phase for leg in lr.emitted_legs(block)}
+            assert len(phases) <= 1, f"one parallel() spans phase titles {sorted(phases)}"
+        carried = {leg.phase for leg in lr.emitted_legs(script)}
+        listed = [t for t in _meta_titles(script) if t not in _PASSED_THROUGH_TITLES]
+        assert len(set(listed)) == len(listed), f"a title is listed twice: {listed}"
+        assert [t for t in listed if t not in carried] == [], f"titles no agent carries: {listed}"
+
+
+def test_the_stage_fallback_and_the_standalone_falsifier_share_one_phase_title(tmp_path):
+    scripts = [s for s in _ask_scripts(tmp_path) if "'falsifier'" in s and "label: 'stage'" in s]
+    assert scripts
+    for script in scripts:
+        phases = {leg.label: leg.phase for leg in lr.emitted_legs(script) if leg.label in ("falsifier", "stage")}
+        assert phases == {"falsifier": "stage", "stage": "stage"}
 
 
 def _refused_outside_floor(register: Iterable[lr.LegDecl]) -> list[Key]:

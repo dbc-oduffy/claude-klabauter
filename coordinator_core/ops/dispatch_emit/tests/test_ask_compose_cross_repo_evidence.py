@@ -46,11 +46,11 @@ def test_manifest_schema_carries_owner_root():
     assert '"owner_root"' in str(ask_compose._MANIFEST_SCHEMA).replace("'", '"')
 
 
-def test_ledger_check_and_delivery_verifier_both_carry_the_clause(monkeypatch):
+def test_verify_leg_and_delivery_verifier_both_carry_the_clause(monkeypatch):
     script = _script(monkeypatch)
-    ledger_start = script.index("phase: ledger-check")
-    ledger = script[ledger_start : script.index("label: 'ledger-check'", ledger_start)]
-    assert _CLAUSE in ledger
+    verify_start = script.index("phase: Verify")
+    verify = script[verify_start : script.index("label: 'verify'", verify_start)]
+    assert _CLAUSE in verify
     assert script.count(_CLAUSE) >= 2
     assert "_crossRepoRows" in script[script.index("Review wave") :]
 
@@ -68,8 +68,8 @@ def test_ledger_schema_and_prompt_ask_for_root_read(monkeypatch):
     item = ask_compose._LEDGER_CHECK_SCHEMA["properties"]["items"]["items"]
     assert "root_read" in item["properties"]
     assert "root_read" not in item["required"]
-    ledger_start = script.index("phase: ledger-check")
-    assert "root_read" in script[ledger_start : script.index("label: 'ledger-check'", ledger_start)]
+    verify_start = script.index("phase: Verify")
+    assert "root_read" in script[verify_start : script.index("label: 'verify'", verify_start)]
 
 
 def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
@@ -83,11 +83,11 @@ def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub", script_path="x.mjs",
         review_roster_fragment=roster, review_stage_schemas={**_V5_STAGE_SCHEMAS, "judge": {"type": "object"}},
     )
-    assert "criterion-judge" in script
+    assert "agentType: 'coordinator:criterion-judge'" not in script
     assert "label: 'ledger-check'" not in script
-    judge = script[: script.index("agentType: 'coordinator:criterion-judge'")]
-    judge = judge[judge.rindex("agent("):]
-    assert "Ledger check, folded" in judge and "root_read" in judge and "engine-plane" in judge
+    verify = script[: script.index("label: 'verify'")]
+    verify = verify[verify.rindex("agent("):]
+    assert "Ledger check, folded" in verify and "root_read" in verify and "engine-plane" in verify
     assert script.count(_CLAUSE) >= 2
 
 

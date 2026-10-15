@@ -59,7 +59,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Optional, cast
+from typing import Callable, NamedTuple, Optional, Sequence, cast
 
 from coordinator_core.git.commit import (
     CommitOutcome,
@@ -90,9 +90,10 @@ from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_gates import (
+    attribution_gate,
     carry_gate,
-    residue_advisory,
     residue_gate,
+    split_process_paths,
     claude_md_budget_gate,
     declared_deletion_gate,
     machine_path_leak_gate,
@@ -415,13 +416,17 @@ def _pre_commit_gates(
     paths: list,
     deleted_paths: list,
     read_source: Callable[[str], Optional[bytes]],
+    prefer_staged: Sequence[str] = (),
+    deliberate_stage: bool = False,
 ) -> Optional[str]:
     """Run the gates `run_commit_pipeline` ran before landing, returning a
     refusal string or None. TWO of its four, and the omissions are the point.
 
-    Runs now, in order: `declared_deletion_gate`, `carry_gate`,
+    Runs now, in order: `declared_deletion_gate`, `carry_gate`, `residue_gate`,
     `op_scope_coverage_gate`, `leak_gate`, `registration_quad_gate`,
-    `claude_md_budget_gate`, `machine_path_leak_gate`. `read_source` is the
+    `claude_md_budget_gate`, `machine_path_leak_gate`, `attribution_gate`
+    (given `deleted_paths` as its vacated set: no index parse, zero spawns;
+    the Bash tripwires do not run it). `read_source` is the
     post-commit reader (`commit_source.post_commit_reader`): the last three and
     `op_scope_coverage_gate` judge the tree this commit lands, never the worktree
     or the index. Of the Bash path's checks only 7, 11 and 12 move here
@@ -547,6 +552,10 @@ def _pre_commit_gates(
         ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
         ("claude_md_budget_gate", partial(claude_md_budget_gate, read_source=read_source)),
         ("machine_path_leak_gate", partial(machine_path_leak_gate, read_source=read_source)),
+        ("attribution_gate", partial(
+            attribution_gate, vacated=deleted_paths,
+            prefer_staged=prefer_staged, deliberate_stage=deliberate_stage,
+        )),
     ):
         outcome = gate(worktree_root, gate_paths)
         if not outcome.passed:
@@ -664,6 +673,97 @@ def _landed_by_predecessor(worktree_root: Path, message: str) -> Optional[str]:
         if _message_identity(body) == want:
             return sha.strip()
     return None
+
+
+_PROCESS_SUBJECT_SUFFIX = " (process files)"
+
+
+class _Landing(NamedTuple):
+    """One `commit_paths` attempt. `error` is set on a refusal; `predecessor` names a recent
+    commit carrying this exact message when the attempt found nothing left to commit."""
+
+    outcome: Optional[CommitOutcome]
+    stale_warning: Optional[str]
+    stale_paths: list
+    error: Optional[dict]
+    predecessor: Optional[str]
+
+
+def _process_message(message: str) -> str:
+    """`message` with `_PROCESS_SUBJECT_SUFFIX` on its subject line; trailers untouched."""
+    subject, sep, rest = message.partition("\n")
+    return subject.rstrip() + _PROCESS_SUBJECT_SUFFIX + sep + rest
+
+
+def _land(
+    worktree_root: Path,
+    paths: list,
+    message: str,
+    *,
+    deleted: list,
+    untracked: list,
+    prefer_staged: list,
+    deliberate_stage: bool,
+    declared_reverts: list,
+) -> _Landing:
+    try:
+        outcome = commit_paths(
+            worktree_root,
+            paths,
+            message,
+            deleted_paths=deleted,
+            untracked_paths=untracked,
+            prefer_staged=prefer_staged,
+            prefer_deliberate_stage=deliberate_stage,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
+            detect_rollback=True,
+            declared_reverts=declared_reverts,
+        )
+    except NothingToCommit as exc:
+        # `already_landed_sha` names the commit when a recent one carries this exact message,
+        # Session-Id trailer included, so a peer's commit cannot match: the retry of a call that
+        # landed before its reply was read.
+        landed = _landed_by_predecessor(worktree_root, message)
+        if landed is not None:
+            return _Landing(None, None, [], _error(
+                f"{exc} The same message already landed as {landed}; an earlier call of "
+                "this op committed it.",
+                nothing_to_commit=True,
+                already_landed_sha=landed,
+            ), landed)
+        return _Landing(None, None, [], _error(str(exc), nothing_to_commit=True), None)
+    except IndexStaleAfterCommit as exc:
+        # THE COMMIT LANDED. Reporting an error here (`committed: False`) makes the caller retry and
+        # commit twice. `commit_paths` splices the index AFTER the ref swap, so a peer holding
+        # `.git/index.lock` lands here routinely. Recovered as a SUCCESS with the stale index as a warning.
+        # `cast`, not a runtime check: `IndexStaleAfterCommit.outcome` is typed
+        # `object` there only to keep `index_write` free of an import cycle
+        # back to `commit.py`. The sole raiser passes a real `CommitOutcome`.
+        if exc.outcome is None:
+            return _Landing(None, None, [], _error(
+                f"{exc} (the outcome was not carried out of the raise site, so "
+                "no sha can be reported -- resolve it with `git log -1`)"
+            ), None)
+        return _Landing(cast(CommitOutcome, exc.outcome), str(exc), list(exc.paths), None, None)
+    except IndexParseError as exc:
+        return _Landing(None, None, [], _error(
+            f"{exc}. Nothing committed; resolve any unmerged path, or convert a v4 "
+            "index with `git update-index --index-version 2`."
+        ), None)
+    except (CommitRefused, FilterUnsupported) as exc:
+        return _Landing(None, None, [], _error(str(exc)), None)
+    return _Landing(outcome, None, [], None, None)
+
+
+def _record_ledger(worktree_root: Path, paths: list, sha: str, message: str) -> None:
+    # Local import for the module-cycle reason the sibling call sites document.
+    from coordinator_core.contract.apply_base import record_ledger_entry
+    from coordinator_core.git.commit_trailers import extract_closure_facts_from_text
+
+    # Line-anchored read of the raw message that became the commit object, so a demoted
+    # `Closes:` still records (C1's contract).
+    closes, reverts_sha = extract_closure_facts_from_text(message)
+    record_ledger_entry(worktree_root, paths, sha, closes=closes, reverts_sha=reverts_sha)
 
 
 @register_op("ceremony.commit_v2")
@@ -924,7 +1024,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         prefer_staged=raw_prefer_staged,
         prefer_deliberate_stage=raw_prefer_deliberate_stage,
     )
-    gate_refusal = _pre_commit_gates(worktree_root, raw_paths, raw_removed, read_source)
+    gate_refusal = _pre_commit_gates(
+        worktree_root, raw_paths, raw_removed, read_source,
+        prefer_staged=raw_prefer_staged,
+        deliberate_stage=raw_prefer_deliberate_stage,
+    )
     if gate_refusal is not None:
         return _error(gate_refusal)
 
@@ -969,61 +1073,80 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if skill_weight_refusal is not None:
         return _error(skill_weight_refusal)
 
-    try:
-        outcome = commit_paths(
-            worktree_root,
-            raw_paths,
-            message,
-            deleted_paths=raw_deleted,
-            untracked_paths=raw_untracked,
-            prefer_staged=raw_prefer_staged,
-            prefer_deliberate_stage=raw_prefer_deliberate_stage,
-            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
-            detect_rollback=True,
-            declared_reverts=raw_declared_reverts,
-        )
-    except NothingToCommit as exc:
-        # `nothing_to_commit` lets a caller expecting a possible no-op tell "already done" from
-        # "failed". `already_landed_sha` names the commit when a recent one carries this exact
-        # message, Session-Id trailer included, so a peer's commit cannot match: the retry of a
-        # call that landed before its reply was read.
-        landed = _landed_by_predecessor(worktree_root, message)
-        if landed is not None:
-            return _error(
-                f"{exc} The same message already landed as {landed}; an earlier call of "
-                "this op committed it.",
-                nothing_to_commit=True,
-                already_landed_sha=landed,
-            )
-        return _error(str(exc), nothing_to_commit=True)
-    except IndexStaleAfterCommit as exc:
-        # THE COMMIT LANDED. Reporting an error here (`committed: False`) makes the caller retry and
-        # commit twice. `commit_paths` splices the index AFTER the ref swap, so a peer holding
-        # `.git/index.lock` lands here routinely. Recovered as a SUCCESS with the stale index as a warning.
-        # `cast`, not a runtime check: `IndexStaleAfterCommit.outcome` is typed
-        # `object` there only to keep `index_write` free of an import cycle
-        # back to `commit.py`. The sole raiser passes a real `CommitOutcome`.
-        outcome = cast(CommitOutcome, exc.outcome)
-        if exc.outcome is None:
-            # No raiser on the commit path omits it; if one ever does, say so
-            # rather than inventing a sha -- but never downgrade to `_error`,
-            # because the commit landed either way.
-            return _error(
-                f"{exc} (the outcome was not carried out of the raise site, so "
-                "no sha can be reported -- resolve it with `git log -1`)"
-            )
-        index_stale_warning = str(exc)
-        index_stale_paths = list(exc.paths)
-    except IndexParseError as exc:
-        return _error(
-            f"{exc}. Nothing committed; resolve any unmerged path, or convert a v4 "
-            "index with `git update-index --index-version 2`."
-        )
-    except (CommitRefused, FilterUnsupported) as exc:
-        return _error(str(exc))
+    # Process files (`state/`, `docs/plans/`, `archive/`, `.coordinator-local/`) never ride in a
+    # product commit on a non-DoE repo: a mixed call lands product first, process second.
+    prod_paths, proc_paths = split_process_paths(worktree_root, raw_paths)
+    prod_deleted, proc_deleted = split_process_paths(worktree_root, raw_deleted)
+    prod_untracked, proc_untracked = split_process_paths(worktree_root, raw_untracked)
+    mixed = bool(prod_paths or prod_deleted or prod_untracked) and bool(
+        proc_paths or proc_deleted or proc_untracked
+    )
+    if mixed:
+        proc_set = set(proc_paths) | set(proc_deleted) | set(proc_untracked)
+        halves = [
+            (prod_paths, prod_deleted, prod_untracked, message),
+            (proc_paths, proc_deleted, proc_untracked, _process_message(message)),
+        ]
     else:
-        index_stale_warning = None
-        index_stale_paths = []
+        proc_set = set()
+        halves = [(raw_paths, raw_deleted, raw_untracked, message)]
+
+    # (paths + removed, message, landing outcome or None, sha, process half?)
+    landed_halves: list = []
+    index_stale_warnings: list = []
+    index_stale_paths: list = []
+    last_error: Optional[dict] = None
+    for half_index, (h_paths, h_deleted, h_untracked, h_message) in enumerate(halves):
+        is_process = mixed and half_index == 1
+        landing = _land(
+            worktree_root,
+            h_paths,
+            h_message,
+            deleted=h_deleted,
+            untracked=h_untracked,
+            prefer_staged=(
+                [p for p in raw_prefer_staged if (p in proc_set) == is_process]
+                if mixed else raw_prefer_staged
+            ),
+            deliberate_stage=raw_prefer_deliberate_stage,
+            declared_reverts=(
+                [p for p in raw_declared_reverts if (p in proc_set) == is_process]
+                if mixed else raw_declared_reverts
+            ),
+        )
+        h_all = list(h_paths) + list(h_deleted) + list(h_untracked)
+        if landing.error is None:
+            assert landing.outcome is not None
+            landed_halves.append((h_all, h_message, landing.outcome, landing.outcome.sha, is_process))
+            if landing.stale_warning is not None:
+                index_stale_warnings.append(landing.stale_warning)
+                index_stale_paths.extend(landing.stale_paths)
+        elif mixed and landing.predecessor is not None:
+            # A retry of a mixed call whose half already landed: report it as landed.
+            landed_halves.append((h_all, h_message, None, landing.predecessor, is_process))
+        elif mixed and landing.error.get("nothing_to_commit"):
+            last_error = landing.error
+        elif landed_halves:
+            unlanded = ", ".join((list(h_paths) + list(h_deleted))[:5])
+            for done_paths, done_message, _o, done_sha, _p in landed_halves:
+                _record_ledger(worktree_root, done_paths, done_sha, done_message)
+                _release_committed_claims_step(worktree_root, done_paths)
+            return _error(
+                f"{landing.error['error']} The product commit {landed_halves[0][3]} landed; "
+                f"these process paths did not: {unlanded}. Retry the same call to land them.",
+                landed_sha=landed_halves[0][3],
+                unlanded_paths=list(h_paths) + list(h_deleted) + list(h_untracked),
+            )
+        else:
+            return landing.error
+    if not landed_halves:
+        assert last_error is not None
+        return last_error
+
+    outcomes = [h[2] for h in landed_halves if h[2] is not None]
+    sha = landed_halves[0][3]
+    process_sha = next((h[3] for h in landed_halves[1:] if h[4]), None)
+    index_stale_warning = " ".join(index_stale_warnings) or None
 
     # A FIELD IS NOT A SIGNAL. A commit which sets one side aside is a
     # legitimate success and the operator still needs to see why, not a
@@ -1037,29 +1160,28 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     warnings.extend(peer_claim_warnings)
     if skill_weight_note is not None:
         warnings.append(skill_weight_note)
-    residue_note = residue_advisory(worktree_root, list(raw_paths) + list(raw_removed))
-    if residue_note is not None:
-        warnings.append(residue_note)
-    if outcome.sign_warning is not None:
-        # First-class: the only warning meaning "this commit is not what the branch's protection expects."
-        warnings.append(outcome.sign_warning)
+    staged_preferred = [p for o in outcomes for p in o.staged_preferred]
+    worktree_over_staged = [p for o in outcomes for p in o.worktree_over_staged]
+    no_delta = [p for o in outcomes for p in o.no_delta]
+    # First-class: the only warning meaning "this commit is not what the branch's protection expects."
+    warnings.extend(o.sign_warning for o in outcomes if o.sign_warning is not None)
     if index_stale_warning is not None:
         # First, because it is the one warning here that changes what the
         # reader should DO: everything else describes which bytes landed; this
         # one says the commit landed and the index did not, so `git status`
         # will misreport these paths until any subsequent index write.
         warnings.append(index_stale_warning)
-    if outcome.worktree_over_staged:
+    if worktree_over_staged:
         # Bounded like the other truncation sites in this diff area
         # (commit.py's `refused[:5]` / `sorted(unknown)[:5]`) -- an unbounded
         # join of every passed-over path violates the register's bounded,
         # terse intent (docs/wiki/guard-messaging.md § Register) on a commit
         # touching a dozen-plus partially-staged paths.
-        paths = ", ".join(outcome.worktree_over_staged[:5])
-        if len(outcome.worktree_over_staged) > 5:
+        paths = ", ".join(worktree_over_staged[:5])
+        if len(worktree_over_staged) > 5:
             paths += ", ..."
         warnings.append(
-            f"committed worktree content for {len(outcome.worktree_over_staged)} "
+            f"committed worktree content for {len(worktree_over_staged)} "
             f"path(s) whose index held different content: {paths}. "
             "Pass prefer_staged to name those paths, or "
             "prefer_deliberate_stage=true to preserve every staged blob in "
@@ -1067,14 +1189,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "differing content is a peer's and you cannot name it up front."
         )
 
-    if outcome.no_delta:
+    if no_delta:
         # The k-of-N face of the zero-delta bug, and it belongs in `warnings`
         # for the same reason the divergence above does: the caller named
         # these paths and they are not in the commit, which is indistinguish-
         # able from delivery on the success line alone. Bounded at five like
         # every other join in this envelope.
         # `PhantomDeletionDeclared` is raised before any write, so `no_delta` is only "already at HEAD".
-        matched = list(outcome.no_delta)
+        matched = list(no_delta)
         declared = len(raw_paths) + len(raw_removed)
 
         if matched:
@@ -1105,7 +1227,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # fail it (NEGATIVE SPEC). `guard_class_relay` is additive; existing
     # consumers reading `committed`/`sha`/`warnings` see no change.
     guard_class_relay = _guard_class_relay_step(
-        worktree_root, guard_paths, pre_commit_guard_sources, outcome.sha,
+        worktree_root, guard_paths, pre_commit_guard_sources, sha,
         repo_root=repo_root,
     )
 
@@ -1128,20 +1250,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # spawns. Local import for the module-cycle reason the two sibling call
     # sites (`git_native.commit_authored_content`, `apply._commit_one`) each
     # document at their own.
-    from coordinator_core.contract.apply_base import record_ledger_entry
-    from coordinator_core.git.commit_trailers import extract_closure_facts_from_text
-
-    # `message` post-`apply_missing_trailers`: the raw text that became this
-    # commit object, read line-anchored rather than through git's parsed
-    # trailer block, so a demoted `Closes:` still records (C1's contract).
-    closes, reverts_sha = extract_closure_facts_from_text(message)
-    record_ledger_entry(
-        worktree_root,
-        list(raw_paths) + raw_removed,
-        outcome.sha,
-        closes=closes,
-        reverts_sha=reverts_sha,
-    )
+    for done_paths, done_message, _o, done_sha, _p in landed_halves:
+        _record_ledger(worktree_root, done_paths, done_sha, done_message)
 
     # Mark the repo for the next push sweep (DR-329: mark only, never push).
     # `sys.modules` gate: a process that never loaded the cadence has no
@@ -1151,17 +1261,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if cadence is not None:
         cadence.note_commit(worktree_root)
 
-    landed = commit_meta(resolve_git_common_dir(worktree_root), outcome.sha)
-    return {
+    landed = commit_meta(resolve_git_common_dir(worktree_root), sha)
+    result = {
         "committed": True,
-        "sha": outcome.sha,
+        "sha": sha,
         "tree": landed["tree"] if landed else None,
-        "staged_preferred": list(outcome.staged_preferred),
-        "worktree_over_staged": list(outcome.worktree_over_staged),
-        "no_delta": list(outcome.no_delta),
+        "staged_preferred": staged_preferred,
+        "worktree_over_staged": worktree_over_staged,
+        "no_delta": no_delta,
         "warnings": warnings,
         "guard_class_relay": guard_class_relay,
         "index_stale": index_stale_paths,
         "dropped_ignored": dropped_ignored,
         "skipped_missing": skipped_missing,
     }
+    if process_sha is not None:
+        result["process_sha"] = process_sha
+    return result

@@ -271,10 +271,11 @@ class RefusalTest(unittest.TestCase):
             self.assertEqual(result["exit_code"], 1)
             self.assertIn("summary", result["error"])
 
-    def test_missing_ledger_heading_refused(self):
+    def test_multiple_ledger_headings_refused(self):
         with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
             repo = _make_git_repo(Path(tmp))
-            _seed(repo, "2026-08-21-test.md", body="\n## What this covers\n\nprose\n")
+            body = _LEDGER_BODY + "\n## Session Ledger\n\n"
+            _seed(repo, "2026-08-21-test.md", body=body)
 
             result = _call(
                 repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "x"}
@@ -282,6 +283,34 @@ class RefusalTest(unittest.TestCase):
 
             self.assertEqual(result["exit_code"], 1)
             self.assertIn("Session Ledger", result["error"])
+
+
+class HeadingCreationTest(unittest.TestCase):
+    _NO_HEADING_BODY = _LEDGER_BODY.split("## Session Ledger")[0]
+
+    def test_absent_heading_is_refused_and_file_left_untouched(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md", body=self._NO_HEADING_BODY)
+            before = hpath.read_bytes()
+
+            result = _call(
+                repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "x"}
+            )
+
+            self.assertEqual(result["exit_code"], 1, result)
+            self.assertIn("Session Ledger", result["error"])
+            self.assertEqual(hpath.read_bytes(), before)
+
+    def test_body_with_heading_keeps_single_heading(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+            result = _call(
+                repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "x"}
+            )
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertEqual(hpath.read_text(encoding="utf-8").count("## Session Ledger"), 1)
 
 
 # ---------------------------------------------------------------------------

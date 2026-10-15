@@ -404,6 +404,78 @@ def _resolve(record: dict[str, Any], run_id: str, now: datetime) -> dict[str, Le
     return resolved
 
 
+def _read_json(path: Path) -> Optional[dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def sibling_release(
+    root: Path, run_id: str, landed_sha: Optional[str], budget: Optional[int] = None
+) -> Optional[dict[str, Any]]:
+    """Close *run_id*'s sibling status and name what the close frees.
+
+    ``None`` unless the run's own status file exists (the slice bind wrote it). Otherwise rewrites only
+    that file (``landed`` with *landed_sha*, or ``halted`` when it is ``None``), reads the write-once
+    parent record and every sibling's status file, and returns ``{parent_id, released: [fire call],
+    blocked: [{run_id, slice_sizing}]}``. A halted run frees its budget slot but releases no ``after``
+    successor; ``blocked`` names each waiting run behind a halted or blocked predecessor.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.session import claimed_write
+    from coordinator_core.warp_fire import fire_command
+
+    base = Path(root)
+    own = base / contract.status_rel(run_id)
+    prior = _read_json(own)
+    if prior is None:
+        return None
+    entry: dict[str, Any] = {"status": contract.STATUS_HALTED}
+    if landed_sha:
+        entry = {"status": contract.STATUS_LANDED, "sha": landed_sha}
+    if isinstance(prior.get("parent_id"), str):
+        entry["parent_id"] = prior["parent_id"]
+    claimed_write.replace_text(own, json.dumps(entry, sort_keys=True) + "\n")
+
+    parent_id = entry.get("parent_id") or _own_parent_id(base, run_id, contract)
+    parent_data = _read_json(base / contract.parent_record_rel(parent_id)) if parent_id else None
+    if parent_data is None:
+        return None
+    try:
+        parent = contract.ParentRecord.from_json(parent_data)
+    except (ValueError, KeyError, TypeError):
+        return None
+    statuses: dict[str, str] = {}
+    for run in parent.runs:
+        data = _read_json(base / contract.status_rel(run.run_id))
+        status = data.get("status") if data else None
+        statuses[run.run_id] = status if status in contract.RUN_STATUSES else run.status
+    budget = contract.concurrent_run_budget() if budget is None else budget
+    freed = contract.release(parent, statuses, budget)
+    by_id = {r.run_id: r for r in parent.runs}
+    dead = {rid for rid, st in statuses.items() if st == contract.STATUS_HALTED}
+    blocked: list[dict[str, str]] = []
+    for run in parent.runs:
+        if statuses[run.run_id] not in (contract.STATUS_AFTER, contract.STATUS_QUEUED):
+            continue
+        if any(p in dead for p in run.after):
+            dead.add(run.run_id)
+            blocked.append({"run_id": run.run_id, "slice_sizing": run.slice_sizing})
+    return {
+        "parent_id": parent.parent_id,
+        "released": [fire_command(by_id[rid].slice_sizing) for rid in freed],
+        "blocked": blocked,
+    }
+
+
+def _own_parent_id(base: Path, run_id: str, contract: Any) -> Optional[str]:
+    copy = _read_json(base / contract.run_parent_copy_rel(run_id))
+    parent_id = copy.get("parent_id") if copy else None
+    return parent_id if isinstance(parent_id, str) and parent_id else None
+
+
 DISCHARGED_BY_KEY = "discharged_by"
 DISCHARGING_STATUSES: frozenset[str] = frozenset({"ran", "discharged"})
 

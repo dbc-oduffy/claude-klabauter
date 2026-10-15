@@ -196,6 +196,7 @@ reintroducing the by-path resolver this note retires.
 
 from __future__ import annotations
 
+import functools
 import io
 import json
 import os
@@ -474,8 +475,21 @@ def _transcript_idle_seconds(
 #: match. Any hit makes the line WAITING: the peer ended its turn on a gate only
 #: the Group EM or the PM opens, which is never a ledger obligation, so
 #: `obligations=none` on that line is not "nothing owed".
-_GATE_HOLDER = re.compile(r"(?i:group[- ]?em|\bcoordinator-content-repo-\d+|\bslot\b|\bgo\b|\bruling\b)|\bPM\b")
+#: The Group EM handle is `<doctrine repo>-<letter?><digits>`; the repo name is
+#: resolved at runtime because the publish scrub rewrites any literal of it.
 _WAIT_WINDOW_CHARS = 80
+
+
+@functools.lru_cache(maxsize=1)
+def _gate_holder_re() -> "re.Pattern[str]":
+    """Gate-holder pattern; the handle alternative is dropped when no doctrine repo resolves."""
+    alternatives = ["group[- ]?em", r"\bslot\b", r"\bgo\b", r"\bruling\b"]
+    from coordinator_core._fleet_names import doctrine_repo_name
+
+    name = doctrine_repo_name()
+    if name:
+        alternatives.insert(1, r"\b" + re.escape(name.casefold()) + r"-[a-z]?\d+\b")
+    return re.compile("(?i:" + "|".join(alternatives) + r")|\bPM\b")
 
 
 def _waiting_on(session_id: str, cwd: str) -> tuple[str, bool]:
@@ -493,7 +507,15 @@ def _waiting_on(session_id: str, cwd: str) -> tuple[str, bool]:
         return "none", False
     phrase = said[-1][match.start():match.end() + _WAIT_WINDOW_CHARS]
     phrase = phrase.replace('"', "'").strip()
-    return phrase, bool(_GATE_HOLDER.search(phrase, match.end() - match.start()))
+    return phrase, bool(_gate_holder_re().search(phrase, match.end() - match.start()))
+
+
+#: The `next=` field of a PARKED/WAITING line: the action for the line's reader.
+_REMEDY_GATED = "answer the gate it names"
+_REMEDY_UNRELATED_BLOCKER = (
+    "tell it to continue work not behind this wait and raise the wait as an ask"
+)
+_REMEDY_UNNAMED = "ask what it is waiting on"
 
 
 def _fmt_seconds(value: Optional[float]) -> str:
@@ -557,9 +579,16 @@ def _parked_line(
     reason = verdict.get("reason")
     waiting_on, gated = _waiting_on(session_id, cwd or repo_root)
     who = f"{name} [{session_id}]" if name else str(session_id)
+    if gated:
+        remedy = _REMEDY_GATED
+    elif waiting_on in ("none", "unknown"):
+        remedy = _REMEDY_UNNAMED
+    else:
+        remedy = _REMEDY_UNRELATED_BLOCKER
     return (
         f"{'WAITING' if gated else 'PARKED'} session={who} reason={reason} "
         f"waiting_on=\"{waiting_on}\" "
+        f"next=\"{remedy}\" "
         f"at={watch_heartbeat.iso_instant(now.timestamp())} "
         f"stamped_age={_fmt_seconds(stamped_age)} "
         f"transcript_idle={_fmt_seconds(transcript_idle)} "

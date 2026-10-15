@@ -221,6 +221,42 @@ def test_parent_session_transcript_of_another_agent_is_denied(repo):
     assert _check_t(_file_cmd(repo), session) is not None
 
 
+def _relay_first(tmp_path, relay_text: str, spawn_params: dict | None, name: str = "agent-r.jsonl") -> str:
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    d = tmp_path / "proj" / "subagents" / "workflows" / "wf_r"
+    d.mkdir(parents=True, exist_ok=True)
+    records = [{"type": "user", "message": {"role": "user", "content": chan.RELAY_HEADER + "\n" + relay_text}}]
+    prompt = "Commit."
+    if spawn_params is not None:
+        prompt = "\n".join(["Commit.", *chan.render_params_block(spawn_params).split("\n")])
+    records.append({"type": "user", "message": {"role": "user", "content": prompt}})
+    f = d / name
+    f.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return str(f)
+
+
+def test_relay_first_transcript_admits_the_params_of_record_one(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _relay_first(repo, "land the halted run", _params(token))
+    assert _check_t(_file_cmd(repo), tp) is None
+
+
+def test_params_block_quoted_only_in_the_relay_record_is_denied(repo):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    forged = chan.render_params_block(_params(token))
+    tp = _relay_first(repo, forged, None)
+    assert "unreadable or holds no params block" in _reason(_check_t(_file_cmd(repo), tp))
+
+
+def test_relay_first_transcript_of_another_run_is_denied_by_path(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _relay_first(repo, "land", _params(token))
+    assert "not the run's own params file" in _reason(_check_t(_file_cmd(repo, run_id="ask-2"), tp))
+
+
 def test_planted_params_file_without_a_prompt_block_is_denied(repo):
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
@@ -233,12 +269,38 @@ def test_planted_params_file_without_a_prompt_block_is_denied(repo):
     assert _check_t(_file_cmd(repo), tp) is not None
 
 
+def _reason(verdict) -> str:
+    return verdict["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_token_leg_denial_names_the_token_leg_not_the_pathspec(repo):
     run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _spawn(repo, _params("f" * 32))
-    verdict = _check_t(_file_cmd(repo), tp)
-    reason = verdict["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "params not admitted" in reason and "pathspec" not in reason
+    reason = _reason(_check_t(_file_cmd(repo), tp))
+    assert "run token is spent" in reason and "pathspec" not in reason
+
+
+def test_refusal_names_no_block_when_the_prompt_holds_none(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _spawn(repo, _params(token), name="x.jsonl")
+    Path(tp).write_text(json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n", encoding="utf-8")
+    assert "unreadable or holds no params block" in _reason(_check_t(_file_cmd(repo), tp))
+
+
+def test_refusal_names_the_path_when_it_is_not_the_runs_own(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _spawn(repo, _params(token))
+    cmd = _file_cmd(repo).replace("terminal-commit-params.json", "evil.json")
+    assert "not the run's own params file" in _reason(_check_t(cmd, tp))
+
+
+def test_refusal_names_the_write_when_the_file_cannot_be_written(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _spawn(repo, _params(token))
+    monkeypatch.setattr(chan, "materialize", lambda path, params: False)
+    assert "could not be written" in _reason(_check_t(_file_cmd(repo), tp))
 
 
 def test_record_stores_no_plain_token_and_lives_in_the_git_dir(repo):

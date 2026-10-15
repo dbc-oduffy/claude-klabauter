@@ -345,6 +345,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "close.review":                            "coordinator_core.ops.ceremony.close_review",
     "dispatch.ask_gate":                       "coordinator_core.ops.dispatch_emit.ask_gate",
     "dispatch.ask_stage":                      "coordinator_core.ops.dispatch_emit.ask_stage",
+    "dispatch.ask_fanout":                     "coordinator_core.ops.dispatch_emit.ask_fanout",
     "dispatch.reap_abandoned_runs":            "coordinator_core.ops.dispatch_emit.abandoned_runs",
     "dispatch.commit_halted_rows":             "coordinator_core.ops.dispatch_emit.halted_rows_commit",
     "workflow.revise":                        "coordinator_core.ops.dispatch_emit.requirements_ledger",

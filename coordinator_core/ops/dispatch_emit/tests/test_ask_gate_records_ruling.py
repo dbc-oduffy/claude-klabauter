@@ -64,6 +64,14 @@ def test_xl_exit_record_writes_what_the_writer_writes_then_passes_the_room(repo)
     assert got["pm_resolution"]["xl_exit_apm"] == _doc(repo)["pm_resolution"]["xl_exit_apm"]
 
 
+def test_a_split_record_is_written_then_gates_to_the_split_halt(repo):
+    _put(repo, tshirt="XL", route="pm-decision", mode="ceo", accepted=ACCEPTED)
+    reply = _call(repo, record={**XL_REC, "xl_exit": "split"})
+    assert reply["recorded"] == {"ok": True}
+    assert reply["halt"]["kind"] == "split"
+    assert _doc(repo)["xl_exit"] == "split"
+
+
 def test_a_refused_write_reports_the_error_and_still_returns_the_original_halt(repo):
     _put(repo, tshirt="XL", route="plan", mode="pm")
     before = (repo / REL).read_text(encoding="utf-8")

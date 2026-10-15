@@ -721,6 +721,7 @@ def attribution_gate(
     gate_paths: Sequence[str],
     prefer_staged: Sequence[str] = (),
     deliberate_stage: bool = False,
+    vacated: Optional[Sequence[str]] = None,
 ) -> GateOutcome:
     """Refuse a commit whose staged content ADDS a reviewer-attribution line
     (`coordinator_core.attribution.scan_added_lines`) to a non-exempt tracked path.
@@ -731,6 +732,12 @@ def attribution_gate(
     UNFILTERED `gate_paths`, since a source may sit under an exempt root), else `None`. New bytes are
     the worktree text, plus the staged blob when `prefer_staged`/`deliberate_stage` and it differs;
     a path gone from the worktree but still staged scans its staged blob. Non-UTF-8 is skipped.
+
+    `vacated` is the caller's declared deletion set. When given, those paths' HEAD text is the
+    rename-source pool and the whole-index rename scan (`read_index`) is skipped. Pooling every
+    declared deletion is a superset of the exact-sha rename match, so old_text only widens
+    (fewer false refusals); the cost is a false negative: an attribution line moved from a
+    declared-deleted file into an unrelated new file passes. `None` keeps the index scan.
 
     Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, capped at 5, then one
     remedy line. No override key, no bypass.
@@ -744,13 +751,16 @@ def attribution_gate(
     spine = read_tree_spine(root, remaining)
 
     # Rename-source pool: over the UNFILTERED gate set (a source may sit under an exempt root).
-    try:
-        staged_deletions, rename_sources = _staged_deletions_and_renames_in_process(
-            root, set(gate_paths)
-        )
-    except IndexParseError:
-        staged_deletions, rename_sources = set(), set()
-    vacated_paths = staged_deletions | rename_sources
+    if vacated is not None:
+        vacated_paths = {_norm(p) for p in vacated}
+    else:
+        try:
+            staged_deletions, rename_sources = _staged_deletions_and_renames_in_process(
+                root, set(gate_paths)
+            )
+        except IndexParseError:
+            staged_deletions, rename_sources = set(), set()
+        vacated_paths = staged_deletions | rename_sources
 
     rename_pool_lines: List[str] = []
     if vacated_paths:
@@ -853,18 +863,23 @@ def residue_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
-def residue_advisory(
+def split_process_paths(
     worktree_root: Union[str, Path],
-    gate_paths: Sequence[str],
-) -> Optional[str]:
-    """One advisory line when process paths (`archive/`, `state/`, `docs/plans/`, `.coordinator-local/`) mix with product
-    paths on a non-DoE repo; `None` otherwise. Never a refusal."""
-    process = sum(1 for p in gate_paths if _norm(p).startswith(_PROCESS_PREFIXES))
-    if not process or process == len(gate_paths):
-        return None
+    paths: Sequence[str],
+) -> Tuple[List[str], List[str]]:
+    """`(product, process)` partition of `paths`, order preserved, input strings returned as given.
+
+    Process paths sit under `archive/`, `state/`, `docs/plans/` or `.coordinator-local/`
+    (either separator). A repo carrying `.coordinator-dev-repo` has no process class:
+    returns `(list(paths), [])`. Zero spawns.
+    """
     if (Path(worktree_root) / _DOE_SENTINEL).exists():
-        return None
-    return f"{process} process path(s) (archive/state/docs/plans/.coordinator-local) mixed with product files; consider splitting."
+        return list(paths), []
+    product: List[str] = []
+    process: List[str] = []
+    for p in paths:
+        (process if _norm(p).startswith(_PROCESS_PREFIXES) else product).append(p)
+    return product, process
 
 
 _REGISTRY_MAP_RELPATH = "coordinator_core/ops/_registry_map.py"

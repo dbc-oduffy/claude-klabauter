@@ -18,6 +18,13 @@ Negative-spec:
   - With declared writes (`plan` or `paths`), a diff file outside them is another run's and
     contributes no entry; with neither, every diff file counts.
   - An untracked referrer is scanned only when the plan declares it or it sits beside a changed file.
+  - `doc` (markdown) and `op` (`@register_op` module) entries are default kinds. `cli`, `hook`,
+    `doc` and `op` verdicts come from `reachability_docs` and `reachability_registration`, which read
+    only the diff's added lines, the one shared `read_index` list, ancestor index files and named
+    wiring surfaces, never the whole tree and never a second spawn.
+  - `unreachable` is also returned for a hook body (in a repo holding a hook wiring surface), bin
+    script, doc or op the range CREATED and nothing modelled names. A pre-existing hook or bin script
+    stays `undecidable`: its wiring may live in another repo.
   - Click paths are traced on the Next.js app router only; any other stack is `undecidable`.
   - A middleware/proxy rewrite or redirect is not modelled: with one present, a step the trace
     cannot resolve is `undecidable`, never `broken`.
@@ -40,6 +47,8 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.ops.reachability_docs import doc_entries, doc_verdicts
+from coordinator_core.ops.reachability_registration import registration_entries, registration_verdicts
 
 _CODE_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".py", ".rs")
 _JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs")
@@ -66,7 +75,8 @@ _MANIFESTS = (
     "package.json", "pyproject.toml", "setup.py", "setup.cfg", "hooks.json", "plugin.json",
     "manifest.json", ".claude/settings.json", ".claude/settings.local.json",
 )
-_ALL_ENTRY_KINDS = ("exported-function", "cli", "hook", "api-route", "page")
+_ALL_ENTRY_KINDS = ("exported-function", "cli", "hook", "api-route", "page", "doc", "op")
+_REGISTRATION_KINDS = ("cli", "hook", "op")
 _WORD = re.compile(rb"[\w$]")
 
 _LINK_RE = re.compile(r"""<Link[^>]*?href=\{?['"`]([^'"`]+)['"`]\}?[^>]*>([^<]*)<""")
@@ -92,8 +102,13 @@ def _empty(error: str) -> dict:
     }
 
 
-def _diff_added(root: Path, base: str, head: Optional[str], worktree: bool) -> Optional[dict]:
-    """{path: added lines} from one `git diff -U0`; None when git refuses."""
+def _diff_added(
+    root: Path, base: str, head: Optional[str], worktree: bool
+) -> Optional[tuple[dict[str, list[str]], set[str]]]:
+    """({path: added lines}, {paths the range created}) from one `git diff -U0`; None when git refuses.
+
+    A file header is the span from `diff --git` to the first `@@`; `--- /dev/null` counts only there,
+    since a removed content line `-- /dev/null` is indistinguishable from it under -U0."""
     args = ["-C", str(root), "-c", "core.quotepath=off", "diff", "-U0", "--no-color",
             "--no-ext-diff", "--no-renames", base]
     if not worktree:
@@ -102,15 +117,30 @@ def _diff_added(root: Path, base: str, head: Optional[str], worktree: bool) -> O
     if res.returncode != 0:
         return None
     added: dict[str, list[str]] = {}
+    created: set[str] = set()
     cur = None
+    in_header = False
+    from_null = False
     for ln in res.stdout.splitlines():
-        if ln.startswith("+++ "):
-            cur = ln[6:].split("\t")[0] if ln.startswith("+++ b/") else None
-            if cur is not None:
-                added.setdefault(cur, [])
+        if in_header:
+            if ln.startswith("--- "):
+                from_null = ln.startswith("--- /dev/null")
+                continue
+            if ln.startswith("+++ "):
+                cur = ln[6:].split("\t")[0] if ln.startswith("+++ b/") else None
+                if cur is not None:
+                    added.setdefault(cur, [])
+                    if from_null:
+                        created.add(cur)
+                continue
+            if ln.startswith("@@"):
+                in_header = False
+            continue
+        if ln.startswith("diff --git "):
+            in_header, from_null, cur = True, False, None
         elif ln.startswith("+") and cur is not None:
             added[cur].append(ln[1:])
-    return added
+    return added, created
 
 
 def _classify(rel: str, text: str) -> list[tuple[str, str]]:
@@ -145,15 +175,19 @@ def _route_of(rel: str) -> tuple[str, bool]:
     return "/" + "/".join(seg), any(s.startswith(("[", "@")) for s in seg)
 
 
-def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str], sym_counts: dict):
+def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str], sym_counts: dict, index: list[str]):
     """One pass over production code files -> (symbol hits, route-hit set, barrels).
 
     symbol hits: {symbol: {file}}; barrels: [(file, spec)] for `export * from`.
     `sym_counts` is filled with {(symbol, file): whole-word occurrences}, the definition included.
+    `index` is the handler's single `read_index` result.
     """
-    files = [p for p in read_index(root) if p.endswith(_CODE_EXT) and not _TEST_RE.search(p)]
+    files = [p for p in index if p.endswith(_CODE_EXT) and not _TEST_RE.search(p)]
     seen = set(files)
     files += [e for e in dict.fromkeys(extra) if e not in seen and e.endswith(_CODE_EXT) and not _TEST_RE.search(e)]
+    # Plain-substring pre-filter: a file holding no wanted name skips the regex engine entirely.
+    sym_bytes = [s.encode() for s in symbols]
+    route_bytes = [r.encode() for r in routes]
     sym_re = None
     if symbols:
         sym_re = re.compile(b"(" + b"|".join(re.escape(s.encode()) for s in sorted(symbols, key=len, reverse=True)) + b")")
@@ -172,7 +206,7 @@ def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str], sym
         except OSError:
             continue
         if sym_re is not None:
-            for m in sym_re.finditer(b):
+            for m in (sym_re.finditer(b) if any(s in b for s in sym_bytes) else ()):
                 i, j = m.span()
                 if (i and _WORD.match(b, i - 1)) or _WORD.match(b, j):
                     continue
@@ -181,7 +215,7 @@ def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str], sym
                 sym_counts[(name, f)] = sym_counts.get((name, f), 0) + 1
             if b"export" in b:
                 barrels += [(f, m.group(1).decode("utf-8", "replace")) for m in _BARREL.finditer(b)]
-        if route_re is not None:
+        if route_re is not None and any(r in b for r in route_bytes):
             for m in route_re.finditer(b):
                 route_hits.setdefault(m.group(1).decode(), set()).add(f)
     return sym_hits, route_hits, barrels
@@ -191,12 +225,16 @@ def _manifest_text(root: Path) -> str:
     return "\n".join(_read(root, m) for m in _MANIFESTS)
 
 
-def _verdicts(root, found, sym_hits, route_hits, barrels, manifest_text, sym_counts) -> list[dict]:
+def _verdicts(root, found, sym_hits, route_hits, barrels, manifest_text, sym_counts, resolved=None) -> list[dict]:
+    """`resolved` carries {(kind, sym, rel): verdict} from the doc and registration resolvers."""
     ents = []
     manifest = None
+    resolved = resolved or {}
     for kind, sym, rel in found:
         ref = f"{rel}:{sym}" if sym else rel
-        if kind == "exported-function" and sym and rel.endswith(_CODE_EXT[:-1]):
+        if (kind, sym, rel) in resolved:
+            v = resolved[(kind, sym, rel)]
+        elif kind == "exported-function" and sym and rel.endswith(_CODE_EXT[:-1]):
             if sym_hits.get(sym, set()) - {rel}:
                 v = "reachable"
             elif sym_counts.get((sym, rel), 0) > 1:
@@ -361,19 +399,28 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         writes = [str(x).replace("\\", "/").removeprefix("./") for x in params["paths"]]
     clicks = params.get("click_paths") if params.get("click_paths") is not None else plan_clicks
 
-    added = _diff_added(root, base, params.get("head_sha"), worktree)
-    if added is None:
+    diffed = _diff_added(root, base, params.get("head_sha"), worktree)
+    if diffed is None:
         return _empty(f"git diff failed against base_sha {base}")
+    added, created = diffed
     # An untracked declared write is invisible to `git diff`; a tracked one absent from the diff
     # added nothing in this range, so its pre-existing symbols are not this run's entry points.
+    index_box: list[list[str]] = []
+
+    def _index() -> list[str]:
+        if not index_box:
+            index_box.append(read_index(root))
+        return index_box[0]
+
     tracked = None
     for w in writes:
         if w in added or not (root / w).is_file():
             continue
         if tracked is None:
-            tracked = set(read_index(root))
+            tracked = set(_index())
         if w not in tracked:
             added[w] = _read(root, w).splitlines()
+            created.add(w)
 
     declared = set(writes) if writes else None
 
@@ -386,7 +433,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     for rel, lines in added.items():
         if _TEST_RE.search(rel) or (declared is not None and not _declared(rel)):
             continue
-        for kind, sym in _classify(rel, "\n".join(lines)):
+        text = "\n".join(lines)
+        entries = _classify(rel, text) + doc_entries(rel) + registration_entries(rel, text)
+        for kind, sym in dict.fromkeys(entries):
             if kind in kinds:
                 found.append((kind, sym, rel))
 
@@ -400,9 +449,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             pass
     sym_counts: dict[tuple[str, str], int] = {}
     sym_hits, route_hits, barrels = (
-        ({}, {}, []) if not (symbols or routes) else _scan(root, writes, symbols, routes, sym_counts)
+        ({}, {}, []) if not (symbols or routes) else _scan(root, writes, symbols, routes, sym_counts, _index())
     )
-    ents = _verdicts(root, found, sym_hits, route_hits, barrels, lambda: _manifest_text(root), sym_counts)
+    resolved: dict[tuple[str, str, str], str] = {}
+    doc_rels = [r for k, _, r in found if k == "doc"]
+    reg_found = [f for f in found if f[0] in _REGISTRATION_KINDS]
+    if doc_rels:
+        resolved.update({("doc", "", r): v for r, v in doc_verdicts(root, doc_rels, added, _index()).items()})
+    if reg_found:
+        resolved.update(registration_verdicts(root, reg_found, added, _index(), new=frozenset(created)))
+    ents = _verdicts(root, found, sym_hits, route_hits, barrels, lambda: _manifest_text(root), sym_counts, resolved)
 
     touches_next = any(
         re.match(r"(src/)?app/", r) or r.endswith((".tsx", ".ts")) for _, _, r in found

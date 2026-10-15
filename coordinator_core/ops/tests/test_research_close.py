@@ -307,3 +307,49 @@ def test_require_claims_escape_is_refused(repo, scratch):
 def test_without_require_claims_behaviour_is_unchanged(repo, scratch):
     out = _close(repo, scratch, "corpus")
     assert out["exit_code"] == 0 and out["committed"] is True
+
+
+def _absolute_output(repo: Path, scratch: Path) -> str:
+    """Write an output naming a scratch path, a worktree path and an out-of-root path."""
+    outside = "/elsewhere/keep/me.md"
+    (scratch / "final.md").write_text(
+        f"see {scratch}/x.md and {repo}/docs/y.md and {outside}\n", encoding="utf-8"
+    )
+    return outside
+
+
+def test_absolute_scratch_and_worktree_paths_are_committed_repo_relative(repo, scratch):
+    outside = _absolute_output(repo, scratch)
+    out = _close(repo, scratch, "corpus")
+    assert out["exit_code"] == 0, out
+    dest = f"docs/research/{datetime.date.today().isoformat()}-topic"
+    body = _git(repo, "show", f"HEAD:{dest}/final.md")
+    assert body == f"see {dest}/x.md and docs/y.md and {outside}"
+    assert str(repo) not in body and str(scratch) not in body
+
+
+def test_reclose_over_a_rewritten_output_returns_the_landed_sha(repo, scratch):
+    _absolute_output(repo, scratch)
+    first = _close(repo, scratch, "corpus")
+    before = _count(repo)
+    second = _close(repo, scratch, "corpus")
+    assert second["exit_code"] == 0, second
+    assert second["sha"] == first["sha"] and _count(repo) == before
+
+
+def test_non_utf8_output_is_archived_byte_identical(repo, scratch):
+    raw = b"\xff\xfe" + str(repo).encode() + b"/docs/y.md\x80"
+    (scratch / "final.md").write_bytes(raw)
+    out = _close(repo, scratch, "corpus")
+    assert out["exit_code"] == 0, out
+    dest = repo / f"docs/research/{datetime.date.today().isoformat()}-topic/final.md"
+    assert dest.read_bytes() == raw
+
+
+def test_local_only_keeps_absolute_paths_byte_identical(repo, scratch, tmp_path):
+    _absolute_output(repo, scratch)
+    local = tmp_path / "local"
+    local.mkdir()
+    out = _close(repo, scratch, "corpus", local_root=local.as_posix())
+    assert out["exit_code"] == 0, out
+    assert (Path(out["destination"]) / "final.md").read_bytes() == (scratch / "final.md").read_bytes()

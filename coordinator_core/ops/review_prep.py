@@ -12,10 +12,23 @@ changed, kept only when a live session other than the caller's claims the path
 (``claim_index.lookup``). The commit-range read is the one git spawn added over the two ops
 composed; it is skipped when ``paths`` is empty.
 
+Computes once per ``slice_prefix``: the success sidecar stores the whole reply, and a later call
+with the same prefix, base, basis, head and paths reads it back and spawns no git. Concurrent
+first callers claim ``<slice_prefix>.review-prep.lock`` with ``O_EXCL``; the loser waits at most
+``_LOCK_WAIT_SECS`` for the winner's sidecar, then returns it or a refusal whose ``error`` starts
+with ``REVIEW_PREP_BUSY_PREFIX`` for the caller to re-call. No path computes without the lock.
+Only a success is stored, so a refusal is recomputed.
+
+Optional ``group_index`` / ``group_count`` (both or neither) narrow the reply's ``slices`` to the
+one contiguous balanced group at ``group_index`` of ``min(slices, group_count)`` groups, the split
+``execute_review._GROUP_SLICES_JS`` applies; every other field is the whole-run reply. Without
+them ``slices`` is the full list.
+
 Negative-spec: a single-reviewer-ok verdict over product files returns ONE whole-diff slice,
 never an empty list; zero product files returns no slices. A refusal from either composed op is
 returned as ``error`` with no slices, never raised. ``basis`` is ``"worktree"`` in worktree
-mode and ``"range"`` in range mode.
+mode and ``"range"`` in range mode. A group past the last populated one returns no slices; that
+is not an error.
 """
 
 from __future__ import annotations
@@ -24,9 +37,12 @@ MUTATES = [
     "state/review-trail/diffs/*.diff",
     "state/review-trail/diffs/*.head.sha",
     ".coordinator-local/subagent-share/*/*.review-prep.md",
+    ".coordinator-local/subagent-share/*/*.review-prep.lock",
 ]
 
+import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -109,6 +125,74 @@ def _rel(path: Path, repo_root: Path) -> str:
         return path.as_posix()
 
 
+def group_slices(slices: List[dict], group_count: int) -> List[List[dict]]:
+    """``slices`` split into ``max(1, min(len(slices), group_count))`` contiguous groups whose sizes
+    differ by at most one, empty groups dropped."""
+    n = max(1, min(len(slices), group_count))
+    groups: List[List[dict]] = []
+    at = 0
+    for i in range(n):
+        size = len(slices) // n + (1 if i < len(slices) % n else 0)
+        groups.append(slices[at : at + size])
+        at += size
+    return [g for g in groups if g]
+
+
+def _for_group(reply: dict, group_index: Optional[int], group_count: Optional[int]) -> dict:
+    if group_index is None or group_count is None or reply.get("error"):
+        return reply
+    groups = group_slices(reply["slices"], group_count)
+    return {**reply, "slices": groups[group_index] if group_index < len(groups) else []}
+
+
+_STORED_KEYS = (
+    "plan_id", "share_dir", "run_base_sha", "verdict", "basis", "whole_diff_path", "product_files",
+    "foreign_claims", "slices", "whole_diff_sidecars", "sidecar_path",
+)
+REVIEW_PREP_BUSY_PREFIX = "review.prep busy:"
+_LOCK_WAIT_SECS = 0.5
+# 20x the wait: a live winner holding the lock this long is an over-bar op; a dead one clears fast.
+_LOCK_STALE_SECS = 10.0
+_LOCK_POLL_SECS = 0.05
+
+
+def _stored_reply(sidecar: Path, base: str, paths: List[str], head: Optional[str]) -> Optional[dict]:
+    """The reply a success sidecar stored, or ``None`` when absent, unreadable, written before
+    replies were stored, or written for another base, basis, head or path list."""
+    try:
+        split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
+        fm = yaml.safe_load(split.fm_text) if split else None
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(fm, dict) or any(k not in fm for k in _STORED_KEYS):
+        return None
+    if (
+        fm["run_base_sha"] != base
+        or fm["basis"] != ("range" if head else "worktree")
+        or fm.get("head") != (head or None)
+        or fm.get("paths") != paths
+    ):
+        return None
+    return {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
+
+
+def _claim(lock: Path) -> bool:
+    for _ in range(2):
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime < _LOCK_STALE_SECS:
+                    return False
+                lock.unlink()
+            except OSError:
+                return False
+        except OSError:
+            return False
+    return False
+
+
 def review_prep(
     repo_root: Path,
     *,
@@ -118,19 +202,71 @@ def review_prep(
     plan_path: str,
     head: Optional[str] = None,
     session_id: str = "",
+    group_index: Optional[int] = None,
+    group_count: Optional[int] = None,
 ) -> dict:
-    """Freeze, partition and claim-check one run's diff; see the module docstring."""
+    """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
+    docstring."""
     if not base or not paths or not slice_prefix or not plan_path:
         return _fail("base, paths, slice_prefix and plan_path are required")
     if not _SHA_RE.match(base):
         return _fail("base must be a lowercase commit sha")
+    if (group_index is None) != (group_count is None):
+        return _fail("group_index and group_count go together")
+    if group_count is not None and not (group_count >= 1 and 0 <= group_index < group_count):
+        return _fail("group_index must be in [0, group_count) and group_count at least 1")
     session = session_id or resolve_session_id(str(repo_root))
     if not session:
         return _fail("no session id: pass session_id or run under a session")
 
-    plan_id = _plan_id(repo_root, plan_path)
     share = Path(share_dir(str(repo_root), session))
     sidecar = share / f"{slice_prefix}.review-prep.md"
+    lock = share / f"{slice_prefix}.review-prep.lock"
+
+    def served() -> Optional[dict]:
+        return _stored_reply(sidecar, base, paths, head)
+
+    def compute_locked() -> dict:
+        try:
+            return served() or _compute(
+                repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar
+            )
+        finally:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
+    reply = served()
+    if reply is None:
+        share.mkdir(parents=True, exist_ok=True)
+        if _claim(lock):
+            reply = compute_locked()
+        else:
+            deadline = time.monotonic() + _LOCK_WAIT_SECS
+            while reply is None and lock.exists() and time.monotonic() < deadline:
+                time.sleep(_LOCK_POLL_SECS)
+                reply = served()
+            reply = reply or served()
+            if reply is None and not lock.exists() and _claim(lock):
+                reply = compute_locked()
+            if reply is None:
+                reply = _fail(f"{REVIEW_PREP_BUSY_PREFIX} another caller holds the lock")
+    return _for_group(reply, group_index, group_count)
+
+
+def _compute(
+    repo_root: Path,
+    base: str,
+    paths: List[str],
+    slice_prefix: str,
+    plan_path: str,
+    head: Optional[str],
+    session: str,
+    share: Path,
+    sidecar: Path,
+) -> dict:
+    plan_id = _plan_id(repo_root, plan_path)
     whole_sidecars = {
         "kira": _rel(share / f"{slice_prefix}.kira.md", repo_root),
         "personas": [_rel(share / f"{slice_prefix}.whole-slice.md", repo_root)],
@@ -189,22 +325,20 @@ def review_prep(
         ]
 
     out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
-    _write_sidecar(sidecar, out, session)
     out["sidecar_path"] = _rel(sidecar, repo_root)
+    _write_sidecar(sidecar, out, session, paths, head)
     return out
 
 
-def _write_sidecar(sidecar: Path, result: dict, session: str) -> None:
-    keys = (
-        "plan_id", "run_base_sha", "verdict", "basis", "whole_diff_path", "product_files",
-        "foreign_claims", "whole_diff_sidecars",
-    )
+def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], head: Optional[str]) -> None:
     fm = {
         "agent_type": "engine:prep-freeze",
         "status": "complete",
         "lead_session_id": session,
         "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-        **{k: result[k] for k in keys},
+        **{k: result[k] for k in _STORED_KEYS},
+        "head": head or None,
+        "paths": paths,
     }
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(fm, default_flow_style=False, sort_keys=False).strip()
@@ -219,7 +353,8 @@ def _write_sidecar(sidecar: Path, result: dict, session: str) -> None:
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "review.prep". Params: ``base`` (str sha), ``paths`` (list[str]), ``slice_prefix``
     (str), ``plan_path`` (str), optional ``session_id``, and exactly one of ``head`` (str,
-    committed range mode) or ``worktree: true``. Keying scope: show_top."""
+    committed range mode) or ``worktree: true``; optional ``group_index`` / ``group_count`` (ints,
+    together) return only that slice group. Keying scope: show_top."""
     if repo_root is None:
         return _fail("review.prep requires a show_top-keyed dispatch; repo_root was not supplied")
     paths = params.get("paths")
@@ -228,6 +363,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     head = str(params.get("head") or "")
     if bool(head) == bool(params.get("worktree")):
         return _fail("review.prep requires exactly one of head (range mode) or worktree=true")
+    group_index, group_count = params.get("group_index"), params.get("group_count")
+    if any(v is not None and (isinstance(v, bool) or not isinstance(v, int)) for v in (group_index, group_count)):
+        return _fail("review.prep group_index and group_count must be integers")
     return review_prep(
         repo_root,
         base=str(params.get("base") or ""),
@@ -236,4 +374,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         plan_path=str(params.get("plan_path") or ""),
         head=head or None,
         session_id=str(params.get("session_id") or ""),
+        group_index=group_index,
+        group_count=group_count,
     )

@@ -694,25 +694,29 @@ def test_closure_detail_names_external_gate_root(tmp_path):
         "  external_gate:\n    - owner_repo: r\n      condition: c\n",
     )
     assert entry["reason"] == "transitive_gate_closure"
+    assert (entry["root"], entry["root_reason"]) == ("C1", "external_gate")
     assert entry["detail"].startswith("transitively gated via depends_on -> C1")
     assert entry["detail"].endswith("; root C1 carries an uncleared external_gate")
 
 
 def test_closure_detail_names_operator_root(tmp_path):
     entry = _closure_detail(tmp_path, "  execution_mode: operator\n")
-    assert entry["reason"] == "transitive_gate_closure"
+    assert entry["reason"] == "withheld_by_owed_dependency"
+    assert (entry["root"], entry["root_reason"]) == ("C1", "operator")
     assert entry["detail"].endswith("; root C1 is execution_mode: operator")
 
 
 def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
     entry = _closure_detail(tmp_path, "  performer: em\n")
-    assert entry["reason"] == "transitive_gate_closure"
+    assert entry["reason"] == "withheld_by_owed_dependency"
+    assert (entry["root"], entry["root_reason"]) == ("C1", "em-performed")
     assert entry["detail"].endswith("; root C1 is owed by the EM (performer: em), not gated")
 
 
 def test_closure_detail_names_memo_send_root_not_gated(tmp_path):
     entry = _closure_detail(tmp_path, "  kind: memo-send\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
-    assert entry["reason"] == "transitive_gate_closure"
+    assert entry["reason"] == "withheld_by_owed_dependency"
+    assert (entry["root"], entry["root_reason"]) == ("C1", "memo-send")
     assert "; root C1 is owed by the EM (" in entry["detail"]
     assert entry["detail"].endswith("), not gated")
     assert "uncleared gate/operator mode" not in entry["detail"]

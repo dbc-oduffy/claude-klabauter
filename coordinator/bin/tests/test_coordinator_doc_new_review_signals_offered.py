@@ -1,3 +1,5 @@
+"""A scaffolded plan neither offers nor inlines review_signals."""
+
 from __future__ import annotations
 
 import importlib.machinery
@@ -34,25 +36,19 @@ def _scaffolded_plan_text() -> str:
     )
 
 
-class ReviewSignalsOfferedTest(unittest.TestCase):
-    def test_optional_keys_block_offers_review_signals(self):
-        self.assertIn("# review_signals:", _scaffolded_plan_text())
+class ReviewSignalsNotOfferedTest(unittest.TestCase):
+    def test_template_does_not_offer_review_signals(self):
+        self.assertNotIn("# review_signals", _scaffolded_plan_text())
 
-    def test_review_signals_points_at_the_contract_not_an_enum(self):
-        text = _scaffolded_plan_text()
-        self.assertIn("coordinator/contract/review-signals.json", text)
-        offered = [
+    def test_template_does_not_inline_a_signal_vocabulary(self):
+        inlined = [
             line
-            for line in text.splitlines()
+            for line in _scaffolded_plan_text().splitlines()
             if line.startswith("#   - ") and "positive claim" in line
         ]
-        self.assertEqual(
-            len(offered),
-            1,
-            "expected a single sample signal row, not an inlined vocabulary",
-        )
+        self.assertEqual(inlined, [], "signal vocabulary is referenced, not vendored")
 
-    def test_review_signals_stays_commented_out(self):
+    def test_review_signals_is_not_a_default_frontmatter_key(self):
         fm_text = _scaffolded_plan_text().split("---", 2)[1]
         fields = yaml.safe_load(fm_text)
         self.assertNotIn("review_signals", fields)

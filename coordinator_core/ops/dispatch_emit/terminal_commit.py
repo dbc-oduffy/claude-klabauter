@@ -2449,7 +2449,15 @@ def _close_block(ctx: dict, reply: dict) -> dict:
         for leg in RUN_BOUND_LEGS:
             legs.setdefault(leg, _leg("failed", why))
         legs.update(ctx["presets"])
-    return build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"])
+    block = build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"])
+    sha = reply.get("sha")
+    if ctx["applies"] and reply.get("committed") is True and isinstance(sha, str) and sha:
+        from coordinator_core.ops.dispatch_emit.run_close import sibling_release
+
+        siblings = sibling_release(Path(ctx["root"]), ctx["run_id"], sha)
+        if siblings is not None:
+            block["siblings"] = siblings
+    return block
 
 
 @register_op("dispatch.terminal_commit")

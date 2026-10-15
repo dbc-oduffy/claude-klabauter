@@ -2,6 +2,11 @@
   "emitted_at": "<EMITTED_AT>",
   "findings": [
     {
+      "code": "agent-options-phase-title-mismatch",
+      "message": "agent()/parallel-item option phase: 'wave-boundary' is not listed in meta.phases \u2014 it will still run but gets its own separate (ungrouped) progress group; add 'wave-boundary' to meta.phases to group it.",
+      "severity": "WARN"
+    },
+    {
       "code": "absent-edit-target",
       "message": "21 edit-kind writes: path(s) absent from the tree -- each is either created by its row or a surface deleted since the row was authored; check the second kind before dispatching: C0: coordinator_core/git/reconcile_manifest.py, C0: coordinator_core/git/tests/test_reconcile_manifest.py, C1: coordinator_core/ops/workday_start_step0_reconcile.py, C1: coordinator_core/ops/test_workday_start_step0_reconcile.py, C1: coordinator_core/ops/test_workday_start_step0_reconcile_classify.py, C1: coordinator/bin/workday-start-step0-reconcile.py, C1: coordinator/bin/workday-start-step0.py, C2a: coordinator_core/ops/reconcile_merge_conclude.py, C2a: coordinator_core/ops/test_reconcile_merge_conclude.py, C2a: coordinator_core/tests/test_no_pathspec_less_commit.py (+11 more)",
       "severity": "WARN"
@@ -9,5 +14,5 @@
   ],
   "plan": "emit-full-path-plan.md",
   "session_id": "<SESSION_ID>",
-  "sha256": "066efab79c629bea1b2fcb80c0d7b6742824951860534afc163d27d31bacea78"
+  "sha256": "c6cdfe91828eaeb072fd9da585a46119d98ffc876670685b0737522f08c6eb78"
 }

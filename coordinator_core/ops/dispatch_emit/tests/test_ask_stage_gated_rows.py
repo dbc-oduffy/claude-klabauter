@@ -179,9 +179,9 @@ def test_em_owned_rows_land_in_owed_not_gated(tmp_path):
     assert [(o["id"], o["reason"]) for o in reply["owed"]] == [
         ("C3", "em-performed"),
         ("C4", "memo-send"),
+        ("C5", "withheld_by_owed_dependency"),
     ]
-    assert [(g["id"], g["reason"]) for g in reply["gated"]] == [("C5", "transitive_gate_closure")]
-    assert "C3" not in [g["id"] for g in reply["gated"]]
+    assert reply["gated"] == []
 
 
 def test_plan_without_em_owned_rows_writes_empty_owed(tmp_path):

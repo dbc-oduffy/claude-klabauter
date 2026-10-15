@@ -12,7 +12,10 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str}` | `{sizing: str}`, optional `repo` (absolute path; else the payload
+`args` shape: `{ask: str}` | `{sizing: str}` | `{asks: [{ask, label?, writes?}], confirm_split?}` (each ask a
+separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
+carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
+slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
 cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (ask only; absent is `pm`; a relayed ask is
 forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
 (`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
@@ -42,18 +45,20 @@ from typing import Any, Callable, Mapping, Optional
 
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.ipc import register_op
-from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
+from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_submit_name
 
 GUARD_NAME = "submit-engine-ask"
 SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
 
 _ARGS_SHAPE = (
     'args: {ask: "<the PM\'s words, verbatim>"} or {sizing: "<state/sizings/x.yaml>", '
-    'writes: ["<repo-relative file>", ...]}, '
+    'writes: ["<repo-relative file>", ...]} or {asks: [{ask: "<words>", label?: "<name>", '
+    'writes?: ["<repo-relative file>", ...]}, ...], confirm_split?: true}, '
     'optional brief: "<your directives>" (or brief_file, context: [paths])'
 )
 
 EmitFn = Callable[[dict, Path], dict]
+FanoutFn = Callable[[dict, Path], dict]  # the contract's FANOUT_OP signature (ask_fanout_contract.FanoutFn)
 
 
 def is_submission(payload: Mapping[str, Any]) -> bool:
@@ -165,22 +170,129 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
     return _dispatch_emit(params, repo_root)
 
 
-def _has_research_block(root: Path, sizing_rel: str) -> bool:
-    """True when the sizing carries a non-empty `research` mapping; an unreadable sizing is left to the engine's own refusal."""
+def _load_sizing_doc(root: Path, sizing_rel: str) -> dict:
+    """The sizing mapping; an unreadable sizing reads `{}` and is left to the engine's own refusal."""
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 
     try:
-        research = load_sizing(root, sizing_rel).get("research")
+        return load_sizing(root, sizing_rel)
     except SizingFireRefused:
-        return False
+        return {}
+
+
+def _has_research_block(sizing: Mapping[str, Any]) -> bool:
+    research = sizing.get("research")
     return isinstance(research, dict) and bool(research)
+
+
+def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]:
+    """(asks, refusal): `asks` is None when the call carries no `asks` key."""
+    args = tool_input.get("args")
+    if not isinstance(args, dict) or "asks" not in args:
+        return None, None
+    asks = args["asks"]
+    if not isinstance(asks, list) or not asks:
+        return None, "asks must be a non-empty list of {ask, label?, writes?}."
+    for i, item in enumerate(asks):
+        if not isinstance(item, dict) or not isinstance(item.get("ask"), str) or not item["ask"].strip():
+            return None, f"asks[{i}] carries no ask text."
+        label = item.get("label")
+        if label is not None and not isinstance(label, str):
+            return None, f"asks[{i}].label must be a string."
+        writes = item.get("writes")
+        if writes is not None and not (isinstance(writes, list) and all(isinstance(w, str) for w in writes)):
+            return None, f"asks[{i}].writes must be a list of repo-relative paths."
+    confirm = args.get("confirm_split")
+    if confirm is not None and not isinstance(confirm, bool):
+        return None, "confirm_split must be true or false."
+    return asks, None
+
+
+def _status_of(root: Path, run_id: str) -> Optional[str]:
+    """A run's `sibling-status.json` status; None when the run has not bound or the file is unreadable."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import status_rel
+
+    try:
+        data = json.loads((root / status_rel(run_id)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    status = data.get("status") if isinstance(data, dict) else None
+    return status if isinstance(status, str) else None
+
+
+def _read_parent(root: Path, parent_id: str):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ParentRecord, parent_record_rel
+
+    try:
+        return ParentRecord.from_json(json.loads((root / parent_record_rel(parent_id)).read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
+    """Why a slice sizing may not start now: an unlanded `after` predecessor, or a full budget."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+        STATUS_AFTER, STATUS_HALTED, STATUS_LANDED, STATUS_QUEUED, STATUS_RUNNING, concurrent_run_budget,
+    )
+
+    parent_id, run_id = marker
+    parent = _read_parent(root, parent_id)
+    mine = next((r for r in (parent.runs if parent else ()) if r.run_id == run_id), None)
+    if mine is None:
+        return f"Run {run_id} is not in parent {parent_id}'s record. Submit the ask as a fresh {{ask}}."
+    for pred in mine.after:
+        state = _status_of(root, pred)
+        if state == STATUS_LANDED:
+            continue
+        if state == STATUS_HALTED:
+            return f"Predecessor {pred} halted, so {run_id} cannot start. Resubmit the slice as a fresh {{ask}}."
+        return f"Predecessor {pred} has not landed ({state or 'not started'}); its close names this run's fire call."
+    if mine.status in (STATUS_QUEUED, STATUS_AFTER):
+        running = [r.run_id for r in parent.runs if r.run_id != run_id and _status_of(root, r.run_id) == STATUS_RUNNING]
+        if len(running) >= concurrent_run_budget():
+            return f"Parent {parent_id} is at its run budget; running: {', '.join(running)}. A close names this run's fire call."
+    return None
+
+
+def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
+    """The allow reason's tail for an asks submission: the frozen reply and the other ready runs' fire calls."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FanoutReply
+
+    parent = _read_parent(root, str(reply["parent_id"]))
+    runs = parent.runs if parent else ()
+    frozen = FanoutReply(parent_id=str(reply["parent_id"]), runs=runs).to_json()
+    others = [
+        fire_command(r.slice_sizing) for r in runs if r.run_id != fired_run and r.status == "ready" and r.slice_sizing
+    ]
+    parts = [f"Reply: {json.dumps(frozen)}."]
+    if others:
+        parts.append("Fire the listed runs now, one call each, this turn: " + " ".join(others))
+    held = [r.run_id for r in runs if r.status in ("after", "queued")]
+    if held:
+        parts.append(f"Held runs ({', '.join(held)}) are named by the close of the run that frees them.")
+    parts.append("Each run's completion is its own wake.")
+    return " ".join(parts)
+
+
+def _default_fanout(params: dict, repo_root: Path) -> dict:
+    from coordinator_core.ops.dispatch_emit.ask_fanout import fanout
+
+    return fanout(params, repo_root)
 
 
 def _refuse(text: str) -> dict:
     return deny("PreToolUse", f"{text}\nSubmit shape: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}}).")
 
 
-def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> dict:
+def evaluate(
+    payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None, fanout: Optional[FanoutFn] = None
+) -> dict:
     """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing."""
     if not is_submission(payload):
         return no_advisory()
@@ -188,8 +300,13 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
         return deny("PreToolUse", "Only the EM submits an ask to the engine; return it in your report.")
 
     ask, sizing_rel, repo_arg, source = _request(payload["tool_input"])
-    if (ask is None) == (sizing_rel is None):
-        return _refuse("The submission carries neither an ask nor a sizing, or both.")
+    asks, asks_refusal = _asks(payload["tool_input"])
+    if asks_refusal:
+        return _refuse(asks_refusal)
+    if sum(x is not None for x in (ask, sizing_rel, asks)) != 1:
+        return _refuse("The submission carries neither an ask nor a sizing nor asks, or more than one of them.")
+    if asks is not None and len(asks) == 1:
+        ask, asks = asks[0]["ask"], None
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
 
     if source is not None:
@@ -201,13 +318,18 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
     brief, brief_refusal = _brief_params(payload["tool_input"])
     if brief_refusal:
         return _refuse(brief_refusal)
+    if asks is not None:
+        if "ask_brief" in brief or "ask_brief_file" in brief:
+            return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
+        if source == ASK_SOURCE_RELAYED:
+            return _refuse("source: relayed marks one ask's text; submit relayed asks one call each.")
 
     root = _repo_root(repo_arg, payload.get("cwd"))
     if root is None:
         where = repo_arg or payload.get("cwd") or "the session cwd"
         return _refuse(f"{where} is in no git repo. Add `repo: \"<absolute repo path>\"` to args.")
 
-    if ask is not None and repo_arg is None and brief.get("ask_context"):
+    if (ask is not None or asks is not None) and repo_arg is None and brief.get("ask_context"):
         root = _context_home(root, brief["ask_context"])
     missing = _missing_context(root, brief.get("ask_context", []))
     if missing:
@@ -217,6 +339,33 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
 
     from coordinator_core import warp_live
+
+    fan_reply: Optional[dict] = None
+    reserved_run_id: Optional[str] = None
+    if asks is not None:
+        fan_params: dict = {"asks": asks, "session_id": session_id or ""}
+        if payload["tool_input"]["args"].get("confirm_split") is True:
+            fan_params["confirm_split"] = True
+        try:
+            fan_reply = (fanout or _default_fanout)(fan_params, root)
+        except Exception as exc:  # the engine's refusal text is the whole message
+            return deny("PreToolUse", str(exc))
+        parent = _read_parent(root, str(fan_reply.get("parent_id"))) if isinstance(fan_reply, dict) else None
+        first = next((r for r in (parent.runs if parent else ()) if r.status == "ready"), None)
+        if first is None:
+            return deny("PreToolUse", "The fan-out produced no ready run to fire.")
+        sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
+
+    sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
+    if sizing_rel and asks is None:
+        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent
+
+        marker = parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent"))
+        if marker is not None:
+            why = _slice_deny(root, marker)
+            if why:
+                return deny("PreToolUse", why)
+            reserved_run_id = marker[1]
 
     if sizing_rel:
         from coordinator_core.ops.dispatch_emit import run_token
@@ -235,7 +384,7 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
             )
 
     params: dict = {"session_id": session_id or ""}
-    if sizing_rel and _has_research_block(root, sizing_rel):
+    if sizing_rel and _has_research_block(sizing_doc):
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse(
                 "A research sizing takes no brief or inline-prose context: the research route has no brief slot. "
@@ -247,6 +396,8 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
     else:
         if sizing_rel:
             params.update({"ask": True, "sizing_path": sizing_rel})
+            if reserved_run_id:
+                params["reserved_run_id"] = reserved_run_id
             # An XS sizing carries no footprint; a resubmission (applying review findings) names it.
             args = payload["tool_input"].get("args")
             writes = args.get("writes") if isinstance(args, dict) else None
@@ -302,12 +453,17 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
         if inherited
         else ""
     )
+    if fan_reply is not None:
+        tail = _fan_tail(root, fan_reply, str(reserved_run_id))
+    else:
+        tail = (
+            "It runs to its commit in the background; its completion notification is your one wake. "
+            "End the turn: no polling, dispatch or verification meanwhile."
+        )
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"Submitted to the engine as run {run_id}.{carries} It runs to its commit in the background; its "
-        "completion notification is your one wake. End the turn: no polling, dispatch or "
-        "verification meanwhile.",
+        f"Submitted to the engine as run {run_id}.{carries} {tail}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"

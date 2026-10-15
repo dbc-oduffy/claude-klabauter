@@ -2279,6 +2279,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
     "dispatch.ask_stage": OpClass.MUTATING,
+    # dispatch.ask_fanout — MUTATING: writes draft slice sizings under state/sizings/ and the write-once
+    # parent record under scratch/warp/<parent_id>/, then raises sized_through_turn; spawns no process
+    # (ops/dispatch_emit/ask_fanout.py).
+    "dispatch.ask_fanout": OpClass.MUTATING,
     # dispatch.reap_abandoned_runs — MUTATING: commits the state/warp/<run_id>/ record files of runs with no
     # live token and their orphaned sizings in one ceremony.commit_v2 call (ops/dispatch_emit/abandoned_runs.py).
     # DR-208 five-question affirmation (citing dispatch.reap_abandoned_runs handler):

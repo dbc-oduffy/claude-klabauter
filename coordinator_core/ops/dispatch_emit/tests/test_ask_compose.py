@@ -50,8 +50,12 @@ def _titles(script):
 
 def test_phases_follow_the_contract_order_for_a_raw_ask():
     titles = _titles(_compose())
-    positions = [titles.index(p) for p in ASK_PHASES]
+    present = [p for p in ASK_PHASES if p in titles]
+    assert {"size", "accept", "plan", "stage"} <= set(present)
+    positions = [titles.index(p) for p in present]
     assert positions == sorted(positions)
+    assert titles.index("stage") < titles.index("Execute") < titles.index("Review wave") < titles.index("Verify")
+    assert "execute" not in titles and "review" not in titles
 
 
 def test_raw_ask_has_a_size_phase_and_a_sized_one_does_not(tmp_path, monkeypatch):
@@ -97,10 +101,10 @@ def test_exactly_one_of_prompt_or_sizing_is_required():
 def test_each_halt_assigns_before_the_guarded_stage_and_execute():
     script = _compose()
     halt_at = script.index("_gate.halt || !_gate.arm")
-    assert halt_at < script.index("phase('stage')") < script.index("phase('execute')")
+    assert halt_at < script.index("phase('stage')") < script.index("phase('Execute')")
     assert script.index("_halted = { halted:", halt_at) < script.index("phase('stage')")
     stage_guard = script.rindex("if (!_halted) {", 0, script.index("phase('stage')"))
-    exec_guard = script.rindex("if (!_halted) {", 0, script.index("phase('execute')"))
+    exec_guard = script.rindex("if (!_halted) {", 0, script.index("phase('Execute')"))
     assert halt_at < stage_guard < exec_guard
     assert "return { halted:" not in script
     assert "_halted = { halted: 'no-op'," in script
@@ -129,7 +133,9 @@ def test_no_fire_substring_and_no_clock_or_spawn_globals():
 def test_review_wave_declares_paths_from_the_manifest():
     script = _compose()
     assert "_manifest.review_declared_paths" in script
-    assert script.index("phase('execute')") < script.index("phase('Review prep')")
+    assert "phase('Review prep')" not in script and "label: 'review:coordinator:review-prep'" not in script
+    assert script.index("phase('Execute')") < script.index("phase('Review wave')")
+    assert script.count("review.prep") >= 1 and "\"slice_prefix\"" in script
 
 
 def test_m_plus_stage_is_embedded_only_when_the_arm_can_be_m_plus(monkeypatch):
@@ -199,7 +205,7 @@ def test_degraded_host_ask_review_stages_emit_no_coordinator_review_type_and_kee
     def types(script):
         return set(re.findall(r"agentType:\s*['\"]coordinator:([^'\"]+)", script))
 
-    review_types = {"code-reviewer", "integrator", "review-prep"}
+    review_types = {"code-reviewer", "integrator"}
     normal = _compose()
     degraded = _compose(agent_type_host="host")
     assert review_types <= types(normal)
@@ -227,43 +233,53 @@ _JUDGE_KW = {
 }
 
 
-def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
+def test_a_roster_judge_runs_inside_the_one_verify_agent_and_feeds_the_criterion_digest():
     script = _compose(**_JUDGE_KW)
-    assert "agentType: 'coordinator:criterion-judge'" in script
-    assert "Criterion judge" in _titles(script)
-    assert "[_testResult, _falsifierResult] = await parallel([" not in script
-    test_at = script.index("_testResult = await agent(")
-    assert test_at < script.index("_falsifierResult = await (async () =>")
+    assert "agentType: 'coordinator:criterion-judge'" not in script
+    assert script.count("label: 'verify'") == 1
+    opts = script[script.index("label: 'verify'") :].split("schema:", 1)[0]
+    assert "phase: 'Verify'" in opts and "agentType: 'coordinator:executor'" in opts
+    assert "Verify" in _titles(script)
+    assert not {"Criterion judge", "Scoped test run", "docs", "ledger-check"} & set(_titles(script))
     assert "let _falsifierResult = null;" in script
     assert "(_planRel ?? _sizingRel)" in script
     assert "PLAN_PATH_SLOT_X" not in script
-    assert "criterion leg threw" in script
+    assert "_falsifierResult = (_verify && _verify.judge) ? " in script
+    assert "unjudged: verify leg returned no verdict" in script
     assert "_falsifierResult.differs_from_baseline" in script
 
 
-def test_the_judge_leg_runs_on_the_xs_arm_where_the_scoped_test_does_not():
+def test_the_verify_agent_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
-    assert "(_gate.arm !== 'xs' || _reviewApplied > 0) && (_manifest.test_targets ?? []).length) { try { _testResult = await agent(" in script
-    assert "_falsifierResult = await" in script
+    assert "const _testWanted = !!((_gate.arm !== 'xs' || _reviewApplied > 0) && (_manifest.test_targets ?? []).length);" in script
+    assert "if (_testWanted && _verify && _verify.test) { _testResult = _verify.test; }" in script
+    assert "_falsifierResult = (_verify && _verify.judge)" in script
 
 
-def test_a_review_fix_reruns_the_scoped_test_before_the_judge_even_on_xs():
-    """The re-run lives inside `_testLeg`, which the judge awaits; the phase-consolidation tail
-    (docs/plans/2026-10-15-engine-ask-phase-consolidation.md) must keep the judge after the last test call."""
+def test_the_verdict_follows_the_verify_agents_own_scoped_test_run():
+    """C5: the criterion is ruled on a tree the tests have already run against. The order lives
+    inside the one agent's prompt, and the re-run for a review fix is the same `_testWanted` guard."""
     script = _compose(**_JUDGE_KW)
     assert "_reviewApplied = (Array.isArray(_reviewWave)" in script
-    assert script.index("const _reviewApplied") < script.index("const _testLeg")
-    judge_at = script.index("_falsifierResult = await")
-    assert script.index("await _testLeg;") < judge_at
-    assert "_testResult = await agent(" not in script[judge_at:]
-    assert script.count("_testResult = await agent(") == 1
+    assert script.index("const _reviewApplied") < script.index("const _testWanted") < script.index("label: 'verify'")
+    assert script.index("(1) TESTS.") < script.index("(2) DOCS.") < script.index("(3) VERDICT.")
+    assert "Run the scoped test targets: [" in script and "_manifest.test_targets" in script
+    assert "_testLeg" not in script and "await _testLeg" not in script
+    assert script.count("_testResult = _verify.test") == 1 and "_testResult = await agent(" not in script
+
+
+def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_target_stays_degraded():
+    script = _compose(**_JUDGE_KW)
+    assert "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }" in script
+    assert script.index("label: 'verify'") < script.index("_manifest.no_test_target")
 
 
 def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
     script = _compose()
-    gate = "if (!_halted && _gate.arm !== 'xs') {\n  phase('review');"
+    gate = "if (!_halted && _gate.arm !== 'xs') {\n  phase('Review wave');"
     assert script.count(gate) == 1
-    assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("const _testLeg")
+    assert "phase('review')" not in script
+    assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("label: 'verify'")
     assert "if (!_halted && _gate.arm === 'xs') { _reviewWave = []; }" in script
     assert script.index(gate) < script.index("_reviewWave = [];") < script.index("  _nextAction = _closeable")
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
@@ -273,6 +289,7 @@ def test_a_roster_without_a_judge_leaves_the_criterion_unrun():
     script = _compose()
     assert "_falsifierResult" not in script
     assert "Criterion judge" not in _titles(script)
+    assert "label: 'verify'" in script and "`judge`" not in script
 
 
 def test_the_judge_script_validates_with_zero_errors():
@@ -294,7 +311,7 @@ def test_a_sized_ask_carries_the_preamble_into_every_row_executor_prompt(monkeyp
     script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml",
                       preamble="BOX TERMS: no UBT, do not verify by building.")
 
-    execute = script.split("phase('execute');", 1)[1]
+    execute = script.split("phase('Execute');", 1)[1]
     assert "BOX TERMS: no UBT, do not verify by building." in execute
     assert not [i for i in run_checks(script) if i.severity == Severity.ERROR]
 
@@ -340,8 +357,8 @@ def test_doe_typed_calls_take_their_model_from_the_table(tmp_path):
     assert f"model: '{emit._AGENT_MODELS['coordinator:sizing-scout']}'" in scout
     accept = script.split("label: 'accept'", 1)[1].split("schema:", 1)[0]
     assert f"model: '{emit._AGENT_MODELS['coordinator:apm']}'" in accept
-    ledger = script.split("label: 'ledger-check'", 1)[1].split("schema:", 1)[0]
-    assert f"model: '{emit._AGENT_MODELS['coordinator:code-reviewer']}'" in ledger
+    verify = script.split("label: 'verify'", 1)[1].split("schema:", 1)[0]
+    assert f"model: '{emit._AGENT_MODELS[emit._EXECUTOR_AGENT_TYPE]}'" in verify
 
 
 def test_an_override_changing_a_pinned_type_model_is_refused():
@@ -407,14 +424,24 @@ def test_folded_manifest_is_adopted_behind_the_rows_guard_and_the_fallback_stays
     )
     assert "_scoutClean" in script.split("Array.isArray(_scouted.manifest?.rows)", 1)[0].splitlines()[-1]
     assert script.count("phase('stage')") == 1 and script.count("label: 'stage'") == 1
-    assert "if (_stagedManifest) { _manifest = _stagedManifest; } else {" in script
+    assert "if (_stagedManifest) { _manifest = _stagedManifest; }" in script
+    assert "if (!_stagedManifest) {\n  phase('stage');" in script
 
 
 def test_every_non_stop_after_arm_reaches_one_ask_stage_site_folded_or_fallback():
     scout, script = _scout_prompt(_compose()), _compose()
     assert OP_ASK_STAGE in scout
-    fallback = script.split("if (_stagedManifest) { _manifest = _stagedManifest; } else {", 1)[1]
+    fallback = script.split("if (!_stagedManifest) {\n  phase('stage');", 1)[1]
     assert OP_ASK_STAGE in fallback.split("label: 'stage'", 1)[0]
+
+
+def test_the_standalone_falsifier_and_the_stage_fallback_run_in_one_parallel_under_one_title():
+    script = _compose(**_JUDGE_KW)
+    assert script.count("phase('stage')") == 1 and "phase('falsifier')" not in script
+    group = script[script.index("  await parallel([\n    async () => { if (_falsifierNeeded)") :]
+    group = group[: group.index("  ]);")]
+    assert "label: 'falsifier', phase: 'stage'" in group and "label: 'stage', phase: 'stage'" in group
+    assert "if (_stageNeeded) { _manifest = await agent(" in group
 
 
 def test_a_sized_in_run_non_xs_scout_authors_the_falsifier_behind_the_adopted_spec_guard():
@@ -424,7 +451,7 @@ def test_a_sized_in_run_non_xs_scout_authors_the_falsifier_behind_the_adopted_sp
     assert "falsifier" in ask_compose.ASK_SCOUT_SCHEMA["properties"]
     assert "authored_by: 'sizing-scout'" in script
     assert "if (_scoutFalsifier) { _falsifierSpec = _scoutFalsifier; } else {" in script
-    assert script.count("phase('falsifier')") == 1 and script.count("label: 'falsifier'") == 1
+    assert "phase('falsifier')" not in script and script.count("label: 'falsifier'") == 1
     assert script.index("_scoutClean") < script.index("_scoutFalsifier")
     assert "authored_by: 'exit-criterion-falsifier'" in script
     assert "_falsifierSpec.authored_by" in script
@@ -437,7 +464,7 @@ def test_a_roster_without_a_judge_folds_no_falsifier_act():
 def test_a_presized_script_composes_the_standalone_falsifier_unconditionally(monkeypatch):
     script = _presized(monkeypatch, arm="s", **_JUDGE_KW)
     assert "_scoutFalsifier" not in script and "baseline falsifier" not in _gate_prompt(script)
-    assert script.count("phase('falsifier')") == 1
+    assert "phase('falsifier')" not in script and script.count("label: 'falsifier'") == 1
 
 
 def test_folded_scripts_validate_with_zero_errors(monkeypatch):

@@ -5,7 +5,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import falsifier_integrity_phase as fip
+
+
+@pytest.fixture(autouse=True)
+def _rubric(tmp_path_factory, monkeypatch):
+    path = tmp_path_factory.mktemp("rubric") / "falsifier-integrity-reviewer.md"
+    path.write_text("rubric A\n", encoding="utf-8")
+    monkeypatch.setattr(fip, "_reviewer_rubric_path", lambda: path)
+    return path
+
 
 _PLAN = """---
 title: x
@@ -187,3 +198,61 @@ def test_reviewer_model_is_the_engine_table_entry():
     from coordinator_core.ops.dispatch_emit import emit
 
     assert fip.reviewer_agent_model() == emit._AGENT_MODELS[fip.REVIEWER_AGENT_TYPE]
+
+
+def test_rubric_identity_change_invalidates_cached_verdict(tmp_path, _rubric):
+    a = _repo(tmp_path, "run tools/inst.py")
+    report_dir = Path("state/mi/run.can-report-red")
+    [base] = fip.review_inputs([a], repo_root=tmp_path, report_dir=report_dir)
+    _write_verdict(tmp_path, base)
+    _rubric.write_text("rubric B\n", encoding="utf-8")
+    [changed] = fip.review_inputs([a], repo_root=tmp_path, report_dir=report_dir)
+    assert changed.cached is None
+    _rubric.write_text("rubric A\n", encoding="utf-8")
+    [again] = fip.review_inputs([a], repo_root=tmp_path, report_dir=report_dir)
+    assert again.cached == {"verdict": "BROKEN", "tells": ["SCOPE-WIDER-THAN-CLAIM"]}
+
+
+def test_rubric_identity_unresolved_neither_replays_nor_persists(tmp_path, monkeypatch):
+    a = _repo(tmp_path, "run tools/inst.py")
+    report_dir = Path("state/mi/run.can-report-red")
+    [base] = fip.review_inputs([a], repo_root=tmp_path, report_dir=report_dir)
+    _write_verdict(tmp_path, base)
+    monkeypatch.setattr(fip, "_reviewer_rubric_path", lambda: None)
+    [inp] = fip.review_inputs([a], repo_root=tmp_path, report_dir=report_dir)
+    assert inp.cached is None and inp.cache_path is None
+    [spec] = fip.review_specs([inp])
+    assert spec.cache_path is None and spec.cache_key is None
+
+
+def test_rubric_identity_is_line_ending_stable(tmp_path, _rubric):
+    _rubric.write_bytes(b"line1\nline2\n")
+    lf = fip._reviewer_rubric_identity()
+    _rubric.write_bytes(b"line1\r\nline2\r\n")
+    assert fip._reviewer_rubric_identity() == lf != ""
+
+
+@pytest.mark.parametrize("sub", ["agents", "coordinator/agents"])
+def test_rubric_path_resolves_under_content_root_in_both_layouts(tmp_path, monkeypatch, sub):
+    from coordinator_core import content_root
+
+    monkeypatch.undo()
+    monkeypatch.setattr(content_root, "read_content_root", lambda: str(tmp_path))
+    assert fip._reviewer_rubric_path() is None
+    target = tmp_path / sub / "falsifier-integrity-reviewer.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("rubric", encoding="utf-8")
+    assert fip._reviewer_rubric_path() == target
+
+
+def test_rubric_path_is_none_when_content_root_unset(monkeypatch):
+    from coordinator_core import content_root
+
+    monkeypatch.undo()
+    monkeypatch.setattr(content_root, "read_content_root", lambda: "")
+    assert fip._reviewer_rubric_path() is None
+
+
+def test_rubric_identity_unreadable_rubric_is_unresolved(_rubric):
+    _rubric.write_bytes(b"\xff\xfe\x00bad")
+    assert fip._reviewer_rubric_identity() == ""

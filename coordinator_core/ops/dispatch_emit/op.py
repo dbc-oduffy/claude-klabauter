@@ -518,6 +518,43 @@ class FiredDriftError(ValueError):
     """
 
 
+def _reserved_run(root: Path, reserved: object, intake_doc: Optional[dict], sizing_rel: Optional[str]) -> tuple:
+    """(run_id, parent_id) for a fan-out slice's reserved run id; ValueError when the id is not the
+    sizing's own `em_analysis.ask_parent` run or is already bound."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent, status_rel
+
+    if not sizing_rel or intake_doc is None:
+        raise ValueError("dispatch.emit reserved_run_id takes a slice sizing_path, not a raw ask")
+    marker = parse_ask_parent((intake_doc.get("em_analysis") or {}).get("ask_parent"))
+    if marker is None or marker[1] != reserved:
+        raise ValueError(f"dispatch.emit reserved_run_id {reserved!r} is not the run {sizing_rel} reserves")
+    if (root / status_rel(marker[1])).exists():
+        raise ValueError(f"dispatch.emit reserved_run_id {reserved!r} is already bound to a run")
+    return marker[1], marker[0]
+
+
+def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
+    """Copy the parent record into the run's own record dir, then mark the run `running`; the
+    exclusive status create is the bind, so a second bind of one id is refused."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+        STATUS_RUNNING, parent_record_rel, run_parent_copy_rel, status_rel,
+    )
+    from coordinator_core.session import claimed_write
+
+    status = root / status_rel(run_id)
+    status.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        claimed_write.create_exclusive(status, json.dumps({"run_id": run_id, "status": STATUS_RUNNING}) + "\n")
+    except FileExistsError:
+        raise ValueError(f"dispatch.emit reserved_run_id {run_id!r} is already bound to a run") from None
+    parent = root / parent_record_rel(parent_id)
+    if not parent.is_file():
+        raise ValueError(f"dispatch.emit reserved_run_id {run_id!r}: parent record {parent_record_rel(parent_id)} is missing")
+    copy = root / run_parent_copy_rel(run_id)
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    claimed_write.replace_text(copy, parent.read_text(encoding="utf-8"))
+
+
 def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
     """Make the run ledger-bearing and, for a `--sizing` run, seed that sizing's
     requirement_register with its PM words and the ask now; a raw ask's sizing is minted in-run and
@@ -528,6 +565,8 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     from coordinator_core.ops.dispatch_emit import requirements_ledger as ledger
 
     root = Path(ask_ctx["root"])
+    if ask_ctx.get("reserved_parent"):
+        _bind_reserved_run(root, ask_ctx["run_id"], ask_ctx["reserved_parent"])
     ledger.start(root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask)
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
@@ -1362,9 +1401,13 @@ def _dispatch_emit(
             )
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
+        reserved_parent = None
+        if params.get("reserved_run_id") is not None:
+            run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], intake_doc, sizing_rel)
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
+            "reserved_parent": reserved_parent,
             "ask_source": ask_source,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }

@@ -82,21 +82,19 @@ def test_read_spawn_prompt_returns_prompt_exactly(tmp_path):
     assert ch.read_spawn_prompt(str(_spawn_file(tmp_path, _record(prompt)))) == prompt
 
 
-def test_read_spawn_prompt_skips_the_user_request_relay(tmp_path):
-    relay = _record("[Workflow harness — user request] relayed\n  please commit")
-    prompt = _indent("x\n" + ch.render_params_block(PARAMS))
-    f = _spawn_file(tmp_path, relay, json.dumps(_record(prompt)) + "\n")
-    assert ch.prompt_params(ch.read_spawn_prompt(str(f))) == PARAMS
-
-
-def test_read_spawn_prompt_reads_no_second_record_after_a_task_prompt(tmp_path):
-    f = _spawn_file(tmp_path, _record("first"), json.dumps(_record("second")) + "\n")
-    assert ch.read_spawn_prompt(str(f)) == "first"
-
-
-def test_read_spawn_prompt_accepts_backslash_separators(tmp_path):
+def test_read_spawn_prompt_accepts_backslash_separators(tmp_path, monkeypatch):
     f = _spawn_file(tmp_path, _record("hello"))
-    assert ch.read_spawn_prompt(str(f).replace("/", "\\")) == "hello"
+    winpath = str(f).replace("/", "\\")
+    real_open = open
+
+    def open_translating(path, *args, **kwargs):
+        # POSIX treats backslashes as filename characters; map back so the Windows-separator
+        # path still reaches the real file.
+        return real_open(str(path).replace("\\", "/"), *args, **kwargs)
+
+    monkeypatch.setattr(ch, "open", open_translating, raising=False)
+    assert "\\" in winpath and "/" not in winpath
+    assert ch.read_spawn_prompt(winpath) == "hello"
 
 
 def test_read_spawn_prompt_requires_workflow_spawn_segments(tmp_path):
@@ -128,9 +126,42 @@ def test_read_spawn_prompt_rejects_unreadable_shapes(tmp_path):
     assert ch.read_spawn_prompt(str(notuser)) is None
 
 
-def test_read_spawn_prompt_never_reads_second_record(tmp_path):
-    f = _spawn_file(tmp_path, {"type": "system"}, extra=json.dumps(_record("second")) + "\n")
+RELAY = f"{ch.RELAY_HEADER} please run the thing"
+
+
+def _lines(*records):
+    return "".join(json.dumps(r) + "\n" for r in records)
+
+
+def test_read_spawn_prompt_non_relay_first_record_never_reads_second(tmp_path):
+    f = _spawn_file(tmp_path, {"type": "system"}, extra=_lines(_record("second")))
     assert ch.read_spawn_prompt(str(f)) is None
+    g = _spawn_file(tmp_path / "g", _record("first"), extra=_lines(_record("second")))
+    assert ch.read_spawn_prompt(str(g)) == "first"
+
+
+def test_read_spawn_prompt_returns_computed_record_behind_the_relay(tmp_path):
+    prompt = _indent("x\n" + ch.render_params_block(PARAMS))
+    f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record(prompt)))
+    assert ch.read_spawn_prompt(str(f)) == prompt
+    assert ch.prompt_params(ch.read_spawn_prompt(str(f))) == PARAMS
+
+
+def test_block_inside_the_relay_record_is_never_returned(tmp_path):
+    relay = RELAY + "\n" + ch.render_params_block(PARAMS)
+    f = _spawn_file(tmp_path, _record(relay), extra=_lines(_record("no block")))
+    assert ch.prompt_params(ch.read_spawn_prompt(str(f))) is None
+
+
+def test_relay_with_over_cap_second_record_returns_none(tmp_path):
+    f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("x" * (ch.READ_CAP_BYTES + 10))))
+    assert ch.read_spawn_prompt(str(f)) is None
+
+
+def test_third_record_is_never_read(tmp_path):
+    block = _indent(ch.render_params_block(PARAMS))
+    f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("second"), _record(block)))
+    assert ch.read_spawn_prompt(str(f)) == "second"
 
 
 def test_materialize_writes_ascii_json_equal_to_input_and_replaces(tmp_path):

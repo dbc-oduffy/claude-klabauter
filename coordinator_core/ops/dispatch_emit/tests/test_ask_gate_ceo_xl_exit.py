@@ -34,5 +34,11 @@ def test_ceo_recorded_multi_session_exit_proceeds_past_the_room(repo):  # noqa: 
     assert halt is None or halt["kind"] != "room"
 
 
+def test_recorded_split_halts_with_kind_split_never_an_arm(repo):  # noqa: F811
+    _put(repo, tshirt="XL", route="pm-decision", mode="ceo", xl_exit="split")
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "split"
+
+
 def test_only_ceo_delegates_the_exit():
     assert apm_picks_xl_exit("ceo") and not apm_picks_xl_exit("pm") and not apm_picks_xl_exit("hands-on")

@@ -27,6 +27,8 @@ from coordinator_core.ops.review_mint.roster import (
     VALID_TIERS,
 )
 from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal
+from coordinator_core.ops.review_partition_slices import MAX_SLICES
+from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
@@ -382,6 +384,135 @@ _ANCESTRY_RULE = (
 )
 
 
+_PREP_GUARDS_JS = (
+    # A single-reviewer-ok verdict over product files is one slice of the
+    # whole diff; prep that omitted it is synthesised here, never refused.
+    "  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+    "!(_reviewPrep.slices ?? []).length && (_reviewPrep.product_files ?? 0) > 0) { "
+    "_reviewPrep.slices = [{ id: 'whole-diff', files: [], "
+    "diff_path: _reviewPrep.whole_diff_path, "
+    "sidecar_path: (_reviewPrep.whole_diff_sidecars?.personas ?? [])[0] ?? "
+    "String(_reviewPrep.whole_diff_path).replace(/\\.diff$/, '') + '.whole-slice.md', "
+    "contract_blocks: 0 }]; }\n"
+    # A clean prep over a run whose rows changed nothing froze an empty
+    # diff: there is nothing to review or commit, which is an outcome,
+    # not a failed prep.
+    # A count of 0 that disagrees with the slices (one lists files), or with
+    # a row this run landed, is not trusted: the run falls through to the
+    # slices guard instead of halting, so landed rows never skip review.
+    "  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+    "(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
+    "(typeof _finished === 'undefined' || !_finished.size) && "
+    "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
+    "!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) { "
+    "return { halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
+    "prep: _reviewPrep, wave: null, integration: null }; }\n"
+    # Rows landed but changed no product file (a verification-only row):
+    # the clean empty-diff prep is the one case with nothing to review.
+    # The slice reviewers, other whole-diff reviewers and integration
+    # are skipped; the delivery verifier and the terminal judge still run.
+    # The same clean-prep predicate as the no-op halt, minus its
+    # landed-rows condition; a refused prep fails `verdict`, and a prep
+    # with product files fails `product_files`, so both still throw.
+    "  const _verifyOnly = !!(_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+    "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
+    "!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length));\n"
+    # A failed or refused prep yields no slices -- a refusal reports
+    # product_files 0, so the guard keys on the slices alone. The wave's
+    # `?? []` would otherwise expand to no sliced reviewer and land the
+    # run reviewed by the whole-diff tail alone. Declared paths are
+    # non-empty here: the plan route always declares them, and the queue
+    # route skips the wave before prep when no row committed.
+    "  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) { "
+    f"return {{ halted: {_js_string_literal(NO_SLICES_HALT)} + ' (prep verdict: ' + "
+    f"String(_reviewPrep?.verdict ?? 'none') + ')', reason: {_js_string_literal(_NO_SLICES_REFUSAL)}, "
+    "prep: _reviewPrep ?? null, wave: null, integration: null }; }"
+)
+
+_PREP_BUSY_RETRIES = 5
+PREP_BUSY_HALT = "review.prep stayed busy after retries"
+REVIEW_MISSING_HALT = "review wave reply carried no review beside a successful prep"
+_PREP_BUSY_REFUSAL = (
+    "A review-wave agent's review.prep call stayed busy past its retries, so its slice group was "
+    "not reviewed. Re-run the review wave."
+)
+_REVIEW_MISSING_REFUSAL = (
+    "A review-wave agent returned a prep reply with a null error and no review. Re-run the review wave."
+)
+
+#: With `prep_in_wave` the review-wave block binds these after the wave, from the replies the
+#: agents returned beside their reviews. `_reviewPrep` is the first reply without an error with
+#: every reply's slices merged by id; when every reply errored it is the first reply, else null.
+_PREP_FROM_WAVE_JS = (
+    "  const _prepReplies = _waveRaw.map(r => (r && r.prep) ? r.prep : null).filter(p => p);\n"
+    f"  const _busyPrefix = {_js_string_literal(REVIEW_PREP_BUSY_PREFIX)};\n"
+    "  const _busyReplies = _prepReplies.filter(p => typeof p.error === 'string' && p.error.startsWith(_busyPrefix));\n"
+    "  if (_busyReplies.length) { "
+    f"return {{ halted: {_js_string_literal(PREP_BUSY_HALT)} + ' (' + _busyReplies.length + ' of ' + "
+    "_waveRaw.length + ' wave agents; reviewed slices: ' + "
+    "_prepReplies.filter(p => !p.error).flatMap(p => (p.slices ?? []).map(s => s.id)).join(', ') + ')', "
+    f"reason: {_js_string_literal(_PREP_BUSY_REFUSAL)}, "
+    "prep: _busyReplies[0], wave: null, integration: null }; }\n"
+    "  if (_waveRaw.some(r => r && r.prep && !r.prep.error && (r.review === undefined || r.review === null))) { "
+    f"return {{ halted: {_js_string_literal(REVIEW_MISSING_HALT)}, "
+    f"reason: {_js_string_literal(_REVIEW_MISSING_REFUSAL)}, "
+    "prep: _prepReplies[0] ?? null, wave: null, integration: null }; }\n"
+    "  const _reviewPrep = (() => {\n"
+    "    const ok = _prepReplies.find(p => !p.error);\n"
+    "    if (!ok) return _prepReplies[0] ?? null;\n"
+    "    const seen = new Set();\n"
+    "    const merged = [];\n"
+    "    for (const p of _prepReplies) for (const s of (p.slices ?? [])) {\n"
+    "      if (!seen.has(s.id)) { seen.add(s.id); merged.push(s); }\n"
+    "    }\n"
+    "    return { ...ok, slices: merged };\n"
+    "  })();\n"
+)
+
+
+_WAVE_GROUP_CLAUSE = (
+    "\nYou own every slice the reply lists: apply findings only inside their files, write one "
+    "sidecar at the first slice's sidecar_path, and return slice_id as the slice ids joined with `+`."
+)
+
+
+def _wave_prep_instruction(
+    mode_args: str, base_ref: str, prep_slice_id: str, repo_root: Optional[str], *, grouped: bool
+) -> str:
+    """The first-act ``review.prep`` instruction every review-wave agent carries under
+    ``prep_in_wave``; a grouped agent adds the ``group_index`` / ``group_count`` values its prompt
+    ends with."""
+    group_args = ',"group_index":<group_index>,"group_count":<group_count>' if grouped else ""
+    group_note = " Pass the `group_index:` and `group_count:` values given below." if grouped else ""
+    repo_pin = f" --repo '{repo_root}'" if repo_root else ""
+    return (
+        f"First, run this run's review prep as ONE engine call, never your own freeze, grouping or "
+        f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
+        f"review.prep '{{{mode_args},\"base\":\"{base_ref}\","
+        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>],"
+        f"\"plan_path\":\"<plan_path>\"{group_args}}}'{repo_pin}`, its command word exactly as written "
+        f"(a guard denies the prefix moved into a shell variable). <plan_path> is the `plan:` value "
+        f"below when it is given, else the `plan_path:` line. When a non-empty `session_id:` value is "
+        f"given, add it as `\"session_id\"`.{group_note} The op computes once per run: concurrent "
+        f"callers read one stored reply. Return the reply verbatim as `prep`, beside your review as "
+        f"`review`. An error beginning `{REVIEW_PREP_BUSY_PREFIX}` is not a refusal: re-run the same "
+        f"call, up to {_PREP_BUSY_RETRIES} times, and if it is still busy return `prep` alone. Any other "
+        f"non-null error in the reply is a refusal: return `prep` alone."
+    )
+
+
+def _wave_schema_literal(schema_literal: str) -> str:
+    """The review schema wrapped so an agent returns its prep reply beside its review.
+
+    Only ``prep`` is schema-required: the runtime's validator is not known to honour ``if/then`` or
+    ``oneOf``. The wave consumer (``_PREP_FROM_WAVE_JS``) enforces that ``review`` is present
+    unless ``prep.error`` is non-null."""
+    return (
+        '{ "type": "object", "properties": { "prep": { "type": "object" }, '
+        f'"review": {schema_literal} }}, "required": ["prep"] }}'
+    )
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -407,8 +538,8 @@ def compose_execute_review(
     executor_rows_js: Optional[str] = None,
     tshirt: Optional[str] = None,
     tshirt_js: Optional[str] = None,
-    mechanical_prep: bool = False,
     repo_root: Optional[str] = None,
+    prep_in_wave: bool = False,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -463,13 +594,20 @@ def compose_execute_review(
     When the roster names no delivery verifier the wave binds ``_deliveryVerdict`` to ``null`` and
     ``_deliveryNotRun`` to ``DELIVERY_NOT_ROSTERED``.
 
-    ``mechanical_prep`` replaces the prep agent's multi-step prompt with one ``review.prep`` engine
-    call whose reply it returns verbatim; the freeze, partition and foreign-claim work then runs
-    in-process in the op. ``False`` keeps the prompt byte-identical.
-
-    ``repo_root`` pins the mechanical prep command to the repo that minted ``run_base_sha`` with
-    ``--repo``, so a run driven from another repo's cwd resolves the base in the right object
+    ``repo_root`` pins the ``prep_in_wave`` prep command to the repo that minted ``run_base_sha``
+    with ``--repo``, so a run driven from another repo's cwd resolves the base in the right object
     store. ``None`` leaves the command unpinned.
+
+    ``prep_in_wave`` emits no prep agent and no "Review prep" phase: each review-wave agent runs
+    one ``review.prep`` call first (slice agents with their ``group_index`` / ``group_count``,
+    whole-diff agents with the whole run) and returns ``{prep, review}``. The op computes once per
+    slice id, so the first call freezes and the rest read the stored reply. After the wave
+    ``_reviewWave`` holds the unwrapped reviews, ``_reviewPrep`` is bound from the replies, and the
+    no-op, no-slices and verify-only outcomes are decided from it with the same halt keys and
+    texts. Slice agents fan out their ratio's reviewer count up front, so every one must carry
+    ``executor_rows_per_reviewer``; a group with no slices returns no review. Prompts are the full
+    briefs, since the diff size is unknown until the wave has run, and whole-diff reviewers are
+    not skipped on a verify-only run. ``False`` keeps the output byte-identical.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -574,39 +712,13 @@ def compose_execute_review(
         f"run_base_sha: {run_base_sha}\n"
         f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
     ).strip()
-    if mechanical_prep:
-        mode_args = (
-            f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
-        )
-        repo_pin = f" --repo '{repo_root}'" if repo_root else ""
-        prep_prompt = (
-            f"{prompt_head}\n\n{prep_role}"
-            f"Run this run's review prep as ONE engine call, never your own freeze, grouping or "
-            f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
-            f"review.prep '{{{mode_args},\"base\":\"{base_ref}\","
-            f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>],"
-            f"\"plan_path\":\"<plan_path>\"}}'{repo_pin}`, its command word exactly as written (a guard denies "
-            f"the prefix moved into a shell variable). <plan_path> is the `plan:` value below when it "
-            f"is given, else the `plan_path:` line. When a non-empty `session_id:` value is given, add "
-            f"it as `\"session_id\"`. Return the reply's whole_diff_path, product_files, verdict, "
-            f"slices, whole_diff_sidecars, foreign_claims, error and sidecar_path verbatim, and "
-            f"nothing else. A non-null error is a refusal: return it as is. Never report a missing "
-            f"binary in place of the reply.\n"
-            f"plan_path: {plan_path}\n"
-            f"run_base_sha: {run_base_sha}\n"
-            f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
-        ).strip()
-    prep_opts = _agent_opts_for(review.prep, emitted_agent_type=prep_type)
-    if mechanical_prep:
-        # One-op wrapper with no preceding agent to fold into: the minimal haiku floor.
-        prep_opts = {prep_type: {**prep_opts.get(prep_type, {}), "model": "haiku"}}
     prep_call = _agent_call_literal(
         prep_type,
         prep_prompt,
         prep_phase,
         schema=True,
         as_arrow=False,
-        agent_opts=prep_opts,
+        agent_opts=_agent_opts_for(review.prep, emitted_agent_type=prep_type),
         schema_literal=_schema_literal(review.prep.schema, stage_schemas),
     )
     if declared_paths_js:
@@ -620,55 +732,14 @@ def compose_execute_review(
             + ", "
             + prep_call[len(prep_prefix):]
         )
-    phases.append(
-        (
-            prep_phase,
-            f"  phase({_js_string_literal(prep_phase)});\n"
-            f"  const _reviewPrep = await {_degrading(prep_call)};\n"
-            # A single-reviewer-ok verdict over product files is one slice of the
-            # whole diff; prep that omitted it is synthesised here, never refused.
-            f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
-            f"!(_reviewPrep.slices ?? []).length && (_reviewPrep.product_files ?? 0) > 0) {{ "
-            f"_reviewPrep.slices = [{{ id: 'whole-diff', files: [], "
-            f"diff_path: _reviewPrep.whole_diff_path, "
-            f"sidecar_path: (_reviewPrep.whole_diff_sidecars?.personas ?? [])[0] ?? "
-            f"String(_reviewPrep.whole_diff_path).replace(/\\.diff$/, '') + '.whole-slice.md', "
-            f"contract_blocks: 0 }}]; }}\n"
-            # A clean prep over a run whose rows changed nothing froze an empty
-            # diff: there is nothing to review or commit, which is an outcome,
-            # not a failed prep.
-            # A count of 0 that disagrees with the slices (one lists files), or with
-            # a row this run landed, is not trusted: the run falls through to the
-            # slices guard instead of halting, so landed rows never skip review.
-            f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
-            f"(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
-            f"(typeof _finished === 'undefined' || !_finished.size) && "
-            f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
-            f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) {{ "
-            f"return {{ halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
-            f"prep: _reviewPrep, wave: null, integration: null }}; }}\n"
-            # Rows landed but changed no product file (a verification-only row):
-            # the clean empty-diff prep is the one case with nothing to review.
-            # The slice reviewers, other whole-diff reviewers and integration
-            # are skipped; the delivery verifier and the terminal judge still run.
-            # The same clean-prep predicate as the no-op halt, minus its
-            # landed-rows condition; a refused prep fails `verdict`, and a prep
-            # with product files fails `product_files`, so both still throw.
-            f"  const _verifyOnly = !!(_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
-            f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
-            f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length));\n"
-            # A failed or refused prep yields no slices -- a refusal reports
-            # product_files 0, so the guard keys on the slices alone. The wave's
-            # `?? []` would otherwise expand to no sliced reviewer and land the
-            # run reviewed by the whole-diff tail alone. Declared paths are
-            # non-empty here: the plan route always declares them, and the queue
-            # route skips the wave before prep when no row committed.
-            f"  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {{ "
-            f"return {{ halted: {_js_string_literal(NO_SLICES_HALT)} + ' (prep verdict: ' + "
-            f"String(_reviewPrep?.verdict ?? 'none') + ')', reason: {_js_string_literal(_NO_SLICES_REFUSAL)}, "
-            f"prep: _reviewPrep ?? null, wave: null, integration: null }}; }}",
+    if not prep_in_wave:
+        phases.append(
+            (
+                prep_phase,
+                f"  phase({_js_string_literal(prep_phase)});\n"
+                f"  const _reviewPrep = await {_degrading(prep_call)};\n" + _PREP_GUARDS_JS,
+            )
         )
-    )
 
     # -- 2. review-wave -----------------------------------------------------
     wave_phase = "Review wave"
@@ -714,8 +785,57 @@ def compose_execute_review(
     whole_diff_agents = [a for a in all_whole_diff_agents if _runs_at_compile_tier(a)]
 
     item_lines: List[str] = []
+    wave_mode_args = f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
+    wave_tail_js = (
+        (f" + ' ' + JSON.stringify({declared_paths_js})" if declared_paths_js else "")
+        + (f" + {prep_suffix_js}" if declared_paths_js and prep_suffix_js else "")
+    )
     for agent in slice_agents:
         slice_type, slice_role = _host_native(agent.agent_type, host_degraded)
+        if prep_in_wave:
+            if agent.executor_rows_per_reviewer is None:
+                raise ValueError(
+                    "compose_execute_review(prep_in_wave=True) needs executor_rows_per_reviewer on "
+                    f"slice agent {agent.agent_type!r}: its reviewer count is fixed before prep runs"
+                )
+            min_rows, max_rows = agent.executor_rows_per_reviewer
+            slice_prompt = (
+                f"{prompt_head}\n\n{slice_role}"
+                f"Review your assigned slice group of this run's diff.\n"
+                + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=True)
+                + f" Review exactly the slices the reply lists, and nothing else. If it lists none, "
+                f"there is nothing in your group: return `prep` alone.{_WAVE_GROUP_CLAUSE}\n"
+                f"plan_path: {plan_path}\n"
+                f"run_base_sha: {run_base_sha}\n"
+                f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
+            ).strip()
+            slice_call = _agent_call_literal(
+                slice_type,
+                slice_prompt,
+                wave_phase,
+                schema=True,
+                as_arrow=False,
+                agent_opts=_agent_opts_for(agent, emitted_agent_type=slice_type),
+                schema_literal=_wave_schema_literal(_schema_literal(agent.schema, stage_schemas)),
+            )
+            slice_prefix = f"agent({_prompt_literal(slice_prompt)}, "
+            assert slice_call.startswith(slice_prefix)
+            grouped_call = (
+                f"() => agent({_prompt_literal(slice_prompt)}{wave_tail_js} + "
+                f"{_js_string_literal(chr(10) + 'group_index: ')} + i + "
+                f"{_js_string_literal(chr(10) + 'group_count: ')} + n, " + slice_call[len(slice_prefix):]
+            )
+            count_js = (
+                f"Math.max(1, Math.min({MAX_SLICES}, Math.ceil({rows_expr} / {max_rows}), "
+                f"Math.floor({rows_expr} / {min_rows})))"
+            )
+            slice_items = (
+                f"(() => {{ const n = {count_js}; "
+                f"return Array.from({{ length: n }}, (_, i) => {_degrading(grouped_call)}); }})()"
+            )
+            gate = _agent_gate(agent)
+            item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")
+            continue
         base_prompt = (
             f"{prompt_head}\n\n{slice_role}"
             f"Review your assigned slice of this run's diff.\n"
@@ -801,6 +921,53 @@ def compose_execute_review(
         emitted_agent_type = (
             _DELIVERY_VERIFIER_HOST_NATIVE_TYPE if is_delivery_verifier else whole_type
         )
+        if prep_in_wave:
+            wave_prompt = (
+                f"{prompt_head}\n\n{whole_role}"
+                f"Review this run's whole diff.\n"
+                + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=False)
+                + f" Read the frozen diff named by the reply's whole_diff_path (this run's is "
+                f"`{prep_slice_id}.diff`); never another plan's `-prep.diff`."
+                + (
+                    " Your sidecar_path is the reply's whole_diff_sidecars.delivery."
+                    if is_delivery_verifier
+                    else " If the reply's product_files is 0 and no slice lists files, there is "
+                    "nothing to review: return `prep` alone."
+                )
+                + f"\nplan_path: {plan_path}\n"
+                f"run_base_sha: {run_base_sha}"
+                f"{credit_note if is_delivery_verifier else ''}"
+                f"{role_note}"
+                f"\ndeclared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
+            ).strip()
+            call = _agent_call_literal(
+                emitted_agent_type,
+                wave_prompt,
+                wave_phase,
+                schema=True,
+                as_arrow=True,
+                agent_opts=_agent_opts_for(agent, emitted_agent_type=emitted_agent_type),
+                schema_literal=_wave_schema_literal(_schema_literal(agent.schema, stage_schemas)),
+            )
+            prefix = f"() => agent({_prompt_literal(wave_prompt)}, "
+            assert call.startswith(prefix)
+            owner = (
+                f" + {owner_repo_clause_js(owner_rows_js)}"
+                if is_delivery_verifier and owner_rows_js
+                else ""
+            )
+            call = f"() => agent({_prompt_literal(wave_prompt)}{wave_tail_js}{owner}, " + call[len(prefix):]
+            line = _degrading(call, _DELIVERY_REJECTED_JS if is_delivery_verifier else "")
+            gate = _agent_gate(agent)
+            if gate:
+                skipped = (
+                    f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
+                    if is_delivery_verifier
+                    else "null"
+                )
+                line = f"() => ({gate} ? ({line})() : {skipped})"
+            item_lines.append(f"    {line}")
+            continue
         call = _agent_call_literal(
             emitted_agent_type,
             wave_prompt,
@@ -854,11 +1021,16 @@ def compose_execute_review(
     )
 
     wave_lines = [f"  phase({_js_string_literal(wave_phase)});"]
-    if any(a.executor_rows_per_reviewer is not None for a in slice_agents):
+    if not prep_in_wave and any(a.executor_rows_per_reviewer is not None for a in slice_agents):
         wave_lines.append(_GROUP_SLICES_JS)
     if delivery_index is not None:
         wave_lines.append(f"  let {_DELIVERY_REASON_VAR} = null;")
-    wave_lines.append(f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);")
+    if prep_in_wave:
+        wave_lines.append(f"  const _waveRaw = await parallel([\n{map_lines}\n  ]);")
+        wave_lines.append("  const _reviewWave = _waveRaw.map(r => (r ? (r.review ?? null) : null));")
+        wave_lines.append(_PREP_FROM_WAVE_JS + _PREP_GUARDS_JS)
+    else:
+        wave_lines.append(f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);")
     if delivery_index is not None:
         offset_from_end = len(whole_diff_agents) - delivery_index
         wave_lines.append(
@@ -1164,6 +1336,74 @@ def delivery_supersession_clause(criterion: Optional[OperativeCriterion]) -> str
     )
 
 
+def _criterion_judge_prompt(
+    review: ExecuteReview,
+    *,
+    plan_path: str,
+    run_base_sha: str,
+    falsifier: Optional[dict],
+    prompt_head: str,
+    criterion: Optional[OperativeCriterion],
+    host_degraded: bool,
+    evidence_path: Optional[str],
+    evidence: Optional[JudgeEvidence],
+    em_owned_rows: Optional[List[str]],
+    ledger_charter: Optional[str],
+) -> Tuple[str, str]:
+    """``(emitted agent type, prompt)`` of the roster judge; ``review.judge`` must be set."""
+    falsifier_clause = ""
+    if falsifier:
+        falsifier_clause = (
+            f"\nrecorded falsifier: how={falsifier['how']!r}; "
+            f"expected_when_true={falsifier['expected_when_true']!r}"
+            + (f"; baseline_output={falsifier['baseline_output']!r}" if falsifier.get("baseline_output") else "")
+        )
+    judge_type, judge_role = _host_native(review.judge.agent_type, host_degraded)
+    prompt = (
+        f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}\n"
+        f"{_tier1_clause(evidence)}\n"
+        f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
+        f"run_base_sha: {run_base_sha}\n"
+        f"verification_record: {plan_path} § Verification (EM-run legs, committed; "
+        f"weigh one only for a leg you are denied, and mark it provenance em-recorded)"
+        f"{_criterion_clause(criterion)}"
+        f"{falsifier_clause}"
+        f"{em_owned_clause(em_owned_rows)}"
+        + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence and `criterion_evidence` clause entries; weigh them, cite them)" if evidence_path else "")
+        + (f"\n{ledger_charter}" if ledger_charter else "")
+    ).strip()
+    return judge_type, prompt
+
+
+def criterion_judge_brief(
+    review: ExecuteReview,
+    *,
+    stage_schemas: Dict[str, dict],
+    plan_path: str,
+    run_base_sha: str,
+    prompt_head: str = "",
+    ledger_charter: Optional[str] = None,
+    falsifier: Optional[dict] = None,
+    criterion: Optional[OperativeCriterion] = None,
+    evidence_path: Optional[str] = None,
+    evidence: Optional[JudgeEvidence] = None,
+    em_owned_rows: Optional[List[str]] = None,
+) -> Optional[Tuple[str, dict]]:
+    """The roster judge's ``(prompt, widened result schema)`` for a caller that runs the judging
+    inside another agent, or ``None`` when the roster declares no judge. The prompt is the judge's
+    own brief with no role preamble, so the host agent keeps its own type. The optional keywords
+    render as in ``compose_criterion_judge``; all ``None`` leaves the prompt unchanged."""
+    if review.judge is None:
+        return None
+    _, prompt = _criterion_judge_prompt(
+        review, plan_path=plan_path, run_base_sha=run_base_sha, falsifier=falsifier, prompt_head=prompt_head,
+        criterion=criterion, host_degraded=False, evidence_path=evidence_path, evidence=evidence,
+        em_owned_rows=em_owned_rows, ledger_charter=ledger_charter,
+    )
+    schema = json.loads(_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)))
+    return prompt, schema
+
+
 def compose_criterion_judge(
     review: ExecuteReview,
     *,
@@ -1195,27 +1435,12 @@ def compose_criterion_judge(
     with its ``required`` fields required. Both ``None`` leaves the call byte-identical."""
     if review.judge is None:
         return None
-    falsifier_clause = ""
-    if falsifier:
-        falsifier_clause = (
-            f"\nrecorded falsifier: how={falsifier['how']!r}; "
-            f"expected_when_true={falsifier['expected_when_true']!r}"
-            + (f"; baseline_output={falsifier['baseline_output']!r}" if falsifier.get("baseline_output") else "")
-        )
-    judge_type, judge_role = _host_native(review.judge.agent_type, host_degraded)
-    prompt = (
-        f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}\n"
-        f"{_tier1_clause(evidence)}\n"
-        f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
-        f"run_base_sha: {run_base_sha}\n"
-        f"verification_record: {plan_path} § Verification (EM-run legs, committed; "
-        f"weigh one only for a leg you are denied, and mark it provenance em-recorded)"
-        f"{_criterion_clause(criterion)}"
-        f"{falsifier_clause}"
-        f"{em_owned_clause(em_owned_rows)}"
-        + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence and `criterion_evidence` clause entries; weigh them, cite them)" if evidence_path else "")
-        + (f"\n{ledger_charter}" if ledger_charter else "")
-    ).strip()
+    judge_type, prompt = _criterion_judge_prompt(
+        review, plan_path=plan_path, run_base_sha=run_base_sha, falsifier=falsifier,
+        prompt_head=prompt_head, criterion=criterion, host_degraded=host_degraded,
+        evidence_path=evidence_path, evidence=evidence, em_owned_rows=em_owned_rows,
+        ledger_charter=ledger_charter,
+    )
     schema_literal = _widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas))
     if ledger_schema is not None:
         merged = json.loads(schema_literal)

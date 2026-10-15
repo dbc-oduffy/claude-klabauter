@@ -162,6 +162,81 @@ def test_tracked_declared_write_unchanged_in_range_adds_nothing(tmp_path):
     assert res["entries"] == []
 
 
+def test_new_unnamed_wiki_doc_is_an_unreachable_doc_entry_by_default(tmp_path):
+    root = build("unwired", tmp_path / "d")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    _write(root, "docs/wiki/x.md", "# x\n")
+    params = {"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["docs/wiki/x.md"]}
+    want = [{"kind": "doc", "ref": "docs/wiki/x.md", "verdict": "unreachable"}]
+    res = _handler({**params, "entry_kinds": ["doc"]})
+    assert res["entries"] == want
+    assert res["cost"]["spawns"] == 1
+    res = _handler(params)
+    assert res["entries"] == want
+    assert res["cost"]["spawns"] == 1
+
+
+_OP_SRC = 'from x import register_op\n\n@register_op("x.y")\ndef _h(params):\n    return {}\n'
+
+
+def _by_kind(res):
+    return {e["ref"].split(":")[0]: (e["kind"], e["verdict"]) for e in res["entries"] if e["kind"] != "exported-function"}
+
+
+def test_default_kinds_include_an_op_entry_for_a_created_register_op_module(tmp_path):
+    root = build("unwired", tmp_path / "p")
+    _write(root, "pkg/ops/__init__.py", "")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "registry surface")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    _write(root, "pkg/ops/m.py", _OP_SRC)
+    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["pkg/ops/m.py"]})
+    assert _by_kind(res) == {"pkg/ops/m.py": ("op", "unreachable")}
+
+
+def test_created_unreferenced_bin_script_and_hook_body_are_unreachable_by_default(tmp_path):
+    root = build("unwired", tmp_path / "h")
+    _write(root, "pkg/hooks/__init__.py", "")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "wiring surface")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    paths = ["bin/tool.py", "pkg/hooks/guard.py"]
+    for p in paths:
+        _write(root, p, "x = 1\n")
+    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "paths": paths})
+    assert _by_kind(res) == {
+        "bin/tool.py": ("cli", "unreachable"),
+        "pkg/hooks/guard.py": ("hook", "unreachable"),
+    }
+
+
+def test_committed_range_marks_a_created_file_and_not_a_modified_one(tmp_path):
+    root = build("unwired", tmp_path / "m")
+    _write(root, "bin/old.py", "x = 1\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "old script")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    _write(root, "bin/old.py", "x = 1\ny = 2\n")
+    _write(root, "bin/fresh.py", "x = 1\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "range")
+    head = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    res = _handler({"repo_root": str(root), "base_sha": base, "head_sha": head, "paths": ["bin/old.py", "bin/fresh.py"]})
+    assert _by_kind(res) == {"bin/old.py": ("cli", "undecidable"), "bin/fresh.py": ("cli", "unreachable")}
+    assert res["cost"]["spawns"] == 1
+
+
+def test_removed_dev_null_looking_content_line_does_not_mark_a_file_created(tmp_path):
+    root = build("unwired", tmp_path / "r")
+    _write(root, "bin/tool.py", "a\n-- /dev/null\nb\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "tool")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    _write(root, "bin/tool.py", "a\nb\nc\n")
+    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["bin/tool.py"]})
+    assert _by_kind(res) == {"bin/tool.py": ("cli", "undecidable")}
+
+
 @pytest.mark.parametrize("rel", ["src/proxy.ts", "middleware.ts"])
 def test_a_proxy_rewrite_makes_an_unresolved_step_undecidable_not_broken(tmp_path, rel):
     root = build("unwired", tmp_path / "t")

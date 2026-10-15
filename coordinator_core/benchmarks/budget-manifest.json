@@ -411,9 +411,10 @@
       },
       "spawn_count_budget": {
         "sizing_submission": 0,
-        "raw_ask_submission": 0
+        "raw_ask_submission": 0,
+        "asks_submission": 0
       },
-      "_rationale": "The hook runs the real dispatch.emit in process and starts no process on either route: the sizing submission and the raw-ask submission each measured 0 spawns and one process (the interpreter alone). Process time over six runs was 264.8 to 318.8 ms, three runs per route, so it sits above the 300ms target of the op it wraps and carries 500. The cost is the cold import of coordinator_core.ops.dispatch_emit.op, which dispatch.emit itself carries; trimming that import is a separate sized fix. Counted by coordinator_core/hooks/tests/test_submit_engine_ask_real_emit.py with exact equality."
+      "_rationale": "The hook runs the real dispatch.emit in process and starts no process on either route: the sizing submission and the raw-ask submission each measured 0 spawns and one process (the interpreter alone). Process time over six runs was 264.8 to 318.8 ms, three runs per route, so it sits above the 300ms target of the op it wraps and carries 500. The cost is the cold import of coordinator_core.ops.dispatch_emit.op, which dispatch.emit itself carries; trimming that import is a separate sized fix. The asks route (the in-process dispatch.ask_fanout over a budget-sized array, then the first run's emit) measured 0 spawns; its process time over three fresh interpreters, pytest start included, was 0.34 to 0.36 s (user plus sys) for a 3-ask array on 15 cores, the same band as the raw-ask route, so it stays under the 500ms row. Counted by coordinator_core/hooks/tests/test_submit_engine_ask_real_emit.py with exact equality."
     },
     "hooks.postuse_advisory_dispatch": {
       "_tier": "HOOK_PORT: deliberately shadowed -- the non-ASCII write touch costs one git spawn, so the 15ms warm-hook band is unreachable on that path and this op is held to its own 300ms target and spawn_count_budget instead",

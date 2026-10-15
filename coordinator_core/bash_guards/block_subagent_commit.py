@@ -6510,8 +6510,12 @@ _LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 #: has nothing to resolve candidates against without one.
 _LEG_UNRESOLVABLE_GIT_ROOT = "leg:unresolvable-git-root"
 
-#: A `dispatch.terminal_commit --params-file <path>` the run-token leg refused.
+#: A `dispatch.terminal_commit --params-file <path>` the run-token leg refused, one leg per cause.
 _LEG_RUN_TOKEN_PARAMS = "leg:run-token-params"
+_LEG_PARAMS_NO_BLOCK = "leg:run-token-params-no-block"
+_LEG_PARAMS_PATH = "leg:run-token-params-path"
+_LEG_PARAMS_TOKEN = "leg:run-token-params-token"
+_LEG_PARAMS_WRITE = "leg:run-token-params-write"
 
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
@@ -6544,9 +6548,24 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "each file relative to the repo root; path scope was never checked."
     ),
     _LEG_RUN_TOKEN_PARAMS: (
-        "BLOCKED: terminal_commit params not admitted -- the spawn prompt "
-        "holds no params block, the path is not the run's own, or the run "
-        "token is spent or expired. Report it; do not edit the command."
+        "BLOCKED: terminal_commit params not admitted -- the command is not "
+        "one bare params-file segment in a resolvable repo. Report it; do not edit the command."
+    ),
+    _LEG_PARAMS_NO_BLOCK: (
+        "BLOCKED: terminal_commit params not admitted -- the spawn prompt is "
+        "unreadable or holds no params block. Report it; do not edit the command."
+    ),
+    _LEG_PARAMS_PATH: (
+        "BLOCKED: terminal_commit params not admitted -- the typed path is not "
+        "the run's own params file. Report it; do not edit the command."
+    ),
+    _LEG_PARAMS_TOKEN: (
+        "BLOCKED: terminal_commit params not admitted -- the run token is "
+        "spent, expired or not the one minted. Report it; do not edit the command."
+    ),
+    _LEG_PARAMS_WRITE: (
+        "BLOCKED: terminal_commit params not admitted -- the params file could "
+        "not be written. Report it; do not edit the command."
     ),
     _LEG_UNRESOLVABLE_GIT_ROOT: (
         "BLOCKED: git-commit-agent: no repo root at this cwd; pathspec "
@@ -6830,13 +6849,13 @@ def _bare_params_file_value(args: List[str]) -> Optional[str]:
 
 def _prompt_sourced_params_admit(
     typed_path: str, git_root: str, transcript_path: Any
-) -> bool:
+) -> Optional[str]:
     """Admit `--params-file <path>` from the spawn's own prompt, writing the file itself.
 
     Trap: params come only from the spawn prompt's block, never from the typed text and never
     from the file at `typed_path` (reading it would let any file authorize a commit). The
     typed path must be the canonical one for the prompt's run id; an unreadable transcript
-    denies rather than falling back to typed text.
+    denies rather than falling back to typed text. None when admitted, else the refusal's leg.
     """
     from pathlib import Path
 
@@ -6844,18 +6863,18 @@ def _prompt_sourced_params_admit(
 
     params = chan.prompt_params(chan.read_spawn_prompt(transcript_path))
     if params is None:
-        return False
+        return _LEG_PARAMS_NO_BLOCK
     canonical = chan.params_path(git_root, params["run_id"])
     if canonical is None:
-        return False
+        return _LEG_PARAMS_PATH
     try:
         if Path(typed_path).resolve() != canonical.resolve():
-            return False
+            return _LEG_PARAMS_PATH
     except (OSError, ValueError):
-        return False
+        return _LEG_PARAMS_PATH
     if not run_token.admits(git_root, params["run_id"], params["run_token"], params["script_path"]):
-        return False
-    return chan.materialize(canonical, params)
+        return _LEG_PARAMS_TOKEN
+    return None if chan.materialize(canonical, params) else _LEG_PARAMS_WRITE
 
 
 def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
@@ -6889,7 +6908,7 @@ def _warp_run_token_admits(
     legs: Set[str],
     heredoc_hit: bool,
     transcript_path: Any = None,
-) -> bool:
+) -> Optional[str]:
     """A warp run's own terminal commit: exactly one bare `coordinator-invoke
     dispatch.terminal_commit <params>` segment whose params carry the run token the emit
     minted for `run_id` (`dispatch_emit.run_token`). Caller has already required the
@@ -6898,23 +6917,26 @@ def _warp_run_token_admits(
 
     Trap: no wrapper, env prefix, `--repo` override, interpreter payload or second segment
     is admitted -- the token authorizes one op invocation, never a shell.
+
+    None when admitted, else the refusal's leg (the generic one outside the params-file shape).
     """
+    refused = _LEG_RUN_TOKEN_PARAMS
     if legs or heredoc_hit or not _command_is_single_segment(cmd_for_scan):
-        return False
+        return refused
     if _has_git_commit(cmd_for_scan) or _has_coordinator_safe_commit(cmd_for_scan):
-        return False
+        return refused
     tokens = _tokenize_full_command(cmd_for_scan)
     if tokens is None:
-        return False
+        return refused
     segments = [seg for seg in _segments_from_tokens(tokens) if seg]
     if len(segments) != 1 or not _token_matches_binary(segments[0][0], _COORDINATOR_INVOKE_BINARY):
-        return False
+        return refused
     seg = segments[0]
     op_idx = _first_positional_after_invoke_module(seg, 1)
     if op_idx is None or seg[op_idx] != _RUN_TOKEN_OP:
-        return False
+        return refused
     if any(t.split("=", 1)[0] == "--repo" for t in seg[1:op_idx]):
-        return False
+        return refused
     from coordinator_core.ops.dispatch_emit import run_token
 
     params_file = _bare_params_file_value(seg[op_idx + 1:])
@@ -6922,9 +6944,10 @@ def _warp_run_token_admits(
         return _prompt_sourced_params_admit(params_file, git_root, transcript_path)
 
     params = run_token.token_params_from_command(raw_cmd)
-    return params is not None and run_token.admits(
+    admitted = params is not None and run_token.admits(
         git_root, params["run_id"], params["run_token"], params["script_path"]
     )
+    return None if admitted else refused
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -7077,17 +7100,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         )
         if may_commit:
             return None
-        if git_root and _warp_run_token_admits(
-            cmd,
-            cmd_for_scan,
-            git_root,
-            payload_legs,
-            heredoc_stdin_import_hit,
-            transcript_path=_spawn_transcript(payload),
-        ):
+        refusal = (
+            _warp_run_token_admits(
+                cmd,
+                cmd_for_scan,
+                git_root,
+                payload_legs,
+                heredoc_stdin_import_hit,
+                transcript_path=_spawn_transcript(payload),
+            )
+            if git_root
+            else _LEG_RUN_TOKEN_PARAMS
+        )
+        if refusal is None:
             return None
         if _is_terminal_commit_params_file_cmd(cmd_for_scan):
-            ownership_reason = _LEG_RUN_TOKEN_PARAMS
+            ownership_reason = refusal
 
     kind_unresolved = not effective_type
 

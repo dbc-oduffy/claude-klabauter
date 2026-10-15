@@ -69,7 +69,7 @@ def test_unlanded_predecessor_withholds_row_and_its_dependents(tmp_path):
     by_id = {e["id"]: e for e in exclusions}
     assert by_id["D1"]["reason"] == "depends_on_plan"
     assert "docs/plans/pred.md" in by_id["D1"]["detail"] and "P1" in by_id["D1"]["detail"]
-    assert by_id["D2"]["reason"] == "transitive_gate_closure"
+    assert by_id["D2"]["reason"] == "withheld_by_held_dependency"
 
 
 def test_coded_predecessor_releases_the_row(tmp_path):

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
@@ -126,7 +127,13 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
             refused="run-token",
         )
     try:
-        return _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
+        reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
+        from coordinator_core.ops.dispatch_emit.run_close import sibling_release
+
+        siblings = sibling_release(worktree_root, run_id, None)
+        if siblings is not None:
+            reply["siblings"] = siblings
+        return reply
     finally:
         if token is not None:
             run_token.release(worktree_root, run_id, token, script_path)
@@ -156,6 +163,15 @@ def _land(
     owner = declared
     home, _siblings = split_sibling_paths(list(owner), worktree_root)
     declared = [p for p in home if not p.startswith(record_dir_rel + "/")]
+    sizing_rel = record_sizing_rel(worktree_root, run_id)
+    if (
+        sizing_rel
+        and not Path(sizing_rel).is_absolute()
+        and contained_path(worktree_root / sizing_rel, [worktree_root]) is not None
+        and sizing_rel not in owner
+        and not sizing_rel.startswith(record_dir_rel + "/")
+    ):
+        declared.append(sizing_rel)
 
     snapshot = _worktree_snapshot(worktree_root, declared, [record_dir_rel], [])
     if snapshot is None:
@@ -175,7 +191,7 @@ def _land(
     withheld = {p: "peer-held" for p in sorted(held)}
     product = [p for p in product if p not in held]
     gone = [p for p in gone if p not in held]
-    landed_chunks = sorted({owner[p] for p in product + gone})
+    landed_chunks = sorted({owner[p] for p in product + gone if p in owner})
     paths = paths + product
     deleted = deleted + gone
     if not paths and not deleted:

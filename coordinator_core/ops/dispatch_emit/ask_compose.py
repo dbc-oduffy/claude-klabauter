@@ -18,12 +18,18 @@ from typing import Callable, Optional, Sequence
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
+from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_FALSIFIER_PHASE,
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
     ASK_SOURCES,
+    ASK_STAGE_PHASE,
+    ASK_VERIFY_LABEL,
+    ASK_VERIFY_PHASE,
     DELIVERY_NOTE_DIR,
     HALTED_RECORD_PARAM,
     PM_INTENT_FILE,
@@ -31,6 +37,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RELAYED_ASK_FILE,
     HALT_REFUSAL,
     HALT_ROOM,
+    HALT_SPLIT,
     HALT_TOUCHPOINT,
     NO_PLAN_HAND_OFF_FLAG,
     OP_ASK_GATE,
@@ -47,6 +54,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     SIZING_ASSEMBLE_CMD,
     scout_assemble_flags_js,
 )
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
     LEDGER_VIEW_FILE,
@@ -71,10 +79,9 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
 )
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import (
-    CRITERION_JUDGE_PHASE_TITLE,
     NO_SLICES_HALT,
-    compose_criterion_judge,
     compose_execute_review,
+    criterion_judge_brief,
     owner_repo_clause_js,
 )
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
@@ -223,10 +230,31 @@ _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
     {
         "verdict": {"type": "string", "enum": ["ruled", "pm-only"]},
-        "pick": {"type": "string", "enum": ["roadmap", "accept_multi_session"]},
+        "pick": {"type": "string", "enum": ["roadmap", "accept_multi_session", "split"]},
+        "slices": {
+            "type": "array",
+            "items": _obj(
+                ["label", "ask", "rows"],
+                {
+                    "label": _STR,
+                    "ask": _STR,
+                    "rows": {"type": "array", "items": _STR},
+                    "writes": {"type": "array", "items": _STR},
+                },
+            ),
+        },
         "pmOnly": {"type": "boolean"},
         "pmOnlyGround": _STR,
         "ruling": _STR,
+    },
+)
+_SPLIT_SCHEMA = _obj(
+    ["parent_id", "runs", "fire", "error"],
+    {
+        "parent_id": _STR,
+        "runs": {"type": "array", "items": {"type": "object"}},
+        "fire": {"type": "array", "items": _STR},
+        "error": _STR,
     },
 )
 _DOCS_SCHEMA = _obj(
@@ -269,7 +297,6 @@ _LEDGER_CHECK_SCHEMA = _obj(
         "conflicts": {"type": "array", "items": _STR},
     },
 )
-_LEDGER_CHECK_AGENT_TYPE = "coordinator:code-reviewer"
 _LEDGER_ITEMS_RULES = (
     "Return one entry in items for EVERY ledger item, by "
     "its id (the sizing's requirement_register row id), and on every engine-plane item named above "
@@ -298,7 +325,7 @@ _LEDGER_GATED_RULE = (
 )
 _LEDGER_DOC_WRITES_RULE = (
     ". When a not_met item's only gap is writing one of those paths, name that path "
-    "exactly as its own entry in remaining; the engine settles it from the docs stage's "
+    "exactly as its own entry in remaining; the engine settles it from the docs step's "
     "report."
 )
 _GATED_IDS_JS = "(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')"
@@ -397,23 +424,27 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
     )
 
 
-_SCOPE_SLOT = "SCOPE_SLOT_X"
 _ROW_VERIFY_PROMPT_OPEN = "`Run and report on the scoped test target(s) for ${id}: `"
 
 
-def _scoped_test_call(
-    agent_type_host: Optional[str], review_edits_base: str = "HEAD", prompt_head: Optional[str] = None
-) -> str:
-    """The plan route's terminal test agent call, scoped at run time to the manifest's test targets.
+def _test_instruction_js(review_edits_base: str) -> str:
+    """JS expression for the verify agent's scoped-test instructions, scoped at run time to the manifest's test targets.
 
     The plan is authored inside the run, so the scope cannot resolve at compose time; the stage
-    resolves `test_targets` through `pathspec.terminal_test_scope`. Trap: no falsifier leg -- the
-    plan's falsifier is unknown until the plan exists.
+    resolves `test_targets` through `pathspec.terminal_test_scope`. Trap: the runner is told to
+    report raw evidence and never gate, and the targets are scoped, never a tier.
     """
-    call = _emit._test_agent_call_expr(
-        [_SCOPE_SLOT], agent_type_host=agent_type_host, review_edits_base=review_edits_base, prompt_head=prompt_head
+    return _cat(
+        "Run the scoped test targets: [",
+        "js:(_manifest.test_targets ?? []).join(', ')",
+        "]. "
+        + _emit._review_edits_clause(review_edits_base)
+        + " "
+        + _emit._test_runner_clause()
+        + " "
+        + (_emit._baseline_context_clause(review_edits_base) + " " if _emit._is_full_sha(review_edits_base) else "")
+        + "Report raw evidence; do not gate. Write your record and return its path as sidecar_path -- required.",
     )
-    return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.test_targets.join(', ') + ']")
 
 
 _USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
@@ -498,48 +529,98 @@ _FALSIFIER_SUFFIX_JS = (
 )
 
 
-#: JS expression naming the doc paths the docs thunk is writing while the tail's other legs read the tree.
-_DOC_WRITES_IN_FLIGHT_JS = (
-    "'\\n\\nThe docs stage is writing these paths while you read, so judge them as in flight and never "
-    "as a gap: ' + JSON.stringify(_manifest?.doc_writes ?? [])"
-)
+def _criterion_judge_brief(
+    review, stage_schemas: dict, *, run_base_sha: str, intent: str, ledger_charter: str
+) -> Optional[tuple[str, dict]]:
+    """The roster judge's `(prompt, result schema)` for the verify agent, or None without a judge.
 
-
-def _criterion_judge_call(
-    review, stage_schemas: dict, *, run_base_sha: str, head: str, agent_type_host: Optional[str],
-    docs_in_flight: bool = False,
-    ledger_charter: Optional[str] = None,
-) -> Optional[str]:
-    """The roster judge's call EXPRESSION, naming the plan (or XS sizing) known only at run time.
-
-    `compose_criterion_judge` takes `plan_path` as a compile-time literal; the slot stands in and
-    is spliced out for the runtime expression. The plan's own falsifier is unknown until the plan
-    exists, so the judge gets the run's pre-change `_falsifierSpec` instead (null at XS).
-    `ledger_charter` folds the requirements-ledger check into the judge; the run-time gated-chunk
-    list then closes its prompt.
+    `criterion_judge_brief` takes `plan_path` as a compile-time literal; the slot stands in and is
+    spliced out for the run-time marker naming the plan (or XS sizing). The plan's own falsifier is
+    unknown until the plan exists, so the run's pre-change `_falsifierSpec` rides the prompt's
+    run-time suffix instead (null at XS).
     """
-    suffix_js = f"({owner_repo_clause_js(_OWNER_ROWS_JS)}) + {_FALSIFIER_SUFFIX_JS}"
-    if docs_in_flight:
-        suffix_js = f"({suffix_js}) + {_DOC_WRITES_IN_FLIGHT_JS}"
-    if ledger_charter:
-        suffix_js = f"({suffix_js}) + '\\n\\nThe stage manifest withheld these chunks (gated): ' + {_GATED_IDS_JS}"
-    call = compose_criterion_judge(
+    brief = criterion_judge_brief(
         review,
         stage_schemas=stage_schemas,
         plan_path=_PLAN_SLOT,
         run_base_sha=run_base_sha,
-        falsifier=None,
-        prompt_head=head + _JUDGE_PATH_CLAUSE,
-        host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
-        prompt_suffix_js=suffix_js,
+        prompt_head=intent + _JUDGE_PATH_CLAUSE,
         ledger_charter=ledger_charter,
-        ledger_schema=_LEDGER_CHECK_SCHEMA if ledger_charter else None,
     )
-    if call is None:
+    if brief is None:
         return None
-    if call.count(_PLAN_SLOT) != 2:
+    prompt, schema = brief
+    if prompt.count(_PLAN_SLOT) != 2:
         raise AskComposeRefused("criterion judge prompt no longer names its plan path exactly twice")
-    return call.replace(_PLAN_SLOT, f"' + {_RUNTIME_PLAN_PATH_JS} + '")
+    marker = _emit._SHARED_PATH_MARKER_DELIM
+    return prompt.replace(_PLAN_SLOT, f"{marker}{_RUNTIME_PLAN_PATH_JS}{marker}"), schema
+
+
+_VERIFY_INTRO = (
+    f"phase: {ASK_VERIFY_PHASE}\n\nYou are the run's one closing agent: it replaces the separate scoped-test, "
+    "docs and criterion-judge agents. The run's change is on disk, uncommitted. Do these three steps in "
+    "order. Your write set is exactly step 2's declared doc writes and its delivery note; in steps 1 and 3 "
+    "you edit, stage and commit nothing, and you never change a file to make a requirement true.\n\n"
+)
+_VERIFY_NO_TESTS = "Run no tests: this run has no scoped test target to run. Omit `test`."
+_VERIFY_NO_DOCS = "Write no docs on this run: omit doc_paths, note_path and stale_docs."
+
+
+def _verify_call(
+    *,
+    head: str,
+    anchor: str,
+    test_js: str,
+    docs_parts: Sequence[str],
+    verdict_parts: Sequence[str],
+    judged: bool,
+    schema: dict,
+) -> str:
+    """The merged tail's one `agent(...)` call EXPRESSION: scoped tests, declared docs, then the
+    criterion and ledger verdict, in that order inside one coordinator:executor agent.
+
+    Trap: the verdict follows the agent's own test run, and its write set is bounded in the prompt
+    to `_manifest.doc_writes` plus the delivery note; the engine's reconcile (not this prompt) is
+    what keeps a path outside that set from clearing a ledger item.
+    """
+    docs_js = (
+        f"js:(_docsWanted ? ({_cat(*docs_parts)}) : {_lit(_VERIFY_NO_DOCS)})" if docs_parts else _VERIFY_NO_DOCS
+    )
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        _VERIFY_INTRO + "(1) TESTS. Start the scoped tests first and let them run in the background while "
+        "you do step 2. ",
+        f"js:(_testWanted ? ({test_js}) : {_lit(_VERIFY_NO_TESTS)})",
+        "\n\n(2) DOCS. ",
+        docs_js,
+        "\n\n(3) VERDICT. Once the test result is in, read it before you rule: a failing or degraded "
+        "result is evidence for the verdict, never the verdict itself. ",
+        *verdict_parts,
+        "\n\nReturn one object: `test` (step 1's result, status and summary included; omit it when no "
+        "tests ran), "
+        + ("`judge` (the criterion verdict fields the judge brief above names, its status included), " if judged else "")
+        + "`items`, `all_of_pm_ask` and `conflicts` (the ledger verdict), and `doc_paths`, `note_path` and "
+        "`stale_docs` (step 2).",
+    )
+    return _agent(
+        prompt, label=ASK_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=schema,
+    )
+
+
+def _verify_schema(judge_schema: Optional[dict]) -> dict:
+    """The merged leg's result schema: `ask_contract.ASK_VERIFY_RETURN_KEYS`, with the test result
+    and the judge verdict nested because their `status` keys collide."""
+    properties = {
+        "test": json.loads(_emit.stage_schema_literal("test_result")),
+        **_LEDGER_CHECK_SCHEMA["properties"],
+        **_DOCS_SCHEMA["properties"],
+    }
+    required = ["items"]
+    if judge_schema is not None:
+        properties["judge"] = judge_schema
+        required.append("judge")
+    return _obj(required, properties)
 
 
 def _fire_tier_js() -> str:
@@ -557,7 +638,7 @@ def _folded_ledger_charter(
     """The requirements-ledger check as a charter the criterion judge carries.
 
     The judge reads the plan and the sizing itself; the gated-chunk list and the engine-plane
-    clause reach it as a run-time suffix (`_criterion_judge_call`).
+    clause reach it as a run-time suffix of the verify prompt (`compose_ask_script`).
     """
     return (
         "Ledger check, folded into this verdict (no separate ledger-check agent runs): also judge "
@@ -621,31 +702,51 @@ def _read_plan_blitz() -> str:
     return load_plan_blitz_text()
 
 
+_PHASE_CALL_TITLES = {"execute": _emit._EXECUTE_PHASE_TITLE}
+
+
+def _carried_titles(lines: Sequence[str]) -> set[str]:
+    """Phase titles some composed agent call carries as its `phase:` option."""
+    return agent_options_phase_titles("\n".join(lines))
+
+
 def _phase_titles(
     *,
-    with_size: bool,
+    carried: set[str],
     blitz_phases: list[str],
     review_titles: list[str],
-    judged: bool = False,
-    with_accept: bool = False,
     through_plan: bool = False,
     extra: Sequence[str] = (),
 ) -> list[str]:
+    """One title per serial group, in run order: the contract phases and the review titles that an
+    agent in this script carries, plus plan-blitz's own titles (DoE's, passed through).
+
+    Agents that run together carry one title (the verify leg; the standalone falsifier beside the
+    stage fallback under `ASK_STAGE_PHASE`), so a concurrent group reads as one row, and a title no
+    agent carries is never listed.
+    """
     titles: list[str] = []
-    for phase in ASK_PHASES:
-        if phase == "size" and not with_size:
-            continue
-        if phase == "accept" and not with_accept:
-            continue
-        titles.append(phase)
-        if phase == "plan":
-            titles.extend(t for t in blitz_phases if t not in titles)
-            if through_plan:
-                return titles
-    judge_titles = [CRITERION_JUDGE_PHASE_TITLE] if judged else []
-    for title in [_emit._EXECUTE_PHASE_TITLE, *review_titles, *judge_titles, _emit._TEST_PHASE_TITLE, *extra]:
+
+    def add(title: str) -> None:
         if title not in titles:
             titles.append(title)
+
+    for phase in ASK_PHASES:
+        if phase == "review":
+            for title in review_titles:
+                if title in carried:
+                    add(title)
+            continue
+        title = _PHASE_CALL_TITLES.get(phase, phase)
+        if title in carried:
+            add(title)
+        if phase == "plan":
+            for title in blitz_phases:
+                add(title)
+            if through_plan:
+                return titles
+    for title in extra:
+        add(title)
     return titles
 
 
@@ -655,10 +756,10 @@ _REVIEW_SLICES_GUARD = "  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).lengt
 
 
 def _single_exit_review(blocks: list[str]) -> str:
-    """The review blocks with prep's no-op `return` turned into a `_halted` assignment.
+    """The review blocks with the prep guards' no-op `return` turned into a `_halted` assignment.
 
-    Everything after the no-op check, the rest of prep and every later block, runs under
-    `if (!_halted)`, so the no-op reaches the terminal return like any other halt.
+    The guards sit in the review-wave block (`prep_in_wave`), so every later block runs under
+    `if (!_halted)` and the no-op reaches the terminal return like any other halt.
     """
     prep = blocks[0]
     if prep.count(_REVIEW_NOOP_EXIT) != 1 or _REVIEW_NOOP_TAIL not in prep or _REVIEW_SLICES_GUARD not in prep:
@@ -668,6 +769,42 @@ def _single_exit_review(blocks: list[str]) -> str:
     prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)
     rest = "\n\n".join(blocks[1:])
     return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
+
+
+def _reviewer_row_js(anchor: str, label_prefix: str) -> list[str]:
+    """The execute-loop branch for a blinded falsifier-integrity reviewer row: the agent is given
+    only the repo anchor and its brief path (no preamble, no ledger clause -- the brief is the
+    phase's own spec prompt), its structured verdict is written as JSON to the row's dispatch
+    report path by a mechanical writer. `_runRow` reads the returned `DONE:` line.
+    Trap: the writer agent, not the read-only reviewer, holds the Write."""
+    prompt = _cat(f"{anchor}\n\n", "Your brief is the file ", "js:r.brief_path", " -- read it completely, then execute it as written.")
+    report = (
+        f"{_lit(_emit._DISPATCH_REPORT_DIR + '/')} + {_RUNTIME_PLAN_PATH_JS}.split('/').pop().slice(0, -3)"
+        " + '/' + r.id + '.md'"
+    )
+    writer = _cat(
+        "Write the file `", f"js:({report})",
+        "` with the Write tool (create its directory if missing) holding exactly this text and nothing else: ",
+        "js:JSON.stringify(_v)",
+        ". Return the path you wrote.",
+    )
+    reviewer = (
+        f"agent({prompt}, {{ label: {label_prefix} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
+        f"agentType: r.agent_type, model: r.model, schema: {_emit.stage_schema_literal('falsifier_integrity_result')} }})"
+    )
+    write_call = _agent(
+        writer, label="verdict-write", phase=_emit._EXECUTE_PHASE_TITLE, agent_type=_MECHANICAL_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_obj(["path"], {"path": _STR}), effort=_MECHANICAL_EFFORT,
+    )
+    return [
+        f"      if (r.agent_type === {_lit(REVIEWER_AGENT_TYPE)}) _rows[r.id] = _runRow(r.id, "
+        "(r.deps ?? []).map((d) => _rows[d]), null, async () => {",
+        f"        const _v = await {reviewer};",
+        "        if (!_v || !_v.verdict) { return 'BLOCKED: the reviewer returned no verdict'; }",
+        f"        await {write_call};",
+        "        return 'DONE: ' + r.id + ' verdict ' + _v.verdict;",
+        "      });",
+    ]
 
 
 def _row_runner_js() -> str:
@@ -859,7 +996,7 @@ def compose_ask_script(
         prompt_head=review_head,
         run_key=run_id,
         prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel) + ' session_id: ' + _SESSION_ID",
-        mechanical_prep=True,
+        prep_in_wave=True,
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
         owner_rows_js=_OWNER_ROWS_JS,
         tier_js=_fire_tier_js(),
@@ -874,15 +1011,14 @@ def compose_ask_script(
         run_dir=run_dir,
         in_run_commit=in_run_commit,
     )
-    judge_expr = _criterion_judge_call(
+    judge_brief = _criterion_judge_brief(
         review,
         review_stage_schemas,
         run_base_sha=run_base_sha,
-        head=head + intent_clause,
-        agent_type_host=agent_type_host,
-        docs_in_flight=in_run_commit,
+        intent=intent_clause,
         ledger_charter=ledger_charter,
     )
+    judged = judge_brief is not None
 
     b: list[str] = []
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
@@ -898,6 +1034,7 @@ def compose_ask_script(
     b.append("  let _stagedManifest = null;")
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
+    b.append("  let _splitExit = null;")
     b.append(_RUN_TOKEN_DECL_JS)
     b.append("  let _nextAction = null;")
     b.append("  let _docs = null;")
@@ -931,7 +1068,7 @@ def compose_ask_script(
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = null;")
-    if judge_expr is not None:
+    if judged:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 
     def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel") -> str:
@@ -943,7 +1080,7 @@ def compose_ask_script(
         )
 
     fold_stage = not stop_after
-    fold_falsifier = judge_expr is not None and not stop_after
+    fold_falsifier = judged and not stop_after
     def _stage_act_parts(base: str, sizing: str, gated: str) -> tuple[str, ...]:
         """The closing act of the agent that just ran the gate: stage the arms with no plan agent to fold into.
 
@@ -1258,7 +1395,14 @@ def compose_ask_script(
             "js:_sizingRel",
             " (intent, estimate, exit_criterion, research) and pick its exit: 'accept_multi_session' when "
             "the work is one deliverable a single multi-session plan can carry; 'roadmap' when it spans two "
-            "or more named workstreams or needs an initiative or goal link. Return verdict 'ruled', the "
+            "or more named workstreams or needs an initiative or goal link; 'split' when its intent or "
+            "register names two or more independent, separately shippable initiatives (each would ship "
+            "alone), which then run as sibling runs. For 'split' also return slices: [{label, ask, rows, "
+            "writes?}], one per initiative, where ask is that initiative's full request, rows lists "
+            "requirement_register row ids, and writes (when you can name them) its repo-relative file "
+            "paths. Every register row id, a verbatim row included, goes in exactly one slice: assign a "
+            "verbatim row to the slice it most serves; none is left out or repeated. 'roadmap' stays the "
+            "pick for one initiative spanning workstreams. Return verdict 'ruled', the "
             "pick, and your one-paragraph reasoning verbatim as ruling. Return verdict 'pm-only' with "
             "pmOnly true and pmOnlyGround ONLY when the job-to-be-done itself is unstated, or the work "
             "needs a merge, publish, push to main or cross-repo commit. Being unsure is not a ground. "
@@ -1275,6 +1419,7 @@ def compose_ask_script(
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
         take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, spine_plan: %s.spine_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
+        b.append("  let _splitSlices = null;")
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
             # owe both the exit pick and the exit-criterion acceptance. No progress ends the loop.
@@ -1300,9 +1445,10 @@ def compose_ask_script(
             f"    try {{ _xl = await {xl_call}; }} catch (_e) {{ _xl = null; }}\n"
             f"    const _xlGated = {irreversible}.test(_xl?.ruling ?? '');\n"
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
-            "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick) "
+            "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
             f"      {take_gate % (('_xl',) * 6)}\n"
+            "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) _splitSlices = _xl.slices;\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (!_progressed && _xl) {{\n"
@@ -1324,6 +1470,9 @@ def compose_ask_script(
             f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId"
             f", ...(_pmExit ? {{ {PM_EXIT_QUESTION_KEY}: _pmExit }} : {{}}) }}; }}"
         )
+
+    if xl_possible:
+        _append_split_stage(b, head=head, anchor=anchor, run_id=run_id)
 
     stage_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
@@ -1550,10 +1699,9 @@ def compose_ask_script(
             manifest_rel,
             "Size, gate and plan from an ask, then stop before stage.",
             _phase_titles(
-                with_size=sized_in_run,
+                carried=_carried_titles(b),
                 blitz_phases=blitz_phases,
                 review_titles=[],
-                with_accept=accept_pending or sized_in_run,
                 through_plan=True,
             ),
         )
@@ -1577,7 +1725,20 @@ def compose_ask_script(
                 "sizing: _sizingRel, run_id: _runId };"
             )
         b.append("  }")
-    if judge_expr is not None:
+    stage_call = _agent(
+        stage_prompt, label="stage", phase=ASK_STAGE_PHASE, agent_type=_MECHANICAL_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT,
+    )
+    if judged:
+        b.append("  let _falsifierSpec = null;")
+    b.append("  if (!_viaRoadmap) {")
+    b.append("  if (!_halted) {")
+    # Stage is folded into the plan agent's last act (stage_fold) wherever a plan agent runs. This
+    # standalone haiku call stays only for the arms with no plan agent to fold into (XS, a resumed
+    # plan, stop_after) -- there is no prior agent whose last act could carry it. The standalone
+    # falsifier reads only the sizing, so when both spawn they run together under one phase title.
+    b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
+    if judged:
         falsifier_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             "Before any change lands, author the baseline falsifier for the prime exit criterion in the sizing at ",
@@ -1589,31 +1750,31 @@ def compose_ask_script(
             "how (one runnable observation, verbatim), baseline_output, and expected_when_true (what the same "
             "observation shows once the criterion holds).",
         )
-        b.append("  let _falsifierSpec = null;")
-        b.append(f"  if (!_halted && !_viaRoadmap && _gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{")
         standalone = (
-            "    phase('falsifier');\n"
-            f"    _falsifierSpec = {{ ...(await {_agent(falsifier_prompt, label='falsifier', phase='falsifier', agent_type=_FALSIFIER_AGENT_TYPE, schema=_FALSIFIER_SCHEMA, agent_model=_emit._AGENT_MODELS[_FALSIFIER_AGENT_TYPE], effort=_MECHANICAL_EFFORT)}), "
+            f"_falsifierSpec = {{ ...(await {_agent(falsifier_prompt, label='falsifier', phase=ASK_FALSIFIER_PHASE, agent_type=_FALSIFIER_AGENT_TYPE, schema=_FALSIFIER_SCHEMA, agent_model=_emit._AGENT_MODELS[_FALSIFIER_AGENT_TYPE], effort=_MECHANICAL_EFFORT)}), "
             "authored_by: 'exit-criterion-falsifier' };"
         )
-        if fold_falsifier and sized_in_run:
-            b.append("    if (_scoutFalsifier) { _falsifierSpec = _scoutFalsifier; } else {")
-            b.append(standalone)
-            b.append("    }")
-        else:
-            b.append(standalone)
+        falsifier_body = (
+            f"if (_scoutFalsifier) {{ _falsifierSpec = _scoutFalsifier; }} else {{ {standalone} }}"
+            if fold_falsifier and sized_in_run
+            else standalone
+        )
+        b.append(f"  const _falsifierNeeded = !!(_gate.arm && _gate.arm !== {_lit(ARM_XS)});")
+        b.append("  const _stageNeeded = !_stagedManifest;")
+        b.append("  if (_falsifierNeeded || _stageNeeded) {")
+        b.append(f"  phase({_lit(ASK_STAGE_PHASE)});")
+        b.append(
+            "  await parallel([\n"
+            f"    async () => {{ if (_falsifierNeeded) {{ {falsifier_body} }} }},\n"
+            f"    async () => {{ if (_stageNeeded) {{ _manifest = await {stage_call}; }} }},\n"
+            "  ]);"
+        )
         b.append("  }")
-    b.append("  if (!_viaRoadmap) {")
-    b.append("  if (!_halted) {")
-    # Stage is folded into the plan agent's last act (stage_fold) wherever a plan agent runs. This
-    # standalone haiku call stays only for the arms with no plan agent to fold into (XS, a resumed
-    # plan, stop_after) -- there is no prior agent whose last act could carry it.
-    b.append("  if (_stagedManifest) { _manifest = _stagedManifest; } else {")
-    b.append("  phase('stage');")
-    b.append(
-        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT)};"
-    )
-    b.append("  }")
+    else:
+        b.append("  if (!_stagedManifest) {")
+        b.append(f"  phase({_lit(ASK_STAGE_PHASE)});")
+        b.append(f"  _manifest = await {stage_call};")
+        b.append("  }")
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
     b.append(
@@ -1632,7 +1793,7 @@ def compose_ask_script(
     b.append("  }")
 
     b.append("  if (!_halted) {")
-    b.append("  phase('execute');")
+    b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
     b.append("  for (const w of _waves) {")
@@ -1643,8 +1804,9 @@ def compose_ask_script(
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.{ledger_clause}{session_tail}",
     )
+    b.extend(_reviewer_row_js(anchor, _lit(build_work_label(''))))
     b.append(
-        f"      _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
+        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
         f"{{ label: {_lit(build_work_label(''))} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
         f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}));"
     )
@@ -1664,12 +1826,11 @@ def compose_ask_script(
     review_text = _single_exit_review(
         [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
     )
-    b.append(f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)}) {{\n  phase('review');\n" + review_text + "\n  }")
+    b.append(f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)}) {{\n" + review_text + "\n  }")
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_XS)}) {{ _reviewWave = []; }}")
     b.append(_REVIEW_BLOCKED_HALT_JS)
-    test_call = _scoped_test_call(agent_type_host, run_base_sha or "HEAD", brief_prefix + _AGENT_DEFS_MARKER)
     test_guard = (
         f"(_gate.arm !== {_lit(ARM_XS)} || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
     )
@@ -1692,29 +1853,23 @@ def compose_ask_script(
         has_commit_request=True,
         review_vars=review_vars,
         test_var=_emit._TEST_RESULT_VAR,
-        falsifier_var=_emit._FALSIFIER_RESULT_VAR if judge_expr is not None else None,
+        falsifier_var=_emit._FALSIFIER_RESULT_VAR if judged else None,
         verification_var="_verifications",
         test_absent_status="not_run",
         script_path=script_path,
         session_id=session_id,
     )
-    test_leg = (
-        f"const _testLeg = (async () => {{ if ({test_guard}) {{ try {{ {_emit._TEST_RESULT_VAR} = await {test_call}; }} "
-        "catch (e) { _haltOnUsageLimit(e); } } })();"
-    )
-    thunks = ["() => _testLeg"]
-    if judge_expr is not None:
-        # The judge reads the scoped test's verdict, so it starts only once the test leg has settled.
-        thunks.append(
-            f"async () => {{ await _testLeg; try {{ {_emit._FALSIFIER_RESULT_VAR} = await "
-            f"{_emit._never_stranding_criterion(judge_expr, judge=True)}; }} "
-            "catch (e) { _haltOnUsageLimit(e); } }"
+    if judged:
+        verdict_parts: tuple[str, ...] = (
+            judge_brief[0],
+            "js:(" + owner_repo_clause_js(_OWNER_ROWS_JS) + ")",
+            "js:" + _FALSIFIER_SUFFIX_JS,
+            "\n\nThe stage manifest withheld these chunks (gated): ",
+            "js:" + _GATED_IDS_JS,
         )
     else:
-        ledger_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            "phase: ledger-check\n\nRead-only: edit, stage and commit nothing. You are the run's final "
-            "checker: judge the result against every requirement "
+        verdict_parts = (
+            "Rule the run against every requirement "
             + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
             + ", never against the "
             f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
@@ -1727,38 +1882,56 @@ def compose_ask_script(
             + "The stage manifest withheld these chunks (gated): ",
             "js:" + _GATED_IDS_JS,
             _LEDGER_GATED_RULE,
-            *(("js:" + _DOC_WRITES_IN_FLIGHT_JS, _LEDGER_DOC_WRITES_RULE) if in_run_commit else ()),
+            *((_LEDGER_DOC_WRITES_RULE,) if in_run_commit else ()),
         )
-        ledger_call = _agent(
-            ledger_prompt, label="ledger-check", phase="ledger-check",
-            # A bare host has no coordinator review type; the prompt carries the whole charter.
-            agent_type="general-purpose" if agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED else _LEDGER_CHECK_AGENT_TYPE,
-            schema=_LEDGER_CHECK_SCHEMA, effort=_MECHANICAL_EFFORT,
-            agent_model=_emit._AGENT_MODELS[_LEDGER_CHECK_AGENT_TYPE] if agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED else None,
-        )
-        thunks.append(f"async () => {{ try {{ _ledger = await {ledger_call}; }} catch (e) {{ _haltOnUsageLimit(e); }} }}")
-    if in_run_commit:
-        docs_call = _docs_call(head=head, anchor=anchor, run_id=run_id, manifest_rel=manifest_rel)
-        thunks.append(
-            f"async () => {{ if ({_DOCS_PRE_TAIL_GUARD}) {{ try {{ _docs = await {docs_call}; }} "
-            "catch (e) { _haltOnUsageLimit(e); } } }"
-        )
-    b.append("  if (!_halted && _manifest && !_manifest.error) {")
-    b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
-    b.append("    " + review_applied)
-    b.append("    " + test_leg)
-    b.append("    await parallel([\n      " + ",\n      ".join(thunks) + "\n    ]);")
-    b.append(_TEST_VERDICT_EMPTY_HALT_JS.replace("TEST_GUARD", test_guard))
-    b.append("  }")
+    verify_call = _verify_call(
+        head=head,
+        anchor=anchor,
+        test_js=_test_instruction_js(run_base_sha or "HEAD"),
+        docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
+        verdict_parts=verdict_parts,
+        judged=judged,
+        schema=_verify_schema(judge_brief[1] if judged else None),
+    )
+    unjudged = (
+        "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
+        "no verdict', reason: 'verify leg returned no judge verdict', sidecar_path: null }"
+    )
+    verify_lines = [
+        "  if (!_halted && _manifest && !_manifest.error) {",
+        f"    phase({_lit(ASK_VERIFY_PHASE)});",
+        "    " + review_applied,
+        f"    const _testWanted = !!({test_guard});",
+        *([f"    const _docsWanted = !!({_DOCS_PRE_TAIL_GUARD});"] if in_run_commit else []),
+        "    let _verify = null;",
+        f"    try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } }",
+        f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",
+        *(
+            [
+                "    if (_docsWanted && _verify && Array.isArray(_verify.doc_paths)) { _docs = { doc_paths: "
+                "_verify.doc_paths, note_path: _verify.note_path ?? null, stale_docs: "
+                "Array.isArray(_verify.stale_docs) ? _verify.stale_docs : [] }; }"
+            ]
+            if in_run_commit
+            else []
+        ),
+        *(
+            [
+                f"    {_emit._FALSIFIER_RESULT_VAR} = (_verify && _verify.judge) ? "
+                f"{_emit._JUDGE_VERDICT_RULES_JS}(_verify.judge) : {unjudged};"
+            ]
+            if judged
+            else []
+        ),
+        "    _ledger = (_verify && Array.isArray(_verify.items)) ? { all_of_pm_ask: _verify.all_of_pm_ask === true, "
+        "items: _verify.items, conflicts: Array.isArray(_verify.conflicts) ? _verify.conflicts : [] } : null;",
+        "  }",
+    ]
+    verify_lines[-1:-1] = [_TEST_VERDICT_EMPTY_HALT_JS.replace("TEST_GUARD", test_guard)]
+    b.extend(verify_lines)
     b.append(no_target)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
-    if judge_expr is not None:
-        v = _emit._FALSIFIER_RESULT_VAR
-        b.append(
-            f"    _ledger = (!_manifest.error && Array.isArray({v}?.items)) ? "
-            f"{{ all_of_pm_ask: {v}.all_of_pm_ask === true, items: {v}.items, "
-            f"conflicts: Array.isArray({v}.conflicts) ? {v}.conflicts : [] }} : null;"
-        )
     b.append(
         "    const _reconciled = [];\n"
         "    for (const i of (_ledger?.items ?? [])) {\n"
@@ -1769,7 +1942,7 @@ def compose_ask_script(
         "      if (rest.length) i.remaining = rest; else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
         "    }"
     )
-    if judge_expr is not None:
+    if judged:
         v = _emit._FALSIFIER_RESULT_VAR
         b.append(
             f"    if ({v}?.status === 'not_met' && (_ledger?.items ?? []).length "
@@ -1813,8 +1986,8 @@ def compose_ask_script(
     if not in_run_commit:
         b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
     _fv = _emit._FALSIFIER_RESULT_VAR
-    criterion_open = " && !_criterionOpen" if judge_expr is not None else ""
-    if judge_expr is not None:
+    criterion_open = " && !_criterionOpen" if judged else ""
+    if judged:
         b.append(f"  const _criterionOpen = !!({_fv} && {_fv}.status === 'not_met');")
     b.append(
         "  const _closeable = !!(!_halted && _manifest && !_manifest.error"
@@ -1826,7 +1999,7 @@ def compose_ask_script(
         + (
             f"_criterionOpen ? (String({_fv}.reason ?? '').startsWith('not wired up: ') ? String({_fv}.reason).slice(0, 200) : "
             f"'criterion not_met' + ({_fv}.reason ? ': ' + String({_fv}.reason).slice(0, 200) : '')) : "
-            if judge_expr is not None
+            if judged
             else ""
         )
         + "'delivery verdict FAIL', "
@@ -1863,13 +2036,12 @@ def compose_ask_script(
         "if (Array.isArray(_ir.wave_sidecar_paths)) { _ir.wave_sidecar_paths = _ir.wave_sidecar_paths.map(_rel); } "
         "if (typeof _ir.prep_sidecar === 'string') { _ir.prep_sidecar = _rel(_ir.prep_sidecar); } }"
     )
-    stage_titles: list[str] = []
     if in_run_commit:
-        stage_titles = ["docs", "commit"]
         _append_docs_and_commit(b, head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, manifest_rel=manifest_rel)
         _append_halt_record_commit(b)
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
+        "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : [], "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
@@ -1901,16 +2073,15 @@ def compose_ask_script(
             else "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review."
         ),
         _phase_titles(
-            with_size=sized_in_run,
+            carried=_carried_titles(b),
             blitz_phases=blitz_phases,
             review_titles=review_titles,
-            judged=judge_expr is not None,
-            with_accept=accept_pending or sized_in_run,
             extra=[
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
+                *(["split"] if xl_possible else []),
                 *(["roadmap-blitz", *rb_phases, "workstream-complete"] if rb_fn else []),
-                *([] if judge_expr is not None else ["ledger-check"]),
-                *stage_titles,
+                ASK_VERIFY_PHASE,
+                *(["commit"] if in_run_commit else []),
             ],
         ),
     )
@@ -1953,24 +2124,23 @@ def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titl
     return script
 
 
-#: The docs thunk starts with the tail, before any ledger or criterion halt is known, so it
-#: carries only what is settled by then.
+#: The verify agent writes docs before any ledger or criterion verdict exists, so docs are asked
+#: for only on what is settled before it runs.
 _DOCS_PRE_TAIL_GUARD = (
     "!_halted && _manifest && !_manifest.error && !_viaRoadmap && _RUN_TOKEN "
     "&& !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL')"
 )
 
 
-def _docs_call(*, head: str, anchor: str, run_id: str, manifest_rel: str) -> str:
-    """The docs stage's `agent(...)` call expression, one thunk of the parallel tail.
+def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
+    """Step 2 of the merged verify prompt, as `_cat` parts: the declared docs and the delivery note.
 
     It edits only `_manifest.doc_writes`; the delivery note's `## Verdicts` section is
     `dispatch.terminal_commit`'s, so the prompt carries none of the tail's own results.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
-    docs_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        "phase: docs\n\nThis run's change is on disk, uncommitted. Read the sizing at ",
+    return (
+        "This run's change is on disk, uncommitted. Read the sizing at ",
         "js:_sizingRel",
         "js:(_planRel ? ', the plan at ' + _planRel : '')",
         f", and the run manifest at {manifest_rel}. The review's verdicts, verbatim:\n",
@@ -1979,11 +2149,11 @@ def _docs_call(*, head: str, anchor: str, run_id: str, manifest_rel: str) -> str
         "\n\nThe files you may write are exactly this run's declared doc writes: ",
         "js:JSON.stringify(_manifest.doc_writes ?? [])",
         ". Edit no other file: a README or wiki page the change makes stale that is not in that list "
-        "goes in stale_docs, unedited. (1) Update every path the sizing's `doc_consumers` lists (each "
+        "goes in stale_docs, unedited. (a) Update every path the sizing's `doc_consumers` lists (each "
         "restates the rule this ask changes; a `:<line>` or `#<anchor>` suffix names where), and amend "
         "or supersede the text at each `ask_conflicts` path so it no longer contradicts the ask -- the "
         "ask outranks it. "
-        f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/"
+        f"(b) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/"
         f"{run_id}/{LEDGER_VIEW_FILE}) with what the change did for it, what shipped (files "
         "and why), each review finding and how it was resolved, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
@@ -1994,18 +2164,14 @@ def _docs_call(*, head: str, anchor: str, run_id: str, manifest_rel: str) -> str
         "Return as doc_paths every "
         "repo-relative file you wrote or edited, the note's path as note_path, and stale_docs.",
     )
-    return _agent(
-        docs_prompt, label="docs", phase="docs", agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=_DOCS_SCHEMA,
-    )
 
 
 def _append_docs_and_commit(
     b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str
 ) -> None:
     """The run's commit stage, under a live terminal-commit `_nextAction` and no halt: a
-    git-commit-agent running `dispatch.terminal_commit` with the run token. The docs stage ran
-    earlier, as a thunk of the parallel tail. The commit lands product only: plans, sizings,
+    git-commit-agent running `dispatch.terminal_commit` with the run token. The docs were written
+    earlier, by the verify agent. The commit lands product only: plans, sizings,
     briefs and sidecars are process records it never carries, and a doc no chunk declares stays
     out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run.
 
@@ -2081,6 +2247,50 @@ def _halt_record_commit_fn(
         schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
     )
     return f"  async function _commitHaltRecord() {{ return await {call}; }}"
+
+
+def _append_split_stage(b: list[str], *, head: str, anchor: str, run_id: str) -> None:
+    """The in-run split exit: a `split` halt fans out to sibling runs, or stays a halt for the EM.
+
+    With `args.confirm_split === true`, or no proposed slices, the halt keeps kind `split` and
+    carries the proposed slices. Otherwise one mechanical agent runs `dispatch.ask_fanout` over the
+    slices and the parent sizing and copies the parent record into this run's own record dir, and
+    `_splitExit` is the script's single exit. A refusal keeps the halt: the roadmap arm is never
+    reached from a split.
+    """
+    parent_copy = run_parent_copy_rel(run_id)
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        f"phase: split\n\nRun `{_INVOKE} {FANOUT_OP} '",
+        "js:JSON.stringify({ slices: _splitSlices, parent_sizing: _sizingRel }).split(\"'\").join(\"'\\\\''\")",
+        "'` and return its JSON reply verbatim as parent_id, runs and fire (error empty on success). "
+        "If it replies `{\"error\": ...}`, return that message as `error` with parent_id empty and runs "
+        f"and fire empty. On success, read the file at scratch/warp/<parent_id>/parent.json and write "
+        f"its content verbatim to {parent_copy} (create the directory first). Run nothing else.",
+    )
+    call = _agent(
+        prompt, label="split", phase="split", agent_type=_MECHANICAL_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_SPLIT_SCHEMA, effort=_MECHANICAL_EFFORT,
+    )
+    b.append(
+        f"  if (_halted && _halted.halted === {_lit(HALT_SPLIT)}) {{\n"
+        "    const _confirmSplit = typeof args !== 'undefined' && !!args && args.confirm_split === true;\n"
+        "    const _proposed = Array.isArray(_splitSlices) ? _splitSlices : [];\n"
+        "    _halted = { ..._halted, slices: _proposed, confirm_split: _confirmSplit };\n"
+        "    if (!_confirmSplit && _proposed.length) {\n"
+        "      phase('split');\n"
+        "      let _fan = null;\n"
+        f"      try {{ _fan = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}\n"
+        "      if (_fan && !_fan.error && _fan.parent_id && Array.isArray(_fan.runs)) {\n"
+        "        _splitExit = { split: { parent_id: _fan.parent_id, runs: _fan.runs }, "
+        "fire: _fan.fire ?? [], sizing: _sizingRel, run_id: _runId };\n"
+        "        _halted = { ..._halted, split: _splitExit.split, fire: _splitExit.fire };\n"
+        "      } else {\n"
+        "        _halted = { ..._halted, reason: 'split refused: ' + String((_fan && _fan.error) || 'no reply').slice(0, 600) };\n"
+        "      }\n"
+        "    }\n"
+        "  }"
+    )
 
 
 def _append_halt_record_commit(b: list[str]) -> None:

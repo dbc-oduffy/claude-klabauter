@@ -3,11 +3,13 @@ commit -- `deletion_block_gate`, `carry_gate`, `op_scope_coverage_gate` --
 in-process, against a ceremony-sized path set. (A fourth gate, `dirty_tree_gate`,
 was probed here until its brightline-kill-bar deletion -- Review: overengineering-reviewer.)
 
-`attribution_gate` is measured too, but for a different reason: it is NOT
-wired into `commit_v2` yet (plan `docs/plans/2026-09-25-reviewer-attribution-commit-gate.md`
-C5) -- this is the pre-wiring cost check the C4 wiring row waits on, not a
-reinstatement question. It is excluded from the "ALL THREE (reinstate shape)"
-bundle below, which is specific to the three `run_commit_pipeline` gates.
+`attribution_gate` is measured too, for a different reason: it is a cost
+check on the gate itself, not a reinstatement question. It is measured in two
+forms -- the default whole-index rename scan, and the declared-`vacated` form
+that skips `read_index` -- and `measure_attribution_vacated` composes the
+vacated form with the three-gate bundle. It is excluded from the "ALL THREE
+(reinstate shape)" bundle below, which is specific to the three
+`run_commit_pipeline` gates.
 
 THE QUESTION THIS ANSWERS, and it is the one the P1 asks rather than a
 general benchmark: `run_commit_pipeline` was killed at the 500ms brightline
@@ -251,6 +253,47 @@ def _print_registration_static(results: dict) -> None:
         print(f"registration_violations paths={size:3d} p50={p50:6.2f}ms spawns={spawns:.0f} outcome={outcome}{flag}")
 
 
+def measure_attribution_vacated(root: Path, n: int = 12, windows: int = 3) -> dict:
+    """`attribution_gate(vacated=[])` alone and composed with the three-gate bundle.
+
+    Returns `{size: {"vacated": [ms per window], "composed": [ms per window], "spawns": float}}`
+    using `time.process_time()` plus `spawn_counter` (cross-platform), `windows` windows of `n` calls.
+    """
+    msg = "probe: measuring gate cost\n\nbody\n"
+    results: dict = {}
+    for size in SIZES:
+        paths = _tracked_sample(root, size)
+        attr_paths = _tracked_non_exempt_python_sample(root, size)
+
+        def vacated_only(attr_paths=attr_paths):
+            attribution_gate(root, attr_paths, vacated=[])
+
+        def composed(paths=paths, attr_paths=attr_paths):
+            deletion_block_gate(msg, paths, cwd=root)
+            carry_gate(root, paths)
+            op_scope_coverage_gate(root, paths)
+            attribution_gate(root, attr_paths, vacated=[])
+
+        row = {"vacated": [], "composed": [], "spawns": 0.0}
+        for _ in range(windows):
+            ms, spawns = _process_ms_and_spawns(vacated_only, n)
+            row["vacated"].append(ms)
+            row["spawns"] = max(row["spawns"], spawns)
+            ms, spawns = _process_ms_and_spawns(composed, n)
+            row["composed"].append(ms)
+            row["spawns"] = max(row["spawns"], spawns)
+        results[size] = row
+    return results
+
+
+def _print_attribution_vacated(results: dict) -> None:
+    for size, row in results.items():
+        vac = " ".join(f"{m:7.2f}" for m in row["vacated"])
+        comp = " ".join(f"{m:7.2f}" for m in row["composed"])
+        flag = "" if max(row["composed"]) <= PROCESS_TIME_TARGET_MS and not row["spawns"] else "  OVER"
+        print(f"attribution_gate(vacated) paths={size:3d} alone_ms=[{vac}] composed_ms=[{comp}] spawns={row['spawns']:.0f}{flag}")
+
+
 def main(n=12):
     declare_benchmark_origin()
     root = SRC
@@ -296,6 +339,7 @@ def main(n=12):
         f"attribution_gate summary: within_{PROCESS_TIME_TARGET_MS}ms_and_0_spawns="
         f"{within_budget}"
     )
+    _print_attribution_vacated(measure_attribution_vacated(root, n))
     _print_leak_gate(measure_leak_gate(root))
     _print_registration_static(measure_registration_static(root))
     return attribution_results, within_budget

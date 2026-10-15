@@ -275,7 +275,8 @@ def gated_rows(
     ``GatedRow``, in exclusion order. Never raises.
 
     Negative-spec: other reasons are skipped, and exclusion ``detail``
-    strings are copied through, not parsed."""
+    strings are copied through, not parsed. A transitive row reads ``owner_repo`` and
+    ``closure_key`` from its root row's gate (the entry's ``root`` key)."""
     out: list[GatedRow] = []
     for entry in exclusions:
         reason = entry.get("reason")
@@ -286,7 +287,8 @@ def gated_rows(
             gate = str(entry.get("detail", ""))
         else:
             continue
-        raw = raw_by_id.get(row_id)
+        gate_row = entry.get("root") if reason == "transitive_gate_closure" and entry.get("root") else row_id
+        raw = raw_by_id.get(gate_row)
         out.append(
             GatedRow(
                 id=row_id, reason=reason, gate=gate,

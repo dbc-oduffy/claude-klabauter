@@ -132,6 +132,12 @@ strictly more permissive in the safe (does-not-miss-a-foreground-dispatch)
 direction. It is the *outcome* of the three-state logic, not the input
 coercion feeding it, that is preserved exactly from the reference.
 
+SYNC_RETURN_TYPES exemption, shared with the plugin: an explicit foreground
+dispatch of a bounded agent type in `SYNC_RETURN_TYPES` returns `None` after
+the calibration touch and before the escape-hatch check, matching the plugin
+copy. The "BYTE-FAITHFUL PORT" claim above now excludes this exemption; the
+engine's reference op `nudge_foreground_agent_dispatch` still carries none.
+
 Spec backlink: coordinator_core/hooks/nudge_foreground_agent_dispatch.py
 (the engine's reference implementation, the algorithm this module ports).
 """
@@ -150,6 +156,28 @@ from coordinator_core.hooks.support.message_envelope import resolve_wiki_citatio
 from coordinator_core.hooks.support.session_hub import ensure_session_dir
 
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
+
+#: Membership rule (all four must hold for a type to belong here):
+#:   - Sonnet-or-below.
+#:   - Single pass.
+#:   - Not in the ACCUMULATED class named in subagent-sandbox-policy.yaml's
+#:     dispatch_tier comment (doc-link-checker, code-reviewer, dep-cve-auditor
+#:     are excluded on this ground: unbounded network checks, chunked review,
+#:     input-proportional payload growth).
+#:   - A result the EM consumes before its next decision.
+#: Opus personas are excluded as not cheap. Must equal the plugin's set; pinned
+#: by test_foreground_sync_return_parity.py.
+SYNC_RETURN_TYPES = frozenset(
+    {
+        "git-commit-agent",
+        "premise-checker",
+        "prior-art-checker",
+        "plan-coverage-checker",
+        "docs-checker",
+        "test-evidence-parser",
+        "sizing-scout",
+    }
+)
 
 _BG_CAPABLE_MARKER_NAME = ".harness-bg-capable"
 _FOREGROUND_OK_MARKER_NAME = ".foreground-ok"
@@ -253,6 +281,12 @@ def compute_foreground_reroute(
     if not has_bg:
         if not _is_bg_capable(git_dir, sid):
             return None
+
+    if isinstance(tool_input, dict):
+        raw_subagent_type = tool_input.get("subagent_type")
+        if isinstance(raw_subagent_type, str) and raw_subagent_type:
+            if raw_subagent_type.rsplit(":", 1)[-1] in SYNC_RETURN_TYPES:
+                return None
 
     if sid and git_dir:
         try:

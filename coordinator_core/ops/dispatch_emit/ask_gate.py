@@ -18,6 +18,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_REFUSAL,
     HALT_ROOM,
+    HALT_SPLIT,
     HALT_TOUCHPOINT,
     GateVerdict,
 )
@@ -50,7 +51,7 @@ _PARAMS = (
     Field("run_id", "nonempty_str"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit")
-_XL_PICKS = ("roadmap", "accept_multi_session")
+_XL_PICKS = ("roadmap", "accept_multi_session", "split")
 _DOC_NEW = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
@@ -96,6 +97,11 @@ def gate(
     if baton and arm != ARM_M_PLUS:
         return _halt(HALT_REFUSAL, f"baton given but arm {arm} mints no baton")
 
+    if sizing.get("xl_exit") == "split":
+        return _halt(
+            HALT_SPLIT,
+            "xl_exit recorded as split: the bundle resolves to sibling runs, not one",
+        )
     route = effective_route(sizing)
     if route == "shape":  # DR-450 exemption: only the PM can state the JTBD, so no workflow fronts shape
         return _halt(

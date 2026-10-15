@@ -97,6 +97,18 @@ def test_unknown_row_and_empty_text_refuse_without_sidecar(tmp_path):
     assert not evidence_sidecar_path(plan).exists()
 
 
+def test_absolute_paths_under_repo_root_recorded_repo_relative(tmp_path):
+    repo, plan = _stamped_plan(tmp_path)
+    inside = f"{repo}/state/sidecars/run.md"
+    outside = "/elsewhere/other-repo/file.py"
+
+    _call(repo, plan, text=f"sidecar at {inside}; sibling {outside}")
+
+    text = read_row_evidence(plan, "C12")[0]["text"]
+    assert text == f"sidecar at state/sidecars/run.md; sibling {outside}"
+    assert str(repo) not in text
+
+
 def test_missing_plan_refuses(tmp_path):
     repo = _make_git_repo(tmp_path)
     result = _call(repo, repo / "docs" / "plans" / "nope.md")

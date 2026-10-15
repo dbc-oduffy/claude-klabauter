@@ -43,8 +43,11 @@ def test_raw_ask_emits_the_full_phase_chain_with_both_verbs(repo):
     reply = op._dispatch_emit({"ask": "add the widget"}, repo_root=repo)
     text = Path(reply["path"]).read_text(encoding="utf-8")
     titles = _titles(text)
-    positions = [titles.index(p) for p in ASK_PHASES]
+    present = [p for p in ASK_PHASES if p in titles]
+    assert {"size", "plan", "stage"} <= set(present)
+    positions = [titles.index(p) for p in present]
     assert positions == sorted(positions)
+    assert titles.index("stage") < titles.index("Execute") < titles.index("Review wave") < titles.index("Verify")
     assert OP_ASK_GATE in text and OP_ASK_STAGE in text
     assert reply["ok"], reply["findings"]
 

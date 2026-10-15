@@ -40,6 +40,13 @@ def test_ceo_mode_records_the_apm_pick_apart_from_the_pms_words(tmp_path):
     assert doc["pm_resolution"] == {"decided_on": "2026-10-13", "xl_exit_apm": f"ask-1: {_RULING}"}
 
 
+def test_ceo_mode_records_an_apm_split(tmp_path):
+    p = _seed_mode(tmp_path, "ceo")
+    r = _apm(tmp_path, "split")
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    assert yaml.safe_load(p.read_text(encoding="utf-8"))["xl_exit"] == "split"
+
+
 @pytest.mark.parametrize("mode", ["pm", "hands-on"])
 def test_other_modes_keep_the_exit_the_pms(tmp_path, mode):
     p = _seed_mode(tmp_path, mode)

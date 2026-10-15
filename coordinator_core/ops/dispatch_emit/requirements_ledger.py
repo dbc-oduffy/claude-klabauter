@@ -481,6 +481,21 @@ def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
     return out
 
 
+def _is_sibling_slice(sizing: Mapping) -> bool:
+    analysis = sizing.get("em_analysis")
+    return isinstance(analysis, Mapping) and bool(analysis.get("ask_parent"))
+
+
+def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
+    """A sibling slice shares its `pm_verbatims` with every other slice, so it seeds none of them:
+    its register already holds the rows the split assigned it, else its `intent` is its one row."""
+    register = sizing.get(rr.REGISTER_KEY)
+    if isinstance(register, Mapping) and register.get(rr.ROWS_KEY):
+        return []
+    intent = sizing.get("intent")
+    return [(intent, ORIGIN_ASK)] if isinstance(intent, str) and intent.strip() else []
+
+
 def bind(
     repo_root: Path, run_id: str, sizing_rel: str, *, ask_text: Optional[str] = None,
     relayed_text: Optional[str] = None,
@@ -504,11 +519,12 @@ def bind(
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     sizing = sizing if isinstance(sizing, dict) else {}
     foreign = foreign_turns(root, sizing, ask_text, relayed_text)
-    entries = (
-        []
-        if relayed_text and relayed_text.strip()
-        else [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
-    )
+    if _is_sibling_slice(sizing):
+        entries = _slice_entries(sizing)
+    elif relayed_text and relayed_text.strip():
+        entries = []
+    else:
+        entries = [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
     register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
     rows_now = [r for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping)]
     asked = any(r.get(rr.ROW_ANCHOR) in (ORIGIN_ASK, ORIGIN_RELAYED) for r in rows_now)

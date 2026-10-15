@@ -98,7 +98,10 @@ read pipelines"):
      stripped first (data, not live shell); quoted spans are stripped
      before the write-marker re-scan (message prose containing ``>`` stays
      allowed) but code-execution markers are re-scanned on the UNSTRIPPED
-     text (``git commit -m "$(python3 -c '...')"`` still denies).
+     text (``git commit -m "$(python3 -c '...')"`` still denies); for
+     ``git add``/``git commit`` only the operands after the subcommand are
+     quote-stripped first, so a quoted ``python3`` in a message is prose
+     while an env prefix or ``-c`` value before the subcommand still denies.
 
   8. GIT CONTENT-MUTATING SUBCOMMANDS ARE THEMSELVES A WRITE MARKER
      (``checkout``, ``restore``, ``switch``, ``apply``, ``reset``,
@@ -1211,10 +1214,44 @@ def _is_git_read_shape(segment: str) -> bool:
     return _passes_git_read_checks(segment)
 
 
+def _git_subcommand_end(segment: str) -> Optional[int]:
+    """Offset just past the subcommand token, walked as ``_git_subcommand``
+    walks it; None when the segment names no subcommand."""
+    idx = 0
+    seen_git = False
+    skip = False
+    for match in re.finditer(r"\S+", segment):
+        token = match.group().replace("'", "").replace('"', "")
+        if not seen_git:
+            if token == "git":
+                seen_git = True
+            elif not _ASSIGN_RE.match(token):
+                return None
+            continue
+        if skip:
+            skip = False
+            continue
+        if not token.startswith("-"):
+            return match.end()
+        if token in _GIT_VALUE_OPTS:
+            skip = True
+    return None
+
+
 def _passes_git_read_checks(segment: str) -> bool:
     without_heredocs = _strip_heredoc_bodies(segment)
     if _has_write_marker(_strip_quoted_spans(without_heredocs)):
         return False
+    if _git_subcommand(segment) in ("add", "commit"):
+        end = _git_subcommand_end(without_heredocs)
+        if end is not None:
+            # Env prefix and global -c values execute, so they stay
+            # unstripped; add/commit operands are data, so a quoted
+            # interpreter word there runs nothing.
+            return not (
+                _has_code_execution_marker(without_heredocs[:end])
+                or _has_code_execution_marker(_strip_quoted_spans(without_heredocs[end:]))
+            )
     return not _has_code_execution_marker(without_heredocs)
 
 

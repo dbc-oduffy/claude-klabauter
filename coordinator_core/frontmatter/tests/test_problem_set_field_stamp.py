@@ -90,17 +90,13 @@ class ScaffoldPlanEmitsProblemSetTest(unittest.TestCase):
         fields = yaml.safe_load(fm_text)
         self.assertEqual(fields.get("problem_set"), "inline")
 
-    def test_omitted_problem_set_leaves_commented_skeleton_unchanged(self):
+    def test_omitted_problem_set_emits_no_line(self):
         content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
         fm_text = content.split("---", 2)[1]
         fields = yaml.safe_load(fm_text)
         self.assertNotIn("problem_set", fields)
-        self.assertIn(
-            "# problem_set: inline               # ratified problem-set slug or 'inline'",
-            content,
-        )
-        # The pre-existing commented-optional-key block is untouched.
-        self.assertIn(
+        self.assertNotIn("# problem_set: inline", content)
+        self.assertNotIn(
             "# Optional keys — uncomment and fill as needed (promoted de-facto keys, D1):",
             content,
         )

@@ -49,7 +49,6 @@ import datetime
 import json
 import os
 import re
-import shutil
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -72,6 +71,7 @@ from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops import _research_trail
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.repo_relative_text import relativize_text
 
 _RESEARCH_DIR = Path("docs") / "research"
 _WALK_LIMIT = 200
@@ -155,6 +155,19 @@ def _secret_hits(sources: list[Path], scratch: Path) -> list[str]:
     return hits
 
 
+def _archived_bytes(src: Path, roots: list[tuple[str, str]]) -> bytes:
+    """Bytes to archive for `src`: UTF-8 text gets machine-absolute roots rewritten, anything else
+    (and every local-only run, which has no roots) is copied byte-for-byte."""
+    data = src.read_bytes()
+    if not roots:
+        return data
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    return relativize_text(text, roots).encode("utf-8")
+
+
 def _strays(worktree: Path, dest_dir: Path, since: float) -> list[str]:
     """Untracked files under docs/research/, outside `dest_dir`, modified at or after `since`."""
     root = worktree / _RESEARCH_DIR
@@ -235,6 +248,11 @@ def _close_committed(
         return _err(f"destination escapes {str(archive_root)!r}: {str(dest_dir)!r}")
 
     pairs = [(src, dest_dir / src.relative_to(scratch)) for src in sources]
+    roots = [] if local else [
+        (str(scratch), dest_dir.relative_to(worktree).as_posix()),
+        (str(worktree), ""),
+    ]
+    payload = {dst: _archived_bytes(src, roots) for src, dst in pairs}
     rel_paths = [] if local else [dst.relative_to(worktree).as_posix() for _, dst in pairs]
     try:
         trail_rel = _research_trail.trail_rel(run_id)
@@ -259,7 +277,7 @@ def _close_committed(
             dest=trail_rel,
         )
     for src, dst in pairs:
-        if dst.exists() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
+        if dst.exists() and (not dst.is_file() or dst.read_bytes() != payload[dst]):
             return _err(
                 f"destination exists with different content, refusing to overwrite: {str(dst)!r}",
                 dest=str(dest_dir),
@@ -272,7 +290,7 @@ def _close_committed(
         for src, dst in pairs:
             if not dst.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
+                dst.write_bytes(payload[dst])
         trail_path.parent.mkdir(parents=True, exist_ok=True)
         if not trail_path.is_file():
             trail_path.write_bytes(trail_bytes)

@@ -68,6 +68,12 @@ def _call(root: Path, **extra) -> dict:
     return terminal_commit._handler(params, repo_root=root / ".git")
 
 
+def _landed(root: Path, out: dict, *show_args: str) -> list:
+    """`git show` lines over every commit the reply names: `sha`, plus `process_sha` when mixed."""
+    shas = [out["sha"]] + ([out["process_sha"]] if out.get("process_sha") else [])
+    return [line for sha in shas for line in _git(["show", *show_args, "--format=", sha], root).splitlines()]
+
+
 def _status(root: Path) -> dict:
     out = _git(["status", "--porcelain", "-uall"], root)
     return {line[3:]: line[:2] for line in out.splitlines()}
@@ -183,7 +189,7 @@ def test_halted_run_lands_done_chunk_not_unfinished_one(repo):
 
     assert out["committed"] is True, out
     assert out["landed_chunks"] == ["C1"]
-    names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    names = _landed(repo, out, "--name-only")
     assert "done.py" in names and "half.py" not in names
     assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
     assert _status(repo)["half.py"] == "??"
@@ -197,7 +203,7 @@ def test_incomplete_chunks_param_overrides_report_evidence(repo):
     out = _call(repo, incomplete_chunks=["C1"])
 
     assert "landed_chunks" not in out
-    assert "done.py" not in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    assert "done.py" not in _landed(repo, out, "--name-only")
 
 
 def test_peer_held_done_path_is_withheld_and_named(repo, monkeypatch):
@@ -210,7 +216,7 @@ def test_peer_held_done_path_is_withheld_and_named(repo, monkeypatch):
     out = _call(repo)
 
     assert out["withheld"] == {"other.py": "peer-held"}
-    names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    names = _landed(repo, out, "--name-only")
     assert "done.py" in names and "other.py" not in names
 
 
@@ -222,7 +228,7 @@ def test_done_tracked_deletion_is_declared_and_never_tracked_path_is_not_staged(
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert "D\tproduct.py" in _git(["show", "--name-status", "--format=", "HEAD"], repo).splitlines()
+    assert "D\tproduct.py" in _landed(repo, out, "--name-status")
     assert out.get("dropped", []) == []
 
 
@@ -244,3 +250,45 @@ def test_token_live_after_halt_landing_done_chunk(repo):
 
     assert out["landed_chunks"] == ["C1"]
     assert run_token.admits(repo, RUN, token, "run.mjs")
+
+
+def _name_sizing(root: Path, sizing_rel: str) -> None:
+    (root / RECORD_DIR_ROOT / RUN / "run.json").write_text(f'{{"sizing_rel": "{sizing_rel}"}}\n', encoding="utf-8")
+
+
+def test_run_json_sizing_lands_when_dirty_and_is_skipped_otherwise(repo):
+    _write_record(repo, RUN)
+    sizing = repo / "state" / "sizings" / "own.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("a: 1\n", encoding="utf-8")
+    _name_sizing(repo, "state/sizings/own.yaml")
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    names = _landed(repo, out, "--name-only")
+    assert "state/sizings/own.yaml" in names
+    assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
+    assert "landed_chunks" not in out
+
+    record = {f"{RECORD_DIR_ROOT}/{RUN}/ask.md", f"{RECORD_DIR_ROOT}/{RUN}/run.json"}
+    for named in ("state/sizings/own.yaml", "../outside.yaml", "/abs/outside.yaml", "state/sizings/absent.yaml"):
+        (repo / RECORD_DIR_ROOT / RUN / "ask.md").write_text(f"again {named}\n", encoding="utf-8")
+        _name_sizing(repo, named)
+        again = _call(repo)
+        assert again["committed"] is True, again
+        assert set(_landed(repo, again, "--name-only")) <= record, named
+
+
+def test_peer_held_run_json_sizing_is_withheld(repo, monkeypatch):
+    _write_record(repo, RUN)
+    sizing = repo / "state" / "sizings" / "own.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("a: 1\n", encoding="utf-8")
+    _name_sizing(repo, "state/sizings/own.yaml")
+    monkeypatch.setattr(terminal_commit, "_peer_held", lambda root, sid, paths: {"state/sizings/own.yaml"} & set(paths))
+
+    out = _call(repo)
+
+    assert out["withheld"] == {"state/sizings/own.yaml": "peer-held"}
+    assert "state/sizings/own.yaml" not in _landed(repo, out, "--name-only")

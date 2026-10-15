@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -153,6 +154,167 @@ def test_unanswerable_claim_is_not_foreign_and_empty_paths_spawn_nothing(repo, m
 
     monkeypatch.setattr(rp, "run_git", boom)
     assert rp.foreign_claims(repo, f"{base}..HEAD", [], SESSION) == []
+
+
+def _spawn_trap(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(rp, "run_git", boom)
+    monkeypatch.setattr(rp, "freeze_diff", boom)
+    monkeypatch.setattr(rp, "partition_slices", boom)
+
+
+def test_second_call_with_the_same_prefix_reads_the_store_and_spawns_nothing(repo, monkeypatch):
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    first = _call(repo, rels)
+    _spawn_trap(monkeypatch)
+    second = _call(repo, rels)
+    assert second == first
+    assert second["slices"] and second["error"] is None
+
+
+def test_a_call_for_other_paths_is_not_served_from_the_store(repo, monkeypatch):
+    _write(repo, ["a/one.py", "b/two.py"], 3)
+    _call(repo, ["a/one.py"])
+    _spawn_trap(monkeypatch)
+    with pytest.raises(AssertionError, match="spawned"):
+        _call(repo, ["a/one.py", "b/two.py"])
+
+
+def test_a_refusal_is_not_stored(repo):
+    _write(repo, ["a.py"], 3)
+    bad = rp.review_prep(
+        repo, base="deadbeef", paths=["a.py"], slice_prefix="prep-t", plan_path="docs/plans/p.md",
+        session_id=SESSION,
+    )
+    assert bad["error"]
+    assert not list((repo / ".coordinator-local").rglob("prep-t.review-prep.md"))
+    assert _call(repo, ["a.py"])["error"] is None
+
+
+def test_concurrent_first_callers_freeze_once(repo, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    calls = []
+    real = rp.freeze_diff
+
+    def counting(*a, **k):
+        calls.append(1)
+        time.sleep(0.2)
+        return real(*a, **k)
+
+    monkeypatch.setattr(rp, "freeze_diff", counting)
+    with ThreadPoolExecutor(4) as pool:
+        replies = list(pool.map(lambda _: _call(repo, rels), range(4)))
+    assert len(calls) == 1
+    winners = [r for r in replies if r["error"] is None]
+    assert winners and all(r == winners[0] for r in winners)
+    assert all(r["error"] is None or r["error"].startswith(rp.REVIEW_PREP_BUSY_PREFIX) for r in replies)
+    assert not list((repo / ".coordinator-local").rglob("*.review-prep.lock"))
+    assert _call(repo, rels) == winners[0]
+
+
+def _lock_path(repo: Path) -> Path:
+    return Path(rp.share_dir(str(repo), SESSION)) / "prep-t.review-prep.lock"
+
+
+def _make_lock(repo: Path, age_secs: float = 0.0) -> Path:
+    lock = _lock_path(repo)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_bytes(b"")
+    if age_secs:
+        then = time.time() - age_secs
+        os.utime(lock, (then, then))
+    return lock
+
+
+def _count_freezes(monkeypatch) -> list:
+    calls: list = []
+    real = rp.freeze_diff
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(rp, "freeze_diff", counting)
+    return calls
+
+
+def test_a_loser_on_a_fresh_lock_returns_busy_without_computing(repo, monkeypatch):
+    _write(repo, ["a.py"], 3)
+    monkeypatch.setattr(rp, "_LOCK_WAIT_SECS", 0.05)
+    lock = _make_lock(repo)
+    calls = _count_freezes(monkeypatch)
+    reply = _call(repo, ["a.py"])
+    assert reply["error"].startswith(rp.REVIEW_PREP_BUSY_PREFIX)
+    assert calls == []
+    assert lock.exists()
+
+
+def test_a_stale_lock_is_reclaimed_and_computed_once(repo, monkeypatch):
+    _write(repo, ["a.py"], 3)
+    _make_lock(repo, age_secs=rp._LOCK_STALE_SECS + 5)
+    calls = _count_freezes(monkeypatch)
+    reply = _call(repo, ["a.py"])
+    assert reply["error"] is None
+    assert len(calls) == 1
+    assert list((repo / ".coordinator-local").rglob("prep-t.review-prep.md"))
+    assert not _lock_path(repo).exists()
+
+
+def test_a_loser_whose_winner_unlinked_the_lock_reclaims_and_computes_once(repo, monkeypatch):
+    _write(repo, ["a.py"], 3)
+    lock = _make_lock(repo)
+    monkeypatch.setattr(rp, "_LOCK_POLL_SECS", 0.0)
+    real_sleep = time.sleep
+
+    def winner_leaves(secs):
+        lock.unlink(missing_ok=True)
+        real_sleep(0)
+
+    monkeypatch.setattr(rp.time, "sleep", winner_leaves)
+    calls = _count_freezes(monkeypatch)
+    reply = _call(repo, ["a.py"])
+    assert reply["error"] is None
+    assert len(calls) == 1
+    assert not lock.exists()
+
+
+def test_group_index_selects_the_balanced_contiguous_group(repo):
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    whole = _call(repo, rels)
+    ids = [s["id"] for s in whole["slices"]]
+    n = len(ids)
+    assert n > 2
+    groups = [_call(repo, rels, group_index=i, group_count=2) for i in range(2)]
+    assert [s["id"] for s in groups[0]["slices"]] == ids[: (n + 1) // 2]
+    assert [s["id"] for s in groups[1]["slices"]] == ids[(n + 1) // 2 :]
+    for g in groups:
+        assert {k: v for k, v in g.items() if k != "slices"} == {k: v for k, v in whole.items() if k != "slices"}
+    assert _call(repo, rels, group_index=0, group_count=1)["slices"] == whole["slices"]
+    assert _call(repo, rels, group_index=n + 2, group_count=n + 3)["slices"] == []
+    assert len(_call(repo, rels, group_index=n - 1, group_count=99)["slices"]) == 1
+
+
+def test_group_params_go_together_and_stay_in_range(repo):
+    _write(repo, ["a.py"], 3)
+    assert "go together" in _call(repo, ["a.py"], group_index=0)["error"]
+    assert _call(repo, ["a.py"], group_index=2, group_count=2)["error"]
+    assert _call(repo, ["a.py"], group_index=0, group_count=0)["error"]
+    common = {"base": _base(repo), "paths": ["a.py"], "slice_prefix": "p", "plan_path": "docs/plans/p.md", "worktree": True}
+    assert "integers" in rp._handler(dict(common, group_index="0", group_count=1), repo)["error"]
+
+
+def test_group_slices_split_matches_the_js_helper():
+    items = [{"id": i} for i in range(5)]
+    assert [[s["id"] for s in g] for g in rp.group_slices(items, 2)] == [[0, 1, 2], [3, 4]]
+    assert [[s["id"] for s in g] for g in rp.group_slices(items, 99)] == [[0], [1], [2], [3], [4]]
+    assert rp.group_slices([], 3) == []
 
 
 def test_registered_in_every_op_set():

@@ -148,6 +148,48 @@ def test_all_of_pm_ask_is_an_ask_route_flag(repo, capsys):
     assert cli.main(["--plan", "docs/plans/x.md", "--all-of-pm-ask", "--repo-root", str(repo)]) == cli.EXIT_USAGE
 
 
+def test_sibling_slices_sharing_one_verbatim_seed_disjoint_rows_unioning_to_the_parent(repo):
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
+
+    rels = []
+    for i, intent in enumerate(("fix the a thing", "fix the b thing")):
+        rel = f"state/sizings/2026-10-01-slice-{i}.yaml"
+        doc = {
+            "schema": "sizing-object", "name": f"slice {i}", "intent": intent, "intent_source": "em-elaborated",
+            "estimate": {"tshirt": "XS", "provisional": True}, "route": "dispatch", "detents": [],
+            "fork": None, "xl_exit": None, "status": "draft",
+            "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+            "pm_verbatims": [{"turn": 1, "text": "one shared PM verbatim"}],
+            "em_analysis": {"ask_parent": fc.ask_parent_marker("ask-parent-x", f"run-{i}")},
+        }
+        (repo / rel).write_text(yaml.safe_dump(doc), encoding="utf-8")
+        rl.start(repo, f"run-{i}")
+        rl.bind(repo, f"run-{i}", rel)
+        rels.append(rel)
+    seeded = []
+    for rel in rels:
+        rows = rr.read_register((repo / rel).read_text(encoding="utf-8")).rows
+        assert all("shared PM verbatim" not in r["source_text"] for r in rows)
+        seeded.append([r["source_text"] for r in rows])
+    assert seeded == [["fix the a thing"], ["fix the b thing"]]
+
+
+def test_a_slice_holding_its_assigned_rows_seeds_nothing_more(repo):
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
+
+    _put(repo)
+    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
+    doc["em_analysis"] = {"ask_parent": fc.ask_parent_marker("ask-parent-x", "run-9")}
+    doc[rr.REGISTER_KEY] = {"sources": [{"doc": "p", "ref": "r"}], "rows": [{
+        "id": "R4", "source_text": "assigned row", "anchor": "pm_verbatims", "surface": "internal",
+        "status": "open", "claimed_by": [],
+    }]}
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8")
+    rl.start(repo, "run-9")
+    rl.bind(repo, "run-9", REL)
+    assert [r["id"] for r in _rows(repo)] == ["R4"]
+
+
 def test_stage_binds_a_ledger_bearing_run_only(repo):
     _put(repo)
     stage(repo, run_id="noledger", sizing_rel=REL, writes=["pkg/a.py"])

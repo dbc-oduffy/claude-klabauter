@@ -40,6 +40,36 @@ DENY_CASES = [
 ]
 
 
+SZY = "state/sizings/x.yaml"
+SZ_GOV = ("state/sizings/",)
+
+# DR-394: git add/commit operands are data; a quoted interpreter word is prose.
+GIT_ALLOW = [
+    f"git commit -m 'run python3 halted' -- {SZY}",
+    f"git add -- {SZY}",
+    f"git add -- {SZY} state/warp/r/ && git commit -m 'run python3 halted' -- {SZY}",
+]
+GIT_DENY = [
+    f'git commit -m "$(python3 -c 1)" -- {SZY}',
+    f'git commit -m "`python3 x`" -- {SZY}',
+    f"git -c core.editor='python3 e.py' commit -- {SZY}",
+    f"GIT_EDITOR='python3 e.py' git commit -- {SZY}",
+    f"echo x > {SZY}",
+    f"git checkout HEAD -- {SZY}",
+    f"git log --grep 'python3 -c' -- {SZY}",
+]
+
+
+@pytest.mark.parametrize("cmd", GIT_ALLOW)
+def test_git_add_commit_quoted_interpreter_allowed(cmd: str) -> None:
+    assert guard.is_denied_bash_write(cmd, SZ_GOV) is False
+
+
+@pytest.mark.parametrize("cmd", GIT_DENY)
+def test_git_live_execution_and_writes_still_denied(cmd: str) -> None:
+    assert guard.is_denied_bash_write(cmd, SZ_GOV) is True
+
+
 @pytest.mark.parametrize("label,cmd", ALLOW_CASES, ids=[c[0] for c in ALLOW_CASES])
 def test_argv_mention_allows(label: str, cmd: str) -> None:
     assert guard.is_denied_bash_write(cmd, IDS) is False, label

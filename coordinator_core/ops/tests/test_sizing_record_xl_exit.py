@@ -111,11 +111,20 @@ def test_preserves_existing_pm_resolution_keys(tmp_path):
     assert pm["decided_on"] == "2026-10-03"
 
 
+def test_split_is_recorded_with_only_xl_exit_and_resolution(tmp_path):
+    p = _seed(tmp_path)
+    r = _run(tmp_path, "split")
+    assert r["exit_code"] == 0 and r["applied"] is True
+    doc = _doc(p)
+    assert doc["xl_exit"] == "split" and doc["pm_resolution"]["xl_exit"] == _QUOTE
+    assert "initiatives" not in doc and "parent_id" not in doc
+
+
 def test_refusals(tmp_path):
     p = _seed(tmp_path)
     before = p.read_text(encoding="utf-8")
     assert _run(tmp_path, "roadmap", "  ")["exit_code"] == 1
-    assert _run(tmp_path, "split")["exit_code"] == 1
+    assert _run(tmp_path, "bogus")["exit_code"] == 1
     assert _run(tmp_path, "roadmap", decided_on="10/03")["exit_code"] == 1
     assert _run(tmp_path, "roadmap", sizing="../escape.yaml")["exit_code"] == 1
     assert p.read_text(encoding="utf-8") == before

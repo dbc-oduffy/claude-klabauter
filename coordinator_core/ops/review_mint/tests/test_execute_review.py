@@ -3,7 +3,14 @@ import json
 
 import pytest
 
-from coordinator_core.ops.review_mint.execute_review import compose_execute_review
+from coordinator_core.ops.review_mint.execute_review import (
+    _PREP_BUSY_RETRIES,
+    _wave_schema_literal,
+    PREP_BUSY_HALT,
+    REVIEW_MISSING_HALT,
+    compose_execute_review,
+)
+from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.review_mint.roster import (
     RosterFragmentError,
     parse_execute_review,
@@ -965,32 +972,10 @@ def test_delivery_prompt_carries_owner_clause_but_prep_and_reviewers_do_not():
     assert with_rows["Review prep"] == without["Review prep"]
 
 
-def test_mechanical_prep_is_one_review_prep_call_in_either_basis():
-    default = _delivery_and_review_prompts()["Review prep"]
-    worktree = _delivery_and_review_prompts(mechanical_prep=True)["Review prep"]
-    ranged = _delivery_and_review_prompts(mechanical_prep=True, review_terminal_sha="b" * 40)["Review prep"]
-    assert "freeze-review-diff" in default and "freeze-review-diff" not in worktree
-    for block in (worktree, ranged):
-        assert "review.prep" in block and "review.partition_slices" not in block
-        assert "session-claim-cli" not in block
-        assert "const _reviewPrep = await" in block
-        assert "return { halted: 'no-op'," in block
-    assert '"worktree":true' in worktree and '"head"' not in worktree
-    assert f'"head":"{"b" * 40}"' in ranged and '"worktree"' not in ranged
-
-
-def test_mechanical_prep_emits_haiku_even_when_the_roster_names_another_model():
-    fragment = _v5_fragment()
-    for stage in fragment["execute_review"]["stages"]:
-        for agent in stage["agents"]:
-            if agent.get("model") == "haiku":
-                agent["model"] = "sonnet"
-    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
-    phases = dict(compose_execute_review(
-        review, stage_schemas=_STAGE_SCHEMAS, plan_path="p.md", run_base_sha="a" * 40,
-        declared_paths=["x.py"], mechanical_prep=True,
-    ))
-    assert "model: 'haiku'" in phases["Review prep"]
+def test_the_mechanical_prep_flag_is_gone_and_the_default_prep_is_the_multi_step_agent():
+    with pytest.raises(TypeError):
+        _delivery_and_review_prompts(mechanical_prep=True)
+    assert "freeze-review-diff" in _delivery_and_review_prompts()["Review prep"]
 
 
 
@@ -1109,3 +1094,183 @@ def test_roster_without_a_delivery_verifier_binds_the_not_rostered_slot():
     assert "const _deliveryVerdict = null;" in block
     assert f"const _deliveryNotRun = '{DELIVERY_NOT_ROSTERED}';" in block
     assert "delivery-verifier" not in block.replace(DELIVERY_NOT_ROSTERED, "")
+
+
+def _in_wave(review=None, **kw):
+    kw.setdefault("executor_rows", 9)
+    return compose_execute_review(
+        review or _ratio_review(),
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["x.py"],
+        prep_in_wave=True,
+        **kw,
+    )
+
+
+def test_prep_in_wave_off_is_byte_identical_to_the_default():
+    review = _ratio_review()
+    kw = dict(
+        stage_schemas=_STAGE_SCHEMAS, plan_path="p.md", run_base_sha="a" * 40,
+        declared_paths=["x.py"], executor_rows=9,
+    )
+    assert compose_execute_review(review, prep_in_wave=False, **kw) == compose_execute_review(review, **kw)
+
+
+def test_prep_in_wave_emits_no_prep_agent_and_no_prep_phase():
+    phases = _in_wave()
+    assert [t for t, _ in phases] == ["Review wave", "Review integration"]
+    text = "\n".join(b for _, b in phases)
+    assert "Review prep" not in text and "review:coordinator:test-runner" not in text
+    assert "model: 'haiku'" not in text
+
+
+def test_prep_in_wave_every_wave_agent_runs_review_prep_first_and_returns_prep_beside_review():
+    wave = dict(_in_wave())["Review wave"]
+    calls = wave.split("agent(")[1:]
+    assert len(calls) == 4  # one slice-group fan-out plus three whole-diff agents
+    for call in calls:
+        assert "review.prep" in call.split(", { label")[0]
+        assert "\"required\": [\"prep\"]" in call
+        assert "\"review\": {" in call
+        assert REVIEW_PREP_BUSY_PREFIX in call
+        assert f"up to {_PREP_BUSY_RETRIES} times" in call
+    slice_call, *whole_calls = calls
+    assert "\"group_index\":<group_index>" in slice_call and "group_index: " in slice_call
+    for call in whole_calls:
+        assert "group_index" not in call
+    assert "_groupSlices" not in wave and "_reviewPrep?." not in wave.split("const _waveRaw")[0]
+
+
+def test_prep_in_wave_slice_agent_without_a_ratio_raises():
+    plain = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    with pytest.raises(ValueError, match="executor_rows_per_reviewer"):
+        _in_wave(plain)
+
+
+def _run_in_wave(prep_full: dict, rows: int, *, landed=None, fail_all=False, ratio_review=None, patch=None) -> dict:
+    """Run the prep_in_wave wave block under node with every agent stubbed to return what the
+    op would: the whole reply for a whole-diff agent, one group of slices for a slice agent."""
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops import review_prep as rp
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    wave, *_ = (b for _, b in _in_wave(ratio_review, executor_rows=rows))
+    body = "\n".join(ln for ln in wave.splitlines() if not ln.lstrip().startswith("phase("))
+    slices = prep_full.get("slices") or []
+    script = (
+        f"const _full = {json.dumps(prep_full)}; const _failAll = {json.dumps(fail_all)};\n"
+        f"const _group = (i, n) => {{ const gs = {json.dumps({str(n): [[s['id'] for s in g] for g in rp.group_slices(slices, n)] for n in range(1, 8)})}[String(n)] ?? []; "
+        "const ids = gs[i] ?? []; return { ..._full, slices: _full.slices.filter(s => ids.includes(s.id)) }; };\n"
+        "const _spawned = [];\n"
+        "const agent = async (p, o) => {\n"
+        "  if (_failAll) throw new Error('rejected');\n"
+        "  const m = /group_index: (\\d+)\\ngroup_count: (\\d+)/.exec(p);\n"
+        "  _spawned.push(m ? [Number(m[1]), Number(m[2])] : 'whole');\n"
+        "  const _r = { prep: m ? _group(Number(m[1]), Number(m[2])) : _full, review: { v: o.agentType } };\n"
+        f"  return ({patch or '(r, n) => r'})(_r, _spawned.length - 1);\n"
+        "};\n"
+        "const parallel = (fns) => Promise.all(fns.map(f => f()));\n"
+        "(async () => { try { const _out = await (async () => {\n"
+        + (f"const _landed = {json.dumps(landed)};\n" if landed is not None else "")
+        + body
+        + "\n return { prep: _reviewPrep, wave: _reviewWave, verifyOnly: _verifyOnly, spawned: _spawned,"
+        " delivery: _deliveryVerdict }; })();\n console.log(JSON.stringify(_out));\n"
+        "} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def test_wave_schema_requires_only_prep_and_the_consumer_enforces_review():
+    wave = dict(_in_wave())["Review wave"]
+    assert "const _busyPrefix" in wave and "r.review === undefined" in wave
+    assert '"required": ["prep"]' in _wave_schema_literal("{}")
+
+
+def test_a_wave_return_with_no_review_beside_a_clean_prep_is_refused():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => n === 0 ? { prep: r.prep } : r")
+    assert result["halted"] == REVIEW_MISSING_HALT
+
+
+def test_a_wave_return_with_no_review_beside_a_refused_prep_is_accepted():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => n === 0 ? { prep: { ...r.prep, error: 'freeze failed' } } : r")
+    assert result.get("halted") != REVIEW_MISSING_HALT
+
+
+def test_a_busy_prep_in_the_wave_halts_rather_than_merging_a_prep_without_its_slices():
+    patch = f"(r, n) => n === 0 ? {{ prep: {{ ...r.prep, slices: [], error: {json.dumps(REVIEW_PREP_BUSY_PREFIX + ' x')} }} }} : r"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert result["halted"].startswith(PREP_BUSY_HALT)
+    assert result["prep"]["error"].startswith(REVIEW_PREP_BUSY_PREFIX)
+    assert result["wave"] is None
+
+
+_SLICES = [
+    {"id": f"s{i}", "files": [f"f{i}.py"], "diff_path": f"d/{i}.diff", "sidecar_path": "p.md"} for i in range(5)
+]
+_FULL = {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 9, "slices": _SLICES, "error": None}
+
+
+@pytest.mark.parametrize("rows,groups", [(1, 1), (4, 1), (8, 2), (9, 3), (12, 3), (99, 6)])
+def test_prep_in_wave_fans_out_the_ratio_reviewer_count_and_merges_every_group_back(rows, groups):
+    result = _run_in_wave(_FULL, rows)
+    assert "halted" not in result and "error" not in result
+    group_calls = [c for c in result["spawned"] if c != "whole"]
+    assert len(group_calls) == groups and {n for _, n in group_calls} == {groups}
+    assert result["spawned"].count("whole") == 3
+    assert [s["id"] for s in result["prep"]["slices"]] == [s["id"] for s in _SLICES]
+    assert len(result["wave"]) == groups + 3
+    assert result["delivery"] == result["wave"][-1] and result["delivery"]["v"] == "general-purpose"
+
+
+def test_prep_in_wave_binds_reviewprep_from_the_first_reply_without_an_error():
+    result = _run_in_wave({**_FULL, "slices": [_SLICES[0]]}, 9)
+    assert result["prep"]["verdict"] == "PARTITION-MANDATORY"
+    assert [s["id"] for s in result["prep"]["slices"]] == ["s0"]
+
+
+def test_prep_in_wave_single_reviewer_ok_over_product_files_synthesises_one_whole_diff_slice():
+    result = _run_in_wave({**_PREP, "slices": [], "error": None}, 4)
+    assert [s["id"] for s in result["prep"]["slices"]] == ["whole-diff"]
+    assert result["prep"]["slices"][0]["sidecar_path"] == "p.md"
+
+
+def test_prep_in_wave_no_product_file_is_a_no_op_after_the_wave():
+    result = _run_in_wave({**_PREP, "product_files": 0, "slices": [], "error": None}, 4)
+    assert result["halted"] == "no-op" and result["prep"]["product_files"] == 0
+    assert result["wave"] is None and result["integration"] is None
+
+
+def test_prep_in_wave_landed_rows_with_no_product_file_proceed_verify_only():
+    result = _run_in_wave({**_PREP, "product_files": 0, "slices": [], "error": None}, 4, landed=_LANDED)
+    assert "halted" not in result and result["verifyOnly"] is True and result["prep"]["slices"] == []
+
+
+@pytest.mark.parametrize(
+    "prep",
+    [
+        {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 0, "slices": [], "error": None},
+        {**_PREP, "product_files": 0, "foreign_claims": ["peer.py"], "slices": [], "error": None},
+        {**_PREP, "slices": [], "verdict": None, "error": "freeze failed"},
+    ],
+)
+def test_prep_in_wave_an_empty_or_refused_prep_halts_with_todays_text(prep):
+    result = _run_in_wave(prep, 4, landed=_LANDED)
+    assert result["halted"].startswith("review prep returned no slices (prep verdict: ")
+    assert result["wave"] is None and result["integration"] is None
+    assert result["prep"]["error"] == prep["error"]
+
+
+def test_prep_in_wave_every_agent_rejecting_halts_as_a_failed_prep():
+    result = _run_in_wave(_FULL, 4, fail_all=True)
+    assert result["halted"] == "review prep returned no slices (prep verdict: none)"
+    assert result["prep"] is None

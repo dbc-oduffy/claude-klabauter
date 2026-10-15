@@ -46,6 +46,20 @@ def test_one_row_per_file_with_fields(tmp_path):
     assert "more" not in a["body"]
 
 
+def test_evidence_is_repo_relative_for_absolute_target_under_root(tmp_path):
+    target = tmp_path / "scratch" / "redset.txt"
+    mint_tf_rows(tmp_path, "r1", _tests(), target_ref=str(target))
+    assert {r["evidence"] for r in _rows(tmp_path).values()} == {"scratch/redset.txt"}
+
+
+def test_evidence_outside_root_stays_as_given(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = str(tmp_path / "other" / "redset.txt")
+    mint_tf_rows(root, "r1", _tests(), target_ref=outside)
+    assert {r["evidence"] for r in _rows(root).values()} == {outside}
+
+
 def test_rerun_same_run_is_idempotent(tmp_path):
     first = mint_tf_rows(tmp_path, "r1", _tests(), target_ref="t")
     before = _rows(tmp_path)

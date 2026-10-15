@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core import warp_fire, warp_live
 from coordinator_core.hooks import submit_engine_ask as mod
+from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 from coordinator_core.ops.dispatch_emit import run_token
 
 
@@ -253,7 +254,13 @@ def test_repo_arg_selects_the_repo_from_a_non_repo_cwd(tmp_path):
     "args, cwd_inside, needle",
     [
         ({}, True, "neither an ask nor a sizing"),
-        ({"ask": "a", "sizing": "s.yaml"}, True, "neither an ask nor a sizing, or both"),
+        ({"ask": "a", "sizing": "s.yaml"}, True, "nor asks, or more than one"),
+        ({"ask": "a", "asks": [{"ask": "b"}]}, True, "nor asks, or more than one"),
+        ({"asks": [{"ask": "a"}, {"ask": "b"}], "brief": "x"}, True, "rides one run"),
+        ({"asks": [{"ask": "a"}, {"ask": "b"}], "source": "relayed"}, True, "one call each"),
+        ({"asks": []}, True, "non-empty list"),
+        ({"asks": [{"ask": " "}]}, True, "carries no ask text"),
+        ({"asks": [{"ask": "a", "writes": "x"}, {"ask": "b"}]}, True, "writes must be a list"),
         ({"ask": "   "}, True, "neither an ask nor a sizing"),
         ({"ask": "a"}, False, "in no git repo"),
     ],
@@ -638,3 +645,195 @@ def test_a_brief_the_engine_refuses_is_named_in_the_deny(tmp_path):
 
 def test_the_deny_shape_names_the_brief_field():
     assert "brief:" in mod._ARGS_SHAPE and "brief_file" in mod._ARGS_SHAPE
+    assert "asks:" in mod._ARGS_SHAPE
+
+
+PARENT = "ask-parent-20261015T000000-aaaaaa"
+
+
+class _Fanout:
+    """Stands in for `dispatch.ask_fanout`: writes the slice sizings and the parent record."""
+
+    def __init__(self, runs, raises=None):
+        self.runs = runs  # [(run_id, label, after, status)]
+        self.raises = raises
+        self.calls: list = []
+
+    def __call__(self, params: dict, root: Path) -> dict:
+        self.calls.append((params, root))
+        if self.raises:
+            raise self.raises
+        records = []
+        for run_id, label, after, status in self.runs:
+            rel = f"state/sizings/{run_id}.yaml"
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(
+                f"em_analysis:\n  ask_parent: {PARENT} {run_id}\n", encoding="utf-8"
+            )
+            records.append(
+                {"run_id": run_id, "label": label, "after": list(after), "slice_sizing": rel, "status": status}
+            )
+        parent = root / contract.parent_record_rel(PARENT)
+        parent.parent.mkdir(parents=True, exist_ok=True)
+        parent.write_text(
+            json.dumps({"schema": "ask-parent", "version": 1, "parent_id": PARENT, "runs": records}),
+            encoding="utf-8",
+        )
+        return {"parent_id": PARENT, "runs": [{"run_id": r[0], "label": r[1]} for r in self.runs]}
+
+
+def _status(root: Path, run_id: str, status: str) -> None:
+    path = root / contract.status_rel(run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": run_id, "status": status}), encoding="utf-8")
+
+
+def _asks(*names, **extra):
+    return {"asks": [{"ask": f"ask {n}", "label": n} for n in names], **extra}
+
+
+def test_asks_fire_the_first_ready_run_and_list_the_rest(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready"), ("r3", "c", ("r1",), "after")])
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, _asks("a", "b", "c", confirm_split=True)), emit=emit, fanout=fan)
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "allow"
+    assert fan.calls[0][0]["confirm_split"] is True and len(fan.calls[0][0]["asks"]) == 3
+    params = emit.calls[0][0]
+    assert params["sizing_path"] == "state/sizings/r1.yaml" and params["reserved_run_id"] == "r1"
+    assert "ask" in params and params["ask"] is True
+    assert out["hookSpecificOutput"]["updatedInput"]["scriptPath"] == emit.script
+    reason = json.dumps(out)
+    assert PARENT in reason and "state/sizings/r2.yaml" in reason
+    assert "state/sizings/r1.yaml" not in reason.split("Fire the listed")[-1]
+    assert "state/sizings/r3.yaml" not in reason and "r3" in reason
+    assert "Fire the listed runs now" in reason and "End the turn" not in reason
+
+
+def test_a_queued_run_is_not_listed_as_fireable(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "queued")])
+    out = mod.evaluate(_payload(root, _asks("a", "b")), emit=_Emit(), fanout=fan)
+    assert "state/sizings/r2.yaml" not in json.dumps(out)
+
+
+def test_a_one_element_asks_array_is_an_ask(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([])
+    emit = _Emit()
+    mod.evaluate(_payload(root, _asks("a")), emit=emit, fanout=fan)
+    assert fan.calls == []
+    assert emit.calls[0][0] == {"session_id": "sess-1", "ask": "ask a"}
+
+
+def test_a_fanout_refusal_is_the_deny_text_verbatim(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([], raises=ValueError("Partition refused; unclaimed rows: R2."))
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, _asks("a", "b")), emit=emit, fanout=fan)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert _hso(out)["permissionDecisionReason"] == "[coordinator] Partition refused; unclaimed rows: R2."
+    assert emit.calls == []
+
+
+def _fanned(tmp_path, runs):
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, _asks(*[r[1] for r in runs])), emit=_Emit(), fanout=_Fanout(runs))
+    return root
+
+
+def _submit_slice(root, run_id, **extra):
+    emit = _Emit()
+    out = mod.evaluate(
+        _payload(root, {"sizing": f"state/sizings/{run_id}.yaml"}, tool_use_id=f"t-{run_id}", **extra),
+        emit=emit,
+    )
+    return out, emit
+
+
+def test_a_slice_with_a_landed_predecessor_binds_its_reserved_id(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "landed")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert emit.calls[0][0]["reserved_run_id"] == "r2"
+
+
+def test_a_slice_is_denied_naming_an_unlanded_predecessor(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "running")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert "r1" in _hso(out)["permissionDecisionReason"] and "not landed" in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == []
+
+
+def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "halted")
+    out, _ = _submit_slice(root, "r2")
+    assert "fresh {ask}" in _hso(out)["permissionDecisionReason"] and "r1" in _hso(out)["permissionDecisionReason"]
+
+
+def test_a_queued_slice_is_denied_while_the_parent_is_at_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(contract, "concurrent_run_budget", lambda physical_cores=None: 1)
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", (), "queued")])
+    _status(root, "r1", "running")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert "r1" in _hso(out)["permissionDecisionReason"] and emit.calls == []
+    _status(root, "r1", "landed")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "allow" and emit.calls[0][0]["reserved_run_id"] == "r2"
+
+
+def test_a_sizing_without_a_parent_marker_binds_nothing(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"sizing": "state/sizings/plain.yaml"}), emit=emit)
+    assert "reserved_run_id" not in emit.calls[0][0]
+
+
+def _op_root(tmp_path):
+    root = _repo(tmp_path)
+    parent = root / contract.parent_record_rel(PARENT)
+    parent.parent.mkdir(parents=True)
+    parent.write_text('{"schema": "ask-parent", "version": 1, "parent_id": "p"}\n', encoding="utf-8")
+    return root, parent
+
+
+def test_reserved_id_bind_copies_the_parent_and_marks_running(tmp_path):
+    from coordinator_core.ops.dispatch_emit import op
+
+    root, parent = _op_root(tmp_path)
+    doc = {"em_analysis": {"ask_parent": f"{PARENT} r1"}}
+    assert op._reserved_run(root, "r1", doc, "state/sizings/r1.yaml") == ("r1", PARENT)
+    op._bind_reserved_run(root, "r1", PARENT)
+    copy = root / contract.run_parent_copy_rel("r1")
+    assert copy.read_text(encoding="utf-8") == parent.read_text(encoding="utf-8")
+    assert json.loads((root / contract.status_rel("r1")).read_text(encoding="utf-8"))["status"] == "running"
+
+
+def test_a_second_bind_of_one_reserved_id_is_refused(tmp_path):
+    from coordinator_core.ops.dispatch_emit import op
+
+    root, _ = _op_root(tmp_path)
+    doc = {"em_analysis": {"ask_parent": f"{PARENT} r1"}}
+    op._bind_reserved_run(root, "r1", PARENT)
+    with pytest.raises(ValueError, match="already bound"):
+        op._reserved_run(root, "r1", doc, "state/sizings/r1.yaml")
+    with pytest.raises(ValueError, match="already bound"):
+        op._bind_reserved_run(root, "r1", PARENT)
+
+
+def test_a_reserved_id_the_sizing_does_not_reserve_is_refused(tmp_path):
+    from coordinator_core.ops.dispatch_emit import op
+
+    root, _ = _op_root(tmp_path)
+    doc = {"em_analysis": {"ask_parent": f"{PARENT} r1"}}
+    with pytest.raises(ValueError, match="not the run"):
+        op._reserved_run(root, "r9", doc, "state/sizings/r1.yaml")
+    with pytest.raises(ValueError, match="slice sizing_path"):
+        op._reserved_run(root, "r1", None, None)
+

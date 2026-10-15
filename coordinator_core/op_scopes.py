@@ -733,6 +733,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.ask_gate / dispatch.ask_stage — keyed like dispatch.terminal_commit: the caller's own worktree.
     "dispatch.ask_gate":                        "common_dir",
     "dispatch.ask_stage":                       "common_dir",
+    # dispatch.ask_fanout — writes slice sizings and the parent record under the caller's own worktree.
+    "dispatch.ask_fanout":                      "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.

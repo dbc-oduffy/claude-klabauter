@@ -45,6 +45,11 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
+from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
+    REVIEWER_AGENT_TYPE,
+    review_inputs,
+    review_specs,
+)
 from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_model,
     _dispatch_report_path,
@@ -262,6 +267,35 @@ def _discharge_clauses_for(plan_text: str, root: Path, raw_rows: list) -> dict[s
     return discharge_clauses(raw_rows, sizing)
 
 
+def _reviewer_brief(root: Path, run_dir: Path, row_id: str, raw: Mapping) -> str:
+    """The blinded reviewer row's brief: exactly the falsifier-integrity phase's spec prompt for
+    the plan the row's `falsifier_review_of` names, and nothing else. Writes the can-report-red
+    report the prompt cites under the run dir first. Trap: no intent block, plan context or plan
+    text may be added -- any of them un-blinds the reviewer. Raises AskStageError, failing the whole
+    stage, when the target's verdict is already cached."""
+    target = raw.get("falsifier_review_of")
+    if not isinstance(target, str) or not target.strip():
+        raise AskStageError(f"reviewer row {row_id}: names no falsifier_review_of")
+    if raw.get("writes") != []:
+        raise AskStageError(f"reviewer row {row_id}: a reviewer is read-only, its writes must be []")
+    reviewed = contained_path(root / target.strip(), [root])
+    if reviewed is None or not reviewed.is_file():
+        raise AskStageError(f"reviewer row {row_id}: falsifier_review_of {target!r} is not a plan under the repo")
+    report_dir = Path(_rel(root, run_dir)) / "can-report-red"
+    inputs = review_inputs([_rel(root, reviewed)], repo_root=root, report_dir=report_dir)
+    if not inputs:
+        raise AskStageError(f"reviewer row {row_id}: {target!r} carries no falsifier block")
+    item = inputs[0]
+    if item.cached is not None:
+        raise AskStageError(f"reviewer row {row_id}: a cached verdict needs no reviewer dispatch")
+    if item.report_path is not None:
+        report = contained_path(root / item.report_path, [root])
+        if report is None:
+            raise AskStageError(f"reviewer row {row_id}: can-report-red path escapes the repo root")
+        _write(report, item.report_json or "")
+    return review_specs(inputs)[0].prompt
+
+
 def _with_owner_roots(gated: Sequence[GatedRow]) -> list[GatedRow]:
     """Fill each gated row's ``owner_root`` from the machine-local registry, one lookup per
     distinct ``owner_repo``; ``""`` when unregistered. No process is spawned."""
@@ -437,14 +471,17 @@ def stage(
             _model_opt(agent_type, row.agent_model)  # raises on bad model grammar or a pinned-type override
             model = resolve_agent_model(agent_type, row.agent_model)
             brief = run_dir / "briefs" / f"{row.id}.md"
-            text = _row_prompt(row, plan_posix, context)
-            if intent:
-                text = intent + "\n" + text
-            if row.id in clauses:
-                text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
             prior = _set_aside_prior_report(root, _dispatch_report_path(plan_posix, row.id))
-            if prior:
-                text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
+            if agent_type == REVIEWER_AGENT_TYPE:
+                text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
+            else:
+                text = _row_prompt(row, plan_posix, context)
+                if intent:
+                    text = intent + "\n" + text
+                if row.id in clauses:
+                    text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+                if prior:
+                    text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
             _write(brief, text)
             paths = _widen_with_test_candidates(
                 commit_pathspec_or_none([row]) or [], root

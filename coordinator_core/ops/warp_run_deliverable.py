@@ -87,7 +87,8 @@ def declared_writes(run_dir: Path) -> tuple:
     return tuple(seen)
 
 
-def _record_sizing_rel(repo_root: Path, run_id: str) -> str:
+def record_sizing_rel(repo_root: Path, run_id: str) -> str:
+    """The normalized `sizing_rel` a run's record-dir `run.json` names, "" when absent or unsafe."""
     try:
         run_json = record_dir(repo_root, run_id) / "run.json"
     except ValueError:
@@ -113,7 +114,7 @@ def run_records(repo_root: Path) -> Iterator[RunRecord]:
             run_id=run_dir.name,
             session_id=session_id if isinstance(session_id, str) else "",
             submitted_at=float(submitted_at) if isinstance(submitted_at, (int, float)) else 0.0,
-            sizing_rel=sizing_rel or _record_sizing_rel(root, run_dir.name),
+            sizing_rel=sizing_rel or record_sizing_rel(root, run_dir.name),
             writes=declared_writes(run_dir),
             reconciled=(run_dir / RECONCILED_FILE).is_file(),
         )

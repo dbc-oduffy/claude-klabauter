@@ -12,17 +12,38 @@
   `roadmap.prep_gate.gate_plan`; there is no skip or force parameter.
 - **Consumers:** the `ask_compose` revise block (applies `mechanical_repairs` in one targeted
   revise, no second `planBlitz` round); `plan-blitz.mjs` once the DoE run wires it.
+- **Producer of `premise`:** DoE `premiseAsReview`'s caller in `plan-blitz.mjs`, once the DoE
+  change lands. It passes the premise checker's rows as `premise` instead of as a `premise-check`
+  reviews entry.
 
 ## 2. Params
 
-`{plan, coverage?, reviews?}`. `coverage` is `{verdict, mechanicalFindings, judgmentFindings}`;
-`reviews` is `[{reviewer, verdict, ledger?}]`. Both are the structured values plan-blitz already
+`{plan, coverage?, reviews?, premise?}`. `coverage` is `{verdict, mechanicalFindings, judgmentFindings}`;
+`reviews` is `[{reviewer, verdict, ledger?}]`. These are the structured values plan-blitz already
 holds. No other top-level param exists.
+
+**`premise` (optional).** `{rows: [{verdict, citation, questionClass?, evidence?}]}`: the rows of
+DoE's `PREMISE_SCHEMA`, passed through unchanged.
+
+- `verdict` is one of `RESOLVES`, `UNRESOLVED`, `CONTRADICTED`, `UNCHECKABLE`. Any other value is
+  refused with a ValueError naming the row; the op invents no blocking class.
+- Only `UNRESOLVED` and `CONTRADICTED` rows block. Each adds one judgment entry,
+  `premise-check: <VERDICT> <citation>` (citation capped at 200 characters), and the verdict is
+  `judgment`, as for a non-clear reviewer. When several rows block, `reason` names as many
+  citations as fit and ends `+N more premise row(s)`.
+- `UNCHECKABLE` and `RESOLVES` rows never add a judgment entry. `UNCHECKABLE` is reviewer judgment,
+  not a premise failure: it never makes the verdict `judgment` or pulls the plan. When the verdict
+  is `ready`, `reason` appends `; N UNCHECKABLE premise row(s) left to reviewer judgment`, a
+  non-blocking note only.
+- `premise` together with a `reviews[]` entry whose `reviewer` is `premise-check` is refused: the
+  rows are passed once.
+- An empty `rows` list adds nothing to the verdict (the `premise-check` exclusion still applies). With `premise` absent, the reply is unchanged.
 
 **Clear vocabulary.** A coverage or review verdict reads as clear (case-insensitive) when it is one
 of `approve`, `approved`, `pass`, `passed`, `clear`, `clean`, `ready`, `ok`, `accept`, `accepted`,
-or `complete`. `COMPLETE` is the coverage check's own clear verdict; `INCOMPLETE` without findings
-stays `judgment`. PIVOT, REJECTED, FAILED and any unknown verdict stay `judgment` (fail-closed).
+or `complete`. `COMPLETE` is the coverage check's own clear verdict; A non-clear coverage verdict
+(`INCOMPLETE`, `SCOPE-MISMATCH`) with zero findings gives the plan nothing to fix: it adds a note to
+a `ready` reply and never pulls. PIVOT, REJECTED, FAILED and any unknown verdict stay `judgment` (fail-closed).
 
 **`reviews[].ledger` (optional).** A repo-relative or absolute path to that reviewer's
 findings-ledger sidecar. The op reads it in-process and never stamps or writes it.

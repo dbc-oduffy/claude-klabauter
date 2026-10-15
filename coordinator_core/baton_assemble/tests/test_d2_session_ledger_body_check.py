@@ -1,29 +1,18 @@
 """
 coordinator_core.baton_assemble.tests.test_d2_session_ledger_body_check --
-C1 coverage (pln-the-ledger-check-follows-the-body-not-ju-e2da19 § AC1/AC2/AC3).
-
-Proves d2 (`_dispatch_lint_frontmatter`) reports a missing `## Session
-Ledger` heading in the body of the artifact it just linted, without
-refusing (AC1, AC3), that it goes through `session_ledger`'s shared
-`body_has_session_ledger_heading` / `SESSION_LEDGER_HEADING_RE` rather than
-a second detection grammar (AC1), and that `frontmatter/schema_validate.py`
-is untouched by this chunk (AC2).
+d2 (`_dispatch_lint_frontmatter`) no longer checks the body for a `## Session
+Ledger` heading: `handoff.append_session_ledger` adds the heading with the
+first row, so a heading-less minted baton is the norm and warning on it
+would prescribe a remedy the appender owns.
 
 No process spawn (subprocess.run is monkeypatched), no git -- fast tier.
 """
 
 from __future__ import annotations
 
-import subprocess
-from typing import Any
-
 import pytest
 
 from coordinator_core.baton_assemble import apply as ba_apply
-from coordinator_core.session_ledger import (
-    SESSION_LEDGER_HEADING_RE,
-    body_has_session_ledger_heading,
-)
 
 
 class _FakeCompletedProcess:
@@ -43,111 +32,34 @@ def _stub_lint_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(facade, "resolve_operator_config", lambda: {"claude_klabauter_bin": "unused"})
 
 
-def _write(tmp_path, rel: str, body_extra: str) -> str:
-    content = (
-        "---\n"
-        "kind: session-handoff\n"
-        "---\n"
-        f"{body_extra}\n"
-    )
+def _write(tmp_path, rel: str, body: str) -> str:
     target = tmp_path / rel
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    target.write_text(f"---\nkind: session-handoff\n---\n{body}\n", encoding="utf-8")
     return rel
 
 
-class TestMissingBlockIsReported:
-    def test_body_without_heading_is_reported_not_raised(self, tmp_path) -> None:
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-x.md", "# Some Handoff\n\nno ledger here.")
-        detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        assert detail["session_ledger_checked"] is True
-        assert detail["session_ledger_heading_present"] is False
-
-    def test_reported_not_refused_no_exception_raised(self, tmp_path) -> None:
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-y.md", "no heading at all")
-        ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-
-    def test_warning_printed_to_stderr(self, tmp_path, capsys) -> None:
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-z.md", "no heading at all")
-        ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        captured = capsys.readouterr()
-        assert "Session Ledger" in captured.err
+def test_heading_absent_body_is_silent_and_reports_only_cli_and_args(tmp_path, capsys) -> None:
+    rel = _write(tmp_path, "state/handoffs/2026-08-20-x.md", "# Some Handoff\n\nno ledger here.")
+    detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
+    assert detail == {"cli": "lint-frontmatter", "args": ["--file", rel]}
+    assert capsys.readouterr().err == ""
 
 
-class TestPresentBlockPassesUnchanged:
-    def test_body_with_heading_reports_present_true(self, tmp_path) -> None:
-        body = "# Some Handoff\n\n## Session Ledger\n\n<!-- rows -->\n"
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-ok.md", body)
-        detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        assert detail["session_ledger_checked"] is True
-        assert detail["session_ledger_heading_present"] is True
-
-    def test_frontmatter_lint_detail_keys_still_present(self, tmp_path) -> None:
-        body = "## Session Ledger\n"
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-ok2.md", body)
-        detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        assert detail["cli"] == "lint-frontmatter"
-        assert detail["args"] == ["--file", rel]
+def test_heading_present_body_is_silent_and_reports_only_cli_and_args(tmp_path, capsys) -> None:
+    rel = _write(tmp_path, "state/handoffs/2026-08-20-ok.md", "## Session Ledger\n")
+    detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
+    assert detail == {"cli": "lint-frontmatter", "args": ["--file", rel]}
+    assert capsys.readouterr().err == ""
 
 
-class TestNotCheckedDegradeIsNotSilent:
-
-    def test_missing_file_arg_prints_distinct_note(self, tmp_path, capsys) -> None:
-        detail = ba_apply._dispatch_lint_frontmatter(["--other-flag", "x"], tmp_path)
-        assert detail["session_ledger_checked"] is False
-        captured = capsys.readouterr()
-        assert "session ledger check skipped" in captured.err
-        assert "has no '## Session Ledger' heading" not in captured.err
-
-    def test_unreadable_file_prints_distinct_note(self, tmp_path, capsys) -> None:
-        rel = "state/handoffs/2026-08-20-missing.md"
-        detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        assert detail["session_ledger_checked"] is False
-        captured = capsys.readouterr()
-        assert "session ledger check skipped" in captured.err
-        assert rel in captured.err
-        assert "has no '## Session Ledger' heading" not in captured.err
-
-    def test_not_checked_note_differs_from_present_case_silence(self, tmp_path, capsys) -> None:
-        body = "## Session Ledger\n"
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-present.md", body)
-        ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        assert capsys.readouterr().err == ""
+def test_lint_failure_still_raises(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        ba_apply.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(returncode=1, stderr="bad")
+    )
+    with pytest.raises(RuntimeError, match="lint-frontmatter"):
+        ba_apply._dispatch_lint_frontmatter(["--file", "x.md"], tmp_path)
 
 
-class TestSharesTheCanonicalRegexNotASecondGrammar:
-    def test_check_session_ledger_body_uses_shared_predicate(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[str] = []
-        real = body_has_session_ledger_heading
-
-        def _tracking(body: str) -> bool:
-            calls.append(body)
-            return real(body)
-
-        import coordinator_core.session_ledger as session_ledger_mod
-
-        monkeypatch.setattr(session_ledger_mod, "body_has_session_ledger_heading", _tracking)
-        rel = _write(tmp_path, "state/handoffs/2026-08-20-shared.md", "## Session Ledger\n")
-        ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        assert calls, "expected the shared session_ledger predicate to be invoked"
-
-    def test_apply_module_imports_rather_than_redefines_the_regex(self) -> None:
-        import inspect
-
-        source = inspect.getsource(ba_apply)
-        assert "from coordinator_core.session_ledger import" in source
-        assert "body_has_session_ledger_heading" in source
-        assert "re.compile(" not in inspect.getsource(ba_apply._check_session_ledger_body)
-
-    def test_predicate_matches_the_canonical_regex_directly(self) -> None:
-        assert body_has_session_ledger_heading("## Session Ledger\n") is bool(
-            SESSION_LEDGER_HEADING_RE.search("## Session Ledger\n")
-        )
-        assert body_has_session_ledger_heading("no heading") is False
-
-
-def test_schema_validate_module_is_untouched() -> None:
-    from coordinator_core.frontmatter.schema_validate import parse_frontmatter
-
-    result = parse_frontmatter("---\nkind: x\n---\nbody text")
-    assert result["body"] == "body text"
+def test_check_helper_is_gone() -> None:
+    assert not hasattr(ba_apply, "_check_session_ledger_body")

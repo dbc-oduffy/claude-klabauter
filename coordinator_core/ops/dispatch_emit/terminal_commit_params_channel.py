@@ -2,7 +2,8 @@
 
 The commit-stage prompt carries the params as a sentinel-fenced block the agent never copies;
 the run-token leg of `block_subagent_commit` reads that block back from the spawn's own
-transcript and writes the params file itself. The agent types only the file path.
+transcript (its computed-task record, which may follow a relayed user-request record) and
+writes the params file itself. The agent types only the file path.
 
 Commit hot path: stdlib, `ask_contract.RUN_DIR_ROOT` and the run-token id shape only. No
 subprocess, no emit-side import.
@@ -22,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 PARAMS_FILE_NAME = "terminal-commit-params.json"
 BLOCK_OPEN = "-----BEGIN TERMINAL-COMMIT PARAMS-----"
 BLOCK_CLOSE = "-----END TERMINAL-COMMIT PARAMS-----"
+RELAY_HEADER = "[Workflow harness — user request]"
 READ_CAP_BYTES = 64 * 1024
 
 # Emitted into the composed script; must stay byte-equal to `render_params_block`
@@ -103,12 +105,9 @@ def spawn_transcript_path(payload: dict) -> Optional[str]:
     return str(hits[0]) if len(hits) == 1 else None
 
 
-#: A run fired from a raw ask opens each spawn transcript with the harness's relay of the
-#: user's request; the spawn prompt is the record after it.
-_USER_REQUEST_RELAY_PREFIX = "[Workflow harness — user request]"
-
-
-def _user_record_content(line: bytes) -> Optional[str]:
+def _read_record_content(fh: object) -> Optional[str]:
+    """Content of the next capped transcript line when it is a `type: user` string record."""
+    line = fh.readline(READ_CAP_BYTES + 1)
     if len(line) > READ_CAP_BYTES:
         return None
     record = json.loads(line.decode("utf-8"))
@@ -120,21 +119,22 @@ def _user_record_content(line: bytes) -> Optional[str]:
 
 
 def read_spawn_prompt(transcript_path: object) -> Optional[str]:
-    """The spawn prompt from the transcript's first record, or from its second when the first
-    is the harness's user-request relay; None otherwise. Never raises.
+    """The spawn's computed-task record, or None. Never raises.
 
-    Reads at most two capped lines of the path the hook payload hands over: no listing.
+    Record 0, unless it is the harness's relayed user request: then record 1, and record 0's
+    content is discarded unsearched because relayed user text can quote a block. At most two capped lines
+    of the path the hook payload hands over: no listing, no third record.
     """
     if not isinstance(transcript_path, str) or not _is_workflow_spawn_path(transcript_path):
         return None
     try:
         with open(transcript_path, "rb") as fh:
-            content = _user_record_content(fh.readline(READ_CAP_BYTES + 1))
-            if content is not None and content.startswith(_USER_REQUEST_RELAY_PREFIX):
-                content = _user_record_content(fh.readline(READ_CAP_BYTES + 1))
+            first = _read_record_content(fh)
+            if first is not None and first.startswith(RELAY_HEADER):
+                return _read_record_content(fh)
+            return first
     except (OSError, ValueError):
         return None
-    return content
 
 
 def materialize(path: Path, params: dict) -> bool:

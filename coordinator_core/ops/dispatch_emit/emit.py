@@ -3282,7 +3282,13 @@ def _judge_engine_clause(
     gated = {
         e.get("id")
         for e in (excluded_rows or [])
-        if e.get("reason") in ("external_gate", "transitive_gate_closure")
+        if e.get("reason")
+        in (
+            "external_gate",
+            "transitive_gate_closure",
+            "withheld_by_owed_dependency",
+            "withheld_by_held_dependency",
+        )
     }
     # A dispatched row's writes land in this repo, so its own diff holds them: path signals
     # (writes/writes_under/surface) do not make it engine-owned on this route.
@@ -3633,7 +3639,7 @@ def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequenc
     )
 
 
-def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
+def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Optional[str] = None) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
 
@@ -3717,8 +3723,12 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "  }\n"
         "  async function _runRowInner(id, deps, verifyScope, run, commit) {\n"
         "    const _depResults = await Promise.all(deps);\n"
-        "    const plan = _rowPlan[id];\n"
-        "    if (_halted) {\n"
+        + (
+            f"    const plan = _rowPlan[id] || {_js_string_literal(default_plan)};\n"
+            if default_plan
+            else "    const plan = _rowPlan[id];\n"
+        )
+        + "    if (_halted) {\n"
         "      _notStarted.push(id);\n"
         "      return 'BLOCKED: run halted by stop rule (' + _halted + ')';\n"
         "    }\n"
@@ -3945,18 +3955,19 @@ def seam_leg_for(
     committable_ids: frozenset,
     run_base_sha: Optional[str] = None,
 ) -> Optional[SeamLeg]:
-    """The run's seam leg, or ``None`` when it does not qualify (single plan, no
-    edge, ``capabilities`` absent or empty) or no wave commits.
+    """The run's seam leg, or ``None`` when it does not qualify (a single wave of a
+    single plan with no edge and ``capabilities`` absent or empty) or no wave commits.
 
-    A row is held only when it reads a path a row of another plan writes, or its
-    plan names a ``depends_on_plan`` edge; it awaits the leg of each earlier wave
-    that lands such a row (or a row of the named plan). Every other row awaits nothing."""
+    A row is held only when it reads a path a row of an earlier committing wave
+    writes, whatever plan owns that row, or its plan names a ``depends_on_plan``
+    edge; it awaits the leg of each earlier wave that lands such a row (or a row
+    of the named plan). Every other row awaits nothing."""
     if seam is None or not run_base_sha:
         return None
     flat = [(n, row) for n, wave in enumerate(waves, start=1) for row in wave]
     plans = sorted({p for _, row in flat if (p := _plan_of(row_plans.get(row.id), plan_path))})
     has_edge = any(seam.plan_edges.get(p) for p in plans)
-    if not (len(plans) > 1 or has_edge or seam.capabilities):
+    if not (len(plans) > 1 or has_edge or seam.capabilities or len(waves) > 1):
         return None
     gated = tuple(
         n for n, wave in enumerate(waves, start=1) if any(r.id in committable_ids for r in wave)
@@ -3978,9 +3989,9 @@ def seam_leg_for(
             for m, other in flat
             if m < n
             and m in gated
-            and _plan_of(row_plans.get(other.id), plan_path) != mine
             and (
-                _plan_of(row_plans.get(other.id), plan_path) in named
+                (_plan_of(row_plans.get(other.id), plan_path) != mine
+                 and _plan_of(row_plans.get(other.id), plan_path) in named)
                 or any(writes_path(other, path) for path in (row.reads or ()))
             )
         }
@@ -4011,13 +4022,29 @@ def _seam_leg_js(
     ``_seamLeg``, one ``plan.seam_record`` agent dispatch per landed wave commit."""
     exec_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
     phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
+    invoke = (
+        "\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
+        f"/bin/coordinator-invoke\""
+    )
     route = (
-        " Run `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
-        f"/bin/coordinator-invoke\" plan.seam_record{repo_flag} '<params>'` with exactly the "
-        "params above as the JSON `<params>`, and return the op's reply verbatim: `verdict`, "
-        "`per_plan`, `findings`, `sidecars`. Judge nothing, edit nothing, commit nothing. "
-        "If the op refuses or errors, put its verbatim output in `findings` as one object with "
+        f" Step 1: run `{invoke} plan.seam_record{repo_flag} '<params>'` with exactly the "
+        "params above as the JSON `<params>`; its reply carries `verdict`, "
+        "`per_plan`, `findings`, `sidecars`. "
+        f"Step 2: run `{invoke} review.reachability{repo_flag} '<reach>'` with exactly the "
+        "reach params as the JSON `<reach>`. Add one finding "
+        "`{class: 'unreachable', path, blocking: true}` for each `entries[]` item whose verdict is "
+        "`unreachable` and each `click_paths[]` item whose verdict is `broken`; never report "
+        "`undecidable`. Any such finding makes the `verdict` DRIFT. Return `verdict`, `per_plan`, "
+        "`findings`, `sidecars` with step 1's reply and step 2's findings merged. "
+        "Judge nothing, edit nothing, commit nothing. "
+        "If either op refuses or errors, put its verbatim output in `findings` as one object with "
         "`class` `op-error` and report `verdict` REFUSED for any op refusal or error."
+    )
+    tests_step = (
+        " Step 3, only when tests are listed: run `python -m pytest <tests> -q` once with exactly "
+        "those paths. A non-zero exit is one finding `{class: 'execution-failed', path: <first "
+        "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT. "
+        "Run no other command."
     )
     return [
         "  const _seamDrift = [];",
@@ -4027,6 +4054,7 @@ def _seam_leg_js(
         f"  const _seamPlans = {json.dumps(list(seam.plans))};",
         *([f"  const _seamCertified = {json.dumps(list(seam.certified_plans))};"] if seam.certified_plans else []),
         f"  const _SEAM_REPLY_SCHEMA = {json.dumps(_SEAM_REPLY_SCHEMA)};",
+        "  const _SEAM_OWN_CLASSES = ['unreachable', 'execution-failed'];",
         "  const _seamRelease = {};",
         "  const _seamGates = {};",
         "  async function _seamLeg(n, sha) {",
@@ -4034,11 +4062,16 @@ def _seam_leg_js(
         + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
         f"      landed_range: {_RUN_BASE_VAR} + '..' + sha,",
         f"      landed_rows: _seamCommitted.map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
+        "    const _paths = [...new Set(_seamCommitted.flatMap((i) => _landed[i].paths))];",
+        f"    const reach = {{ base_sha: {_RUN_BASE_VAR}, head_sha: sha, paths: _paths }};",
+        "    const tests = [...new Set(_seamCommitted.flatMap((i) => _landed[i].declared))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
+        "    const _seamPathPlan = {};",
+        f"    _seamCommitted.forEach((i) => _landed[i].paths.forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
         "    let r = null;",
         "    try {",
         "      r = await agent(",
-        f"        {js(head)} + 'You run the seam check for wave ' + n + '. Params, verbatim: `' + JSON.stringify(params) + '`.' + "
-        f"{js(route)},",
+        f"        {js(head)} + 'You run the seam check for wave ' + n + '. Params, verbatim: `' + JSON.stringify(params) + '`. Reach params, verbatim: `' + JSON.stringify(reach) + '`.' + "
+        f"{js(route)} + (tests.length ? ' Tests: ' + JSON.stringify(tests) + '.' + {js(tests_step)} : ''),",
         f"        {{ label: 'seam:wave-' + n, phase: {phase}, agentType: {exec_type}, "
         f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _SEAM_REPLY_SCHEMA }}",
         "      );",
@@ -4059,8 +4092,10 @@ def _seam_leg_js(
         "    const halted = new Set(marked);",
         "    const finding = {};",
         "    found.forEach((f) => {",
+        "      const mine = !f.plan && _SEAM_OWN_CLASSES.includes(f.class) && _seamPathPlan[f.path];",
+        "      if (mine) (_seamHeldPlans[n] || []).concat(mine).forEach((p) => halted.add(p));",
         "      if (f.plan) halted.add(f.plan);",
-        "      const named = f.plan ? [f.plan, f.counterpart_plan].filter(Boolean) : marked;",
+        "      const named = f.plan ? [f.plan, f.counterpart_plan].filter(Boolean) : mine ? [mine] : marked;",
         "      const what = (f.class || 'unclassified') + (f.path ? ' at ' + f.path : '');",
         "      named.forEach((p) => { if (!finding[p]) finding[p] = what; });",
         "      _seamDrift.push({ wave: n, class: f.class || 'unclassified', plans: named, path: f.path || '' });",
@@ -4441,7 +4476,7 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
         text = (
             f"  _rows[{_js_string_literal(row.id)}] = _runRow("
             f"{_js_string_literal(row.id)}, [{deps}], null, async () => ({call_expr}), "
-            f"{{ title: {_js_string_literal(row.title)}, paths: [] }});"
+            f"{{ title: {_js_string_literal(row.title)}, paths: [], declared: [] }});"
         )
         size = len(text.encode("utf-8"))
         if row.writes is not UNDECLARED:
@@ -4767,6 +4802,10 @@ def compose_script(
         for p in row.writes_under
         if _prefix_probe(p) in gitignored
     ]
+    row_declared = {
+        row.id: [p for p in (commit_pathspec_or_none([row]) or []) if p not in gitignored]
+        for row in flat_rows
+    }
     row_pathspecs = {
         rid: [p for p in paths if p not in gitignored]
         for rid, paths in row_pathspecs.items()
@@ -4849,9 +4888,10 @@ def compose_script(
     seam_leg: Optional[SeamLeg] = None
     if review_only:
         landed_seed = ", ".join(
-            "{id}: {{ paths: [{paths}] }}".format(
+            "{id}: {{ paths: [{paths}], declared: [{declared}] }}".format(
                 id=_js_string_literal(row.id),
                 paths=", ".join(_js_string_literal(p) for p in row_pathspecs.get(row.id, ())),
+                declared=", ".join(_js_string_literal(p) for p in row_declared.get(row.id, ())),
             )
             for row in flat_rows
         )
@@ -4898,7 +4938,7 @@ def compose_script(
                 prior_run_base=prior_run_base,
             )
         )
-        body_blocks.append(_run_row_helper_js(agent_type_host))
+        body_blocks.append(_run_row_helper_js(agent_type_host, plan_path if seam_leg else None))
 
     gate_commands_all = _distinct_gate_commands(flat_rows, plan_context)
     if (gate_commands_all or carried_gate_owed) and not review_only:
@@ -4995,6 +5035,8 @@ def compose_script(
                 + _js_string_literal(row.title)
                 + ", paths: ["
                 + ", ".join(_js_string_literal(p) for p in row_paths)
+                + "], declared: ["
+                + ", ".join(_js_string_literal(p) for p in row_declared.get(row.id, ()))
                 + "] }"
                 if row_paths
                 else "null"

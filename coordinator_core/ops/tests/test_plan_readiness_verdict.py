@@ -172,9 +172,88 @@ def test_complete_coverage_without_findings_is_ready():
     assert op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])["verdict"] == "ready"
 
 
-def test_incomplete_coverage_without_findings_stays_judgment():
-    cov = {"verdict": "INCOMPLETE", "mechanicalFindings": [], "judgmentFindings": []}
-    assert op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])["verdict"] == "judgment"
+@pytest.mark.parametrize("word", ["INCOMPLETE", "SCOPE-MISMATCH"])
+def test_non_clear_coverage_without_findings_never_pulls(word):
+    cov = {"verdict": word, "mechanicalFindings": [], "judgmentFindings": []}
+    out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])
+    assert (out["verdict"], out["pull_class"]) == ("ready", "none")
+    assert "carries no findings" in out["reason"]
+
+
+def _rows(*verdicts, citation="c"):
+    return [{"verdict": v, "citation": f"{citation}-{i}"} for i, v in enumerate(verdicts)]
+
+
+def _premise(rows, reviews=None):
+    return op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, reviews or [], None, rows)
+
+
+def test_premise_uncheckable_only_ledger_is_ready_with_note():
+    rows = _rows("UNCHECKABLE", "UNCHECKABLE", "UNCHECKABLE")
+    rows[0]["questionClass"] = 5
+    rows[2]["questionClass"] = 4
+    out = _premise(rows)
+    assert (out["verdict"], out["pull_class"]) == ("ready", "none")
+    assert "3 UNCHECKABLE premise row(s) left to reviewer judgment" in out["reason"]
+    _validate({"plan": REL, **out, "prep_gate": _gate(PASS, verdict="PREPPED")})
+
+
+def test_premise_uncheckable_citing_a_ruling_never_pulls_on_repeat_passes():
+    rows = [{"verdict": "UNCHECKABLE", "citation": "Settled premises: ruling X", "evidence": "state/apm-rulings/x.md"}]
+    outs = [_premise(rows) for _ in range(3)]
+    assert [(o["verdict"], o["pull_class"]) for o in outs] == [("ready", "none")] * 3
+
+
+def test_premise_blocking_citation_is_capped_at_200_characters():
+    out = _premise([{"verdict": "UNRESOLVED", "citation": "y" * 300}])
+    assert "y" * 200 in out["reason"]
+    assert "y" * 201 not in out["reason"]
+
+
+def test_premise_uncheckable_plus_resolves_is_ready():
+    assert _premise(_rows("UNCHECKABLE", "RESOLVES"))["verdict"] == "ready"
+
+
+@pytest.mark.parametrize("word", ["UNRESOLVED", "CONTRADICTED"])
+def test_premise_unresolved_or_contradicted_row_blocks_and_names_citation(word):
+    out = _premise(_rows("UNCHECKABLE", word, citation="wiki/path.md"))
+    assert (out["verdict"], out["pull_class"]) == ("judgment", "none")
+    assert f"premise-check: {word} wiki/path.md-1" in out["reason"]
+    _validate({"plan": REL, **out, "prep_gate": _gate(PASS, verdict="PREPPED")})
+
+
+def test_premise_unknown_row_verdict_is_refused(tmp_path):
+    common = _plan(tmp_path)
+    with pytest.raises(ValueError, match=r"premise\.rows\[0\]"):
+        op._handler({"plan": REL, "premise": {"rows": _rows("MAYBE")}}, common)
+
+
+def test_premise_with_premise_check_review_is_refused(tmp_path):
+    common = _plan(tmp_path)
+    reviews = [{"reviewer": "premise-check", "verdict": "BLOCKED"}]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        op._handler({"plan": REL, "premise": {"rows": _rows("RESOLVES")}, "reviews": reviews}, common)
+
+
+def test_premise_reaches_the_op_through_the_handler(tmp_path):
+    common = _plan(tmp_path)
+    reply = op._handler({"plan": REL, "premise": {"rows": _rows("CONTRADICTED", citation="zz")}}, common)
+    assert "premise-check: CONTRADICTED zz-0" in reply["reason"]
+    _validate(reply)
+
+
+def test_premise_empty_rows_behave_as_absent(tmp_path):
+    common = _plan(tmp_path)
+    a = op._handler({"plan": REL}, common)
+    b = op._handler({"plan": REL, "premise": {"rows": []}}, common)
+    assert a == b
+
+
+def test_premise_overflowing_citations_end_with_more_tail():
+    out = _premise(_rows(*["UNRESOLVED"] * 10, citation="x" * 190))
+    assert out["verdict"] == "judgment"
+    assert out["reason"].endswith("more premise row(s)")
+    assert len(out["reason"]) <= 1000
 
 
 @pytest.mark.parametrize("verdict", ["WARN", "BLOCKED"])

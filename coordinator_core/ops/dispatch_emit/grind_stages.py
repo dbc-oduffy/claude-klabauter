@@ -636,7 +636,10 @@ def compose_size_call(
 #: `_sizeAssembleWhen` also read `_sizingPathFor`, `_TSHIRT_ORDER`, `PLAN_WEIGHT_FLOOR_RANK`,
 #: `SIZE_FIX_TARGET` and `ROUTING`, at call time. sizing-assemble has no --repo-root, so its --write
 #: path is absolute; `sizingPath` stays repo-relative elsewhere. Every `const _size*` stays one line:
-#: the integration test lifts them by pattern.
+#: the integration test lifts them by pattern. A row id shaped `<date>-<slug>-<12 hex>` is re-minted under
+#: a fresh date and hash with the same slug (the `tf` mint); `_sizeSupersededTest` finds a sibling ledger
+#: of that slug already marked route-to-plan, and the chain then echoes a skip and exits 0. A slug
+#: truncated identically for two surfaces would match both: the guard errs toward skipping.
 SIZE_ASSEMBLE_JS = (
     "const _sizeAssembleCmd = (scouted, sizingPath) => "
     + _js_string_literal(SIZING_ASSEMBLE_CMD)
@@ -654,10 +657,14 @@ SIZE_ASSEMBLE_JS = (
     "const _sizeBatonCmd = (sizingPath) => "
     + _js_string_literal(DOC_NEW_CMD + " --type spinoff --from-sizing ")
     + " + _shq(sizingPath);\n"
-    "const _sizeChainCmd = (scouted, row, sizingPath) => 'cd ' + _shq(REPO_ROOT)"
-    " + ' && ' + _sizeAssembleCmd(scouted, sizingPath)"
-    " + ' && ' + _sizeBatonCmd(sizingPath)"
-    " + ' && ' + _sizeMarkCmd(row, sizingPath);\n"
+    "const _sizeSupersededTest = (row) => { const m = /^\\d{4}-\\d{2}-\\d{2}-(.+)-[0-9a-f]{12}$/.exec(row.row_id);"
+    " return m ? 'grep -l ' + _shq('\"outcome\": \"route-to-plan\"') + ' ' + _shq('state/queue-grind/' + PROFILE_NAME + '/')"
+    " + '????-??-??-' + _shq(m[1]) + '-????????????.jsonl 2>/dev/null | grep -qvxF '"
+    " + _shq('state/queue-grind/' + PROFILE_NAME + '/' + row.row_id + '.jsonl') : ''; };\n"
+    "const _sizeChainCmd = (scouted, row, sizingPath) => { const run = _sizeAssembleCmd(scouted, sizingPath)"
+    " + ' && ' + _sizeBatonCmd(sizingPath) + ' && ' + _sizeMarkCmd(row, sizingPath); const skip = _sizeSupersededTest(row);"
+    " return 'cd ' + _shq(REPO_ROOT) + ' && ' + (skip ? 'if ' + skip + '; then echo '"
+    " + _shq('size skipped: a superseded predecessor already carries route-to-plan') + '; else ' + run + '; fi' : run); };\n"
     "const _SIZE_SLOTS = { tshirt: '<tshirt>', intent: '<intent>', name: '<name>', premise_provenance: '<premise_provenance>',"
     " premise_evidence: '<premise_evidence>', exit_criterion: '<exit_criterion>' };\n"
     "const _sizeChainTemplate = (row) => _sizeChainCmd(_SIZE_SLOTS, row, _sizingPathFor('<name>', row.row_id));\n"

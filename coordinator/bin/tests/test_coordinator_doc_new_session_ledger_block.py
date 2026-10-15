@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -95,6 +96,25 @@ class SessionLedgerBlockIdenticalAcrossScaffoldersTest(unittest.TestCase):
         self.assertIsNotNone(
             match, "sample row matching the scaffolded comment's documented grammar failed _ONELINE_RE"
         )
+
+
+class BackstopLedgerHeadingWaiverTest(unittest.TestCase):
+    def _headingless(self) -> str:
+        content = _cli._scaffold_spinoff(title="t", branch="b", kind="session-handoff")
+        return content.replace("## Session Ledger", "## Other")
+
+    def test_backstop_refuses_headingless_handoff_by_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SystemExit):
+                _cli._assert_scaffold_content_valid(
+                    self._headingless(), str(Path(td) / "state/handoffs/x.md"), td
+                )
+
+    def test_waiver_admits_the_minted_headingless_handoff(self):
+        with tempfile.TemporaryDirectory() as td:
+            _cli._assert_scaffold_content_valid(
+                self._headingless(), str(Path(td) / "state/handoffs/x.md"), td, waive_ledger_heading=True
+            )
 
 
 if __name__ == "__main__":

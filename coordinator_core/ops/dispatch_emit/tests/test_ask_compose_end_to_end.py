@@ -53,16 +53,12 @@ def test_fallback_stage_agent_is_haiku_at_low_effort_with_one_engine_call():
     assert call.count(ask_compose.OP_ASK_STAGE) == 1 and "coordinator-invoke" in call
 
 
-def test_review_prep_agent_is_haiku_with_one_review_prep_call():
-    import copy
-
-    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-
-    roster = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
-    roster["execute_review"]["stages"][0]["agents"][0]["model"] = "haiku"
-    script = _compose(review_roster_fragment=roster)
-    opts = _agent_opts(script, "review:coordinator:review-prep")
-    assert "model: 'haiku'" in opts
+def test_review_prep_is_the_first_act_of_each_wave_agent_and_no_prep_agent_spawns():
+    script = _compose()
+    assert "label: 'review:coordinator:review-prep'" not in script and "phase('Review prep')" not in script
+    assert "'Review prep'" not in script.split("phases: [", 1)[1].split("]", 1)[0]
+    wave = script.split("phase('Review wave')", 1)[1]
+    assert wave.index("review.prep") < wave.index("label: 'review:coordinator:code-reviewer'")
     assert script.count("review.prep") == 1
 
 
@@ -98,15 +94,17 @@ def test_every_composed_agent_call_is_modeled(em_brief):
 def test_no_in_run_commit_leaves_the_commit_to_the_em():
     script = _compose()
     assert "phase('commit')" not in script and "label: 'docs'" not in script
+    assert "_docsWanted" not in script and "Write no docs on this run" in script
 
 
-def test_in_run_commit_composes_docs_in_the_tail_then_commit_before_the_one_return():
+def test_in_run_commit_composes_docs_in_the_verify_agent_then_commit_before_the_one_return():
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     docs, commit, ret = (
-        script.index("label: 'docs'"),
+        script.index("label: 'verify'"),
         script.index("phase('commit')"),
         script.rindex("  return { arm:"),
     )
+    assert "label: 'docs'" not in script and "const _docsWanted" in script
     assert docs < script.index("  _nextAction = ") < commit < ret
     opts = _agent_opts(script, "commit")
     assert "agentType: 'coordinator:git-commit-agent'" in opts and "model: 'haiku'" in opts
@@ -121,72 +119,71 @@ def test_in_run_commit_composes_docs_in_the_tail_then_commit_before_the_one_retu
 
 
 def _tail(script: str) -> tuple[str, str]:
-    """(the test leg and the one parallel call's text, the script text after it)."""
-    start = script.rindex("const _testLeg")
-    end = script.index("\n    ]);", start) + len("\n    ]);")
+    """(the verify leg's text, the script text after it)."""
+    start = script.rindex("    phase('Verify');")
+    end = script.index("\n  }\n", start) + len("\n  }\n")
     return script[start:end], script[end:]
 
 
-def test_the_tail_is_one_parallel_of_tests_judge_with_ledger_and_docs():
+def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
     script = _compose(in_run_commit=True, **_JUDGE_KW)
     call, after = _tail(script)
-    assert script.index("phase('review')") < script.rindex("await parallel([") and "await parallel([" not in after
-    for marker in ("_testResult = await", "coordinator:criterion-judge", "label: 'docs'", "Ledger check, folded"):
+    assert script.index("phase('Review wave')") < script.rindex("phase('Verify')")
+    assert script.count("await agent(") >= 1 and call.count("label: 'verify'") == 1
+    assert "await parallel([" not in call and "await parallel([" not in after
+    for marker in ("_testWanted ?", "_docsWanted ?", "Ledger check, folded", "TIER 1, the human"):
         assert marker in call, marker
-    assert "label: 'ledger-check'" not in script
+    for gone in ("label: 'docs'", "label: 'ledger-check'", "coordinator:criterion-judge", "label: 'test:terminal'"):
+        assert gone not in script, gone
     assert "phase('ledger-check')" not in script and "phase('docs')" not in script
     assert re.findall(r"label: '([^']+)'", after) == ["commit"]
     assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
 
 
-def test_the_judge_awaits_the_scoped_test_leg_before_it_starts():
+def test_the_verdict_is_ruled_after_the_tests_inside_the_one_prompt():
     call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
-    judge = call[call.index("coordinator:criterion-judge") - 12000 :]
-    assert call.index("const _testLeg") < call.index("await parallel([")
-    assert "async () => { await _testLeg; try { _falsifierResult = await" in call
-    assert judge.count("_testLeg") >= 1
+    assert call.index("(1) TESTS.") < call.index("(2) DOCS.") < call.index("(3) VERDICT.")
+    assert "Start the scoped tests first and let them run in the background" in call
+    assert "Once the test result is in, read it before you rule" in call
 
 
-def test_a_judged_run_projects_the_ledger_from_the_judge_result_and_fails_closed():
+def test_a_judged_run_projects_the_ledger_from_the_verify_reply_and_fails_closed():
     script = _compose(in_run_commit=True, **_JUDGE_KW)
-    _, after = _tail(script)
-    proj = after[after.index("    _ledger = ") :].split("\n", 1)[0]
-    assert "!_manifest.error && Array.isArray(_falsifierResult?.items)" in proj
+    call, after = _tail(script)
+    proj = call[call.index("    _ledger = ") :].split("\n", 1)[0]
+    assert "_verify && Array.isArray(_verify.items)" in proj
     assert proj.rstrip().endswith(": null;")
-    assert after.index("    _ledger = ") < after.index("for (const i of (_ledger?.items ?? []))")
+    assert script.index("    _ledger = ") < script.index("for (const i of (_ledger?.items ?? []))")
     assert "_ledger = await" not in script
 
 
-def test_an_unjudged_run_keeps_the_single_ledger_check_agent():
+def test_an_unjudged_run_folds_the_ledger_check_into_the_verify_agent():
     script = _compose(in_run_commit=True)
-    assert script.count("label: 'ledger-check'") == 1 and "_ledger = await" in script
-    assert "Ledger check, folded" not in script
+    assert script.count("label: 'verify'") == 1 and "label: 'ledger-check'" not in script
+    assert "_ledger = (_verify && Array.isArray(_verify.items))" in script
+    assert "Ledger check, folded" not in script and "_falsifierResult" not in script
 
 
-def test_the_tail_without_a_judge_or_commit_has_fewer_thunks():
+def test_the_tail_without_a_judge_or_commit_carries_neither_judge_nor_docs_instructions():
     call, _ = _tail(_compose())
-    assert "label: 'ledger-check'" in call and "label: 'docs'" not in call
-    assert "coordinator:criterion-judge" not in call
+    assert "label: 'verify'" in call and "const _docsWanted" not in call
+    assert "coordinator:criterion-judge" not in call and "TIER 1" not in call
 
 
-def test_judge_and_ledger_check_prompts_name_the_docs_in_flight():
+def test_the_verify_prompt_binds_its_write_set_to_the_declared_docs_and_the_note():
     script = _compose(in_run_commit=True, **_JUDGE_KW)
-    call, _ = _tail(script)
-    judge = call[call.index("coordinator:criterion-judge") - 12000 : call.index("coordinator:criterion-judge")]
-    assert "JSON.stringify(_manifest?.doc_writes ?? [])" in judge
-    assert "name that path exactly as its own entry in remaining" in judge
+    call = _tail(script)[0].replace("\\'", "'")
+    assert "JSON.stringify(_manifest.doc_writes ?? [])" in call
+    assert "Your write set is exactly step 2's declared doc writes and its delivery note" in call
+    assert "name that path exactly as its own entry in remaining" in call
     assert "doc_writes" not in _tail(_compose(**_JUDGE_KW))[0]
-    unjudged, _ = _tail(_compose(in_run_commit=True))
-    ledger = unjudged[unjudged.index("phase: ledger-check") : unjudged.index("label: 'ledger-check'")]
-    assert "JSON.stringify(_manifest?.doc_writes ?? [])" in ledger
 
 
-def test_docs_thunk_sits_under_the_pre_tail_guard_and_carries_no_tail_result():
+def test_docs_instructions_sit_under_the_pre_tail_guard_and_carry_no_tail_result():
     call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
-    thunk = call[call.index("async () => { if (" + ask_compose._DOCS_PRE_TAIL_GUARD) :]
-    assert "label: 'docs'" in thunk
-    docs_prompt = thunk[: thunk.index("label: 'docs'")]
-    assert "_ledger" not in docs_prompt and "_testResult" not in docs_prompt and "_falsifier" not in docs_prompt.lower()
+    assert f"const _docsWanted = !!({ask_compose._DOCS_PRE_TAIL_GUARD});" in call
+    docs = call[call.index("_docsWanted ? (") : call.index("(3) VERDICT.")]
+    assert "_ledger" not in docs and "_testResult" not in docs and "_falsifier" not in docs.lower()
 
 
 def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
@@ -244,13 +241,13 @@ def test_script_is_valid_and_parses(over, tmp_path):
     assert subprocess.run([node, "--check", str(path)], capture_output=True).returncode == 0
 
 
-def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
+def test_the_verify_leg_rules_the_ledger_at_every_size_and_gates_the_commit():
     script = _compose(in_run_commit=True)
-    check = script.index("label: 'ledger-check'")
-    assert script.index("phase('review')") < check < script.index("label: 'docs'") < script.index("phase('commit')")
+    check = script.index("label: 'verify'")
+    assert script.index("phase('Review wave')") < check < script.index("phase('commit')")
     assert "ask-fidelity" not in script
-    opts = _agent_opts(script, "ledger-check")
-    assert "agentType: 'coordinator:code-reviewer'" in opts and "model: 'sonnet'" in opts
+    opts = _agent_opts(script, "verify")
+    assert "agentType: 'coordinator:executor'" in opts and "model: 'sonnet'" in opts
     assert "_ledgerBlocking(_ledger).length)) { _halted = { halted: 'ledger-check'" in script
     assert "_ledger.verdict" not in script
     assert '"verdict":' not in opts
@@ -261,7 +258,7 @@ def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
 
 def test_ledger_check_admits_post_commit_items():
     script = _compose(in_run_commit=True)
-    opts = script[script.index("label: 'ledger-check'"):]
+    opts = script[script.index("label: 'verify'"):]
     opts = opts[: opts.index("\n")]
     assert "post_commit' when everything the item asks" in script.replace("\\'", "'")
     assert "post_commit_acts from (commit, sha_reply, sha_memo)" in script
@@ -276,10 +273,10 @@ def test_ledger_check_admits_post_commit_items():
 def test_every_judgment_stage_reads_the_ledger_at_its_start():
     script = _compose()
     view = f"{RECORD_DIR_ROOT}/run-1/requirements.md"
-    for label in ("size", "accept", "xl-exit", "plan", "ledger-check"):
+    for label in ("size", "accept", "xl-exit", "plan", "verify"):
         call = script[: script.index(f"label: '{label}'")]
         assert view in call[call.rindex("agent(") :], label
-    rows = script[script.index("phase('execute');", script.index("phase('stage')")) :]
+    rows = script[script.index("phase('Execute');", script.index("phase('stage')")) :]
     assert view in rows[: rows.index("stallMs")]
     # plan-blitz is shadowed: every prompt it composes opens with the ledger clause.
     assert "const agent = (p, o) => _outerAgent(_LEDGER_PREFIX + _agentDefsClause() + p, o);" in script
@@ -289,9 +286,9 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start():
 def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier():
     script = _compose(in_run_commit=True)
     assert "_ledgerCloses" not in script
-    wave = script[script.index("phase('review')"):script.rindex("await parallel([")]
+    wave = script[script.index("phase('Review wave')"):script.rindex("phase('Verify')")]
     # Nothing in the review stage (delivery verifier, terminal judge, falsifier) reads the ledger:
-    # the ledger check runs after it as one more gate, at every size.
+    # the verify leg's ledger verdict runs after it as one more gate, at every size.
     assert not re.search(r"_ledger\w*", wave)
     assert "delivery: _deliveryVerdict" in script
 
@@ -300,14 +297,14 @@ def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk(tmp_pat
     script = _compose(in_run_commit=True)
     assert "function _agentDefsClause()" in script
     assert "agents\\/[^/]+\\.md$" in script
-    # Every agent prompt after the helper opens through it: review, judge, ledger, docs, rows.
-    for label in ("ledger-check", "docs", "commit", "stage"):
+    # Every agent prompt after the helper opens through it: review, verify, rows.
+    for label in ("verify", "commit", "stage"):
         call = script[: script.index(f"label: '{label}'")]
         assert "_agentDefsClause()" in call[call.rindex("agent(") :], label
     gated = _existing_sizing_compose(tmp_path, in_run_commit=True)
     call = gated[: gated.index("label: 'gate'")]
     assert "_agentDefsClause()" in call[call.rindex("agent(") :]
-    rows = script[script.index("phase('execute');", script.index("phase('stage')")) :]
+    rows = script[script.index("phase('Execute');", script.index("phase('stage')")) :]
     assert "_agentDefsClause()" in rows[: rows.index("stallMs")]
 
 
@@ -318,7 +315,7 @@ def test_the_gate_binds_the_run_to_its_sizing():
 def test_a_spine_with_no_test_target_reads_degraded_never_passed():
     script = _compose()
     assert "(_manifest.test_targets ?? []).length" in script
-    assert "_manifest.test_targets.join(', ')" in script
+    assert "(_manifest.test_targets ?? []).join(', ')" in script
     assert "_manifest.no_test_target) {" in script and "status: 'degraded'" in script
 
 
@@ -402,6 +399,6 @@ def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_g
     for entry in ("_ready", "_reready"):
         adopt = f"Array.isArray({entry}.readyOpReply?.rows)) {{ _stagedManifest = {entry}.readyOpReply; }}"
         assert adopt in script and f"!{entry}.readyOpReply?.error" in script
-    body = script.split("if (_stagedManifest) { _manifest = _stagedManifest; } else {", 1)[1]
-    assert "phase('stage')" in body.split("label: 'stage'", 1)[0]
-    assert "phase('stage')" not in script.split("if (_stagedManifest) { _manifest = _stagedManifest; } else {", 1)[0]
+    body = script.split("if (!_stagedManifest) {\n  phase('stage');", 1)[1]
+    assert "label: 'stage'" in body
+    assert "phase('stage')" not in script.split("if (_stagedManifest) { _manifest = _stagedManifest; }", 1)[0]

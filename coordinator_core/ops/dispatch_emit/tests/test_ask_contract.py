@@ -42,6 +42,22 @@ def test_phase_order_and_names():
     assert (c.HALT_ROOM, c.HALT_TOUCHPOINT, c.HALT_REFUSAL) == ("room", "touchpoint", "refusal")
 
 
+def test_tail_and_grouping_constants_are_pinned():
+    assert (c.ASK_VERIFY_LABEL, c.ASK_VERIFY_PHASE) == ("verify", "Verify")
+    assert c.ASK_STAGE_PHASE == c.ASK_FALSIFIER_PHASE == "stage"
+    assert c.ASK_STAGE_PHASE in c.ASK_PHASES
+    assert c.ASK_VERIFY_TEST_KEYS == ("status", "summary")
+    assert c.ASK_VERIFY_JUDGE_KEYS == (
+        "status", "observation", "differs_from_baseline", "baseline_output", "roots_read",
+    )
+    assert c.ASK_VERIFY_LEDGER_KEYS == ("items", "all_of_pm_ask", "conflicts")
+    assert c.ASK_VERIFY_DOCS_KEYS == ("doc_paths", "note_path", "stale_docs")
+    assert c.ASK_VERIFY_RETURN_KEYS == (
+        "test", "judge", "items", "all_of_pm_ask", "conflicts", "doc_paths", "note_path", "stale_docs",
+    )
+    assert c.ASK_VERIFY_PHASE not in c.ASK_PHASES
+
+
 def test_size_then_plan_names():
     assert c.STOP_AFTER_PLAN == "plan"
     assert c.SIZING_SCOUT_AGENT_TYPE == "coordinator:sizing-scout"

@@ -27,8 +27,27 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
 
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
+#: Serial groups, in run order. "stage" is also the one title the standalone stage fallback and
+#: the standalone falsifier share when both spawn (`ASK_STAGE_PHASE`).
+ASK_STAGE_PHASE = "stage"
+ASK_FALSIFIER_PHASE = ASK_STAGE_PHASE
+#: The merged tail agent: scoped tests, criterion and ledger verdict, declared docs. Its label
+#: and its single phase title; it replaces the "Scoped test run", "Criterion judge", "docs" and
+#: "ledger-check" legs.
+ASK_VERIFY_LABEL = "verify"
+ASK_VERIFY_PHASE = "Verify"
+#: Keys the merged leg must return, pinned by `test_ask_contract`; `ask_compose._verify_schema`
+#: builds the real schema from its own properties and does not read these tuples. `test` and
+#: `judge` are objects holding the first two tuples (their `status` keys collide, so they nest);
+#: ledger and docs keys sit at the top level.
+ASK_VERIFY_TEST_KEYS = ("status", "summary")
+ASK_VERIFY_JUDGE_KEYS = ("status", "observation", "differs_from_baseline", "baseline_output", "roots_read")
+ASK_VERIFY_LEDGER_KEYS = ("items", "all_of_pm_ask", "conflicts")
+ASK_VERIFY_DOCS_KEYS = ("doc_paths", "note_path", "stale_docs")
+ASK_VERIFY_RETURN_KEYS = ("test", "judge", *ASK_VERIFY_LEDGER_KEYS, *ASK_VERIFY_DOCS_KEYS)
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
+HALT_SPLIT = "split"
 STOP_AFTER_PLAN = "plan"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
@@ -301,7 +320,8 @@ class GatedRow:
 @dataclass(frozen=True)
 class OwedRow:
     """A row the run excluded because the EM or an operator performs it. ``reason`` is one of
-    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send``, ``operator``."""
+    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send``, ``operator``, or
+    ``withheld_by_owed_dependency`` (a row transitively behind one of those)."""
 
     id: str
     reason: str

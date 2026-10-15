@@ -15,6 +15,7 @@ from pathlib import Path
 from coordinator_core.bug_blitz.contract import FailingTest, run_tag
 from coordinator_core.ops.queue_append import append_queue_entry
 from coordinator_core.ops.queue_family import load_family_records
+from coordinator_core.repo_relative_text import to_repo_relative
 from coordinator_core.session.declared_writes import declare_write
 
 SCHEMA = "bug-backlog"
@@ -126,6 +127,13 @@ def _write_reuse(repo_root: Path, rel: str, updated: str) -> None:
     declare_write(rel)
 
 
+def _evidence_ref(repo_root: Path, target_ref: str) -> str:
+    """Repo-relative form of an absolute target under the repo; anything else is returned as given."""
+    if not os.path.isabs(target_ref):
+        return target_ref
+    return to_repo_relative(target_ref, str(repo_root)) or target_ref
+
+
 def mint_tf_rows(
     repo_root: Path,
     run_id: str,
@@ -172,7 +180,7 @@ def mint_tf_rows(
             surface=file,
             severity=severity,
             tags=[TF_TAG, tag],
-            evidence=target_ref,
+            evidence=_evidence_ref(repo_root, target_ref),
             repro_steps=f"targeted-test-run --row {file}",
         )
         ids.append(row_id)

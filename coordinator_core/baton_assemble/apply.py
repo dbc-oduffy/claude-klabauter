@@ -197,68 +197,7 @@ def _dispatch_lint_frontmatter(args: list[str], repo_root: Path) -> dict[str, An
     )
     if proc.returncode != 0:
         raise RuntimeError(f"lint-frontmatter {args}: failed (rc={proc.returncode}): {proc.stderr.strip()}")
-    detail: dict[str, Any] = {"cli": "lint-frontmatter", "args": args}
-    detail.update(_check_session_ledger_body(args, repo_root))
-    return detail
-
-
-def _check_session_ledger_body(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """d2's body-section check (C1, pln-the-ledger-check-follows-the-body-
-    not-ju-e2da19 § AC1/AC2/AC3): every artifact `baton_assemble` scaffolds
-    is a handoff-family, ledger-owing kind (`coordinator-doc-new.py`'s C3
-    docstring: "all handoff-family kinds are ledger-owing, including
-    goal-seed") so, unlike C3's write-time refusal, this needs no
-    per-kind gate -- reaching d2 at all already implies ledger-owing.
-
-    Deliberately REPORTS rather than refuses (Anti-scope: "Warn vs refuse
-    at d2 is not the executor's call") -- a missing block is surfaced in
-    the returned detail dict and on stderr, never raised, so d2 stays
-    green and `apply()`'s transaction is unaffected either way (AC3).
-
-    Reads `--file <path>` straight off d2's own args (the same target
-    `lint-frontmatter` just validated) rather than threading `d1_out`
-    through a second parameter -- one value, one seam. Degrades to
-    "checked: False" (no raise) if the path is absent from `args` or
-    the file cannot be read/parsed, matching `_assert_scaffold_content_valid`'s
-    own fail-open convention for infra trouble rather than turning a read
-    glitch into a false report. Unlike that convention, the degrade path
-    prints its own distinct stderr note: a stderr-only observer must not
-    read "not checked" as "checked, heading present" -- both were silent
-    before this.
-    """
-    try:
-        file_idx = args.index("--file")
-        rel_path = args[file_idx + 1]
-    except (ValueError, IndexError):
-        print(
-            "warning: session ledger check skipped -- no --file arg found. Verdict is unmeasured, not passing.",
-            file=sys.stderr,
-        )
-        return {"session_ledger_checked": False}
-
-    try:
-        from coordinator_core.frontmatter.schema_validate import parse_frontmatter
-        from coordinator_core.session_ledger import body_has_session_ledger_heading
-
-        content = (repo_root / rel_path).read_text(encoding="utf-8")
-        parsed = parse_frontmatter(content)
-        body = parsed.get("body") or ""
-    except Exception:  # noqa: BLE001 -- fail-open on read/parse trouble, never block d2 on it
-        print(
-            f"warning: session ledger check skipped for {rel_path} -- read/parse failed. Verdict is unmeasured, not passing.",
-            file=sys.stderr,
-        )
-        return {"session_ledger_checked": False}
-
-    if body_has_session_ledger_heading(body):
-        return {"session_ledger_checked": True, "session_ledger_heading_present": True}
-
-    print(
-        f"warning: {rel_path} has no '## Session Ledger' heading -- chain LoE "
-        "reads as zero. Add the block before close.",
-        file=sys.stderr,
-    )
-    return {"session_ledger_checked": True, "session_ledger_heading_present": False}
+    return {"cli": "lint-frontmatter", "args": args}
 
 
 def _dispatch_session_claim_cli(args: list[str], repo_root: Path) -> dict[str, Any]:

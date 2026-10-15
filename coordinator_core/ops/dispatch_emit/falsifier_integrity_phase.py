@@ -64,11 +64,49 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _falsifier_sha(fields: dict, report_json: Optional[str], instrument_source: Optional[str]) -> str:
+def _reviewer_rubric_path() -> Optional[Path]:
+    """The reviewer agent file the harness loads, under the content root; None when absent."""
+    from coordinator_core.content_root import read_content_root
+
+    root = read_content_root()
+    if not root:
+        return None
+    name = REVIEWER_AGENT_TYPE.split(":", 1)[-1] + ".md"
+    for sub in ("agents", "coordinator/agents"):
+        candidate = Path(root) / sub / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _reviewer_rubric_identity() -> str:
+    """sha256 of the rubric text with CRLF folded to LF; ``""`` when unresolved or unreadable.
+    Read per call, never memoised: a rubric edit under a warm engine must miss."""
+    path = _reviewer_rubric_path()
+    if path is None:
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return _sha(text.replace("\r\n", "\n"))
+
+
+def _falsifier_sha(
+    fields: dict,
+    report_json: Optional[str],
+    instrument_source: Optional[str],
+    rubric_identity: str,
+) -> str:
     """Covers every reviewer input, the instrument report, the instrument source (the reviewer
-    can read it and the report omits it) and the reviewer model, so a changed instrument or
-    model tier misses instead of replaying a stale verdict."""
-    return _sha(json.dumps([fields, report_json, instrument_source, reviewer_agent_model()], sort_keys=True))
+    can read it and the report omits it), the reviewer model and the reviewer rubric, so a
+    changed instrument, model tier or rubric misses instead of replaying a stale verdict."""
+    return _sha(
+        json.dumps(
+            [fields, report_json, instrument_source, reviewer_agent_model(), rubric_identity],
+            sort_keys=True,
+        )
+    )
 
 
 def _read_cached(repo_root: Path, cache_path: str, falsifier_sha: str, plan_sha: str) -> Optional[dict]:
@@ -154,6 +192,7 @@ def review_inputs(
 
     out: list[ReviewInput] = []
     verdict = None
+    rubric_identity = _reviewer_rubric_identity()
     for plan_path in plan_paths:
         text = _read_plan(plan_path, repo_root)
         fals = _falsifier(text)
@@ -182,10 +221,14 @@ def review_inputs(
             },
             report_json,
             source,
+            rubric_identity,
         )
         plan_sha = _sha(text)
-        cache_path = (report_dir.parent / CACHE_DIR_NAME / f"{Path(plan_path).stem}.verdict.json").as_posix()
-        cached = _read_cached(repo_root, cache_path, falsifier_sha, plan_sha)
+        cache_path: Optional[str] = None
+        cached: Optional[dict] = None
+        if rubric_identity:
+            cache_path = (report_dir.parent / CACHE_DIR_NAME / f"{Path(plan_path).stem}.verdict.json").as_posix()
+            cached = _read_cached(repo_root, cache_path, falsifier_sha, plan_sha)
         if cached is not None:
             # A hit needs no can-report-red report: nothing will read it.
             report_path = report_json = None

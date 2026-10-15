@@ -108,6 +108,44 @@ def test_cli_tokens_prints_table_exit_zero(tmp_path, capsys):
     assert "stage" in out and "TOTAL" in out and "7" in out
 
 
+def _timed(tmp_path, agent_id, phase, start, end):
+    stamp = lambda s: f"2026-01-01T00:00:{s:02d}Z"
+    _agent(tmp_path, agent_id, phase, "m", [
+        {"type": "user", "timestamp": stamp(start)},
+        {"type": "assistant", "timestamp": stamp(end), "message": {}},
+    ])
+
+
+def test_critical_path_three_serial_agents_depth_three(tmp_path):
+    journal = _write_journal(tmp_path, [{"agentId": "a", "type": "started", "label": "plan"}])
+    _timed(tmp_path, "a", "Plan", 0, 10)
+    _timed(tmp_path, "b", "Review", 10, 20)
+    _timed(tmp_path, "c", "Execute", 25, 40)
+    r = wj.critical_path(str(journal))
+    assert (r["legs"], r["depth"], r["span"], r["unplaced"]) == (3, 3, 40.0, [])
+    assert r["chain"] == [("plan", "Plan"), ("b", "Review"), ("c", "Execute")]
+
+
+def test_critical_path_overlap_shortens_depth(tmp_path):
+    journal = _write_journal(tmp_path, [])
+    _timed(tmp_path, "a", "Review", 0, 20)
+    _timed(tmp_path, "b", "Premise", 5, 15)
+    _timed(tmp_path, "c", "Execute", 30, 40)
+    r = wj.critical_path(str(journal))
+    assert (r["legs"], r["depth"]) == (3, 2)
+
+
+def test_critical_path_unreadable_transcript_is_unplaced(tmp_path, capsys):
+    journal = _write_journal(tmp_path, [])
+    _timed(tmp_path, "a", "Plan", 0, 10)
+    _agent(tmp_path, "b", "Review", "m", None)
+    r = wj.critical_path(str(journal))
+    assert (r["legs"], r["depth"], r["unplaced"]) == (2, 1, ["b"])
+    assert wj.main(["workflow-journal", str(journal), "--critical-path"]) == wj.EXIT_OK
+    out = capsys.readouterr().out
+    assert "agent legs: 2" in out and "critical-path depth: 1" in out and "unplaced" in out
+
+
 def _tool_rec(msg_id, out, tools):
     return {"type": "assistant", "message": {
         "id": msg_id,

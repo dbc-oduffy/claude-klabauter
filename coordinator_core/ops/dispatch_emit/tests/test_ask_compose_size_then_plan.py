@@ -175,7 +175,7 @@ def test_gate_refuses_an_absent_sizing(tmp_path):
 
 def test_stop_after_plan_composes_no_stage_execute_or_review():
     script = _compose(stop_after=STOP_AFTER_PLAN)
-    for absent in ("phase('stage')", "phase('execute')", "phase('review')", "_runRow(r.id", "dispatch.terminal_commit"):
+    for absent in ("phase('stage')", "phase('Execute')", "phase('Review wave')", "phase('Verify')", "_runRow(r.id", "dispatch.terminal_commit"):
         assert absent not in script, absent
     assert "planned: [_planRel]" in script and "route: 'dispatch'" in script
     assert "phase('plan')" in script and "phase('size')" in script and "phase('gate')" in script
@@ -192,7 +192,8 @@ def test_stop_after_refuses_an_unknown_value():
 def test_stage_runs_inside_the_plan_agent_only_when_the_script_goes_on_to_stage():
     full = _compose()
     assert "const _authored = await agent(" in full and "_stagedManifest = _authored.manifest ?? null;" in full
-    assert "if (_stagedManifest) { _manifest = _stagedManifest; } else {" in full
+    assert "if (_stagedManifest) { _manifest = _stagedManifest; }" in full
+    assert "if (!_stagedManifest) {\n  phase('stage');" in full
     assert full.index("const _authored") < full.index("if (_stagedManifest) { _manifest")
     assert "label: 'stage'" in full
     planned = _compose(stop_after=STOP_AFTER_PLAN)

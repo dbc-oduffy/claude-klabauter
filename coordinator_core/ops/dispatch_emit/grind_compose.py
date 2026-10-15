@@ -246,7 +246,7 @@ def _sizing_path(run_id: str, scouted: Mapping[str, Any], row_id: str) -> str:
     return f"state/sizings/{d[:4]}-{d[4:6]}-{d[6:8]}-{_slug(scouted.get('name')) or 'sizing'}-{_slug(row_id) or 'row'}.yaml"
 
 
-#: The params block rides the spawn transcript's first record, which `read_spawn_prompt` caps at
+#: The params block rides the spawn transcript's computed-task record, which `read_spawn_prompt` caps at
 #: `READ_CAP_BYTES`. The transcript stores the prompt JSON-escaped, so the budget is measured on the
 #: twice-encoded params, less room for the prompt's own text. Over it, the rows are handed back, never
 #: truncated.

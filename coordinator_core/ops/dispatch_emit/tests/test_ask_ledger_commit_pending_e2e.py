@@ -1,7 +1,7 @@
-"""The composed ask script's parallel tail and ledger-check halt, run under node: a not_met item whose
+"""The composed ask script's one verify leg and ledger-check halt, run under node: a not_met item whose
 only remaining acts follow the commit must not stop the run before its commit stage, the composed
-blocking rule must agree with `requirements_ledger.judge`, and the docs thunk's report settles the
-ledger gaps that name only in-flight doc paths."""
+blocking rule must agree with `requirements_ledger.judge`, and the verify agent's docs report settles
+the ledger gaps that name only declared doc paths it wrote."""
 
 from __future__ import annotations
 
@@ -20,18 +20,15 @@ from coordinator_core.win_portability import no_console_creationflags
 _RUN_TOKEN = "a" * 32
 
 _STUBS = r"""
-const _seen = { phases: [], labels: [], docs: 0 };
+const _seen = { phases: [], labels: [] };
 const phase = (name) => { _seen.phases.push(name); };
 const parallel = (thunks) => Promise.all(thunks.map((t) => t()));
-const _DOC_PATHS = %(doc_paths)s;
 const agent = async (_prompt, opts) => {
   _seen.labels.push(opts.label);
-  if (opts.label === 'ledger-check') return _LEDGER_STUB;
-  if (opts.agentType === 'coordinator:criterion-judge') {
-    if (_LEDGER_STUB && _LEDGER_STUB.__throw) throw new Error('judge refused its schema');
-    return _LEDGER_STUB;
+  if (opts.label === 'verify') {
+    if (_VERIFY_STUB && _VERIFY_STUB.__throw) throw new Error('verify refused its schema');
+    return _VERIFY_STUB;
   }
-  if (opts.label === 'docs') { _seen.docs += 1; return { doc_paths: _DOC_PATHS, note_path: 'n.md', stale_docs: [] }; }
   if (opts.label === 'commit') return { committed: true, sha: 'abc', close: null };
   throw new Error('unstubbed agent label ' + opts.label);
 };
@@ -67,7 +64,7 @@ def _segment(in_run_commit: bool = True, judged: bool = False) -> str:
     script = _compose(
         prompt=None, sizing_rel="state/sizings/x.yaml", in_run_commit=in_run_commit, **(_JUDGE_KW if judged else {})
     )
-    start = script.index("  if (!_halted && _manifest && !_manifest.error) {\n    phase(", script.index("phase('review')"))
+    start = script.index("  if (!_halted && _manifest && !_manifest.error) {\n    phase(", script.index("phase('Review wave')"))
     ret = script.index("  return { arm:", start)
     stop = script.index("};", script.index("get terminal_commit_cli", ret)) + 2
     return "if (true) {\n" + script[start:stop]
@@ -81,11 +78,14 @@ def _run(
     doc_paths: tuple[str, ...] = (),
     judged: bool = False,
 ) -> list[dict]:
-    """One result per ledger-check reply in `stubs`: halted_by, phases run, docs spawns, and the verdict handed to the commit."""
+    """One result per verdict stub in `stubs`: halted_by, phases run, verify spawns, and the verdict handed to the commit.
+
+    An unjudged stub is the ledger reply itself; a judged one is the judge's result, which carries
+    the ledger items beside its verdict. Either is wrapped into the verify agent's reply together
+    with the docs report the agent would return."""
     prelude = _STUBS % {
         "gated": json.dumps([{"id": g, "owner_repo": "sibling", "closure_key": None} for g in gated]),
         "doc_writes": json.dumps(list(doc_writes)),
-        "doc_paths": json.dumps(list(doc_paths)),
         "token": _RUN_TOKEN,
         "owner_rows": ask_compose._OWNER_ROWS_JS,
         "agent_defs": ask_compose._AGENT_DEFS_HELPER_JS,
@@ -93,18 +93,30 @@ def _run(
         "cap": ask_compose.CAP_HELPER_JS,
     }
     body = _segment(in_run_commit, judged).replace(
-        "  return { arm:", "  return { phases: _seen.phases, docs_spawns: _seen.docs, arm:", 1
+        "  return { arm:",
+        "  return { phases: _seen.phases, verify_spawns: _seen.labels.filter((l) => l === 'verify').length, arm:",
+        1,
     )
+    docs = {"doc_paths": list(doc_paths), "note_path": "n.md", "stale_docs": []}
+
+    def reply(stub: dict) -> dict:
+        if stub.get("__throw"):
+            return stub
+        if not judged:
+            return {**stub, **docs}
+        ledger = {k: stub[k] for k in ("items", "all_of_pm_ask", "conflicts") if k in stub}
+        return {"judge": stub, **ledger, **docs}
+
     program = (
         "const _CASES = JSON.parse(process.env.CASES);\n"
-        "async function _once(_LEDGER_STUB) {\n" + prelude + body + "\n}\n"
+        "async function _once(_VERIFY_STUB) {\n" + prelude + body + "\n}\n"
         "(async () => { const out = []; for (const c of _CASES) out.push(await _once(c));"
         " console.log(JSON.stringify(out)); })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });\n"
     )
     proc = subprocess.run(
         [_node(), "-"],
         input=program, capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "CASES": json.dumps(stubs)},
+        env={**os.environ, "CASES": json.dumps([reply(s) for s in stubs])},
         **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
@@ -126,7 +138,7 @@ def test_a_commit_only_not_met_item_reaches_docs_and_commit():
     item = _item("R1", "not_met", remaining=["commit"], evidence="uncommitted")
     (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}])
     assert out["halted_by"] is None, out["halted_by"]
-    assert out["docs_spawns"] == 1 and "commit" in out["phases"]
+    assert out["verify_spawns"] == 1 and out["docs"] is not None and "commit" in out["phases"]
     judged = out["ledger"]["items"]
     assert judged[0]["remaining"] == ["commit"]
 
@@ -148,7 +160,7 @@ def test_an_all_post_commit_ledger_does_not_halt_on_a_fail_verdict():
     item = _item("R1", "post_commit", post_commit_acts=["commit"])
     (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}])
     assert out["halted_by"] is None, out["halted_by"]
-    assert out["docs_spawns"] == 1 and "commit" in out["phases"]
+    assert out["verify_spawns"] == 1 and out["docs"] is not None and "commit" in out["phases"]
 
 
 @pytest.mark.spawns_process
@@ -170,7 +182,7 @@ def test_a_ledger_halt_with_docs_edits_on_disk_still_yields_revise_and_refire():
         [{"verdict": "fail", "items": [item], "conflicts": []}],
         doc_writes=("docs/a.md",), doc_paths=("docs/a.md",),
     )
-    assert out["docs_spawns"] == 1
+    assert out["verify_spawns"] == 1 and out["docs"]["doc_paths"] == ["docs/a.md"]
     assert out["halted_by"]["halted"] == "ledger-check"
     assert out["next_action"]["kind"] == "revise_and_refire" and out["next_action"]["op"] == "workflow.revise"
     assert out["revise_and_refire"] is not None
@@ -188,6 +200,20 @@ def test_a_gap_naming_only_in_flight_doc_paths_docs_wrote_is_settled_without_a_s
     assert out["halted_by"] is None, out["halted_by"]
     assert out["ledger"]["items"][0]["status"] == "met"
     assert "commit" in out["phases"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_path_the_verify_agent_writes_outside_the_declared_docs_still_blocks_closure():
+    """The writer-judge's bound is mechanical: only `_manifest.doc_writes` clears a gap by being written."""
+    item = _item("R1", "not_met", remaining=["docs/out-of-bounds.md"])
+    (out,) = _run(
+        [{"verdict": "fail", "items": [item], "conflicts": []}],
+        doc_writes=("docs/a.md",), doc_paths=("docs/a.md", "docs/out-of-bounds.md"),
+    )
+    assert out["halted_by"] and out["halted_by"]["halted"] == "ledger-check"
+    assert [i["id"] for i in out["halted_by"]["items"]] == ["R1"]
+    assert out["commit"] is None and out["next_action"]["kind"] == "revise_and_refire"
 
 
 @pytest.mark.spawns_process
@@ -306,14 +332,15 @@ def test_a_judge_that_carries_a_met_ledger_projects_it_and_reaches_docs_and_comm
     (out,) = _run([judge], judged=True)
     assert out["halted_by"] is None, out["halted_by"]
     assert [i["id"] for i in out["ledger"]["items"]] == ["R1"] and out["ledger"]["all_of_pm_ask"] is True
-    assert out["docs_spawns"] == 1 and "commit" in out["phases"]
+    assert out["verify_spawns"] == 1 and out["docs"] is not None and "commit" in out["phases"]
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_judge_that_threw_leaves_the_ledger_itemless_and_the_halt_fires():
+def test_a_verify_agent_that_threw_leaves_the_ledger_itemless_the_criterion_indeterminate_and_the_halt_fires():
     (out,) = _run([{"__throw": True}], judged=True)
-    assert out["ledger"] is None
+    assert out["ledger"] is None and out["verify_spawns"] == 1
+    assert out["docs"] is None
     assert out["halted_by"] and out["halted_by"]["halted"] == "ledger-check" and out["halted_by"]["items"] == []
     assert out["next_action"]["kind"] == "revise_and_refire"
 

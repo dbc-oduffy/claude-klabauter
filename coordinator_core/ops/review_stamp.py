@@ -12,8 +12,9 @@ against the reviewed tree.
     integration and delivery sidecars it names, and writes `review_stamp:`
     into the plan frontmatter. Refuses (raises `MintRefusal`) on a FAIL
     delivery verdict, a missing/non-pass build/test record, any unresolved
-    finding, any confinement violation, any foreign claim, or zero product
-    files. Writes nothing else in the plan.
+    finding, any confinement violation, any foreign claim, or zero reviewed
+    files unless the exit criterion is met (`verdict.mint_refusal` owns the rule).
+    Writes nothing else in the plan.
   - `mint(..., repair=True)` (CLI: `mint --repair`): EXPLICIT, never-default
     repair path for a run that landed after the review-integrator
     retirement (commit 3d44bfb122) but before step b' shipped
@@ -39,7 +40,8 @@ against the reviewed tree.
       4. mints against that record exactly as it would a normal one -- the
          same refusal predicates apply unchanged (FAIL delivery, non-pass
          build/test, unresolved findings, confinement violations, foreign
-         claims, zero product files), plus a repair-specific refusal when
+         claims, zero reviewed files unless the exit criterion is met --
+         `verdict.mint_refusal`), plus a repair-specific refusal when
          no prep sidecar or zero wave sidecars are discoverable.
     A run whose sidecar already carries `prep_sidecar` is unaffected by
     `--repair` -- it takes the normal path even with the flag set.

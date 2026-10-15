@@ -110,26 +110,41 @@ def test_the_digest_names_class_both_plans_and_path():
     assert "d.path" in digest
 
 
-@pytest.mark.parametrize(
-    "waves,seam,plan_path",
-    [
-        ([[_row("C1", ["a.py"])], [_row("C2", ["b.py"])]], SeamInputs({}, False), "docs/plans/one.md"),
-        ([[_row("C1", ["a.py"])], [_row("C2", ["b.py"])]], None, "docs/plans/one.md"),
-    ],
-)
-def test_a_single_plan_edge_free_run_emits_no_leg_and_matches_a_run_without_seam_inputs(waves, seam, plan_path):
-    script = _compose(waves, seam, plan_path)
+ONE = "docs/plans/one.md"
+
+
+def _single_plan_waves(reads=("a.py",)):
+    return [[_row("C1", ["a.py"])], [_row("C2", ["b.py"], reads=list(reads))]]
+
+
+@pytest.mark.parametrize("seam", [SeamInputs({}, False), None])
+def test_a_single_plan_one_wave_run_emits_no_leg_and_matches_a_run_without_seam_inputs(seam):
+    waves = [[_row("C1", ["a.py"]), _row("C2", ["b.py"])]]
+    script = _compose(waves, seam, ONE)
     assert "_seam" not in script
     assert "plan.seam_record" not in script
-    assert script == _compose(waves, None, plan_path)
+    assert script == _compose(waves, None, ONE)
 
 
-def test_a_single_plan_run_declaring_capabilities_or_an_edge_emits_the_leg_but_holds_nothing():
-    waves = [[_row("C1", ["a.py"])], [_row("C2", ["b.py"], reads=["a.py"])]]
-    for seam in (SeamInputs({}, True), SeamInputs({"docs/plans/one.md": (P1,)}, False)):
-        script = _compose(waves, seam, "docs/plans/one.md")
+def test_a_single_plan_two_wave_run_emits_the_leg_and_holds_its_read_after_write_row():
+    script = _compose(_single_plan_waves(), SeamInputs({}, False), ONE)
+    assert "plan.seam_record" in script
+    assert "'seam:wave-' + n" in script
+    assert "_seamGates[1]" in _registration(script, "C2")
+    assert "_seamGates" not in _registration(script, "C1")
+
+
+def test_a_single_plan_two_wave_run_whose_rows_read_nothing_composes_the_leg_and_holds_nothing():
+    script = _compose(_single_plan_waves(reads=()), SeamInputs({}, False), ONE)
+    assert "plan.seam_record" in script
+    assert "_seamGates" not in _registration(script, "C2")
+
+
+def test_a_single_plan_run_declaring_capabilities_or_an_edge_holds_its_read_after_write_row():
+    for seam in (SeamInputs({}, True), SeamInputs({ONE: (P1,)}, False)):
+        script = _compose(_single_plan_waves(), seam, ONE)
         assert "plan.seam_record" in script
-        assert "_seamGates[1]" not in _registration(script, "C2")
+        assert "_seamGates[1]" in _registration(script, "C2")
 
 
 def test_a_wave_with_no_committable_row_gets_no_gate_and_no_leg_call():
@@ -368,3 +383,15 @@ def test_seam_sidecars_join_the_terminal_pathspec(tmp_path):
     assert found == ["docs/plans/p1.seam.yaml"]
     assert terminal_commit._seam_sidecars(tmp_path, "docs/plans/p2.md", ["C1"]) == []
     assert terminal_commit._seam_sidecars(tmp_path, None, []) == []
+
+
+@_NODE
+def test_a_single_plan_drift_keeps_the_held_row_out_and_a_clean_leg_dispatches_it(tmp_path):
+    script = _compose(_single_plan_waves(), SeamInputs({}, False), ONE)
+    drift = {"verdict": "DRIFT", "per_plan": {ONE: "DRIFT"}, "findings": [{"class": "drifted-contract", "blocking": True, "plan": ONE, "path": "a.py"}]}
+    out = _run_script(tmp_path, script, drift)
+    assert "seam:wave-1" in out["calls"]
+    assert "work:C2" not in out["calls"]
+    assert out["notStarted"] == ["C2"]
+    clean = _run_script(tmp_path, script, CLEAN_REPLY)
+    assert "work:C2" in clean["calls"] and clean["notStarted"] == []
