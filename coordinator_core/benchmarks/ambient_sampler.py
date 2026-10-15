@@ -29,13 +29,24 @@ def _resolve_live_sessions_count() -> Optional[int]:
         return None
 
 
+def _ram_mb() -> "tuple[Optional[float], Optional[float]]":
+    try:
+        from coordinator_core.telemetry import host_sampler
+
+        avail, total = host_sampler.avail_mb()
+    except Exception:
+        return None, None
+    return (
+        float(avail) if avail is not None else None,
+        float(total) if total is not None else None,
+    )
+
+
 def _windows_process_and_memory_sample() -> "tuple[Optional[int], Optional[float], Optional[float], Optional[float]]":
     import psutil
 
     claude_procs: Optional[int] = None
     cpu_pct: Optional[float] = None
-    ram_free_mb: Optional[float] = None
-    ram_total_mb: Optional[float] = None
 
     try:
         claude_procs = sum(
@@ -46,13 +57,7 @@ def _windows_process_and_memory_sample() -> "tuple[Optional[int], Optional[float
     except Exception:
         claude_procs = None
 
-    try:
-        vm = psutil.virtual_memory()
-        ram_free_mb = vm.available / 1048576.0
-        ram_total_mb = vm.total / 1048576.0
-    except Exception:
-        ram_free_mb = None
-        ram_total_mb = None
+    ram_free_mb, ram_total_mb = _ram_mb()
 
     try:
         cpu_pct = psutil.cpu_percent(interval=0.3)
@@ -74,7 +79,8 @@ def _non_windows_process_sample() -> "tuple[Optional[int], Optional[float], Opti
         )
     except Exception:
         claude_procs = None
-    return claude_procs, None, None, None
+    ram_free_mb, ram_total_mb = _ram_mb()
+    return claude_procs, None, ram_free_mb, ram_total_mb
 
 
 def take_sample() -> dict:

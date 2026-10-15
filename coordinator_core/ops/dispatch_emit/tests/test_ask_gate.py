@@ -183,6 +183,7 @@ def _composed_objects(op: str) -> list:
 
     line = next(ln for ln in _compose().splitlines() if op in ln and "JSON.stringify(" in ln)
     expr = line[line.index("JSON.stringify(") :]
+    expr = re.sub(r",\s*\.\.\.\(_sizingRel \? \{ commit_sizing_path: _sizingRel \} : \{\}\)", "", expr)
     return [
         [pair.split(":")[0].strip() for pair in body.split(",")]
         for body in re.findall(r"\{ ([^{}]*?) \}", expr)

@@ -531,6 +531,15 @@ _SIZED_DENY = "EM edits route through the warp run. " + fire_step(_SESSION_SIZIN
 
 _PLAN_ROUTE_DENY = "This session's sizing routed to a plan. " + fire_step(_SESSION_SIZING)
 
+
+def _escape_tail(session_id: str) -> str:
+    """The logged escape every deny branch names: path, precondition, logging."""
+    return (
+        f"Escape: a reason line in {dispatch_nudge_sentinel_path(session_id)} is "
+        f"honoured once, beside a PM grant or a failed/BLOCKED executor, and logged."
+    )
+
+
 def op(payload: dict) -> dict | None:
     """Deny the main EM's product-code write at every size.
 
@@ -589,12 +598,9 @@ def op(payload: dict) -> dict | None:
         return None
 
     has_sizing, plan_pending = _session_sizing_state(payload, session_id)
+    tail = _escape_tail(session_id)
     if not has_sizing:
-        return deny("PreToolUse", _UNSIZED_DENY)
+        return deny("PreToolUse", f"{_UNSIZED_DENY} {tail}")
     if plan_pending:
-        return deny("PreToolUse", _PLAN_ROUTE_DENY)
-    return deny(
-        "PreToolUse",
-        f"{_SIZED_DENY} No self-escape; if the run's executor BLOCKs, "
-        f"a reason line in {dispatch_nudge_sentinel_path(session_id)} is honoured once.",
-    )
+        return deny("PreToolUse", f"{_PLAN_ROUTE_DENY} {tail}")
+    return deny("PreToolUse", f"{_SIZED_DENY} {tail}")

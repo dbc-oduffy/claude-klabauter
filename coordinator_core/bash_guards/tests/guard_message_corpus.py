@@ -1644,6 +1644,16 @@ def _heredoc_repo_write_advise_setup(
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
+def _move_from_inside_cwd_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    root = scratch_dir.as_posix()
+    return {
+        _CMD_OVERRIDE_KEY: "mv %s/a %s/z" % (root, root),
+        _CWD_OVERRIDE_KEY: "%s/a" % root,
+    }
+
+
 def _headless_plugin_dir_dev_install_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1937,6 +1947,39 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         _REWRITE,
         False,
+    ),
+    CorpusRow(
+        "trailing-background-ampersand",
+        "trailing-background-ampersand-fire",
+        "sleep 5 &",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "trailing-background-ampersand",
+        "trailing-background-ampersand-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "move-from-inside-cwd",
+        "move-from-inside-cwd-fire",
+        "mv a z",
+        True,
+        _REWRITE,
+        True,
+        setup=_move_from_inside_cwd_setup,
+    ),
+    CorpusRow(
+        "move-from-inside-cwd",
+        "move-from-inside-cwd-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        True,
     ),
     CorpusRow(
         "git-commit-safe-commit-advise",

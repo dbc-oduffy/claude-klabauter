@@ -197,15 +197,19 @@ if IS_WINDOWS:
 
 
 def derive_worker_cap() -> int:
+    from coordinator_core.telemetry import host_sampler
+
+    avail = host_sampler.avail_mb()[0]
     try:
         import psutil
 
         physical_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 2
-        usable_ram_gb = psutil.virtual_memory().available / (1024 ** 3)
-        cap = min(physical_cores / 2, usable_ram_gb * 1024 / 150)
+        cap = physical_cores / 2
     except ImportError:
         logical_cores = os.cpu_count() or 2
         cap = logical_cores // 2
+    if avail is not None:
+        cap = min(cap, avail / 150)
 
     return max(1, int(cap))
 

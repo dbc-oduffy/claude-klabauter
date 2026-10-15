@@ -280,6 +280,14 @@ def test_session_sizing_state_reads_the_route(monkeypatch, route, plans, pending
     assert _REAL_SIZING_STATE({"cwd": "/repo"}, "s") == (True, pending)
 
 
+@pytest.mark.parametrize("state", [(False, False), (True, True), (True, False)])
+def test_every_deny_branch_names_the_logged_sentinel_escape(monkeypatch, state) -> None:
+    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: state)
+    reason = _reason(op(_payload()))
+    assert str(_mod.dispatch_nudge_sentinel_path("sess-sizing-1")) in reason
+    assert "reason line" in reason and "logged" in reason
+
+
 def test_subagent_allowed(monkeypatch) -> None:
     _unsized(monkeypatch)
     p = _payload()

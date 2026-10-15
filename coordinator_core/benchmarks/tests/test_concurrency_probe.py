@@ -44,6 +44,24 @@ def _restore_benchmark_origin_env():
             os.environ[op_latency.ORIGIN_ENV] = before
 
 
+def test_read_machine_state_free_ram_comes_from_avail_mb(monkeypatch):
+    from coordinator_core.benchmarks.concurrency_probe import read_machine_state
+    from coordinator_core.telemetry import host_sampler
+
+    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (2048, 8192))
+    state = read_machine_state()
+    assert state.readable is True
+    assert state.free_ram_gb == 2.0
+
+
+def test_read_machine_state_unreadable_avail_fails_closed(monkeypatch):
+    from coordinator_core.benchmarks.concurrency_probe import read_machine_state
+    from coordinator_core.telemetry import host_sampler
+
+    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (None, None))
+    assert read_machine_state().readable is False
+
+
 def test_validate_levels_accepts_ascending_within_cap():
     validate_levels([1, 2, 4], cap=8, override_cap=False)
 

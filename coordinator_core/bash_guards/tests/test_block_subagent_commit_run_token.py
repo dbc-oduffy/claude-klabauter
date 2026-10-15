@@ -81,11 +81,20 @@ def test_wrong_token_run_script_or_shape_is_denied(repo, mutate):
     assert _check(mutate(token)) is not None
 
 
-def test_a_token_admits_one_invocation_only(repo):
+def test_the_guard_checks_without_claiming_so_a_failed_op_run_retries(repo):
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(_cmd(_params(token))) is None
-    # The admit claimed the record: a concurrent second invocation, or a retry, is denied.
+    # The op never ran (its params parse failed): the retry is admitted too.
+    assert _check(_cmd(_params(token))) is None
+    assert run_token.is_live(repo, "ask-1")
+
+
+def test_a_claimed_token_is_denied_until_released(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    assert run_token.redeem(repo, "ask-1", token, _SCRIPT)
     assert _check(_cmd(_params(token))) is not None
+    assert run_token.release(repo, "ask-1", token, _SCRIPT)
+    assert _check(_cmd(_params(token))) is None
 
 
 def test_redeemed_token_no_longer_admits(repo):
