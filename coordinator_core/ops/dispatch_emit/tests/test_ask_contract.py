@@ -116,3 +116,8 @@ def test_scout_return_clause_names_every_required_field():
         assert field in c.SCOUT_RETURN_CLAUSE
     assert c.SCOUT_RETURN_CLAUSE.startswith("Return its inputs:")
     assert c.SCOUT_RETURN_CLAUSE.endswith("never omit one.")
+
+
+def test_scout_return_clause_forbids_suite_tier_names_and_states_the_phrasing():
+    assert "never name a suite tier" in c.SCOUT_RETURN_CLAUSE
+    assert "'tests covering touched files pass'" in c.SCOUT_RETURN_CLAUSE

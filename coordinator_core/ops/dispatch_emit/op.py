@@ -517,7 +517,7 @@ class FiredDriftError(ValueError):
     """
 
 
-def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
+def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
     """Make the run ledger-bearing and, for a `--sizing` run, seed that sizing's
     requirement_register with its PM words and the ask now; a raw ask's sizing is minted in-run and
     its gate binds it (the ask itself, verbatim in ask.md or relayed-ask.md, joins then).
@@ -531,10 +531,11 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
         relayed = ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED
-        ledger.bind(
+        return ledger.bind(
             root, ask_ctx["run_id"], ask_ctx["sizing_rel"],
             ask_text=None if relayed else prompt, relayed_text=prompt if relayed else None,
         )
+    return None
 
 
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
@@ -970,7 +971,13 @@ def _research_route_setup(
         research = {"value_class": "scouts", "appetite": "medium"}
         brief_rel = ""
     shape = research_shape.shape(research)
-    run_id = f"{RUN_ID_PREFIX}research-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    digest = research_emit.ask_digest(root, {
+        "brief": brief_rel or str(ask), "research": research, "lists": lists,
+        "flags": params.get("flags") or {}, "context": [str(c) for c in params.get("context") or ()],
+    })
+    run_id = research_emit.run_id_for(
+        root, RUN_DIR_ROOT, f"{RUN_ID_PREFIX}research-", digest, datetime.now().strftime("%Y%m%dT%H%M%S")
+    )
     local_root = _local_only_root(params, research)
     if local_root is None:
         scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
@@ -1035,7 +1042,10 @@ def _research_route_setup(
         "topic_slug": research_emit.topic_slug(
             str(ask or ""), brief_rel if from_sizing else ""
         ),
+        "value_class": str(research["value_class"]),
     }
+    if from_sizing:
+        close_params["sizing"] = brief_rel
     if local_root is not None:
         close_params["local_root"] = local_root.as_posix()
     if len(segments) > 1:
@@ -1696,7 +1706,12 @@ def _dispatch_emit(
             ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
             ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
-        _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
+        bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
+        ask_ctx["revisions_inherited"] = [
+            {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip()}
+            for i in (bound.items if bound is not None else ())
+            if i.origin == "revision"
+        ]
         receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
@@ -1875,6 +1890,7 @@ def _dispatch_emit(
                 "params": {
                     "scratch_dir": (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).as_posix(),
                     "tier": legacy_tier,
+                    "value_class": legacy_tier,
                     "run_id": pipeline_ctx["run_id"],
                     "topic_slug": research_emit.topic_slug("", pipeline_ctx["inputs"].brief),
                 },
@@ -1902,6 +1918,8 @@ def _dispatch_emit(
         if ask_ctx is not None and ask_ctx.get("run_token"):
             # The run's commit token rides the launch args only: never the script's bytes.
             reply.setdefault("fire_args", {})["runToken"] = ask_ctx["run_token"]
+        if ask_ctx is not None and ask_ctx.get("revisions_inherited"):
+            reply["revisions_inherited"] = list(ask_ctx["revisions_inherited"])
 
     return reply
 

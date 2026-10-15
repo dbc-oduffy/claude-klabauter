@@ -101,8 +101,10 @@ The v4 tier/stage review path (a derived ``review_tier`` routed through
 ``review_mint.roster.parse_stages``/``compose.compose``) is DELETED, not
 degraded into — see the now-superseded design note this replaced,
 ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md``.
-``derive_review_tier`` stays defined (``review_mint.op`` imports it for its
-OWN, pre-execution mint), but nothing in this module calls it any more.
+``derive_review_tier`` is defined here and ``review_mint.op`` imports it for its
+OWN, pre-execution mint; ``compose_script`` also calls it on the plan text it
+already holds and passes the tier to ``compose_execute_review`` so the execute
+wave scales by size (``None`` composes the full roster).
 
 A review wave composes ONLY when the caller supplies BOTH a
 ``review_roster_fragment`` that is ``schema_version 5`` AND
@@ -201,9 +203,9 @@ either/or:
    a plan that carries one already has a terminal verification with a
    recorded baseline and an ``expected_when_true``, which is a BETTER
    terminal phase than any unit suite for a migration a unit suite cannot
-   see (``_falsifier_agent_call_expr``). AC14: when a resolved scope AND a
-   falsifier both exist, the two run together in ONE ``parallel([...])``
-   rather than either alone.
+   see (``_falsifier_agent_call_expr``). When a resolved scope AND a
+   falsifier both exist, the scoped test call is awaited first and the
+   falsifier judge after it, so the judge reads the post-fix check result.
 3. Absent a falsifier too, emit with NO terminal test phase, but LOUD about
    it: a ``log()`` line naming the unmapped paths explicitly
    (``_no_test_target_narration``) — a degraded emit and a fully-tested one
@@ -2959,8 +2961,7 @@ def _test_agent_call_expr(
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
-    assignment, alone or inside a ``parallel([...])`` alongside a falsifier
-    call). Carries a ``schema:`` (``test_result``) so the digest reads a
+    assignment, alone or awaited ahead of a falsifier call). Carries a ``schema:`` (``test_result``) so the digest reads a
     structured result rather than free text, and the prompt now REQUIRES
     ``sidecar_path`` (D1.MK1 -- the build/test carrier ``tests.sidecar``
     copies verbatim). ``typecheck`` (``typecheck_leg``) folds a ``tsc --noEmit``
@@ -3155,8 +3156,7 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
     ``agent(...)`` call EXPRESSION — never a full statement (see
     ``_test_agent_call_expr``'s docstring for why). Runs whenever the plan
     carries a falsifier: alone when no scoped test target resolved (rung
-    2), or alongside the scoped test call inside ONE ``parallel([...])``
-    when both exist (§ Design D4/D1, AC14). Composes a
+    2), or awaited after the scoped test call when both exist. Composes a
     ``coordinator:test-runner`` call the same shape ``_test_agent_call_expr``
     does — same Tier-T-only agent type, same phase — so this is not a
     lesser terminal phase, just a differently-sourced one; see module
@@ -5134,9 +5134,19 @@ def compose_script(
             "review_stamp._resolve_terminal_commit keys the terminal-"
             "commit lookup on this field."
         )
+    wave_tier = (
+        derive_review_tier(
+            plan_path,
+            repo_root=Path(repo_root) if repo_root is not None else _REPO_ROOT,
+            plan_text=plan_text,
+        )
+        if plan_path and plan_text
+        else None
+    )
     for title, block in compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
+        tier=wave_tier,
         plan_path=plan_path or "",
         run_base_sha=stage_base,
         slice_identity_sha=run_base_sha or "",
@@ -5285,15 +5295,14 @@ def compose_script(
                 guarded_blocks.append(criterion_block)
                 falsifier_var = _FALSIFIER_RESULT_VAR
         elif criterion_expr is not None:
-            # AC14: both a resolved scope and the criterion leg run in ONE
-            # parallel([...]) after the integration stage.
+            # Serial, not parallel: the criterion judge must read the post-fix scoped test
+            # result, so it starts only after the test call (owed row build gates included) lands.
             phase_titles.append(_TEST_PHASE_TITLE)
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
-                f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)},\n"
-                f"    () => {criterion_expr},\n"
-                "  ]);"
+                f"  {_TEST_RESULT_VAR} = await "
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};\n"
+                f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
             )
             test_var = _TEST_RESULT_VAR
             falsifier_var = _FALSIFIER_RESULT_VAR

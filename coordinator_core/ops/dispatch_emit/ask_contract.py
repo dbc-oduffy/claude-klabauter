@@ -37,7 +37,8 @@ SIZING_ASSEMBLE_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-s
 SCOUT_RETURN_CLAUSE = (
     "Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), "
     "name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with "
-    "premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` "
+    "premise_evidence, exit_criterion (one sentence stating what done means; never name a suite tier or a "
+    "test-runner command in it -- write 'tests covering touched files pass'), and as `writes` "
     "the repo-relative files the ask will create, edit or delete -- every file the ask names, "
     "plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set "
     "jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), "

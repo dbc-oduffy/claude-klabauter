@@ -225,6 +225,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     # of plan.stamp_prepped; the DoE-side runnable half is
     # coordinator/bin/mise-prep-gate.py and the two must agree.
     "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
+    "plan.readiness_verdict":                 "coordinator_core.ops.plan_readiness_verdict",
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
     "plan.gated_criteria_met":                "coordinator_core.ops.plan_gated_criteria_met",
     "plan.cross_plan_gate":                   "coordinator_core.ops.plan_cross_plan_gate",
@@ -301,6 +302,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "groupem.idle_report":                    "coordinator_core.ops.group_em_idle_report",
     "groupem.standing":                       "coordinator_core.ops.group_em_standing",
     "groupem.box_hold":                       "coordinator_core.ops.group_em_box_hold",
+    "workstream_complete.stand_down_watchers": "coordinator_core.ops.watcher_stand_down",
     "session.work_state":                     "coordinator_core.ops.session_work_state",
     "session.artifact_owner":                 "coordinator_core.ops.session_artifact_owner",
     "session.incident_claim":                 "coordinator_core.ops.session_incident_claim",
@@ -409,6 +411,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "review.snapshot_diff_and_head":          "coordinator_core.ops.ceremony.snapshot_diff_and_head",
     "review.freeze_diff":                     "coordinator_core.ops.review_freeze_diff",
     "review.partition_slices":                "coordinator_core.ops.review_partition_slices",
+    "review.prep":                            "coordinator_core.ops.review_prep",
     "review.reachability":                    "coordinator_core.ops.review_reachability",
     "workday.stitch_sidecar_into_summary":    "coordinator_core.ops.workday_stitch_sidecar_summary",
     "repo_setup.validate_target_root":        "coordinator_core.ops.bootstrap_repo",

@@ -84,7 +84,11 @@ def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
         review_roster_fragment=roster, review_stage_schemas={**_V5_STAGE_SCHEMAS, "judge": {"type": "object"}},
     )
     assert "criterion-judge" in script
-    assert script.count(_CLAUSE) >= 3
+    assert "label: 'ledger-check'" not in script
+    judge = script[: script.index("agentType: 'coordinator:criterion-judge'")]
+    judge = judge[judge.rindex("agent("):]
+    assert "Ledger check, folded" in judge and "root_read" in judge and "engine-plane" in judge
+    assert script.count(_CLAUSE) >= 2
 
 
 def test_clause_names_git_c_owner_root_and_unreadable_fallback():

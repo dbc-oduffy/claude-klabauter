@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/readiness-verdict.schema.json",
+  "title": "plan.readiness_verdict reply",
+  "description": "Reply of the plan.readiness_verdict op: the prep gate computed in-process plus the mechanical readiness verdict. verdict 'ready' with empty mechanical_repairs means no prep-gate or readiness agent is owed. Spec: coordinator_core/contract/readiness-verdict-producer-contract.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plan", "verdict", "pull_class", "mechanical_repairs", "prep_gate", "reason"],
+  "if": { "properties": { "pull_class": { "enum": ["none", "substantive"] } } },
+  "then": { "properties": { "mechanical_repairs": { "maxItems": 0 } } },
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Repo-relative path of the plan the verdict was computed over."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["ready", "pulled", "judgment"],
+      "description": "ready: nothing owed. pulled: the plan must be revised before it is ready. judgment: a reviewer verdict or a judgment finding needs an agent."
+    },
+    "pull_class": {
+      "type": "string",
+      "enum": ["none", "mechanical", "substantive"],
+      "description": "none when verdict is ready or judgment without a pull; mechanical when every pulling finding is repaired by mechanical_repairs; substantive otherwise (full re-review path)."
+    },
+    "mechanical_repairs": {
+      "type": "array",
+      "description": "Targeted revisions a revise block applies without a second review round. Empty unless pull_class is mechanical.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "target", "instruction"],
+        "properties": {
+          "kind": { "type": "string", "maxLength": 100 },
+          "target": { "type": "string", "maxLength": 300, "description": "Row id, section or plan path the repair edits." },
+          "instruction": { "type": "string", "maxLength": 1000 }
+        }
+      }
+    },
+    "prep_gate": {
+      "type": "object",
+      "description": "The plan.prep_gate reply, verbatim (verdict PREPPED | NOT-PREPPED | REFUSED, withheld_rows, classes, message, stamp, engine_build). classes, stamp and engine_build are deliberately untyped objects: passthrough of plan.prep_gate, whose schema owns them.",
+      "required": ["plan", "verdict", "withheld_rows", "classes", "message"],
+      "properties": {
+        "plan": { "type": "string" },
+        "verdict": { "type": "string", "enum": ["PREPPED", "NOT-PREPPED", "REFUSED"] },
+        "withheld_rows": { "type": "array", "items": { "type": "string" } },
+        "classes": { "type": "object" },
+        "message": { "type": "string" },
+        "stamp": { "type": "object" },
+        "engine_build": { "type": "object" }
+      }
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "One-line statement of why the verdict holds."
+    }
+  }
+}

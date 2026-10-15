@@ -88,6 +88,8 @@ def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
         "run_id": reply["run_id"],
         "topic_slug": "r",
         "segment_dirs": ["web", "notebooklm"],
+        "value_class": "corpus",
+        "sizing": rel,
     }
     assert f"next_action: {json.dumps(close, sort_keys=True)}" in script
 
@@ -123,6 +125,8 @@ def test_research_ask_writes_ask_md_and_binds_it_as_the_brief(repo, capsys):
     assert "what-is-x" in script
     assert reply["next_action"]["params"]["topic_slug"] == "what-is-x"
     assert reply["next_action"]["params"]["tier"] == "scouts"
+    assert reply["next_action"]["params"]["value_class"] == "scouts"
+    assert "sizing" not in reply["next_action"]["params"]
 
 
 def test_research_ask_spawns_no_process(repo, capsys, monkeypatch):

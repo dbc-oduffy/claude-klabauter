@@ -99,6 +99,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     op_scope_coverage_gate,
     registration_quad_gate,
 )
+from coordinator_core.ops.ceremony.commit_admission import skill_weight_check_worktree
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
 from coordinator_core.ops.ceremony.commit_companion import untracked_companions
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
@@ -946,6 +947,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         session_id_override=session_id_override,
     )
 
+    skill_weight_refusal, skill_weight_note = skill_weight_check_worktree(
+        worktree_root, raw_paths, raw_deleted
+    )
+    if skill_weight_refusal is not None:
+        return _error(skill_weight_refusal)
+
     try:
         outcome = commit_paths(
             worktree_root,
@@ -1012,6 +1019,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
+    if skill_weight_note is not None:
+        warnings.append(skill_weight_note)
     residue_note = residue_advisory(worktree_root, list(raw_paths) + list(raw_removed))
     if residue_note is not None:
         warnings.append(residue_note)

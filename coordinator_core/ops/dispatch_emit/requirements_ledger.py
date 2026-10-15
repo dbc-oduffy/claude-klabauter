@@ -717,7 +717,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": str(exc)}
     from coordinator_core.ops.dispatch_emit import run_token
 
-    return {
+    live = run_token.is_live(root, params["run_id"])
+    out = {
         "ok": True,
         "run_id": params["run_id"],
         "item": added,
@@ -725,5 +726,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "all_of_pm_ask": ledger.all_of_pm_ask,
         "sizing": ledger.sizing_rel,
         "ledger": (dir_ / LEDGER_VIEW_FILE).relative_to(root.resolve()).as_posix(),
-        "run_live": run_token.is_live(root, params["run_id"]),
+        "run_live": live,
+    }
+    if not live:
+        out.update(_refire(ledger.sizing_rel))
+    return out
+
+
+def _refire(sizing_rel: Optional[str]) -> dict:
+    """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which will."""
+    from coordinator_core.warp_fire import fire_command
+
+    return {
+        "next": {"kind": "refire", "call": fire_command(sizing_rel)},
+        "note": "run finished: nothing reads this revision until a refire.",
     }

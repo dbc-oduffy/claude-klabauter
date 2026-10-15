@@ -1117,7 +1117,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.37.0 -> 1.38.0 (2026-10-13): APM-ruling `accepted` arm admits `hands-on` mode (below XL).
     # Moved 1.38.0 -> 1.38.1 (2026-10-14): DoE 550f72bc20, description only -- `superseded`
     # covers a refused or abandoned run with no successor and no decision record (sizing.supersede).
-    assert schema["x-schema-version"] == "1.38.1"
+    # Moved 1.38.1 -> 1.39.0 (2026-10-15): DoE 6930997bb4, `spike` joins research.value_class.
+    assert schema["x-schema-version"] == "1.39.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1148,10 +1149,10 @@ def test_completion_entry_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/completion-entry.schema.json"
         ).read_text(encoding="utf-8")
     )
-    # 1.5.0 since 19dcc3a785 vendored the completion-receipts fields, a
-    # top-level array addition; this pin follows the vendored bytes.
-    assert schema["x-schema-version"] == "1.5.0"
-    assert schema["x-bump-class"] == "top-level-array-additive"
+    # 2.0.0 drops released_in/released_at/released_sha; this pin follows the
+    # vendored bytes.
+    assert schema["x-schema-version"] == "2.0.0"
+    assert schema["x-bump-class"] == "major"
 
 
 def test_vendored_schema_widened_enums_order_exact():

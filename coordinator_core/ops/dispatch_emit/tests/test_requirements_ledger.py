@@ -135,6 +135,24 @@ def test_run_live_reports_the_unredeemed_run_token(run):
     assert _revise(repo, verbatim="c")["run_live"] is False
 
 
+def test_a_non_live_run_replies_the_refire_next_and_a_live_one_does_not(run):
+    from coordinator_core.warp_fire import fire_command
+
+    repo, _d = run
+    out = _revise(repo, verbatim="a")
+    assert out["next"] == {"kind": "refire", "call": fire_command(REL)}
+    assert "refire" in out["note"]
+    run_token.mint(repo, RUN, "s.mjs")
+    live = _revise(repo, verbatim="b")
+    assert "next" not in live and "note" not in live
+
+
+def test_a_non_live_run_with_no_sizing_names_the_raw_ask_form(repo):
+    rl.start(repo, RUN)
+    out = _revise(repo, verbatim="early")
+    assert out["sizing"] is None and '"ask"' in out["next"]["call"] and '"sizing"' not in out["next"]["call"]
+
+
 def test_revise_spawns_nothing_and_holds_the_bar(run, monkeypatch):
     repo, _d = run
 

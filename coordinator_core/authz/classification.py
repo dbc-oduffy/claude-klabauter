@@ -1298,6 +1298,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"plan", "verdict", "withheld_rows", "classes", "message", "stamp"}.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
     "plan.prep_gate": OpClass.COMPUTE_ONLY,
+    # plan.readiness_verdict — COMPUTE_ONLY: runs the plan.prep_gate read over ONE plan and
+    # combines it with caller-supplied coverage and reviewer values into a verdict.
+    #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
+    #   3. Opens any file for write? No.  4. Shared mutable state? No.
+    #   5. Persistent state changes observable across processes? No.
+    # Spec: coordinator_core/contract/readiness-verdict-producer-contract.md
+    "plan.readiness_verdict": OpClass.COMPUTE_ONLY,
     # plan.cross_plan_gate — COMPUTE_ONLY: reads one plan plus the predecessor plans
     # its depends_on_plan edges name and RETURNS whether they are satisfied.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
@@ -2115,6 +2122,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (worktree mode), writing state/review-trail/diffs/<slice_id>.{diff,head.sha}. DR-208 answers
     # are those of review.freeze_diff above; it commits nothing and writes no other file.
     "review.partition_slices": OpClass.MUTATING,
+    # review.prep — MUTATING: freezes the whole diff and each slice through review_freeze_diff
+    # (state/review-trail/diffs/<slice_id>.{diff,head.sha}) and writes one prep sidecar under the
+    # session share dir. DR-208 answers are those of review.partition_slices above; it commits nothing.
+    "review.prep": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # Backfill: 3 ops registered by concurrent sessions (records.query / ceremony.*) without a
     # classification entry, leaving the drift-guard gate RED on HEAD.
@@ -2547,6 +2558,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.box_hold -- MUTATING: writes or removes
     # <settings-home>/state/group-em/box/hold.json.
     "groupem.box_hold": OpClass.MUTATING,
+    # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
+    # attributed watcher trees and removes the Group EM holder record.
+    "workstream_complete.stand_down_watchers": OpClass.MUTATING,
     # groupem.idle_report -- COMPUTE_ONLY: idle_report.build_report only
     # reads peer transcripts, the harness registry, and the Group-EM's own
     # offer log; it writes nothing.

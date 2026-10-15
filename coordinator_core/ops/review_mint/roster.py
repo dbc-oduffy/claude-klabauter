@@ -6,10 +6,12 @@ No file I/O and no cross-repo pointer resolution; ``op.load_fragment`` reads the
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 _VALID_EFFORTS = frozenset({"low", "medium", "high"})
+#: The tiers ``dispatch_emit.emit.derive_review_tier`` returns.
+VALID_TIERS = frozenset({"lightweight", "standard", "full"})
 _VALID_PER_VALUES = frozenset({"slice", "whole-diff"})
 
 
@@ -52,6 +54,8 @@ class ReviewAgent:
     applies: Optional[str]
     schema: str
     accepts_signals: Optional[str] = None
+    #: Review tiers this agent runs at; ``None`` runs at every tier.
+    tiers: Optional[Tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +218,20 @@ def _resolve_review_agent(
         )
     applies = raw_agent.get("applies")
 
+    raw_tiers = raw_agent.get("tiers")
+    tiers: Optional[Tuple[str, ...]] = None
+    if raw_tiers is not None:
+        if (
+            not isinstance(raw_tiers, list)
+            or not raw_tiers
+            or any(t not in VALID_TIERS for t in raw_tiers)
+        ):
+            raise RosterFragmentError(
+                f"execute_review stage {stage_index} agent entry 'tiers' {raw_tiers!r} "
+                f"must be a non-empty list drawn from {sorted(VALID_TIERS)!r}"
+            )
+        tiers = tuple(raw_tiers)
+
     agent_type = raw_agent.get("agentType")
     accepts_signals = raw_agent.get("accepts_signals")
 
@@ -250,6 +268,7 @@ def _resolve_review_agent(
                 applies=applies,
                 schema=schema,
                 accepts_signals=None,
+                tiers=tiers,
             )
         ]
 
@@ -269,6 +288,7 @@ def _resolve_review_agent(
             applies=applies,
             schema=schema,
             accepts_signals=accepts_signals,
+            tiers=tiers,
         )
         for resolved_type in selected
     ]

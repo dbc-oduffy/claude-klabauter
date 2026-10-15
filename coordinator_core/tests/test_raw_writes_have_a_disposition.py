@@ -319,7 +319,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/plan_chain/digest.py': ('claims-explicitly', 'final digest under the trail dir, declared through declare_write: write_final_digest'),
     'coordinator_core/ops/plan_chain/phase1_checks.py': ('ignored-target', 'completeness sidecar under .coordinator-local/plan-sidecars (gitignored)'),
     'coordinator_core/ops/plan_chain/plan_stage.py': ('claims-explicitly', 'bound plan script under the trail dir, declared through declare_write'),
-    'coordinator_core/ops/research_close.py': ('ignored-target', 'scouts digest.md under the run scratch dir (gitignored scratch/): _close_scouts'),
+    'coordinator_core/ops/research_close.py': ('in-repo-non-state', 'scouts digest.md in the gitignored run scratch dir (_build_digest); archived copies and the docs/research/trail record are written in-repo and committed by _close_committed'),
     'coordinator_core/ops/seam_baton_mint.py': ('claims-explicitly', 'exclusive-create staged batons under state/handoffs/ and state/seam-baton-index.json, declared through declare_write'),
     'coordinator_core/percolate/guard_cache.py': ('git-internal', 'publish parse cache under the destination repo git dir'),
     'coordinator_core/workstream_complete/apply.py': ('in-repo-non-state', 'review-notes section appended to the completion entry under archive/completed/'),

@@ -36,7 +36,9 @@ def test_closeable_predicate_gates_next_action_and_both_commit_stages(monkeypatc
     assert "!_halted" in pred and "_manifest.error" in pred
     assert "_deliveryVerdict.verdict === 'FAIL'" in pred
     assert "_closeable ? { kind: 'terminal_commit'" in script
-    assert script.count(_LIVE) == 2
+    assert script.count(_LIVE) == 1
+    assert ask_compose._DOCS_PRE_TAIL_GUARD in script
+    assert script.index(ask_compose._DOCS_PRE_TAIL_GUARD) < script.index("const _closeable = ")
     assert script.index("const _closeable") < script.index("_nextAction = _closeable")
 
 

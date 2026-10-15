@@ -107,6 +107,52 @@ def test_plan_route_composes_execute_review(tmp_path, monkeypatch):
     assert "_reviewPrep" in script and "_reviewWave" in script
 
 
+def _tiered_fragment():
+    fragment = copy.deepcopy(_V5_FRAGMENT)
+    wave = fragment["execute_review"]["stages"][1]["agents"]
+    wave.append(
+        {
+            "agentType": "coordinator:delivery-verifier",
+            "model": "sonnet",
+            "effort": "low",
+            "per": "whole-diff",
+            "schema": "wave",
+            "tiers": ["standard", "full"],
+        }
+    )
+    return fragment
+
+
+def _sized_plan_params(tmp_path, tshirt):
+    sizing = tmp_path / "state" / "sizings" / "s.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text(f"estimate:\n  tshirt: {tshirt}\n", encoding="utf-8")
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        _PLAN.replace("---\n---", "---\nsizing_object: state/sizings/s.yaml\n---", 1),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "out.mjs"
+    return {"plan_path": str(plan_path), "output_path": str(output_path)}, output_path
+
+
+@pytest.mark.parametrize(
+    ("tshirt", "verifier_present"), [("XS", False), ("M", True)]
+)
+def test_plan_route_scales_the_execute_wave_by_size(
+    tmp_path, monkeypatch, tshirt, verifier_present
+):
+    _patch_loaders(monkeypatch, _tiered_fragment())
+    params, output_path = _sized_plan_params(tmp_path, tshirt)
+
+    result = _dispatch_emit(params, repo_root=tmp_path)
+
+    assert result["ok"] is True, result["findings"]
+    script = output_path.read_text(encoding="utf-8")
+    assert "coordinator:code-reviewer" in script
+    assert ("acting as the delivery-verifier reviewer" in script) is verifier_present
+
+
 def test_inventory_route_composes_execute_review(tmp_path, monkeypatch):
     _patch_loaders(monkeypatch, _V5_FRAGMENT)
     params, output_path = _inventory_params(tmp_path)

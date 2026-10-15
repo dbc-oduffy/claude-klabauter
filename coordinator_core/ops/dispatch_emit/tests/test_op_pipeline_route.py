@@ -162,6 +162,7 @@ def test_a_research_manifest_fired_by_name_closes_through_research_close(stubs, 
     reply = _dispatch_emit(_params(tmp_path, pipeline="notebooklm"))
     params = reply["next_action"]["params"]
     assert reply["next_action"]["op"] == "research.close"
+    assert params["value_class"] == "corpus"
     assert params["tier"] == "corpus" and params["run_id"] == reply["run_id"] and params["topic_slug"] == "brief"
     assert params["scratch_dir"] == (tmp_path / reply["scratch_dir"]).as_posix()
     assert "next_action" not in _dispatch_emit(_params(tmp_path))

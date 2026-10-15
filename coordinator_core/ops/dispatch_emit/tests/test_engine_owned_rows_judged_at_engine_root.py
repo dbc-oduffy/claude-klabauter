@@ -113,6 +113,27 @@ def test_ledger_check_and_judge_prompts_carry_the_engine_clause_and_root_read(mo
     assert "root_read" in str(ask_compose._LEDGER_CHECK_SCHEMA)
 
 
+def test_the_folded_judge_carries_the_engine_clause_and_root_read(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    roster = copy.deepcopy(_V5_ROSTER_FRAGMENT)
+    roster["execute_review"]["stages"][1]["agents"].append(
+        {"agentType": "coordinator:delivery-verifier", "model": "opus", "effort": "low", "per": "whole-diff", "schema": "wave"}
+    )
+    roster["execute_review"]["stages"].append(
+        {"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus", "effort": "low", "schema": "judge"}]}
+    )
+    script = compose_ask_script(
+        repo_root="REPO", prompt=None, sizing_rel="state/sizings/x.yaml", run_id="run-1", session_id=None,
+        wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub", script_path="x.mjs",
+        review_roster_fragment=roster, review_stage_schemas={**_V5_STAGE_SCHEMAS, "judge": {"type": "object"}},
+    )
+    assert "label: 'ledger-check'" not in script
+    judge = script[: script.index("agentType: 'coordinator:criterion-judge'")]
+    judge = judge[judge.rindex("agent(") :]
+    assert "engine-plane row" in judge and "root_read" in judge
+    assert '"root_read"' in script[script.index("agentType: 'coordinator:criterion-judge'") :].split("\n", 1)[0]
+
+
 def _ledger() -> Ledger:
     return Ledger(
         items=(
@@ -129,7 +150,7 @@ def test_verdict_naming_the_engine_root_passes(world):
         {"id": "T8", "status": "met", "root_read": root},
         {"id": "T1", "status": "met"},
     ]}
-    assert judge(_ledger(), verdict, routed={"T8": root}) == {"pass": True, "failures": []}
+    assert judge(_ledger(), verdict, routed={"T8": root}) == {"pass": True, "failures": [], "open": []}
 
 
 def test_verdict_naming_the_cwd_root_for_an_engine_row_fails_as_misrouted(world):
