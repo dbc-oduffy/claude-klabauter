@@ -36,6 +36,7 @@ PLANS = 850  # docs/plans/*.md on the real repo
 COMPLETIONS = 650  # archive/completed/*/*.md on the real repo
 PENDING_RELEASE = 120  # of those, the week's pending-release entries
 DOC_LINES = 20  # above ops.doc_staleness.DEFAULT_SWEEP_LINES_THRESHOLD (15)
+SENTINEL_ID = "jp_step10_semver_judgment"  # judgment point the brief must emit; proves the timed run produced a real result
 WEEK_START ="2026-10-05"
 DOCS = ("README.md", "INSTALL.md", "CONTEXT.md", "CONTRIBUTING.md", "docs/guide.md")
 _REGISTRY = (
@@ -171,9 +172,9 @@ def main(argv: list[str]) -> int:
     for _ in range(calls):
         rc, envelope = brief.brief()
         ids = [p.get("id", "") for p in envelope.get("judgment_points", [])]
-        if rc != 0 or not any(i.startswith("jp_doc_staleness_") for i in ids):
+        if rc != 0 or SENTINEL_ID not in ids:
             print(
-                f"brief did not report the fixture's stale docs (rc={rc}): {ids[:5]!r}",
+                f"brief did not report {SENTINEL_ID} (rc={rc}): {ids[:5]!r}",
                 file=sys.stderr,
             )
             return 1

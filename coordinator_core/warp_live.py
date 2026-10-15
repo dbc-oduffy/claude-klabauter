@@ -9,6 +9,9 @@ The task is found through the submission record this module writes beside the ru
 the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) capture
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
+A run whose submitting call was refused (no launch record and a lone non-launch `tool_result`
+for the stored `tool_use_id`) has ended too, for every reader and every session.
+
 A token owns a sizing only when its record names it: from the emit (a `--sizing` run) or from the
 gate's `bind_sizing` (a raw ask). A raw ask's run is also reachable through `live_run_for_session`.
 `unlaunched_run_for_sizing` names this session's token whose submitting call was refused (a
@@ -145,13 +148,23 @@ def _task_ended(transcript_tail: str, task_id: str) -> bool:
 
 
 def _run_ended(
-    session_id: object, script_path: object, transcript_path: object, minted_at: float, dirs: list[str]
+    session_id: object,
+    script_path: object,
+    transcript_path: object,
+    minted_at: float,
+    dirs: list[str],
+    tool_use_id: object = None,
 ) -> bool:
-    """True once the harness reported the run's task terminal, or its launch never happened."""
+    """True once the harness reported the run's task terminal, or its launch never happened:
+    the submitting call was refused, or the unlaunched grace has passed."""
     if not isinstance(session_id, str) or not isinstance(script_path, str):
         return False
     task_ids = _launched_task_ids(session_id, script_path, dirs)
     if not task_ids:
+        if isinstance(tool_use_id, str) and tool_use_id and isinstance(transcript_path, str) and transcript_path:
+            tail = _tail(transcript_path)
+            if tail and _call_refused(tail, tool_use_id):
+                return True
         return time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS
     if not isinstance(transcript_path, str) or not transcript_path:
         return False
@@ -169,7 +182,9 @@ def _record_live(
         transcript_path if run_session and run_session == session_id else None
     )
     script = submission.get("script_path") or record.get("script_path")
-    return not _run_ended(run_session, script, transcript, float(record["minted_at"]), dirs)
+    return not _run_ended(
+        run_session, script, transcript, float(record["minted_at"]), dirs, submission.get("tool_use_id")
+    )
 
 
 def live_run_for_sizing(

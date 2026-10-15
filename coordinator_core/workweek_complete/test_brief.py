@@ -44,29 +44,6 @@ def test_validate_gate_cli_is_a_manifest_member() -> None:
     assert "validate-fast-and-packageability" in wwc_brief.CONSUMES_MANIFEST
 
 
-def test_doc_staleness_evidence_omits_changed_areas() -> None:
-    line = wwc_brief._doc_staleness_evidence(
-        {
-            "path": "README.md",
-            "commits_since": 9000,
-            "threshold_commits": 8000,
-            "days_since": 40,
-            "threshold_days": 30,
-            "last_touch_sha": "abc1234",
-            "last_touch_date": "2026-09-01",
-            "changed_areas": [],
-        }
-    )
-    assert "commits_since=9000" in line
-    assert "days_since=40" in line
-    assert "last_touch=abc1234@2026-09-01" in line
-    assert "changed_areas" not in line
-    assert line == (
-        "README.md: commits_since=9000 (threshold 8000), days_since=40 "
-        "(threshold 30), last_touch=abc1234@2026-09-01"
-    )
-
-
 def _load_trampoline_parser() -> argparse.ArgumentParser:
     path = (
         Path(__file__).resolve().parents[2]
@@ -81,10 +58,7 @@ def _load_trampoline_parser() -> argparse.ArgumentParser:
 
 
 def test_no_directive_runs_the_doc_staleness_cli() -> None:
-    directives = wwc_brief._build_directives(
-        stale_docs=[{"path": "README.md"}, {"path": "docs/guides/alpha.md"}],
-        repo_root=None,
-    )
+    directives = wwc_brief._build_directives(repo_root=None)
     assert not any(d["cli"] == "workweek-complete-doc-staleness" for d in directives)
     assert not any(
         d["id"].startswith("d_step4b_4k_doc_staleness") for d in directives
@@ -98,13 +72,19 @@ def test_trampoline_parser_takes_doc_and_has_no_ack_flag() -> None:
         parser.parse_args(["--doc", "README.md", "--ack"])
 
 
-def test_doc_staleness_judgment_dispositions_resolve_no_directive() -> None:
-    points = wwc_brief._build_judgment_points(
-        stale_docs=[{"path": "README.md"}]
-    )
-    point = next(p for p in points if p["id"] == "jp_doc_staleness_readme_md")
-    assert [d["value"] for d in point["dispositions"]] == [
-        "reviewed_ok",
-        "queued_for_update",
+def test_brief_emits_no_doc_staleness_id_and_never_enters_the_op(monkeypatch) -> None:
+    import sys
+
+    from coordinator_core.workweek_complete.brief_inputs import BriefInputs
+
+    for name in [m for m in sys.modules if m.endswith("ops.doc_staleness")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(wwc_brief, "compute_brief_inputs", lambda *a, **k: BriefInputs())
+    monkeypatch.setattr(wwc_brief, "resolve_operator_config", lambda env=None: None)
+    exit_code, envelope = wwc_brief.brief()
+    assert exit_code == 0
+    ids = [d["id"] for d in envelope["directives"]] + [
+        p["id"] for p in envelope["judgment_points"]
     ]
-    assert all(d["resolves"] == [] for d in point["dispositions"])
+    assert not any("doc_staleness" in i for i in ids)
+    assert not any(m.endswith("ops.doc_staleness") for m in sys.modules)

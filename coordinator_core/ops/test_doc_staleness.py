@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops import doc_staleness
 from coordinator_core.ops.doc_staleness import (
+    _has_commit_graph,
     build_doc_staleness_report,
     build_doc_staleness_report_from_registry,
 )
@@ -252,7 +254,8 @@ def _write_registry(repo: Path, docs: list[str], commits: int, days: int) -> Non
     )
 
 
-def test_from_registry_reads_docs_and_thresholds(tmp_path):
+def test_from_registry_reads_docs_and_thresholds(tmp_path, monkeypatch):
+    monkeypatch.setattr(doc_staleness, "_has_commit_graph", lambda _root: True)
     repo = _repo_with_old_touch(tmp_path)
     _fillers(repo, THRESHOLD_COMMITS + 1, 30)
     _write_registry(repo, ["README.md", "CONTEXT.md"], THRESHOLD_COMMITS, THRESHOLD_DAYS)
@@ -263,7 +266,8 @@ def test_from_registry_reads_docs_and_thresholds(tmp_path):
     assert by_path["CONTEXT.md"]["status"] == "absent"
 
 
-def test_from_registry_defaults_do_not_flag_a_small_repo(tmp_path):
+def test_from_registry_defaults_do_not_flag_a_small_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(doc_staleness, "_has_commit_graph", lambda _root: True)
     repo = _repo_with_old_touch(tmp_path)
     _fillers(repo, THRESHOLD_COMMITS + 1, 30)
     out = build_doc_staleness_report_from_registry(str(repo))
@@ -412,3 +416,51 @@ def test_commits_since_is_exact_when_a_side_branch_forks_before_the_touch(tmp_pa
     entry = _report(repo)
     assert entry["last_touch_sha"] == touch_sha
     assert entry["commits_since"] == int(expected) == 6
+
+
+_SKIP = {"docs": [], "skipped": doc_staleness.NO_COMMIT_GRAPH_SKIP}
+
+
+def test_from_registry_names_the_skip_on_a_graph_free_repo_and_spawns_no_git(tmp_path, monkeypatch):
+    repo = _repo_with_old_touch(tmp_path)
+    _write_registry(repo, ["README.md"], THRESHOLD_COMMITS, THRESHOLD_DAYS)
+
+    def refuse(*_a, **_k):
+        raise AssertionError("git spawned on a graph-free repo")
+
+    monkeypatch.setattr(doc_staleness, "_git", refuse)
+    monkeypatch.setattr(doc_staleness, "run_git", refuse)
+    assert build_doc_staleness_report_from_registry(str(repo)) == _SKIP
+
+
+def test_from_registry_walks_a_repo_with_a_commit_graph(tmp_path):
+    from coordinator_core.benchmarks.doc_staleness_full_path import ensure_fixture
+
+    repo = ensure_fixture(tmp_path)
+    _write_registry(repo, ["README.md", "INSTALL.md"], THRESHOLD_COMMITS, THRESHOLD_DAYS)
+    out = build_doc_staleness_report_from_registry(str(repo))
+    assert "skipped" not in out
+    assert {d["path"]: d["status"] for d in out["docs"]} == {"README.md": "ok", "INSTALL.md": "ok"}
+
+
+def test_has_commit_graph_follows_a_gitdir_file_and_commondir(tmp_path):
+    common = tmp_path / "common.git"
+    chain = common / "objects" / "info" / "commit-graphs"
+    chain.mkdir(parents=True)
+    gitdir = tmp_path / "wt-gitdir"
+    gitdir.mkdir()
+    (gitdir / "commondir").write_text("../common.git\n", encoding="utf-8")
+    repo = tmp_path / "wt"
+    repo.mkdir()
+    (repo / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    assert _has_commit_graph(repo) is False
+    (chain / "commit-graph-chain").write_text("x\n", encoding="utf-8")
+    assert _has_commit_graph(repo) is True
+
+
+def test_has_commit_graph_reads_the_single_file_graph(tmp_path):
+    info = tmp_path / ".git" / "objects" / "info"
+    info.mkdir(parents=True)
+    assert _has_commit_graph(tmp_path) is False
+    (info / "commit-graph").write_bytes(b"CGPH")
+    assert _has_commit_graph(tmp_path) is True

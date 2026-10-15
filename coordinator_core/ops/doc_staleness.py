@@ -306,14 +306,47 @@ def build_doc_staleness_report(
     return {"docs": entries}
 
 
+NO_COMMIT_GRAPH_SKIP = "no commit-graph: doc-staleness skipped"
+
+
+def _has_commit_graph(repo_root: str | Path) -> bool:
+    """True when the repo's common git dir carries `objects/info/commit-graph` or `commit-graphs/commit-graph-chain`.
+
+    Pathlib only, no git process: follows a `.git` file's `gitdir:` line and the git dir's
+    `commondir`. Deliberately ignores `objects/info/alternates`, `GIT_OBJECT_DIRECTORY` and
+    `core.commitGraph=false`; a miss degrades to the named skip, never to a silent walk.
+    """
+    git_dir = Path(repo_root) / ".git"
+    try:
+        if git_dir.is_file():
+            line = git_dir.read_text(encoding="utf-8", errors="replace").strip()
+            if not line.startswith("gitdir:"):
+                return False
+            git_dir = (Path(repo_root) / line[len("gitdir:") :].strip())
+        common = git_dir / "commondir"
+        if common.is_file():
+            git_dir = git_dir / common.read_text(encoding="utf-8", errors="replace").strip()
+        info = git_dir / "objects" / "info"
+        return (info / "commit-graph").is_file() or (
+            info / "commit-graphs" / "commit-graph-chain"
+        ).is_file()
+    except OSError:
+        return False
+
+
 def build_doc_staleness_report_from_registry(
     repo_root: str | Path, only_doc: Optional[str] = None, **kwargs: Any
 ) -> dict[str, Any]:
     """`build_doc_staleness_report` over the repo's registered docs and thresholds.
 
     `only_doc` narrows the registered list (before the history walk) to that exact path.
+    A repo without a commit-graph runs no git and returns
+    `{"docs": [], "skipped": "no commit-graph: doc-staleness skipped"}`.
     """
     from coordinator_core.ops.doc_registry import resolve_doc_registry_config
+
+    if not _has_commit_graph(repo_root):
+        return {"docs": [], "skipped": NO_COMMIT_GRAPH_SKIP}
 
     registry = resolve_doc_registry_config(str(repo_root))
     docs = registry.human_facing_docs or []

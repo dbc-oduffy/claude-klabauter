@@ -1,8 +1,9 @@
 """Every input the workweek-complete brief computes before building its envelope, in one pass.
 
-One repo-root resolution (a no-spawn walk), one doc-registry read handed to both doc signals,
-and the version recommendation. Each field degrades to its empty value on
-failure; nothing here fails the ceremony. Heavy imports stay inside the function that needs them.
+One repo-root resolution (a no-spawn walk), one doc-registry read feeding doc-verify, and the
+version recommendation. Which docs are stale is answered at the Step 5 door, not here. Each field
+degrades to its empty value on failure; nothing here fails the ceremony. Heavy imports stay inside
+the function that needs them.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ class BriefInputs:
     """`repo_root` is forward-slash or None (not in a repo); the rest are empty when unavailable."""
 
     repo_root: Optional[str] = None
-    stale_docs: list[dict[str, Any]] = field(default_factory=list)
     doc_verify_findings_by_doc: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     version_recommendation: Optional[dict[str, str]] = None
 
@@ -34,28 +34,6 @@ def _resolve_repo_root(start: Optional[Path]) -> Optional[str]:
         return Path(main_worktree_root(Path(out))).as_posix()
     except Exception:  # noqa: BLE001 - never fail the ceremony
         return None
-
-
-def _stale_docs(repo_root: str, registry: Any) -> list[dict[str, Any]]:
-    try:
-        from coordinator_core.ops.doc_staleness import (  # noqa: PLC0415
-            build_doc_staleness_report,
-        )
-
-        report = build_doc_staleness_report(
-            repo_root,
-            registry.human_facing_docs or [],
-            registry.doc_staleness_commits,
-            registry.doc_staleness_days,
-        )
-        return [e for e in report.get("docs", []) if e.get("stale") and e.get("path")]
-    except Exception as exc:  # noqa: BLE001 - never fail the ceremony
-        print(
-            "workweek_complete.brief: doc-staleness report unavailable, "
-            f"degrading to zero stale docs: {exc}",
-            file=sys.stderr,
-        )
-        return []
 
 
 def _sibling_roots() -> list[Path]:
@@ -128,13 +106,13 @@ def compute_brief_inputs(start: Optional[Path] = None) -> BriefInputs:
     if repo_root is None:
         return BriefInputs()
 
-    registry: Any = None
+    findings: dict[str, list[dict[str, Any]]] = {}
     try:
         from coordinator_core.ops.doc_registry import (  # noqa: PLC0415
             resolve_doc_registry_config,
         )
 
-        registry = resolve_doc_registry_config(repo_root)
+        findings = _doc_verify_findings_by_doc(repo_root, resolve_doc_registry_config(repo_root))
     except Exception as exc:  # noqa: BLE001 - never fail the ceremony
         print(
             f"workweek_complete.brief: doc registry unavailable, degrading doc signals: {exc}",
@@ -143,9 +121,6 @@ def compute_brief_inputs(start: Optional[Path] = None) -> BriefInputs:
 
     return BriefInputs(
         repo_root=repo_root,
-        stale_docs=_stale_docs(repo_root, registry) if registry is not None else [],
-        doc_verify_findings_by_doc=(
-            _doc_verify_findings_by_doc(repo_root, registry) if registry is not None else {}
-        ),
+        doc_verify_findings_by_doc=findings,
         version_recommendation=_version_recommendation(repo_root),
     )

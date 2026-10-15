@@ -1,10 +1,16 @@
 """Standing gate: the workweek-complete doc-staleness step under the 500ms bar, warm-engine end-to-end.
 
-The fixture (`doc_staleness_full_path`) is a real-scale history behind README.md and INSTALL.md at
-the depths docs/research/2026-10-14-doc-staleness-rebuild-spike.md § Q5 measured. The CLI is
-reached the way it ships: the installed native door, named for the CLI, relays argv to a warm
-engine (`invoke.from_argv` with `params.entrypoint`), booted here from a hardlink clone of this
-tree so the op under test is the working-tree op.
+Two legs share one booted engine and one `LiveTreeAccountant`:
+  (ii) graph-bearing: the fixture (`doc_staleness_full_path`) is a real-scale history behind
+       README.md and INSTALL.md at the depths docs/research/2026-10-14-doc-staleness-rebuild-spike.md
+       § Q5 measured; the report must show its shape and net must be under BUDGET_MS.
+  (i)  graph-free: the workweek-brief fixture has no commit-graph; the door must emit the named
+       skip and net must be under BUDGET_MS, with a non-zero engine delta so a door that missed
+       the engine cannot pass.
+
+The CLI is reached the way it ships: the installed native door, named for the CLI, relays argv to a
+warm engine (`invoke.from_argv` with `params.entrypoint`), booted from a hardlink clone of this
+tree (`isolated_clone.booted_warm_engine`) so the op under test is the working-tree op.
 
 Basis (requirements ledger R1): per sample, reach_ms is the door client's own tree process time
 (`batched_process_time_ms`; its procs_per_call must stay within _REACH_MAX_PROCS, else the door fell back to a cold CLI) and
@@ -15,40 +21,33 @@ ticks. Process time and spawn count only, never wall clock.
 
 THRESHOLD: 500ms is the brightline bar itself (DR-344), not a derived ratchet.
 
-The fixture follows this repo's shape: merges at its ratio, a split commit-graph, no Bloom filters.
-Run it explicitly with `-m cadence`.
+The graph-bearing fixture follows this repo's shape: merges at its ratio, a split commit-graph, no
+Bloom filters. Run it explicitly with `-m cadence`.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import statistics
 import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import Iterator, Optional
 
 import pytest
 
+from coordinator_core.benchmarks import workweek_complete_brief_full_path as brief_fixture
 from coordinator_core.benchmarks.doc_staleness_full_path import (
     ENTRYPOINT,
     check_report,
     ensure_fixture,
 )
-from coordinator_core.benchmarks.isolated_clone import (
-    mkdtemp_for_clone,
-    reap_processes_under,
-    rmtree_or_raise,
-)
+from coordinator_core.benchmarks.isolated_clone import WarmEngineBootTimeout, booted_warm_engine
 from coordinator_core.benchmarks.process_time import (
     IS_WINDOWS,
     LiveTreeAccountant,
     batched_process_time_ms,
 )
-from coordinator_core.warm import breadcrumb
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -56,6 +55,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 K_CALLS = 3
 SAMPLES = 5
 BUDGET_MS = 500.0
+NO_GRAPH_SKIP = "no commit-graph: doc-staleness skipped"
 
 _REACH_MAX_PROCS = 2  # the door client plus the console host Windows allocates for it
 _REACH_MAX_MS = 100.0  # a cold CLI fallback pays an interpreter start well above this
@@ -76,93 +76,26 @@ def _source_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _link_tree(src: Path, dst: Path, *, skip_dirs: tuple[str, ...] = ("__pycache__",)) -> None:
-    for root, dirs, files in os.walk(src):
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
-        out = dst / Path(root).relative_to(src)
-        out.mkdir(parents=True, exist_ok=True)
-        for name in files:
-            os.link(Path(root) / name, out / name)
-
-
-def _clone_engine(source_root: Path, root: Path) -> None:
-    """The engine package plus the one CLI script and its `lib`, which the entrypoint resolver reads."""
-    _link_tree(source_root / "coordinator_core", root / "coordinator_core")
-    bin_src = source_root / "coordinator" / "bin"
-    bin_dst = root / "coordinator" / "bin"
-    bin_dst.mkdir(parents=True)
-    os.link(bin_src / f"{ENTRYPOINT}.py", bin_dst / f"{ENTRYPOINT}.py")
-    _link_tree(bin_src / "lib", bin_dst / "lib")
-    (root / "coordinator_core" / "_engine_stamp").write_text(
-        f"sha:doc-staleness-process-budget-{time.time_ns()}\n", encoding="utf-8"
-    )
-
-
-def _env(engine_root: Path) -> dict:
-    env = dict(os.environ)
-    env["COORDINATOR_WARM"] = "1"
-    env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
-    env.pop("VIRTUAL_ENV", None)
-    return env
-
-
 @pytest.fixture(scope="module")
-def warm_root() -> Iterator[tuple[Path, int, dict]]:
-    """An isolated warm engine booted with no dispatch fired, so the accountant attaches before
-    the pool workers that execute the op exist (job membership is fixed at process creation)."""
+def warm_root():
     if not IS_WINDOWS:
         pytest.skip("job-object accounting is Windows-only")
     if not (_ENTRY_DOOR.exists() and _PING_DOOR.exists()):
         pytest.skip(f"{_ENTRY_DOOR} / {_PING_DOOR} not installed on this box")
-    source_root = _source_root()
-    tmp_parent = mkdtemp_for_clone(source_root, prefix="doc-staleness-budget-")
-    root = tmp_parent / "clone"
-    proc: Optional[subprocess.Popen] = None
     try:
-        _clone_engine(source_root, root)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "coordinator_core.warm.server"],
-            cwd=str(root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        deadline = time.time() + _BOOT_WAIT_SECS
-        crumb = None
-        while time.time() < deadline:
-            crumb = breadcrumb.read_breadcrumb(engine_root=root)
-            if crumb and crumb.get("pid"):
-                break
-            time.sleep(0.2)
-        if not (crumb and crumb.get("pid")):
-            pytest.skip(f"isolated warm engine did not boot within {_BOOT_WAIT_SECS}s")
-        yield root, int(crumb["pid"]), _env(root)
-    finally:
-        crumb = breadcrumb.read_breadcrumb(engine_root=root)
-        if crumb and crumb.get("pid"):
-            try:
-                import psutil
-
-                p = psutil.Process(int(crumb["pid"]))
-                # Workers are signalled while their parent is alive: an orphan has left the
-                # test's process tree and the suite's foreign-kill tripwire refuses it.
-                workers = p.children(recursive=True)
-                for w in workers:
-                    w.terminate()
-                p.terminate()
-                psutil.wait_procs([p, *workers], timeout=5)
-            except Exception:
-                pass
-        elif proc is not None and proc.poll() is None:
-            proc.terminate()
-        reaped = reap_processes_under(tmp_parent)
-        shutil.rmtree(breadcrumb.svc_dir(engine_root=root), ignore_errors=True)
-        rmtree_or_raise(tmp_parent, label="doc_staleness_process_budget", reaped=reaped)
+        with booted_warm_engine(
+            _source_root(),
+            prefix="doc-staleness-budget-",
+            entrypoint=ENTRYPOINT,
+            label="doc_staleness_process_budget",
+            boot_wait_secs=_BOOT_WAIT_SECS,
+        ) as booted:
+            yield booted
+    except WarmEngineBootTimeout as exc:
+        pytest.skip(str(exc))
 
 
-def _fixture(tmp_path_factory) -> Path:
+def _graph_bearing_fixture(tmp_path_factory) -> Path:
     workdir = tmp_path_factory.mktemp("doc_staleness_budget")
     built = subprocess.run(
         [sys.executable, "-m", "coordinator_core.benchmarks.doc_staleness_full_path", str(workdir), "--build"],
@@ -172,12 +105,63 @@ def _fixture(tmp_path_factory) -> Path:
     return ensure_fixture(workdir)
 
 
-@pytest.fixture(scope="module")
-def staleness_measurement(warm_root, tmp_path_factory):
-    _root, server_pid, env = warm_root
-    fixture = _fixture(tmp_path_factory)
-    cmd = [str(_ENTRY_DOOR), "--root", str(fixture)]
+def _graph_free_fixture(tmp_path_factory) -> Path:
+    workdir = tmp_path_factory.mktemp("doc_staleness_budget_graph_free")
+    built = subprocess.run(
+        [sys.executable, "-m", "coordinator_core.benchmarks.workweek_complete_brief_full_path", str(workdir), "--build"],
+        capture_output=True, text=True, **no_console_creationflags(),
+    )
+    assert built.returncode == 0, f"fixture build failed: {built.stderr}"
+    return brief_fixture.ensure_fixture(workdir)
+
+
+def _door_call(cmd: list, env: dict) -> dict:
+    served = subprocess.run(
+        cmd, capture_output=True, text=True, env=env, timeout=_CALL_TIMEOUT_S,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert served.returncode == 0, f"door call rc={served.returncode}: {served.stderr[:300]!r}"
+    return json.loads(served.stdout)
+
+
+def _sample_leg(acct: LiveTreeAccountant, cmd: list, env: dict, label: str) -> dict:
     samples = []
+    for _ in range(SAMPLES):
+        before = acct.snapshot()
+        reach = batched_process_time_ms(cmd, k=K_CALLS, env=env)
+        after = acct.snapshot()
+        assert reach["rc"] == 0, f"door call rc={reach['rc']}"
+        samples.append({
+            "reach_ms": reach["process_time_ms"],
+            "reach_procs": reach["procs_per_call"],
+            "op_ms": (after["process_time_ms"] - before["process_time_ms"]) / K_CALLS,
+            "op_procs": (after["procs"] - before["procs"]) / K_CALLS,
+        })
+    for s in samples:
+        s["total_ms"] = round(s["reach_ms"] + s["op_ms"], 3)
+        s["spawns"] = round(s["reach_procs"] + s["op_procs"], 3)
+    med = lambda key: round(statistics.median(s[key] for s in samples), 3)  # noqa: E731
+    result = {k: med(k) for k in ("reach_ms", "op_ms", "total_ms", "spawns", "reach_procs", "op_procs")}
+    result["detail"] = (
+        f"doc-staleness step ({label}), warm-engine end-to-end: median total {result['total_ms']}ms = "
+        f"reach_ms {result['reach_ms']} + op_process_ms {result['op_ms']}; spawns {result['spawns']} "
+        f"(reach {result['reach_procs']} + op {result['op_procs']}); "
+        f"samples={SAMPLES} k={K_CALLS}; totals {[s['total_ms'] for s in samples]}"
+    )
+    result["samples"] = samples
+    print(f"DOC-STALENESS-BUDGET {result['detail']}")
+    return result
+
+
+@pytest.fixture(scope="module")
+def staleness_measurements(warm_root, tmp_path_factory):
+    """Both legs under one accountant: it attaches before any pool worker exists, and a second
+    attach after the first leg would miss the workers that leg spawned."""
+    _root, server_pid, env = warm_root
+    graph_bearing = _graph_bearing_fixture(tmp_path_factory)
+    graph_free = _graph_free_fixture(tmp_path_factory)
+    bearing_cmd = [str(_ENTRY_DOOR), "--root", str(graph_bearing)]
+    free_cmd = [str(_ENTRY_DOOR), "--root", str(graph_free)]
     with LiveTreeAccountant(server_pid) as acct:
         before_probe = acct.snapshot()["procs"]
         probe = subprocess.run(
@@ -191,49 +175,31 @@ def staleness_measurement(warm_root, tmp_path_factory):
             "no engine process observed inside the job after the probe: the accountant "
             "attached after the pool spawned, or the probe was not served warm"
         )
-        served = subprocess.run(
-            cmd, capture_output=True, text=True, env=env, timeout=_CALL_TIMEOUT_S,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        assert served.returncode == 0, f"door call rc={served.returncode}: {served.stderr[:300]!r}"
-        problem = check_report(json.loads(served.stdout))
+        problem = check_report(_door_call(bearing_cmd, env))
         assert problem is None, f"gate would time a wrong result: {problem}"
-        for _ in range(SAMPLES):
-            before = acct.snapshot()
-            reach = batched_process_time_ms(cmd, k=K_CALLS, env=env)
-            after = acct.snapshot()
-            assert reach["rc"] == 0, f"door call rc={reach['rc']}"
-            samples.append({
-                "reach_ms": reach["process_time_ms"],
-                "reach_procs": reach["procs_per_call"],
-                "op_ms": (after["process_time_ms"] - before["process_time_ms"]) / K_CALLS,
-                "op_procs": (after["procs"] - before["procs"]) / K_CALLS,
-            })
-    for s in samples:
-        s["total_ms"] = round(s["reach_ms"] + s["op_ms"], 3)
-        s["spawns"] = round(s["reach_procs"] + s["op_procs"], 3)
-    med = lambda key: round(statistics.median(s[key] for s in samples), 3)  # noqa: E731
-    result = {k: med(k) for k in ("reach_ms", "op_ms", "total_ms", "spawns", "reach_procs", "op_procs")}
-    result["detail"] = (
-        f"doc-staleness step, warm-engine end-to-end: median total {result['total_ms']}ms = "
-        f"reach_ms {result['reach_ms']} + op_process_ms {result['op_ms']}; spawns {result['spawns']} "
-        f"(reach {result['reach_procs']} + op {result['op_procs']}); "
-        f"samples={SAMPLES} k={K_CALLS}; totals {[s['total_ms'] for s in samples]}"
-    )
-    result["samples"] = samples
-    print(f"DOC-STALENESS-BUDGET {result['detail']}")
-    return result
+        free_report = _door_call(free_cmd, env)
+        bearing = _sample_leg(acct, bearing_cmd, env, "graph-bearing")
+        free = _sample_leg(acct, free_cmd, env, "graph-free")
+    return {"bearing": bearing, "free": free, "free_report": free_report}
 
 
-def test_door_reach_is_warm(staleness_measurement):
-    m = staleness_measurement
+def test_door_reach_is_warm(staleness_measurements):
+    m = staleness_measurements["bearing"]
     assert all(s["reach_procs"] <= _REACH_MAX_PROCS and s["reach_ms"] < _REACH_MAX_MS for s in m["samples"]), (
         f"the door did more than relay (cold CLI fallback): {m['detail']}"
     )
     assert m["op_procs"] >= 1, f"no git child charged to the engine: {m['detail']}"
 
 
-def test_doc_staleness_is_under_the_500ms_bar(staleness_measurement):
-    m = staleness_measurement
+def test_doc_staleness_is_under_the_500ms_bar(staleness_measurements):
+    m = staleness_measurements["bearing"]
     assert m["op_ms"] > 0 and m["op_procs"] > 0, f"op cost not observed in the engine: {m['detail']}"
+    assert m["total_ms"] < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"
+
+
+def test_graph_free_emits_the_named_skip_under_the_500ms_bar(staleness_measurements):
+    m = staleness_measurements["free"]
+    report = staleness_measurements["free_report"]
+    assert report.get("skipped") == NO_GRAPH_SKIP, f"no named skip on a graph-free repo: {report!r}"
+    assert m["op_ms"] > 0, f"op cost not observed in the engine: {m['detail']}"
     assert m["total_ms"] < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"

@@ -7,7 +7,7 @@ import pytest
 from coordinator_core.benchmarks import workweek_complete_brief_full_path as driver
 from coordinator_core.workweek_complete import brief as brief_module
 
-_OK = (0, {"judgment_points": [{"id": "jp_doc_staleness_x"}]})
+_OK = (0, {"judgment_points": [{"id": driver.SENTINEL_ID}]})
 
 
 @pytest.fixture

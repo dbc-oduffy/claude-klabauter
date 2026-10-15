@@ -49,14 +49,16 @@ either function at a real engine root.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional, Tuple
 
 _TERMINATE_TIMEOUT_SECS = 5.0
 _KILL_TIMEOUT_SECS = 3.0
@@ -232,6 +234,98 @@ def reap_processes_under(root: Path) -> List[int]:
     psutil.wait_procs(alive, timeout=_KILL_TIMEOUT_SECS)
 
     return [proc.pid for proc in doomed]
+
+
+class WarmEngineBootTimeout(RuntimeError):
+    pass
+
+
+def _link_tree(src: Path, dst: Path, *, skip_dirs: tuple = ("__pycache__",)) -> None:
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        out = dst / Path(root).relative_to(src)
+        out.mkdir(parents=True, exist_ok=True)
+        for name in files:
+            os.link(Path(root) / name, out / name)
+
+
+def clone_engine(source_root: Path, root: Path, *, entrypoint: str) -> None:
+    """Hardlink the engine package plus the one CLI script `entrypoint` and its `lib`, which the
+    entrypoint resolver reads, into `root`; stamp it so the clone is its own engine identity."""
+    _link_tree(source_root / "coordinator_core", root / "coordinator_core")
+    bin_src = source_root / "coordinator" / "bin"
+    bin_dst = root / "coordinator" / "bin"
+    bin_dst.mkdir(parents=True)
+    os.link(bin_src / f"{entrypoint}.py", bin_dst / f"{entrypoint}.py")
+    _link_tree(bin_src / "lib", bin_dst / "lib")
+    (root / "coordinator_core" / "_engine_stamp").write_text(
+        f"sha:isolated-clone-{time.time_ns()}\n", encoding="utf-8"
+    )
+
+
+def engine_env(engine_root: Path) -> dict:
+    env = dict(os.environ)
+    env["COORDINATOR_WARM"] = "1"
+    env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
+    env.pop("VIRTUAL_ENV", None)
+    return env
+
+
+@contextlib.contextmanager
+def booted_warm_engine(
+    source_root: Path, *, prefix: str, entrypoint: str, label: str, boot_wait_secs: float = 90.0
+) -> Iterator[Tuple[Path, int, dict]]:
+    """Yield `(clone_root, server_pid, env)` for a warm engine booted from a hardlink clone of
+    `source_root`, with no dispatch fired, so a `LiveTreeAccountant` attached to `server_pid`
+    precedes the pool workers (job membership is fixed at process creation). Raises
+    `WarmEngineBootTimeout` when no breadcrumb appears; tears the clone down on exit."""
+    from coordinator_core.warm import breadcrumb
+
+    tmp_parent = mkdtemp_for_clone(source_root, prefix=prefix)
+    root = tmp_parent / "clone"
+    proc: Optional[subprocess.Popen] = None
+    try:
+        clone_engine(source_root, root, entrypoint=entrypoint)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "coordinator_core.warm.server"],
+            cwd=str(root),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        deadline = time.time() + boot_wait_secs
+        crumb = None
+        while time.time() < deadline:
+            crumb = breadcrumb.read_breadcrumb(engine_root=root)
+            if crumb and crumb.get("pid"):
+                break
+            time.sleep(0.2)
+        if not (crumb and crumb.get("pid")):
+            raise WarmEngineBootTimeout(f"isolated warm engine did not boot within {boot_wait_secs}s")
+        yield root, int(crumb["pid"]), engine_env(root)
+    finally:
+        crumb = breadcrumb.read_breadcrumb(engine_root=root)
+        if crumb and crumb.get("pid"):
+            try:
+                import psutil
+
+                p = psutil.Process(int(crumb["pid"]))
+                # Workers are signalled while their parent is alive: an orphan has left the
+                # test's process tree and the suite's foreign-kill tripwire refuses it.
+                workers = p.children(recursive=True)
+                for w in workers:
+                    w.terminate()
+                p.terminate()
+                psutil.wait_procs([p, *workers], timeout=5)
+            except Exception:
+                pass
+        elif proc is not None and proc.poll() is None:
+            proc.terminate()
+        reaped = reap_processes_under(tmp_parent)
+        shutil.rmtree(breadcrumb.svc_dir(engine_root=root), ignore_errors=True)
+        rmtree_or_raise(tmp_parent, label=label, reaped=reaped)
 
 
 class CloneTeardownLeak(RuntimeError):

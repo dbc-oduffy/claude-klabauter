@@ -34,32 +34,6 @@ ARGS_EXCLUDED_IDS: frozenset[str] = frozenset(FIXED_ARGS)
 
 _FIXED_ROOT = "/fixed/repo-root"
 
-_STALE_DOCS = [
-    {
-        "path": "docs/guides/alpha.md",
-        "stale": True,
-        "commits_since": 31,
-        "threshold_commits": 20,
-        "days_since": 40,
-        "threshold_days": 30,
-        "last_touch_sha": "aaaa111",
-        "last_touch_date": "2026-09-01",
-        "changed_areas": ["coordinator_core/ops"],
-    },
-    {
-        "path": "README.md",
-        "stale": True,
-        "commits_since": 25,
-        "threshold_commits": 20,
-        "days_since": 12,
-        "threshold_days": 30,
-        "last_touch_sha": "bbbb222",
-        "last_touch_date": "2026-09-29",
-        "changed_areas": ["scripts"],
-    },
-    {"path": "docs/guides/fresh.md", "stale": False},
-]
-
 _VERIFY_FINDINGS = [
     {
         "doc": "docs/guides/beta.md",
@@ -114,13 +88,11 @@ def snapshot(envelope: dict[str, Any]) -> dict[str, Any]:
 
 def capture(patch: Any, env: dict[str, str], *, populated: bool) -> dict[str, Any]:
     """Run brief() with the computes stubbed to fixed inputs (or all empty)."""
-    stale = [e for e in _STALE_DOCS if e.get("stale") and e.get("path")]
     grouped: dict[str, list[dict[str, Any]]] = {}
     for finding in _VERIFY_FINDINGS:
         grouped.setdefault(finding["doc"], []).append(finding)
     inputs = BriefInputs(
         repo_root=_FIXED_ROOT,
-        stale_docs=stale if populated else [],
         doc_verify_findings_by_doc=grouped if populated else {},
         version_recommendation=dict(_VERSION) if populated else None,
     )
@@ -180,7 +152,7 @@ def test_populated_baseline_carries_per_doc_points_and_acks():
     populated = _baseline()["populated"]
     jp_ids = {p["id"] for p in populated["judgment_points"]}
     d_ids = {d["id"] for d in populated["directives"]}
-    assert "jp_doc_staleness_docs_guides_alpha_md" in jp_ids
+    assert not any(i.startswith("jp_doc_staleness_") for i in jp_ids)
     assert "jp_doc_verify_docs_guides_beta_md" in jp_ids
     assert "d_doc_staleness_ack_readme_md" not in d_ids
     assert "d_doc_verify_ack_docs_guides_beta_md" in d_ids

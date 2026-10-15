@@ -155,6 +155,36 @@ def test_not_unlaunched_when_the_submission_stored_no_tool_use_id(repo, dirs, tm
     assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") is None
 
 
+def test_a_refused_call_token_is_not_live_for_sizing_or_session(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1") is None
+    assert warp_live.live_run_for_session(repo, "s1") is None
+
+
+def test_another_sessions_refused_token_is_not_live(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") is None
+    assert warp_live.live_run_for_sizing(repo, SIZING) is None
+
+
+def test_an_in_flight_call_token_stays_live(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, '{"type":"assistant","id":"tu1","name":"tool_use"}\n'))
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") == "r1"
+    assert warp_live.live_run_for_session(repo, "s1") == "r1"
+
+
+def test_a_launched_run_stays_live_despite_a_result_line(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1", launch=True)))
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") == "r1"
+    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
+    _launch(dirs[0], "s1", "w1")
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") == "r1"
+
+
 def test_the_reader_names_no_system_tempdir():
     text = Path(warp_live.__file__).read_text(encoding="utf-8")
     assert "gettempdir" not in text and "sizing_mtime" not in text
