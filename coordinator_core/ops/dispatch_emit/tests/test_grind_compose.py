@@ -61,6 +61,7 @@ def _compose(**overrides):
     profile = overrides.pop("profile", None) or _fixture_profile()
     appetite = overrides.pop("appetite", "standard")
     stage_models = overrides.pop("stage_models", None)
+    targeted_runner = overrides.pop("targeted_runner", False)
     knobs = gp.resolve_appetite(profile, appetite)
     knobs.update(overrides)
     manifest = overrides.pop("manifest", None) or _fixture_manifest()
@@ -73,6 +74,7 @@ def _compose(**overrides):
         agent_type_host=None,
         queue_dirs=["state/bug-backlog"],
         stage_models=stage_models,
+        targeted_runner=targeted_runner,
         **REVIEW_KW,
     )
 
@@ -1534,3 +1536,34 @@ def test_fix_prompt_withholds_close_when_tradeoff_reported():
     call = grind_stages.compose_fix_call(label="fix", phase_title="Grind", row_id="r")
     assert "and `has_tradeoff` is false run `" in call
     assert "When `has_tradeoff` is true, do not run `backlog-grind-assemble grind-row close`" in call
+
+
+def test_targeted_runner_off_is_the_golden():
+    assert _compose(targeted_runner=False) == _GOLDEN_PATH.read_text(encoding="utf-8")
+
+
+def _forced_line(script: str) -> str:
+    verify = script[script.index("async function _verifyCall"): script.index("async function _commitCall")]
+    return next(ln for ln in verify.splitlines() if "const _forced" in ln)
+
+
+def test_targeted_runner_non_bug_profile_keeps_agent_verdict_on_no_runner():
+    assert '["failed", "refused"]' in _forced_line(_compose(targeted_runner=True))
+
+
+def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes():
+    import dataclasses
+
+    bug = dataclasses.replace(_fixture_profile(), name="bug")
+    script = _compose(targeted_runner=True, profile=bug)
+    verify = script[script.index("async function _verifyCall"): script.index("async function _commitCall")]
+    assert '["failed", "refused", "no-runner"]' in _forced_line(script)
+    assert "outcome: 'fail'" in verify and "tests_failing_ids" in verify
+    assert "reason: JSON.stringify(_result.output)" in verify
+
+
+def test_targeted_runner_script_names_the_runner_and_no_suite_command():
+    script = _compose(targeted_runner=True)
+    assert "targeted-test-run" in script
+    for banned in ("fast_test_cmd", "full_test_cmd", "with-suite-mutex", "tier-u-grant-cli"):
+        assert banned not in script

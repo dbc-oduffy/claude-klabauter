@@ -281,6 +281,77 @@ def _calls_by_stage(**kw) -> dict:
     return calls
 
 
+def _runner_calls() -> dict:
+    return {
+        "triage": grind_stages.compose_triage_call(
+            label="t", phase_title="T", run_dir="r", batch_id="b1", profile="bug",
+            targeted_runner=True,
+        ),
+        "fix": grind_stages.compose_fix_call(
+            label="f", phase_title="F", row_id="row1", profile="bug", targeted_runner=True,
+        ),
+        "verify": grind_stages.compose_verify_agent_call(
+            label="v", phase_title="V", profile="bug", touched_files_js="row.touchedFiles",
+            run_id_js="RUN_ID", row_id_js="row.rowId", row_path_js="row.path",
+            targeted_runner=True,
+        ),
+    }
+
+
+def test_runner_prompts_name_the_runner_with_every_flag_and_no_suite_command():
+    for stage, call in _runner_calls().items():
+        assert "bin/targeted-test-run" in call, stage
+        for flag in ("--repo", "--row", "--touched", "--record"):
+            assert flag in call, (stage, flag)
+        assert ".tests.json" in call, stage
+        for banned in ("fast_test_cmd", "full_test_cmd", "with-suite-mutex", "tier-u-grant-cli"):
+            assert banned not in call, (stage, banned)
+
+
+def test_runner_off_prompts_never_name_the_runner():
+    off = {
+        "triage": grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r"),
+        "fix": grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r"),
+        "verify": grind_stages.compose_verify_agent_call(label="v", phase_title="V"),
+    }
+    for stage, call in off.items():
+        assert "targeted-test-run" not in call, stage
+    assert "run its tests" in off["fix"]
+
+
+def test_runner_verify_schema_carries_the_runner_outcome_enum():
+    from coordinator_core.bug_blitz.contract import OUTCOMES
+
+    call = _runner_calls()["verify"]
+    assert json.dumps(list(OUTCOMES)) in call or all(o in call for o in OUTCOMES)
+    assert "tests_record" in call and "tests_outcome" in call
+
+
+def test_guard_admits_the_composed_runner_line_and_denies_bare_suites(tmp_path, monkeypatch):
+    import re
+
+    from coordinator_core.bash_guards import check_test_suite_invocation as guard
+
+    monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
+    line = re.search(r"`([^`]*targeted-test-run[^`]*)`", _runner_calls()["verify"]).group(1)
+    line = line.replace("' + ", "").replace(" + '", "")
+
+    def _decision(cmd):
+        out = guard.check({
+            "tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "s1",
+            "cwd": str(tmp_path), "agent_id": "a0123456789abcdef",
+        })
+        return out and out["hookSpecificOutput"]["permissionDecision"]
+
+    assert _decision(line) != "deny"
+    assert _decision("pytest") == "deny"
+    assert _decision("pnpm test") == "deny"
+
+
+def test_runner_fail_outcomes_are_the_non_passing_ones():
+    assert set(grind_stages.RUNNER_FAIL_OUTCOMES) == {"failed", "refused", "no-runner"}
+
+
 def test_every_composer_carries_its_stage_model():
     for key, call_text in _calls_by_stage().items():
         stage = "commit" if key == "review-fix-commit" else key

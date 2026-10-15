@@ -370,6 +370,17 @@
       },
       "_rationale": "One `git check-ignore -z --stdin` over the whole run's declared-write union (dispatch_emit/emit.py::_gitignored_paths via git/run.py::run_git), batched so the count does not grow with rows or waves; a gitignored write path can never be committed and would otherwise halt the run at preflight. The host commit-trailer read (commit_trailers.read_host_commit_trailers) parses the git config files and starts no process. The review-only route adds exactly two run_git spawns (`rev-parse`, `merge-base`) to pin the terminal commit and its ancestry, on top of the check-ignore count. Counted by coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py with exact equality."
     },
+    "hooks.submit_bug_blitz": {
+      "target_ms": 500,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "targets_submission": 0
+      },
+      "_rationale": "The hook runs the real dispatch.emit queue route in process and starts no process: a 24-file targets submission measured 0 spawns. Process time over three fresh-interpreter runs was 123.6 to 126.8 ms (imports and emit, fake parse and mint, fixture profile), well under the 500 target. Counted by coordinator_core/hooks/tests/test_submit_bug_blitz.py with exact equality; the real parse and mint are measured by the verification row."
+    },
     "hooks.submit_engine_ask": {
       "target_ms": 500,
       "tolerance": {

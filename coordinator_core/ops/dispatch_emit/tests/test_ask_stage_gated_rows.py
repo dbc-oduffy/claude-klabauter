@@ -129,6 +129,73 @@ def test_owner_root_round_trips_through_json():
     assert GatedRow.from_json({"id": "G1", "reason": "r", "gate": "g"}).owner_root == ""
 
 
+def _em_plan() -> str:
+    return """---
+title: fixture
+---
+# Fixture
+
+## Tasks
+
+```yaml plan-tasks
+- id: U1
+  title: ungated
+  change_kind: code-edit
+  surface: pkg/a.py
+  writes:
+    - pkg/a.py
+- id: C3
+  title: merge
+  change_kind: code-edit
+  surface: pkg/m.py
+  performer: em
+  writes:
+    - pkg/m.py
+- id: C4
+  title: memo
+  change_kind: doc-edit
+  kind: memo-send
+  surface: pkg/memo.md
+  receipt: .coordinator-local/memo-outbox/sent/the-topic.md
+  writes:
+    - pkg/memo.md
+- id: C5
+  title: after merge
+  change_kind: code-edit
+  surface: pkg/d.py
+  writes:
+    - pkg/d.py
+  depends_on:
+    - chunk: C3
+      gate_kind: output-consumption-runtime
+      note: consumes the merge
+```
+"""
+
+
+def test_em_owned_rows_land_in_owed_not_gated(tmp_path):
+    reply = _stage(tmp_path, _em_plan())
+    assert "error" not in reply
+    assert [(o["id"], o["reason"]) for o in reply["owed"]] == [
+        ("C3", "em-performed"),
+        ("C4", "memo-send"),
+    ]
+    assert [(g["id"], g["reason"]) for g in reply["gated"]] == [("C5", "transitive_gate_closure")]
+    assert "C3" not in [g["id"] for g in reply["gated"]]
+
+
+def test_plan_without_em_owned_rows_writes_empty_owed(tmp_path):
+    reply = _stage(tmp_path, _plan(_gate("landed-work")))
+    assert reply["owed"] == []
+
+
+def test_zero_waves_error_names_owed_rows(tmp_path):
+    full = _em_plan()
+    only_em = full[: full.index("- id: U1")] + full[full.index("- id: C3") : full.index("- id: C5")] + "```\n"
+    reply = _stage(tmp_path, only_em)
+    assert "owed by the EM: C3, C4" in reply["error"]
+
+
 def test_dependent_of_gated_row_is_gated_transitively(tmp_path):
     reply = _stage(tmp_path, _plan(_gate("landed-work"), extra_dep=True))
     assert [r["id"] for r in reply["rows"]] == ["U1"]

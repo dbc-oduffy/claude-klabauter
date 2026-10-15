@@ -671,6 +671,53 @@ def test_transitively_gated_rows_are_reported_in_exclusions(tmp_path):
     assert "C3" in by_id["C7"]["detail"] and "C1b" in by_id["C7"]["detail"]
 
 
+def _closure_detail(tmp_path, root_fields: str) -> dict:
+    body = f"""\
+- id: C1
+  title: root
+  surface: some/surface
+{root_fields}- id: C2
+  title: dependent
+  surface: some/surface
+  depends_on:
+    - chunk: C1
+      gate_kind: output-consumption-runtime
+"""
+    exclusions: list = []
+    read_spine(_write_plan(tmp_path, body), exclusions=exclusions)
+    return {e["id"]: e for e in exclusions}["C2"]
+
+
+def test_closure_detail_names_external_gate_root(tmp_path):
+    entry = _closure_detail(
+        tmp_path,
+        "  external_gate:\n    - owner_repo: r\n      condition: c\n",
+    )
+    assert entry["reason"] == "transitive_gate_closure"
+    assert entry["detail"].startswith("transitively gated via depends_on -> C1")
+    assert entry["detail"].endswith("; root C1 carries an uncleared external_gate")
+
+
+def test_closure_detail_names_operator_root(tmp_path):
+    entry = _closure_detail(tmp_path, "  execution_mode: operator\n")
+    assert entry["reason"] == "transitive_gate_closure"
+    assert entry["detail"].endswith("; root C1 is execution_mode: operator")
+
+
+def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
+    entry = _closure_detail(tmp_path, "  performer: em\n")
+    assert entry["reason"] == "transitive_gate_closure"
+    assert entry["detail"].endswith("; root C1 is owed by the EM (performer: em), not gated")
+
+
+def test_closure_detail_names_memo_send_root_not_gated(tmp_path):
+    entry = _closure_detail(tmp_path, "  kind: memo-send\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
+    assert entry["reason"] == "transitive_gate_closure"
+    assert "; root C1 is owed by the EM (" in entry["detail"]
+    assert entry["detail"].endswith("), not gated")
+    assert "uncleared gate/operator mode" not in entry["detail"]
+
+
 def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
     body = """\
 - id: C1

@@ -1,0 +1,6 @@
+  ddct  test/authn/session.test.ts > resumeSession > success path opens no transaction and issues one query
+  ddct  test/export/xlsx-stage1.test.ts > stage 1 xlsx renderer > the census covers 36 enum/enum_list fields across both entities
+  ddct  test/on-box.test.ts > ON-BOX entries > integrity.md: On-demand integrity check names an interface
+  ddct  test/on-box.test.ts > ON-BOX entries > integrity.md: Recurring runs withdrawn names an interface
+  root  scripts/lib/parity/player-parity.test.ts > parity > matches the committed seed
+

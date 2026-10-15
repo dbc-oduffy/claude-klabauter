@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
+    GatedRow,
+    OwedRow,
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -81,6 +83,30 @@ def test_manifest_sourced_request_commits_done_chunk_paths(repo):
         capture_output=True, text=True, check=True, **no_console_creationflags(),
     ).stdout
     assert "a.py" in shown
+
+
+def test_withheld_rows_each_read_their_own_reason(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    manifest = _stage(repo)
+    manifest_file = repo / RUN_DIR_ROOT / "run1" / "manifest.json"
+    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    data["gated"] = [
+        GatedRow(id="G1", reason="external_gate", gate="g").to_json(),
+        GatedRow(id="G2", reason="transitive_gate_closure", gate="g").to_json(),
+    ]
+    data["owed"] = [OwedRow(id="O1", reason="em-performed", detail="performer: em").to_json()]
+    manifest_file.write_text(json.dumps(data), encoding="utf-8")
+    (repo / "run.mjs").write_text(f"{ASK_MANIFEST_MARKER}{manifest}\n", encoding="utf-8")
+    out = terminal_commit._handler(
+        {"script_path": "run.mjs", "incomplete_chunks": ["G1", "G2", "O1"], "inline_review": _REVIEWED},
+        repo_root=repo / ".git",
+    )
+    assert out["committed"] is True, out
+    assert out["incomplete_reasons"] == {
+        "G1": "external_gate",
+        "G2": "transitive_gate_closure",
+        "O1": "owed: performer: em",
+    }
 
 
 def test_both_markers_refuses(repo):

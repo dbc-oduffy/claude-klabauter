@@ -214,6 +214,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.submit_engine_ask — MUTATING: emits a warp run through dispatch.emit (script,
     # receipt, run token, ask.md) and writes the run's submission record beside its briefs.
     "hooks.submit_engine_ask": OpClass.MUTATING,
+    # hooks.submit_bug_blitz — MUTATING: mints TF backlog rows, emits the bug grind through
+    # dispatch.emit (script, receipt, run token) and writes the run's decisions.json.
+    "hooks.submit_bug_blitz": OpClass.MUTATING,
     # hooks.taskstop_launch_recorder — MUTATING: appends launch records under settings_home().
     "hooks.taskstop_launch_recorder": OpClass.MUTATING,
     # hooks.taskstop_reaper — MUTATING: kills orphaned launch trees and writes the reaper log

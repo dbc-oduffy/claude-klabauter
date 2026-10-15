@@ -1294,7 +1294,8 @@ def read_spine(
     # from a row that never existed. `transitive_root` records, for every
     # row blocked ONLY by this propagation, the direct predecessor edge that
     # blocked it, so the appended entry can name the full chain back to the
-    # row that actually carries the gate/operator mode.
+    # root row, whose own `exclusions` entry supplies the tail's real reason
+    # (an uncleared gate, operator mode, or an EM-owed row).
     transitive_root: dict[str, str] = {}
     # Row -> the path whose withheld writer blocked it, for hops that came from
     # `consumes:` rather than `depends_on`. A consumer dispatched beside its
@@ -1317,6 +1318,7 @@ def read_spine(
 
     if exclusions is not None and transitive_root:
         already_reported = {entry.get("id") for entry in exclusions}
+        root_entries = {entry.get("id"): entry for entry in exclusions}
         for row_id in transitive_root:
             if row_id in already_reported:
                 continue
@@ -1358,7 +1360,7 @@ def read_spine(
                     "detail": (
                         "transitively gated via depends_on -> "
                         + " -> ".join(chain[1:])
-                        + f"; root {chain[-1]} carries the uncleared gate/operator mode"
+                        + _closure_root_tail(chain[-1], root_entries.get(chain[-1]))
                     ),
                 }
             )
@@ -1378,6 +1380,20 @@ def read_spine(
             dispatchable_rows[i] = row._replace(depends_on=stripped)
 
     return dispatchable_rows
+
+
+def _closure_root_tail(root_id: str, entry: Optional[dict]) -> str:
+    """The `transitive_gate_closure` detail tail naming why the root row blocks, by its own exclusion reason."""
+    reason = entry.get("reason") if entry else None
+    if reason == "external_gate":
+        return f"; root {root_id} carries an uncleared external_gate"
+    if reason == "operator":
+        return f"; root {root_id} is execution_mode: operator"
+    if reason in ("em-performed", "memo-send"):
+        return f"; root {root_id} is owed by the EM ({entry.get('detail') or reason}), not gated"
+    if reason:
+        return f"; root {root_id} is held ({reason}: {entry.get('detail') or 'no detail'})"
+    return f"; root {root_id} is held"
 
 
 def _consume_edges(rows: list, satisfied: frozenset = frozenset()) -> dict:

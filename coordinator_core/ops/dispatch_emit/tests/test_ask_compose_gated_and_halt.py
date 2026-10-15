@@ -57,6 +57,26 @@ def test_manifest_schema_carries_optional_gated():
     assert "gated" not in ask_compose._MANIFEST_SCHEMA["required"]
 
 
+def test_manifest_schema_carries_optional_owed():
+    owed = ask_compose._MANIFEST_SCHEMA["properties"]["owed"]
+    assert "owed" not in ask_compose._MANIFEST_SCHEMA["required"]
+    assert owed["items"]["required"] == ["id"]
+    assert set(owed["items"]["properties"]) == {"id", "reason", "detail"}
+
+
+def test_owed_ids_are_pushed_after_stage_and_before_execute(monkeypatch):
+    script = _script(monkeypatch)
+    push = "  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }"
+    assert script.count(push) == 1
+    assert script.index("_manifest = await agent(") < script.index(push) < script.index("phase('execute')")
+
+
+def test_return_object_names_owed(monkeypatch):
+    script = _script(monkeypatch)
+    assert "owed: ((_manifest && !_manifest.error) ? (_manifest.owed ?? []) : []).map((o) => ({ id: o.id, reason: o.reason ?? '', detail: o.detail ?? '' }))" in script
+    assert script.index("withheld:") < script.index("owed: ((_manifest")
+
+
 def test_every_digest_var_read_is_declared(monkeypatch):
     script = _script(monkeypatch)
 

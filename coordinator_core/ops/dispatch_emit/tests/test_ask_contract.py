@@ -21,6 +21,21 @@ def test_manifest_round_trip():
     assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
 
 
+def test_owed_round_trip():
+    owed = (c.OwedRow("C3", "em-performed", "EM runs it"), c.OwedRow("C4", "memo-send", "send memo"))
+    m = _manifest()
+    m = c.StageManifest(m.run_dir, m.rows, m.review_declared_paths, m.marker_path, owed=owed)
+    out = json.loads(json.dumps(m.to_json()))
+    assert out["owed"][1] == {"id": "C4", "reason": "memo-send", "detail": "send memo"}
+    assert c.StageManifest.from_json(out) == m
+
+
+def test_absent_owed_key_reads_empty():
+    data = _manifest().to_json()
+    del data["owed"]
+    assert c.StageManifest.from_json(data).owed == ()
+
+
 def test_phase_order_and_names():
     assert c.ASK_PHASES == ("size", "gate", "accept", "plan", "stage", "execute", "review")
     assert (c.OP_ASK_GATE, c.OP_ASK_STAGE) == ("dispatch.ask_gate", "dispatch.ask_stage")

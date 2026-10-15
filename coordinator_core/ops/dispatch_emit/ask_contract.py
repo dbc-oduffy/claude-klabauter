@@ -241,9 +241,28 @@ class GatedRow:
 
 
 @dataclass(frozen=True)
+class OwedRow:
+    """A row the run excluded because the EM or an operator performs it. ``reason`` is one of
+    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send``, ``operator``."""
+
+    id: str
+    reason: str
+    detail: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {"id": self.id, "reason": self.reason, "detail": self.detail}
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "OwedRow":
+        return cls(id=data["id"], reason=data["reason"], detail=data.get("detail") or "")
+
+
+@dataclass(frozen=True)
 class StageManifest:
     """dispatch.ask_stage reply, also written as manifest.json in the run dir.
     ``gated`` lists rows withheld, never staged; an absent key reads as ``()``.
+    ``owed`` lists rows the run excluded because the EM or an operator performs them, and the
+    run never performs them; an absent key reads as ``()``.
     ``test_targets`` is the spine's terminal test scope; ``no_test_target`` is set (``{reason,
     unmapped_paths, testable_omissions}``) when the locator found no runnable target for a
     testable write -- the run's tests read degraded, never pass. ``doc_writes`` is the docs
@@ -261,9 +280,11 @@ class StageManifest:
     #: Rows delivered in the engine plane, in the owner-clause row shape `{id, owner_repo,
     #: owner_root, root_class, engine}`; an absent key reads as ``()``.
     engine_rows: tuple[dict[str, Any], ...] = ()
+    owed: tuple[OwedRow, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "owed": [o.to_json() for o in self.owed],
             "engine_rows": [dict(r) for r in self.engine_rows],
             "plan_id": self.plan_id,
             "run_dir": self.run_dir,
@@ -289,4 +310,5 @@ class StageManifest:
             no_test_target=data.get("no_test_target"),
             doc_writes=tuple(data.get("doc_writes") or ()),
             engine_rows=tuple(dict(r) for r in data.get("engine_rows") or ()),
+            owed=tuple(OwedRow.from_json(o) for o in data.get("owed") or ()),
         )

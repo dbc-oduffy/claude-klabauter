@@ -84,9 +84,12 @@ def _load_wrapper_module():
 
 
 def _run(args, *, env, timeout=60):
+    # Outside any git repo: a run here must not leave a last-run pair in the real checkout.
+    cwd = Path(env["COORDINATOR_SETTINGS_HOME"])
+    cwd.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
         [sys.executable, str(_WRAPPER)] + args,
-        cwd=str(_REPO_ROOT),
+        cwd=str(cwd),
         env=env,
         capture_output=True,
         text=True,
@@ -252,7 +255,7 @@ def test_interrupted_run_releases_lock(tmp_path):
         creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
     proc = subprocess.Popen(
         [sys.executable, str(_WRAPPER), "--", sys.executable, "-c", script, str(started_marker)],
-        cwd=str(_REPO_ROOT),
+        cwd=str(tmp_path),
         env=env,
         creationflags=creationflags,
     )
@@ -313,7 +316,7 @@ def test_entrypoint_executed_directly_streams_output(tmp_path):
         argv = [sys.executable, str(_WRAPPER), "--", sys.executable, "-c", script]
     result = subprocess.run(
         argv,
-        cwd=str(_REPO_ROOT),
+        cwd=str(tmp_path),
         env=env,
         capture_output=True,
         text=True,
@@ -879,3 +882,64 @@ def test_reuse_fresh_lost_acquire_race_kills_the_unrun_child_and_exits_75(
     time.sleep(0.6)
     assert counter.read_text() == ""
     assert not _current(repo).exists()
+
+
+def _last_pair(repo: Path, name: str):
+    out = repo / "state" / "test-runs"
+    return (out / f"{name}-last.txt"), json.loads((out / f"{name}-last.json").read_text())
+
+
+def test_pass_and_fail_runs_overwrite_the_last_run_pair_with_ansi_stripped_text(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    ok = _run_in(
+        repo, ["--collection", "lr", "--", sys.executable, "-c", "print('\\x1b[31mred\\x1b[0m one')"],
+        env=env,
+    )
+    assert ok.returncode == 0, ok.stderr
+    txt, summary = _last_pair(repo, "lr")
+    assert txt.read_text() == "red one\n"
+    assert summary["exit"] == 0 and len(summary["sha"]) == 40
+
+    bad = _run_in(
+        repo, ["--collection", "lr", "--", sys.executable, "-c", "import sys; print('two'); sys.exit(3)"],
+        env=env,
+    )
+    assert bad.returncode == 3, bad.stderr
+    txt, summary = _last_pair(repo, "lr")
+    assert txt.read_text() == "two\n"
+    assert summary["exit"] == 3
+    assert {"sha", "branch", "started_at", "duration_s", "exit", "counts", "failing"} <= set(summary)
+
+
+def test_timeout_run_leaves_the_last_run_pair(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    result = _run_in(
+        repo,
+        ["--collection", "to", "--max-runtime", "2", "--", sys.executable, "-c",
+         "import time; print('started', flush=True); time.sleep(300)"],
+        env=env, timeout=90,
+    )
+    assert result.returncode == 124, result.stderr
+    txt, summary = _last_pair(repo, "to")
+    assert summary["exit"] == 124
+    assert "started" in txt.read_text()
+
+
+def test_absent_collection_names_the_suite_from_label_or_command(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    py = Path(sys.executable).name.lower().removesuffix(".exe")
+    assert _run_in(repo, ["--owner-label", "My Label!", "--", sys.executable, "-c", "pass"], env=env).returncode == 0
+    _last_pair(repo, "my-label")
+    assert _run_in(repo, ["--", sys.executable, "-c", "pass"], env=env).returncode == 0
+    _last_pair(repo, py)
+
+
+def test_default_collection_is_a_valid_deterministic_slug():
+    module = _load_wrapper_module()
+    assert module._default_collection(None, ["pnpm", "run", "tier:fast"]) == "pnpm-run-tier-fast"
+    assert module._default_collection(None, ["/x/Python.EXE", "-c", "print(1)"]) == "python"
+    assert module._default_collection("Release Gate", ["x"]) == "release-gate"
+    assert module._default_collection(None, ["--", "-x"]) == "default"

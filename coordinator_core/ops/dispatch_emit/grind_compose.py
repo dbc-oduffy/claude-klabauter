@@ -899,6 +899,7 @@ def compose_grind_script(
     review_stage_schemas: Optional[dict] = None,
     review_run_base_sha: str = "",
     stage_models: Optional[Mapping[str, str]] = None,
+    targeted_runner: bool = False,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -930,6 +931,11 @@ def compose_grind_script(
     is skipped at run time when no row committed. ``review_run_base_sha`` is
     the reviewed range's base, resolved by the caller (this function reads no
     disk); empty leaves the prompt's ``run_base_sha`` placeholder.
+
+    ``targeted_runner`` makes triage, fix and verify-agent run tests only through the
+    targeted test runner and makes agent-mode verify honour the runner's outcome:
+    `failed|refused|no-runner` force `fail`, with the failing ids as feedback.
+    Off, every prompt and the verify tail are unchanged.
 
     ``preamble`` (optional) is a run-wide posture block declared
     ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
@@ -1108,6 +1114,7 @@ def compose_grind_script(
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
         agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        targeted_runner=targeted_runner,
     )
     lines.append(
         "async function _triageCall(batchId, batchKey, rowIds) {\n"
@@ -1168,6 +1175,7 @@ def compose_grind_script(
         ),
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        targeted_runner=targeted_runner,
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
@@ -1177,6 +1185,19 @@ def compose_grind_script(
         row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
         agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
+    )
+    _runner_fail = json.dumps([
+        o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
+    ])
+    verify_agent_tail = (
+        "  const _forced = " + _runner_fail + ".includes(_result.tests_outcome);\n"
+        "  if (_forced) {\n"
+        "    const _ids = (_result.tests_failing_ids || []).join(', ');\n"
+        "    return { outcome: 'fail', reason: 'targeted tests ' + _result.tests_outcome"
+        " + (_ids ? ': ' + _ids : '') };\n"
+        "  }\n"
+        "  return _result;"
     )
     verify_op_raw = stages.compose_verify_op_call(
         models=stage_models,
@@ -1201,7 +1222,10 @@ def compose_grind_script(
             "    ",
         )
         + "\n  }\n"
-        + _indent_block(_capture(verify_agent_raw, "verify"), "  ")
+        + _indent_block(
+            _capture(verify_agent_raw, "verify", tail=verify_agent_tail if targeted_runner else None),
+            "  ",
+        )
         + "\n}"
     )
 

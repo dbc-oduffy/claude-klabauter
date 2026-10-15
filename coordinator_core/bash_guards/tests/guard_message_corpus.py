@@ -3633,6 +3633,7 @@ _hooks_asyncio = _HooksAsyncioShim()
 from coordinator_core.hooks import block_unenumerated_agent_type as _hook_block_unenumerated_agent_type
 from coordinator_core.hooks import cater_subagent_start as _hook_cater_subagent_start
 from coordinator_core.hooks import submit_engine_ask as _hook_submit_engine_ask
+from coordinator_core.hooks import submit_bug_blitz as _hook_submit_bug_blitz
 from coordinator_core.hooks import nudge_autonomous_askuserquestion as _hook_nudge_autonomous_askuserquestion
 from coordinator_core.hooks import plan_persistence_check as _hook_plan_persistence_check
 from coordinator_core.hooks import watchdog_undischarged_next_move as _hook_watchdog_undischarged_next_move
@@ -4138,6 +4139,52 @@ def _fire_submit_engine_ask_with(
             if subagent:
                 payload["agent_id"] = "a1"
             return _to_envelope_or_none(_hook_submit_engine_ask.evaluate(payload))
+
+
+def _fire_submit_bug_blitz_with(
+    args: Any = None, branch: str = "main", in_repo: bool = True, subagent: bool = False, name: str = "coordinator:bug-blitz"
+) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sbb-", dir=_neutral_scratch_parent()) as scratch:
+        root = Path(scratch) / "repo"
+        (root / ".git" / "objects").mkdir(parents=True)
+        (root / ".git" / "refs").mkdir()
+        (root / ".git" / "HEAD").write_text(f"ref: refs/heads/{branch}\n", encoding="utf-8")
+        cwd = str(root) if in_repo else str(Path(scratch) / "outside")
+        if not in_repo:
+            (Path(scratch) / "outside").mkdir()
+        payload = {
+            "tool_name": "Workflow",
+            "tool_input": {"name": name, "args": args if args is not None else {"targets": "red-set"}},
+            "session_id": "sess-sbb",
+            "cwd": cwd,
+        }
+        if subagent:
+            payload["agent_id"] = "a1"
+        return _to_envelope_or_none(_hook_submit_bug_blitz.evaluate(payload))
+
+
+def _fire_submit_bug_blitz_main() -> Optional[Dict[str, Any]]:
+    return _fire_submit_bug_blitz_with()
+
+
+def _fire_submit_bug_blitz_no_targets() -> Optional[Dict[str, Any]]:
+    return _fire_submit_bug_blitz_with(args={})
+
+
+def _fire_submit_bug_blitz_unknown_arg() -> Optional[Dict[str, Any]]:
+    return _fire_submit_bug_blitz_with(args={"targets": "x", "suite": "full"})
+
+
+def _fire_submit_bug_blitz_non_repo() -> Optional[Dict[str, Any]]:
+    return _fire_submit_bug_blitz_with(in_repo=False)
+
+
+def _fire_submit_bug_blitz_subagent() -> Optional[Dict[str, Any]]:
+    return _fire_submit_bug_blitz_with(subagent=True)
+
+
+def _fire_submit_bug_blitz_control() -> Optional[Dict[str, Any]]:
+    return _fire_submit_bug_blitz_with(name="coordinator:engine-ask")
 
 
 def _fire_submit_engine_ask_scout_live() -> Optional[Dict[str, Any]]:
@@ -5920,6 +5967,12 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("submit_engine_ask", "fire-non-repo", True, _fire_submit_engine_ask_non_repo),
     HookRow("submit_engine_ask", "fire-subagent-submits", True, _fire_submit_engine_ask_subagent),
     HookRow("submit_engine_ask", "fire-scout-no-live-run", True, _fire_submit_engine_ask_scout_idle),
+    HookRow("submit_bug_blitz", "fire-on-main", True, _fire_submit_bug_blitz_main),
+    HookRow("submit_bug_blitz", "fire-no-targets", True, _fire_submit_bug_blitz_no_targets),
+    HookRow("submit_bug_blitz", "fire-unknown-arg", True, _fire_submit_bug_blitz_unknown_arg),
+    HookRow("submit_bug_blitz", "fire-non-repo", True, _fire_submit_bug_blitz_non_repo),
+    HookRow("submit_bug_blitz", "fire-subagent-submits", True, _fire_submit_bug_blitz_subagent),
+    HookRow("submit_bug_blitz", "control-other-workflow", False, _fire_submit_bug_blitz_control),
     HookRow("guard_terminal_review", "fire-unreviewed-code-commit", True, _fire_guard_terminal_review),
     HookRow("guard_terminal_review", "control-doc-only-commit", False, _fire_guard_terminal_review_control),
     HookRow("preuse_search_dispatch", "fire-first-grep", True, _fire_preuse_search_dispatch),

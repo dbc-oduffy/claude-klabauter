@@ -96,6 +96,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "quick-wrap-assemble.py",
     "roadmap-planning-assemble.py",
     "sprint-planning-assemble.py",
+    "targeted-test-run.py",
     "workday-start-run.py",
 )
 

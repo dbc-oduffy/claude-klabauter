@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/targeted-test-run-record.schema.json",
+  "title": "targeted-test-run record",
+  "description": "One <row-id>.tests.json record written by the targeted-test-run CLI: what verify actually ran for a row, and its outcome. exit_code is null when no test process started (nothing-to-run, refused, no-runner). Types: coordinator_core/bug_blitz/contract.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["row_id", "runner", "argv", "selected", "outcome", "exit_code", "failing_ids", "process_s"],
+  "properties": {
+    "row_id": { "type": "string", "minLength": 1 },
+    "runner": {
+      "type": "string",
+      "description": "Runner head label (e.g. pytest, vitest, jest); empty when no head was chosen."
+    },
+    "argv": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The composed argv, files only. Empty when no argv was composed."
+    },
+    "selected": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Test files selected for the row: its failing file plus covering tests of touched files."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["passed", "failed", "nothing-to-run", "refused", "no-runner"]
+    },
+    "exit_code": { "type": ["integer", "null"] },
+    "failing_ids": { "type": "array", "items": { "type": "string" } },
+    "process_s": { "type": "number", "minimum": 0 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "outcome": { "enum": ["nothing-to-run", "refused", "no-runner"] } } },
+      "then": { "properties": { "exit_code": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "enum": ["passed", "failed"] } } },
+      "then": { "properties": { "exit_code": { "type": "integer" }, "argv": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "nothing-to-run" } } },
+      "then": { "properties": { "selected": { "maxItems": 0 } } }
+    }
+  ]
+}

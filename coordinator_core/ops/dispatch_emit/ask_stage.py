@@ -29,6 +29,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     GatedRow,
     ManifestRow,
+    OwedRow,
     StageManifest,
     record_dir,
 )
@@ -69,7 +70,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
-from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from coordinator_core.ops.dispatch_emit.spine_read import EM_OWNED_REASONS, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
 
@@ -335,6 +336,11 @@ def stage(
     if _drift:
         raise AskStageError(pin_drift_reason(_drift))
     gated = _with_owner_roots(gated_rows(exclusions, raw_by_id))
+    owed = [
+        OwedRow(id=e["id"], reason=e["reason"], detail=e.get("detail") or "")
+        for e in exclusions
+        if e.get("reason") in EM_OWNED_REASONS
+    ]
     try:
         check_cross_repo_writes(rows, root, approved=cross_repo_approved)
     except CrossRepoWriteError as exc:
@@ -342,6 +348,8 @@ def stage(
     waves = build_waves(rows)
     if not waves:
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
+        if owed:
+            named += f"; owed by the EM: {', '.join(o.id for o in owed)}"
         raise AskStageError(f"the spine derives zero dispatchable rows{named}")
 
     context = derive_plan_context(
@@ -440,6 +448,7 @@ def stage(
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
+        owed=tuple(owed),
         engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing),
         test_targets=test_targets,
         no_test_target=no_test_target,

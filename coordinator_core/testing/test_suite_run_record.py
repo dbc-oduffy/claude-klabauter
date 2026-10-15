@@ -99,6 +99,71 @@ def test_failed_ids_null_in_record(tmp_path):
     assert srr.read_runs(rec)["current"]["failed_ids"] is None
 
 
+def _last(tmp_path, name="default"):
+    out = tmp_path / "state" / "test-runs"
+    return out / f"{name}-last.txt", out / f"{name}-last.json"
+
+
+def test_last_pair_strips_ansi_and_summarizes(tmp_path):
+    import json
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/feat/x\n")
+    log = tmp_path / "run.log"
+    log.write_text(
+        "\x1b[31mFAILED a/t.py::test_x\x1b[0m - boom\r\n"
+        "\x1b[31m== 1 failed, 4 passed, 2 skipped in 1.5s ==\x1b[0m\n"
+    )
+    srr.write_run(srr.record_dir(tmp_path, "default"), _fields(exit_code=1, outcome="fail",
+                  failed_ids=["a/t.py::test_x"]), log)
+    txt, js = _last(tmp_path)
+    assert "\x1b" not in txt.read_text() and "\r" not in txt.read_text()
+    assert "FAILED a/t.py::test_x - boom" in txt.read_text()
+    body = json.loads(js.read_text())
+    assert body == {
+        "sha": "a" * 40, "branch": "feat/x", "started_at": "t0", "duration_s": 1.0, "exit": 1,
+        "counts": {"failed": 1, "passed": 4, "skipped": 2}, "failing": ["a/t.py::test_x"],
+    }
+
+
+def test_last_pair_overwritten_per_run(tmp_path):
+    rec = srr.record_dir(tmp_path, "default")
+    for n in (1, 2):
+        log = tmp_path / f"r{n}.log"
+        log.write_text(f"run {n}\n")
+        srr.write_run(rec, _fields(exit_code=n), log)
+    txt, js = _last(tmp_path)
+    assert txt.read_text() == "run 2\n" and '"exit": 2' in js.read_text()
+    assert sorted(p.name for p in txt.parent.iterdir()) == ["default-last.json", "default-last.txt"]
+
+
+def test_last_pair_failure_never_fails_the_run(tmp_path, capsys):
+    (tmp_path / "state").write_text("a file where the directory should be")
+    cur = srr.write_run(srr.record_dir(tmp_path, "default"), _fields(), None)
+    assert cur.is_file()
+    assert "last-run pair not written" in capsys.readouterr().err
+
+
+def test_branch_none_on_detached_head(tmp_path):
+    import json
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("b" * 40 + "\n")
+    assert srr.read_branch(tmp_path) is None
+    srr.write_run(srr.record_dir(tmp_path, "default"), _fields(), None)
+    body = json.loads(_last(tmp_path)[1].read_text())
+    assert body["branch"] is None and body["counts"] is None and body["failing"] == []
+
+
+@pytest.mark.parametrize("line,counts", [
+    ("===== 3 passed in 0.12s =====", {"passed": 3}),
+    ("1 failed, 2 errors, 1 warning in 3.00s", {"failed": 1, "errors": 2, "warnings": 1}),
+    ("no summary here", None),
+])
+def test_parse_counts(line, counts):
+    assert srr.parse_counts(line + "\n") == counts
+
+
 def test_crash_between_demote_steps_leaves_current_readable(tmp_path, monkeypatch):
     rec = srr.record_dir(tmp_path, "default")
     first = tmp_path / "run1.log"

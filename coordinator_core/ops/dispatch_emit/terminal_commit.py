@@ -2269,8 +2269,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``rows_coded`` (``{plan path: [row ids]}`` flipped ``open`` -> ``coded``)
     and ``coded_sha`` (the second, plan-only commit), or ``coded_stamp_error``
     when that second step failed -- the product commit stands regardless.
-    ``incomplete_reasons`` maps every incomplete id to its reason: ``external_gate``
-    (a row the ask manifest withheld; it carries no paths, so nothing is stranded),
+    ``incomplete_reasons`` maps every incomplete id to its reason: a gated row's own
+    ``external_gate`` / ``transitive_gate_closure``, or ``owed: <detail>`` (rows the ask
+    manifest withheld; they carry no paths, so nothing is stranded),
     ``executor_partial: <Not-done lines>`` or ``incomplete_unreported``;
     ``index_stale`` lists committed paths whose index entry could not be
     spliced to the landed blob (``[]`` when every entry equals it); a
@@ -2322,12 +2323,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     stranded: dict = {}
     scope: dict = {}
-    gated_ids: set = set()
+    withheld: dict = {}
     blockers: dict = {}
     regraded: dict = {}
     close_ctx: dict = {}
     reply = _terminal_commit(
-        params, repo_root, stranded, scope, gated_ids, blockers, regraded, close_ctx=close_ctx
+        params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx=close_ctx
     )
     if _is_no_script_call(params):
         return reply
@@ -2362,8 +2363,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         for i in sorted(open_ids):
             if i in held:
                 reasons[i] = f"held: {held[i]}"
-            elif i in gated_ids:
-                reasons[i] = "external_gate"
+            elif i in withheld:
+                reasons[i] = withheld[i]
             elif i in entangled:
                 reasons[i] = "entangled: imports stranded " + ", ".join(entangled[i])
             elif i in blockers:
@@ -2441,7 +2442,7 @@ def _is_no_script_call(params: object) -> bool:
 
 def _terminal_commit(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
-    gated_ids: Optional[set] = None, blockers: Optional[dict] = None,
+    withheld: Optional[dict] = None, blockers: Optional[dict] = None,
     regraded: Optional[dict] = None,
     close_ctx: Optional[dict] = None,
 ) -> dict:
@@ -2538,8 +2539,9 @@ def _terminal_commit(
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 return _error(f"cannot read ask-run manifest {manifest_rel!r}: {exc!r}")
-            if gated_ids is not None:
-                gated_ids.update(g.id for g in manifest.gated)
+            if withheld is not None:
+                withheld.update({g.id: g.reason for g in manifest.gated})
+                withheld.update({o.id: f"owed: {o.detail}" for o in manifest.owed})
             ask_run_dir = manifest_abs.parent
             request_abs = contained_path(worktree_root / manifest.marker_path, [run_root])
             if request_abs is None:

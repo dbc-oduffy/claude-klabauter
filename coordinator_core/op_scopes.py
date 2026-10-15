@@ -54,6 +54,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.cater_subagent_start":            "none",
     "hooks.flag_em_poll_in_flight":          "none",
     "hooks.submit_engine_ask":               "none",
+    "hooks.submit_bug_blitz":                "none",
     "hooks.taskstop_launch_recorder":        "none",
     "hooks.taskstop_reaper":                 "none",
     "hooks.nudge_unauthorized_handoff":      "none",

@@ -381,6 +381,20 @@ _SPAWN_COUNT_HIGH_WATER = {
                 "First recorded 2026-10-06 at the value it entered with: the plan-route gitignore filter is one batched check-ignore for the whole path set."
             ),
         },
+        "review_only_terminal_pin": {
+            "ceiling": 2,
+            "reason": (
+                "First recorded 2026-10-15 at the value it entered with: rev-parse and merge-base pin the review-only terminal commit and its ancestry."
+            ),
+        },
+    },
+    "hooks.submit_bug_blitz": {
+        "targets_submission": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-15 at the value it entered with: the submission runs the real dispatch.emit queue route in process and starts no process."
+            ),
+        },
     },
     "hooks.submit_engine_ask": {
         "sizing_submission": {

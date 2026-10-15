@@ -1065,6 +1065,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/session_hierarchy_derive.py",
         ("_handler",),
     ),
+    "sizing.intake_mint": (
+        "coordinator_core/ops/sizing_intake.py",
+        ("_handler",),
+    ),
     "sizing.decline": (
         "coordinator_core/ops/sizing_decline.py",
         ("_handler",),
@@ -1387,6 +1391,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "hooks.submit_engine_ask": (
         "coordinator_core/hooks/submit_engine_ask.py",
+        ("_handler",),
+    ),
+    "hooks.submit_bug_blitz": (
+        "coordinator_core/hooks/submit_bug_blitz.py",
         ("_handler",),
     ),
     "hooks.taskstop_launch_recorder": (

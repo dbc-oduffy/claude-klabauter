@@ -49,6 +49,11 @@ from __future__ import annotations
 import json
 from typing import Mapping, Optional, Sequence
 
+from coordinator_core.bug_blitz.contract import (
+    CLI_NAME as RUNNER_CLI_NAME,
+    OUTCOMES as RUNNER_OUTCOMES,
+    tests_record_rel,
+)
 from coordinator_core.contract.grind_vocab import (
     OP_RUNNER_AGENT_TYPE,
     TRIAGE_RECORD_FIELDS,
@@ -180,6 +185,46 @@ def _evidence_path_parts(
     return [("lit", head), run_id_part, ("lit", mid), row_id_part, ("lit", tail)]
 
 
+RUNNER_CMD = f'"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/{RUNNER_CLI_NAME}"'
+
+#: Outcomes that force a verify `fail`; `passed` and `nothing-to-run` keep the agent verdict.
+RUNNER_FAIL_OUTCOMES: tuple[str, ...] = tuple(
+    o for o in RUNNER_OUTCOMES if o not in ("passed", "nothing-to-run")
+)
+
+
+def _runner_record_parts(
+    profile: str, run_id_part: tuple[str, str], row_id_part: tuple[str, str]
+) -> list[tuple[str, str]]:
+    head, rest = tests_record_rel(profile, "\0", "\1").split("\0")
+    mid, tail = rest.split("\1")
+    return [("lit", head), run_id_part, ("lit", mid), row_id_part, ("lit", tail)]
+
+
+def _runner_invocation_parts(
+    *,
+    profile: str,
+    row_path_part: tuple[str, str],
+    touched_parts: Sequence[tuple[str, str]],
+    run_id_part: tuple[str, str],
+    row_id_part: tuple[str, str],
+    repo_root_js: str,
+) -> list[tuple[str, str]]:
+    """The one sanctioned test route: the runner runs only tests covering touched files,
+    so it never trips the suite guards. Never a bare test command."""
+    return [
+        ("lit", "`" + RUNNER_CMD + " --repo "),
+        _shq_part(repo_root_js),
+        ("lit", " --row "),
+        row_path_part,
+        ("lit", " --touched "),
+        *touched_parts,
+        ("lit", " --record "),
+        *_runner_record_parts(profile, run_id_part, row_id_part),
+        ("lit", "`"),
+    ]
+
+
 def _shq_part(js_expr: str) -> tuple[str, str]:
     """A prompt part that quotes the runtime path ``js_expr`` as one shell token."""
     return ("expr", f"_shq({js_expr})")
@@ -255,6 +300,7 @@ def compose_triage_call(
     agent_type_host: Optional[str] = None,
     repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
+    targeted_runner: bool = False,
 ) -> str:
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
     depth_part: tuple[str, str] = ("expr", triage_depth_js) if triage_depth_js else ("lit", triage_depth)
@@ -318,6 +364,26 @@ def compose_triage_call(
         depth_part,
         ("lit", "'. " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE),
     ]
+    if targeted_runner:
+        parts[-1] = ("lit", "'. ")
+        parts.append((
+            "lit",
+            "To learn whether a row's defect is already fixed, run its tests only through ",
+        ))
+        parts.extend(_runner_invocation_parts(
+            profile=profile,
+            row_path_part=("lit", "<its path>"),
+            touched_parts=[("lit", "<its surface>")],
+            run_id_part=run_id_part,
+            row_id_part=("lit", "<its row_id>"),
+            repo_root_js=repo_root_js,
+        ))
+        parts.append((
+            "lit",
+            " and cite its `outcome` in `evidence`: `passed` means the defect is already fixed; "
+            "`failed` means it is live. Run no other test command. ",
+        ))
+        parts.append(("lit", _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
     row_schema = {
         "type": "object",
         "required": list(TRIAGE_RECORD_FIELDS) + ["has_tradeoff"],
@@ -606,6 +672,7 @@ def compose_fix_call(
     repo_root_js: str = "REPO_ROOT",
     agent_type_host: Optional[str] = None,
     preamble_expr: Optional[str] = None,
+    targeted_runner: bool = False,
 ) -> str:
     """`fix` (general-purpose, sonnet, high). Holds the lock on its files
     plus `ledger:<row-id>`. Pre-checks its locked files for peer dirt
@@ -630,6 +697,7 @@ def compose_fix_call(
     HEAD and gives the refuter's own reason verbatim (design item 2,
     docs/plans/2026-09-22-port-the-remaining-bug-backlog-grind-les.md)."""
     row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
+    fix_run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     tail = (
         "] plus `ledger:"
     )
@@ -658,8 +726,9 @@ def compose_fix_call(
             "Never write the published mirror (any publish destination) or "
             "`publish.mirrors.*` config for an engine-subject row: both are out "
             "of bounds, and a fix that needs them is NEEDS_WIDER_SCOPE. "
-            "Otherwise, fix the row, run its tests, "
-            "report every file you touched and every file you created -- "
+            "Otherwise, fix the row, "
+            + ("" if targeted_runner else "run its tests, ")
+            + "report every file you touched and every file you created -- "
             "paths inside this repo relative to the repo root, any file outside it "
             "by its absolute path -- and "
             "when they pass and `has_tradeoff` is false run `" + ASSEMBLE_CMD + " grind-row close --profile-dir ",
@@ -674,7 +743,6 @@ def compose_fix_call(
     parts.append(("expr", row_path_js) if row_path_js else ("lit", "<row path>"))
     parts.append(("lit", " --digest "))
     parts.append(("expr", digest_js) if digest_js else ("lit", "<row digest>"))
-    fix_run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts.append(("lit", " --verdict fix --evidence-file "))
     parts.extend(_evidence_path_parts(profile, fix_run_id_part, row_id_part, "done"))
     parts.append((
@@ -692,6 +760,21 @@ def compose_fix_call(
         "at its path for the adjudicator, and a subagent cannot edit a row once "
         "it is archived.",
     ))
+    if targeted_runner:
+        parts.append(("lit", " Run the row's tests only through "))
+        parts.extend(_runner_invocation_parts(
+            profile=profile,
+            row_path_part=("expr", row_path_js) if row_path_js else ("lit", "<row path>"),
+            touched_parts=[("lit", "<every file you touched>")],
+            run_id_part=fix_run_id_part,
+            row_id_part=row_id_part,
+            repo_root_js=repo_root_js,
+        ))
+        parts.append((
+            "lit",
+            " -- never any other test command. The tests pass when its `outcome` is `passed` "
+            "or `nothing-to-run`; on any other outcome they do not pass, so do not close the row.",
+        ))
     if feedback_js:
         parts.append(("expr", feedback_js))
     if close_note_js:
@@ -751,6 +834,10 @@ def compose_verify_agent_call(
     fix_plan_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     preamble_expr: Optional[str] = None,
+    targeted_runner: bool = False,
+    profile: str = "",
+    run_id_js: Optional[str] = None,
+    repo_root_js: str = "REPO_ROOT",
 ) -> str:
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
@@ -783,6 +870,27 @@ def compose_verify_agent_call(
             "reason": {"type": "string"},
         },
     }
+    if targeted_runner:
+        row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", "<row id>")
+        parts.append(("lit", " Before judging, run the row's tests only through "))
+        parts.extend(_runner_invocation_parts(
+            profile=profile,
+            row_path_part=("expr", row_path_js) if row_path_js else ("lit", "<row path>"),
+            touched_parts=[("expr", f"({touched_files_js}).map(_shq).join(' ')")]
+            if touched_files_js else [("lit", "<the touched files>")],
+            run_id_part=("expr", run_id_js) if run_id_js else ("lit", "<run-id>"),
+            row_id_part=row_id_part,
+            repo_root_js=repo_root_js,
+        ))
+        parts.append((
+            "lit",
+            " -- never any other test command -- and return the record path as `tests_record` and "
+            "the record's `outcome` as `tests_outcome`, with its `failing_ids` as `tests_failing_ids`.",
+        ))
+        schema["required"] = ["outcome", "tests_record", "tests_outcome"]
+        schema["properties"]["tests_record"] = {"type": "string"}
+        schema["properties"]["tests_outcome"] = {"type": "string", "enum": list(RUNNER_OUTCOMES)}
+        schema["properties"]["tests_failing_ids"] = {"type": "array", "items": {"type": "string"}}
     return _agent_call(
         _join_prompt_parts(parts),
         stage="verify",
