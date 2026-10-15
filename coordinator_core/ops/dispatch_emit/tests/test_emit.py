@@ -2155,3 +2155,64 @@ def test_dispatch_emit_refuses_malformed_request_without_raising(params, needle)
     out = _dispatch_emit(params)
     assert isinstance(out, dict)
     assert needle in out["error"], out
+
+
+def _sized_roster():
+    """Roster with a ratio-bearing slice reviewer and a min_tshirt-gated Kira."""
+    import copy
+
+    fragment = copy.deepcopy(_V5_ROSTER_FRAGMENT)
+    wave = next(s for s in fragment["execute_review"]["stages"] if s["kind"] == "review-wave")
+    wave["agents"] = [
+        {
+            "agentType": "coordinator:code-reviewer",
+            "model": "sonnet",
+            "effort": "low",
+            "per": "slice",
+            "schema": "wave",
+            "executor_rows_per_reviewer": {"min": 3, "max": 4},
+        },
+        {
+            "agentType": "coordinator:overengineering-reviewer",
+            "model": "opus",
+            "effort": "low",
+            "per": "whole-diff",
+            "schema": "wave",
+            "min_tshirt": "L",
+        },
+    ]
+    return fragment
+
+
+def _sized_plan(tmp_path, tshirt: str, rows: int):
+    plan_path = _write_plan_with_sizing(tmp_path, tshirt)
+    tasks = "".join(
+        f"- id: C{i}\n  title: Row {i}\n  change_kind: doc-edit\n  surface: docs/r{i}.md\n"
+        f"  writes:\n  - docs/r{i}.md\n  queue_scope: project\n  disposition: open\n  body: |\n    Do {i}.\n"
+        for i in range(1, rows + 1)
+    )
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8")
+        + f"\n## Tasks\n\n```yaml plan-tasks\n{tasks}```\n",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
+@pytest.mark.parametrize("tshirt,kira", [("M", False), ("L", True)])
+def test_plan_route_gates_overengineering_reviewer_on_the_sizing_tshirt(tmp_path, tshirt, kira):
+    plan_path = _sized_plan(tmp_path, tshirt, 2)
+    script = emit_script(
+        plan_path, repo_root=tmp_path, review_roster_fragment=_sized_roster(),
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+    )
+    assert ("coordinator:overengineering-reviewer" in script) is kira
+
+
+def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path):
+    plan_path = _sized_plan(tmp_path, "L", 9)
+    script = emit_script(
+        plan_path, repo_root=tmp_path, review_roster_fragment=_sized_roster(),
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+    )
+    assert "_groupSlices(_reviewPrep?.slices ?? [], 9, 3, 4)" in script

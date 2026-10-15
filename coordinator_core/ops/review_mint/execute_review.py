@@ -19,6 +19,8 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.ops.review_mint.roster import (
+    _TSHIRT_ORDER,
+    DELIVERY_NOT_ROSTERED,
     ExecuteReview,
     ReviewAgent,
     RosterFragmentError,
@@ -200,6 +202,27 @@ def _degrading(call: str, on_error: str = "") -> str:
     return f"() => {wrapped}" if call.startswith("() => ") else wrapped
 
 
+#: Emitted once per wave block that fans a ratio-bearing slice agent: splits `slices` into
+#: `min(slices, ceil(rows / maxRows))` (at least one) contiguous groups, sizes differing by at most one.
+_GROUP_SLICES_JS = (
+    "  const _groupSlices = (slices, rows, minRows, maxRows) => {\n"
+    "    const n = Math.max(1, Math.min(slices.length, Math.ceil(rows / maxRows), Math.floor(rows / minRows)));\n"
+    "    const groups = [];\n"
+    "    let at = 0;\n"
+    "    for (let i = 0; i < n; i++) {\n"
+    "      const size = Math.floor(slices.length / n) + (i < slices.length % n ? 1 : 0);\n"
+    "      groups.push(slices.slice(at, at + size));\n"
+    "      at += size;\n"
+    "    }\n"
+    "    return groups.filter(g => g.length);\n"
+    "  };"
+)
+
+_GROUPED_SLICES_CLAUSE = (
+    "\nYou own every slice listed above: apply findings only inside their files, write one sidecar "
+    "at the first slice's sidecar_path, and return slice_id as the slice ids joined with `+`."
+)
+
 #: Prefix of the `halted` string the emitted script returns when review prep yields nothing
 #: to review over a diff that has product files. Fails the run closed before anything lands.
 NO_SLICES_HALT = "review prep returned no slices"
@@ -380,6 +403,10 @@ def compose_execute_review(
     review_terminal_sha: Optional[str] = None,
     tier: Optional[str] = None,
     tier_js: Optional[str] = None,
+    executor_rows: Optional[int] = None,
+    executor_rows_js: Optional[str] = None,
+    tshirt: Optional[str] = None,
+    tshirt_js: Optional[str] = None,
     mechanical_prep: bool = False,
     repo_root: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
@@ -423,6 +450,18 @@ def compose_execute_review(
     which gates those agents at run time instead. An agent without ``tiers`` always runs, and
     neither argument leaves the wave byte-identical. An omitted delivery verifier leaves
     ``_deliveryVerdict`` bound to ``null``. Prep, integration and the judge never filter.
+
+    ``executor_rows`` / ``executor_rows_js`` (exactly one, required while a slice agent carries
+    ``executor_rows_per_reviewer``) is the run's executor row count, literal or a fire-time JS
+    expression. That agent then fans out ``ReviewAgent.reviewer_count`` reviewers, not one per
+    slice: ``_groupSlices`` splits prep's slices into contiguous balanced groups, each reviewer
+    owning its whole slice objects. A one-slice group's prompt equals the per-slice prompt.
+
+    ``tshirt`` / ``tshirt_js`` (at most one) is the plan's t-shirt, literal or fire-time; it omits
+    or run-time gates every agent whose ``min_tshirt`` exceeds it. An unknown size admits.
+
+    When the roster names no delivery verifier the wave binds ``_deliveryVerdict`` to ``null`` and
+    ``_deliveryNotRun`` to ``DELIVERY_NOT_ROSTERED``.
 
     ``mechanical_prep`` replaces the prep agent's multi-step prompt with one ``review.prep`` engine
     call whose reply it returns verbatim; the freeze, partition and foreign-claim work then runs
@@ -640,8 +679,31 @@ def compose_execute_review(
             return None
         return f"{json.dumps(list(agent.tiers))}.includes({tier_js})"
 
+    if tshirt is not None and tshirt_js is not None:
+        raise ValueError("compose_execute_review takes at most one of tshirt / tshirt_js")
+    if (executor_rows is None) == (executor_rows_js is None) and any(
+        a.per == "slice" and a.executor_rows_per_reviewer is not None for a in review.review_wave
+    ):
+        raise ValueError(
+            "compose_execute_review takes exactly one of executor_rows / executor_rows_js "
+            "when a review-wave slice agent carries executor_rows_per_reviewer"
+        )
+    rows_expr = str(executor_rows) if executor_rows is not None else f"({executor_rows_js})"
+
+    def _tshirt_gate(agent: ReviewAgent) -> Optional[str]:
+        """JS test that ``agent`` is admitted at the fire-time t-shirt; an unknown size excludes."""
+        if tshirt_js is None or agent.min_tshirt is None:
+            return None
+        admitted = [t for t in _TSHIRT_ORDER if agent.admits_tshirt(t)]
+        return f"{json.dumps(admitted)}.includes({tshirt_js})"
+
+    def _agent_gate(agent: ReviewAgent) -> Optional[str]:
+        gates = [g for g in (_tier_gate(agent), _tshirt_gate(agent)) if g]
+        return " && ".join(gates) if gates else None
+
     def _runs_at_compile_tier(agent: ReviewAgent) -> bool:
-        return agent.runs_at(tier)
+        # A fire-time t-shirt is judged by `_tshirt_gate`, never at compose time.
+        return agent.runs_at(tier) and (tshirt_js is not None or agent.admits_tshirt(tshirt))
 
     all_whole_diff_agents = [a for a in review.review_wave if a.per != "slice"]
     slice_agents = [a for a in review.review_wave if a.per == "slice" and _runs_at_compile_tier(a)]
@@ -681,8 +743,21 @@ def compose_execute_review(
             f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + "
             f"JSON.stringify(s), " + call[len(prefix):]
         )
-        slice_items = f"(_reviewPrep?.slices ?? []).map(s => () => {_degrading(spliced_call)})"
-        gate = _tier_gate(agent)
+        if agent.executor_rows_per_reviewer is not None:
+            suffix = (
+                f"(g.length === 1 ? {_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + "
+                f"JSON.stringify(g[0]) : {_js_string_literal(chr(10) + chr(10) + 'Slices: ')} + "
+                f"JSON.stringify(g) + {_js_string_literal(_GROUPED_SLICES_CLAUSE)})"
+            )
+            single_suffix = f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + JSON.stringify(s), "
+            grouped_call = spliced_call.replace(single_suffix, f"{suffix}, ", 1)
+            slice_items = (
+                f"_groupSlices(_reviewPrep?.slices ?? [], {rows_expr}, "
+                f"{agent.executor_rows_per_reviewer[0]}, {agent.executor_rows_per_reviewer[1]}).map(g => () => {_degrading(grouped_call)})"
+            )
+        else:
+            slice_items = f"(_reviewPrep?.slices ?? []).map(s => () => {_degrading(spliced_call)})"
+        gate = _agent_gate(agent)
         item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")
 
     for agent in whole_diff_agents:
@@ -753,7 +828,7 @@ def compose_execute_review(
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
         degraded = _degrading(call, _DELIVERY_REJECTED_JS if is_delivery_verifier else "")
         line = degraded if is_delivery_verifier else f"() => _verifyOnly ? null : ({degraded})()"
-        gate = _tier_gate(agent)
+        gate = _agent_gate(agent)
         if gate:
             skipped = (
                 f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
@@ -775,6 +850,8 @@ def compose_execute_review(
     )
 
     wave_lines = [f"  phase({_js_string_literal(wave_phase)});"]
+    if any(a.executor_rows_per_reviewer is not None for a in slice_agents):
+        wave_lines.append(_GROUP_SLICES_JS)
     if delivery_index is not None:
         wave_lines.append(f"  let {_DELIVERY_REASON_VAR} = null;")
     wave_lines.append(f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);")
@@ -793,6 +870,9 @@ def compose_execute_review(
             + _js_string_literal(f"tier {tier} excludes {_DELIVERY_VERIFIER_AGENT_TYPE}")
             + ";"
         )
+    else:
+        wave_lines.append("  const _deliveryVerdict = null;")
+        wave_lines.append(f"  const _deliveryNotRun = {_js_string_literal(DELIVERY_NOT_ROSTERED)};")
     phases.append((wave_phase, "\n".join(wave_lines)))
 
     # -- 3. integration (only when the fragment declares one stage) --------

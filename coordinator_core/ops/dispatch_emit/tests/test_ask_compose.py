@@ -443,3 +443,54 @@ def test_a_presized_script_composes_the_standalone_falsifier_unconditionally(mon
 def test_folded_scripts_validate_with_zero_errors(monkeypatch):
     for script in (_compose(**_JUDGE_KW), _presized(monkeypatch, **_JUDGE_KW)):
         assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
+
+
+def _ratio_kw(*extra_agents):
+    stages = [dict(s) for s in REVIEW_KW["review_roster_fragment"]["execute_review"]["stages"]]
+    wave = next(s for s in stages if s["kind"] == "review-wave")
+    wave["agents"] = [
+        {
+            "agentType": "coordinator:code-reviewer",
+            "model": "sonnet",
+            "effort": "low",
+            "per": "slice",
+            "schema": "wave",
+            "executor_rows_per_reviewer": {"min": 3, "max": 4},
+        },
+        *extra_agents,
+    ]
+    return {
+        "review_roster_fragment": {
+            **REVIEW_KW["review_roster_fragment"],
+            "execute_review": {"stages": stages},
+        },
+        "review_stage_schemas": REVIEW_KW["review_stage_schemas"],
+    }
+
+
+_KIRA = {
+    "agentType": "coordinator:overengineering-reviewer",
+    "model": "opus",
+    "effort": "low",
+    "per": "whole-diff",
+    "schema": "wave",
+    "min_tshirt": "L",
+}
+
+
+def test_the_ask_wave_sizes_reviewers_from_the_manifest_rows_and_gates_kira_on_the_gate_tshirt():
+    script = _compose(**_ratio_kw(_KIRA))
+    wave = script.split("phase('Review wave')", 1)[1] if "phase('Review wave')" in script else script
+    assert "(_manifest?.rows ?? []).length" in wave
+    assert "_gate?.tshirt" in wave
+    kira_line = next(l for l in script.split("\n") if "coordinator:overengineering-reviewer" in l)
+    assert '["L", "XL", "XXL"].includes(_gate?.tshirt) ?' in kira_line
+    assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
+
+
+def test_a_roster_without_a_delivery_verifier_assigns_the_not_rostered_reason():
+    script = _compose(**_ratio_kw())
+    assert "_deliveryNotRun = 'roster names no coordinator:delivery-verifier';" in script
+    assert "_deliveryVerdict = null;" in script
+    assert "const _deliveryNotRun" not in script
+    assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []

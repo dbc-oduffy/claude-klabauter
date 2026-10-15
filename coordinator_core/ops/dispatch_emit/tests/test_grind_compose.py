@@ -90,6 +90,30 @@ def test_golden_byte_identical():
     assert script == golden
 
 
+def test_review_wave_sizes_reviewers_by_committed_row_count():
+    import copy
+
+    fragment = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
+    wave = next(s for s in fragment["execute_review"]["stages"] if s["kind"] == "review-wave")
+    wave["agents"][0]["per"] = "slice"
+    wave["agents"][0]["executor_rows_per_reviewer"] = {"min": 3, "max": 4}
+    profile = _fixture_profile()
+    script = gc.compose_grind_script(
+        _fixture_manifest(),
+        profile,
+        gp.resolve_appetite(profile, "standard"),
+        run_dir=Path("state/queue-grind/fixture/run-1"),
+        appetite="standard",
+        agent_type_host=None,
+        queue_dirs=["state/bug-backlog"],
+        stage_models=None,
+        targeted_runner=False,
+        **{**REVIEW_KW, "review_roster_fragment": fragment},
+    )
+    assert "_settled.filter((s) => s.outcome === 'committed').length" in script
+    assert "_groupSlices(" in script
+
+
 def test_commit_stage_archive_path_is_computed_not_relayed_from_close_agent():
     script = _compose()
     profile = _fixture_profile()

@@ -1263,3 +1263,42 @@ def test_a_goal_gate_refusal_keeps_its_cause_in_the_reported_text(repo):
     assert out["plan_status"] == "refused", out
     assert "refusing to stamp implemented" in out["plan_status_refusal"], out
     assert "baseline_ref" in out["plan_status_refusal"], out
+
+
+def _unrostered_review(reason, product_files=0, unresolved=()):
+    from coordinator_core.ops.review_mint.roster import DELIVERY_NOT_ROSTERED
+
+    review = {
+        "prep": {"product_files": product_files, "slice_files": ["a.py"]},
+        "integration": {"unresolved": list(unresolved), "confinement_violations": []},
+    }
+    if reason == "rostered":
+        reason = DELIVERY_NOT_ROSTERED
+    if reason is not None:
+        review["delivery_not_run"] = reason
+    return review
+
+
+def test_not_rostered_delivery_with_zero_prep_product_files_anchors(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    request = terminal_commit._anchor_request(
+        repo, {"plan_path": "docs/plan.md"}, _unrostered_review("rostered"))
+    assert request is not None and request.chunks == ()
+    nonzero = _unrostered_review("rostered", product_files=2)
+    assert terminal_commit._anchor_request(repo, {"plan_path": "docs/plan.md"}, nonzero) is None
+
+
+def test_not_rostered_delivery_with_clean_integration_yields_the_slice_files():
+    assert terminal_commit._reviewed_files_if_passed(_unrostered_review("rostered")) == {"a.py"}
+    dirty = _unrostered_review("rostered", unresolved=["f"])
+    assert terminal_commit._reviewed_files_if_passed(dirty) is None
+
+
+@pytest.mark.parametrize("reason", ["roster tiers exclude coordinator:delivery-verifier at tier XS", None])
+def test_any_other_absent_delivery_keeps_no_pass(repo, reason):
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    review = _unrostered_review(reason)
+    assert terminal_commit._anchor_request(repo, {"plan_path": "docs/plan.md"}, review) is None
+    assert terminal_commit._reviewed_files_if_passed(review) is None

@@ -177,6 +177,17 @@ def _params_from_task_output(path_raw: str) -> dict:
     return found
 
 
+def _delivery_not_rostered(inline_review: dict) -> bool:
+    """True when the review carries no delivery verdict because the roster names no
+    delivery-verifier: no objection, unlike any other absent verdict."""
+    from coordinator_core.ops.review_mint.roster import DELIVERY_NOT_ROSTERED
+
+    return (
+        not isinstance(inline_review.get("delivery"), dict)
+        and inline_review.get("delivery_not_run") == DELIVERY_NOT_ROSTERED
+    )
+
+
 def _anchor_request(worktree_root: Path, params: dict, inline_review: Optional[dict]) -> Optional[CommitRequest]:
     """The zero-chunk request for a marker-less run whose review delivered PASS
     with no product file: it still owes the plan a fresh `Inline-Review`
@@ -185,7 +196,11 @@ def _anchor_request(worktree_root: Path, params: dict, inline_review: Optional[d
     if not isinstance(plan_rel, str) or not isinstance(inline_review, dict):
         return None
     delivery = inline_review.get("delivery")
-    if not isinstance(delivery, dict) or delivery.get("verdict") != "PASS":
+    if _delivery_not_rostered(inline_review):
+        delivery = inline_review.get("prep")
+    elif not isinstance(delivery, dict) or delivery.get("verdict") != "PASS":
+        return None
+    if not isinstance(delivery, dict):
         return None
     files = delivery.get("product_files")
     if isinstance(files, bool) or not isinstance(files, int) or files != 0:
@@ -1816,11 +1831,12 @@ def _reviewed_files_if_passed(inline_review: dict) -> Optional[set]:
     prep = inline_review.get("prep")
     delivery = inline_review.get("delivery")
     integration = inline_review.get("integration")
-    if not (isinstance(prep, dict) and isinstance(delivery, dict) and isinstance(integration, dict)):
+    unrostered = _delivery_not_rostered(inline_review)
+    if not (isinstance(prep, dict) and (unrostered or isinstance(delivery, dict)) and isinstance(integration, dict)):
         return None
     files = prep.get("slice_files")
     if (
-        delivery.get("verdict") != "PASS"
+        (not unrostered and delivery.get("verdict") != "PASS")
         or integration.get("unresolved")
         or integration.get("confinement_violations")
         or not isinstance(files, list)

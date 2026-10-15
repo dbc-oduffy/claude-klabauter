@@ -18,6 +18,8 @@ _VALID_EFFORTS = frozenset({"low", "medium", "high"})
 #: The tiers ``dispatch_emit.emit.derive_review_tier`` returns.
 VALID_TIERS = frozenset({"lightweight", "standard", "full"})
 _VALID_PER_VALUES = frozenset({"slice", "whole-diff"})
+#: Mirror of ``sizing_assemble.TSHIRT_ORDER`` (importing it costs ~16ms); a test pins equality.
+_TSHIRT_ORDER = ("XS", "S", "M", "L", "XL", "XXL")
 
 
 EMIT_ROUTE_PLAN = "plan"
@@ -61,16 +63,40 @@ class ReviewAgent:
     accepts_signals: Optional[str] = None
     #: Review tiers this agent runs at; ``None`` runs at every tier.
     tiers: Optional[Tuple[str, ...]] = None
+    #: ``(min, max)`` executor rows one reviewer covers; ``None`` keeps one reviewer per slice.
+    executor_rows_per_reviewer: Optional[Tuple[int, int]] = None
+    #: Smallest plan t-shirt this agent is admitted at; ``None`` admits every size.
+    min_tshirt: Optional[str] = None
 
     def runs_at(self, tier: Optional[str]) -> bool:
         """True when this agent runs at ``tier``; an untiered agent or an unknown tier always runs."""
         return tier is None or self.tiers is None or tier in self.tiers
 
+    def reviewer_count(self, rows: int, slices: int) -> int:
+        """Reviewers to fan out over ``slices`` slices of a ``rows``-row run: ``slices`` when no
+        ratio is set, else ``ceil(rows / max_rows)`` held to at least ``min_rows`` rows each, within ``[1, slices]``."""
+        if self.executor_rows_per_reviewer is None:
+            return slices
+        min_rows, max_rows = self.executor_rows_per_reviewer
+        return max(1, min(slices, -(-rows // max_rows), rows // min_rows))
 
-def agent_excluded_at_tier(review: "ExecuteReview", agent_type: str, tier: Optional[str]) -> bool:
-    """True when the review wave names ``agent_type`` and its roster ``tiers`` exclude ``tier``."""
+    def admits_tshirt(self, tshirt: Optional[str]) -> bool:
+        """True when this agent is admitted at plan ``tshirt``; under a floor an unknown size is
+        excluded, since a grind row carries no size and must not admit an L-gated reviewer."""
+        if self.min_tshirt is None:
+            return True
+        if tshirt not in _TSHIRT_ORDER:
+            return False
+        return _TSHIRT_ORDER.index(tshirt) >= _TSHIRT_ORDER.index(self.min_tshirt)
+
+
+DELIVERY_NOT_ROSTERED = "roster names no coordinator:delivery-verifier"
+
+
+def agent_not_run_at_tier(review: "ExecuteReview", agent_type: str, tier: Optional[str]) -> bool:
+    """True when the review wave names no ``agent_type``, or its roster ``tiers`` exclude ``tier``."""
     agents = [a for a in review.review_wave if a.agent_type == agent_type]
-    return bool(agents) and not any(a.runs_at(tier) for a in agents)
+    return not any(a.runs_at(tier) for a in agents)
 
 
 @dataclass(frozen=True)
@@ -297,6 +323,34 @@ def _resolve_review_agent(
         )
     applies = raw_agent.get("applies")
 
+    where = f"execute_review stage {stage_index} agent entry"
+    rows_per_reviewer: Optional[Tuple[int, int]] = None
+    raw_ratio = raw_agent.get("executor_rows_per_reviewer")
+    if raw_ratio is not None:
+        lo = raw_ratio.get("min") if isinstance(raw_ratio, dict) else None
+        hi = raw_ratio.get("max") if isinstance(raw_ratio, dict) else None
+        if (
+            not isinstance(raw_ratio, dict)
+            or set(raw_ratio) != {"min", "max"}
+            or any(type(v) is not int or v < 1 for v in (lo, hi))
+            or lo > hi
+        ):
+            raise RosterFragmentError(
+                f"{where} 'executor_rows_per_reviewer' {raw_ratio!r} must be "
+                "{min, max} integers >= 1 with min <= max"
+            )
+        if per != "slice":
+            raise RosterFragmentError(
+                f"{where} 'executor_rows_per_reviewer' requires 'per': 'slice', got {per!r}"
+            )
+        rows_per_reviewer = (lo, hi)
+
+    min_tshirt = raw_agent.get("min_tshirt")
+    if min_tshirt is not None and min_tshirt not in _TSHIRT_ORDER:
+        raise RosterFragmentError(
+            f"{where} 'min_tshirt' {min_tshirt!r} is not one of {list(_TSHIRT_ORDER)!r}"
+        )
+
     raw_tiers = raw_agent.get("tiers")
     tiers: Optional[Tuple[str, ...]] = None
     if raw_tiers is not None:
@@ -348,6 +402,8 @@ def _resolve_review_agent(
                 schema=schema,
                 accepts_signals=None,
                 tiers=tiers,
+                executor_rows_per_reviewer=rows_per_reviewer,
+                min_tshirt=min_tshirt,
             )
         ]
 
@@ -368,6 +424,8 @@ def _resolve_review_agent(
             schema=schema,
             accepts_signals=accepts_signals,
             tiers=tiers,
+            executor_rows_per_reviewer=rows_per_reviewer,
+            min_tshirt=min_tshirt,
         )
         for resolved_type in selected
     ]

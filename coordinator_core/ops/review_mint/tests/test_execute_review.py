@@ -978,3 +978,120 @@ def test_mechanical_prep_is_one_review_prep_call_in_either_basis():
     assert '"worktree":true' in worktree and '"head"' not in worktree
     assert f'"head":"{"b" * 40}"' in ranged and '"worktree"' not in ranged
 
+
+
+def _ratio_fragment(*, kira_min=None, verifier=True) -> dict:
+    fragment = _v5_fragment()
+    agents = fragment["execute_review"]["stages"][1]["agents"]
+    agents[0]["executor_rows_per_reviewer"] = {"min": 3, "max": 4}
+    if kira_min:
+        agents[1]["min_tshirt"] = kira_min
+    if not verifier:
+        agents.pop(3)
+        del fragment["blocking_verdicts"]["coordinator:delivery-verifier"]
+    return fragment
+
+
+def _ratio_review(**kw):
+    return parse_execute_review(_ratio_fragment(**kw), signals={"named": ["coordinator:staff-eng"]})
+
+
+def _grouped_prompts(rows, slice_count):
+    """Run the emitted ratio wave under node with agent stubbed; one entry per slice-reviewer prompt."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    slices = [
+        {"id": f"s{i}", "files": [f"f{i}.py"], "diff_path": f"d/{i}.diff", "sidecar_path": f"sc{i}.md"}
+        for i in range(slice_count)
+    ]
+    prep = {"verdict": "PARTITION-MANDATORY", "product_files": 9, "slices": slices,
+            "whole_diff_path": "d/w.diff", "whole_diff_sidecars": {"personas": ["p.md"]}}
+    block = _wave_block(_ratio_review(), executor_rows=rows)
+    body = "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("phase("))
+    script = (
+        f"const _reviewPrep = {json.dumps(prep)}; const _verifyOnly = false; const _out = [];\n"
+        "const agent = async (p, o) => { _out.push(p); return null; };\n"
+        "const parallel = (fns) => Promise.all(fns.map(f => f()));\n"
+        f"(async () => {{ {body}\n console.log(JSON.stringify(_out)); }})();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return [p for p in json.loads(out.stdout) if "Slice" in p]
+
+
+def test_ratio_slice_agent_groups_slices_instead_of_one_reviewer_per_slice():
+    block = _wave_block(_ratio_review(), executor_rows=9)
+    assert "_groupSlices(_reviewPrep?.slices ?? [], 9, 3, 4).map(g => () =>" in block
+    assert "(_reviewPrep?.slices ?? []).map(s =>" not in block
+    assert "Math.min(slices.length, Math.ceil(rows / maxRows), Math.floor(rows / minRows))" in block
+
+
+@pytest.mark.parametrize("rows,slices,expected", [(1, 5, 1), (4, 5, 1), (5, 5, 1), (8, 5, 2), (9, 5, 3), (12, 5, 3), (9, 2, 2)])
+def test_grouped_reviewer_count_is_ceil_rows_over_max_capped_at_slices(rows, slices, expected):
+    prompts = _grouped_prompts(rows, slices)
+    assert len(prompts) == expected
+    owned = sum(p.count('"id":"s') for p in prompts)
+    assert owned == slices
+
+
+def test_single_slice_group_prompt_equals_the_per_slice_prompt():
+    review = _ratio_review()
+    plain = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    one = _grouped_prompts(1, 1)
+    assert len(one) == 1 and "Slices: " not in one[0] and "\n\nSlice: " in one[0]
+    assert "Slice: ' + JSON.stringify(s)" not in _wave_block(review, executor_rows=1)
+    assert "JSON.stringify(s)" in _wave_block(plain)
+
+
+def test_multi_slice_group_names_every_slice_and_the_sidecar_rule():
+    (prompt,) = _grouped_prompts(4, 3)
+    assert "\n\nSlices: " in prompt and "joined with `+`" in prompt
+    assert prompt.count('"sidecar_path"') == 3
+
+
+def test_executor_rows_is_required_when_a_slice_agent_carries_a_ratio():
+    with pytest.raises(ValueError):
+        _wave_block(_ratio_review())
+    with pytest.raises(ValueError):
+        _wave_block(_ratio_review(), executor_rows=3, executor_rows_js="n")
+    assert "(_manifest?.rows ?? []).length" in _wave_block(
+        _ratio_review(), executor_rows_js="(_manifest?.rows ?? []).length"
+    )
+
+
+def test_fragment_without_a_ratio_is_unchanged_by_the_new_kwargs():
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    assert _wave_block(review, executor_rows=7, tshirt="M") == _wave_block(review)
+
+
+@pytest.mark.parametrize("size,present", [("XS", False), ("S", False), ("M", False), ("L", True), ("XL", True), ("XXL", True), (None, False)])
+def test_min_tshirt_agent_is_composed_only_at_or_above_the_floor(size, present):
+    block = _wave_block(_ratio_review(kira_min="L"), executor_rows=4, tshirt=size)
+    assert ("coordinator:overengineering-reviewer" in block) is present
+    assert "coordinator:code-reviewer" in block
+
+
+def test_tshirt_js_gates_at_run_time_and_excludes_an_unknown_value():
+    block = _wave_block(_ratio_review(kira_min="L"), executor_rows=4, tshirt_js="_gate?.tshirt")
+    assert '["L", "XL", "XXL"].includes(_gate?.tshirt)' in block
+    assert "!" + json.dumps(["XS", "S", "M", "L", "XL", "XXL"]) not in block
+
+
+def test_tshirt_and_tshirt_js_together_raise():
+    with pytest.raises(ValueError):
+        _wave_block(_ratio_review(), executor_rows=1, tshirt="L", tshirt_js="t")
+
+
+def test_roster_without_a_delivery_verifier_binds_the_not_rostered_slot():
+    from coordinator_core.ops.review_mint.roster import DELIVERY_NOT_ROSTERED
+
+    block = _wave_block(_ratio_review(verifier=False), executor_rows=4)
+    assert "const _deliveryVerdict = null;" in block
+    assert f"const _deliveryNotRun = '{DELIVERY_NOT_ROSTERED}';" in block
+    assert "delivery-verifier" not in block.replace(DELIVERY_NOT_ROSTERED, "")

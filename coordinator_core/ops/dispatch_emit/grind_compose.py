@@ -1155,6 +1155,7 @@ def compose_grind_script(
         plan_path="",
         run_base_sha=review_run_base_sha,
         declared_paths_js="_reviewPaths",
+        executor_rows_js="_settled.filter((s) => s.outcome === 'committed').length",
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         run_key=Path(run_dir).name,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,

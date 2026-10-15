@@ -841,6 +841,8 @@ def compose_ask_script(
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
         owner_rows_js=_OWNER_ROWS_JS,
         tier_js=_fire_tier_js(),
+        executor_rows_js="(_manifest?.rows ?? []).length",
+        tshirt_js="_gate?.tshirt",
     )
     review_titles = [title for title, _ in review_blocks]
     ledger_charter = _folded_ledger_charter(

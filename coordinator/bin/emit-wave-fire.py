@@ -762,6 +762,10 @@ def _execute_review_function(review, stage_schemas: dict, repo_root: str) -> str
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         prep_suffix_js="'\\nbaton_id: ' + String(batonId)",
         slice_key_js="batonId",
+        # The XS dispatch lane runs one executor per baton. The injection itself is slated for
+        # deletion (state/bug-backlog/2026-10-14-delete-execute-review-injection-from-emit-wave-fire.yaml).
+        executor_rows=1,
+        tshirt="XS",
     )
     body = "\n".join(block for _title, block in blocks)
     integration = "_reviewIntegration" if review.integration is not None else "null"

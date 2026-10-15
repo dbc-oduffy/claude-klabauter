@@ -907,7 +907,7 @@ def _resolve_mint(
         prep_data,
         build_test_data,
         criterion_open_ok=criterion_open_ok,
-        delivery_exempt=delivery_verdict is None and _delivery_verifier_off_tier(plan_path, repo_root, text),
+        delivery_exempt=delivery_verdict is None and _delivery_verifier_not_run(plan_path, repo_root, text),
     )
 
     if not landed_here:
@@ -964,27 +964,30 @@ def _require_same_diff_sha(repo_root: Path, run_rel: str, terminal_sha: str) -> 
         )
 
 
-def _delivery_verifier_off_tier(plan_path: Path, repo_root: Path, plan_text: str) -> bool:
-    """True when the plan's review tier is one the roster's `tiers` keep the delivery-verifier
-    off, by the same agent filter `compose_execute_review` applies. Unknown tier or unreadable
-    roster: False, so an absent verdict still refuses."""
+def _delivery_verifier_not_run(plan_path: Path, repo_root: Path, plan_text: str) -> bool:
+    """True when the roster names no delivery-verifier (any tier, derivable or not), or its
+    `tiers` keep it off the plan's review tier, by the filter `compose_execute_review` applies.
+    Unreadable roster, or a rostered verifier at an underivable tier: False, so an absent
+    verdict still refuses."""
     from coordinator_core.ops.dispatch_emit.emit import derive_review_tier
     from coordinator_core.ops.review_mint.execute_review import _DELIVERY_VERIFIER_AGENT_TYPE
     from coordinator_core.ops.review_mint.op import load_fragment
     from coordinator_core.ops.review_mint.roster import (
         RosterFragmentError,
-        agent_excluded_at_tier,
+        agent_not_run_at_tier,
         parse_execute_review,
     )
 
     try:
+        review = parse_execute_review(load_fragment(repo_root))
+        if not any(a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE for a in review.review_wave):
+            return True
         tier = derive_review_tier(plan_path, repo_root=repo_root, plan_text=plan_text)
         if tier is None:
             return False
-        review = parse_execute_review(load_fragment(repo_root))
     except (OSError, ValueError, RosterFragmentError):
         return False
-    return agent_excluded_at_tier(review, _DELIVERY_VERIFIER_AGENT_TYPE, tier)
+    return agent_not_run_at_tier(review, _DELIVERY_VERIFIER_AGENT_TYPE, tier)
 
 
 def _stamp_of(r: _Resolved, superseding_record: Optional[Path]) -> Dict[str, Any]:

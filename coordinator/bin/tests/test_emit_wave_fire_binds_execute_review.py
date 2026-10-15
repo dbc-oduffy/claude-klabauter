@@ -123,6 +123,19 @@ def test_each_baton_freezes_under_its_own_slice_id(tmp_path, monkeypatch):
     assert "--slice-id ' + String(batonId).replace(/[^A-Za-z0-9_.-]/g, '-') + '-" in fn
 
 
+def test_xs_wave_fire_omits_kira_gated_at_l(tmp_path, monkeypatch):
+    fragment = _fragment()
+    wave = fragment["execute_review"]["stages"][1]["agents"]
+    wave.append({"agentType": "coordinator:overengineering-reviewer", "model": "opus",
+                 "effort": "low", "schema": "slice-review-result", "min_tshirt": "L"})
+    _patch_review(monkeypatch, fragment)
+    assert _fire(tmp_path) == ewf.EXIT_OK
+    text = list((tmp_path / "trail").glob("fire-*.mjs"))[0].read_text(encoding="utf-8")
+    fn = text[text.index(SIGNATURE): text.index("const args = ")]
+    assert "coordinator:code-reviewer" in fn
+    assert "overengineering-reviewer" not in fn
+
+
 @pytest.mark.spawns_process
 def test_emitted_function_parses(tmp_path, monkeypatch):
     import shutil

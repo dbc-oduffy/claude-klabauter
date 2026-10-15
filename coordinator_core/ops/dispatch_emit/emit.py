@@ -3333,7 +3333,16 @@ def _no_test_target_narration(error: NoTestTargetError) -> str:
 def derive_review_tier(
     plan_path, *, repo_root: Optional[Path] = None, plan_text: Optional[str] = None
 ) -> Optional[str]:
-    """Derive a review TIER (``lightweight``/``standard``/``full``) from
+    """Review TIER of ``plan_path``'s sizing t-shirt: ``_TSHIRT_TO_REVIEW_TIER`` over
+    ``derive_plan_tshirt``; ``None`` whenever the t-shirt is underivable."""
+    tshirt = derive_plan_tshirt(plan_path, repo_root=repo_root, plan_text=plan_text)
+    return None if tshirt is None else _TSHIRT_TO_REVIEW_TIER[tshirt]
+
+
+def derive_plan_tshirt(
+    plan_path, *, repo_root: Optional[Path] = None, plan_text: Optional[str] = None
+) -> Optional[str]:
+    """Derive the plan's ``estimate.tshirt`` from
     ``plan_path``'s own sizing object (a) — never from ``routing.md`` prose
     and never a locally-minted sizing->reviewer table. See module docstring
     § Review phases.
@@ -3419,7 +3428,7 @@ def derive_review_tier(
             f"sizing object {cited!r} declares estimate.tshirt {tshirt!r}, "
             f"not one of {sorted(_TSHIRT_TO_REVIEW_TIER)}"
         )
-    return _TSHIRT_TO_REVIEW_TIER[tshirt]
+    return tshirt
 
 
 class NoReviewStageError(ValueError):
@@ -5188,8 +5197,8 @@ def compose_script(
             "review_stamp._resolve_terminal_commit keys the terminal-"
             "commit lookup on this field."
         )
-    wave_tier = (
-        derive_review_tier(
+    wave_tshirt = (
+        derive_plan_tshirt(
             plan_path,
             repo_root=Path(repo_root) if repo_root is not None else _REPO_ROOT,
             plan_text=plan_text,
@@ -5197,10 +5206,13 @@ def compose_script(
         if plan_path and plan_text
         else None
     )
+    wave_tier = _TSHIRT_TO_REVIEW_TIER[wave_tshirt] if wave_tshirt is not None else None
     for title, block in compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
         tier=wave_tier,
+        executor_rows=len(row_pathspecs),
+        tshirt=wave_tshirt,
         plan_path=plan_path or "",
         run_base_sha=stage_base,
         slice_identity_sha=run_base_sha or "",

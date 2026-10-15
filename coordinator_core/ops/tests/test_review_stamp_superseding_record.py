@@ -159,7 +159,7 @@ def test_spawn_count_matches_the_resolved_path(tmp_path, monkeypatch):
 _VERIFIER = "coordinator:delivery-verifier"
 
 
-def _roster_fragment() -> dict:
+def _roster_fragment(with_verifier: bool = True) -> dict:
     def agent(agent_type, per, schema, **extra):
         return {"agentType": agent_type, "model": "sonnet", "effort": "low", "per": per,
                 "applies": "none", "schema": schema, **extra}
@@ -173,7 +173,8 @@ def _roster_fragment() -> dict:
                  "schema": "review-prep-result"}]},
             {"kind": "review-wave", "agents": [
                 agent("coordinator:code-reviewer", "slice", "slice-review-result"),
-                agent(_VERIFIER, "whole-diff", "delivery-verdict", tiers=["standard", "full"]),
+                *([agent(_VERIFIER, "whole-diff", "delivery-verdict", tiers=["standard", "full"])]
+                  if with_verifier else []),
             ]},
         ]},
     }
@@ -204,24 +205,44 @@ def _mint_gate(delivery_verdict, tier_exempt):
 
 def test_lightweight_tier_with_no_delivery_verdict_mints(_tiered, tmp_path):
     _tiered("lightweight")
-    exempt = m._delivery_verifier_off_tier(tmp_path / "p.md", tmp_path, "")
+    exempt = m._delivery_verifier_not_run(tmp_path / "p.md", tmp_path, "")
     assert exempt is True
     assert _mint_gate(None, exempt) is None
 
 
 def test_standard_tier_with_no_delivery_verdict_refuses(_tiered, tmp_path):
     _tiered("standard")
-    exempt = m._delivery_verifier_off_tier(tmp_path / "p.md", tmp_path, "")
+    exempt = m._delivery_verifier_not_run(tmp_path / "p.md", tmp_path, "")
     assert exempt is False
     assert "delivery verdict is None" in _mint_gate(None, exempt)
 
 
 def test_lightweight_tier_with_a_fail_delivery_verdict_refuses(_tiered, tmp_path):
     _tiered("lightweight")
-    exempt = m._delivery_verifier_off_tier(tmp_path / "p.md", tmp_path, "")
+    exempt = m._delivery_verifier_not_run(tmp_path / "p.md", tmp_path, "")
     assert "delivery verdict is 'FAIL'" in _mint_gate("FAIL", exempt)
 
 
 def test_an_underivable_tier_keeps_the_absent_verdict_refusal(_tiered, tmp_path):
     _tiered(None)
-    assert m._delivery_verifier_off_tier(tmp_path / "p.md", tmp_path, "") is False
+    assert m._delivery_verifier_not_run(tmp_path / "p.md", tmp_path, "") is False
+
+
+@pytest.mark.parametrize("tier", ["standard", None])
+def test_roster_without_a_verifier_mints_an_absent_verdict(monkeypatch, _tiered, tmp_path, tier):
+    from coordinator_core.ops.review_mint import op
+
+    monkeypatch.setattr(op, "load_fragment", lambda repo_root=None: _roster_fragment(False))
+    _tiered(tier)
+    exempt = m._delivery_verifier_not_run(tmp_path / "p.md", tmp_path, "")
+    assert exempt is True
+    assert _mint_gate(None, exempt) is None
+
+
+def test_roster_without_a_verifier_still_refuses_a_fail_verdict(monkeypatch, _tiered, tmp_path):
+    from coordinator_core.ops.review_mint import op
+
+    monkeypatch.setattr(op, "load_fragment", lambda repo_root=None: _roster_fragment(False))
+    _tiered("standard")
+    exempt = m._delivery_verifier_not_run(tmp_path / "p.md", tmp_path, "")
+    assert "delivery verdict is 'FAIL'" in _mint_gate("FAIL", exempt)
