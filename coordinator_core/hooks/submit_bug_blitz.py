@@ -172,7 +172,9 @@ def _write_decisions(
             if parsed is not None
             else None
         ),
-        "minted": minted,
+        # Repo-relative row paths: grind_rows.cmd_run_record reads this list under
+        # grind_commit_contract.MINTED_KEY as land-set paths.
+        "minted": [f"{QUEUE_DIR}/{row_id}.yaml" for row_id in minted],
     }
     (run_dir / DECISIONS_FILE).write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"

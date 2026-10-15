@@ -1317,6 +1317,92 @@ class TestRunRecordLandsTheRunsBookkeeping:
             assert "--sweep needs" in captured.err
         assert not record_path.exists()
 
+    # -- resolved vs stray deletions -------------------------------------------------
+
+    def _deletion_fixture(self, repo):
+        """A settled ledger removed, `closed.yaml` archived at its destination, `stray.yaml`
+        removed with no archive copy."""
+        profile_dir = repo.parent / f"{repo.name}-profiles"
+        _write_profile(profile_dir, archive_path="archive/bug-backlog", schema_rel="schema/bug.schema.json")
+        for name in ("closed", "stray"):
+            self._write(repo, f"state/bug-backlog/{name}.yaml", f"id: {name}\n", claim=False)
+        assert _git(["add", "-A"], repo).returncode == 0
+        assert _git(["commit", "-m", "seed rows"], repo).returncode == 0
+        for rel in ("state/queue-grind/bug/old-1.jsonl", "state/bug-backlog/closed.yaml", "state/bug-backlog/stray.yaml"):
+            grind_rows._declare_before_unlink(repo / rel, repo)
+            (repo / rel).unlink()
+        archive_rel = grind_rows.archive_destination("archive/bug-backlog", "20261015T000000Z", "closed.yaml")
+        self._write(repo, archive_rel, "id: closed\nstatus: closed\n", claim=False)
+        extra = ["--queue", "state/bug-backlog", "--profile-dir", str(profile_dir)]
+        return archive_rel, extra
+
+    def _capture_commit_params(self, monkeypatch):
+        from coordinator_core.ops.ceremony import commit_v2
+
+        seen: list[dict] = []
+        real = commit_v2._handler
+
+        def spy(params, repo_root=None):
+            seen.append(params)
+            return real(params, repo_root=repo_root)
+
+        monkeypatch.setattr(commit_v2, "_handler", spy)
+        return seen
+
+    def test_settled_ledger_and_archived_row_deletions_are_declared_and_commit(self, repo, capsys, monkeypatch):
+        archive_rel, extra = self._deletion_fixture(repo)
+        seen = self._capture_commit_params(monkeypatch)
+
+        code, captured = self._run_record(repo, capsys, extra=extra)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["commit"]
+        gone = ["state/bug-backlog/closed.yaml", "state/queue-grind/bug/old-1.jsonl"]
+        assert out["deleted"] == sorted(gone)
+        assert sorted(seen[0]["declared_reverts"]) == sorted(gone)
+        assert archive_rel in out["landed"]
+        tracked = _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).stdout.split()
+        assert archive_rel in tracked
+        assert not set(gone) & set(tracked)
+
+    def test_a_queue_row_deleted_without_an_archive_copy_stays_out_and_is_named(self, repo, capsys, monkeypatch):
+        _, extra = self._deletion_fixture(repo)
+        seen = self._capture_commit_params(monkeypatch)
+
+        code, captured = self._run_record(repo, capsys, extra=extra)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["unresolved_deletions"] == ["state/bug-backlog/stray.yaml"]
+        assert "state/bug-backlog/stray.yaml" not in seen[0]["deleted_paths"]
+        assert "state/bug-backlog/stray.yaml" not in seen[0]["declared_reverts"]
+        assert not (repo / "state/bug-backlog/stray.yaml").exists()
+        assert "state/bug-backlog/stray.yaml" in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).stdout.split()
+        assert out["commit"] and "state/queue-grind/bug/runs/20261015T000000Z.json" in out["landed"]
+
+    def test_without_a_profile_dir_every_queue_row_deletion_is_unresolved(self, repo, capsys):
+        _, extra = self._deletion_fixture(repo)
+
+        code, captured = self._run_record(repo, capsys, extra=extra[:2])
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["unresolved_deletions"] == ["state/bug-backlog/closed.yaml", "state/bug-backlog/stray.yaml"]
+        assert out["deleted"] == ["state/queue-grind/bug/old-1.jsonl"]
+
+    def test_a_malformed_profile_is_named_on_stderr_and_deletions_stay_unresolved(self, repo, capsys):
+        _, extra = self._deletion_fixture(repo)
+        (repo.parent / f"{repo.name}-profiles" / "bug.yaml").write_text("- not\n- a mapping\n", encoding="utf-8")
+
+        code, captured = self._run_record(repo, capsys, extra=extra)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        assert "profile bug did not load (ProfileError" in captured.err
+        out = json.loads(captured.out)
+        assert out["unresolved_deletions"] == ["state/bug-backlog/closed.yaml", "state/bug-backlog/stray.yaml"]
+        assert out["deleted"] == ["state/queue-grind/bug/old-1.jsonl"]
+
     def test_the_widened_land_set_spawns_no_git_process(self, repo, capsys, monkeypatch):
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 

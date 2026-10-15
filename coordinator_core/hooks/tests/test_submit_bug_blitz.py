@@ -108,7 +108,7 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     assert decisions["commit_authority"] == {"basis": "submission"}
     assert decisions["verify"] == "targeted-tests"
     assert decisions["parse"] == {"parsed": 2, "unparsed_count": 2, "unparsed_sample": ["junk"]}
-    assert decisions["minted"] == ["TF-0", "TF-1"]
+    assert decisions["minted"] == ["state/bug-backlog/TF-0.yaml", "state/bug-backlog/TF-1.yaml"]
     assert len(spawns) == _budget(), [s.argv for s in spawns]
     _no_grant_records(repo)
 

@@ -40,6 +40,16 @@ retry over the union of its locked files plus every extra file, then
 tree is never reported as an ordinary rejection; a node's ``on_fail`` back-edge is traversed at
 most once per row.
 
+**Every non-landing row is undone.** A row handed back after a fix stage reported writes
+(``widen-exhausted``, ``needs-judgment``, ``baton``, ``manifest-stale``,
+``entangled``, ``stage-dead``, and a thrown run's unfinished rows) runs the existing verify-op
+reject mode over its accumulated in-root touched, created and removed paths, under its lock, and
+keeps its type with ``; undone`` appended -- or becomes ``stage-dead`` (``undo-failed:``) when the
+undo does not return ``undone``. ``commit-failed`` is exempt: ``grind-row settle-run`` lands
+those rows. ``peer-dirty`` is exempt too: undo withholds only paths a live peer *claims*, and
+PEER_DIRTY reports unclaimed dirt, so its reason names the paths left in the tree. A row whose
+fix reported no writes makes no undo call.
+
 STAGE_OUTPUT_TOKENS / batch_reserve live here, not a separate module.
 Calibration source (measured once at authoring time, 2026-09-21): this
 session's LOCAL per-agent transcripts under
@@ -246,6 +256,7 @@ _SETTLE_HINT_TWIN =" -- land the finished rows with `grind-row settle-run`"
 
 _UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits may remain in the tree"
 _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
+_NOT_UNDONE_PEER = "not undone (a peer's edits sit on these paths)"
 _HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records and its edits may remain in the tree"
 
 
@@ -261,6 +272,27 @@ def _historical_paths(paths: Sequence[str]) -> list[str]:
 
 def _union(*lists: Optional[Sequence[str]]) -> list[str]:
     return list(dict.fromkeys(p for lst in lists for p in (lst or [])))
+
+
+#: Hand-back types that never run an undo. ``commit-failed``: ``grind-row settle-run`` lands those
+#: rows. ``peer-dirty``: undo withholds only live-peer *claims*, and PEER_DIRTY reports unclaimed
+#: dirt. Emitted into the script as ``_UNDO_EXEMPT``.
+_UNDO_EXEMPT = ("commit-failed", "peer-dirty")
+
+
+def _has_writes(row: Row) -> bool:
+    """Did this row write anything that must be put back? Twin: ``_hasWrites``."""
+    return bool(row.removed_files or row.created_files or row.fix_reported)
+
+
+def _undo_paths(row: Row) -> list[str]:
+    """The in-root paths a row's undo restores. Twin: ``_undoPaths``."""
+    return [p for p in _union(row.touched_files, row.created_files, row.removed_files) if not _out_of_root_paths([p])]
+
+
+def _nonlanding_undo_failed_head(htype: str) -> str:
+    """Head of the stage-dead reason when a non-landing row's undo did not report `undone`."""
+    return f"undo-failed: the row was handed back {htype} and its edits may remain in the tree"
 
 
 def _undo_failed_reason(undo_result: Mapping[str, Any], head: str = _UNDO_FAILED_HEAD) -> str:
@@ -337,6 +369,7 @@ def run_admission(
     commit_params_sink: Optional[list] = None,
     post_stages: Sequence[str] = (),
     run_close_sink: Optional[list] = None,
+    undo_paths_sink: Optional[list] = None,
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
@@ -374,7 +407,9 @@ def run_admission(
     if it raises) whose reply is ``{"outcome": "recorded"|"record-failed", "swept", "sweep_reason"}``
     -- the verb sweeps and writes the record whole; the record and declared paths it carries are
     appended to ``run_close_sink`` before the call, with a ``swept: false`` reply's stage-dead
-    appended to the sunk record. A historical-record reject runs ``verify`` and reads its ``undo``.
+    appended to the sunk record. A non-landing row with reported writes runs ``verify`` and reads
+    its ``undo``; each such call first appends ``{"row", "paths"}`` (the paths the undo receives) to
+    ``undo_paths_sink``.
     For ``size`` it returns the
     scout's ``{tshirt, intent, name, exit_code, ...}`` (or ``{}`` for a refusal), ``exit_code``
     being its closing sizing chain's. A ``verify`` that fails a row's final verification also
@@ -444,6 +479,33 @@ def run_admission(
         else:
             row.node = value
 
+    def _handback_row(row: Row, htype: str, reason: str, tradeoff: str = "") -> None:
+        """Hand back a non-landing row, undoing its writes first unless its type is exempt. Twin: ``_handBackRow``."""
+        row.done = True
+        undo_set = _undo_paths(row)
+        if htype in _UNDO_EXEMPT or not _has_writes(row) or not undo_set:
+            if htype == "peer-dirty" and _has_writes(row) and undo_set:
+                reason = f"{reason}; {_NOT_UNDONE_PEER}: {', '.join(undo_set)}"
+            _handback(row, htype, reason, tradeoff)
+            return
+        if undo_paths_sink is not None:
+            undo_paths_sink.append({"row": row.row_id, "paths": list(undo_set)})
+        try:
+            undo_result = (_record_call("verify", row.row_id) or {}).get("undo") or {}
+        except Exception as err:  # noqa: BLE001 -- an undo that throws is an undo that did not land
+            undo_result = {"outcome": "undo-failed", "reason": str(err)}
+        if undo_result.get("outcome") != "undone":
+            _handback(row, "stage-dead", _undo_failed_reason(undo_result, _nonlanding_undo_failed_head(htype)))
+            return
+        _handback(row, htype, f"{reason}; undone", tradeoff)
+
+    def _apply_route_row(row: Row, action: tuple[str, str], reason: str) -> None:
+        kind, value = action
+        if kind == "handback":
+            _handback_row(row, value, reason)
+        else:
+            row.node = value
+
     def _queue_commit(row: Row) -> None:
         row.done = True
         paths = list(dict.fromkeys([*row.touched_files, *row.created_files]))
@@ -468,17 +530,14 @@ def run_admission(
         for q in collided:
             pending_commit.remove(q)
             _unsettle(q["row_id"])
-            _handback(
+            _handback_row(
                 rows[q["row_id"]], "entangled",
-                f"a later fix wrote paths this row queued for the terminal commit: {shared}; left on disk, no undo",
+                f"a later fix wrote paths this row queued for the terminal commit: {shared}",
             )
         run_dirty.clear()
         for q in pending_commit:
             run_dirty.update(q["paths"], q["deleted_paths"])
-        _handback(
-            row, "entangled",
-            f"this fix wrote paths already queued for the terminal commit: {shared}; left on disk, no undo",
-        )
+        _handback_row(row, "entangled", f"this fix wrote paths already queued for the terminal commit: {shared}")
         return True
 
     def _halt_reason(grind_err: Optional[BaseException]) -> Optional[str]:
@@ -668,27 +727,27 @@ def run_admission(
             row.touched_files = list(row.touched_files) + [close_result.get("new", "")]
         if tradeoff:
             by_triage_check["fix_late_tradeoff"] += 1
-            _handback(row, "needs-judgment", f"fix reported a tradeoff: {tradeoff}", tradeoff)
+            _handback_row(row, "needs-judgment", f"fix reported a tradeoff: {tradeoff}", tradeoff)
             return
         if outcome == "NEEDS_PLAN":
             by_triage_check["fix_needs_plan"] += 1
-            _handback(row, "baton", "fix reported NEEDS_PLAN")
+            _handback_row(row, "baton", "fix reported NEEDS_PLAN")
             return
         if outcome == "PEER_DIRTY":
-            _handback(row, "peer-dirty", "fix reported PEER_DIRTY")
+            _handback_row(row, "peer-dirty", "fix reported PEER_DIRTY")
             return
         if outcome == "MANIFEST_STALE":
-            _handback(row, "manifest-stale", "fix reported MANIFEST_STALE")
+            _handback_row(row, "manifest-stale", "fix reported MANIFEST_STALE")
             return
         if outcome == "NEEDS_WIDER_SCOPE":
             if not row.widened:
                 row.widened = True
                 return
-            _handback(row, "widen-exhausted", "second NEEDS_WIDER_SCOPE")
+            _handback_row(row, "widen-exhausted", "second NEEDS_WIDER_SCOPE")
             return
         escaped = _out_of_root_paths(list(result.get("touched_files") or []) + list(result.get("created_files") or []))
         if escaped:
-            _handback(
+            _handback_row(
                 row,
                 "needs-judgment",
                 "fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): "
@@ -698,6 +757,8 @@ def run_admission(
         written = [*(result.get("touched_files") or []), *(result.get("created_files") or [])]
         historical = _historical_paths(written)
         if historical:
+            if undo_paths_sink is not None:
+                undo_paths_sink.append({"row": row.row_id, "paths": _undo_paths(row)})
             undo_result = (_record_call("verify", row.row_id) or {}).get("undo") or {}
             if undo_result.get("outcome") != "undone":
                 _handback(row, "stage-dead", _undo_failed_reason(undo_result, _HISTORICAL_UNDO_FAILED_HEAD))
@@ -712,7 +773,7 @@ def run_admission(
         if outcome == "NOT_REPRODUCED":
             by_triage_check["fix_not_reproduced"] += 1
         row.fix_node = prior_node
-        _apply_route(row, follow_edge(routing, row.node, outcome, row), f"fix outcome {outcome!r}")
+        _apply_route_row(row, follow_edge(routing, row.node, outcome, row), f"fix outcome {outcome!r}")
 
     def _verify_row(row: Row) -> None:
         result = _record_call("verify", row.row_id) or {}
@@ -723,13 +784,15 @@ def run_admission(
                 row.verify_feedback = result.get("reason", "")
                 row.node = row.fix_node or row.node
                 return
+            if undo_paths_sink is not None:
+                undo_paths_sink.append({"row": row.row_id, "paths": _undo_paths(row)})
             undo_result = result.get("undo") or {}
             if undo_result.get("outcome") != "undone":
                 _handback(row, "stage-dead", _undo_failed_reason(undo_result))
                 return
             _handback(row, "rejected-after-retry", "verify failed twice")
             return
-        _apply_route(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
+        _apply_route_row(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
 
     def _commit_row(row: Row) -> None:
         _queue_commit(row)
@@ -865,6 +928,10 @@ def run_admission(
             raise
         finally:
             _terminal_commit(grind_err)
+            if grind_err is not None:
+                for row in rows.values():
+                    if not row.done and _has_writes(row):
+                        _handback_row(row, "stage-dead", f"run threw: {grind_err}")
         for kind in post_stages:
             _record_call(kind, "run")
     except BaseException as err:
@@ -1003,10 +1070,11 @@ _ROUTING_HELPERS = (
 )
 
 #: The queue-and-land half of the run: finished rows queue on `_pendingCommit`, one
-#: `_terminalCommit` lands them after the grind. `_runDirty` is the union of queued rows'
-#: paths; a fix that collides with it never gets an undo, because undo restores HEAD and
-#: would revert the earlier queued row. Twin: `run_admission`'s `_queue_commit` /
-#: `_entangle` / `_terminal_commit`.
+#: `_terminalCommit` lands them after the grind. `_runDirty` is the union of queued
+#: rows' paths; a fix that collides with it is undone together with the rows it
+#: collided with, which leave the queue first, so the undo never reverts a row
+#: still queued.
+#: Twin: `run_admission`'s `_queue_commit` / `_entangle` / `_terminal_commit`.
 _TERMINAL_COMMIT_JS = (
     "function _queueCommit(rowId) {\n"
     "  const row = _rows[rowId];\n"
@@ -1021,7 +1089,7 @@ _TERMINAL_COMMIT_JS = (
     "  const j = _settled.findIndex((s) => s.row === rowId && s.outcome === 'committed');\n"
     "  if (j >= 0) { _settled.splice(j, 1); }\n"
     "}\n"
-    "function _entangle(rowId, written) {\n"
+    "async function _entangle(rowId, written) {\n"
     "  const hit = new Set(written.filter((p) => _runDirty.has(p)));\n"
     "  if (hit.size === 0) return false;\n"
     "  _rows[rowId].done = true;\n"
@@ -1030,11 +1098,13 @@ _TERMINAL_COMMIT_JS = (
     "  for (const q of collided) {\n"
     "    _pendingCommit.splice(_pendingCommit.indexOf(q), 1);\n"
     "    _unsettle(q.row_id);\n"
-    "    _handBack(q.row_id, 'entangled', 'a later fix wrote paths this row queued for the terminal commit: ' + shared + '; left on disk, no undo');\n"
     "  }\n"
     "  _runDirty.clear();\n"
     "  for (const q of _pendingCommit) { q.paths.concat(q.deleted_paths).forEach((p) => _runDirty.add(p)); }\n"
-    "  _handBack(rowId, 'entangled', 'this fix wrote paths already queued for the terminal commit: ' + shared + '; left on disk, no undo');\n"
+    "  for (const q of collided) {\n"
+    "    await _handBackRow(q.row_id, 'entangled', 'a later fix wrote paths this row queued for the terminal commit: ' + shared);\n"
+    "  }\n"
+    "  await _handBackRow(rowId, 'entangled', 'this fix wrote paths already queued for the terminal commit: ' + shared);\n"
     "  return true;\n"
     "}\n"
     "function _terminalReason(reply) {\n"
@@ -1512,20 +1582,54 @@ def compose_grind_script(
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
     lines.append(
+        f"const _UNDO_EXEMPT = {json.dumps(list(_UNDO_EXEMPT))};\n"
         "function _undoPaths(row) {\n"
         "  return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
-        ".concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])));\n"
-        "}"
+        ".concat(row.removedFiles || []))).filter((p) => _outOfRootPaths([p]).length === 0);\n"
+        "}\n"
+        "function _hasWrites(row) { return row.fixReported || (row.createdFiles || []).length > 0 || (row.removedFiles || []).length > 0; }"
     )
     reject_raw = stages.compose_verify_op_call(
         models=stage_models,
         label="verify-op", phase_title="Grind", run_dir=run_dir_s,
         agent_type_host=agent_type_host,
         reject_paths_js="_undoPaths(row)",
-        reject_reason_js="'the fix wrote historical records'",
+        reject_reason_js="row.undoReason",
     )
     lines.append(
         "async function _rejectUndoCall(row) {\n" + _indent_block(_capture(reject_raw, "verify"), "  ") + "\n}"
+    )
+    lines.append(
+        "async function _handBackRow(rowId, type, reason, tradeoff) {\n"
+        "  const row = _rows[rowId];\n"
+        "  row.done = true;\n"
+        "  if (_UNDO_EXEMPT.includes(type) || !_hasWrites(row) || _undoPaths(row).length === 0) {\n"
+        "    const _left = _undoPaths(row);\n"
+        f"    if (type === 'peer-dirty' && _hasWrites(row) && _left.length > 0) {{ reason = reason + '; ' + {json.dumps(_NOT_UNDONE_PEER)} + ': ' + _left.join(', '); }}\n"
+        "    _handBack(rowId, type, reason, tradeoff); return;\n"
+        "  }\n"
+        "  row.undoReason = `the row was handed back ${type}: ${reason}`;\n"
+        "  let _undone;\n"
+        "  try { _undone = ((await withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row))) || {}).undo || {}; }\n"
+        "  catch (err) { _undone = { outcome: 'undo-failed', reason: err && err.message ? err.message : String(err) }; }\n"
+        "  if (_undone.outcome !== 'undone') {\n"
+        "    _handBack(rowId, 'stage-dead', 'undo-failed: the row was handed back ' + type + ' and its edits may remain in the tree'"
+        " + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "');\n"
+        "    return;\n"
+        "  }\n"
+        "  _handBack(rowId, type, reason + '; undone', tradeoff);\n"
+        "}\n"
+        "async function _applyRouteRow(row, rowId, route, reason) {\n"
+        "  if (route.kind === 'handback') { await _handBackRow(rowId, route.value, reason); }\n"
+        "  else { row.node = route.value; }\n"
+        "}\n"
+        "async function _undoUnfinished() {\n"
+        "  if (!_grindErr) return;\n"
+        "  const _msg = _grindErr && _grindErr.message ? _grindErr.message : String(_grindErr);\n"
+        "  for (const r of Object.keys(_rows)) {\n"
+        "    if (!_rows[r].done && _hasWrites(_rows[r])) { await _handBackRow(r, 'stage-dead', `run threw: ${_msg}`); }\n"
+        "  }\n"
+        "}"
     )
     verify_agent_raw = stages.compose_verify_agent_call(
         models=stage_models,
@@ -1606,7 +1710,7 @@ def compose_grind_script(
         "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
-        "origin: '', refuteNote: '', fixReported: false, sizingPath: '', "
+        "origin: '', refuteNote: '', fixReported: false, sizingPath: '', undoReason: '', "
         "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
@@ -1758,28 +1862,29 @@ def compose_grind_script(
         "    row.touchedFiles = row.touchedFiles.concat([_archived]);\n"
         "    row.closeResult = { old: row.path, new: _archived };\n"
         "  }\n"
-        "  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }\n"
-        "  if (outcome === 'NEEDS_PLAN') { row.done = true; _byTriageCheck.fix_needs_plan += 1; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
-        "  if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
-        "  if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"
+        "  if (tradeoff) { _byTriageCheck.fix_late_tradeoff += 1; await _handBackRow(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }\n"
+        "  if (outcome === 'NEEDS_PLAN') { _byTriageCheck.fix_needs_plan += 1; await _handBackRow(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
+        "  if (outcome === 'PEER_DIRTY') { await _handBackRow(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
+        "  if (outcome === 'MANIFEST_STALE') { await _handBackRow(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"
         "  if (outcome === 'NEEDS_WIDER_SCOPE') {\n"
         "    if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }\n"
-        "    row.done = true; _handBack(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
+        "    await _handBackRow(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
-        "  if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
+        "  if (_escaped.length) { await _handBackRow(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
         "  const _written = (result.touched_files || []).concat(result.created_files || []);\n"
         "  const _historical = _historicalPaths(_written);\n"
         "  if (_historical.length) {\n"
         "    row.done = true;\n"
+        "    row.undoReason = 'the fix wrote historical records';\n"
         "    const _undone = ((await withLock(lockKeys, async () => _rejectUndoCall(row))) || {}).undo || {};\n"
         "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _HISTORICAL_UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
         "    _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;\n"
         "  }\n"
-        "  if (_entangle(rowId, _written)) return;\n"
+        "  if (await _entangle(rowId, _written)) return;\n"
         "  if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }\n"
         "  row.fixNode = _priorNode;\n"
-        "  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
+        "  await _applyRouteRow(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
         "}"
     )
 
@@ -1800,7 +1905,7 @@ def compose_grind_script(
         "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
         "    _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
         "  }\n"
-        "  applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);\n"
+        "  await _applyRouteRow(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);\n"
         "}"
     )
 
@@ -1848,7 +1953,7 @@ def compose_grind_script(
         "  } catch (err) {\n"
         "    const _msg = err && err.message ? err.message : String(err);\n"
         "    for (const r of batch.rows) {\n"
-        "      if (!_rows[r].done) { _rows[r].done = true; _handBack(r, 'stage-dead', `batch worker threw: ${_msg}`); }\n"
+        "      if (!_rows[r].done) { await _handBackRow(r, 'stage-dead', `batch worker threw: ${_msg}`); }\n"
         "    }\n"
         "  }\n"
         "  delete _admitted[batchState.id];\n"
@@ -1881,7 +1986,7 @@ def compose_grind_script(
         "  }\n"
         "}\n"
         "try {\n"
-        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }"
+        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }"
     )
 
     review_fix_raw = stages.compose_review_fix_commit_call(

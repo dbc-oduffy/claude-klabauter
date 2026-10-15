@@ -107,6 +107,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 from coordinator_core.backlog_grind_assemble.grind_undo import cmd_undo
 from coordinator_core.contract.grind_vocab import (
     CLOSURE_CLOSING_BRANCHES,
@@ -746,12 +748,51 @@ def _git_blob_sha(data: bytes) -> str:
 
 class _LandSet:
     """What `run-record` commits: `paths` present on disk and differing from HEAD,
-    `deleted` gone from disk and present in HEAD, `withheld` held by a live peer."""
+    `deleted` gone from disk and present in HEAD, `withheld` held by a live peer.
+    `unresolved` (filled by `_split_deletions`) are deletions left out of the commit."""
 
     def __init__(self) -> None:
         self.paths: list[str] = []
         self.deleted: list[str] = []
         self.withheld: list[str] = []
+        self.unresolved: list[str] = []
+
+
+def _split_deletions(
+    repo_root: Path, profile: "grind_profile.Profile | None", profile_name: str, run_id: str, land: _LandSet
+) -> None:
+    """Was each removal a closed row or a settled ledger, or a stray? Keeps settled
+    ledger removals under `state/queue-grind/<P>/` and rows whose archive copy exists on
+    disk (adding that copy to `land.paths` when it differs from HEAD); every other
+    deletion moves to `land.unresolved`, uncommitted and still deleted on disk. Zero
+    git spawns."""
+    from coordinator_core.git.git_state import read_tree_spine
+
+    ledger_prefix = f"state/queue-grind/{profile_name}/"
+    kept: list[str] = []
+    archives: list[str] = []
+    for rel in land.deleted:
+        if rel.startswith(ledger_prefix):
+            kept.append(rel)
+            continue
+        if profile is not None:
+            archive_rel = archive_destination(profile.archive_path, run_id, rel.rpartition("/")[2])
+            if (repo_root / archive_rel).is_file():
+                kept.append(rel)
+                archives.append(archive_rel)
+                continue
+        land.unresolved.append(rel)
+    land.deleted = kept
+    if not archives:
+        return
+    spine = read_tree_spine(repo_root, archives) or {}
+    for archive_rel in archives:
+        head_dir, _, head_name = archive_rel.rpartition("/")
+        entry = spine.get(head_dir, {}).get(head_name)
+        if archive_rel not in land.paths and (
+            entry is None or entry[1] != _git_blob_sha((repo_root / archive_rel).read_bytes())
+        ):
+            land.paths.append(archive_rel)
 
 
 def _land_set(
@@ -831,6 +872,8 @@ def _commit_land_set(repo_root: Path, profile: str, run_id: str, land: _LandSet)
             {
                 "paths": land.paths,
                 "deleted_paths": land.deleted,
+                # `_split_deletions` already kept only settled ledgers and archived rows.
+                "declared_reverts": land.deleted,
                 "message": message,
                 # Every path is this session's own claimed bookkeeping, so the
                 # handler's check-ignore spawn is skipped by declaring none ignored.
@@ -864,8 +907,12 @@ def cmd_run_record(rest: list[str]) -> int:
     session claims under `state/queue-grind/<P>/` (swept and settled ledgers,
     appended ledgers, evidence, the record) and its own
     `state/block-discharge/<session>.jsonl`, each only when it differs from HEAD.
-    A path a live peer also claims is withheld and named. Prints
-    `{"path", "commit", "landed", "deleted", "withheld"}` (plus `swept`, `sweep_reason`
+    A path a live peer also claims is withheld and named. Deletions are declared as
+    reverts only when settled (a ledger under `state/queue-grind/<P>/`) or resolved (a
+    row whose archive copy exists, which then lands too, `--profile-dir` required); any
+    other removal stays out of the commit, deleted on disk, and is named in
+    `unresolved_deletions`. Prints
+    `{"path", "commit", "landed", "deleted", "unresolved_deletions", "withheld"}` (plus `swept`, `sweep_reason`
     under `--sweep`, which needs `--profile-dir` and a `--queue`); `commit` is null when
     nothing was left to land, and also when no session id resolves or the branch
     is unborn (the record is then written but left uncommitted). A commit refusal exits 1 with the verbatim
@@ -1018,6 +1065,18 @@ def cmd_run_record(rest: list[str]) -> int:
     if isinstance(land, str):
         print(f"grind-row run-record: {land}", file=sys.stderr)
         return EXIT_REFUSAL
+    if land.deleted:
+        profile = None
+        if "profile-dir" in flags:
+            try:
+                profile = grind_profile.load_profile(flags["profile"], Path(flags["profile-dir"]))
+            except (ValueError, OSError, yaml.YAMLError) as exc:
+                print(
+                    f"grind-row run-record: profile {flags['profile']} did not load "
+                    f"({type(exc).__name__}: {exc}); its queue-row deletions stay unresolved",
+                    file=sys.stderr,
+                )
+        _split_deletions(repo_root, profile, flags["profile"], run_id, land)
     sha: str | None = None
     if land.paths or land.deleted:
         sha, refusal = _commit_land_set(repo_root, flags["profile"], run_id, land)
@@ -1031,6 +1090,7 @@ def cmd_run_record(rest: list[str]) -> int:
                 "commit": sha,
                 "landed": land.paths,
                 "deleted": land.deleted,
+                "unresolved_deletions": land.unresolved,
                 "withheld": land.withheld,
                 **({"swept": swept, "sweep_reason": sweep_reason} if sweeping else {}),
             },

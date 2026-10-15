@@ -19,7 +19,10 @@ per-row routing driven through the profile's own graph.
 """
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -234,7 +237,10 @@ def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block():
 
 def test_the_run_close_is_the_outer_finally_after_review_and_adjudication():
     script = _compose()
-    inner = "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }"
+    inner = (
+        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } "
+        "finally { await _terminalCommit(); await _undoUnfinished(); }"
+    )
     outer_open = "try {\n" + inner
     outer_close = "await _adjudicatePmBound();\n} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
     assert outer_open in script and outer_close in script
@@ -347,7 +353,7 @@ def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
     assert "async function _terminalCommitCall(params) {" in script
     assert "async function _commitCall" not in script
     assert script.count("async function _rejectUndoCall(row) {") == 1
-    assert script.count("_rejectUndoCall(row)") == 2
+    assert script.count("_rejectUndoCall(row)") == 3
     assert "_undoCall" not in script
     assert "async function _triageCall(batchId, batchKey, rowIds) {" in script
 
@@ -1725,17 +1731,18 @@ def test_a_row_declaring_a_queued_rows_path_is_overlap_deferred_with_no_fix_call
     assert [r["row_id"] for r in sink[0]["grind"]["rows"]] == ["r0"]
 
 
-def test_a_post_fix_collision_hands_both_rows_back_entangled_with_no_undo_and_no_commit():
+def test_a_post_fix_collision_hands_both_rows_back_entangled_undone_and_no_commit():
     script = _fix_script(
         ["r0", "r1"],
         declared={"r0": ["a.py"], "r1": ["b.py"]},
         fix=lambda rid: {"outcome": "done", "touched_files": ["shared.py"]},
     )
+    script["verify"] = lambda rid: {"outcome": "pass", "undo": {"outcome": "undone"}}
     result, sink = _run_sink([("b0", ["r0", "r1"])], script)
     entangled = {h["row"]: h["reason"] for h in result["handed_back"] if h["type"] == "entangled"}
     assert set(entangled) == {"r0", "r1"}
-    assert all("shared.py" in reason for reason in entangled.values())
-    assert ("verify", "r1") not in result["call_log"]
+    assert all("shared.py" in reason and reason.endswith("; undone") for reason in entangled.values())
+    assert ("verify", "r0") in result["call_log"] and ("verify", "r1") in result["call_log"]
     assert result["settled"] == []
     assert sink == [] and ("commit", "run") not in result["call_log"]
 
@@ -2045,6 +2052,7 @@ def test_a_fix_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
     script = _fix_script(
         ["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["src/r0.py"], "has_tradeoff": True, "tradeoff": text},
     )
+    script["verify"] = lambda rid: {"undo": {"outcome": "undone"}}
     result, _kinds, sink = _run_logged([("b0", ["r0"])], script)
     handed = [h for h in result["handed_back"] if h["row"] == "r0"]
     assert handed[0]["type"] == "needs-judgment" and handed[0]["tradeoff"] == text and text in handed[0]["reason"]
@@ -2068,3 +2076,287 @@ def test_the_emitted_script_carries_the_tradeoff_on_both_handbacks():
     assert "_handedBack.push(tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason });" in script
     assert "'fix reported a tradeoff: ' + tradeoff, tradeoff)" in script
     assert "`triage reported a tradeoff: ${tradeoff}`, tradeoff)" in script
+
+
+# ---------------------------------------------------------------------------
+# Every non-landing row is undone through the verify-op reject mode
+# ---------------------------------------------------------------------------
+
+_WRITES = {"outcome": "done", "touched_files": ["src/r0.py"], "created_files": ["src/new.py"]}
+
+
+def _undo_script(fix_reply, *, undo, fix_rows=("r0",)):
+    """A fix stub returning ``fix_reply`` and a verify stub whose every call is an undo reply."""
+    script = _fix_script(list(fix_rows), fix=lambda rid: dict(fix_reply))
+    script["verify"] = lambda rid: {"undo": dict(undo)}
+    return script
+
+
+_NONLANDING = [
+    ("widen-exhausted", {"outcome": "NEEDS_WIDER_SCOPE"}),
+    ("needs-judgment", {"outcome": "done", "has_tradeoff": True, "tradeoff": "trade"}),
+    ("baton", {"outcome": "NEEDS_PLAN"}),
+    ("manifest-stale", {"outcome": "MANIFEST_STALE"}),
+]
+
+
+@pytest.mark.parametrize(("htype", "fix_reply"), _NONLANDING)
+@pytest.mark.parametrize("undone", [True, False])
+def test_every_post_fix_hand_back_with_reported_writes_makes_one_reject_undo(htype, fix_reply, undone):
+    undo = {"outcome": "undone"} if undone else {"outcome": "undo-failed", "reason": "left: src/r0.py"}
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], _undo_script({**_WRITES, **fix_reply}, undo=undo))
+    assert kinds.count("verify") == 1 and "commit" not in kinds
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert len(handed) == 1
+    if undone:
+        assert handed[0]["type"] == htype and handed[0]["reason"].endswith("; undone")
+    else:
+        assert handed[0]["type"] == "stage-dead"
+        assert handed[0]["reason"].startswith(f"undo-failed: the row was handed back {htype}")
+        assert "left: src/r0.py" in handed[0]["reason"]
+    assert result["settled"] == []
+
+
+@pytest.mark.parametrize("undone", [True, False])
+def test_an_entangled_pair_is_undone_row_by_row(undone):
+    undo = {"outcome": "undone"} if undone else {"outcome": "undo-failed"}
+    script = _fix_script(
+        ["r0", "r1"], declared={"r0": ["a.py"], "r1": ["b.py"]},
+        fix=lambda rid: {"outcome": "done", "touched_files": ["shared.py"]},
+    )
+    script["verify"] = lambda rid: {"outcome": "pass", "undo": dict(undo)}
+    result, kinds, _sink = _run_logged([("b0", ["r0", "r1"])], script)
+    assert kinds.count("verify") == 3  # r0's own verify stage, then one undo per entangled row
+    handed = {h["row"]: h for h in result["handed_back"]}
+    expected = "entangled" if undone else "stage-dead"
+    assert {h["type"] for h in handed.values()} == {expected}
+    if not undone:
+        assert all(h["reason"].startswith("undo-failed: the row was handed back entangled") for h in handed.values())
+
+
+def test_a_row_whose_fix_reported_no_writes_makes_no_undo_call():
+    result, kinds, _sink = _run_logged(
+        [("b0", ["r0"])], _undo_script({"outcome": "NEEDS_PLAN"}, undo={"outcome": "undone"}),
+    )
+    assert "verify" not in kinds
+    assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["baton"]
+
+
+def test_a_commit_failed_row_makes_no_undo_call():
+    reply = {"committed": False, "refused": "no readable pathspec"}
+    script = _fix_script(["r0"], commit=lambda _unit: reply)
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["commit-failed"]
+    assert kinds.count("verify") == 1 and kinds.index("verify") < kinds.index("commit")
+
+
+def test_a_widen_exhausted_row_undoes_once_after_both_attempts_and_the_script_unions_their_paths():
+    attempts = {"n": 0}
+
+    def fix(rid):
+        attempts["n"] += 1
+        return {
+            "outcome": "NEEDS_WIDER_SCOPE", "touched_files": [f"src/t{attempts['n']}.py"],
+            "created_files": [f"src/c{attempts['n']}.py"], "extra_files": ["src/wide.py"],
+        }
+
+    script = _fix_script(["r0"], fix=fix)
+    script["verify"] = lambda rid: {"undo": {"outcome": "undone"}}
+    undo_sink: list = []
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], script, undo_paths_sink=undo_sink)
+    assert attempts["n"] == 2 and kinds.count("verify") == 1
+    assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["widen-exhausted"]
+    assert len(undo_sink) == 1 and undo_sink[0]["row"] == "r0"
+    assert set(undo_sink[0]["paths"]) == {"src/t1.py", "src/t2.py", "src/c1.py", "src/c2.py"}
+    script_js = _compose()
+    body = script_js[script_js.index("async function _handBackRow("):]
+    body = body[: body.index("\n}\n")]
+    assert "_rejectUndoCall(row)" in body
+    assert "_undoPaths(row)" in script_js[script_js.index("async function _rejectUndoCall"):script_js.index("async function _handBackRow(")]
+
+
+def test_an_out_of_root_needs_judgment_row_undoes_only_its_in_root_paths():
+    fix = {"outcome": "done", "touched_files": ["/etc/outside.conf"], "created_files": []}
+    result, kinds, _sink = _run_logged(
+        [("b0", ["r0"])], _undo_script(fix, undo={"outcome": "undone"}),
+    )
+    assert "verify" not in kinds
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert handed[0]["type"] == "needs-judgment" and "/etc/outside.conf" in handed[0]["reason"]
+    mixed = {"outcome": "done", "touched_files": ["/etc/outside.conf", "src/r0.py"]}
+    undo_sink: list = []
+    _result, kinds, _sink = _run_logged(
+        [("b0", ["r0"])], _undo_script(mixed, undo={"outcome": "undone"}), undo_paths_sink=undo_sink,
+    )
+    assert kinds.count("verify") == 1
+    assert [e["paths"] for e in undo_sink if e["row"] == "r0"] == [["src/r0.py"]]
+    assert "/etc/outside.conf" not in undo_sink[0]["paths"]
+    script_js = _compose()
+    undo_paths = script_js[script_js.index("function _undoPaths(row)"):script_js.index("function _hasWrites")]
+    assert "_outOfRootPaths([p]).length === 0" in undo_paths
+
+
+def test_a_row_reaching_stage_dead_through_a_verify_edge_with_writes_is_undone():
+    calls = {"n": 0}
+
+    def verify(rid):
+        calls["n"] += 1
+        return {"outcome": "weird"} if calls["n"] == 1 else {"undo": {"outcome": "undone"}}
+
+    script = _fix_script(["r0"], fix=lambda rid: dict(_WRITES))
+    script["verify"] = verify
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    assert kinds.count("verify") == 2
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert handed[0]["type"] == "stage-dead" and handed[0]["reason"].endswith("; undone")
+
+
+def test_a_thrown_runs_unfinished_row_with_writes_is_undone_after_the_terminal_commit():
+    state = {"n": 0}
+
+    def fix(rid):
+        state["n"] += 1
+        if rid == "r1":
+            raise RuntimeError("stage blew up")
+        return {"outcome": "done", "touched_files": [f"src/{rid}.py"]}
+
+    script = _fix_script(["r0", "r1"], fix=fix)
+    script["verify"] = lambda rid: {"outcome": "pass", "undo": {"outcome": "undone"}}
+    err, kinds, _sink = _run_logged([("b0", ["r0", "r1"])], script)
+    assert isinstance(err, RuntimeError)
+    assert "verify" in kinds
+    inner = _compose()
+    assert "finally { await _terminalCommit(); await _undoUnfinished(); }" in inner
+    assert "run threw: ${_msg}" in inner
+
+
+def test_the_emitted_fix_stage_has_no_bare_hand_back_for_a_non_landing_row():
+    script = _compose()
+    fix = script[script.index("async function _fixStage(rowId)"):]
+    fix = fix[: fix.index("\n}\n")]
+    assert "_handBack(rowId, 'widen-exhausted'" not in fix
+    assert "await _handBackRow(rowId, 'widen-exhausted'" in fix
+    assert "_handBack(rowId, 'commit-failed'" not in fix
+    terminal = script[script.index("async function _terminalCommit()"):]
+    assert "_handBack(q.row_id, 'commit-failed'" in terminal and "_handBackRow" not in terminal.split("\n}\n")[0]
+
+
+# ---------------------------------------------------------------------------
+# One definition of "wrote" and of the undo set, in both twins
+# ---------------------------------------------------------------------------
+
+
+def _golden_function(name: str) -> str:
+    golden = _GOLDEN_PATH.read_text(encoding="utf-8")
+    start = golden.index(f"function {name}(")
+    first_line_end = golden.index("\n", start)
+    if golden[start:first_line_end].rstrip().endswith("{"):
+        return golden[start: golden.index("\n}\n", start) + 2]
+    return golden[start:first_line_end]
+
+
+def _golden_undo_verdict(row: dict) -> dict:
+    """The golden's `_hasWrites`/`_undoPaths` evaluated by node over ``row``."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    js = (
+        _golden_function("_outOfRootPaths") + "\n"
+        + _golden_function("_undoPaths") + "\n"
+        + _golden_function("_hasWrites") + "\n"
+        + f"const row = {json.dumps(row)};\n"
+        + "console.log(JSON.stringify({ wrote: !!_hasWrites(row), paths: _undoPaths(row) }));"
+    )
+    out = subprocess.run(
+        [node, "-e", js], capture_output=True, text=True, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_the_emitted_undo_helpers_read_removed_files_and_never_close_result():
+    for name in ("_undoPaths", "_hasWrites"):
+        body = _golden_function(name)
+        assert "removedFiles" in body and "closeResult" not in body
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    ("py_row", "js_row"),
+    [
+        (
+            dict(removed_files=["state/bug-backlog/gone.yaml"]),
+            dict(fixReported=False, touchedFiles=[], createdFiles=[], removedFiles=["state/bug-backlog/gone.yaml"]),
+        ),
+        (
+            dict(removed_files=["state/bug-backlog/a.yaml"], touched_files=["state/archive/a.yaml"]),
+            dict(
+                fixReported=False, touchedFiles=["state/archive/a.yaml"], createdFiles=[],
+                removedFiles=["state/bug-backlog/a.yaml"], closeResult={"old": "x", "new": "y"},
+            ),
+        ),
+        (
+            dict(fix_reported=True, touched_files=["src/a.py", "/etc/outside.conf"], removed_files=["../up.yaml"]),
+            dict(fixReported=True, touchedFiles=["src/a.py", "/etc/outside.conf"], createdFiles=[], removedFiles=["../up.yaml"]),
+        ),
+        (dict(), dict(fixReported=False, touchedFiles=[], createdFiles=[], removedFiles=[])),
+    ],
+)
+def test_python_and_emitted_undo_helpers_agree(py_row, js_row):
+    row = gc.Row(row_id="r0", path="r0", batch_id="b0", **py_row)
+    seen = _golden_undo_verdict(js_row)
+    assert seen["wrote"] is gc._has_writes(row)
+    assert seen["paths"] == gc._undo_paths(row)
+
+
+def test_a_removed_only_row_is_a_write_with_an_undo_set():
+    row = gc.Row(row_id="r0", path="r0", batch_id="b0", removed_files=["state/bug-backlog/gone.yaml"])
+    assert gc._has_writes(row) is True
+    assert gc._undo_paths(row) == ["state/bug-backlog/gone.yaml"]
+
+
+def test_a_peer_dirty_row_with_writes_makes_no_undo_call_and_names_the_paths_left():
+    fix = {**_WRITES, "outcome": "PEER_DIRTY"}
+    undo_sink: list = []
+    result, kinds, _sink = _run_logged(
+        [("b0", ["r0"])], _undo_script(fix, undo={"outcome": "undone"}), undo_paths_sink=undo_sink,
+    )
+    assert "verify" not in kinds and undo_sink == []
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert [h["type"] for h in handed] == ["peer-dirty"]
+    assert "not undone" in handed[0]["reason"]
+    assert "src/r0.py" in handed[0]["reason"] and "src/new.py" in handed[0]["reason"]
+    assert not handed[0]["reason"].endswith("; undone")
+
+
+def test_the_emitted_hand_back_tests_the_exempt_set_and_it_holds_both_types():
+    script = _compose()
+    assert 'const _UNDO_EXEMPT = ["commit-failed", "peer-dirty"];' in script
+    body = script[script.index("async function _handBackRow("):]
+    body = body[: body.index("\n}\n")]
+    assert "_UNDO_EXEMPT.includes(type)" in body and "type === 'commit-failed'" not in body
+    assert set(gc._UNDO_EXEMPT) == {"commit-failed", "peer-dirty"}
+
+
+def test_a_thrown_runs_unfinished_row_whose_only_write_is_a_removed_file_is_undone():
+    calls = {"n": 0}
+
+    def verify(rid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("verify blew up")
+        return {"undo": {"outcome": "undone"}}
+
+    script = _fix_script(
+        ["r0"], fix=lambda rid: {
+            "outcome": "done", "close_result": {"old": "state/bug-backlog/r0.yaml", "new": "state/archive/r0.yaml"},
+        },
+    )
+    script["verify"] = verify
+    undo_sink: list = []
+    err, kinds, _sink = _run_logged([("b0", ["r0"])], script, undo_paths_sink=undo_sink)
+    assert isinstance(err, RuntimeError)
+    assert undo_sink and set(undo_sink[0]["paths"]) == {"state/bug-backlog/r0.yaml", "state/archive/r0.yaml"}
+    assert kinds.count("verify") == 2

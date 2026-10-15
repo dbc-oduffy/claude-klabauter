@@ -120,7 +120,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("grind", "close", "closes the row's record"),
     _earns("grind", "verify-agent", "runs the row's tests and reports"),
     _earns("grind", "adjudicate", "the APM adjudicates a held row"),
-    _floor("grind", "verify-op", "verify runs on an agent with no Edit/Write so the fix agent cannot launder the gate and absorbs the undo op and the historical-record reject's undo"),
+    _floor("grind", "verify-op", "verify runs on an agent with no Edit/Write so the fix agent cannot launder the gate and absorbs the undo op and every non-landing row's undo"),
     _floor("grind", "ledger-sweep:drain", "the drain runs after every row, no agent precedes it; absorbs the run-record op"),
     _floor("grind", "commit", _COMMIT_FLOOR),
     _floor("grind", "review-fix-commit", _COMMIT_FLOOR),

@@ -1,9 +1,10 @@
 """Mint one open `tf` bug-backlog row per failing test file, idempotent per run. Implements `MintRows`.
 
 A row is identified by its file stem under `state/bug-backlog/`. An open `tf` row on the same surface
-is reused: the run tag is added by re-appending it through `append_queue_entry`, then the superseded
-file is unlinked (the appender's filename carries a content digest, so a tag change lands as a new
-file). No git spawn.
+is reused in place: the run tag is appended to the row's block-list `tags`, the id and every other
+byte stay, and nothing is deleted; a reused row still loads through `load_family_records`. Every
+reuse is validated before any write, so a row the edit cannot handle aborts the mint with nothing
+written. No git spawn.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 from coordinator_core.bug_blitz.contract import FailingTest, run_tag
 from coordinator_core.ops.queue_append import append_queue_entry
 from coordinator_core.ops.queue_family import load_family_records
+from coordinator_core.session.declared_writes import declare_write
 
 SCHEMA = "bug-backlog"
 TF_TAG = "tf"
@@ -84,33 +86,44 @@ def _append(repo_root: Path, **fields: object) -> str:
     return _row_id(result["out_path"])
 
 
-def _reuse(repo_root: Path, rec: dict, tag: str) -> str:
-    fm = rec["frontmatter"]
-    old_rel = rec["path"]
-    tags = list(fm.get("tags") or [])
-    if tag in tags:
-        return _row_id(old_rel)
-    tags.append(tag)
-    fields = {
-        key: fm[key]
-        for key in (
-            "title",
-            "body",
-            "surface",
-            "severity",
-            "evidence",
-            "repro_steps",
-            "from_repo",
-            "environment",
-            "created",
-        )
-        if fm.get(key) is not None
-    }
-    row_id = _append(repo_root, status="open", tags=tags, **fields)
-    old_abs = repo_root / old_rel
-    if _row_id(old_rel) != row_id and old_abs.is_file():
-        os.unlink(old_abs)
-    return row_id
+def _with_tag(text: str, tag: str, rel: str) -> str:
+    """Return `text` with `tag` added as one more item of its block-list `tags:`; raises on any other shape."""
+    lines = text.split("\n")
+    try:
+        start = lines.index("tags:")
+    except ValueError:
+        raise ValueError(f"{rel}: `tags` is not a block list; add the tag by hand") from None
+    last = start
+    while last + 1 < len(lines) and lines[last + 1].startswith("  - "):
+        last += 1
+    if last == start:
+        raise ValueError(f"{rel}: `tags` is not a block list; add the tag by hand")
+    lines.insert(last + 1, f"  - {tag}")
+    return "\n".join(lines)
+
+
+def _plan_reuse(repo_root: Path, rec: dict, tag: str) -> str | None:
+    """The rewritten text of an open TF row gaining `tag`, or None when it already carries it. Writes nothing."""
+    if tag in (rec["frontmatter"].get("tags") or []):
+        return None
+    rel = rec["path"]
+    with open(repo_root / rel, encoding="utf-8", newline="") as handle:
+        text = handle.read()
+    return _with_tag(text, tag, rel)
+
+
+def _write_reuse(repo_root: Path, rel: str, updated: str) -> None:
+    """Replace the row at `rel` with `updated`; the tmp is unlinked on any failure, so no partial file survives."""
+    path = repo_root / rel
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(updated)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    declare_write(rel)
 
 
 def mint_tf_rows(
@@ -128,11 +141,27 @@ def mint_tf_rows(
     repo_root = Path(repo_root)
     tag = run_tag(run_id)
     existing = _open_tf_rows_by_surface(repo_root)
+    grouped = _group_by_file(tuple(tests))
+    planned: dict[str, str | None] = {}
+    errors: list[str] = []
+    for file in grouped:
+        rec = existing.get(file)
+        if rec is None:
+            continue
+        try:
+            planned[file] = _plan_reuse(repo_root, rec, tag)
+        except ValueError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise ValueError("; ".join(errors))
     ids: list[str] = []
-    for file, group in _group_by_file(tuple(tests)).items():
+    for file, group in grouped.items():
         rec = existing.get(file)
         if rec is not None:
-            ids.append(_reuse(repo_root, rec, tag))
+            updated = planned[file]
+            if updated is not None:
+                _write_reuse(repo_root, rec["path"], updated)
+            ids.append(_row_id(rec["path"]))
             continue
         severity = "P0" if any(is_crash_shaped(t.message) for t in group) else "P1"
         row_id = _append(

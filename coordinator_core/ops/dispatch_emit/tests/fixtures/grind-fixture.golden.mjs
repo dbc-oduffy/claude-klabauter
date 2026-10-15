@@ -235,14 +235,46 @@ async function _fixCall(row) {
     return _result;
 }
 
+const _UNDO_EXEMPT = ["commit-failed", "peer-dirty"];
 function _undoPaths(row) {
-  return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])));
+  return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.removedFiles || []))).filter((p) => _outOfRootPaths([p]).length === 0);
 }
+function _hasWrites(row) { return row.fixReported || (row.createdFiles || []).length > 0 || (row.removedFiles || []).length > 0; }
 
 async function _rejectUndoCall(row) {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This row is rejected. Skip the verify op: do not run it. ' + 'Reason: ' + ('the fix wrote historical records') + '. ' + 'Run this exactly as written, as ONE Bash call:\n' + '```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row undo --paths-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _undoPaths(row)})).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```' + '\nReturn its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with the verbatim stderr in `reason`. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-op', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"undo": {"properties": {"outcome": {"enum": ["undone", "undo-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"}}, "required": ["undo"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This row is rejected. Skip the verify op: do not run it. ' + 'Reason: ' + (row.undoReason) + '. ' + 'Run this exactly as written, as ONE Bash call:\n' + '```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row undo --paths-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _undoPaths(row)})).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```' + '\nReturn its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with the verbatim stderr in `reason`. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-op', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"undo": {"properties": {"outcome": {"enum": ["undone", "undo-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"}}, "required": ["undo"], "type": "object"} })) || {};
     _recordCall('verify');
     return _result;
+}
+
+async function _handBackRow(rowId, type, reason, tradeoff) {
+  const row = _rows[rowId];
+  row.done = true;
+  if (_UNDO_EXEMPT.includes(type) || !_hasWrites(row) || _undoPaths(row).length === 0) {
+    const _left = _undoPaths(row);
+    if (type === 'peer-dirty' && _hasWrites(row) && _left.length > 0) { reason = reason + '; ' + "not undone (a peer's edits sit on these paths)" + ': ' + _left.join(', '); }
+    _handBack(rowId, type, reason, tradeoff); return;
+  }
+  row.undoReason = `the row was handed back ${type}: ${reason}`;
+  let _undone;
+  try { _undone = ((await withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row))) || {}).undo || {}; }
+  catch (err) { _undone = { outcome: 'undo-failed', reason: err && err.message ? err.message : String(err) }; }
+  if (_undone.outcome !== 'undone') {
+    _handBack(rowId, 'stage-dead', 'undo-failed: the row was handed back ' + type + ' and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand');
+    return;
+  }
+  _handBack(rowId, type, reason + '; undone', tradeoff);
+}
+async function _applyRouteRow(row, rowId, route, reason) {
+  if (route.kind === 'handback') { await _handBackRow(rowId, route.value, reason); }
+  else { row.node = route.value; }
+}
+async function _undoUnfinished() {
+  if (!_grindErr) return;
+  const _msg = _grindErr && _grindErr.message ? _grindErr.message : String(_grindErr);
+  for (const r of Object.keys(_rows)) {
+    if (!_rows[r].done && _hasWrites(_rows[r])) { await _handBackRow(r, 'stage-dead', `run threw: ${_msg}`); }
+  }
 }
 
 async function _verifyCall(row) {
@@ -290,7 +322,7 @@ for (const b of BATCHES) {
   for (const r of b.rows) {
     const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);
     const _path = _entry.path;
-    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', fixReported: false, sizingPath: '', widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
+    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', fixReported: false, sizingPath: '', undoReason: '', widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
   }
 }
 
@@ -306,7 +338,7 @@ function _unsettle(rowId) {
   const j = _settled.findIndex((s) => s.row === rowId && s.outcome === 'committed');
   if (j >= 0) { _settled.splice(j, 1); }
 }
-function _entangle(rowId, written) {
+async function _entangle(rowId, written) {
   const hit = new Set(written.filter((p) => _runDirty.has(p)));
   if (hit.size === 0) return false;
   _rows[rowId].done = true;
@@ -315,11 +347,13 @@ function _entangle(rowId, written) {
   for (const q of collided) {
     _pendingCommit.splice(_pendingCommit.indexOf(q), 1);
     _unsettle(q.row_id);
-    _handBack(q.row_id, 'entangled', 'a later fix wrote paths this row queued for the terminal commit: ' + shared + '; left on disk, no undo');
   }
   _runDirty.clear();
   for (const q of _pendingCommit) { q.paths.concat(q.deleted_paths).forEach((p) => _runDirty.add(p)); }
-  _handBack(rowId, 'entangled', 'this fix wrote paths already queued for the terminal commit: ' + shared + '; left on disk, no undo');
+  for (const q of collided) {
+    await _handBackRow(q.row_id, 'entangled', 'a later fix wrote paths this row queued for the terminal commit: ' + shared);
+  }
+  await _handBackRow(rowId, 'entangled', 'this fix wrote paths already queued for the terminal commit: ' + shared);
   return true;
 }
 function _terminalReason(reply) {
@@ -501,28 +535,29 @@ async function _fixStage(rowId) {
     row.touchedFiles = row.touchedFiles.concat([_archived]);
     row.closeResult = { old: row.path, new: _archived };
   }
-  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }
-  if (outcome === 'NEEDS_PLAN') { row.done = true; _byTriageCheck.fix_needs_plan += 1; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }
-  if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }
-  if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }
+  if (tradeoff) { _byTriageCheck.fix_late_tradeoff += 1; await _handBackRow(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }
+  if (outcome === 'NEEDS_PLAN') { _byTriageCheck.fix_needs_plan += 1; await _handBackRow(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }
+  if (outcome === 'PEER_DIRTY') { await _handBackRow(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }
+  if (outcome === 'MANIFEST_STALE') { await _handBackRow(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }
   if (outcome === 'NEEDS_WIDER_SCOPE') {
     if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }
-    row.done = true; _handBack(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;
+    await _handBackRow(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;
   }
   const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));
-  if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }
+  if (_escaped.length) { await _handBackRow(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }
   const _written = (result.touched_files || []).concat(result.created_files || []);
   const _historical = _historicalPaths(_written);
   if (_historical.length) {
     row.done = true;
+    row.undoReason = 'the fix wrote historical records';
     const _undone = ((await withLock(lockKeys, async () => _rejectUndoCall(row))) || {}).undo || {};
     if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', 'undo-failed: the fix wrote historical records and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand'); return; }
     _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;
   }
-  if (_entangle(rowId, _written)) return;
+  if (await _entangle(rowId, _written)) return;
   if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }
   row.fixNode = _priorNode;
-  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);
+  await _applyRouteRow(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);
 }
 
 async function _verifyStage(rowId) {
@@ -541,7 +576,7 @@ async function _verifyStage(rowId) {
     if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', 'undo-failed: verify rejected the fix twice and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand'); return; }
     _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;
   }
-  applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);
+  await _applyRouteRow(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);
 }
 
 async function _commitStage(rowId) {
@@ -603,7 +638,7 @@ async function _runBatchWorker(batchState) {
   } catch (err) {
     const _msg = err && err.message ? err.message : String(err);
     for (const r of batch.rows) {
-      if (!_rows[r].done) { _rows[r].done = true; _handBack(r, 'stage-dead', `batch worker threw: ${_msg}`); }
+      if (!_rows[r].done) { await _handBackRow(r, 'stage-dead', `batch worker threw: ${_msg}`); }
     }
   }
   delete _admitted[batchState.id];
@@ -635,7 +670,7 @@ async function runGrind() {
   }
 }
 try {
-try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }
+try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }
 
 const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed').flatMap((s) => (_rows[s.row] || {}).touchedFiles || [])));
 if (_reviewPaths.length === 0) {
