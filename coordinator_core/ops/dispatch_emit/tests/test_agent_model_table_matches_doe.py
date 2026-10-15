@@ -154,21 +154,6 @@ def test_literal_scan_walks_conditional_branches(tmp_path, monkeypatch):
     assert len(_composer_literal_models()) == 1
 
 
-def test_verdict_cache_write_runs_general_purpose_on_haiku():
-    from coordinator_core.ops.dispatch_emit.tests import test_emit_predispatch_gating as g
-    from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import ReviewInput
-
-    fresh = ReviewInput(
-        plan_path=g.PLAN, criterion="c", how="h", baseline_output=None, expected_when_true="e",
-        baseline_ref=None, report_path=None, report_json=None,
-        falsifier_sha="fsha", plan_sha="psha", cache_path="state/mi/.can-report-red/x.verdict.json",
-    )
-    script = g._compose(g.WAVES, specs=g.review_specs([fresh]), repo_root=Path("/repo"))
-    call = script[script.index("label: 'verdict-cache'") :].split("}", 1)[0]
-    assert "model: 'haiku'" in call
-    assert "coordinator:executor" not in call
-
-
 def test_literal_scan_catches_a_typed_literal(tmp_path, monkeypatch):
     src = tmp_path / "composer.py"
     src.write_text(

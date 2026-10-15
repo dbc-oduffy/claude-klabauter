@@ -85,8 +85,8 @@ function followEdge(nodeId, outcome, row) {
   if (!ROUTING[target]) return { kind: 'handback', value: target };
   return { kind: 'node', value: target };
 }
-function applyRoute(row, rowId, route, reason) {
-  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason); }
+function applyRoute(row, rowId, route, reason, tradeoff) {
+  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason, tradeoff); }
   else { row.node = route.value; }
 }
 function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }
@@ -125,12 +125,16 @@ const _sizeAssembleCmd = (scouted, sizingPath) => '"${COORDINATOR_SETTINGS_HOME:
 const _sizeMarkCmd = (row, sizingPath) => '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row append' + ' --profile ' + _shq(PROFILE_NAME) + ' --row-id ' + _shq(row.row_id) + ' --digest ' + _shq(row.digest) + ' --stage size --verdict sized' + ' --outcome route-to-plan --evidence-file ' + _shq(sizingPath) + ' --run-stamp ' + _shq(RUN_ID) + ' --repo-root ' + _shq(REPO_ROOT);
 const _sizeBatonCmd = (sizingPath) => '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new" --type spinoff --from-sizing ' + _shq(sizingPath);
 const _sizeChainCmd = (scouted, row, sizingPath) => 'cd ' + _shq(REPO_ROOT) + ' && ' + _sizeAssembleCmd(scouted, sizingPath) + ' && ' + _sizeBatonCmd(sizingPath) + ' && ' + _sizeMarkCmd(row, sizingPath);
+const _SIZE_SLOTS = { tshirt: '<tshirt>', intent: '<intent>', name: '<name>', premise_provenance: '<premise_provenance>', premise_evidence: '<premise_evidence>', exit_criterion: '<exit_criterion>' };
+const _sizeChainTemplate = (row) => _sizeChainCmd(_SIZE_SLOTS, row, _sizingPathFor('<name>', row.row_id));
+const _sizeAssembleWhen = () => (SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET]) ? 'Only when your tshirt is ' + _TSHIRT_ORDER.slice(PLAN_WEIGHT_FLOOR_RANK).join(', ') + ' (plan weight or larger), run' : 'Run';
 
 function _slug(text) { return String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''); }
-function _sizingPath(scouted, rowId) {
+function _sizingPathFor(nameSlug, rowId) {
   const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);
-  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + '-' + (_slug(scouted.name) || 'sizing') + '-' + (_slug(rowId) || 'row') + '.yaml';
+  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + '-' + nameSlug + '-' + (_slug(rowId) || 'row') + '.yaml';
 }
+function _sizingPath(scouted, rowId) { return _sizingPathFor(_slug(scouted.name) || 'sizing', rowId); }
 
 function _terminalCommitParamsBlock(p) {
   return "-----BEGIN TERMINAL-COMMIT PARAMS-----\n" + JSON.stringify(p) + "\n-----END TERMINAL-COMMIT PARAMS-----";
@@ -170,24 +174,33 @@ const _pendingCommit = [];
 const _runDirty = new Set();
 let _grindErr = null;
 let _terminalCommitDropped = [];
+function _haltReason() {
+  if (_exhausted) return 'budget-exhausted';
+  return _grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null;
+}
+
+const HISTORICAL_PREFIXES = ["state/warp/", "docs/plans/", "state/handoffs/", "state/sizings/", "docs/decisions/"];
+
+function _normRel(p) { return String(p).replace(/\\/g, '/').replace(/^(\.\/)+/, ''); }
+function _historicalPaths(paths) { return (paths || []).filter((p) => HISTORICAL_PREFIXES.some((h) => _normRel(p).startsWith(h))); }
+function _union(a, b) { return Array.from(new Set((a || []).concat(b || []))); }
 
 const _byRefuteOrigin = {};
 
 const _byTriageCheck = { triaged: 0, triage_handback: 0, size_confirmed: 0, size_collapsed: 0, fix_needs_plan: 0, fix_not_reproduced: 0, fix_late_tradeoff: 0 };
-const _sizePending = [];
 
 function _bumpRefuteOrigin(origin, key) {
   if (!_byRefuteOrigin[origin]) { _byRefuteOrigin[origin] = { confirmed: 0, refuted: 0 }; }
   _byRefuteOrigin[origin][key] += 1;
 }
 
-function _handBack(rowId, type, reason) {
+function _handBack(rowId, type, reason, tradeoff) {
   const _row = _rows[rowId];
   if (_row && _row.refuteNote) {
     reason = `${reason} (revived from a refuted close proposal, origin ${_row.origin}: ${_row.refuteNote})`;
   }
   if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;
-  _handedBack.push({ row: rowId, type, reason });
+  _handedBack.push(tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason });
 }
 function _normalizeRowRef(items, ref) {
   const hit = items.find((it) => it.path === ref);
@@ -205,15 +218,9 @@ async function _triageCall(batchId, batchKey, rowIds) {
 }
 
 async function _sizeCall(row) {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Size the work of resolving one backlog row, afresh, judging only: write no file and run no sizing-assemble. "The ask" is resolving this one row. The row (row_id/path/digest) is: ' + (JSON.stringify({ row_id: row.rowId, path: row.path, digest: row.digest })) + '. Triage\'s evidence on it: ' + (row.evidence) + '. Triage\'s fix plan: ' + (row.fixPlan) + '. Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with premise_evidence, exit_criterion (one sentence stating what done means; never name a suite tier or a test-runner command in it -- write \'tests covering touched files pass\'), and as `writes` the repo-relative files the ask will create, edit or delete -- every file the ask names, plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), and well_trodden_step_change true only when the ask proposes a new direction on ground recently built (it also routes the ask to shaping, a PM conversation). An ask that continues a workstream an existing sizing, plan, ruling or baton already scoped is not a step change, however much it rebuilds. Return as `gated` every deliverable the ask declares as owned by another repo or blocked on an external gate (title, owner_repo, requires): never fold one into `writes` and never omit one. Name the row\'s path in premise_evidence, so the sizing records the row it came from. If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'size', phase: 'Grind', agentType: 'coordinator:sizing-scout', model: 'sonnet', effort: 'medium', schema: {"properties": {"exit_criterion": {"type": "string"}, "gated": {"items": {"properties": {"owner_repo": {"type": "string"}, "requires": {"type": "string"}, "title": {"type": "string"}}, "required": ["title", "owner_repo"], "type": "object"}, "type": "array"}, "intent": {"type": "string"}, "jtbd_unclear": {"type": "boolean"}, "name": {"type": "string"}, "premise_evidence": {"type": "string"}, "premise_provenance": {"enum": ["executed", "read", "not-applicable"], "type": "string"}, "tshirt": {"enum": ["XS", "S", "M", "L", "XL", "XXL"], "type": "string"}, "well_trodden_step_change": {"type": "boolean"}, "writes": {"items": {"type": "string"}, "type": "array"}}, "required": ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Size the work of resolving one backlog row, afresh. Judge first; write no file except through your closing command. "The ask" is resolving this one row. The row (row_id/path/digest) is: ' + (JSON.stringify({ row_id: row.rowId, path: row.path, digest: row.digest })) + '. Triage\'s evidence on it: ' + (row.evidence) + '. Triage\'s fix plan: ' + (row.fixPlan) + '. Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with premise_evidence, exit_criterion (one sentence stating what done means; never name a suite tier or a test-runner command in it -- write \'tests covering touched files pass\'), and as `writes` the repo-relative files the ask will create, edit or delete -- every file the ask names, plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), and well_trodden_step_change true only when the ask proposes a new direction on ground recently built (it also routes the ask to shaping, a PM conversation). An ask that continues a workstream an existing sizing, plan, ruling or baton already scoped is not a step change, however much it rebuilds. Return as `gated` every deliverable the ask declares as owned by another repo or blocked on an external gate (title, owner_repo, requires): never fold one into `writes` and never omit one. Name the row\'s path in premise_evidence, so the sizing records the row it came from. If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that. Your closing act, once your fields are settled: ' + (_sizeAssembleWhen()) + ' the one command below as ONE Bash call, replacing each <field> with your own value (the quotes around it stay; an embedded \' is written \'\\\'\'), <name> being lowercase kebab-case ([a-z0-9-] only):\n\n' + (_sizeChainTemplate({ row_id: row.rowId, path: row.path, digest: row.digest })) + '\n\nAdd --jtbd-unclear to its sizing-assemble segment when jtbd_unclear is true and --well-trodden-step-change when well_trodden_step_change is true. Return its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. Do not edit, retry or repair it. When you run no command, return no exit_code.', { label: 'size', phase: 'Grind', agentType: 'coordinator:sizing-scout', model: 'sonnet', effort: 'medium', schema: {"properties": {"exit_code": {"type": "integer"}, "exit_criterion": {"type": "string"}, "gated": {"items": {"properties": {"owner_repo": {"type": "string"}, "requires": {"type": "string"}, "title": {"type": "string"}}, "required": ["title", "owner_repo"], "type": "object"}, "type": "array"}, "intent": {"type": "string"}, "jtbd_unclear": {"type": "boolean"}, "name": {"type": "string"}, "premise_evidence": {"type": "string"}, "premise_provenance": {"enum": ["executed", "read", "not-applicable"], "type": "string"}, "stderr": {"type": "string"}, "stdout": {"type": "string"}, "tshirt": {"enum": ["XS", "S", "M", "L", "XL", "XXL"], "type": "string"}, "well_trodden_step_change": {"type": "boolean"}, "writes": {"items": {"type": "string"}, "type": "array"}}, "required": ["tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes"], "type": "object"} })) || {};
     _recordCall('size');
     return _result;
-}
-
-async function _sizeAssembleCall(commands) {
-    const _result = (await agent('Run each command in this JSON array of {row, command}, exactly as written, one Bash call each, in order, without editing, retrying or repairing any: ' + (JSON.stringify(commands)) + '. Return for each its row, exit code and stdout verbatim. You do not stage or commit anything. Only the committer stage does that.', { label: 'size-assemble', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'sonnet', effort: 'low', schema: {"properties": {"results": {"items": {"properties": {"exit_code": {"type": "integer"}, "row": {"type": "string"}, "stderr": {"type": "string"}, "stdout": {"type": "string"}}, "required": ["row", "exit_code", "stdout"], "type": "object"}, "type": "array"}}, "required": ["results"], "type": "object"} })) || {};
-    _recordCall('size-assemble');
-    return _result.results || [];
 }
 
 async function _closeCall(proposals) {
@@ -223,21 +230,31 @@ async function _closeCall(proposals) {
 }
 
 async function _fixCall(row) {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the fix stage for row ' + (row.rowId) + '. You hold the lock on [' + ((row.declaredFiles).join(', ')) + '] plus `ledger:' + (row.rowId) + '`. Before doing any work, pre-check every locked file for peer dirt -- if a locked file has changed under you since the lock was acquired, stop and report PEER_DIRTY rather than fixing over it. If the fix needs files beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the extra files, and take no other action. If the fix needs a plan before it can proceed, report NEEDS_PLAN. Set `has_tradeoff` to true only when your fix genuinely carries a tradeoff triage did not catch, and describe it in `tradeoff`; otherwise set `has_tradeoff` to false and leave `tradeoff` empty. Never write the published mirror (any publish destination) or `publish.mirrors.*` config for an engine-subject row: both are out of bounds, and a fix that needs them is NEEDS_WIDER_SCOPE. Otherwise, fix the row, run its tests, report every file you touched and every file you created -- paths inside this repo relative to the repo root, any file outside it by its absolute path -- and when they pass and `has_tradeoff` is false run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row close --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --row ' + (row.path) + ' --digest ' + (row.digest) + ' --verdict fix --evidence-file ' + 'state/queue-grind/fixture/evidence/' + (RUN_ID) + '/' + (row.rowId) + '.done.md' + ', written before the command; pass --closed-by fix --run-stamp ' + (RUN_ID) + ' --repo-root ' + (_shq(REPO_ROOT)) + '`, reporting the `{{old,new}}` path pair it prints as `close_result`. If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch -- the row changed since the manifest was emitted), report MANIFEST_STALE and stop. When `has_tradeoff` is true, do not run `backlog-grind-assemble grind-row close`: the row must stay at its path for the adjudicator, and a subagent cannot edit a row once it is archived.' + ((row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')) + ((row.closeResult ? (' This row is already closed at ' + row.closeResult.new + '; amend the fix only, do not run `backlog-grind-assemble grind-row close` again.') : '')) + ((row.refuteNote ? (' The refuter judged this defect live at HEAD; reason: ' + row.refuteNote) : '')) + ' If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'fix', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'high', schema: {"properties": {"close_result": {"properties": {"new": {"type": "string"}, "old": {"type": "string"}}, "type": "object"}, "created_files": {"items": {"type": "string"}, "type": "array"}, "extra_files": {"items": {"type": "string"}, "type": "array"}, "has_tradeoff": {"type": "boolean"}, "outcome": {"enum": ["done", "NEEDS_WIDER_SCOPE", "PEER_DIRTY", "NOT_REPRODUCED", "NEEDS_PLAN", "MANIFEST_STALE"], "type": "string"}, "touched_files": {"items": {"type": "string"}, "type": "array"}, "tradeoff": {"type": "string"}}, "required": ["outcome", "has_tradeoff"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the fix stage for row ' + (row.rowId) + '. You hold the lock on [' + ((row.declaredFiles).join(', ')) + '] plus `ledger:' + (row.rowId) + '`. Before doing any work, pre-check every locked file for peer dirt -- if a locked file has changed under you since the lock was acquired, stop and report PEER_DIRTY rather than fixing over it. If the fix needs files beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the extra files, and take no other action. If the fix needs a plan before it can proceed, report NEEDS_PLAN. Set `has_tradeoff` to true only when your fix genuinely carries a tradeoff triage did not catch, and describe it in `tradeoff`; otherwise set `has_tradeoff` to false and leave `tradeoff` empty. Never write the published mirror (any publish destination) or `publish.mirrors.*` config for an engine-subject row: both are out of bounds, and a fix that needs them is NEEDS_WIDER_SCOPE. Never write a historical record -- any path under `state/warp/`, `docs/plans/`, `state/handoffs/`, `state/sizings/`, `docs/decisions/`: a fix that needs one is NEEDS_WIDER_SCOPE. Otherwise, fix the row, run its tests, report every file you touched and every file you created -- paths inside this repo relative to the repo root, any file outside it by its absolute path -- and when they pass and `has_tradeoff` is false run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row close --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --row ' + (row.path) + ' --digest ' + (row.digest) + ' --verdict fix --evidence-file ' + 'state/queue-grind/fixture/evidence/' + (RUN_ID) + '/' + (row.rowId) + '.done.md' + ', written before the command; pass --closed-by fix --run-stamp ' + (RUN_ID) + ' --repo-root ' + (_shq(REPO_ROOT)) + '`, reporting the `{{old,new}}` path pair it prints as `close_result`. If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch -- the row changed since the manifest was emitted), report MANIFEST_STALE and stop. When `has_tradeoff` is true, do not run `backlog-grind-assemble grind-row close`: the row must stay at its path for the adjudicator, and a subagent cannot edit a row once it is archived.' + ((row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')) + ((row.closeResult ? (' This row is already closed at ' + row.closeResult.new + '; amend the fix only, do not run `backlog-grind-assemble grind-row close` again.') : '')) + ((row.refuteNote ? (' The refuter judged this defect live at HEAD; reason: ' + row.refuteNote) : '')) + ' If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'fix', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'high', schema: {"properties": {"close_result": {"properties": {"new": {"type": "string"}, "old": {"type": "string"}}, "type": "object"}, "created_files": {"items": {"type": "string"}, "type": "array"}, "extra_files": {"items": {"type": "string"}, "type": "array"}, "has_tradeoff": {"type": "boolean"}, "outcome": {"enum": ["done", "NEEDS_WIDER_SCOPE", "PEER_DIRTY", "NOT_REPRODUCED", "NEEDS_PLAN", "MANIFEST_STALE"], "type": "string"}, "touched_files": {"items": {"type": "string"}, "type": "array"}, "tradeoff": {"type": "string"}}, "required": ["outcome", "has_tradeoff"], "type": "object"} })) || {};
     _recordCall('fix');
+    return _result;
+}
+
+function _undoPaths(row) {
+  return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])));
+}
+
+async function _rejectUndoCall(row) {
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This row is rejected. Skip the verify op: do not run it. ' + 'Reason: ' + ('the fix wrote historical records') + '. ' + 'Run this exactly as written, as ONE Bash call:\n' + '```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row undo --paths-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _undoPaths(row)})).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```' + '\nReturn its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with the verbatim stderr in `reason`. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-op', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"undo": {"properties": {"outcome": {"enum": ["undone", "undo-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"}}, "required": ["undo"], "type": "object"} })) || {};
+    _recordCall('verify');
     return _result;
 }
 
 async function _verifyCall(row) {
   const spec = ((VERIFY_SPEC[row.node] || {})[row.batchKey]) || { mode: 'agent', op: null };
   if (spec.mode === 'op') {
-      const _result = (await agent('Run `coordinator-invoke ' + (spec.op) + ' --params-file state/queue-grind/fixture/run-1/records/' + (row.batchId) + '.json` and return its JSON output verbatim. Exit 0 means the batch passes. A non-zero exit means the JSON output names the failing row ids -- return it unchanged either way; do not summarize or reinterpret it. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-op', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'sonnet', effort: 'low', schema: {"properties": {"exit_code": {"type": "integer"}, "output": {"type": "object"}}, "required": ["exit_code", "output"], "type": "object"} })) || {};
+      const _result = (await agent('Run `coordinator-invoke ' + (spec.op) + ' --params-file state/queue-grind/fixture/run-1/records/' + (row.batchId) + '.json` and return its JSON output verbatim. Exit 0 means the batch passes. A non-zero exit means the JSON output names the failing row ids -- return it unchanged either way; do not summarize or reinterpret it. You do not stage or commit anything. Only the committer stage does that.' + ((row.verifyRetried) ? ' This is this row\'s final verification. ' + 'When the exit code is non-zero, unless the output\'s `failing_ids` is a non-empty list naming neither `' + (row.rowId) + '` nor `' + (row.path) + '`,' + ' also run this exactly as written, as ONE Bash call:\n' + '```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row undo --paths-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _undoPaths(row)})).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```' + '\nand return its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with the verbatim stderr in `reason`. Run it on no other outcome.' : ''), { label: 'verify-op', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"exit_code": {"type": "integer"}, "output": {"type": "object"}, "undo": {"properties": {"outcome": {"enum": ["undone", "undo-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"}}, "required": ["exit_code", "output"], "type": "object"} })) || {};
       _recordCall('verify');
       const _failing = (_result.output && _result.output.failing_ids) || [];
       const _pass = _result.exit_code === 0 || (Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId) && !_failing.includes(row.path));
-      return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output) };
+      return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output), undo: _result.undo };
   }
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the verify stage for row ' + (row.rowId) + ' at ' + (row.path) + '. The fixer touched: [' + ((row.touchedFiles).join(', ')) + ']. Triage evidence: ' + (row.evidence) + '. The fix plan was: ' + (row.fixPlan) + '. Try to reject the fix you are handed -- look for a way it fails, not a reason to wave it through. You are read-only apart from running the named tests: do not edit any file. Report pass only if your attempt to reject it failed. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-agent', phase: 'Grind', agentType: 'coordinator:test-runner', model: 'haiku', effort: 'high', schema: {"properties": {"outcome": {"enum": ["pass", "fail"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the verify stage for row ' + (row.rowId) + ' at ' + (row.path) + '. The fixer touched: [' + ((row.touchedFiles).join(', ')) + ']. Triage evidence: ' + (row.evidence) + '. The fix plan was: ' + (row.fixPlan) + '. Try to reject the fix you are handed -- look for a way it fails, not a reason to wave it through. You are read-only apart from running the named tests: do not edit any file. Report pass only if your attempt to reject it failed. You do not stage or commit anything. Only the committer stage does that.' + ((row.verifyRetried) ? ' This is this row\'s final verification. ' + 'When your outcome is fail,' + ' also run this exactly as written, as ONE Bash call:\n' + '```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row undo --paths-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _undoPaths(row)})).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```' + '\nand return its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with the verbatim stderr in `reason`. Run it on no other outcome.' : ''), { label: 'verify-agent', phase: 'Grind', agentType: 'coordinator:test-runner', model: 'haiku', effort: 'high', schema: {"properties": {"outcome": {"enum": ["pass", "fail"], "type": "string"}, "reason": {"type": "string"}, "undo": {"properties": {"outcome": {"enum": ["undone", "undo-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"}}, "required": ["outcome"], "type": "object"} })) || {};
     _recordCall('verify');
     return _result;
 }
@@ -246,12 +263,6 @@ async function _terminalCommitCall(params) {
   const _paramsFile = REPO_ROOT.replace(/\/+$/, '') + '/scratch/warp/' + RUN_ID + '/terminal-commit-params.json';
     const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This is a queue grind\'s one terminal commit stage. Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the grind\'s finished rows, so no `paths` array is owed.\n\ncoordinator-invoke dispatch.terminal_commit --params-file ' + (_paramsFile) + '\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n' + (_terminalCommitParamsBlock(params)) + '\n\nReturn from its JSON reply committed, sha, rows, dropped, error and refused, verbatim (null where absent). Run nothing else.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"committed": {"type": "boolean"}, "dropped": {"items": {"properties": {"path": {"type": "string"}, "reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": "array"}, "error": {"type": ["string", "null"]}, "refused": {"type": ["string", "null"]}, "rows": {"items": {"properties": {"outcome": {"type": "string"}, "row_id": {"type": "string"}, "sha": {"type": ["string", "null"]}}, "type": "object"}, "type": "array"}, "sha": {"type": ["string", "null"]}}, "required": ["committed"], "type": "object"} })) || {};
     _recordCall('commit');
-    return _result;
-}
-
-async function _undoCall(row) {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Run this exactly as written, as ONE Bash call:\n```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row undo --paths-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])))})).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```\nReturn `undone` when it exits 0, else `undo-failed` with the verbatim stderr in `reason`. You do not stage or commit anything. Only the committer stage does that.', { label: 'undo', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["undone", "undo-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
-    _recordCall('undo');
     return _result;
 }
 
@@ -266,7 +277,12 @@ function _spend() {
   return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };
 }
 function _runCostRecord() {
-  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), terminal_commit_dropped: _terminalCommitDropped };
+  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };
+}
+function _declaredWrites() {
+  const out = [];
+  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }
+  return Array.from(new Set(out));
 }
 
 const _rows = {};
@@ -274,7 +290,7 @@ for (const b of BATCHES) {
   for (const r of b.rows) {
     const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);
     const _path = _entry.path;
-    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
+    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', fixReported: false, sizingPath: '', widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
   }
 }
 
@@ -318,8 +334,7 @@ async function _terminalCommit() {
     for (const q of queued) { _unsettle(q.row_id); _handBack(q.row_id, 'commit-failed', reason); }
   };
   if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }
-  const _halted = _exhausted ? 'budget-exhausted'
-    : (_grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null);
+  const _halted = _haltReason();
   const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, grind: { profile: PROFILE_NAME, rows: queued, halted: _halted } };
   const _size = JSON.stringify(JSON.stringify(_params)).length;
   if (_size > PARAMS_BUDGET) { _failAll(`terminal commit params are ${_size} bytes escaped, over the ${PARAMS_BUDGET} the spawn transcript can carry; the rows stay on disk` + SETTLE_HINT); return; }
@@ -378,7 +393,8 @@ async function _triageBatch(batchState) {
     const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);
     if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }
     if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }
-    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);
+    if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { applyRoute(row, recRow, route, `triage reported a tradeoff: ${tradeoff}`, tradeoff); }
+    else { applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }
   }
   for (const staleRef of (_out.stale || [])) {
     const staleId = _normalizeRowRef(rowsMeta, staleRef);
@@ -412,13 +428,9 @@ async function _triageBatch(batchState) {
     }
     if (!_belowFloor) { _byTriageCheck.size_confirmed += 1; }
     row.done = true;
-    const _sizingRel = _sizingPath(scouted, rid);
-    _sizePending.push({
-      rid,
-      path: _sizingRel,
-      intent: scouted.intent || '',
-      command: _sizeChainCmd(scouted, { row_id: rid, path: row.path, digest: row.digest }, _sizingRel),
-    });
+    const _intent = scouted.intent || '';
+    if (scouted.exit_code === 0) { row.sizingPath = _sizingPath(scouted, rid); _handBack(rid, 'baton', 'sized at ' + row.sizingPath + ': ' + _intent); }
+    else { _handBack(rid, 'baton', _intent + ' (size step failed: exit ' + (scouted.exit_code === undefined ? 'missing' : scouted.exit_code) + ')'); }
   }
 }
 
@@ -480,16 +492,16 @@ async function _fixStage(rowId) {
   const tradeoff = result.has_tradeoff ? (result.tradeoff || '') : '';
   const outcome = result.outcome;
   row.lastOutcome = outcome;
-  if (result.touched_files && result.touched_files.length) { row.touchedFiles = result.touched_files; }
-  else if (outcome === 'done') { row.touchedFiles = row.declaredFiles; }
-  row.createdFiles = result.created_files || [];
+  if (result.touched_files && result.touched_files.length) { row.touchedFiles = _union(row.fixReported ? row.touchedFiles : [], result.touched_files); row.fixReported = true; }
+  else if (outcome === 'done' && !row.fixReported) { row.touchedFiles = row.declaredFiles; }
+  row.createdFiles = _union(row.createdFiles, result.created_files);
   if (outcome === 'done' && result.close_result) {
     const _archived = _archiveDestination(row.path);
     row.removedFiles = row.removedFiles.concat([row.path]);
     row.touchedFiles = row.touchedFiles.concat([_archived]);
     row.closeResult = { old: row.path, new: _archived };
   }
-  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }
+  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }
   if (outcome === 'NEEDS_PLAN') { row.done = true; _byTriageCheck.fix_needs_plan += 1; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }
   if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }
   if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }
@@ -499,7 +511,15 @@ async function _fixStage(rowId) {
   }
   const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));
   if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }
-  if (_entangle(rowId, (result.touched_files || []).concat(result.created_files || []))) return;
+  const _written = (result.touched_files || []).concat(result.created_files || []);
+  const _historical = _historicalPaths(_written);
+  if (_historical.length) {
+    row.done = true;
+    const _undone = ((await withLock(lockKeys, async () => _rejectUndoCall(row))) || {}).undo || {};
+    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', 'undo-failed: the fix wrote historical records and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand'); return; }
+    _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;
+  }
+  if (_entangle(rowId, _written)) return;
   if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }
   row.fixNode = _priorNode;
   applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);
@@ -516,9 +536,9 @@ async function _verifyStage(rowId) {
       row.node = row.fixNode || row.node;
       return;
     }
-    const _undone = await withLock(lockKeys, async () => _undoCall(row));
+    const _undone = result.undo || {};
     row.done = true;
-    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', 'undo-failed: verify rejected the fix twice and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : '') + ' -- the row stays open; restore the touched files by hand'); return; }
+    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', 'undo-failed: verify rejected the fix twice and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand'); return; }
     _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;
   }
   applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);
@@ -542,11 +562,27 @@ async function _dispatchRow(rowId, batchState) {
   else { row.done = true; _handBack(rowId, 'stage-dead', `unhandled node kind ${kind}`); }
 }
 
-async function _drainSweep() {
-  const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Run this exactly as written, as ONE Bash call:\n```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --repo-root ' + (_shq(REPO_ROOT)) + '\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row run-record --profile fixture --run-id ' + (RUN_ID) + ' --record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --repo-root ' + (_shq(REPO_ROOT)) + '\n```\n' + ' Return `swept` when every command exits 0, else `sweep-failed` with the verbatim stderr in `reason`, including a non-zero exit from run-record. run-record itself commits this run\'s own bookkeeping (swept ledgers, run record, block-discharge row). You do not stage or commit anything. Only the committer stage does that.', { label: 'ledger-sweep:drain', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["swept", "sweep-failed"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
-  _recordCall('ledger-sweep');
-  if (_result.outcome !== 'swept') {
-    _handBack(RUN_ID, 'stage-dead', `drain sweep did not complete; run-cost record may be missing: state/queue-grind/fixture/runs/${RUN_ID}.json` + _commitReason(_result));
+async function _drainCall() {
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Run this exactly as written, as ONE Bash call:\n```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --run-id ' + (RUN_ID) + ' --record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --declared-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _declaredWrites()})).replace(/'/g, '%27')) + '\'' + ((args.decisions_file || '') ? ' --decisions-file ' + _shq(args.decisions_file || '') : '') + ' --repo-root ' + (_shq(REPO_ROOT)) + '\n```\nThe command\'s JSON output carries `swept` and `sweep_reason`. Return `recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints none). You do not stage or commit anything. Only the committer stage does that.', { label: 'ledger-sweep:drain', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"outcome": {"enum": ["recorded", "record-failed"], "type": "string"}, "reason": {"type": "string"}, "sweep_reason": {"type": "string"}, "swept": {"type": "boolean"}}, "required": ["outcome"], "type": "object"} })) || {};
+    _recordCall('ledger-sweep');
+    return _result;
+}
+async function _runClose() {
+  let _drained;
+  let _threw;
+  try { _drained = await _drainCall(); } catch (err) {
+    try { _drained = await _drainCall(); } catch (err2) { _threw = err2 && err2.message ? err2.message : String(err2); }
+  }
+  if (_threw !== undefined) {
+    _handBack(RUN_ID, 'stage-dead', `drain sweep did not complete: state/queue-grind/fixture/runs/${RUN_ID}.json: ${_threw}`);
+    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: state/queue-grind/fixture/runs/${RUN_ID}.json: ${_threw}`);
+    return;
+  }
+  if (_drained.swept === false) {
+    _handBack(RUN_ID, 'stage-dead', `drain sweep did not complete: state/queue-grind/fixture/runs/${RUN_ID}.json` + (_drained.sweep_reason ? `: ${_drained.sweep_reason}` : ''));
+  }
+  if (_drained.outcome !== 'recorded') {
+    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: state/queue-grind/fixture/runs/${RUN_ID}.json` + _commitReason(_drained));
   }
 }
 
@@ -597,23 +633,9 @@ async function runGrind() {
   if (_exhausted) {
     for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) _handBack(r, 'budget-exhausted', 'emit-admitted row; runtime ceiling reached (per-row cost above the measured admission cost, or runtime budget bound)'); }
   }
-  if (_sizePending.length) {
-    const _commands = _sizePending.map((p) => ({ row: p.rid, command: p.command }));
-    const _byRow = {};
-    try {
-      for (const r of (await _sizeAssembleCall(_commands))) { _byRow[r.row] = r; }
-    } catch (err) {
-      for (const p of _sizePending) { _byRow[p.rid] = { exit_code: `assemble call threw: ${err && err.message ? err.message : String(err)}` }; }
-    }
-    for (const p of _sizePending) {
-      const r = _byRow[p.rid];
-      if (r && r.exit_code === 0) { _handBack(p.rid, 'baton', 'sized at ' + p.path + ': ' + p.intent); }
-      else { _handBack(p.rid, 'baton', p.intent + ' (size step failed: exit ' + (r ? r.exit_code : 'missing') + ')'); }
-    }
-  }
 }
+try {
 try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }
-await _drainSweep();
 
 const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed').flatMap((s) => (_rows[s.row] || {}).touchedFiles || [])));
 if (_reviewPaths.length === 0) {
@@ -670,6 +692,7 @@ async function _adjudicatePmBound() {
 }
 
 await _adjudicatePmBound();
+} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }
 
 const HANDBACK = {
   schema: 'queue-grind-handback/1',

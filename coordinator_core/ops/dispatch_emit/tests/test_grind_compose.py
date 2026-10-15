@@ -28,6 +28,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops import _workflow_contract as wc
+from coordinator_core.ops.dispatch_emit import grind_commit_contract
 from coordinator_core.ops.dispatch_emit import grind_compose as gc
 from coordinator_core.ops.dispatch_emit import grind_profile as gp
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
@@ -231,15 +232,41 @@ def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block():
     assert "/scratch/warp/" in script and "terminal-commit-params.json" in script
 
 
-def test_terminal_commit_runs_in_a_finally_and_the_drain_sweep_follows_it():
+def test_the_run_close_is_the_outer_finally_after_review_and_adjudication():
     script = _compose()
-    runner = "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }"
-    assert runner in script
-    assert script.index(runner) < script.index("await _drainSweep();")
-    assert "await _drainSweep();" not in script[: script.index(runner)]
-    assert script.count("await _terminalCommit()") == 1
-    reviewed = script.index("const _reviewPaths")
-    assert script.index("await _drainSweep();") < reviewed
+    inner = "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }"
+    outer_open = "try {\n" + inner
+    outer_close = "await _adjudicatePmBound();\n} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
+    assert outer_open in script and outer_close in script
+    assert script.count("await _terminalCommit()") == 1 and script.count("await _runClose()") == 1
+    assert script.index(outer_open) < script.index(inner) < script.index("const _reviewPaths")
+    assert script.index("const _reviewPaths") < script.index("async function _adjudicatePmBound()")
+    assert script.index("async function _adjudicatePmBound()") < script.index(outer_close)
+    assert script.index(outer_close) < script.index("const HANDBACK")
+    assert "_drainSweep" not in script
+
+
+def test_run_close_is_one_drain_call_retried_once_and_names_both_failures():
+    script = _compose()
+    close = script[script.index("async function _runClose()"):]
+    close = close[: close.index("\n}\n")]
+    assert close.count("await _drainCall()") == 2
+    assert "throw" not in close
+    assert "_sweepCall" not in script and "_runRecordCall" not in script
+    assert f"{grind_commit_contract.SWEEP_FAILED_HEAD}: state/queue-grind/fixture/runs/${{RUN_ID}}.json" in close
+    assert "if (_drained.swept === false)" in close
+    assert "run record may be missing or incomplete: state/queue-grind/fixture/runs/${RUN_ID}.json" in close
+
+
+def test_drain_call_is_the_one_run_record_sweep_command_with_declared_writes_and_decisions():
+    script = _compose()
+    drain = script[script.index("async function _drainCall()"):]
+    drain = drain[: drain.index("\n}\n")]
+    assert "grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --run-id " in drain
+    assert "--declared-urlenc" in drain and "_declaredWrites()" in drain
+    assert "args.decisions_file || ''" in drain and "--decisions-file" in drain
+    assert "grind-row sweep" not in drain and "commit_v2" not in drain
+    assert "label: 'ledger-sweep:drain'" in drain
 
 
 def test_terminal_commit_skips_when_nothing_queued_and_hands_back_without_a_token():
@@ -249,7 +276,10 @@ def test_terminal_commit_skips_when_nothing_queued_and_hands_back_without_a_toke
     assert "if (_pendingCommit.length === 0) return;" in fn
     assert "if (!RUN_TOKEN) { _failAll(" in fn
     assert "halted: _halted" in fn
-    assert "'budget-exhausted'" in fn and "_grindErr" in fn
+    assert "const _halted = _haltReason();" in fn
+    reason = script[script.index("function _haltReason()"):]
+    reason = reason[: reason.index("\n}\n")]
+    assert "'budget-exhausted'" in reason and "_grindErr" in reason
 
 
 def test_ledger_settle_verb_is_never_a_commit_step():
@@ -258,13 +288,10 @@ def test_ledger_settle_verb_is_never_a_commit_step():
     assert "grind-row settle " not in script.replace("grind-row settle-run", "")
 
 
-def test_drain_sweeps_the_full_queue_set_and_commits_nothing():
+def test_no_leg_labelled_undo_or_run_record_close_is_emitted():
     script = _compose()
-    drain = script[script.index("async function _drainSweep()"):]
-    drain = drain[: drain.index("\n}\n")]
-    assert "grind-row sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --repo-root ' + (_shq(REPO_ROOT))" in drain
-    assert "commit_v2" not in drain
-    assert "await _drainSweep();" in script
+    assert "label: 'undo'" not in script and "label: 'run-record:close'" not in script
+    assert "await _drainCall()" in script
 
 
 def test_commit_failed_hand_back_names_the_runnable_settle_run_command():
@@ -319,7 +346,9 @@ def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
     assert "async function _verifyCall(row) {" in script
     assert "async function _terminalCommitCall(params) {" in script
     assert "async function _commitCall" not in script
-    assert "async function _undoCall(row) {" in script
+    assert script.count("async function _rejectUndoCall(row) {") == 1
+    assert script.count("_rejectUndoCall(row)") == 2
+    assert "_undoCall" not in script
     assert "async function _triageCall(batchId, batchKey, rowIds) {" in script
 
 
@@ -483,9 +512,14 @@ def _fixture_routing():
     return gc.build_routing_table(_fixture_profile()), "triage"
 
 
+_RUN_CLOSE_REPLIES = {"ledger-sweep": {"outcome": "recorded", "swept": True}}
+
+
 def _agent_stub(script_by_kind, budget):
     def _agent(stage_kind, unit_id):
         budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+        if stage_kind in _RUN_CLOSE_REPLIES and stage_kind not in script_by_kind:
+            return _RUN_CLOSE_REPLIES[stage_kind]
         return script_by_kind[stage_kind](unit_id)
 
     return _agent
@@ -509,10 +543,6 @@ def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_
 
 def _scout(tshirt, **extra):
     return {"tshirt": tshirt, "intent": f"intent {tshirt}", "name": "Scout Name", **extra}
-
-
-def _assembled(*row_codes):
-    return {"results": [{"row": row, "exit_code": code, "stdout": ""} for row, code in row_codes]}
 
 
 def _all_close_batches(row_ids):
@@ -550,7 +580,7 @@ def test_downstream_before_triage_and_window_bound():
     if len(triage_indices) >= 2 and downstream_indices:
         assert downstream_indices[0] < triage_indices[1]
 
-    assert call_log[-1] == ("commit", "run")
+    assert call_log[-2:] == [("commit", "run"), ("ledger-sweep", "run")]
     assert [c for c in call_log if c[0] == "commit"] == [("commit", "run")]
 
 
@@ -757,27 +787,23 @@ def test_verify_retry_exactly_once_then_undo_rejected_after_retry():
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: (seen.append("fix"), {"outcome": "done"})[1],
-        "verify": lambda rid: (seen.append("verify"), {"outcome": "fail", "reason": "nope"})[1],
-        "undo": lambda rid: (seen.append("undo"), {"outcome": "undone"})[1],
+        "verify": lambda rid: (seen.append("verify"), {"outcome": "fail", "reason": "nope", "undo": {"outcome": "undone"}})[1],
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert seen.count("verify") == 2
-    assert seen.count("undo") == 1
+    assert "undo" not in result["spend"]["agent_calls_by_stage_kind"]
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
 
 
 @pytest.mark.parametrize("undo_result", [None, {}, {"outcome": "undo-failed", "reason": "3 files still modified"}])
 def test_undo_that_does_not_return_undone_hands_back_stage_dead_undo_failed(undo_result):
-    seen = []
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: {"outcome": "done"},
-        "verify": lambda rid: {"outcome": "fail", "reason": "nope"},
-        "undo": lambda rid: (seen.append("undo"), undo_result)[1],
+        "verify": lambda rid: {"outcome": "fail", "reason": "nope", "undo": undo_result},
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
-    assert seen == ["undo"]
     types = [h["type"] for h in result["handed_back"] if h["row"] == "r0"]
     assert types == ["stage-dead"]
     reason = next(h["reason"] for h in result["handed_back"] if h["row"] == "r0")
@@ -788,7 +814,8 @@ def test_undo_that_does_not_return_undone_hands_back_stage_dead_undo_failed(undo
 def test_golden_verify_stage_gates_rejected_after_retry_on_undone_outcome():
     golden = _GOLDEN_PATH.read_text(encoding="utf-8")
     stage = golden[golden.index("async function _verifyStage"):golden.index("async function _commitStage")]
-    assert "const _undone = await withLock(lockKeys, async () => _undoCall(row));" in stage
+    assert "const _undone = result.undo || {};" in stage
+    assert "_undoCall" not in stage
     assert stage.index("_undone.outcome !== 'undone'") < stage.index("'rejected-after-retry'")
     assert "'undo-failed: " in stage
 
@@ -798,8 +825,7 @@ def test_row_sized_m_or_above_routes_to_baton_never_fix():
     fix_calls = {"n": 0}
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
-        "size": lambda rid: _scout("M"),
-        "size-assemble": lambda unit: _assembled(("r0", 0)),
+        "size": lambda rid: _scout("M", exit_code=0),
         "fix": lambda rid: (fix_calls.__setitem__("n", fix_calls["n"] + 1), {"outcome": "done"})[1],
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
@@ -962,20 +988,15 @@ def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail()
 
     def verify_stub(rid):
         seen.append("verify")
-        return {"outcome": "fail", "reason": "tests still fail"}
-
-    def undo_stub(rid):
-        seen.append("undo")
-        return {"outcome": "undone"}
+        return {"outcome": "fail", "reason": "tests still fail", "undo": {"outcome": "undone"}}
 
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": fix_stub,
         "verify": verify_stub,
-        "undo": undo_stub,
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
-    assert seen == ["fix", "verify", "fix", "verify", "undo"]
+    assert seen == ["fix", "verify", "fix", "verify"]
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
 
 
@@ -1003,11 +1024,12 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
     script = _compose()
-    assert r"""--record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --repo-root '""" in script
+    assert r"""--record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --declared-urlenc \'""" in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",
-                "counts: _counts()", "spend: _spend()"):
+                "counts: _counts()", "spend: _spend()", "handed_back: _handedBack",
+                "halted: _haltReason() !== null", "halted_reason: _haltReason()"):
         assert key in record_fn, key
 
 
@@ -1063,7 +1085,9 @@ def test_finding1_null_fix_verify_close_route_to_stage_dead_never_throw():
         [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
         budget=budget, agent=agent_fn,
     )
-    assert result["handed_back"] == [{"row": "r0", "type": "stage-dead", "reason": "fix outcome None"}]
+    assert [h for h in result["handed_back"] if h["row"] == "r0"] == [
+        {"row": "r0", "type": "stage-dead", "reason": "fix outcome None"}
+    ]
 
 
 def test_finding1_null_commit_result_hands_back_commit_failed():
@@ -1213,8 +1237,6 @@ def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outc
                 return {"outcome": "pass"}
             if stage_kind == "commit":
                 return {"outcome": "committed", "sha": "x"}
-            if stage_kind == "undo":
-                return {"outcome": "undone"}
             return None
 
         result = gc.run_admission(
@@ -1237,8 +1259,6 @@ def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outc
                 return {"outcome": _vo} if _vo is not None else None
             if stage_kind == "commit":
                 return {"outcome": "committed", "sha": "x"}
-            if stage_kind == "undo":
-                return {"outcome": "undone"}
             return None
 
         result = gc.run_admission(
@@ -1342,8 +1362,7 @@ def test_scout_below_plan_weight_marks_origin_size_below_plan_weight():
 def test_scout_at_plan_weight_hands_back_baton_naming_the_sizing():
     script_by_kind = {
         "triage": _m_triage(["r0"]),
-        "size": lambda rid: _scout("M"),
-        "size-assemble": lambda unit: _assembled(("r0", 0)),
+        "size": lambda rid: _scout("M", exit_code=0),
     }
     result, _ = _run([("b0", ["r0"])], script_by_kind, )
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
@@ -1356,13 +1375,18 @@ def test_scout_at_plan_weight_hands_back_baton_naming_the_sizing():
 def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code():
     script_by_kind = {
         "triage": _m_triage(["r0"]),
-        "size": lambda rid: _scout("L"),
-        "size-assemble": lambda unit: _assembled(("r0", 3)),
+        "size": lambda rid: _scout("L", exit_code=3),
     }
     result, _ = _run([("b0", ["r0"])], script_by_kind)
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
     assert hand["type"] == "baton"
     assert hand["reason"] == "intent L (size step failed: exit 3)"
+
+
+def test_scout_that_returns_no_exit_code_is_a_baton_naming_a_missing_exit():
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("M")})
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["reason"] == "intent M (size step failed: exit missing)"
 
 
 def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
@@ -1374,7 +1398,7 @@ def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
     assert "size-assemble" not in result["spend"]["agent_calls_by_stage_kind"]
 
 
-def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_one_assemble_before_the_end():
+def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_no_assemble_call():
     batches = [("b0", ["r0"]), ("b1", ["r1"])]
 
     def triage(batch_id):
@@ -1382,14 +1406,12 @@ def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_one_assemble_be
 
     script_by_kind = {
         "triage": triage,
-        "size": lambda rid: _scout("M"),
-        "size-assemble": lambda unit: _assembled(("r0", 0), ("r1", 0)),
+        "size": lambda rid: _scout("M", exit_code=0),
     }
     result, _ = _run(batches, script_by_kind, batch_size=1)
     by_kind = result["spend"]["agent_calls_by_stage_kind"]
     assert by_kind["size"] == 2
-    assert by_kind["size-assemble"] == 1
-    assert result["call_log"][-1] == ("size-assemble", "run")
+    assert "size-assemble" not in by_kind
     assert {h["row"] for h in result["handed_back"] if h["type"] == "baton"} == {"r0", "r1"}
 
 
@@ -1422,8 +1444,7 @@ def test_by_triage_check_counts_each_branch_and_a_straight_hand_back():
     }
     script_by_kind = {
         "triage": lambda bid: [dict(r, has_tradeoff=bool(r["tradeoff"])) for r in triage(bid)],
-        "size": lambda rid: _scout(sizes[rid]),
-        "size-assemble": lambda unit: _assembled(("r1", 0)),
+        "size": lambda rid: _scout(sizes[rid], exit_code=0),
         "fix": lambda rid: fixes[rid],
     }
     result, _ = _run([("b0", ["r0", "r1", "r2", "r3"])], script_by_kind)
@@ -1463,7 +1484,7 @@ def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_ro
 
     budget = _StubBudgetSpender()
     agent_fn = _agent_stub(
-        {"triage": triage, "size": lambda rid: _scout("S"), "size-assemble": lambda unit: _assembled(("r0", 0))},
+        {"triage": triage, "size": lambda rid: _scout("S", exit_code=0)},
         budget,
     )
     result = gc.run_admission(
@@ -1493,11 +1514,17 @@ def test_golden_size_call_site_ordered_before_first_dispatch_row_call():
     assert size_agent_idx < dispatch_row_call_idx
 
 
-def test_golden_size_assemble_runs_in_run_grind_before_the_drain_sweep():
+def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply():
     script = _compose()
-    run_grind = script[script.index("async function runGrind()"):]
-    assert run_grind.index("await _sizeAssembleCall(") < run_grind.index("await _drainSweep();")
-    assert "_recordCall('size-assemble')" in script and "_recordCall('size')" in script
+    assert "_sizeAssembleCall" not in script and "_sizePending" not in script
+    assert "_recordCall('size-assemble')" not in script and "_recordCall('size')" in script
+    assert "label: 'size-assemble'" not in script
+    to_size = script[script.index("const scouted = await _sizeCall(row);"):]
+    to_size = to_size[:to_size.index("async function _closeBatch")]
+    assert "scouted.exit_code === 0" in to_size
+    assert "row.sizingPath = _sizingPath(scouted, rid);" in to_size
+    assert "'sized at ' + row.sizingPath" in to_size
+    assert "size step failed: exit" in to_size
 
 
 def test_golden_holds_no_resize_in_any_case():
@@ -1708,7 +1735,6 @@ def test_a_post_fix_collision_hands_both_rows_back_entangled_with_no_undo_and_no
     entangled = {h["row"]: h["reason"] for h in result["handed_back"] if h["type"] == "entangled"}
     assert set(entangled) == {"r0", "r1"}
     assert all("shared.py" in reason for reason in entangled.values())
-    assert not any(kind == "undo" for kind, _ in result["call_log"])
     assert ("verify", "r1") not in result["call_log"]
     assert result["settled"] == []
     assert sink == [] and ("commit", "run") not in result["call_log"]
@@ -1741,7 +1767,7 @@ def test_a_failed_terminal_commit_hands_every_queued_row_back_naming_the_settle_
 def test_no_run_token_hands_the_queue_back_without_calling_the_commit_agent():
     result, sink = _run_sink([("b0", ["r0"])], _fix_script(["r0"]), has_run_token=False)
     assert ("commit", "run") not in result["call_log"] and sink == []
-    assert [h["type"] for h in result["handed_back"]] == ["commit-failed"]
+    assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["commit-failed"]
     assert "settle-run" in result["handed_back"][0]["reason"]
 
 
@@ -1809,3 +1835,236 @@ def test_the_script_has_one_terminal_stage_for_the_fixture_profile():
     script = _compose()
     assert script.count("async function _terminalCommit()") == 1
     assert "@commit" not in script
+
+
+# ---------------------------------------------------------------------------
+# Run close: one record, last, whatever happened before it
+# ---------------------------------------------------------------------------
+
+
+def _run_logged(batches, script_by_kind, **kw):
+    """`(result_or_error, kinds_called_in_order, run_close_sink)`."""
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender()
+    base = _agent_stub(script_by_kind, budget)
+    kinds: list = []
+    sink: list = []
+
+    def agent_fn(kind, unit):
+        kinds.append(kind)
+        return base(kind, unit)
+
+    try:
+        result = gc.run_admission(
+            batches, routing, triage_node, reserve=gc.batch_reserve(4), budget=budget, agent=agent_fn,
+            run_close_sink=sink, **kw,
+        )
+    except Exception as err:
+        return err, kinds, sink
+    return result, kinds, sink
+
+
+def test_a_grind_that_throws_still_records_exactly_one_run_record_last_and_rethrows():
+    def fix(rid):
+        if rid == "r1":
+            raise RuntimeError("stage blew up")
+        return {"outcome": "done", "touched_files": [f"src/{rid}.py"]}
+
+    script = _fix_script(["r0", "r1"], fix=fix)
+    script.update({"review": lambda u: {}, "adjudicate": lambda u: {}})
+    err, kinds, sink = _run_logged([("b0", ["r0", "r1"])], script, post_stages=("review", "adjudicate"))
+    assert isinstance(err, RuntimeError)
+    assert kinds.count("ledger-sweep") == 1 and kinds[-1] == "ledger-sweep"
+    assert "review" not in kinds and "adjudicate" not in kinds
+    assert kinds.index("commit") < kinds.index("ledger-sweep")
+    assert sink[0]["record"]["halted"] is True and sink[0]["record"]["halted_reason"] == "stage blew up"
+
+
+def test_a_clean_run_records_once_after_the_review_and_adjudication_calls():
+    script = _fix_script(["r0"])
+    script.update({"review": lambda u: {}, "adjudicate": lambda u: {}})
+    result, kinds, sink = _run_logged([("b0", ["r0"])], script, post_stages=("review", "adjudicate"))
+    assert kinds[-4:] == ["commit", "review", "adjudicate", "ledger-sweep"]
+    assert kinds.count("ledger-sweep") == 1 and "run-record" not in kinds and len(sink) == 1
+    assert sink[0]["record"]["halted"] is False and sink[0]["record"]["halted_reason"] is None
+    assert result["halted"] is False
+
+
+def test_a_failed_or_throwing_review_stage_still_closes_the_run():
+    def review(unit):
+        raise RuntimeError("review blew up")
+
+    script = _fix_script(["r0"])
+    script.update({"review": review, "adjudicate": lambda u: {}})
+    err, kinds, sink = _run_logged([("b0", ["r0"])], script, post_stages=("review", "adjudicate"))
+    assert isinstance(err, RuntimeError)
+    assert kinds[-1] == "ledger-sweep" and sink[0]["record"]["halted_reason"] == "review blew up"
+
+
+def test_a_drain_whose_sweep_failed_still_records_and_names_the_sweep_in_record_and_hand_back():
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = lambda u: {"outcome": "recorded", "swept": False, "sweep_reason": "ledger locked"}
+    result, kinds, sink = _run_logged([("b0", ["r0"])], script)
+    assert kinds[-1] == "ledger-sweep" and kinds.count("ledger-sweep") == 1
+    for handed in (sink[0]["record"]["handed_back"], result["handed_back"]):
+        dead = [h for h in handed if h["type"] == "stage-dead"]
+        assert len(dead) == 1 and dead[0]["reason"].startswith(grind_commit_contract.SWEEP_FAILED_HEAD)
+        assert "state/queue-grind/profile/runs/20260101T000000Z.json" in dead[0]["reason"]
+        assert dead[0]["reason"].endswith(": ledger locked")
+    assert sink[0]["record"]["counts"]["by_type"]["stage-dead"] == 1
+
+
+@pytest.mark.parametrize("raises", ["once", "twice"])
+def test_a_drain_that_raises_is_retried_once_and_only_a_second_raise_is_stage_dead(raises):
+    calls = {"n": 0}
+
+    def ledger_sweep(unit):
+        calls["n"] += 1
+        if raises == "twice" or calls["n"] == 1:
+            raise RuntimeError("drain exploded")
+        return {"outcome": "recorded", "swept": True}
+
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = ledger_sweep
+    result, kinds, sink = _run_logged([("b0", ["r0"])], script)
+    assert kinds.count("ledger-sweep") == 2 and len(sink) == 1
+    dead = [h["reason"] for h in result["handed_back"] if h["type"] == "stage-dead"]
+    if raises == "once":
+        assert dead == []
+    else:
+        assert len(dead) == 2
+        assert dead[0].startswith(grind_commit_contract.SWEEP_FAILED_HEAD) and dead[0].endswith("drain exploded")
+        assert dead[1].startswith("run record may be missing or incomplete") and dead[1].endswith("drain exploded")
+
+
+def test_a_failed_run_record_is_named_on_the_hand_back_and_never_masks_the_grind_result():
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = lambda u: {"outcome": "record-failed", "swept": True, "reason": "commit refused"}
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    dead = [h for h in result["handed_back"] if h["type"] == "stage-dead"]
+    assert len(dead) == 1 and "run record may be missing or incomplete" in dead[0]["reason"]
+    assert "commit refused" in dead[0]["reason"]
+
+
+def test_a_halted_run_without_a_throw_runs_the_close_and_the_record_says_halted():
+    batches = [(f"b{i}", [f"r{i}"]) for i in range(4)]
+    script = _fix_script([f"r{i}" for i in range(4)])
+    script["triage"] = lambda bid: [
+        {"row": bid.replace("b", "r"), "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}
+    ]
+    result, kinds, sink = _run_logged(batches, script, max_agent_calls=3)
+    assert kinds[-1] == "ledger-sweep"
+    assert sink[0]["record"]["halted"] is True and sink[0]["record"]["halted_reason"] == "budget-exhausted"
+    assert result["halted"] is True
+
+
+def test_the_run_record_carries_every_required_key_and_the_declared_writes():
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+    script = _fix_script(["r0", "r1"])
+    result, _kinds, sink = _run_logged([("b0", ["r0", "r1"])], script)
+    record = sink[0]["record"]
+    assert set(contract.RUN_RECORD_REQUIRED) <= set(record)
+    assert record["profile"] == "profile" and record["run_id"] == "20260101T000000Z"
+    assert record["handed_back"] == result["handed_back"]
+    assert sink[0]["declared"] == ["r0", "r1"]
+
+
+def test_a_row_rejected_twice_accumulates_both_attempts_paths_for_the_undo_and_the_commit():
+    attempts = {"n": 0}
+
+    def fix(rid):
+        attempts["n"] += 1
+        return {"outcome": "done", "touched_files": [f"src/attempt{attempts['n']}.py"], "created_files": [f"new{attempts['n']}.py"]}
+
+    verifies = {"n": 0}
+
+    def verify(rid):
+        verifies["n"] += 1
+        return {"outcome": "fail"} if verifies["n"] == 1 else {"outcome": "pass"}
+
+    script = _fix_script(["r0"], fix=fix)
+    script["verify"] = verify
+    _result, sink = _run_sink([("b0", ["r0"])], script)
+    assert sink[0]["grind"]["rows"][0]["paths"] == ["src/attempt1.py", "src/attempt2.py", "new1.py", "new2.py"]
+
+
+def test_the_emitted_fix_stage_accumulates_touched_and_created_paths_across_attempts():
+    script = _compose()
+    fix = script[script.index("async function _fixStage(rowId)"):]
+    fix = fix[: fix.index("\n}\n")]
+    assert "row.touchedFiles = _union(row.fixReported ? row.touchedFiles : [], result.touched_files); row.fixReported = true;" in fix
+    assert "row.createdFiles = _union(row.createdFiles, result.created_files);" in fix
+    assert "row.createdFiles = result.created_files || [];" not in fix
+    assert "_undoPaths(row)" in script[script.index("async function _verifyCall"):script.index("async function _terminalCommitCall")]
+
+
+@pytest.mark.parametrize("written", ["state/warp/x.md", "./docs/plans/p.md", "state/sizings/s.yaml"])
+def test_a_fix_that_writes_a_historical_record_is_undone_and_handed_back_needs_judgment(written):
+    undone: list = []
+    script = _fix_script(
+        ["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["src/r0.py"], "created_files": [written]},
+    )
+    script["verify"] = lambda rid: undone.append(rid) or {"undo": {"outcome": "undone"}}
+    result, kinds, sink = _run_logged([("b0", ["r0"])], script)
+    assert undone == ["r0"] and kinds.count("verify") == 1 and "commit" not in kinds
+    assert "undo" not in kinds
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert [h["type"] for h in handed] == ["needs-judgment"]
+    assert written in handed[0]["reason"] and "historical" in handed[0]["reason"]
+    assert result["settled"] == []
+
+
+def test_a_historical_write_whose_undo_fails_is_stage_dead_naming_the_undo_failure():
+    script = _fix_script(["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["state/warp/x.md"]})
+    script["verify"] = lambda rid: {"undo": {"outcome": "undo-failed", "reason": "left: state/warp/x.md (peer)"}}
+    result, _kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert [h["type"] for h in handed] == ["stage-dead"]
+    assert handed[0]["reason"].startswith("undo-failed: the fix wrote historical records")
+    assert "left: state/warp/x.md (peer)" in handed[0]["reason"]
+
+
+def test_a_non_historical_path_that_merely_resembles_a_prefix_is_not_refused():
+    assert gc._historical_paths(["state/warp-notes/x.md", "docs/plans.md", "src/state/warp/x.py", "state/warp/x.md"]) == [
+        "state/warp/x.md"
+    ]
+
+
+def test_the_emitted_fix_stage_checks_historical_records_before_the_entangle_check():
+    script = _compose()
+    fix = script[script.index("async function _fixStage(rowId)"):]
+    fix = fix[: fix.index("\n}\n")]
+    assert fix.index("_historicalPaths(_written)") < fix.index("_entangle(rowId, _written)")
+    assert "withLock(lockKeys, async () => _rejectUndoCall(row))" in fix
+    assert 'const HISTORICAL_PREFIXES = ["state/warp/", "docs/plans/", "state/handoffs/", "state/sizings/", "docs/decisions/"];' in script
+
+
+def test_a_fix_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
+    text = "keeps the old retry path; costs one extra spawn"
+    script = _fix_script(
+        ["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["src/r0.py"], "has_tradeoff": True, "tradeoff": text},
+    )
+    result, _kinds, sink = _run_logged([("b0", ["r0"])], script)
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert handed[0]["type"] == "needs-judgment" and handed[0]["tradeoff"] == text and text in handed[0]["reason"]
+    assert [h for h in sink[0]["record"]["handed_back"] if h["row"] == "r0"][0]["tradeoff"] == text
+
+
+def test_a_triage_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
+    text = "two valid readings of the row"
+    script = _fix_script(["r0"])
+    script["triage"] = lambda bid: [
+        {"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "has_tradeoff": True, "tradeoff": text}
+    ]
+    result, _kinds, sink = _run_logged([("b0", ["r0"])], script)
+    handed = [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert handed[0]["type"] == "needs-judgment" and handed[0]["tradeoff"] == text and text in handed[0]["reason"]
+    assert sink[0]["record"]["handed_back"][0]["tradeoff"] == text
+
+
+def test_the_emitted_script_carries_the_tradeoff_on_both_handbacks():
+    script = _compose()
+    assert "_handedBack.push(tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason });" in script
+    assert "'fix reported a tradeoff: ' + tradeoff, tradeoff)" in script
+    assert "`triage reported a tradeoff: ${tradeoff}`, tradeoff)" in script

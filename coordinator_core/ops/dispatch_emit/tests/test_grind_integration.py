@@ -26,7 +26,9 @@ integration-fix wave (post C2-C9), END-TO-END TEST.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import re
 import shutil
@@ -431,6 +433,38 @@ def _golden_size_chain_command(repo_root: Path, row: dict, sizing_path: str) -> 
     return out.stdout.strip()
 
 
+def test_size_scout_template_filled_with_the_scout_fields_is_the_concrete_chain_command(grind_repo):
+    """The command the scout is told to fill is the script's own chain, slot for slot."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    golden = _GOLDEN_PATH.read_text(encoding="utf-8")
+    size_consts = "\n".join(re.findall(r"^const _(?:size\w+|SIZE_SLOTS) = .*$", golden, re.M))
+    path_fns = golden[golden.index("function _slug("):golden.index("function _terminalCommitParamsBlock")]
+    row = {"row_id": "row-a", "path": "state/bug-backlog/row-a.yaml", "digest": "d" * 64}
+    scouted = {
+        "tshirt": "M", "intent": "rework", "name": "row-a-rework", "premise_provenance": "read",
+        "premise_evidence": "read-the-row", "exit_criterion": "tests-pass",
+    }
+    js = (
+        grind_stages.SHQ_JS + "\n" + size_consts + "\n" + path_fns
+        + f"\nconst REPO_ROOT = '/r', PROFILE_NAME = 'fixture', RUN_ID = '20261013T000000Z';"
+        + f"\nconst row = {json.dumps(row)}, scouted = {json.dumps(scouted)};"
+        + "\nconsole.log(JSON.stringify({ template: _sizeChainTemplate(row),"
+        " concrete: _sizeChainCmd(scouted, row, _sizingPath(scouted, row.row_id)) }));"
+    )
+    out = subprocess.run(
+        [node, "-e", js], capture_output=True, text=True, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    filled = got["template"]
+    for field, value in scouted.items():
+        filled = filled.replace(f"<{field}>", value)
+    assert filled == got["concrete"]
+
+
 def _settings_home_with_engine_shims(tmp_path: Path) -> Path:
     """A settings home whose three `bin/` tools run this checkout's own code."""
     bin_dir = tmp_path / "settings-home" / "bin"
@@ -561,3 +595,106 @@ def test_close_round_trips_a_real_bug_backlog_row_through_its_schema(tmp_path):
     for key, value in before.items():
         if key not in ("status", "closed_at", "closed_by"):
             assert closed.get(key) == value, key
+
+
+# ---------------------------------------------------------------------------
+# Exit criterion: a grind that throws mid-run leaves the tree clean of its own writes
+# ---------------------------------------------------------------------------
+
+
+class _Budget:
+    total = None
+
+    def spent(self):
+        return 0
+
+    def remaining(self):
+        return None
+
+
+def test_a_grind_that_throws_mid_run_leaves_the_run_write_roots_clean_and_the_record_at_head(tmp_path, monkeypatch):
+    from urllib.parse import quote
+
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+    from coordinator_core.ops.dispatch_emit import grind_compose as gc
+    from coordinator_core.ops.dispatch_emit import grind_profile as gp
+    from coordinator_core.session import touch_record
+    from coordinator_core.tests.git_seed import seeded_repo
+
+    seeded_repo(tmp_path, readme="x")
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-run")
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: False)
+    row = "state/bug-backlog/row0.yaml"
+    (tmp_path / row).parent.mkdir(parents=True)
+    (tmp_path / row).write_text("status: open\n", encoding="utf-8")
+    assert _git(["add", "-A"], tmp_path).returncode == 0
+    assert _git(["commit", "-m", "seed row"], tmp_path).returncode == 0
+    decisions = tmp_path.parent / f"{tmp_path.name}-decisions.json"
+    decisions.write_text(json.dumps({contract.MINTED_KEY: ["state/bug-backlog/TF-1.yaml"]}), encoding="utf-8")
+    run_id = "20261015T000000Z"
+    sink: list = []
+
+    def write(rel, text, *, claim):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        if claim:
+            grind_rows._declare_under_repo_root(path, tmp_path)
+
+    def fix(_unit):
+        write(row, "status: open\nnote: handed back\n", claim=True)
+        write("state/apm-rulings/r0.yaml", "ruling\n", claim=True)
+        write("state/bug-backlog/TF-1.yaml", "status: open\n", claim=False)
+        raise RuntimeError("stage blew up")
+
+    profile_dir = tmp_path.parent / f"{tmp_path.name}-profiles"
+    profile_dir.mkdir()
+    (profile_dir / "bug.yaml").write_text(
+        (_FIXTURE_PROFILE_DIR / "fixture.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    def drain(_unit):
+        payload = sink[-1]
+        argv = [
+            "run-record", f"--{contract.SWEEP_FLAG}", "--profile-dir", str(profile_dir),
+            "--profile", "bug", "--queue", "state/bug-backlog", "--run-id", run_id,
+            "--record-urlenc", quote(json.dumps(payload["record"]), safe=""),
+            f"--{contract.DECLARED_FLAG}", contract.encode_declared_paths(payload["declared"]),
+            f"--{contract.DECISIONS_FLAG}", str(decisions), "--repo-root", str(tmp_path),
+        ]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = grind_rows.main(argv)
+        printed = json.loads(out.getvalue()) if code == grind_rows.EXIT_OK else {}
+        assert printed.get("swept") is True, printed
+        return {"outcome": "recorded" if code == grind_rows.EXIT_OK else "record-failed", "swept": printed["swept"]}
+
+    script = {
+        "triage": lambda _bid: [{"row": row, "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}],
+        "fix": fix,
+        "ledger-sweep": drain,
+    }
+    profile = gp.load_profile("fixture", _FIXTURE_PROFILE_DIR)
+    gp.validate_graph(profile)
+    err = None
+    try:
+        gc.run_admission(
+            [("b0", [row])], gc.build_routing_table(profile), gc._triage_node_id(profile), reserve=1,
+            budget=_Budget(), agent=lambda kind, unit: script[kind](unit), run_id=run_id, profile="bug",
+            run_close_sink=sink,
+        )
+    except RuntimeError as exc:
+        err = exc
+    assert err is not None and str(err) == "stage blew up"
+
+    status = _git(["status", "--porcelain", "--", "state"], tmp_path)
+    assert status.returncode == 0 and status.stdout == ""
+    shown = _git(["show", f"HEAD:state/queue-grind/bug/runs/{run_id}.json"], tmp_path)
+    assert shown.returncode == 0, shown.stderr
+    record = json.loads(shown.stdout)
+    assert set(contract.RUN_RECORD_REQUIRED) <= set(record)
+    assert record["halted"] is True and record["halted_reason"] == "stage blew up"
+    landed = _git(["show", "--name-only", "--format=", "HEAD"], tmp_path).stdout.split()
+    assert {row, "state/apm-rulings/r0.yaml", "state/bug-backlog/TF-1.yaml"} <= set(landed)

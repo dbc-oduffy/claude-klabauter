@@ -52,6 +52,9 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   when `F` is `-` or the flag is absent). The committer agent has no Write tool, so the drain
   commit's run-cost record is written through this verb instead of being
   hand-written, and the write is declared like every other row mutation.
+  `--sweep --profile-dir D --queue Q [...]` first runs the `sweep` body in-process; a
+  sweep refusal or exception never stops the record, which names it as one `stage-dead`
+  hand-back and prints `swept: false` (exit 0 covers the record only).
 
 - `settle-run --profile-dir D --profile P --run-id T --queue Q [--queue Q ...]
   --repo-root R [--run-dir RD] [--rows-file F] [--dry-run]`: implemented in
@@ -131,13 +134,15 @@ def _usage(msg: str) -> int:
     return EXIT_USAGE
 
 
-def _parse_flags(rest: list[str], required: tuple[str, ...], optional: tuple[str, ...] = ()) -> dict[str, str] | None:
+def _parse_flags(
+    rest: list[str], required: tuple[str, ...], optional: tuple[str, ...] = (), bare: tuple[str, ...] = ()
+) -> dict[str, str] | None:
     """Parse `--flag value` pairs. Returns `None` (never raises) on a usage
     error — a missing value, an unrecognized flag, or a repeated flag — so
     every verb's own caller can turn that into `_usage(...)` with its own
     message. Every flag in `required` must be present exactly once; a flag
-    in `optional` may be absent."""
-    known = set(required) | set(optional)
+    in `optional` may be absent; a flag in `bare` takes no value and reads `""`."""
+    known = set(required) | set(optional) | set(bare)
     seen: dict[str, str] = {}
     i = 0
     while i < len(rest):
@@ -149,6 +154,10 @@ def _parse_flags(rest: list[str], required: tuple[str, ...], optional: tuple[str
             return None
         if name in seen:
             return None
+        if name in bare:
+            seen[name] = ""
+            i += 1
+            continue
         if i + 1 >= len(rest):
             return None
         seen[name] = rest[i + 1]
@@ -325,11 +334,11 @@ def _ledger_path(repo_root: Path, profile: str, row_id: str) -> Path:
 def evidence_rel(profile: str, run_id: str, item_id: str, kind: str) -> str:
     """POSIX repo-relative `state/queue-grind/<profile>/evidence/<run_id>/<item_id>.<kind>.md`.
 
-    `kind` is `done` or `verify`. Segments are joined unchecked: callers pass
+    `kind` is `done`, `verify` or `judgment`. Segments are joined unchecked: callers pass
     literals or dispatch-time placeholders; an agent-supplied path is checked
     in `cmd_append`. Pure string work."""
-    if kind not in ("done", "verify"):
-        raise ValueError(f"grind-row: evidence kind must be 'done' or 'verify': {kind!r}")
+    if kind not in ("done", "verify", "judgment"):
+        raise ValueError(f"grind-row: evidence kind must be 'done', 'verify' or 'judgment': {kind!r}")
     return f"state/queue-grind/{profile}/evidence/{run_id}/{item_id}.{kind}.md"
 
 
@@ -649,8 +658,6 @@ def cmd_sweep(rest: list[str]) -> int:
     `route-to-*` mark that declines the row regardless of digest. The caller
     names the FULL queue set, as for emit; a queue dir left out reads as
     closed and its rows' ledgers are settled. Prints `{"settled": [...]}`."""
-    from coordinator_core.ops.dispatch_emit.queue_select import live_row_ids
-
     queue: list[str] = []
     others: list[str] = []
     i = 0
@@ -667,18 +674,42 @@ def cmd_sweep(rest: list[str]) -> int:
             "usage: grind-row sweep --profile-dir D --profile P --queue Q [--queue Q ...] --repo-root R"
         )
 
-    repo_root = Path(flags["repo-root"])
+    try:
+        settled = _sweep_ledgers(
+            flags["profile"], Path(flags["profile-dir"]), queue, Path(flags["repo-root"])
+        )
+    except _SweepError as exc:
+        if exc.usage:
+            return _usage(f"grind-row sweep: {exc}")
+        print(f"grind-row sweep: {exc}", file=sys.stderr)
+        return EXIT_REFUSAL
+    print(json.dumps({"settled": settled}, sort_keys=True))
+    return EXIT_OK
+
+
+class _SweepError(Exception):
+    """A sweep that did not run: `usage` marks a bad argument, otherwise a refusal."""
+
+    def __init__(self, message: str, *, usage: bool = False) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+def _sweep_ledgers(profile_name: str, profile_dir: Path, queue: list[str], repo_root: Path) -> list[str]:
+    """The body of `sweep`: unlinks (declared) every orphaned ledger and hand-back mark
+    and returns their repo-relative paths. Raises `_SweepError` before any unlink."""
+    from coordinator_core.ops.dispatch_emit.queue_select import live_row_ids
+
     queue_dirs: list[Path] = []
     for q in queue:
         guarded = contained_path(Path(q), [repo_root])
         if guarded is None or not guarded.is_dir():
-            return _usage(f"grind-row sweep: --queue is not a directory under --repo-root: {q!r}")
+            raise _SweepError(f"--queue is not a directory under --repo-root: {q!r}", usage=True)
         queue_dirs.append(guarded)
     try:
-        profile = grind_profile.load_profile(flags["profile"], Path(flags["profile-dir"]))
+        profile = grind_profile.load_profile(profile_name, profile_dir)
     except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal, never swallowed
-        print(f"grind-row sweep: profile refused: {exc}", file=sys.stderr)
-        return EXIT_REFUSAL
+        raise _SweepError(f"profile refused: {exc}") from exc
     live = live_row_ids(
         queue_dirs, row_id_key=profile.row_id_key, repo_root=repo_root, source=profile.source
     )
@@ -701,8 +732,7 @@ def cmd_sweep(rest: list[str]) -> int:
         _declare_before_unlink(path, repo_root)
         path.unlink()
         settled.append(path.relative_to(repo_root).as_posix())
-    print(json.dumps({"settled": settled}, sort_keys=True))
-    return EXIT_OK
+    return settled
 
 
 # ---------------------------------------------------------------------------
@@ -724,12 +754,20 @@ class _LandSet:
         self.withheld: list[str] = []
 
 
-def _land_set(repo_root: Path, profile: str) -> "_LandSet | str":
-    """The run's own bookkeeping: paths THIS session claims under
-    `state/queue-grind/<profile>/`, plus this session's block-discharge ledger, that
-    differ from HEAD. Returns a refusal string when HEAD cannot be read. Never a
-    directory pathspec, never a path this session does not hold. Zero git spawns."""
+def _land_set(
+    repo_root: Path,
+    profile: str,
+    roots: tuple[str, ...] | None = None,
+    declared: tuple[str, ...] = (),
+    baseline_dirty: frozenset[str] = frozenset(),
+) -> "_LandSet | str":
+    """Which of the run's writes still differ from HEAD. Candidates are the paths THIS
+    session claims under `roots` minus `baseline_dirty` (claims that predate the run), the
+    `declared` paths under `roots`, and this session's block-discharge ledger. `roots=None`
+    is the profile's ledger dir alone. Returns a refusal string when HEAD cannot be read.
+    Never a directory pathspec; a path a live peer holds is withheld. Zero git spawns."""
     from coordinator_core.git.git_state import head_sha, read_tree_spine
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import under_roots
     from coordinator_core.session import core, scope
 
     result = _LandSet()
@@ -737,8 +775,12 @@ def _land_set(repo_root: Path, profile: str) -> "_LandSet | str":
     sid = core.resolve_session_id(root_str)
     if not sid:
         return result
-    home = f"state/queue-grind/{profile}/"
-    held = {p for p in scope.own_path_claims(sid, cwd=root_str) if p.startswith(home)}
+    roots = roots or (f"state/queue-grind/{profile}/",)
+    held = {
+        p for p in scope.own_path_claims(sid, cwd=root_str)
+        if under_roots(p, roots) and p not in baseline_dirty
+    }
+    held.update(p for p in declared if under_roots(p, roots))
     if "/" not in sid and "\\" not in sid and not sid.startswith("."):
         held.add(f"state/block-discharge/{sid}.jsonl")
     candidates = sorted(p for p in held if not (repo_root / p).is_dir())
@@ -823,19 +865,37 @@ def cmd_run_record(rest: list[str]) -> int:
     appended ledgers, evidence, the record) and its own
     `state/block-discharge/<session>.jsonl`, each only when it differs from HEAD.
     A path a live peer also claims is withheld and named. Prints
-    `{"path", "commit", "landed", "deleted", "withheld"}`; `commit` is null when
+    `{"path", "commit", "landed", "deleted", "withheld"}` (plus `swept`, `sweep_reason`
+    under `--sweep`, which needs `--profile-dir` and a `--queue`); `commit` is null when
     nothing was left to land, and also when no session id resolves or the branch
     is unborn (the record is then written but left uncommitted). A commit refusal exits 1 with the verbatim
     refusal on stderr, the record already written."""
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+    queue: list[str] = []
+    others: list[str] = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == f"--{contract.QUEUE_FLAG}" and i + 1 < len(rest):
+            queue.append(rest[i + 1])
+            i += 2
+            continue
+        others.append(rest[i])
+        i += 1
     flags = _parse_flags(
-        rest, required=("profile", "run-id", "repo-root"),
-        optional=("record-file", "record-urlenc"),
+        others, required=("profile", "run-id", "repo-root"),
+        optional=("record-file", "record-urlenc", contract.DECLARED_FLAG, contract.DECISIONS_FLAG, "profile-dir"),
+        bare=(contract.SWEEP_FLAG,),
     )
     if flags is None:
         return _usage(
             "usage: grind-row run-record --profile P --run-id T "
-            "[--record-file F|- | --record-urlenc E] --repo-root D"
+            "[--record-file F|- | --record-urlenc E] [--queue Q ...] "
+            "[--declared-urlenc E] [--decisions-file F] [--sweep --profile-dir D] --repo-root D"
         )
+    sweeping = contract.SWEEP_FLAG in flags
+    if sweeping and ("profile-dir" not in flags or not queue):
+        return _usage("grind-row run-record: --sweep needs --profile-dir and at least one --queue")
 
     repo_root = Path(flags["repo-root"])
     record_file = flags.get("record-file", "-")
@@ -867,9 +927,44 @@ def cmd_run_record(rest: list[str]) -> int:
         print(f"grind-row run-record: --record-file is not valid JSON: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
+    missing = [k for k in contract.RUN_RECORD_REQUIRED if not isinstance(record, dict) or k not in record]
+    if missing:
+        return _usage(f"grind-row run-record: record is missing required keys: {', '.join(missing)}")
+
     run_id = flags["run-id"]
     if "/" in run_id or "\\" in run_id or run_id in (".", "..") or ".." in Path(run_id).parts:
         return _usage(f"grind-row run-record: --run-id escapes the runs directory: {run_id!r}")
+
+    declared: list[str] = []
+    baseline_dirty: set[str] = set()
+    if contract.DECLARED_FLAG in flags:
+        try:
+            declared.extend(contract.decode_declared_paths(flags[contract.DECLARED_FLAG]))
+        except ValueError as exc:
+            return _usage(f"grind-row run-record: --{contract.DECLARED_FLAG}: {exc}")
+    if contract.DECISIONS_FLAG in flags:
+        decisions_path = Path(flags[contract.DECISIONS_FLAG])
+        try:
+            decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
+            minted = decisions.get(contract.MINTED_KEY) or []
+            dirty_at_fire = decisions.get(contract.BASELINE_DIRTY_KEY) or []
+            if not all(isinstance(p, str) for p in [*minted, *dirty_at_fire]):
+                raise ValueError("entries must be strings")
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            return _usage(f"grind-row run-record: --{contract.DECISIONS_FLAG} unreadable: {exc}")
+        declared.extend(minted)
+        baseline_dirty.update(dirty_at_fire)
+    declared = [d for d in declared if d and not d.startswith("/") and ".." not in Path(d).parts]
+    widened = bool(queue or declared or baseline_dirty or contract.DECISIONS_FLAG in flags)
+    roots = None
+    if widened:
+        queue_rel: list[str] = []
+        for q in queue:
+            guarded = contained_path(repo_root / q if not Path(q).is_absolute() else Path(q), [repo_root])
+            if guarded is None:
+                return _usage(f"grind-row run-record: --queue escapes --repo-root: {q!r}")
+            queue_rel.append(Path(os.path.relpath(guarded, repo_root.resolve())).as_posix())
+        roots = contract.run_write_roots(flags["profile"], queue_rel)
 
     target = repo_root / "state" / "queue-grind" / flags["profile"] / "runs" / f"{run_id}.json"
     contained = contained_path(target, [repo_root])
@@ -878,13 +973,48 @@ def cmd_run_record(rest: list[str]) -> int:
             f"grind-row run-record: resolved path escapes --repo-root: {target!r}"
         )
 
+    swept, sweep_reason = True, ""
+    if sweeping:
+        try:
+            _sweep_ledgers(
+                flags["profile"], Path(flags["profile-dir"]),
+                [str(repo_root / q) if not Path(q).is_absolute() else q for q in queue], repo_root,
+            )
+        except Exception as exc:  # noqa: BLE001 -- recorded verbatim; the record write must still happen
+            swept, sweep_reason = False, str(exc) or type(exc).__name__
+    if not swept:
+        handed_back = record["handed_back"] if isinstance(record["handed_back"], list) else []
+        reason = f"{contract.SWEEP_FAILED_HEAD}: state/queue-grind/{flags['profile']}/runs/{run_id}.json"
+        record["handed_back"] = [
+            *handed_back, {"row": run_id, "type": "stage-dead", "reason": reason + (f": {sweep_reason}" if sweep_reason else "")}
+        ]
+        counts = record["counts"] if isinstance(record["counts"], dict) else {}
+        by_type = counts.get("by_type") if isinstance(counts.get("by_type"), dict) else {}
+        by_type["stage-dead"] = by_type.get("stage-dead", 0) + 1
+        counts["by_type"] = by_type
+        record["counts"] = counts
+
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}"
     tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp_path, target)
     _declare_under_repo_root(target, repo_root)
 
-    land = _land_set(repo_root, flags["profile"])
+    for entry in record["handed_back"] if isinstance(record["handed_back"], list) else []:
+        tradeoff = entry.get("tradeoff") if isinstance(entry, dict) else None
+        row_id = entry.get("row") if isinstance(entry, dict) else None
+        if not (isinstance(tradeoff, str) and tradeoff.strip() and isinstance(row_id, str)):
+            continue
+        try:
+            _check_row_id(row_id)
+        except RowIdEscapeError:
+            continue
+        judgment = repo_root / evidence_rel(flags["profile"], run_id, row_id, "judgment")
+        judgment.parent.mkdir(parents=True, exist_ok=True)
+        judgment.write_text(tradeoff, encoding="utf-8", newline="\n")
+        _declare_under_repo_root(judgment, repo_root)
+
+    land = _land_set(repo_root, flags["profile"], roots, tuple(declared), frozenset(baseline_dirty))
     if isinstance(land, str):
         print(f"grind-row run-record: {land}", file=sys.stderr)
         return EXIT_REFUSAL
@@ -902,6 +1032,7 @@ def cmd_run_record(rest: list[str]) -> int:
                 "landed": land.paths,
                 "deleted": land.deleted,
                 "withheld": land.withheld,
+                **({"swept": swept, "sweep_reason": sweep_reason} if sweeping else {}),
             },
             sort_keys=True,
         )

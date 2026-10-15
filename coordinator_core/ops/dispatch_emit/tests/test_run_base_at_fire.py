@@ -58,6 +58,12 @@ def test_base_is_resolved_before_any_other_agent_call():
     assert "Run base sha (observed at fire)" in script
 
 
+def test_run_base_agent_runs_on_haiku():
+    script = _compose(run_base_sha=EMIT)
+    call = script[script.index("label: 'run-base'") :].split("schema:", 1)[0]
+    assert "model: 'haiku'" in call
+
+
 def test_resume_replays_the_same_call():
     # The runtime caches the longest unchanged prefix of agent() calls: an identical
     # prompt at the identical position is what makes a resumed run keep its first base.

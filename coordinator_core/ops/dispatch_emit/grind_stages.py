@@ -7,7 +7,9 @@ Purpose: each ``compose_*`` function is a pure function of its arguments
 that returns the JS text of ONE ``agent(...)`` call -- prompt, options
 object, everything -- for one row of the stage-library table (``triage``,
 ``refute-close``, ``fix``, ``verify`` in both its agent and op forms,
-``commit``, the drain's ``ledger-sweep``, and ``undo``). No
+``commit``, and the drain's ``ledger-sweep``, which also writes the run record; the sizing
+assemble rides the size scout's prompt and the ``undo`` rides the verify stage's, in a
+reject mode of ``verify-op``). No
 function here writes to disk, derives a graph, or schedules a batch --
 ``grind_compose.py`` (C7) is the sole caller that stitches these calls into
 one script's edge interpreter.
@@ -70,6 +72,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     SIZING_SCOUT_AGENT_TYPE,
     scout_assemble_flags_js,
 )
+from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
+    DECISIONS_FLAG,
+    DECLARED_FLAG,
+    HISTORICAL_RECORD_PREFIXES,
+    QUEUE_FLAG,
+    SWEEP_FLAG,
+)
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _COMMIT_AGENT_TYPE,
@@ -90,13 +99,17 @@ APM_AGENT_TYPE = "coordinator:apm"
 #: ``emit._AGENT_MODELS`` entry and no run ``models`` entry may change it.
 STAGE_AGENT_TYPES: dict[str, str] = {
     "size": SIZING_SCOUT_AGENT_TYPE,
-    "size-assemble": OP_RUNNER_AGENT_TYPE,
     "verify": _TEST_AGENT_TYPE,
     "verify-op": OP_RUNNER_AGENT_TYPE,
     "commit": COMMIT_AGENT_TYPE,
     "adjudicate": APM_AGENT_TYPE,
     "ledger-sweep": OP_RUNNER_AGENT_TYPE,
-    "undo": OP_RUNNER_AGENT_TYPE,
+}
+
+#: The grind size scout's return: the shared scout fields plus its closing sizing chain's result.
+SIZE_SCOUT_SCHEMA = {
+    **SCOUT_SCHEMA,
+    "properties": {**SCOUT_SCHEMA["properties"], **ASSEMBLE_SCHEMA["properties"]},
 }
 
 #: Model per stage. General-purpose stages carry their own default (a run's
@@ -259,7 +272,7 @@ def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
     static text segments. Each part is ``("lit", text)`` (escaped through
     ``_js_string_literal``, the existing escaper) or ``("expr", js_expr)``
     (emitted verbatim, parenthesised). Runtime interpolation support for
-    ``compose_fix_call``/``compose_undo_call``/
+    ``compose_fix_call``/``compose_verify_op_call``/
     ``compose_ledger_sweep_call`` -- fixes the break-class defect
     where a static per-row manifest path stood in for the live triage-
     declared/fixer-touched file list a real committer/undoer needs."""
@@ -565,14 +578,17 @@ def compose_size_call(
 ) -> str:
     """One sizing-scout call for one backlog row. ``row_js`` evaluates at run
     time to ``{row_id, path, digest}``; ``evidence_js`` and ``fix_plan_js`` to
-    strings. The prompt never carries triage's size verdict."""
+    strings. The prompt never carries triage's size verdict. The scout's last
+    act is the row's sizing-assemble chain (``SIZE_ASSEMBLE_JS``'s
+    ``_sizeChainTemplate``/``_sizeAssembleWhen`` must be in scope), whose exit
+    code it returns beside its sizing fields."""
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         (
             "lit",
-            "Size the work of resolving one backlog row, afresh, judging only: "
-            "write no file and run no sizing-assemble. \"The ask\" is resolving "
-            "this one row. The row (row_id/path/digest) is: ",
+            "Size the work of resolving one backlog row, afresh. Judge first; "
+            "write no file except through your closing command. \"The ask\" is "
+            "resolving this one row. The row (row_id/path/digest) is: ",
         ),
         ("expr", f"JSON.stringify({row_js})"),
         ("lit", ". Triage's evidence on it: "),
@@ -583,7 +599,23 @@ def compose_size_call(
             "lit",
             ". " + SCOUT_RETURN_CLAUSE + " Name the row's path in premise_evidence, so "
             "the sizing records the row it came from. "
-            + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
+            + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE
+            + " Your closing act, once your fields are settled: ",
+        ),
+        ("expr", "_sizeAssembleWhen()"),
+        (
+            "lit",
+            " the one command below as ONE Bash call, replacing each <field> with your own value "
+            "(the quotes around it stay; an embedded ' is written '\\''), <name> being lowercase "
+            "kebab-case ([a-z0-9-] only):\n\n",
+        ),
+        ("expr", f"_sizeChainTemplate({row_js})"),
+        (
+            "lit",
+            "\n\nAdd --jtbd-unclear to its sizing-assemble segment when jtbd_unclear is true and "
+            "--well-trodden-step-change when well_trodden_step_change is true. Return its exit code "
+            "as exit_code, its stdout verbatim as stdout and its stderr as stderr. Do not edit, "
+            "retry or repair it. When you run no command, return no exit_code.",
         ),
     ]
     return _agent_call(
@@ -595,61 +627,16 @@ def compose_size_call(
         agent_type=SIZING_SCOUT_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="medium",
-        schema=SCOUT_SCHEMA,
+        schema=SIZE_SCOUT_SCHEMA,
         is_expr=True,
     )
 
 
-def compose_size_assemble_call(
-    *,
-    label: str,
-    phase_title: str,
-    commands_js: str,
-    agent_type_host: Optional[str] = None,
-    models: Optional[Mapping[str, str]] = None,
-) -> str:
-    """One op-runner call that runs each ``{row, command}`` in ``commands_js``
-    verbatim and returns ``{results: [{row, exit_code, stdout}]}``."""
-    parts: list[tuple[str, str]] = [
-        (
-            "lit",
-            "Run each command in this JSON array of {row, command}, exactly as "
-            "written, one Bash call each, in order, without editing, retrying or "
-            "repairing any: ",
-        ),
-        ("expr", f"JSON.stringify({commands_js})"),
-        (
-            "lit",
-            ". Return for each its row, exit code and stdout verbatim. "
-            + _NO_STAGING_CLAUSE,
-        ),
-    ]
-    item = {
-        **ASSEMBLE_SCHEMA,
-        "required": ["row", *ASSEMBLE_SCHEMA["required"]],
-        "properties": {"row": {"type": "string"}, **ASSEMBLE_SCHEMA["properties"]},
-    }
-    schema = {
-        "type": "object",
-        "required": ["results"],
-        "properties": {"results": {"type": "array", "items": item}},
-    }
-    return _agent_call(
-        _join_prompt_parts(parts),
-        stage="size-assemble",
-        models=models,
-        label=label,
-        phase_title=phase_title,
-        agent_type=OP_RUNNER_AGENT_TYPE,
-        agent_type_host=agent_type_host,
-        effort="low",
-        schema=schema,
-        is_expr=True,
-    )
-
-
-#: Needs `_shq`, `REPO_ROOT`, `PROFILE_NAME`, `RUN_ID` in scope. sizing-assemble has no
-#: --repo-root, so its --write path is absolute; `sizingPath` stays repo-relative elsewhere.
+#: Needs `_shq`, `REPO_ROOT`, `PROFILE_NAME`, `RUN_ID` in scope; `_sizeChainTemplate` and
+#: `_sizeAssembleWhen` also read `_sizingPathFor`, `_TSHIRT_ORDER`, `PLAN_WEIGHT_FLOOR_RANK`,
+#: `SIZE_FIX_TARGET` and `ROUTING`, at call time. sizing-assemble has no --repo-root, so its --write
+#: path is absolute; `sizingPath` stays repo-relative elsewhere. Every `const _size*` stays one line:
+#: the integration test lifts them by pattern.
 SIZE_ASSEMBLE_JS = (
     "const _sizeAssembleCmd = (scouted, sizingPath) => "
     + _js_string_literal(SIZING_ASSEMBLE_CMD)
@@ -670,7 +657,13 @@ SIZE_ASSEMBLE_JS = (
     "const _sizeChainCmd = (scouted, row, sizingPath) => 'cd ' + _shq(REPO_ROOT)"
     " + ' && ' + _sizeAssembleCmd(scouted, sizingPath)"
     " + ' && ' + _sizeBatonCmd(sizingPath)"
-    " + ' && ' + _sizeMarkCmd(row, sizingPath);"
+    " + ' && ' + _sizeMarkCmd(row, sizingPath);\n"
+    "const _SIZE_SLOTS = { tshirt: '<tshirt>', intent: '<intent>', name: '<name>', premise_provenance: '<premise_provenance>',"
+    " premise_evidence: '<premise_evidence>', exit_criterion: '<exit_criterion>' };\n"
+    "const _sizeChainTemplate = (row) => _sizeChainCmd(_SIZE_SLOTS, row, _sizingPathFor('<name>', row.row_id));\n"
+    "const _sizeAssembleWhen = () => (SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET])"
+    " ? 'Only when your tshirt is ' + _TSHIRT_ORDER.slice(PLAN_WEIGHT_FLOOR_RANK).join(', ') + ' (plan weight or larger), run'"
+    " : 'Run';"
 )
 
 
@@ -748,6 +741,9 @@ def compose_fix_call(
             "Never write the published mirror (any publish destination) or "
             "`publish.mirrors.*` config for an engine-subject row: both are out "
             "of bounds, and a fix that needs them is NEEDS_WIDER_SCOPE. "
+            "Never write a historical record -- any path under "
+            + ", ".join(f"`{p}`" for p in HISTORICAL_RECORD_PREFIXES)
+            + ": a fix that needs one is NEEDS_WIDER_SCOPE. "
             "Otherwise, fix the row, "
             + ("" if targeted_runner else "run its tests, ")
             + "report every file you touched and every file you created -- "
@@ -860,7 +856,11 @@ def compose_verify_agent_call(
     profile: str = "",
     run_id_js: Optional[str] = None,
     repo_root_js: str = "REPO_ROOT",
+    final_js: Optional[str] = None,
+    undo_paths_js: Optional[str] = None,
 ) -> str:
+    """The `verify` agent call. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
+    op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`."""
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         ("lit", "You are the verify stage for row "),
@@ -913,6 +913,22 @@ def compose_verify_agent_call(
         schema["properties"]["tests_record"] = {"type": "string"}
         schema["properties"]["tests_outcome"] = {"type": "string", "enum": list(RUNNER_OUTCOMES)}
         schema["properties"]["tests_failing_ids"] = {"type": "array", "items": {"type": "string"}}
+    if undo_paths_js:
+        fail_when = (
+            "When your outcome is fail"
+            + (
+                ", or the tests' `outcome` is neither `passed` nor `nothing-to-run`,"
+                if targeted_runner
+                else ","
+            )
+        )
+        parts.append(_undo_fold_clause(
+            final_js=final_js or "false",
+            condition=[("lit", fail_when)],
+            paths_js=undo_paths_js,
+            repo_root_js=repo_root_js,
+        ))
+        schema["properties"]["undo"] = _UNDO_SCHEMA
     return _agent_call(
         _join_prompt_parts(parts),
         stage="verify",
@@ -938,7 +954,50 @@ def compose_verify_op_call(
     batch_id: str = "",
     batch_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    row_id_js: Optional[str] = None,
+    row_path_js: Optional[str] = None,
+    final_js: Optional[str] = None,
+    undo_paths_js: Optional[str] = None,
+    repo_root_js: str = "REPO_ROOT",
+    reject_paths_js: Optional[str] = None,
+    reject_reason_js: Optional[str] = None,
 ) -> str:
+    """The `verify-op` op-runner call. With ``undo_paths_js`` (and ``row_id_js``/``row_path_js``/
+    ``final_js``) the runner also runs the undo op on the row's final verification when the batch
+    fails that row, and returns its result as `undo`; the failing-row rule twins the script's
+    ``_pass`` in ``_verifyCall``.
+
+    With ``reject_paths_js`` the call is the reject mode: the composer already rejected the row, so
+    the runner skips the verify op and runs only `grind-row undo` over that runtime paths expression
+    (``reject_reason_js`` is an optional runtime expression naming why), returning `undo`."""
+    if reject_paths_js:
+        reject_parts: list[tuple[str, str]] = [
+            *_REPO_ANCHOR_PARTS,
+            ("lit", "This row is rejected. Skip the verify op: do not run it. "),
+        ]
+        if reject_reason_js:
+            reject_parts += [("lit", "Reason: "), ("expr", reject_reason_js), ("lit", ". ")]
+        reject_parts += [
+            ("lit", "Run this exactly as written, as ONE Bash call:\n"),
+            *_undo_command_parts(reject_paths_js, repo_root_js),
+            (
+                "lit",
+                "\nReturn its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with "
+                "the verbatim stderr in `reason`. " + _NO_STAGING_CLAUSE,
+            ),
+        ]
+        return _agent_call(
+            _join_prompt_parts(reject_parts),
+            stage="verify-op",
+            models=models,
+            label=label,
+            phase_title=phase_title,
+            agent_type=OP_RUNNER_AGENT_TYPE,
+            agent_type_host=agent_type_host,
+            effort="low",
+            is_expr=True,
+            schema={"type": "object", "required": ["undo"], "properties": {"undo": _UNDO_SCHEMA}},
+        )
     op_part: tuple[str, str] = ("expr", op_js) if op_js else ("lit", op)
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
     parts: list[tuple[str, str]] = [
@@ -962,6 +1021,20 @@ def compose_verify_op_call(
             "output": {"type": "object"},
         },
     }
+    if undo_paths_js:
+        parts.append(_undo_fold_clause(
+            final_js=final_js or "false",
+            condition=[
+                ("lit", "When the exit code is non-zero, unless the output's `failing_ids` is a non-empty list naming neither `"),
+                ("expr", row_id_js or "''"),
+                ("lit", "` nor `"),
+                ("expr", row_path_js or "''"),
+                ("lit", "`,"),
+            ],
+            paths_js=undo_paths_js,
+            repo_root_js=repo_root_js,
+        ))
+        schema["properties"]["undo"] = _UNDO_SCHEMA
     return _agent_call(
         _join_prompt_parts(parts),
         stage="verify-op",
@@ -1157,71 +1230,58 @@ def compose_ledger_sweep_call(
     phase_title: str,
     profile: str,
     queue_dirs: Sequence[str] = (),
-    run_id: Optional[str] = None,
-    run_id_js: Optional[str] = None,
-    record_js: Optional[str] = None,
     repo_root_js: str = "REPO_ROOT",
     profile_dir_js: str = "PROFILE_DIR",
     agent_type_host: Optional[str] = None,
+    run_id_js: str,
+    record_js: str,
+    declared_js: str,
+    decisions_js: str,
 ) -> str:
-    """The drain's `ledger-sweep` op-runner call: settles, out of band, every
-    ledger whose row left the named queues (`grind-row sweep`), then writes
-    the run-cost record (`grind-row run-record`), which itself commits the
-    run's bookkeeping (swept ledgers, run record, block-discharge row). This
-    op-runner stages and commits nothing. ``queue_dirs`` must be the FULL
-    queue set the manifest was selected from: a queue left out reads as
-    closed and its live rows' ledgers are settled. With no ``queue_dirs``
-    the sweep clause is omitted rather than guessed."""
-    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", str(run_id))
-    parts: list[tuple[str, str]] = [*_REPO_ANCHOR_PARTS]
-    if record_js:
-        # One verbatim Bash call: prose like "pass this JSON on stdin" is not
-        # executable -- the op-runner ran the verb with no stdin and the verb
-        # died on empty input.
-        parts.append(("lit", "Run this exactly as written, as ONE Bash call:\n```\n"))
-    elif queue_dirs:
-        parts.append(("lit", "Run "))
+    """The drain's `ledger-sweep` op-runner call, and the run close: ONE `grind-row run-record --sweep`
+    command that settles, out of band, every ledger whose row left the named queues, then writes the
+    run record whole and lands it -- the verb records a failed sweep instead of skipping the record.
+    ``record_js``/``declared_js`` name runtime expressions for the record object and the declared-paths
+    array; ``decisions_js`` names the decisions.json path, and the `--decisions-file` flag is omitted
+    when it evaluates empty. ``queue_dirs`` must be the FULL queue set the manifest was selected from:
+    a queue left out reads as closed and its live rows' ledgers are settled. With no ``queue_dirs`` the
+    sweep flag is omitted and the reply reports ``swept: true``. Returns `recorded` or `record-failed`
+    plus ``swept`` and ``sweep_reason``. This op-runner stages and commits nothing."""
+    queue_flags = "".join(f" --{QUEUE_FLAG} {q}" for q in queue_dirs)
+    sweep_flags = f" --{SWEEP_FLAG} --profile-dir " if queue_dirs else ""
+    parts: list[tuple[str, str]] = [
+        *_REPO_ANCHOR_PARTS,
+        ("lit", "Run this exactly as written, as ONE Bash call:\n```\n"),
+        ("lit", f"{ASSEMBLE_CMD} grind-row run-record{sweep_flags}"),
+    ]
     if queue_dirs:
-        queue_flags = " ".join(f"--queue {q}" for q in queue_dirs)
-        parts.append(("lit", f"{'' if record_js else '`'}{ASSEMBLE_CMD} grind-row sweep --profile-dir "))
         parts.append(_shq_part(profile_dir_js))
-        parts.append(("lit", f" --profile {profile} {queue_flags} --repo-root "))
-        parts.append(_shq_part(repo_root_js))
-        parts.append(("lit", "\n" if record_js else "`. Then run "))
-    elif not record_js:
-        parts.append(("lit", "Run "))
-    parts.append(
-        ("lit", f"{'' if record_js else '`'}{ASSEMBLE_CMD} grind-row run-record --profile {profile} --run-id ")
-    )
-    parts.append(run_id_part)
-    if record_js:
-        # The record rides as one percent-encoded, single-quoted token, never
-        # stdin: the hook-mode door is the only path that forwards stdin, so a
-        # heredoc or pipe reached the verb empty. `'` is encoded too, so the
-        # token is shell-safe in bash and PowerShell alike.
-        parts.append(("lit", " --record-urlenc '"))
-        parts.append(("expr", f"encodeURIComponent({record_js}).replace(/'/g, '%27')"))
-        parts.append(("lit", "' --repo-root "))
-        parts.append(_shq_part(repo_root_js))
-        parts.append(("lit", "\n```\n"))
-    else:
-        parts.append(("lit", " --record-file - --repo-root "))
-        parts.append(_shq_part(repo_root_js))
-        parts.append(("lit", "`"))
-    parts.append(
+    parts += [
+        ("lit", f" --profile {profile}{queue_flags} --run-id "),
+        ("expr", run_id_js),
+        ("lit", " --record-urlenc '"),
+        ("expr", f"encodeURIComponent({record_js}).replace(/'/g, '%27')"),
+        ("lit", f"' --{DECLARED_FLAG} '"),
+        ("expr", f"encodeURIComponent(JSON.stringify({{paths: {declared_js}}})).replace(/'/g, '%27')"),
+        ("lit", "'"),
+        ("expr", f"({decisions_js}) ? ' --{DECISIONS_FLAG} ' + _shq({decisions_js}) : ''"),
+        ("lit", " --repo-root "),
+        _shq_part(repo_root_js),
         (
             "lit",
-            ("" if record_js else ".") + " Return `swept` when every command exits 0, else `sweep-failed` with the "
-            "verbatim stderr in `reason`, including a non-zero exit from run-record. "
-            "run-record itself commits this run's own bookkeeping (swept ledgers, run "
-            "record, block-discharge row). " + _NO_STAGING_CLAUSE,
-        )
-    )
+            "\n```\nThe command's JSON output carries `swept` and `sweep_reason`. Return `recorded` when "
+            "it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and "
+            "`sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints "
+            "none). " + _NO_STAGING_CLAUSE,
+        ),
+    ]
     schema = {
         "type": "object",
         "required": ["outcome"],
         "properties": {
-            "outcome": {"type": "string", "enum": ["swept", "sweep-failed"]},
+            "outcome": {"type": "string", "enum": ["recorded", "record-failed"]},
+            "swept": {"type": "boolean"},
+            "sweep_reason": {"type": "string"},
             "reason": {"type": "string"},
         },
     }
@@ -1239,52 +1299,43 @@ def compose_ledger_sweep_call(
     )
 
 
-def compose_undo_call(
-    *,
-    models: Optional[Mapping[str, str]] = None,
-    label: str,
-    phase_title: str,
-    paths: Sequence[str] = (),
-    paths_js: Optional[str] = None,
-    repo_root_js: str = "REPO_ROOT",
-    agent_type_host: Optional[str] = None,
-    preamble_expr: Optional[str] = None,
-) -> str:
-    """The `undo` op-runner call: one `grind-row undo` command that puts every
-    declared path back to its HEAD state. ``paths_js`` is one runtime
-    expression for the union of touched and created paths; the encoder
-    expression must stay the twin of ``grind_vocab.encode_undo_paths``."""
-    paths_expr = paths_js if paths_js else json.dumps(list(paths))
-    parts: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
-        ("lit", "Run this exactly as written, as ONE Bash call:\n```\n"),
+_UNDO_SCHEMA = {
+    "type": "object",
+    "required": ["outcome"],
+    "properties": {
+        "outcome": {"type": "string", "enum": ["undone", "undo-failed"]},
+        "reason": {"type": "string"},
+    },
+}
+
+
+def _undo_command_parts(paths_expr: str, repo_root_js: str) -> list[tuple[str, str]]:
+    """The fenced `grind-row undo` command, ending on the closing fence. The encoder expression
+    must stay the twin of ``grind_vocab.encode_undo_paths``."""
+    return [
+        ("lit", "```\n"),
         ("lit", f"{ASSEMBLE_CMD} grind-row undo --paths-urlenc '"),
         ("expr", f"encodeURIComponent(JSON.stringify({{paths: {paths_expr}}})).replace(/'/g, '%27')"),
         ("lit", "' --repo-root "),
         _shq_part(repo_root_js),
+        ("lit", "\n```"),
+    ]
+
+
+def _undo_fold_clause(
+    *, final_js: str, condition: Sequence[tuple[str, str]], paths_js: str, repo_root_js: str
+) -> tuple[str, str]:
+    """A prompt part that, on the row's final verification (``final_js`` truthy at run time), tells the
+    verifying agent to run the undo op itself when ``condition`` holds and return its result as `undo`."""
+    clause = _join_prompt_parts([
+        ("lit", " This is this row's final verification. "),
+        *condition,
+        ("lit", " also run this exactly as written, as ONE Bash call:\n"),
+        *_undo_command_parts(paths_js, repo_root_js),
         (
             "lit",
-            "\n```\nReturn `undone` when it exits 0, else `undo-failed` with the verbatim stderr in "
-            "`reason`. " + _NO_STAGING_CLAUSE,
+            "\nand return its result as `undo`: outcome `undone` when it exits 0, else `undo-failed` with the "
+            "verbatim stderr in `reason`. Run it on no other outcome.",
         ),
-    ]
-    schema = {
-        "type": "object",
-        "required": ["outcome"],
-        "properties": {
-            "outcome": {"type": "string", "enum": ["undone", "undo-failed"]},
-            "reason": {"type": "string"},
-        },
-    }
-    return _agent_call(
-        _join_prompt_parts(parts),
-        stage="undo",
-        models=models,
-        label=label,
-        phase_title=phase_title,
-        agent_type=OP_RUNNER_AGENT_TYPE,
-        agent_type_host=agent_type_host,
-        effort="low",
-        schema=schema,
-        is_expr=True,
-    )
+    ])
+    return ("expr", f"({final_js}) ? {clause} : ''")

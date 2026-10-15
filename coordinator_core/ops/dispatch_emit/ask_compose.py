@@ -158,7 +158,6 @@ def _obj(required: list[str], properties: dict) -> dict:
 
 
 _STR = {"type": "string"}
-_REWORD_SCHEMA = _obj(["exit_criterion"], {"exit_criterion": _STR})
 #: Worded positively: the refused spellings live only in suite_tier_refusal, never in a scout prompt.
 EXIT_CRITERION_RULES_CLAUSE = (
     " The exit_criterion names no test tier and no tier-valued argument; "
@@ -181,6 +180,12 @@ _GATE_STAGED_SCHEMA = {
     **_GATE_SCHEMA,
     "properties": {**_GATE_SCHEMA["properties"], "manifest": {"type": ["object", "null"]}},
 }
+#: The size-reword agent's return: the reworded criterion, its own sizing-assemble result, and the
+#: gate reply (plus stage manifest) it runs as closing acts.
+_REWORD_SCHEMA = _obj(
+    ["exit_criterion"],
+    {**_GATE_STAGED_SCHEMA["properties"], **ASSEMBLE_SCHEMA["properties"], "exit_criterion": _STR},
+)
 _RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
 
 
@@ -912,9 +917,9 @@ def compose_ask_script(
     if judge_expr is not None:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 
-    def _gate_payload(record_js: str = "") -> str:
+    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel") -> str:
         return (
-            "js:JSON.stringify({ sizing_path: _sizingRel, run_id: _runId, writes: _writes"
+            "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (f", record: {record_js}" if record_js else "")
             + " })"
@@ -1069,28 +1074,52 @@ def compose_ask_script(
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         assemble_cmd_js = (
             f"{_lit(SIZING_ASSEMBLE_CMD)}"
-            + scout_assemble_flags_js("_scouted", "_q", _deliverable_js)
+            + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
             + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
             + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
         )
-        reassemble_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            "Run exactly this one command and nothing else, then return its exit code as exit_code and "
-            "its stdout verbatim as stdout (stderr as stderr). Do not edit, retry or repair it:\n\n",
+        _reword_sizing_js = "_sizingPath.slice(REPO_ROOT.length + 1)"
+        reword_closing = (
+            "\n\nThen, in order: (1) run exactly this one command, replacing the quoted placeholder "
+            "'<your reworded exit_criterion>' with your reworded exit_criterion, POSIX single-quoted (an "
+            "embedded ' written '\\''), and change nothing else:\n\n",
             "js:_reassembleCmd",
+            "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. "
+            f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
+            _gate_payload(sizing_js=_reword_sizing_js),
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan and "
+            "spine_plan; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
+            "text>}, never arm and halt both null. Also read the sizing at ",
+            "js:" + _reword_sizing_js,
+            " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
+            "gate command and return no arm or halt.",
+            *(
+                _stage_act_parts(
+                    "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
+                    "_crossRepoApproved, session_id: _SESSION_ID })",
+                    "js:JSON.stringify(" + _reword_sizing_js + ")",
+                    "js:JSON.stringify(_gated)",
+                )
+                if fold_stage
+                else ()
+            ),
         )
         # One reword: a remediable exit-criterion refusal from the scout's closing sizing-assemble goes
-        # back to the scout, then re-assembles and re-gates in fresh agents. `_scouted` is mutated in
-        # place so the halt and decision lines below read the final attempt; a second refusal falls
-        # through to the halt.
+        # back to the scout, which rewords, re-assembles, re-gates and stages as its closing acts.
+        # `_scouted` is mutated in place so the halt and decision lines below read the final attempt; a
+        # second refusal falls through to the halt.
         reword_prompt = prompt_of(
-            "sizing-assemble refused your exit_criterion. Return only a reworded exit_criterion that "
-            "clears the refusal; judge nothing else and write no file." + EXIT_CRITERION_RULES_CLAUSE,
+            "sizing-assemble refused your exit_criterion. Judge nothing else and write no file except "
+            "through the closing commands below. Reword the exit_criterion so it clears the refusal and return it "
+            "as exit_criterion."
+            + EXIT_CRITERION_RULES_CLAUSE,
             "\n\nRefusal:\n",
             "js:_asmOut.slice(0, 1500)",
             "\n\nRefused exit_criterion:\n",
             "js:String(_scouted.exit_criterion ?? '')",
+            *reword_closing,
         )
+        b.append("  let _rewordStaged = false;")
         b.append(
             "  const _asmOut = String(_scouted.stderr ?? '') + '\\n' + String(_scouted.stdout ?? '');"
         )
@@ -1098,26 +1127,24 @@ def compose_ask_script(
             f"  if (_scouted.exit_code !== 0 && _asmOut.includes({_lit(EXIT_CRITERION_REFUSAL_HEAD)}) "
             f"&& _asmOut.includes({_lit(REMEDIATION_MARKER)})) {{"
         )
+        b.append("    const _asmFields = { ..._scouted, exit_criterion: '<your reworded exit_criterion>' };")
+        b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
         b.append(
             f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA)};"
         )
-        b.append("    _scouted.exit_criterion = _reworded.exit_criterion;")
-        b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
         b.append(
-            f"    const _reassembled = await {_agent(reassemble_prompt, label='assemble-reword', phase='size', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, effort=_MECHANICAL_EFFORT, schema=ASSEMBLE_SCHEMA)};"
-        )
-        b.append(
-            "    _scouted.exit_code = _reassembled.exit_code; _scouted.stdout = _reassembled.stdout; "
-            "_scouted.stderr = _reassembled.stderr;"
+            "    _scouted.exit_criterion = _reworded.exit_criterion; _scouted.exit_code = _reworded.exit_code; "
+            "_scouted.stdout = _reworded.stdout; _scouted.stderr = _reworded.stderr;"
         )
         b.append("    if (_scouted.exit_code === 0) {")
         b.append("      _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1);")
-        b.append(f"      const _regated = await {_gate_agent_call('gate-reword', 'size')};")
         b.append(
-            "      Object.assign(_scouted, { arm: _regated.arm ?? null, halt: _regated.halt ?? null, "
-            "baton: _regated.baton ?? null, tshirt: _regated.tshirt, route: _regated.route, "
-            "resume_plan: _regated.resume_plan ?? null, spine_plan: _regated.spine_plan ?? null });"
+            "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
+            "baton: _reworded.baton ?? null, tshirt: _reworded.tshirt, route: _reworded.route, "
+            "resume_plan: _reworded.resume_plan ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            "manifest: _reworded.manifest ?? null });"
         )
+        b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
         b.append("    }")
         b.append("  }")
         b.append("  let _decision = null;")
@@ -1161,7 +1188,7 @@ def compose_ask_script(
         b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate', stage_act=True)};")
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
-        clean_js = "_scoutClean" if sized_in_run else "!_gate.halt"
+        clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
         reply_js = "_scouted" if sized_in_run else "_gate"
         b.append(
             f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan)) "

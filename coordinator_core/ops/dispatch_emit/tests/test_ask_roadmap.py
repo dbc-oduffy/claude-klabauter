@@ -96,6 +96,14 @@ def test_composed_script_chains_four_stages_in_order(repo):
     assert not any(f.severity is Severity.ERROR for f in run_checks(script))
 
 
+def test_roadmap_gate_leg_is_haiku_on_the_mechanical_type(repo):
+    _put(repo)
+    script = _compose(repo)
+    gate_call = script[script.index("const _gate = await agent("):].split("\n", 1)[0]
+    assert ask_compose._lit(ask_compose._MECHANICAL_AGENT_TYPE) in gate_call
+    assert ask_compose._lit(ask_compose._MECHANICAL_MODEL) in gate_call
+
+
 @pytest.mark.parametrize(
     "mode,approver", [("hands-on", "pm"), ("pm", "apm"), ("ceo", "apm")]
 )

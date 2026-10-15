@@ -16,6 +16,23 @@ def test_resolve_backlog(tmp_path):
     assert evidence.resolve_target("backlog", tmp_path) == TargetSpec(kind="backlog")
 
 
+@pytest.mark.parametrize("spelling", ["state/bug-backlog", "state/bug-backlog/", "./state/bug-backlog", "ABS"])
+def test_backlog_dir_spellings_resolve_to_backlog_without_reading(tmp_path, spelling):
+    (tmp_path / "state" / "bug-backlog").mkdir(parents=True)
+    raw = str((tmp_path / "state" / "bug-backlog").resolve()) if spelling == "ABS" else spelling
+    spec = evidence.resolve_target(raw, tmp_path)
+    assert spec.kind == "backlog"
+    assert evidence.parse_targets(spec).tests == ()
+
+
+def test_sibling_dir_without_evidence_still_refused(tmp_path):
+    (tmp_path / "state" / "bug-backlog-x").mkdir(parents=True)
+    spec = evidence.resolve_target("state/bug-backlog-x", tmp_path)
+    assert spec.kind == "dir"
+    with pytest.raises(evidence.NoFailingTests):
+        evidence.parse_targets(spec)
+
+
 def test_resolve_relative_dir_and_file(tmp_path):
     (tmp_path / "rs").mkdir()
     (tmp_path / "f.txt").write_text("x")

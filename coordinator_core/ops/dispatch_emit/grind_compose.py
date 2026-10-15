@@ -26,8 +26,8 @@ on their own verdict/size/tradeoff.
 row triage sizes ``>= grind_vocab.PLAN_WEIGHT_FLOOR`` is sized afresh by the
 ``coordinator:sizing-scout`` (one call per row): a size below the floor sends
 it to ``fix``, and at or above it the row is handed back as ``baton`` naming
-its sizing, which one run-level ``size-assemble`` call writes (with the baton
-and the row's ``route-to-plan`` ledger mark) before the drain sweep. A row
+its sizing, which the scout's own closing command writes (with the baton
+and the row's ``route-to-plan`` ledger mark). A row
 below plan weight with a non-empty tradeoff
 routes to ``needs-judgment`` (checked at triage-exit AND fix-exit, since a
 fixer can surface a tradeoff triage missed); ``NEEDS_PLAN`` maps to
@@ -53,7 +53,7 @@ batch size -- no ``verdict_mix`` parameter; the reserve stays sound over a
 partial map.
 
 **Runtime-interpolated prompts, not a static approximation.**
-``grind_stages.py``'s ``compose_fix_call``/``compose_undo_call``/
+``grind_stages.py``'s ``compose_fix_call``/``compose_verify_op_call``/
 ``compose_ledger_sweep_call`` each take an
 optional ``*_js`` parameter naming a JS runtime expression; when supplied,
 the composed prompt is built as static, escaped literal pieces
@@ -67,6 +67,9 @@ commits on its own: it queues on ``_pendingCommit`` with its runtime
 ``touchedFiles``/``createdFiles``/``removedFiles``, and ONE terminal
 ``dispatch.terminal_commit`` call lands every queued row after the grind
 (in a ``finally``, so a halted or throwing run still lands what finished).
+After review and adjudication an outer ``finally`` runs ``_runClose()``: one
+drain call whose verb sweeps, then writes the whole run record whatever the sweep did, so a throw
+still writes the whole run record and lands the run's own writes.
 The mutex lock keys
 `withLock` acquires are computed from these SAME live values, so the
 actual lock scope and the prompt's own description of it never diverge.
@@ -88,6 +91,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.contract import grind_vocab as vocab
+from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.dispatch_emit import pm_adjudication
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -242,11 +246,27 @@ _SETTLE_HINT_TWIN =" -- land the finished rows with `grind-row settle-run`"
 
 _UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits may remain in the tree"
 _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
+_HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records and its edits may remain in the tree"
 
 
-def _undo_failed_reason(undo_result: Mapping[str, Any]) -> str:
+def _norm_rel(path: Any) -> str:
+    """A reported path as repo-relative POSIX. Twin: ``_normRel`` in the emitted script."""
+    return re.sub(r"^(\./)+", "", str(path).replace("\\", "/"))
+
+
+def _historical_paths(paths: Sequence[str]) -> list[str]:
+    """The reported paths a fix stage may not write. Twin: ``_historicalPaths`` in the emitted script."""
+    return [p for p in paths if contract.is_historical_record(_norm_rel(p))]
+
+
+def _union(*lists: Optional[Sequence[str]]) -> list[str]:
+    return list(dict.fromkeys(p for lst in lists for p in (lst or [])))
+
+
+def _undo_failed_reason(undo_result: Mapping[str, Any], head: str = _UNDO_FAILED_HEAD) -> str:
     detail = undo_result.get("reason")
-    return _UNDO_FAILED_HEAD + (f" ({detail})" if detail else "") + _UNDO_FAILED_TAIL
+    shown = detail or ("" if undo_result.get("outcome") else "the verify stage returned no undo reply")
+    return head + (f" ({shown})" if shown else "") + _UNDO_FAILED_TAIL
 
 
 def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "Row") -> tuple[str, str]:
@@ -284,6 +304,8 @@ class Row:
     sha: str = ""
     origin: str = ""
     refute_note: str = ""
+    fix_reported: bool = False
+    sizing_path: str = ""
 
 @dataclass
 class _Batch:
@@ -313,6 +335,8 @@ def run_admission(
     profile: str = "profile",
     has_run_token: bool = True,
     commit_params_sink: Optional[list] = None,
+    post_stages: Sequence[str] = (),
+    run_close_sink: Optional[list] = None,
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
@@ -328,8 +352,7 @@ def run_admission(
 
     ``agent(stage_kind, unit_id) -> result`` is the caller's stub. ``unit_id``
     is a batch id for ``triage``/``refute-close``, a row id for
-    ``fix``/``verify``/``commit``/``undo``/``size``, and ``"run"`` for the one
-    run-level ``size-assemble`` call. It is expected to call
+    ``fix``/``verify``/``commit``/``size``. It is expected to call
     ``budget.spend(n)`` itself (mirroring the real runtime, where every
     agent call is what advances ``budget.spent()``).
 
@@ -345,9 +368,17 @@ def run_admission(
     "dropped": [{"row_id", "path", "reason"}], "error", "refused"}``. The params
     that call carries are appended to ``commit_params_sink`` when one is given,
     and a stage that raises still lands the rows finished so far before the
-    error propagates. For ``size`` it returns the
-    scout's ``{tshirt, intent, name, ...}`` (or ``{}`` for a refusal); for
-    ``size-assemble`` it returns ``{"results": [{row, exit_code, stdout}]}``.
+    error propagates. ``post_stages`` names the stage kinds (review, review-fix,
+    adjudication) called once, in order, after that commit when the grind did not
+    throw. An outer ``finally`` then runs the run close: one ``ledger-sweep`` call (retried once
+    if it raises) whose reply is ``{"outcome": "recorded"|"record-failed", "swept", "sweep_reason"}``
+    -- the verb sweeps and writes the record whole; the record and declared paths it carries are
+    appended to ``run_close_sink`` before the call, with a ``swept: false`` reply's stage-dead
+    appended to the sunk record. A historical-record reject runs ``verify`` and reads its ``undo``.
+    For ``size`` it returns the
+    scout's ``{tshirt, intent, name, exit_code, ...}`` (or ``{}`` for a refusal), ``exit_code``
+    being its closing sizing chain's. A ``verify`` that fails a row's final verification also
+    carries ``"undo": {"outcome", "reason"}``.
 
     Downstream-first, one admitted batch's row work fully drains before the
     next admission decision -- this reference scheduler never holds more
@@ -384,7 +415,6 @@ def run_admission(
     by_triage_check: dict[str, int] = {k: 0 for k in _SIZE_CHECK_KEYS}
     fix_verdict = triage_fix_verdict(routing, triage_node_id)
     fix_target = routing[triage_node_id]["edges"].get(fix_verdict) if fix_verdict else None
-    size_pending: list[tuple[str, str, str]] = []
 
     def _bump_refute_origin(origin: str, key: str) -> None:
         entry = by_refute_origin.setdefault(origin, {"confirmed": 0, "refuted": 0})
@@ -396,18 +426,21 @@ def run_admission(
         calls_by_kind[kind] = calls_by_kind.get(kind, 0) + 1
         return result
 
-    def _handback(row: Row, htype: str, reason: str) -> None:
+    def _handback(row: Row, htype: str, reason: str, tradeoff: str = "") -> None:
         row.done = True
         if row.refute_note:
             reason = f"{reason} (revived from a refuted close proposal, origin {row.origin!r}: {row.refute_note!r})"
         if any(h["row"] == row.row_id and h["type"] == htype for h in handed_back):
             return
-        handed_back.append({"row": row.row_id, "type": htype, "reason": reason})
+        entry = {"row": row.row_id, "type": htype, "reason": reason}
+        if tradeoff:
+            entry["tradeoff"] = tradeoff
+        handed_back.append(entry)
 
-    def _apply_route(row: Row, action: tuple[str, str], reason: str) -> None:
+    def _apply_route(row: Row, action: tuple[str, str], reason: str, tradeoff: str = "") -> None:
         kind, value = action
         if kind == "handback":
-            _handback(row, value, reason)
+            _handback(row, value, reason, tradeoff)
         else:
             row.node = value
 
@@ -448,6 +481,11 @@ def run_admission(
         )
         return True
 
+    def _halt_reason(grind_err: Optional[BaseException]) -> Optional[str]:
+        if exhausted:
+            return "budget-exhausted"
+        return (str(grind_err) or "error") if grind_err else None
+
     def _terminal_commit(grind_err: Optional[BaseException]) -> None:
         nonlocal terminal_params, terminal_commit_dropped
         if not pending_commit:
@@ -464,7 +502,7 @@ def run_admission(
         if not has_run_token:
             _fail_all("no run token in the fire args: the terminal commit cannot run" + _SETTLE_HINT_TWIN)
             return
-        halted = "budget-exhausted" if exhausted else (str(grind_err) or "error") if grind_err else None
+        halted = _halt_reason(grind_err)
         terminal_params = {"profile": profile, "rows": queued, "halted": halted}
         full_params = {"run_id": run_id, "grind": terminal_params}
         size = len(json.dumps(json.dumps(full_params, separators=(",", ":"))))
@@ -534,7 +572,10 @@ def run_admission(
                 continue
             if action[0] == "handback":
                 by_triage_check["triage_handback"] += 1
-            _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
+            if tradeoff and action == ("handback", "needs-judgment"):
+                _apply_route(row, action, f"triage reported a tradeoff: {tradeoff}", tradeoff)
+            else:
+                _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         for rid in batch.row_ids:
             row = rows[rid]
             if rid not in seen and not row.done and row.node is None:
@@ -558,7 +599,13 @@ def run_admission(
         if not below_floor:
             by_triage_check["size_confirmed"] += 1
         row.done = True
-        size_pending.append((row.row_id, _sizing_path(run_id, scouted, row.row_id), scouted.get("intent", "")))
+        intent = scouted.get("intent", "")
+        code = scouted.get("exit_code", "missing")
+        if code == 0:
+            row.sizing_path = _sizing_path(run_id, scouted, row.row_id)
+            _handback(row, "baton", f"sized at {row.sizing_path}: {intent}")
+        else:
+            _handback(row, "baton", f"{intent} (size step failed: exit {code})")
 
     def _close_batch(batch: _Batch) -> None:
         proposal_ids = [
@@ -612,15 +659,16 @@ def run_admission(
         tradeoff = result.get("tradeoff", "") if result.get("has_tradeoff") else ""
         outcome = result.get("outcome")
         if result.get("touched_files"):
-            row.touched_files = list(result["touched_files"])
-        row.created_files = list(result.get("created_files") or [])
+            row.touched_files = _union(row.touched_files if row.fix_reported else [], result["touched_files"])
+            row.fix_reported = True
+        row.created_files = _union(row.created_files, result.get("created_files"))
         close_result = result.get("close_result")
         if outcome == "done" and close_result:
             row.removed_files = list(row.removed_files) + [close_result.get("old", row.path)]
             row.touched_files = list(row.touched_files) + [close_result.get("new", "")]
         if tradeoff:
             by_triage_check["fix_late_tradeoff"] += 1
-            _handback(row, "needs-judgment", "fix reported a tradeoff")
+            _handback(row, "needs-judgment", f"fix reported a tradeoff: {tradeoff}", tradeoff)
             return
         if outcome == "NEEDS_PLAN":
             by_triage_check["fix_needs_plan"] += 1
@@ -647,7 +695,19 @@ def run_admission(
                 + ", ".join(escaped),
             )
             return
-        if _entangle(row, [*(result.get("touched_files") or []), *(result.get("created_files") or [])]):
+        written = [*(result.get("touched_files") or []), *(result.get("created_files") or [])]
+        historical = _historical_paths(written)
+        if historical:
+            undo_result = (_record_call("verify", row.row_id) or {}).get("undo") or {}
+            if undo_result.get("outcome") != "undone":
+                _handback(row, "stage-dead", _undo_failed_reason(undo_result, _HISTORICAL_UNDO_FAILED_HEAD))
+                return
+            _handback(
+                row, "needs-judgment",
+                "fix wrote historical records, undone: " + ", ".join(historical),
+            )
+            return
+        if _entangle(row, written):
             return
         if outcome == "NOT_REPRODUCED":
             by_triage_check["fix_not_reproduced"] += 1
@@ -663,7 +723,7 @@ def run_admission(
                 row.verify_feedback = result.get("reason", "")
                 row.node = row.fix_node or row.node
                 return
-            undo_result = _record_call("undo", row.row_id) or {}
+            undo_result = result.get("undo") or {}
             if undo_result.get("outcome") != "undone":
                 _handback(row, "stage-dead", _undo_failed_reason(undo_result))
                 return
@@ -743,28 +803,79 @@ def run_admission(
                 for rid in batch_objs[bid].row_ids:
                     handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
 
-        if size_pending:
-            assembled = _record_call("size-assemble", "run") or {}
-            by_row = {r.get("row"): r for r in assembled.get("results", [])}
-            for rid, path, intent in size_pending:
-                res = by_row.get(rid)
-                code = res.get("exit_code") if res else "missing"
-                if code == 0:
-                    handed_back.append({"row": rid, "type": "baton", "reason": f"sized at {path}: {intent}"})
-                else:
-                    handed_back.append({"row": rid, "type": "baton", "reason": f"{intent} (size step failed: exit {code})"})
+    def _run_close(grind_err: Optional[BaseException]) -> None:
+        def _stage_dead(reason: str) -> None:
+            handed_back.append({"row": run_id, "type": "stage-dead", "reason": reason})
+
+        record_path = f"state/queue-grind/{profile}/runs/{run_id}.json"
+        sweep_dead = f"{contract.SWEEP_FAILED_HEAD}: {record_path}"
+        by_type: dict[str, int] = {}
+        for h in handed_back:
+            by_type[h["type"]] = by_type.get(h["type"], 0) + 1
+        halted = _halt_reason(grind_err)
+        record = {
+            "profile": profile,
+            "run_id": run_id,
+            "counts": {"by_type": by_type, "by_outcome": {"committed": len(settled)} if settled else {}},
+            "spend": {
+                "output_tokens": budget.spent() - start_spent,
+                "agent_calls_total": len(call_log),
+                "agent_calls_by_stage_kind": dict(calls_by_kind),
+            },
+            "handed_back": list(handed_back),
+            "halted": halted is not None,
+            "halted_reason": halted,
+            "terminal_commit_dropped": terminal_commit_dropped,
+        }
+        declared = list(dict.fromkeys(
+            [r.path for r in rows.values() if r.origin] + [r.sizing_path for r in rows.values() if r.sizing_path]
+        ))
+        if run_close_sink is not None:
+            run_close_sink.append({"record": record, "declared": declared})
+        drained: Optional[Mapping[str, Any]] = None
+        threw = ""
+        for _ in range(2):
+            try:
+                drained = _record_call("ledger-sweep", "run") or {}
+                break
+            except Exception as err:  # noqa: BLE001 -- surfaced on the hand-back, never masks the grind's own error
+                threw = str(err)
+        if drained is None:
+            _stage_dead(f"{sweep_dead}: {threw}")
+            _stage_dead(f"run record may be missing or incomplete: {record_path}: {threw}")
+            return
+        if drained.get("swept") is False:
+            reason = drained.get("sweep_reason")
+            sweep_entry = {"row": run_id, "type": "stage-dead", "reason": sweep_dead + (f": {reason}" if reason else "")}
+            if run_close_sink is not None:
+                sunk = run_close_sink[-1]["record"]
+                sunk["handed_back"].append(sweep_entry)
+                sunk["counts"]["by_type"]["stage-dead"] = sunk["counts"]["by_type"].get("stage-dead", 0) + 1
+            handed_back.append(sweep_entry)
+        if drained.get("outcome") != "recorded":
+            reason = drained.get("reason")
+            _stage_dead(f"run record may be missing or incomplete: {record_path}" + (f": {reason}" if reason else ""))
 
     grind_err: Optional[BaseException] = None
     try:
-        _run_grind()
+        try:
+            _run_grind()
+        except BaseException as err:
+            grind_err = err
+            raise
+        finally:
+            _terminal_commit(grind_err)
+        for kind in post_stages:
+            _record_call(kind, "run")
     except BaseException as err:
         grind_err = err
         raise
     finally:
-        _terminal_commit(grind_err)
+        _run_close(grind_err)
 
     end_spent = budget.spent()
     return {
+        "halted": _halt_reason(None) is not None,
         "call_log": call_log,
         "handed_back": handed_back,
         "settled": settled,
@@ -883,8 +994,8 @@ _ROUTING_HELPERS = (
     "  if (!ROUTING[target]) return { kind: 'handback', value: target };\n"
     "  return { kind: 'node', value: target };\n"
     "}\n"
-    "function applyRoute(row, rowId, route, reason) {\n"
-    "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason); }\n"
+    "function applyRoute(row, rowId, route, reason, tradeoff) {\n"
+    "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason, tradeoff); }\n"
     "  else { row.node = route.value; }\n"
     "}\n"
     "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
@@ -938,8 +1049,7 @@ _TERMINAL_COMMIT_JS = (
     "    for (const q of queued) { _unsettle(q.row_id); _handBack(q.row_id, 'commit-failed', reason); }\n"
     "  };\n"
     "  if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }\n"
-    "  const _halted = _exhausted ? 'budget-exhausted'\n"
-    "    : (_grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null);\n"
+    "  const _halted = _haltReason();\n"
     "  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, "
     "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted } };\n"
     "  const _size = JSON.stringify(JSON.stringify(_params)).length;\n"
@@ -1004,14 +1114,17 @@ def _indent_block(text: str, indent: str) -> str:
     return indent + f"\n{indent}".join(text.splitlines())
 
 
-def _drain_sweep_block(
+def _run_close_block(
     *,
     profile_name: str,
     queue_dirs: Sequence[str],
     agent_type_host: Optional[str],
     models: Optional[Mapping[str, str]] = None,
+    preamble_expr: Optional[str] = None,
 ) -> str:
-    raw = stages.compose_ledger_sweep_call(
+    """`_runClose()`: one drain call (`grind-row run-record --sweep`) that sweeps and writes the run
+    record whole, retried once if it throws. Twin: ``run_admission``'s ``_run_close``."""
+    drain_raw = stages.compose_ledger_sweep_call(
         models=models,
         label="ledger-sweep:drain",
         phase_title="Grind",
@@ -1019,18 +1132,33 @@ def _drain_sweep_block(
         queue_dirs=queue_dirs,
         run_id_js="RUN_ID",
         record_js="JSON.stringify(_runCostRecord())",
+        declared_js="_declaredWrites()",
+        decisions_js="args.decisions_file || ''",
         agent_type_host=agent_type_host,
     )
-    body = (
-        _capture(raw, "ledger-sweep", tail=(
-            "  if (_result.outcome !== 'swept') {\n"
-            "    _handBack(RUN_ID, 'stage-dead', "
-            f"`drain sweep did not complete; run-cost record may be missing: "
-            f"state/queue-grind/{profile_name}/runs/${{RUN_ID}}.json` + _commitReason(_result));\n"
-            "  }"
-        ))
+    record_path = f"state/queue-grind/{profile_name}/runs/${{RUN_ID}}.json"
+    sweep_dead = f"{contract.SWEEP_FAILED_HEAD}: {record_path}"
+    return (
+        "async function _drainCall() {\n" + _indent_block(_capture(drain_raw, "ledger-sweep"), "  ") + "\n}\n"
+        "async function _runClose() {\n"
+        "  let _drained;\n"
+        "  let _threw;\n"
+        "  try { _drained = await _drainCall(); } catch (err) {\n"
+        "    try { _drained = await _drainCall(); } catch (err2) { _threw = err2 && err2.message ? err2.message : String(err2); }\n"
+        "  }\n"
+        "  if (_threw !== undefined) {\n"
+        f"    _handBack(RUN_ID, 'stage-dead', `{sweep_dead}: ${{_threw}}`);\n"
+        f"    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: {record_path}: ${{_threw}}`);\n"
+        "    return;\n"
+        "  }\n"
+        "  if (_drained.swept === false) {\n"
+        f"    _handBack(RUN_ID, 'stage-dead', `{sweep_dead}` + (_drained.sweep_reason ? `: ${{_drained.sweep_reason}}` : ''));\n"
+        "  }\n"
+        "  if (_drained.outcome !== 'recorded') {\n"
+        f"    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: {record_path}` + _commitReason(_drained));\n"
+        "  }\n"
+        "}"
     )
-    return f"async function _drainSweep() {{\n{body}\n}}"
 
 
 def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tuple[str, Optional[str]]:
@@ -1070,11 +1198,12 @@ ARCHIVE_DESTINATION_JS = (
 _SIZE_PATH_JS = (
     "function _slug(text) { return String(text == null ? '' : text).toLowerCase()"
     ".replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''); }\n"
-    "function _sizingPath(scouted, rowId) {\n"
+    "function _sizingPathFor(nameSlug, rowId) {\n"
     "  const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);\n"
     "  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8)"
-    " + '-' + (_slug(scouted.name) || 'sizing') + '-' + (_slug(rowId) || 'row') + '.yaml';\n"
-    "}"
+    " + '-' + nameSlug + '-' + (_slug(rowId) || 'row') + '.yaml';\n"
+    "}\n"
+    "function _sizingPath(scouted, rowId) { return _sizingPathFor(_slug(scouted.name) || 'sizing', rowId); }"
 )
 
 
@@ -1136,7 +1265,7 @@ def compose_grind_script(
     ``preamble`` (optional) is a run-wide posture block declared
     ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
     ``PREAMBLE +`` expression, to every general-purpose (executor-tier)
-    stage prompt -- triage, refute-close, size, fix, verify-agent, undo.
+    stage prompt -- triage, refute-close, size, fix, verify-agent, verify-op.
     Never inlined per call site (mirrors the ``_shared`` write-set array's
     own discipline, ``emit.py``'s ``SharedBlocks``), and never spliced into
     ``verify-op`` or ``commit``, which are not executor prompts. A no-op
@@ -1278,13 +1407,23 @@ def compose_grind_script(
         "const _pendingCommit = [];\n"
         "const _runDirty = new Set();\n"
         "let _grindErr = null;\n"
-        "let _terminalCommitDropped = [];"
+        "let _terminalCommitDropped = [];\n"
+        "function _haltReason() {\n"
+        "  if (_exhausted) return 'budget-exhausted';\n"
+        "  return _grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null;\n"
+        "}"
+    )
+    lines.append(f"const HISTORICAL_PREFIXES = {json.dumps(list(contract.HISTORICAL_RECORD_PREFIXES))};")
+    lines.append(
+        "function _normRel(p) { return String(p).replace(/\\\\/g, '/').replace(/^(\\.\\/)+/, ''); }\n"
+        "function _historicalPaths(paths) { return (paths || []).filter((p) => HISTORICAL_PREFIXES.some((h) => _normRel(p).startsWith(h))); }\n"
+        "function _union(a, b) { return Array.from(new Set((a || []).concat(b || []))); }"
     )
     lines.append("const _byRefuteOrigin = {};")
     lines.append(
         "const _byTriageCheck = { "
         + ", ".join(f"{k}: 0" for k in _SIZE_CHECK_KEYS)
-        + " };\nconst _sizePending = [];"
+        + " };"
     )
     lines.append(
         "function _bumpRefuteOrigin(origin, key) {\n"
@@ -1293,13 +1432,13 @@ def compose_grind_script(
         "}"
     )
     lines.append(
-        "function _handBack(rowId, type, reason) {\n"
+        "function _handBack(rowId, type, reason, tradeoff) {\n"
         "  const _row = _rows[rowId];\n"
         "  if (_row && _row.refuteNote) {\n"
         "    reason = `${reason} (revived from a refuted close proposal, origin ${_row.origin}: ${_row.refuteNote})`;\n"
         "  }\n"
         "  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;\n"
-        "  _handedBack.push({ row: rowId, type, reason });\n"
+        "  _handedBack.push(tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason });\n"
         "}\n"
         "function _normalizeRowRef(items, ref) {\n"
         "  const hit = items.find((it) => it.path === ref);\n"
@@ -1342,17 +1481,6 @@ def compose_grind_script(
     )
     lines.append("async function _sizeCall(row) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
 
-    size_assemble_raw = stages.compose_size_assemble_call(
-        models=stage_models,
-        label="size-assemble", phase_title="Grind", commands_js="commands",
-        agent_type_host=agent_type_host,
-    )
-    lines.append(
-        "async function _sizeAssembleCall(commands) {\n"
-        + _indent_block(_capture(size_assemble_raw, "size-assemble", return_expr="_result.results || []"), "  ")
-        + "\n}"
-    )
-
     if has_close_node:
         close_raw = stages.compose_refute_close_call(
             models=stage_models,
@@ -1383,6 +1511,22 @@ def compose_grind_script(
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
+    lines.append(
+        "function _undoPaths(row) {\n"
+        "  return Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
+        ".concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])));\n"
+        "}"
+    )
+    reject_raw = stages.compose_verify_op_call(
+        models=stage_models,
+        label="verify-op", phase_title="Grind", run_dir=run_dir_s,
+        agent_type_host=agent_type_host,
+        reject_paths_js="_undoPaths(row)",
+        reject_reason_js="'the fix wrote historical records'",
+    )
+    lines.append(
+        "async function _rejectUndoCall(row) {\n" + _indent_block(_capture(reject_raw, "verify"), "  ") + "\n}"
+    )
     verify_agent_raw = stages.compose_verify_agent_call(
         models=stage_models,
         label="verify-agent", phase_title="Grind",
@@ -1390,6 +1534,7 @@ def compose_grind_script(
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
         agent_type_host=agent_type_host, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
+        final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
     )
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
@@ -1399,7 +1544,7 @@ def compose_grind_script(
         "  if (_forced) {\n"
         "    const _ids = (_result.tests_failing_ids || []).join(', ');\n"
         "    return { outcome: 'fail', reason: 'targeted tests ' + _result.tests_outcome"
-        " + (_ids ? ': ' + _ids : '') };\n"
+        " + (_ids ? ': ' + _ids : ''), undo: _result.undo };\n"
         "  }\n"
         "  return _result;"
     )
@@ -1407,6 +1552,8 @@ def compose_grind_script(
         models=stage_models,
         label="verify-op", phase_title="Grind", run_dir=run_dir_s, op_js="spec.op", batch_id_js="row.batchId",
         agent_type_host=agent_type_host,
+        row_id_js="row.rowId", row_path_js="row.path",
+        final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
     )
     lines.append(
         "async function _verifyCall(row) {\n"
@@ -1420,7 +1567,7 @@ def compose_grind_script(
                     "  const _pass = _result.exit_code === 0 || "
                     "(Array.isArray(_failing) && _failing.length > 0 && "
                     "!_failing.includes(row.rowId) && !_failing.includes(row.path));\n"
-                    "  return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output) };"
+                    "  return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output), undo: _result.undo };"
                 ),
             ),
             "    ",
@@ -1447,19 +1594,8 @@ def compose_grind_script(
         + "\n}"
     )
 
-    undo_raw = stages.compose_undo_call(
-        models=stage_models,
-        label="undo", phase_title="Grind",
-        paths_js=(
-            "Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
-            ".concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])))"
-        ),
-        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
-    )
-    lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
-
     lines.append(
-        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), terminal_commit_dropped: _terminalCommitDropped };\n}"
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
     )
     lines.append(
         "const _rows = {};\n"
@@ -1470,7 +1606,7 @@ def compose_grind_script(
         "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
-        "origin: '', refuteNote: '', "
+        "origin: '', refuteNote: '', fixReported: false, sizingPath: '', "
         "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
@@ -1510,7 +1646,8 @@ def compose_grind_script(
         "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);\n"
         "    if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
         "    if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
-        "    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);\n"
+        "    if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { applyRoute(row, recRow, route, `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
+        "    else { applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
         "  }\n"
         "  for (const staleRef of (_out.stale || [])) {\n"
         "    const staleId = _normalizeRowRef(rowsMeta, staleRef);\n"
@@ -1544,13 +1681,9 @@ def compose_grind_script(
         "    }\n"
         "    if (!_belowFloor) { _byTriageCheck.size_confirmed += 1; }\n"
         "    row.done = true;\n"
-        "    const _sizingRel = _sizingPath(scouted, rid);\n"
-        "    _sizePending.push({\n"
-        "      rid,\n"
-        "      path: _sizingRel,\n"
-        "      intent: scouted.intent || '',\n"
-        "      command: _sizeChainCmd(scouted, { row_id: rid, path: row.path, digest: row.digest }, _sizingRel),\n"
-        "    });\n"
+        "    const _intent = scouted.intent || '';\n"
+        "    if (scouted.exit_code === 0) { row.sizingPath = _sizingPath(scouted, rid); _handBack(rid, 'baton', 'sized at ' + row.sizingPath + ': ' + _intent); }\n"
+        "    else { _handBack(rid, 'baton', _intent + ' (size step failed: exit ' + (scouted.exit_code === undefined ? 'missing' : scouted.exit_code) + ')'); }\n"
         "  }\n"
         "}"
     )
@@ -1616,16 +1749,16 @@ def compose_grind_script(
         "  const tradeoff = result.has_tradeoff ? (result.tradeoff || '') : '';\n"
         "  const outcome = result.outcome;\n"
         "  row.lastOutcome = outcome;\n"
-        "  if (result.touched_files && result.touched_files.length) { row.touchedFiles = result.touched_files; }\n"
-        "  else if (outcome === 'done') { row.touchedFiles = row.declaredFiles; }\n"
-        "  row.createdFiles = result.created_files || [];\n"
+        "  if (result.touched_files && result.touched_files.length) { row.touchedFiles = _union(row.fixReported ? row.touchedFiles : [], result.touched_files); row.fixReported = true; }\n"
+        "  else if (outcome === 'done' && !row.fixReported) { row.touchedFiles = row.declaredFiles; }\n"
+        "  row.createdFiles = _union(row.createdFiles, result.created_files);\n"
         "  if (outcome === 'done' && result.close_result) {\n"
         "    const _archived = _archiveDestination(row.path);\n"
         "    row.removedFiles = row.removedFiles.concat([row.path]);\n"
         "    row.touchedFiles = row.touchedFiles.concat([_archived]);\n"
         "    row.closeResult = { old: row.path, new: _archived };\n"
         "  }\n"
-        "  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }\n"
+        "  if (tradeoff) { row.done = true; _byTriageCheck.fix_late_tradeoff += 1; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }\n"
         "  if (outcome === 'NEEDS_PLAN') { row.done = true; _byTriageCheck.fix_needs_plan += 1; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
         "  if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
         "  if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"
@@ -1635,7 +1768,15 @@ def compose_grind_script(
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
         "  if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
-        "  if (_entangle(rowId, (result.touched_files || []).concat(result.created_files || []))) return;\n"
+        "  const _written = (result.touched_files || []).concat(result.created_files || []);\n"
+        "  const _historical = _historicalPaths(_written);\n"
+        "  if (_historical.length) {\n"
+        "    row.done = true;\n"
+        "    const _undone = ((await withLock(lockKeys, async () => _rejectUndoCall(row))) || {}).undo || {};\n"
+        "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _HISTORICAL_UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
+        "    _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;\n"
+        "  }\n"
+        "  if (_entangle(rowId, _written)) return;\n"
         "  if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }\n"
         "  row.fixNode = _priorNode;\n"
         "  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
@@ -1654,9 +1795,9 @@ def compose_grind_script(
         "      row.node = row.fixNode || row.node;\n"
         "      return;\n"
         "    }\n"
-        "    const _undone = await withLock(lockKeys, async () => _undoCall(row));\n"
+        "    const _undone = result.undo || {};\n"
         "    row.done = true;\n"
-        "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : '') + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
+        "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
         "    _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
         "  }\n"
         "  applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);\n"
@@ -1686,7 +1827,7 @@ def compose_grind_script(
     )
 
     lines.append(
-        _drain_sweep_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, models=stage_models)
+        _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, models=stage_models)
     )
     lines.append(
         "const _admitted = {};\n"
@@ -1738,23 +1879,9 @@ def compose_grind_script(
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
         "_handBack(r, 'budget-exhausted', " + repr(_EXHAUSTED_REASON) + "); }\n"
         "  }\n"
-        "  if (_sizePending.length) {\n"
-        "    const _commands = _sizePending.map((p) => ({ row: p.rid, command: p.command }));\n"
-        "    const _byRow = {};\n"
-        "    try {\n"
-        "      for (const r of (await _sizeAssembleCall(_commands))) { _byRow[r.row] = r; }\n"
-        "    } catch (err) {\n"
-        "      for (const p of _sizePending) { _byRow[p.rid] = { exit_code: `assemble call threw: ${err && err.message ? err.message : String(err)}` }; }\n"
-        "    }\n"
-        "    for (const p of _sizePending) {\n"
-        "      const r = _byRow[p.rid];\n"
-        "      if (r && r.exit_code === 0) { _handBack(p.rid, 'baton', 'sized at ' + p.path + ': ' + p.intent); }\n"
-        "      else { _handBack(p.rid, 'baton', p.intent + ' (size step failed: exit ' + (r ? r.exit_code : 'missing') + ')'); }\n"
-        "    }\n"
-        "  }\n"
         "}\n"
-        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }\n"
-        "await _drainSweep();"
+        "try {\n"
+        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }"
     )
 
     review_fix_raw = stages.compose_review_fix_commit_call(
@@ -1777,7 +1904,10 @@ def compose_grind_script(
     )
 
     lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, models=stage_models))
-    lines.append("await _adjudicatePmBound();")
+    lines.append(
+        "await _adjudicatePmBound();\n"
+        "} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
+    )
 
     lines.append(
         "const HANDBACK = {\n"

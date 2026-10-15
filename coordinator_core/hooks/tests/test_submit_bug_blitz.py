@@ -167,6 +167,57 @@ def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(rep
     assert "overrides" not in seen
 
 
+def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
+    (repo / "state" / "bug-backlog" / "row-a.md").write_text(
+        "---\nid: row-a\nstatus: open\nseverity: P1\npm_ruling: fix it\n---\nbody\n", encoding="utf-8"
+    )
+    seen: dict = {}
+
+    def emit(params: dict, root: Path) -> dict:
+        seen.update(params)
+        return {"ok": False}
+
+    def boom(*a, **k):
+        raise AssertionError("a backlog dir target must not parse or mint")
+
+    env = _call(repo, {"targets": "state/bug-backlog"}, emit=emit, parse=boom, mint=boom, resolve=mod._default_resolve)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"  # the stub emit refused after resolve
+    assert "no failing" not in _reason(env)
+    assert seen["queue"] == ["state/bug-backlog"]
+    assert "overrides" not in seen
+
+
+def test_backlog_dir_target_allows_through_the_real_emit(repo):
+    (repo / "state" / "bug-backlog" / "row-a.md").write_text(
+        "---\nid: row-a\nstatus: open\nseverity: P1\npm_ruling: fix it\n---\nbody\n", encoding="utf-8"
+    )
+    env = _call(repo, {"targets": "./state/bug-backlog/"}, resolve=mod._default_resolve)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+
+
+def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
+    from coordinator_core.session import scope
+
+    claims = [
+        "state/sizings/held.yaml",
+        "state/bug-backlog/row-a.md",
+        "state/queue-grind/bug/runs/x.json",
+        "coordinator_core/other.py",
+    ]
+    seen_sid: list = []
+
+    def fake_claims(sid, cwd=None):
+        seen_sid.append(sid)
+        return claims
+
+    monkeypatch.setattr(scope, "own_path_claims", fake_claims)
+    env = _call(repo, {"targets": "red-set"})
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert decisions[mod.BASELINE_DIRTY_KEY] == claims[:3]
+    assert seen_sid == ["sess-blitz"]
+
+
 @pytest.mark.parametrize("branch", ["main", "feature/foo"])
 def test_denies_off_a_work_branch(repo, branch):
     _head(repo, branch)

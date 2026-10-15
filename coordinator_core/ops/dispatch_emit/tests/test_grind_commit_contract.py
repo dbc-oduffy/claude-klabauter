@@ -96,6 +96,66 @@ def test_refuses_non_dict():
     assert isinstance(gcc.validate_grind_params([]), str)
 
 
+def test_run_close_names_are_pinned():
+    assert gcc.DECLARED_FLAG == "declared-urlenc"
+    assert gcc.DECISIONS_FLAG == "decisions-file"
+    assert gcc.QUEUE_FLAG == "queue"
+    assert gcc.SWEEP_FLAG == "sweep"
+    assert gcc.SWEEP_FAILED_HEAD == "drain sweep did not complete"
+    assert gcc.BASELINE_DIRTY_KEY == "baseline_dirty"
+    assert gcc.MINTED_KEY == "minted"
+    assert gcc.RUN_RECORD_REQUIRED == ("profile", "run_id", "counts", "spend", "handed_back", "halted")
+    assert gcc.HISTORICAL_RECORD_PREFIXES == (
+        "state/warp/", "docs/plans/", "state/handoffs/", "state/sizings/", "docs/decisions/",
+    )
+
+
+def test_run_write_roots():
+    roots = gcc.run_write_roots("bug", ["state/bug-backlog", "state/other/"])
+    assert roots == (
+        "state/bug-backlog/", "state/other/", "state/queue-grind/bug/",
+        "state/sizings/", "state/handoffs/", "state/apm-rulings/",
+    )
+    assert all(r.endswith("/") for r in roots)
+    assert gcc.run_write_roots("bug", ["state/sizings/"]).count("state/sizings/") == 1
+
+
+def test_under_roots():
+    roots = gcc.run_write_roots("bug", ["state/bug-backlog"])
+    assert gcc.under_roots("state/bug-backlog/x.md", roots)
+    assert gcc.under_roots("state/sizings/s.yaml", roots)
+    assert not gcc.under_roots("state/bug-backlogger/x.md", roots)
+    assert not gcc.under_roots("src/a.py", roots)
+
+
+@pytest.mark.parametrize("path", [
+    "state/warp/run/x.md", "docs/plans/p.md", "state/handoffs/h.md",
+    "state/sizings/s.yaml", "docs/decisions/DR-1.md",
+])
+def test_historical_records_refused(path):
+    assert gcc.is_historical_record(path)
+
+
+@pytest.mark.parametrize("path", ["state/bug-backlog/a.md", "src/a.py", "state/warpish/x", "docs/plans"])
+def test_work_product_not_historical(path):
+    assert not gcc.is_historical_record(path)
+
+
+@pytest.mark.parametrize("paths", [
+    ["a/b.py"], [], ["it's/x.md", "state/sizings/café.yaml", "a b/c%d.md"],
+])
+def test_declared_paths_round_trip(paths):
+    token = gcc.encode_declared_paths(paths)
+    assert "'" not in token and " " not in token
+    assert gcc.decode_declared_paths(token) == sorted(set(paths))
+
+
+@pytest.mark.parametrize("token", ["%7B", "%5B%5D", "%7B%22paths%22%3A%20%5B1%5D%7D", "%7B%22x%22%3A%201%7D"])
+def test_decode_refuses_malformed(token):
+    with pytest.raises(ValueError):
+        gcc.decode_declared_paths(token)
+
+
 def test_import_adds_no_non_stdlib_module():
     code = (
         "import sys\n"

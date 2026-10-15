@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 
@@ -47,6 +48,8 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.chdir(r)
+    # The peer-contest read answers None until a sessions dir exists.
+    scope.touch(SID, "session-marker", cwd=str(r), root=str(r))
     return r
 
 
@@ -97,7 +100,7 @@ def test_restores_modified_deleted_and_removes_created(repo, capsys, monkeypatch
     calls = _count_spawns(monkeypatch)
     assert _undo(repo, paths) == 0
     assert capsys.readouterr().out.strip() == (
-        '{"removed": ["new.txt"], "restored": ["gone.txt", "mod.txt", "tool.sh"]}'
+        '{"left": [], "removed": ["new.txt"], "restored": ["gone.txt", "mod.txt", "tool.sh"]}'
     )
     assert (repo / "mod.txt").read_bytes() == b"orig\r\nbytes\x00\xff\n"
     assert (repo / "gone.txt").read_text() == "gone\n"
@@ -131,7 +134,7 @@ def test_single_class_is_one_spawn(repo, monkeypatch):
 def test_already_absent_created_path_is_not_an_error(repo, capsys):
     _claim(repo, "never.txt")
     assert _undo(repo, ["never.txt"]) == 0
-    assert capsys.readouterr().out.strip() == '{"removed": [], "restored": []}'
+    assert capsys.readouterr().out.strip() == '{"left": [], "removed": [], "restored": []}'
 
 
 def test_created_symlink_is_removed_and_its_target_kept(repo, capsys):
@@ -141,7 +144,7 @@ def test_created_symlink_is_removed_and_its_target_kept(repo, capsys):
         pytest.skip("symlink creation unavailable")
     _claim(repo, "link.txt")
     assert _undo(repo, ["link.txt"]) == 0
-    assert capsys.readouterr().out.strip() == '{"removed": ["link.txt"], "restored": []}'
+    assert capsys.readouterr().out.strip() == '{"left": [], "removed": ["link.txt"], "restored": []}'
     assert not (repo / "link.txt").is_symlink()
     assert (repo / "other.txt").read_text() == "other\n"
 
@@ -180,12 +183,86 @@ def _refused(repo, paths, monkeypatch, expect_rc=1, spawns=0):
     assert len(calls) == spawns
 
 
-def test_undeclared_path_refused(repo, monkeypatch, capsys):
+def _out(capsys):
+    return json.loads(capsys.readouterr().out)
+
+
+def test_undeclared_paths_are_restored_without_claims(repo, capsys):
     (repo / "mod.txt").write_bytes(b"changed")
     (repo / "other.txt").write_text("edited\n")
-    _claim(repo, "mod.txt")
-    _refused(repo, ["mod.txt", "other.txt"], monkeypatch)
-    assert "other.txt" in capsys.readouterr().err
+    assert _undo(repo, ["mod.txt", "other.txt"]) == 0
+    assert _out(capsys)["restored"] == ["mod.txt", "other.txt"]
+    assert (repo / "other.txt").read_text() == "other\n"
+
+
+def test_sixty_four_paths_restore_every_one(repo, capsys):
+    names = [f"hist/f{i}.md" for i in range(64)]
+    (repo / "hist").mkdir()
+    for n in names:
+        (repo / n).write_text("h\n")
+    _git(repo, "add", "hist")
+    _git(repo, "commit", "-q", "-m", "hist")
+    for n in names:
+        (repo / n).write_text("edited\n")
+    assert _undo(repo, names) == 0
+    assert len(_out(capsys)["restored"]) == 64
+    assert all((repo / n).read_text() == "h\n" for n in names)
+
+
+def test_one_contested_path_among_64_leaves_only_it(repo, capsys, monkeypatch):
+    names = [f"hist/f{i}.md" for i in range(64)]
+    (repo / "hist").mkdir()
+    for n in names:
+        (repo / n).write_text("h\n")
+    _git(repo, "add", "hist")
+    _git(repo, "commit", "-q", "-m", "hist")
+    for n in names:
+        (repo / n).write_text("edited\n")
+    monkeypatch.setattr(
+        scope, "contested_by_live_peers", lambda *a, **k: {"hist/f7.md": ["peer"]}
+    )
+    assert _undo(repo, names) == 1
+    out = _out(capsys)
+    assert len(out["restored"]) == 63
+    assert out["left"] == [{"path": "hist/f7.md", "reason": "live-peer:peer"}]
+    assert (repo / "hist/f7.md").read_text() == "edited\n"
+    assert (repo / "hist/f8.md").read_text() == "h\n"
+
+
+def test_failure_json_is_also_on_stderr(repo, capsys, monkeypatch):
+    (repo / "mod.txt").write_bytes(b"changed")
+    monkeypatch.setattr(scope, "contested_by_live_peers", lambda *a, **k: {"mod.txt": ["peer"]})
+    assert _undo(repo, ["mod.txt"]) == 1
+    cap = capsys.readouterr()
+    assert json.loads(cap.out)["left"] == [{"path": "mod.txt", "reason": "live-peer:peer"}]
+    assert "live-peer:peer" in cap.err
+
+
+def test_baseline_dirty_path_is_left_and_other_restored(repo, capsys, tmp_path):
+    (repo / "mod.txt").write_bytes(b"pre-fire edit")
+    (repo / "other.txt").write_text("edited\n")
+    dec = tmp_path / "decisions.json"
+    dec.write_text(json.dumps({"baseline_dirty": ["mod.txt"]}))
+    rc = grind_rows.main(
+        ["undo", "--paths-urlenc", encode_undo_paths(["mod.txt", "other.txt"]),
+         "--repo-root", str(repo), "--decisions-file", str(dec)]
+    )
+    assert rc == 1
+    out = _out(capsys)
+    assert out["left"] == [{"path": "mod.txt", "reason": "baseline"}]
+    assert out["restored"] == ["other.txt"]
+    assert (repo / "mod.txt").read_bytes() == b"pre-fire edit"
+
+
+def test_unreadable_decisions_file_restores_nothing(repo, capsys, tmp_path):
+    (repo / "mod.txt").write_bytes(b"pre-fire edit")
+    rc = grind_rows.main(
+        ["undo", "--paths-urlenc", encode_undo_paths(["mod.txt"]),
+         "--repo-root", str(repo), "--decisions-file", str(tmp_path / "missing.json")]
+    )
+    assert rc == 1
+    assert _out(capsys)["left"] == [{"path": "mod.txt", "reason": "baseline-unreadable"}]
+    assert (repo / "mod.txt").read_bytes() == b"pre-fire edit"
 
 
 def test_peer_held_path_refused(repo, monkeypatch):

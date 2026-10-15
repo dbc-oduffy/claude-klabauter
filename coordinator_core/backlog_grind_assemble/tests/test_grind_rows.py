@@ -33,6 +33,11 @@ from coordinator_core.backlog_grind_assemble import grind_rows
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
+def _record(**extra) -> dict:
+    """A run record carrying every `RUN_RECORD_REQUIRED` key."""
+    return {"profile": "bug", "run_id": "r", "counts": {}, "spend": {}, "handed_back": [], "halted": False, **extra}
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -658,7 +663,7 @@ class TestDR276DeclaredWrites:
         repo = _make_repo(tmp_path)
         self._set_session(monkeypatch, "sid-run-record")
         record_file = repo / "record.json"
-        record_file.write_text(json.dumps({"run_id": "20260922T000000Z"}), encoding="utf-8")
+        record_file.write_text(json.dumps(_record()), encoding="utf-8")
 
         exit_code = _run_grind_row_recording(
             [
@@ -677,7 +682,7 @@ class TestDR276DeclaredWrites:
 class TestRunRecordVerb:
     def test_writes_the_record_atomically_under_repo_root(self, tmp_path, capsys):
         record_file = tmp_path / "record.json"
-        record_file.write_text(json.dumps({"a": 1, "b": 2}), encoding="utf-8")
+        record_file.write_text(json.dumps(_record(a=1, b=2)), encoding="utf-8")
 
         exit_code = grind_rows.main(
             [
@@ -690,14 +695,14 @@ class TestRunRecordVerb:
         )
         assert exit_code == grind_rows.EXIT_OK
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000000Z.json"
-        assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1, "b": 2}
+        assert json.loads(target.read_text(encoding="utf-8")) == _record(a=1, b=2)
         # No leftover temp file.
         assert list(target.parent.glob(".*.tmp-*")) == []
 
     def test_reads_a_percent_encoded_record_argument(self, tmp_path, capsys):
         from urllib.parse import quote
 
-        record = {"reason": "it's — café"}
+        record = _record(reason="it's — café")
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "bug", "--run-id", "20260922T000000Z",
@@ -722,7 +727,7 @@ class TestRunRecordVerb:
     def test_reads_from_stdin_when_record_file_is_a_dash(self, tmp_path, monkeypatch, capsys):
         import io
 
-        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"x": 1})))
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_record(x=1))))
         exit_code = grind_rows.main(
             [
                 "run-record",
@@ -734,12 +739,12 @@ class TestRunRecordVerb:
         )
         assert exit_code == grind_rows.EXIT_OK
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000001Z.json"
-        assert json.loads(target.read_text(encoding="utf-8")) == {"x": 1}
+        assert json.loads(target.read_text(encoding="utf-8")) == _record(x=1)
 
     def test_reads_from_stdin_when_record_file_is_absent(self, tmp_path, monkeypatch, capsys):
         import io
 
-        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"y": 2})))
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_record(y=2))))
         exit_code = grind_rows.main(
             [
                 "run-record",
@@ -750,11 +755,11 @@ class TestRunRecordVerb:
         )
         assert exit_code == grind_rows.EXIT_OK
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000004Z.json"
-        assert json.loads(target.read_text(encoding="utf-8")) == {"y": 2}
+        assert json.loads(target.read_text(encoding="utf-8")) == _record(y=2)
 
     def test_run_id_escaping_the_runs_directory_is_a_usage_error(self, tmp_path):
         record_file = tmp_path / "record.json"
-        record_file.write_text("{}", encoding="utf-8")
+        record_file.write_text(json.dumps(_record()), encoding="utf-8")
         exit_code = grind_rows.main(
             [
                 "run-record",
@@ -1044,11 +1049,14 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert _git(["commit", "-m", "seed ledgers"], tmp_path).returncode == 0
         return tmp_path
 
-    def _run_record(self, repo, capsys, run_id="20261015T000000Z"):
+    def _run_record(self, repo, capsys, run_id="20261015T000000Z", record=None, extra=()):
+        from urllib.parse import quote
+
         capsys.readouterr()
         code = grind_rows.main(
-            ["run-record", "--profile", "bug", "--run-id", run_id, "--record-urlenc", "%7B%22a%22%3A1%7D",
-             "--repo-root", str(repo)]
+            ["run-record", "--profile", "bug", "--run-id", run_id,
+             "--record-urlenc", quote(json.dumps(record or _record()), safe=""),
+             "--repo-root", str(repo), *extra]
         )
         captured = capsys.readouterr()
         return code, captured
@@ -1150,4 +1158,172 @@ class TestRunRecordLandsTheRunsBookkeeping:
             code, captured = self._run_record(repo, capsys)
         assert code == grind_rows.EXIT_OK, captured.err
         assert json.loads(captured.out)["commit"]
+        assert list(spawns) == []
+
+    # -- widened run-close land set ------------------------------------------------
+
+    def _write(self, repo, rel, text, *, claim=True):
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        if claim:
+            grind_rows._declare_under_repo_root(path, repo)
+
+    def _decisions(self, repo, **keys):
+        path = repo.parent / f"{repo.name}-decisions.json"
+        path.write_text(json.dumps(keys), encoding="utf-8")
+        return ["--decisions-file", str(path)]
+
+    def _widened_extra(self, repo, declared, decisions=()):
+        from coordinator_core.ops.dispatch_emit.grind_commit_contract import encode_declared_paths
+
+        return ["--queue", "state/bug-backlog", "--declared-urlenc", encode_declared_paths(declared), *decisions]
+
+    def test_queue_edit_declared_sizing_baton_and_minted_row_land_in_one_commit(self, repo, capsys):
+        self._write(repo, "state/bug-backlog/bug-1.yaml", "status: open\n", claim=False)
+        assert _git(["add", "-A"], repo).returncode == 0
+        assert _git(["commit", "-m", "seed row"], repo).returncode == 0
+        self._write(repo, "state/bug-backlog/bug-1.yaml", "status: open\nnote: handed back\n")
+        self._write(repo, "state/sizings/s.yaml", "size: s\n", claim=False)
+        self._write(repo, "state/handoffs/b.md", "---\ncarried_items: []\n---\nbaton\n", claim=False)
+        self._write(repo, "state/bug-backlog/TF-9.yaml", "status: open\n", claim=False)
+        before = _git(["rev-list", "--count", "HEAD"], repo).stdout.strip()
+        extra = self._widened_extra(
+            repo, ["state/sizings/s.yaml", "state/handoffs/b.md"],
+            self._decisions(repo, minted=["state/bug-backlog/TF-9.yaml"], baseline_dirty=[]),
+        )
+
+        code, captured = self._run_record(repo, capsys, extra=extra)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert set(out["landed"]) == {
+            "state/bug-backlog/bug-1.yaml", "state/sizings/s.yaml", "state/handoffs/b.md",
+            "state/bug-backlog/TF-9.yaml", "state/queue-grind/bug/runs/20261015T000000Z.json",
+        }
+        assert _git(["rev-list", "--count", "HEAD"], repo).stdout.strip() == str(int(before) + 1)
+        assert _git(["status", "--porcelain"], repo).stdout == ""
+
+    def test_a_baseline_dirty_claim_does_not_land(self, repo, capsys):
+        self._write(repo, "state/sizings/old.yaml", "predates the run\n")
+        self._write(repo, "state/sizings/new.yaml", "this run\n")
+        extra = self._widened_extra(repo, [], self._decisions(repo, baseline_dirty=["state/sizings/old.yaml"]))
+
+        code, captured = self._run_record(repo, capsys, extra=extra)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        landed = json.loads(captured.out)["landed"]
+        assert "state/sizings/new.yaml" in landed and "state/sizings/old.yaml" not in landed
+        assert _git(["status", "--porcelain"], repo).stdout.split() == ["??", "state/sizings/old.yaml"]
+
+    def test_a_peer_contested_declared_path_is_withheld_and_named(self, repo, capsys):
+        from coordinator_core.session import scope, touch_record
+
+        self._write(repo, "state/handoffs/b.md", "---\ncarried_items: []\n---\nbaton\n", claim=False)
+        scope.touch("sid-b", "state/handoffs/b.md", str(repo), kind=touch_record.KIND_WRITE)
+
+        code, captured = self._run_record(repo, capsys, extra=self._widened_extra(repo, ["state/handoffs/b.md"]))
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["withheld"] == ["state/handoffs/b.md"]
+        assert "state/handoffs/b.md" not in out["landed"]
+
+    def test_a_declared_path_outside_the_roots_never_lands(self, repo, capsys):
+        self._write(repo, "docs/elsewhere.md", "x\n", claim=False)
+
+        code, captured = self._run_record(repo, capsys, extra=self._widened_extra(repo, ["docs/elsewhere.md"]))
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        assert "docs/elsewhere.md" not in json.loads(captured.out)["landed"]
+        assert _git(["status", "--porcelain", "-uall"], repo).stdout.split() == ["??", "docs/elsewhere.md"]
+
+    def test_a_record_missing_a_required_key_exits_usage_and_writes_nothing(self, repo, capsys):
+        record = _record()
+        del record["handed_back"]
+
+        code, captured = self._run_record(repo, capsys, record=record)
+
+        assert code == grind_rows.EXIT_USAGE
+        assert "handed_back" in captured.err
+        assert not (repo / "state/queue-grind/bug/runs/20261015T000000Z.json").exists()
+
+    def test_a_tradeoff_is_written_verbatim_beside_the_evidence_and_lands(self, repo, capsys):
+        text = "it's a trade — café\nsecond line"
+        record = _record(handed_back=[
+            {"row": "bug-1", "type": "needs-judgment", "reason": "fix reported a tradeoff", "tradeoff": text},
+            {"row": "bug-2", "type": "needs-judgment", "reason": "r"},
+        ])
+
+        code, captured = self._run_record(repo, capsys, record=record)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        rel = grind_rows.evidence_rel("bug", "20261015T000000Z", "bug-1", "judgment")
+        assert (repo / rel).read_text(encoding="utf-8") == text
+        assert rel in json.loads(captured.out)["landed"]
+        assert not (repo / grind_rows.evidence_rel("bug", "20261015T000000Z", "bug-2", "judgment")).exists()
+        assert _git(["status", "--porcelain"], repo).stdout == ""
+
+    # -- run-record --sweep ----------------------------------------------------------
+
+    def _sweep_extra(self, repo, profile_dir):
+        queue = repo / "state" / "bug-backlog"
+        queue.mkdir(parents=True, exist_ok=True)
+        (queue / "keep.yaml").write_text("id: keep\nstatus: open\n", encoding="utf-8")
+        return ["--sweep", "--profile-dir", str(profile_dir), "--queue", "state/bug-backlog"]
+
+    def test_sweep_settles_the_ledgers_and_lands_the_unlinks_in_the_records_commit(self, repo, capsys):
+        profile_dir = repo.parent / f"{repo.name}-profiles"
+        _write_profile(profile_dir, archive_path="archive/bug-backlog", schema_rel="schema/bug.schema.json")
+
+        code, captured = self._run_record(repo, capsys, extra=self._sweep_extra(repo, profile_dir))
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["swept"] is True and out["sweep_reason"] == ""
+        assert out["commit"]
+        assert out["deleted"] == [f"state/queue-grind/bug/{n}.jsonl" for n in ("old-1", "old-2")]
+        assert _git(["status", "--porcelain"], repo).stdout.split() == ["??", "state/bug-backlog/"]
+        record = json.loads((repo / "state/queue-grind/bug/runs/20261015T000000Z.json").read_text(encoding="utf-8"))
+        assert record["handed_back"] == []
+
+    def test_a_refused_sweep_still_writes_the_record_and_names_the_failure(self, repo, capsys):
+        from coordinator_core.ops.dispatch_emit.grind_commit_contract import SWEEP_FAILED_HEAD
+
+        missing_profiles = repo.parent / f"{repo.name}-no-profiles"
+
+        code, captured = self._run_record(repo, capsys, extra=self._sweep_extra(repo, missing_profiles))
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["swept"] is False and out["sweep_reason"].startswith("profile refused")
+        assert out["deleted"] == []
+        record = json.loads((repo / "state/queue-grind/bug/runs/20261015T000000Z.json").read_text(encoding="utf-8"))
+        dead = [h for h in record["handed_back"] if h["type"] == "stage-dead"]
+        assert len(dead) == 1 and dead[0]["row"] == "20261015T000000Z"
+        assert dead[0]["reason"].startswith(
+            f"{SWEEP_FAILED_HEAD}: state/queue-grind/bug/runs/20261015T000000Z.json: profile refused"
+        )
+        assert record["counts"]["by_type"]["stage-dead"] == 1
+        assert (repo / "state/queue-grind/bug/old-1.jsonl").is_file()
+
+    def test_sweep_without_a_profile_dir_or_a_queue_is_a_usage_error_and_writes_no_record(self, repo, capsys):
+        record_path = repo / "state/queue-grind/bug/runs/20261015T000000Z.json"
+        no_profile_dir = self._run_record(repo, capsys, extra=["--sweep", "--queue", "state/bug-backlog"])
+        no_queue = self._run_record(repo, capsys, extra=["--sweep", "--profile-dir", str(repo)])
+
+        for code, captured in (no_profile_dir, no_queue):
+            assert code == grind_rows.EXIT_USAGE
+            assert "--sweep needs" in captured.err
+        assert not record_path.exists()
+
+    def test_the_widened_land_set_spawns_no_git_process(self, repo, capsys, monkeypatch):
+        from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+
+        self._write(repo, "state/sizings/s.yaml", "size: s\n", claim=False)
+        extra = self._widened_extra(repo, ["state/sizings/s.yaml"])
+        with _count_spawns_attributed(monkeypatch) as spawns:
+            code, captured = self._run_record(repo, capsys, extra=extra)
+        assert code == grind_rows.EXIT_OK, captured.err
+        assert "state/sizings/s.yaml" in json.loads(captured.out)["landed"]
         assert list(spawns) == []

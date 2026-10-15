@@ -494,3 +494,26 @@ def test_a_roster_without_a_delivery_verifier_assigns_the_not_rostered_reason():
     assert "_deliveryVerdict = null;" in script
     assert "const _deliveryNotRun" not in script
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
+
+
+def _reword_prompt(script):
+    return next(ln for ln in script.splitlines() if "label: 'size-reword'" in ln)
+
+
+def test_size_reword_runs_assemble_gate_and_stage_itself_with_no_wrapper_agent():
+    script = _compose()
+    assert "label: 'assemble-reword'" not in script and "label: 'gate-reword'" not in script
+    reword = _reword_prompt(script)
+    assert "<your reworded exit_criterion>" in reword
+    assert OP_ASK_GATE in reword and OP_ASK_STAGE in reword
+    for field in ("exit_code", "stdout", "arm", "halt", "manifest"):
+        assert field in ask_compose._REWORD_SCHEMA["properties"]
+    assert "_rewordStaged = !_scouted.halt && !!_scouted.arm;" in script
+    assert "(_scoutClean || _rewordStaged)" in script
+    assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
+
+
+def test_size_reword_stage_fold_drops_with_stop_after():
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
+
+    assert OP_ASK_STAGE not in _reword_prompt(_compose(stop_after=STOP_AFTER_PLAN))

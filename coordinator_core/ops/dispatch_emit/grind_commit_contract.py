@@ -10,13 +10,84 @@ a ``DROP_*`` reason, never refused; only a malformed path refuses the call.
 
 from __future__ import annotations
 
+import json
 from typing import Optional
+from urllib.parse import quote, unquote
 
 GRIND_COMMIT_PARAM = "grind"
 ROW_TRAILER_KEY = "Grind-Row"
 LEDGER_ROOT = "state/queue-grind/"
 DROP_LEDGER_ROOT = "ledger-root"
 DROP_UNSEEN_DELETION = "deletion-git-cannot-see"
+
+# Run-close contract: the ``grind-row run-record`` flags, the decisions.json keys and the record shape.
+DECLARED_FLAG = "declared-urlenc"
+DECISIONS_FLAG = "decisions-file"
+QUEUE_FLAG = "queue"
+BASELINE_DIRTY_KEY = "baseline_dirty"
+MINTED_KEY = "minted"
+SWEEP_FLAG = "sweep"
+# Twinned by grind_rows run-record --sweep (the record) and grind_compose's run close (the hand-back).
+SWEEP_FAILED_HEAD = "drain sweep did not complete"
+RUN_RECORD_REQUIRED = ("profile", "run_id", "counts", "spend", "handed_back", "halted")
+
+# Records a fix stage must never write: history, not work product.
+HISTORICAL_RECORD_PREFIXES = (
+    "state/warp/",
+    "docs/plans/",
+    "state/handoffs/",
+    "state/sizings/",
+    "docs/decisions/",
+)
+
+_SHARED_WRITE_ROOTS = ("state/sizings/", "state/handoffs/", "state/apm-rulings/")
+
+
+def _dir_root(path: str) -> str:
+    return path if path.endswith("/") else path + "/"
+
+
+def run_write_roots(profile: str, queue_dirs: list[str]) -> tuple[str, ...]:
+    """Which directories may a grind run's close commit sweep: the queue dirs, the profile's
+    ledger dir and the shared sizing, baton and ruling dirs, each ending in ``/``, deduplicated in order."""
+    roots = [_dir_root(d) for d in queue_dirs]
+    roots.append(f"{LEDGER_ROOT}{profile}/")
+    roots.extend(_SHARED_WRITE_ROOTS)
+    return tuple(dict.fromkeys(roots))
+
+
+def under_roots(path: str, roots: tuple[str, ...] | list[str]) -> bool:
+    """True when the repo-relative POSIX ``path`` lies under any of ``roots``."""
+    return any(path.startswith(root) for root in roots)
+
+
+def is_historical_record(path: str) -> bool:
+    """May a fix stage write ``path``? False exactly when it lies under ``HISTORICAL_RECORD_PREFIXES``."""
+    return path.startswith(HISTORICAL_RECORD_PREFIXES)
+
+
+def encode_declared_paths(paths: list[str]) -> str:
+    """Render ``paths`` as the ``--declared-urlenc`` token: percent-encoded JSON ``{"paths": [...]}``
+    with ``'`` encoded too, so it is one shell-safe single-quoted token."""
+    return quote(json.dumps({"paths": list(paths)}, sort_keys=True), safe="")
+
+
+def decode_declared_paths(token: str) -> list[str]:
+    """Inverse of ``encode_declared_paths``; returns ``sorted(set(paths))``, empty when none were
+    declared. Raises ``ValueError`` on malformed JSON, a wrong key set or a non-string entry."""
+    try:
+        obj = json.loads(unquote(token))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"declared paths token is not valid JSON: {exc}") from exc
+    if not isinstance(obj, dict) or set(obj) != {"paths"}:
+        raise ValueError("declared paths token must be an object with exactly the key 'paths'")
+    paths = obj["paths"]
+    if not isinstance(paths, list):
+        raise ValueError("declared paths token 'paths' must be a list")
+    for entry in paths:
+        if not isinstance(entry, str) or not entry:
+            raise ValueError("declared paths token entries must be non-empty strings")
+    return sorted(set(paths))
 
 
 def partition_ledger_paths(paths: list[str]) -> tuple[list[str], list[str]]:

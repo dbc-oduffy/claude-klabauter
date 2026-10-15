@@ -170,7 +170,6 @@ def compose_roadmap_script(
     lit, agent, cat = ac._lit, ac._agent, ac._cat
     anchor = ac._ANCHOR_CLAUSE.format(root=repo_root)
     head = _emit._BRIEF_PRECEDENCE_CLAUSE
-    agent_type = _emit._EXECUTOR_AGENT_TYPE
     halt = lambda reason: (  # noqa: E731
         f"_halted = {{ halted: {lit(HALT_REFUSAL)}, reason: {reason}, sizing: _sizingRel, run_id: _runId }};"
     )
@@ -192,7 +191,7 @@ def compose_roadmap_script(
         rb_fn,
         plan_blitz_fn,
         "  phase('gate');",
-        f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=agent_type, schema=ac._GATE_SCHEMA)};",
+        f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=ac._MECHANICAL_AGENT_TYPE, agent_model=ac._MECHANICAL_MODEL, effort=ac._MECHANICAL_EFFORT, schema=ac._GATE_SCHEMA)};",
         "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
         f"{lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}",
         f"  if (!_halted && _gate.arm !== {lit('roadmap')}) {{ {halt(lit('sizing resolved to a non-roadmap arm in the roadmap script'))} }}",

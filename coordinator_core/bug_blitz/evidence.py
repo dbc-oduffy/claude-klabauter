@@ -15,6 +15,7 @@ from coordinator_core.bug_blitz.contract import FailingTest, ParseResult, Target
 from coordinator_core.testing.suite_run_record import parse_failed_ids, strip_ansi
 
 BACKLOG = "backlog"
+BACKLOG_DIR = "state/bug-backlog"
 UNPARSED_SAMPLE_MAX = 5
 _SAMPLE_WIDTH = 200
 _DIR_LIST = "failing-tests.txt"
@@ -40,10 +41,11 @@ class NoFailingTests(EvidenceError):
 
 
 def resolve_target(raw: str, repo_root: Path) -> TargetSpec:
-    """Resolve a raw `targets` arg: `backlog`, a red-set directory, or a file.
+    """Resolve a raw `targets` arg: `backlog`, the bug-backlog dir, a red-set directory, or a file.
 
-    A relative path must stay inside `repo_root`; an absolute path is accepted when it exists
-    (the red-set may live in a sibling checkout).
+    The bug-backlog dir (`BACKLOG_DIR` under `repo_root`, in any spelling) is the backlog itself,
+    never a red-set dir. A relative path must stay inside `repo_root`; an absolute path is accepted
+    when it exists (the red-set may live in a sibling checkout).
     """
     text = (raw or "").strip()
     if not text:
@@ -58,6 +60,8 @@ def resolve_target(raw: str, repo_root: Path) -> TargetSpec:
         resolved = (root / candidate).resolve()
         if not resolved.is_relative_to(root):
             raise TargetRefused(f"targets path escapes the repo: {text}")
+    if resolved == root / BACKLOG_DIR:
+        return TargetSpec(kind="backlog")
     if resolved.is_dir():
         return TargetSpec(kind="dir", path=str(resolved))
     if resolved.is_file():

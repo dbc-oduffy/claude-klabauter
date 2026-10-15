@@ -596,13 +596,17 @@ def compose_execute_review(
             f"run_base_sha: {run_base_sha}\n"
             f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
         ).strip()
+    prep_opts = _agent_opts_for(review.prep, emitted_agent_type=prep_type)
+    if mechanical_prep:
+        # One-op wrapper with no preceding agent to fold into: the minimal haiku floor.
+        prep_opts = {prep_type: {**prep_opts.get(prep_type, {}), "model": "haiku"}}
     prep_call = _agent_call_literal(
         prep_type,
         prep_prompt,
         prep_phase,
         schema=True,
         as_arrow=False,
-        agent_opts=_agent_opts_for(review.prep, emitted_agent_type=prep_type),
+        agent_opts=prep_opts,
         schema_literal=_schema_literal(review.prep.schema, stage_schemas),
     )
     if declared_paths_js:

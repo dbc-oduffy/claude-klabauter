@@ -32,15 +32,16 @@ from coordinator_core.bug_blitz.contract import (
     TargetSpec,
     run_tag,
 )
+from coordinator_core.bug_blitz.evidence import BACKLOG_DIR
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.dispatch_emit.grind_commit_contract import BASELINE_DIRTY_KEY, run_write_roots, under_roots
 
 GUARD_NAME = "submit-bug-blitz"
 SUBMIT_NAME = f"coordinator:{STUB_NAME}"
 PROFILE = "bug"
-QUEUE_DIR = "state/bug-backlog"
+QUEUE_DIR = BACKLOG_DIR
 SCRATCH_ROOT = "state/scratch/bug-blitz"
-BACKLOG_TARGET = "backlog"
 DECISIONS_FILE = "decisions.json"
 _ALLOWED_ARGS = frozenset({"targets", "appetite", "limit", "budget_tokens"})
 _ARGS_SHAPE = 'args: {targets: "<red-set dir | failing-tests file | backlog>"}, optional appetite, limit, budget_tokens'
@@ -138,8 +139,26 @@ def _repo_root(cwd: object) -> Optional[Path]:
     return Path(top) if top else None
 
 
-def _write_decisions(run_dir: Path, parsed: Optional[ParseResult], minted: list[str], target_ref: str) -> None:
+def _baseline_dirty(root: Path, session_id: str) -> list[str]:
+    """Which run-write-root paths did the firing session already claim: the run close never sweeps them.
+    Read in-process from the session's own claim list."""
+    if not session_id:
+        return []
+    from coordinator_core.session.scope import own_path_claims
+
+    roots = run_write_roots(PROFILE, [QUEUE_DIR])
+    try:
+        claims = own_path_claims(session_id, cwd=str(root))
+    except Exception:  # advisory baseline: an unreadable claim list must not refuse an emitted run
+        return []
+    return [p for p in claims if under_roots(p, roots)]
+
+
+def _write_decisions(
+    run_dir: Path, parsed: Optional[ParseResult], minted: list[str], target_ref: str, baseline_dirty: list[str]
+) -> None:
     record = {
+        BASELINE_DIRTY_KEY: baseline_dirty,
         "commit_authority": {"basis": "submission"},
         "suite": "not-run (targeted-runner)",
         "verify": "targeted-tests",
@@ -191,9 +210,12 @@ def evaluate(
     parsed: Optional[ParseResult] = None
     minted: list[str] = []
     overrides: dict = {}
-    if target_raw != BACKLOG_TARGET:
+    try:
+        spec = (resolve or _default_resolve)(target_raw, root)
+    except Exception as exc:  # the resolve refusal text is the whole message
+        return _refuse(f"targets {target_raw}: {exc}")
+    if spec.kind != "backlog":
         try:
-            spec = (resolve or _default_resolve)(target_raw, root)
             parsed = (parse or _default_parse)(spec)
             if not parsed.tests:
                 raise ValueError("no failing test parsed")
@@ -229,7 +251,7 @@ def evaluate(
         return _refuse(f"The engine emitted no run: {detail}")
 
     try:
-        _write_decisions(Path(script).parent, parsed, minted, target_raw)
+        _write_decisions(Path(script).parent, parsed, minted, target_raw, _baseline_dirty(root, session_id))
     except OSError as exc:
         return _refuse(f"decisions.json not written: {exc}")
 

@@ -224,10 +224,10 @@ def _reword_branch(script):
     return script[start : script.index("\n  }", start)]
 
 
-def test_sized_in_run_script_has_one_reword_and_one_reassemble_agent():
+def test_sized_in_run_script_has_one_reword_agent_and_no_reassemble_leg():
     script = _compose()
     assert script.count("label: 'size-reword'") == 1
-    assert script.count("label: 'assemble-reword'") == 1
+    assert "label: 'assemble-reword'" not in script
     unsized = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
     assert "size-reword" not in unsized and "assemble-reword" not in unsized
 
@@ -242,7 +242,7 @@ def test_reword_merges_only_the_criterion_and_the_halt_follows_it():
     script = _compose()
     assert script.count("_scouted.exit_criterion = _reworded.exit_criterion;") == 1
     assert script.count("const _sizingPath") == 1
-    reword_end = script.index("label: 'assemble-reword'")
+    reword_end = script.index("label: 'size-reword'")
     halt = script.index("if (_scouted.exit_code !== 0) { _halted")
     assert reword_end < script.index("_decision = JSON.parse") < halt
     assert "the gate, plan, stage, execute and review phases were skipped" in script[halt:]

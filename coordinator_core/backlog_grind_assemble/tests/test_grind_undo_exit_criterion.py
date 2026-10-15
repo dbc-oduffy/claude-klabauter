@@ -48,7 +48,9 @@ def _js_encode_uri_component(s: str) -> str:
 
 def _rendered_command(paths):
     """The stage's shell command, with the JS encoder expression evaluated in Python."""
-    js = grind_stages.compose_undo_call(label="undo", phase_title="Undo", paths=paths)
+    js = grind_stages.compose_verify_op_call(
+        label="verify-op", phase_title="Undo", run_dir="RUN_DIR", reject_paths_js=json.dumps(paths)
+    )
     match = re.search(r"JSON\.stringify\((\{paths: \[.*?\]\})\)\)\.replace", js)
     assert match, js
     payload = json.loads(match.group(1).replace("{paths:", '{"paths":'))
@@ -95,6 +97,7 @@ def test_verify_failed_row_restored_by_stage_command(repo, capsys):
     assert _run_as_op_runner(_rendered_command(paths), repo) == 0
 
     out = json.loads(capsys.readouterr().out)
+    assert out["left"] == []
     assert out["restored"] == ["fixed.md", "row one.md"]
     assert out["removed"] == ["archive/row one's copy.md", "new.md"]
     assert _tree(repo) == head_tree

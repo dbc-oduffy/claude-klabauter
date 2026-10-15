@@ -380,7 +380,7 @@ def test_cached_review_spec_is_a_literal_thunk_not_an_agent_call_and_flows_throu
     assert out["broken"] == [[PLAN, ["WRONG-DENOMINATOR"]]]
 
 
-def test_fresh_review_spec_persists_its_verdict_and_the_script_awaits_the_write():
+def test_fresh_review_spec_persists_its_verdict_through_its_own_last_act():
     fresh = ReviewInput(
         plan_path=PLAN, criterion="c", how="h", baseline_output=None, expected_when_true="e",
         baseline_ref=None, report_path=None, report_json=None,
@@ -389,8 +389,8 @@ def test_fresh_review_spec_persists_its_verdict_and_the_script_awaits_the_write(
     script = _compose(WAVES, specs=review_specs([fresh]), repo_root=Path("/repo"))
     assert "label: 'falsifier-integrity:1'" in script
     assert "/repo/state/mi/.can-report-red/x.verdict.json" in script
-    assert "falsifier_sha: 'fsha'" in script and "plan_sha: 'psha'" in script
-    assert "label: 'verdict-cache'" in script
-    assert script.index("_verdictCacheWrites = []") < script.index("] = _runRow(")
-    assert "await Promise.all(_verdictCacheWrites);" in script
+    assert '"falsifier_sha": "fsha"' in script and '"plan_sha": "psha"' in script
+    assert "label: 'verdict-cache'" not in script
+    assert "_verdictCacheWrites" not in script
+    assert "As your last act" in script
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []

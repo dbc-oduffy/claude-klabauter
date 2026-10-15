@@ -73,10 +73,11 @@ def _all_non_commit_calls() -> dict:
             run_dir="state/queue-grind/run1",
             batch_id="b1",
         ),
-        "undo": grind_stages.compose_undo_call(
-            label="undo:row1",
+        "verify-op-reject": grind_stages.compose_verify_op_call(
+            label="verify-op",
             phase_title="Undo",
-            paths=["a.py", "b.py"],
+            run_dir="state/queue-grind/run1",
+            reject_paths_js='["a.py", "b.py"]',
         ),
     }
 
@@ -109,7 +110,10 @@ def test_only_commit_composers_mention_settle_or_staging():
 
 def _sweep_call(**kw):
     kw.setdefault("queue_dirs", ["state/bug-backlog"])
-    kw.setdefault("run_id", "run-1")
+    kw.setdefault("run_id_js", "RUN_ID")
+    kw.setdefault("record_js", "REC")
+    kw.setdefault("declared_js", "DECLARED")
+    kw.setdefault("decisions_js", "DECISIONS")
     return grind_stages.compose_ledger_sweep_call(
         label="ledger-sweep:drain", phase_title="Grind", profile="p1", **kw
     )
@@ -125,17 +129,10 @@ def test_review_fix_commit_prompt_never_names_a_ledger_in_its_path_lists():
 
 
 def test_ledger_sweep_names_every_queue_and_never_commits():
-    call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"], record_js="REC")
-    assert "grind-row sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile p1 --queue state/bug-backlog --queue state/other --repo-root ' + (_shq(REPO_ROOT)) + '" in call_text
-    assert "grind-row run-record --profile p1 --run-id ' + 'run-1'" in call_text
-    # The record rides as one percent-encoded, single-quoted token, never stdin.
-    assert " --record-urlenc \\'" in call_text
-    assert "ONE Bash call" in call_text
-    assert "encodeURIComponent(REC).replace(/'/g, '%27')" in call_text
-    assert "--record-file" not in call_text
-    assert "run-record itself commits this run\\'s own bookkeeping" in call_text
+    call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"])
+    assert "grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile p1 --queue state/bug-backlog --queue state/other --run-id " in call_text
+    assert "--repo-root ' + (_shq(REPO_ROOT))" in call_text
     assert "never committed" not in call_text
-    assert "non-zero exit from run-record" in call_text
     assert "commit_v2" not in call_text
     assert "coordinator:git-commit-agent" not in call_text
 
@@ -159,6 +156,14 @@ def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
         m = re.fullmatch(r"encodeURIComponent\((\w+)\)\.replace\(/'/g, '%27'\)", expr)
         if m:
             return _js_encode_uri_component(bindings[m.group(1)]).replace("'", "%27")
+        m = re.fullmatch(r"encodeURIComponent\(JSON\.stringify\(\{paths: (\w+)\}\)\)\.replace\(/'/g, '%27'\)", expr)
+        if m:
+            paths = json.dumps({"paths": bindings[m.group(1)]}, separators=(",", ":"))
+            return _js_encode_uri_component(paths).replace("'", "%27")
+        m = re.fullmatch(r"\((\w+)\) \? ' --decisions-file ' \+ _shq\(\1\) : ''", expr)
+        if m:
+            value = bindings[m.group(1)]
+            return f" --decisions-file {shlex.quote(value)}" if value else ""
         m = re.fullmatch(r"_shq\((\w+)\)", expr)
         if m:
             return shlex.quote(str(bindings[m.group(1)]))
@@ -182,14 +187,14 @@ def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
 
     from coordinator_core.backlog_grind_assemble import grind_rows
 
-    call_text = grind_stages.compose_ledger_sweep_call(
-        label="ledger-sweep:drain", phase_title="Grind", profile="p1",
-        queue_dirs=[], run_id_js="RUN_ID", record_js="REC",
-    )
-    record = {"run_id": "20261002T000000Z", "reason": "it's \"quoted\" — café; $(x) `y`"}
+    call_text = _sweep_call(queue_dirs=[], declared_js="DECLARED", decisions_js="DEC")
+    record = {
+        "profile": "p1", "run_id": "20261002T000000Z", "counts": {}, "spend": {},
+        "handed_back": [], "halted": False, "reason": "it's \"quoted\" — café; $(x) `y`",
+    }
     argv = _emitted_run_record_argv(
         call_text,
-        {"RUN_ID": "20261002T000000Z", "REPO_ROOT": str(tmp_path), "REC": json.dumps(record)},
+        {"RUN_ID": "20261002T000000Z", "REPO_ROOT": str(tmp_path), "REC": json.dumps(record), "DECLARED": [], "DEC": ""},
     )
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
@@ -216,10 +221,49 @@ def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, ca
     assert "not valid JSON" not in err
 
 
-def test_ledger_sweep_without_queue_dirs_omits_the_sweep():
-    call_text = _sweep_call(queue_dirs=[])
+def test_drain_call_carries_every_flag_in_one_command():
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
+
+    call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"])
+    assert f"grind-row run-record --{gcc.SWEEP_FLAG} --profile-dir " in call_text
+    assert call_text.count("grind-row ") == 1
+    assert f"--{gcc.QUEUE_FLAG} state/other" in call_text
+    assert "--record-urlenc" in call_text
+    assert f"--{gcc.DECLARED_FLAG}" in call_text
+    assert "encodeURIComponent(JSON.stringify({paths: DECLARED})).replace(/'/g, '%27')" in call_text
+    assert f"--{gcc.DECISIONS_FLAG} " in call_text
+    assert "_shq(DECISIONS)" in call_text
     assert "grind-row sweep" not in call_text
-    assert "grind-row run-record" in call_text
+    assert "record-failed" in call_text and "recorded" in call_text
+    assert '"swept": {"type": "boolean"}' in call_text and '"sweep_reason"' in call_text
+    assert "coordinator:git-commit-agent" not in call_text
+
+
+def test_drain_call_omits_decisions_flag_behind_a_runtime_guard():
+    call_text = _sweep_call(decisions_js="DEC")
+    assert "(DEC) ? " in call_text and "_shq(DEC) : ''" in call_text
+
+
+def test_drain_stage_takes_the_op_runner_model():
+    assert "run-record" not in grind_stages.STAGE_AGENT_TYPES
+    assert grind_stages.STAGE_AGENT_TYPES["ledger-sweep"] == OP_RUNNER_AGENT_TYPE
+    assert OP_RUNNER_AGENT_TYPE in _sweep_call()
+
+
+def test_drain_call_without_queues_omits_the_sweep_flag():
+    call_text = _sweep_call(queue_dirs=[])
+    assert "--sweep" not in call_text and "--profile-dir" not in call_text
+    assert "grind-row run-record' + ' --profile p1 --run-id " in call_text
+
+
+def test_fix_prompt_names_every_historical_record_prefix():
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import HISTORICAL_RECORD_PREFIXES
+
+    call_text = grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r")
+    assert "Never write a historical record" in call_text
+    for prefix in HISTORICAL_RECORD_PREFIXES:
+        assert f"`{prefix}`" in call_text
+    assert "NEEDS_WIDER_SCOPE" in call_text
 
 
 def test_terminal_commit_prompt_is_one_bare_invoke_segment_plus_the_params_block():
@@ -278,10 +322,11 @@ def _calls_by_stage(**kw) -> dict:
         ),
         "commit": _terminal_call(label="c", phase_title="Commit", **kw),
         "ledger-sweep": grind_stages.compose_ledger_sweep_call(
-            label="ls", phase_title="Sweep", profile="p", run_id="r", **kw
+            label="ls", phase_title="Sweep", profile="p", run_id_js="RUN_ID", record_js="REC",
+            declared_js="[]", decisions_js="''", **kw
         ),
-        "undo": grind_stages.compose_undo_call(
-            label="u", phase_title="Undo", paths=["a.py"], **kw
+        "verify-op-reject": grind_stages.compose_verify_op_call(
+            label="vo", phase_title="Undo", run_dir="r", reject_paths_js='["a.py"]', **kw
         ),
     }
     calls["review-fix-commit"] = grind_stages.compose_review_fix_commit_call(
@@ -363,7 +408,7 @@ def test_runner_fail_outcomes_are_the_non_passing_ones():
 
 def test_every_composer_carries_its_stage_model():
     for key, call_text in _calls_by_stage().items():
-        stage = "commit" if key == "review-fix-commit" else key
+        stage = {"review-fix-commit": "commit", "verify-op-reject": "verify-op"}.get(key, key)
         assert f"model: '{grind_stages.STAGE_MODELS[stage]}'" in call_text
 
 
@@ -381,8 +426,9 @@ def test_models_override_changes_only_its_stage():
 
 def test_unknown_stage_key_in_models_raises():
     with pytest.raises(ValueError, match="nonesuch"):
-        grind_stages.compose_undo_call(
-            label="u", phase_title="Undo", paths=["a"], models={"nonesuch": "haiku"}
+        grind_stages.compose_verify_op_call(
+            label="u", phase_title="Undo", run_dir="r", reject_paths_js='["a"]',
+            models={"nonesuch": "haiku"},
         )
     with pytest.raises(ValueError, match="bogus"):
         grind_stages._agent_call(
@@ -490,10 +536,16 @@ def test_review_fix_commit_schema_carries_a_failure_reason():
     assert "verbatim refusal or the divergence you found in `reason`" in call_text
 
 
-def test_undo_call_is_one_verb_command_run_by_the_op_runner():
-    call_text = grind_stages.compose_undo_call(
-        label="undo:row1", phase_title="Undo", paths_js="fixResult.paths"
+def test_reject_mode_is_one_undo_command_run_by_the_op_runner_under_the_verify_op_label():
+    call_text = grind_stages.compose_verify_op_call(
+        label="verify-op", phase_title="Undo", run_dir="r", reject_paths_js="fixResult.paths",
+        reject_reason_js="why",
     )
+    assert "label: 'verify-op'" in call_text
+    assert "Skip the verify op" in call_text and "(why)" in call_text
+    assert '"required": ["undo"]' in call_text
+    assert "--params-file" not in call_text
+    assert call_text.count("grind-row undo") == 1
     assert "grind-row undo --paths-urlenc \\'" in call_text
     assert "encodeURIComponent(JSON.stringify({paths: fixResult.paths})).replace(/'/g, '%27')" in call_text
     assert "\\' --repo-root ' + (_shq(REPO_ROOT))" in call_text
@@ -502,14 +554,17 @@ def test_undo_call_is_one_verb_command_run_by_the_op_runner():
     assert f"agentType: '{grind_stages.OP_RUNNER_AGENT_TYPE}'" in call_text
 
 
-def test_undo_call_static_paths_render_a_json_array():
-    call_text = grind_stages.compose_undo_call(label="u", phase_title="U", paths=["a.py", "b c.py"])
+def test_reject_mode_literal_paths_render_a_json_array():
+    call_text = grind_stages.compose_verify_op_call(
+        label="verify-op", phase_title="U", run_dir="r", reject_paths_js=json.dumps(["a.py", "b c.py"])
+    )
     assert 'JSON.stringify({paths: ["a.py", "b c.py"]})' in call_text
 
 
-def test_ledger_sweep_interpolates_run_id():
-    call_text = _sweep_call(run_id=None, run_id_js="RUN_ID")
-    assert "--run-id ' + (RUN_ID) + '" in call_text
+def test_no_undo_or_run_record_composer_remains():
+    for folded in ("undo", "run_record"):
+        assert not hasattr(grind_stages, f"compose_{folded}_call")
+    assert "undo" not in grind_stages.STAGE_MODELS and "run-record" not in grind_stages.STAGE_MODELS
 
 
 def test_fix_schema_carries_touched_files():
@@ -752,7 +807,8 @@ def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
     profile_dir = "C:\\a b\\profiles"
     repo_root = "/r o/it's"
     sweep = gs.compose_ledger_sweep_call(
-        label="s", phase_title="p", profile="x", queue_dirs=["q"], run_id="r1",
+        label="s", phase_title="p", profile="x", queue_dirs=["q"],
+        run_id_js="'r'", record_js="'{}'", declared_js="[]", decisions_js="''",
     )
     script = (
         gs.SHQ_JS
@@ -788,9 +844,6 @@ def _size_calls(**kw) -> dict:
         "size": grind_stages.compose_size_call(
             label="sz", phase_title="Size", row_js="row", evidence_js="ev", fix_plan_js="fp", **kw
         ),
-        "size-assemble": grind_stages.compose_size_assemble_call(
-            label="sa", phase_title="Size", commands_js="cmds", **kw
-        ),
     }
 
 
@@ -807,16 +860,60 @@ def test_size_call_carries_scout_agent_schema_and_clauses():
     assert "plan-weight" not in call
 
 
-def test_size_assemble_call_is_an_op_runner_at_low_effort():
-    call = _size_calls()["size-assemble"]
-    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in call
-    assert "effort: 'low'" in call
-    assert '"results"' in call
+def test_size_call_runs_the_assemble_chain_as_its_closing_act():
+    call = _size_calls()["size"]
+    assert "_sizeChainTemplate(row)" in call
+    assert "_sizeAssembleWhen()" in call
+    assert "Return its exit code as exit_code" in call
+    assert "run no sizing-assemble" not in call
+    for field in ("exit_code", "stdout", "stderr"):
+        assert f'"{field}"' in call
+    assert "required" in call and '"exit_code"' not in grind_stages.SIZE_SCOUT_SCHEMA["required"]
+    assert not hasattr(grind_stages, "compose_size_assemble_call")
+    assert "size-assemble" not in grind_stages.STAGE_MODELS
+
+
+def _final_verify_calls() -> dict:
+    kw = dict(final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)")
+    return {
+        "verify-op": grind_stages.compose_verify_op_call(
+            label="vo", phase_title="Verify", op="x.y", run_dir="r", batch_id="b1",
+            row_id_js="row.rowId", row_path_js="row.path", **kw,
+        ),
+        "verify": grind_stages.compose_verify_agent_call(label="v", phase_title="Verify", **kw),
+        "verify-targeted": grind_stages.compose_verify_agent_call(
+            label="v", phase_title="Verify", targeted_runner=True, profile="bug", **kw
+        ),
+    }
+
+
+def test_the_verify_stages_run_the_undo_op_themselves_on_the_final_verification():
+    for key, call in _final_verify_calls().items():
+        assert "(row.verifyRetried) ? " in call, key
+        assert "grind-row undo --paths-urlenc" in call, f"{key} lacks the undo command"
+        assert "_undoPaths(row)" in call, key
+        assert "and return its result as `undo`" in call, key
+        assert '"undo": {' in call, key
+    op_call = _final_verify_calls()["verify-op"]
+    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in op_call
+    assert "naming neither `' + (row.rowId) + '` nor `' + (row.path) + '`" in op_call
+    assert "neither `passed` nor `nothing-to-run`" in _final_verify_calls()["verify-targeted"]
+
+
+def test_a_verify_call_without_an_undo_carries_no_undo_clause():
+    op_call = grind_stages.compose_verify_op_call(
+        label="vo", phase_title="Verify", op="x.y", run_dir="r", batch_id="b1"
+    )
+    agent_call = grind_stages.compose_verify_agent_call(label="v", phase_title="Verify")
+    for call in (op_call, agent_call):
+        assert "grind-row undo" not in call
+        assert '"undo"' not in call
 
 
 def test_size_calls_carry_sonnet_and_follow_a_models_override():
     for call in _size_calls().values():
         assert "model: 'sonnet'" in call
+    assert len(_size_calls()) == 1
     assert _size_calls(models={"size": "sonnet"})["size"].count("model: 'sonnet'") == 1
     with pytest.raises(ValueError, match="pinned to 'sonnet'"):
         _size_calls(models={"size": "haiku"})

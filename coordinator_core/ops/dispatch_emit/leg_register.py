@@ -11,7 +11,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from coordinator_core.ops._workflow_contract import _AGENT_CALL_SITE, _find_matching_paren, scrub
+from coordinator_core.ops._workflow_contract import (
+    _AGENT_CALL_SITE,
+    _find_matching_paren,
+    _quoted_end,
+    _template_end,
+    scrub,
+)
 
 
 class LegClass(str, Enum):
@@ -51,7 +57,84 @@ class EmittedLeg:
     model: Optional[str]
 
 
-REGISTER: tuple[LegDecl, ...] = ()
+RUNTIME_FLOOR_RULING = "state/apm-rulings/2026-10-15-engine-ask-phase-consolidation.md"
+
+
+def _earns(workflow: str, label: str, reason: str) -> LegDecl:
+    return LegDecl(workflow, label, LegClass.EARNS_ITS_COST, reason)
+
+
+def _floor(workflow: str, label: str, reason: str) -> LegDecl:
+    return LegDecl(workflow, label, LegClass.OP_WRAPPER, reason, runtime_floor=RUNTIME_FLOOR_RULING)
+
+
+_COMMIT_FLOOR = "the commit guard admits only coordinator:git-commit-agent, so it cannot fold into a preceding agent"
+_REVIEW_ROLES = (
+    ("review:coordinator:code-reviewer", "reads the diff and rules on it"),
+    ("review:coordinator:integrator", "applies the accepted review fixes"),
+)
+
+
+def _review_legs(workflow: str, *, prep: LegDecl) -> tuple[LegDecl, ...]:
+    return (prep, *(_earns(workflow, label, reason) for label, reason in _REVIEW_ROLES))
+
+
+REGISTER: tuple[LegDecl, ...] = (
+    _earns("ask", "size", "scouts the ask and judges its size and route"),
+    _earns("ask", "size-reword", "rewords a refused exit criterion; absorbed the gate op and sizing-assemble that ran after it"),
+    _earns("ask", "falsifier", "authors the baseline falsifier for the exit criterion"),
+    _earns("ask", "accept", "the APM rules on the exit criterion"),
+    _earns("ask", "xl-exit", "the APM picks the XL exit"),
+    _earns("ask", "plan", "authors the plan"),
+    _earns("ask", "plan-review", "reviews the plan"),
+    _earns("ask", "plan-revise", "revises the plan against its review"),
+    _earns("ask", "waves", "maps the plan's rows into waves"),
+    _earns("ask", "execute", "executes the rows"),
+    _earns("ask", "work:", "executes one row"),
+    _earns("ask", "verify:", "runs a row's scoped tests and reports"),
+    _earns("ask", "test:terminal", "runs the terminal scoped tests and reports"),
+    _earns("ask", "docs", "writes the run's docs"),
+    _earns("ask", "workstream-complete", "closes the workstream's records"),
+    _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
+    _floor("ask", "stage", "fallback only when no fold staged a manifest (stop_after, failed fold); no preceding agent"),
+    _earns("ask", "ledger-check", "rules each requirement on a tail shape with no preceding agent to carry the ledger verdict"),
+    _floor("ask", "commit", _COMMIT_FLOOR),
+    _floor("ask", "halt-commit", _COMMIT_FLOOR),
+    *_review_legs("ask", prep=_floor("ask", "review:coordinator:review-prep", "mechanical review.prep, first review call")),
+    _earns("emit", "work:", "executes one row"),
+    _earns("emit", "seam:wave-", "checks a wave seam"),
+    _earns("emit", "verify:", "runs a row's scoped tests and reports"),
+    _earns("emit", "check:", "runs a row's pre-dispatch command and judges its baseline"),
+    _earns("emit", "falsifier-integrity:", "judges whether the falsifier can report red; absorbed the verdict-cache write"),
+    _earns("emit", "chatty-overseer", "oversees the chatty roster"),
+    _earns("emit", "chatty-survey", "surveys the chatty roster"),
+    _earns("emit", "chatty-summary", "summarises the chatty run"),
+    _earns("emit", "continue:", "continues a chatty executor"),
+    LegDecl("emit", "checkpoint-push:", LegClass.OVER_MODELLED, "one git push on an executor-tier model"),
+    _floor("emit", "run-base", "first step of the script: git rev-parse HEAD, no agent precedes it"),
+    _floor("emit", "commit:wave-", _COMMIT_FLOOR),
+    *_review_legs("emit", prep=_earns("emit", "review:coordinator:review-prep", "multi-step review prep")),
+    _earns("grind", "size", "scouts a row and judges its size; absorbed the sizing-assemble op that ran after it"),
+    _earns("grind", "triage", "classifies a row's fix verdict"),
+    _earns("grind", "fix", "fixes the row"),
+    _earns("grind", "close", "closes the row's record"),
+    _earns("grind", "verify-agent", "runs the row's tests and reports"),
+    _earns("grind", "adjudicate", "the APM adjudicates a held row"),
+    _floor("grind", "verify-op", "verify runs on an agent with no Edit/Write so the fix agent cannot launder the gate and absorbs the undo op and the historical-record reject's undo"),
+    _floor("grind", "ledger-sweep:drain", "the drain runs after every row, no agent precedes it; absorbs the run-record op"),
+    _floor("grind", "commit", _COMMIT_FLOOR),
+    _floor("grind", "review-fix-commit", _COMMIT_FLOOR),
+    *_review_legs("grind", prep=_earns("grind", "review:coordinator:review-prep", "multi-step review prep")),
+    *_review_legs("review", prep=_earns("review", "review:coordinator:review-prep", "multi-step review prep")),
+    _earns("review", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),
+    _earns("review", "review:coordinator:staff-eng", "reviews the diff as staff engineer"),
+    _earns("review", "review:coordinator:test-runner", "freezes the diff, runs tests and reports"),
+    _earns("review", "review:general-purpose", "reviews the diff as a general reviewer"),
+    *_review_legs(
+        "review-mechanical-prep",
+        prep=_floor("review-mechanical-prep", "review:coordinator:review-prep", "mechanical review.prep, first review call"),
+    ),
+)
 
 _STRING_START = re.compile(r"""\s*(['"`])""")
 _KEY_VALUE = r"\b{key}\s*:\s*"
@@ -104,9 +187,66 @@ def _label(scrubbed_args: str, raw_args: str) -> str:
     return ident.group(0) if ident else ""
 
 
+_REGEX_KEYWORDS = frozenset({"return", "typeof", "case", "in", "of", "void", "delete", "throw", "else", "do"})
+_TRAILING_WORD = re.compile(r"[\w$]+$")
+
+
+def _regex_may_start(script: str, i: int) -> bool:
+    """True when the `/` at `i` opens a regex literal rather than dividing: the token before it is not a value."""
+    before = script[:i].rstrip()
+    if not before:
+        return True
+    last = before[-1]
+    if last.isalnum() or last in "_$":
+        word = _TRAILING_WORD.search(before)
+        return bool(word) and word.group(0) in _REGEX_KEYWORDS
+    return last not in ")]}'\"`"
+
+
+def _mask_regex_literals(script: str) -> str:
+    """Same-length copy with every regex literal's body blanked.
+
+    Trap: `scrub` reads a quote inside a regex literal (`/'/g`) as a string delimiter and inverts its
+    quote state for the rest of the script, hiding every `agent(` call after it.
+    """
+    out = list(script)
+    n = len(script)
+    i = 0
+    while i < n:
+        ch, nxt = script[i], script[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            j = script.find("\n", i)
+            i = n if j < 0 else j
+        elif ch == "/" and nxt == "*":
+            j = script.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        elif ch in ("'", '"'):
+            i = _quoted_end(script, i + 1, ch) + 1
+        elif ch == "`":
+            i = _template_end(script, i + 1) + 1
+        elif ch == "/" and _regex_may_start(script, i):
+            j, in_class = i + 1, False
+            while j < n and script[j] != "\n" and (in_class or script[j] != "/"):
+                if script[j] == "\\":
+                    j += 1
+                elif script[j] == "[":
+                    in_class = True
+                elif script[j] == "]":
+                    in_class = False
+                j += 1
+            if j < n and script[j] == "/":
+                out[i + 1 : j] = "x" * (j - i - 1)
+                i = j + 1
+            else:
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
 def emitted_legs(script: str) -> list[EmittedLeg]:
     """One `EmittedLeg` per `agent(` call site, in source order; a templated label keeps its literal prefix."""
-    scrubbed = scrub(script)
+    scrubbed = scrub(_mask_regex_literals(script))
     legs: list[EmittedLeg] = []
     for m in _AGENT_CALL_SITE.finditer(scrubbed):
         open_paren = m.end() - 1

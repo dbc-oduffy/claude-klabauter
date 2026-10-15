@@ -24,6 +24,19 @@ def test_concatenated_label_keeps_literal_prefix():
     assert legs[0].label == "work:"
 
 
+def test_a_quote_inside_a_regex_literal_does_not_hide_later_legs():
+    script = (
+        "const q = (v) => \"'\" + String(v).replace(/'/g, \"'\\\\''\") + \"'\";\n"
+        "const a = await agent('p', { label: 'after', phase: 'x' });\n"
+    )
+    assert [leg.label for leg in lr.emitted_legs(script)] == ["after"]
+
+
+def test_division_beside_strings_is_left_alone():
+    script = "const r = a / 2 + 'x'; const b = await agent('p', { label: 'one' }); const c = d / 4 + 'y';"
+    assert [leg.label for leg in lr.emitted_legs(script)] == ["one"]
+
+
 def test_lookup_hit_and_miss(monkeypatch):
     decl = lr.LegDecl("wf", "size", lr.LegClass.EARNS_ITS_COST, "judgment")
     monkeypatch.setattr(lr, "REGISTER", (decl,))

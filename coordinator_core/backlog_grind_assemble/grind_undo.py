@@ -1,18 +1,20 @@
 """
 coordinator_core.backlog_grind_assemble.grind_undo -- `grind-row undo`: put the
-named paths back to HEAD, only when this session declared them and no live peer
-holds them.
+named paths back to HEAD, leaving and naming any path it may not or cannot touch.
 
-`undo --paths-urlenc E --repo-root R`: each path becomes equal to HEAD (restored
-when HEAD has it, deleted when HEAD does not). All-or-nothing predicate before
-any write; at most two git spawns (`cat-file --batch-check`, `restore`).
+`undo --paths-urlenc E --repo-root R [--decisions-file F]`: the named set is the
+fix stage's accumulated touched/created paths. Each path no live peer holds, that
+is not a directory, not in the decisions file's `baseline_dirty`, and is a blob or
+absent at HEAD becomes equal to HEAD (restored, or deleted when HEAD lacks it).
+Every other path is left and named with a reason. At most two git spawns
+(`cat-file --batch-check`, `restore`).
 
-Exit codes: 0 ok, 1 refusal (undeclared, contested, directory, tree/submodule at
-HEAD, git failure, unresolvable session), 2 usage (bad token, path escapes root).
+Exit codes: 0 nothing left, 1 something left (stdout and stderr carry the
+`{restored, removed, left: [{path, reason}]}` JSON), 2 usage (bad token, path
+escapes root).
 
 Negative-spec: never `git status`, `clean`, `reset`, `stash`; never a recursive
-delete; never releases touch claims; never accepts a path outside
-`own_path_claims`.
+delete; never releases touch claims; never restores a `baseline_dirty` path.
 """
 
 from __future__ import annotations
@@ -25,17 +27,41 @@ from coordinator_core.contract.grind_vocab import decode_undo_paths
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.git_scope import scoped_git_env
 from coordinator_core.ops._path_guard import contained_path
-
-
-def _refuse(msg: str) -> int:
-    print(f"grind-row undo: {msg}", file=sys.stderr)
-    return 1
+from coordinator_core.ops.dispatch_emit.grind_commit_contract import BASELINE_DIRTY_KEY
 
 
 def _git(repo_root: Path, args: list[str], stdin: bytes) -> GitResult:
     """A spawn that cannot start or overruns comes back as a failed result, so
-    every caller's non-zero branch refuses with exit 1 instead of a traceback."""
+    every caller's non-zero branch leaves the paths with a reason instead of a traceback."""
     return run_git(args, cwd=str(repo_root), input=stdin, env=scoped_git_env())
+
+
+def _baseline_dirty(decisions_file: str | None) -> set[str] | None:
+    """None when a named decisions file cannot be read: the pre-run dirty set is then
+    unknown and nothing may be restored."""
+    if not decisions_file:
+        return set()
+    try:
+        data = json.loads(Path(decisions_file).read_text(encoding="utf-8"))
+        return {str(p) for p in data.get(BASELINE_DIRTY_KEY, [])}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def _report(restored: list[str], removed: list[str], left: dict[str, str]) -> int:
+    body = json.dumps(
+        {
+            "left": [{"path": p, "reason": r} for p, r in sorted(left.items())],
+            "removed": sorted(removed),
+            "restored": sorted(restored),
+        },
+        sort_keys=True,
+    )
+    print(body)
+    if left:
+        print(f"grind-row undo: {body}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_undo(rest: list[str]) -> int:
@@ -47,9 +73,11 @@ def cmd_undo(rest: list[str]) -> int:
     )
     from coordinator_core.session import core, scope
 
-    flags = _parse_flags(rest, ("paths-urlenc", "repo-root"))
+    flags = _parse_flags(rest, ("paths-urlenc", "repo-root"), ("decisions-file",))
     if flags is None:
-        return _usage("usage: grind-row undo --paths-urlenc <E> --repo-root <dir>")
+        return _usage(
+            "usage: grind-row undo --paths-urlenc <E> --repo-root <dir> [--decisions-file <F>]"
+        )
     try:
         raw_paths = decode_undo_paths(flags["paths-urlenc"])
     except ValueError as exc:
@@ -72,40 +100,53 @@ def cmd_undo(rest: list[str]) -> int:
         rels.append((parent / name).relative_to(real_root).as_posix())
     rels = sorted(set(rels))
 
+    left: dict[str, str] = {}
+    baseline = _baseline_dirty(flags.get("decisions-file"))
+    if baseline is None:
+        return _report([], [], {p: "baseline-unreadable" for p in rels})
+    for p in rels:
+        if p in baseline:
+            left[p] = "baseline"
+    todo = [p for p in rels if p not in left]
+
     root_str = str(real_root)
     sid = core.resolve_session_id(root_str)
-    if not sid:
-        return _refuse("no resolvable session id; cannot establish a declared claim")
-    claims = set(scope.own_path_claims(sid, cwd=root_str))
-    undeclared = [p for p in rels if p not in claims]
-    if undeclared:
-        return _refuse(f"paths this session never declared: {json.dumps(undeclared)}")
-    contested = scope.contested_by_live_peers(rels, sid, cwd=root_str)
-    if contested is None:
-        return _refuse("could not establish whether a live peer holds these paths")
-    if contested:
-        return _refuse(f"paths held by a live peer: {json.dumps(contested, sort_keys=True)}")
-    dirs = [p for p in rels if (real_root / p).is_dir() and not (real_root / p).is_symlink()]
-    if dirs:
-        return _refuse(f"paths that are directories (no recursive delete): {json.dumps(dirs)}")
+    contested = scope.contested_by_live_peers(todo, sid, cwd=root_str) if sid and todo else None
+    if todo and contested is None:
+        for p in todo:
+            left[p] = "contest-unknown"
+        return _report([], [], left)
+    for p in contested or {}:
+        if p in todo:
+            left[p] = "live-peer:" + ",".join(sorted(contested[p]))
+    todo = [p for p in todo if p not in left]
+    for p in todo:
+        full = real_root / p
+        if full.is_dir() and not full.is_symlink():
+            left[p] = "directory"
+    todo = [p for p in todo if p not in left]
+    if not todo:
+        return _report([], [], left)
 
-    tokens = "".join(f"HEAD:{p}\n" for p in rels).encode("utf-8")
+    tokens = "".join(f"HEAD:{p}\n" for p in todo).encode("utf-8")
     proc = _git(real_root, ["cat-file", "--batch-check=%(objecttype)"], tokens)
-    if proc.returncode != 0:
-        return _refuse(proc.stderr.strip() or "git cat-file failed")
-    replies = proc.stdout.splitlines()
-    if len(replies) != len(rels):
-        return _refuse("git cat-file reply did not match the paths asked about")
+    replies = proc.stdout.splitlines() if proc.returncode == 0 else []
+    if len(replies) != len(todo):
+        reason = f"git-cat-file-failed: {proc.stderr.strip()}" if proc.returncode else "git-cat-file-reply-mismatch"
+        for p in todo:
+            left[p] = reason
+        return _report([], [], left)
     present: list[str] = []
     absent: list[str] = []
-    for p, reply in zip(rels, replies):
+    for p, reply in zip(todo, replies):
         if reply == "blob":
             present.append(p)
         elif reply.endswith(" missing"):
             absent.append(p)
         else:
-            return _refuse(f"HEAD entry for {p!r} is {reply!r}, not a blob")
+            left[p] = f"head-entry-not-blob: {reply}"
 
+    restored: list[str] = []
     if present:
         stdin = b"".join(p.encode("utf-8") + b"\x00" for p in present)
         proc = _git(
@@ -122,11 +163,14 @@ def cmd_undo(rest: list[str]) -> int:
             stdin,
         )
         if proc.returncode != 0:
-            return _refuse(proc.stderr.strip() or "git restore failed")
-        for p in present:
-            _declare_under_repo_root(real_root / p, real_root)
+            reason = f"git-restore-failed: {proc.stderr.strip()}"
+            for p in present:
+                left[p] = reason
+        else:
+            restored = present
+            for p in present:
+                _declare_under_repo_root(real_root / p, real_root)
 
-    left: list[str] = []
     removed: list[str] = []
     for p in absent:
         target = real_root / p
@@ -136,10 +180,7 @@ def cmd_undo(rest: list[str]) -> int:
             _declare_before_unlink(target, real_root)
             target.unlink()
             removed.append(p)
-        except OSError:
-            left.append(p)
-    if left:
-        return _refuse(f"restore done; could not delete: {left}")
+        except OSError as exc:
+            left[p] = f"delete-failed: {exc}"
 
-    print(json.dumps({"removed": sorted(removed), "restored": sorted(present)}, sort_keys=True))
-    return 0
+    return _report(restored, removed, left)

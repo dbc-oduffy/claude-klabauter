@@ -979,6 +979,20 @@ def test_mechanical_prep_is_one_review_prep_call_in_either_basis():
     assert f'"head":"{"b" * 40}"' in ranged and '"worktree"' not in ranged
 
 
+def test_mechanical_prep_emits_haiku_even_when_the_roster_names_another_model():
+    fragment = _v5_fragment()
+    for stage in fragment["execute_review"]["stages"]:
+        for agent in stage["agents"]:
+            if agent.get("model") == "haiku":
+                agent["model"] = "sonnet"
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    phases = dict(compose_execute_review(
+        review, stage_schemas=_STAGE_SCHEMAS, plan_path="p.md", run_base_sha="a" * 40,
+        declared_paths=["x.py"], mechanical_prep=True,
+    ))
+    assert "model: 'haiku'" in phases["Review prep"]
+
+
 
 def _ratio_fragment(*, kira_min=None, verifier=True) -> dict:
     fragment = _v5_fragment()
