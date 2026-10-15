@@ -78,4 +78,24 @@ def test_the_union_filters_cold_removals_before_the_live_source_refusal():
     union = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_assemble_root_union")
     source = ast.unparse(union)
 
-    assert source.index("_removals_this_source_shipped(") < source.index("refuse_removals_with_live_source(target.source_dir, removals")
+    assert source.index("_removals_this_source_shipped(") < source.index("refuse_removals_with_live_source(")
+
+
+def test_an_allowlist_denied_live_removal_passes_and_an_allowed_one_still_refuses(tmp_path):
+    import pytest
+    from percolate.diff_commit import RemovalSourceLiveError, refuse_removals_with_live_source
+
+    for name in ("denied.py", "kept.py"):
+        (tmp_path / name).write_text("x = 1\n", encoding="utf-8")
+    target = SimpleNamespace(name="row", source_dir=tmp_path, allowlist="kept.py,other.py")
+
+    denied = publish._paths_the_row_allowlist_denies(target, {"denied.py", "kept.py"})
+
+    assert denied == {"denied.py"}
+    survivors = [r for r in ("denied.py", "kept.py") if r not in denied]
+    assert survivors == ["kept.py"]
+    with pytest.raises(RemovalSourceLiveError) as excinfo:
+        refuse_removals_with_live_source(tmp_path, survivors, "row")
+    assert "denied.py" not in str(excinfo.value)
+    no_list = SimpleNamespace(name="row", source_dir=tmp_path, allowlist="")
+    assert publish._paths_the_row_allowlist_denies(no_list, {"kept.py"}) == set()

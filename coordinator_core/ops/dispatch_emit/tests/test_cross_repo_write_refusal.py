@@ -154,6 +154,27 @@ def test_split_sibling_paths_buckets_per_repo(tmp_path: Path) -> None:
     assert siblings == {peer: ["x/y.py", "z.py", "w.py"]}
 
 
+def test_read_spine_cleared_gate_owners_are_per_call_not_shared(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import spine_read
+
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        "---\nplan_id: pln-iso-abc123\n---\n# P\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: G1\n  title: a\n  change_kind: code-edit\n  surface: a.py\n  writes:\n    - a.py\n"
+        "  external_gate:\n    - owner_repo: repo-a\n      requires: x\n"
+        "- id: G2\n  title: b\n  change_kind: code-edit\n  surface: b.py\n  writes:\n    - b.py\n"
+        "  external_gate:\n    - owner_repo: repo-b\n      requires: x\n```\n",
+        encoding="utf-8",
+    )
+
+    def ids(owners):
+        return sorted(r.id for r in spine_read.read_spine(plan, cleared_gate_owners=frozenset(owners)))
+
+    assert ids({"repo-a"}) == ["G1"]
+    assert ids({"repo-b"}) == ["G2"]
+    assert ids(set()) == []
+
+
 def test_commit_siblings_one_commit_per_repo(tmp_path: Path, monkeypatch) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit
 

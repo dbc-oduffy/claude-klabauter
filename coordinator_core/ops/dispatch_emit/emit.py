@@ -101,8 +101,10 @@ The v4 tier/stage review path (a derived ``review_tier`` routed through
 ``review_mint.roster.parse_stages``/``compose.compose``) is DELETED, not
 degraded into — see the now-superseded design note this replaced,
 ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md``.
-``derive_review_tier`` stays defined (``review_mint.op`` imports it for its
-OWN, pre-execution mint), but nothing in this module calls it any more.
+``derive_review_tier`` is defined here and ``review_mint.op`` imports it for its
+OWN, pre-execution mint; ``compose_script`` also calls it on the plan text it
+already holds and passes the tier to ``compose_execute_review`` so the execute
+wave scales by size (``None`` composes the full roster).
 
 A review wave composes ONLY when the caller supplies BOTH a
 ``review_roster_fragment`` that is ``schema_version 5`` AND
@@ -162,9 +164,10 @@ Which model is a per-``agentType`` decision, not one constant. A call-site
 ``model:`` OVERRIDES the agent definition's own frontmatter, so a blanket
 ``'sonnet'`` silently outranked ``git-commit-agent``'s and
 ``test-runner``'s charter tier and billed a Sonnet for mechanical work.
-``_AGENT_MODELS`` mirrors the charter tier each definition declares
-(coordinator-content-repo ``coordinator/agent-effort-registry.yaml``); keep the two in
-step when either moves.
+``_AGENT_MODELS`` equals the ``model:`` frontmatter of each coordinator-content-repo
+``coordinator/agents/<name>.md``, pinned by
+``tests/test_agent_model_table_matches_doe.py``; a call-site override of a
+pinned type's model is refused (``resolve_agent_model``).
 
 ## Tier-T only (Anti-scope)
 
@@ -201,9 +204,9 @@ either/or:
    a plan that carries one already has a terminal verification with a
    recorded baseline and an ``expected_when_true``, which is a BETTER
    terminal phase than any unit suite for a migration a unit suite cannot
-   see (``_falsifier_agent_call_expr``). AC14: when a resolved scope AND a
-   falsifier both exist, the two run together in ONE ``parallel([...])``
-   rather than either alone.
+   see (``_falsifier_agent_call_expr``). When a resolved scope AND a
+   falsifier both exist, the scoped test call is awaited first and the
+   falsifier judge after it, so the judge reads the post-fix check result.
 3. Absent a falsifier too, emit with NO terminal test phase, but LOUD about
    it: a ``log()`` line naming the unmapped paths explicitly
    (``_no_test_target_narration``) — a degraded emit and a fully-tested one
@@ -341,6 +344,7 @@ from coordinator_core.ops.dispatch_emit.gate_owed import (
     GATE_OWED_JS_RE,
     GATE_OWED_VAR,
     KIND_GUARD_DENIED,
+    KIND_NEEDS_DEPENDENT,
     KIND_OUTSIDE_FOOTPRINT,
     report_line,
 )
@@ -366,7 +370,11 @@ from coordinator_core.ops.review_mint.execute_review import (
     resolve_operative_criterion,
     compose_execute_review,
 )
-from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
+from coordinator_core.ops.review_mint.roster import (
+    RosterFragmentError,
+    parse_execute_review,
+    plan_required_reviewers,
+)
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
@@ -431,12 +439,49 @@ _EXECUTION_TIER_CHANGE_KINDS = frozenset({"verification"})
 _TEST_AGENT_TYPE = "coordinator:test-runner"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
+#: The one table of DoE-defined agent types the engine dispatches, each mapped to
+#: the ``model:`` frontmatter of coordinator-content-repo's ``coordinator/agents/<name>.md``.
+#: Pinned by ``tests/test_agent_model_table_matches_doe.py``; a type listed here
+#: refuses any override that names a different model (``resolve_agent_model``).
 _AGENT_MODELS = {
     _EXECUTOR_AGENT_TYPE: "sonnet",
     _ENRICHER_AGENT_TYPE: "sonnet",
     _TEST_AGENT_TYPE: "haiku",
     _COMMIT_AGENT_TYPE: "haiku",
+    "coordinator:queue-grind-op-runner": "sonnet",
+    "coordinator:sizing-scout": "sonnet",
+    "coordinator:exit-criterion-falsifier": "sonnet",
+    "coordinator:falsifier-integrity-reviewer": "sonnet",
+    "coordinator:apm": "opus",
+    "coordinator:plan-author": "opus",
+    "coordinator:code-reviewer": "sonnet",
+    "coordinator:delivery-verifier": "sonnet",
+    "coordinator:staff-eng": "opus",
 }
+
+
+def resolve_agent_model(agent_type: str, override: Optional[str] = None) -> str:
+    """Return the model for ``agent_type``, or ``override`` for an unpinned type.
+
+    A type in ``_AGENT_MODELS`` is pinned: an ``override`` equal to its entry is
+    accepted, any other raises ``MalformedAgentOverrideError``. An unpinned type
+    takes ``override`` as given and refuses when none is supplied.
+    """
+    pinned = _AGENT_MODELS.get(agent_type)
+    if pinned is None:
+        if not override:
+            raise MalformedAgentOverrideError(
+                f"agent_type {agent_type!r} has no entry in _AGENT_MODELS and no "
+                "agent_model override was supplied -- supply agent_model to name "
+                "this agent's model explicitly"
+            )
+        return override
+    if override and override != pinned:
+        raise MalformedAgentOverrideError(
+            f"agent_model {override!r} would change {agent_type!r}, pinned to "
+            f"{pinned!r} by its DoE definition -- drop agent_model"
+        )
+    return pinned
 
 #: The Workflow runtime aborts an agent call after this many stalled ms
 #: (no progress) and retries it up to 5 times; the runtime default (180000)
@@ -457,8 +502,9 @@ def _model_opt(agent_type: str, agent_model: Optional[str] = None) -> str:
     workflow-maker`` and any future plugin-qualified persona).
 
     ``agent_model`` (state/sizings/2026-09-05-a-plan-row-can-name-the-agent-
-    that-runs.yaml), when supplied, OVERRIDES the ``_AGENT_MODELS`` lookup
-    entirely. Validated against ``_AGENT_MODEL_GRAMMAR_RE`` before use, and
+    that-runs.yaml), when supplied, names the model of an unpinned type; for a
+    type in ``_AGENT_MODELS`` it must equal the entry
+    (``resolve_agent_model``). Validated against ``_AGENT_MODEL_GRAMMAR_RE`` before use, and
     escaped through ``_js_string_literal`` like every other spliced value --
     unlike ``agent_type``, this value is interpolated with nothing else
     protecting the emitted ``model: '...'`` literal, so escaping cannot be
@@ -478,14 +524,7 @@ def _model_opt(agent_type: str, agent_model: Optional[str] = None) -> str:
                 f"agent_model {agent_model!r} does not match the required "
                 f"grammar {_AGENT_MODEL_GRAMMAR}"
             )
-        return f"model: {_js_string_literal(agent_model)}"
-    if agent_type not in _AGENT_MODELS:
-        raise MalformedAgentOverrideError(
-            f"agent_type {agent_type!r} has no entry in _AGENT_MODELS and no "
-            "agent_model override was supplied -- supply agent_model to name "
-            "this agent's model explicitly"
-        )
-    return f"model: '{_AGENT_MODELS[agent_type]}'"
+    return f"model: {_js_string_literal(resolve_agent_model(agent_type, agent_model))}"
 
 
 # dispatch_emit/emit.py -> dispatch_emit -> ops -> coordinator_core -> repo
@@ -1875,6 +1914,9 @@ def _build_gate_clause(commands: list) -> str:
         "If a guard or hook refuses a gate command (it never ran), do not retry it or "
         "route around the guard: return PARTIAL with the report line "
         f"`{report_line(KIND_GUARD_DENIED, '<command> (<guard>)')}` and nothing else undone. "
+        "If the only thing undone is a live test that needs a later row of this plan to exist "
+        "first, return PARTIAL with the report line "
+        f"`{report_line(KIND_NEEDS_DEPENDENT, '<that row id> <why>')}`: only the named row starts. "
         "Either way, copy that `gate-blocker:` line verbatim as the second line of your "
         "reply, under the status line.\n"
         + lines
@@ -2200,11 +2242,14 @@ _ROW_LOCAL_BLOCK_TOKEN = "ROW-LOCAL-BLOCK"
 #: real newline and the backslash-n a JSON-stringified object reply carries.
 #: Line-anchored for `_preflight_halt_gate`'s reason: the prompt itself names
 #: the token, so a substring test fails OPEN on an agent quoting it back.
+#: A nil value (`none`, `n/a`, `no`) is an agent declaring the line unfired,
+#: not firing it -- matching it halts a run whose every row is DONE.
+_NIL_VALUE_JS = "(?![*_`]*(?:[Nn]one|[Nn]\\/[Aa]|[Nn]o)[*_`.]*\\s*(?:$|\\n|\\\\n|<))"
 _STOP_RULE_JS_RE = (
-    f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*\\S/"
+    f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*{_NIL_VALUE_JS}\\S/"
 )
 _ROW_LOCAL_BLOCK_JS_RE = (
-    f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_ROW_LOCAL_BLOCK_TOKEN}[*_]{{0,2}}:\\s*\\S/"
+    f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_ROW_LOCAL_BLOCK_TOKEN}[*_]{{0,2}}:\\s*{_NIL_VALUE_JS}\\S/"
 )
 
 _VITEST_CAP_CLAUSE = (
@@ -2959,8 +3004,7 @@ def _test_agent_call_expr(
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
-    assignment, alone or inside a ``parallel([...])`` alongside a falsifier
-    call). Carries a ``schema:`` (``test_result``) so the digest reads a
+    assignment, alone or awaited ahead of a falsifier call). Carries a ``schema:`` (``test_result``) so the digest reads a
     structured result rather than free text, and the prompt now REQUIRES
     ``sidecar_path`` (D1.MK1 -- the build/test carrier ``tests.sidecar``
     copies verbatim). ``typecheck`` (``typecheck_leg``) folds a ``tsc --noEmit``
@@ -3155,8 +3199,7 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
     ``agent(...)`` call EXPRESSION — never a full statement (see
     ``_test_agent_call_expr``'s docstring for why). Runs whenever the plan
     carries a falsifier: alone when no scoped test target resolved (rung
-    2), or alongside the scoped test call inside ONE ``parallel([...])``
-    when both exist (§ Design D4/D1, AC14). Composes a
+    2), or awaited after the scoped test call when both exist. Composes a
     ``coordinator:test-runner`` call the same shape ``_test_agent_call_expr``
     does — same Tier-T-only agent type, same phase — so this is not a
     lesser terminal phase, just a differently-sourced one; see module
@@ -3621,13 +3664,18 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    const by = [...new Set(ids.map((i) => _heldBy[i]))];\n"
         "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')';\n"
         "  }\n"
-        "  function _depBlocker(deps, results) {\n"
+        "  function _owedReleases(owed, id) {\n"
+        "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
+        "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
+        "  }\n"
+        "  function _depBlocker(deps, results, id) {\n"
         "    for (let i = 0; i < results.length; i++) {\n"
         "      const r = results[i];\n"
         "      const t = JSON.stringify(r ?? null);\n"
         "      const settled = typeof r === 'string' && "
         "(r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));\n"
-        "      if (r != null && _gateOwedOf(t)) continue;\n"
+        "      const _o = r != null ? _gateOwedOf(t) : null;\n"
+        "      if (_o && _owedReleases(_o, id)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t))) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
@@ -3658,7 +3706,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _routedOut.push(id);\n"
         "      return 'ROUTED-OUT: a dependency was routed out';\n"
         "    }\n"
-        "    const _blocker = _depBlocker(deps, _depResults);\n"
+        "    const _blocker = _depBlocker(deps, _depResults, id);\n"
         "    if (_blocker) {\n"
         "      _notStarted.push(id);\n"
         "      _blockedChunks.push(id);\n"
@@ -4282,7 +4330,7 @@ def _spec_thunk_js(spec: AgentSpec, shared: SharedBlocks, agent_type_host: Optio
 
 
 def _verdict_cache_blocks(
-    review_specs: Sequence[AgentSpec], repo_root: Optional[Path], agent_type_host: Optional[str]
+    review_specs: Sequence[AgentSpec], repo_root: Optional[Path]
 ) -> list[str]:
     """Persist each freshly returned SOUND/BROKEN verdict where ``review_inputs`` looks for
     it next emit. Best-effort and off the critical path: a failed write only costs a
@@ -4302,7 +4350,7 @@ def _verdict_cache_blocks(
     ]
     if all(e == "null" for e in entries):
         return []
-    agent_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
+    agent_type = _js_string_literal("general-purpose")
     return [
         "  const _verdictCacheWrites = [];",
         "  {",
@@ -4360,7 +4408,7 @@ def _pre_phase_blocks(
         + ", ".join(_js_string_literal(spec.key) for spec in review_specs)
         + "];",
         _PRE_PHASE_FOLD_JS,
-        *_verdict_cache_blocks(review_specs, repo_root, agent_type_host),
+        *_verdict_cache_blocks(review_specs, repo_root),
     ]
 
 
@@ -4999,11 +5047,12 @@ def compose_script(
                     chatty_nonce_var="_n",
                 ).replace("label: ", "label: 'continue:' + ", 1)
                 body_blocks.append(f"  _continue[{_js_string_literal(row.id)}] = (_n) => {cont_call};")
+            _continue_nonces = {row.id: _chatty.new_nonce() for row in flat_rows}
+            body_blocks.append(f"  const _continueNonces = {json.dumps(_continue_nonces)};")
             body_blocks.append(
                 "  await Promise.all(((_survey && _survey.continuations) || [])"
                 ".filter((c) => _continue[c.role])"
-                ".map((c) => _continue[c.role](Array.from({ length: 16 }, "
-                "() => Math.floor(Math.random() * 16).toString(16)).join(''))));"
+                ".map((c) => _continue[c.role](_continueNonces[c.role])));"
             )
             body_blocks.append(
                 "  await agent("
@@ -5092,7 +5141,9 @@ def compose_script(
             "review roster fragment is schema_version "
             f"{review_roster_fragment.get('schema_version')!r}, not 5"
         )
-    review = parse_execute_review(review_roster_fragment)
+    review = parse_execute_review(
+        review_roster_fragment, required_reviewers=plan_required_reviewers(plan_text)
+    )
     declared_paths = sorted(
         {path for paths in row_pathspecs.values() for path in paths} | set(prior_surface)
     )
@@ -5134,9 +5185,19 @@ def compose_script(
             "review_stamp._resolve_terminal_commit keys the terminal-"
             "commit lookup on this field."
         )
+    wave_tier = (
+        derive_review_tier(
+            plan_path,
+            repo_root=Path(repo_root) if repo_root is not None else _REPO_ROOT,
+            plan_text=plan_text,
+        )
+        if plan_path and plan_text
+        else None
+    )
     for title, block in compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
+        tier=wave_tier,
         plan_path=plan_path or "",
         run_base_sha=stage_base,
         slice_identity_sha=run_base_sha or "",
@@ -5285,15 +5346,14 @@ def compose_script(
                 guarded_blocks.append(criterion_block)
                 falsifier_var = _FALSIFIER_RESULT_VAR
         elif criterion_expr is not None:
-            # AC14: both a resolved scope and the criterion leg run in ONE
-            # parallel([...]) after the integration stage.
+            # Serial, not parallel: the criterion judge must read the post-fix scoped test
+            # result, so it starts only after the test call (owed row build gates included) lands.
             phase_titles.append(_TEST_PHASE_TITLE)
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
-                f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)},\n"
-                f"    () => {criterion_expr},\n"
-                "  ]);"
+                f"  {_TEST_RESULT_VAR} = await "
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};\n"
+                f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
             )
             test_var = _TEST_RESULT_VAR
             falsifier_var = _FALSIFIER_RESULT_VAR
@@ -6160,7 +6220,7 @@ def emit_script(
     slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
-    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved)
+    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved, session_id=session_id)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))

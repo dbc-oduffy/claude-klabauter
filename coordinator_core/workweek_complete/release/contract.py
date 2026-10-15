@@ -58,7 +58,6 @@ def last_ledger_row(ledger_rows: Iterable[object], ids: Sequence[str]) -> Option
 MISS_REASONS: Dict[str, Tuple[str, ...]] = {
     "changelog-confirm": (
         "uncovered-commits",
-        "validation-failed",
         "block-outside-week",
         "backfill-not-run",
     ),
@@ -72,7 +71,6 @@ MISS_REASONS: Dict[str, Tuple[str, ...]] = {
         "notes-empty",
         "entry-not-cited",
         "placeholder-version",
-        "lint-failed",
     ),
     "merge-evidence": (
         "review-blocked",

@@ -169,6 +169,22 @@ def test_cli_doe_verb_refused_inside_pytest(tmp_path, monkeypatch):
         rsr.main(["count", "--registry", "x.json"])
 
 
+def test_capped_worker_count_reads_avail_mb(monkeypatch):
+    from coordinator_core.telemetry import host_sampler
+
+    monkeypatch.setattr(rsr.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (450, 65536))
+    assert rsr.capped_worker_count(16) == 3
+
+
+def test_capped_worker_count_unreadable_avail_is_conservative(monkeypatch):
+    from coordinator_core.telemetry import host_sampler
+
+    monkeypatch.setattr(rsr.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (None, 65536))
+    assert rsr.capped_worker_count(64) == 27
+
+
 def test_census_cli_shape_still_parses():
     ns = rsr.build_parser().parse_args(["some/dir", "--workers", "2"])
     assert (ns.target, ns.workers) == ("some/dir", 2)

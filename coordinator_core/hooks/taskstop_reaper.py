@@ -8,10 +8,10 @@ failure means no kill plus a log row. Windows only: off Windows no record exists
 from __future__ import annotations
 
 import sys
-from typing import List, Tuple
 
 from coordinator_core.bash_guards import _host_probe as _hp
 from coordinator_core.bash_guards import _process_kill
+from coordinator_core.bash_guards._taskstop_kill import kill_tree_verified
 from coordinator_core.bash_guards import _taskstop_launch_store as store
 from coordinator_core.bash_guards._taskstop_attribution import attribute
 from coordinator_core.bash_guards._taskstop_contract import ReapOutcome, ReapRow
@@ -30,16 +30,6 @@ def _log(row: ReapRow) -> None:
         store.append_row(row)
     except Exception:
         pass
-
-
-def _stale_children(rows, killed: List[Tuple[int, int]], done: set) -> list:
-    """Live processes whose ppid names a killed pid and that are no older than that parent
-    (a younger-than-parent ctime is pid reuse, not a child)."""
-    parent_ctime = dict(killed)
-    return [
-        r for r in rows
-        if r.ppid in parent_ctime and (r.pid, r.ctime) not in done and r.ctime >= parent_ctime[r.ppid]
-    ]
 
 
 def _reap(payload: dict) -> None:
@@ -64,21 +54,7 @@ def _reap(payload: dict) -> None:
         _log(ReapRow(task_id, outcome, competing=competing, candidates=candidates))
         return
 
-    killed: List[Tuple[int, int]] = []
-    complete = True
-    for p in tree:
-        if _kill.terminate_verified(p.pid, p.ctime):
-            killed.append((p.pid, p.ctime))
-        else:
-            complete = False
-    done = {(p.pid, p.ctime) for p in tree}
-    again = _snapshot()
-    if again:
-        for r in _stale_children(again, killed, done):
-            if _kill.terminate_verified(r.pid, r.ctime):
-                killed.append((r.pid, r.ctime))
-            else:
-                complete = False
+    killed, complete, _ = kill_tree_verified(tree, lambda: _snapshot(), _kill)
     result = ReapOutcome.KILLED if complete else ReapOutcome.INCOMPLETE
     _log(ReapRow(task_id, result, killed=tuple(killed), candidates=candidates))
     store.delete_record(task_id)

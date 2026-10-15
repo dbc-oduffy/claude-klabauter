@@ -99,6 +99,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     op_scope_coverage_gate,
     registration_quad_gate,
 )
+from coordinator_core.ops.ceremony.commit_admission import skill_weight_check_worktree
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
 from coordinator_core.ops.ceremony.commit_companion import untracked_companions
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
@@ -330,12 +331,14 @@ def _disclose_gone_deletions(message: str, gone: list) -> str:
 
 def _peer_claim_warnings(
     worktree_root: Path, paths: list, peer_holds: Optional[list] = None,
-    own_sid: Optional[str] = None,
+    own_sid: Optional[str] = None, abandoned_holds: Optional[list] = None,
 ) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
     ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. Each live peer also
     gets one warning naming (capped at 5) its untracked files outside ``paths``, degrading likewise.
+    A live claimant that ``session_abandoned`` reads idle here is released: it joins
+    ``abandoned_holds`` (when given), not ``peer_holds``; a raise from that read keeps it a live hold.
     ``own_sid`` (opt-in) names the caller's session when it is not the worktree's resolved one.
     """
     if not paths:
@@ -369,6 +372,18 @@ def _peer_claim_warnings(
                 warnings.append(f"claim state indeterminate for {path!r}")
                 continue
             if live:
+                try:
+                    abandoned = session_liveness.session_abandoned(sid, str(worktree_root))
+                except Exception:  # noqa: BLE001 -- see docstring
+                    abandoned = False
+                if abandoned:
+                    if abandoned_holds is not None:
+                        abandoned_holds.append((path, sid))
+                    warnings.append(
+                        f"{path!r} is held by session {sid!r}, live but idle here past the "
+                        "abandonment window -- claim released, committed"
+                    )
+                    continue
                 if peer_holds is not None:
                     peer_holds.append((path, sid))
                 if sid not in live_peers:
@@ -892,8 +907,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # A live peer holding a named path is reported, never refused.
     peer_holds: list = []
+    abandoned_holds: list = []
     peer_claim_warnings = _peer_claim_warnings(
-        worktree_root, list(raw_paths) + raw_removed, peer_holds
+        worktree_root, list(raw_paths) + raw_removed, peer_holds,
+        abandoned_holds=abandoned_holds,
     )
 
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
@@ -937,7 +954,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     #
     # `commit_paths` honours `commit.gpgsign`; a signing failure lands the commit unsigned and
     # `outcome.sign_warning` is surfaced into `warnings` below.
-    message = _disclose_peer_holds(message, peer_holds)
+    message = _disclose_peer_holds(message, peer_holds + abandoned_holds)
     message = _disclose_gone_deletions(message, reclassified)
     message = apply_missing_trailers(
         message,
@@ -945,6 +962,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         list(raw_paths) + raw_removed,
         session_id_override=session_id_override,
     )
+
+    skill_weight_refusal, skill_weight_note = skill_weight_check_worktree(
+        worktree_root, raw_paths, raw_deleted
+    )
+    if skill_weight_refusal is not None:
+        return _error(skill_weight_refusal)
 
     try:
         outcome = commit_paths(
@@ -1012,6 +1035,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
+    if skill_weight_note is not None:
+        warnings.append(skill_weight_note)
     residue_note = residue_advisory(worktree_root, list(raw_paths) + list(raw_removed))
     if residue_note is not None:
         warnings.append(residue_note)

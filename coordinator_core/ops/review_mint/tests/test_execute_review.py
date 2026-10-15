@@ -386,6 +386,89 @@ def _compose_judge(stage_schemas, falsifier=None):
     )
 
 
+def _tiered_review():
+    fragment = _v5_fragment()
+    agents = fragment["execute_review"]["stages"][1]["agents"]
+    agents[1]["tiers"] = ["standard", "full"]
+    agents[3]["tiers"] = ["standard", "full"]
+    return parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+
+
+def _wave_block(review, **kw) -> str:
+    phases = compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["x.py"],
+        **kw,
+    )
+    return dict(phases)["Review wave"]
+
+
+def test_lightweight_tier_drops_tiered_agents_and_nulls_the_delivery_verdict():
+    block = _wave_block(_tiered_review(), tier="lightweight")
+    assert "coordinator:code-reviewer" in block
+    assert "coordinator:overengineering-reviewer" not in block
+    assert "delivery-verifier" not in block
+    assert "const _deliveryVerdict = null;" in block
+    assert "coordinator:staff-eng" in block
+
+
+@pytest.mark.parametrize("tier", ["standard", "full"])
+def test_higher_tiers_keep_the_full_wave(tier):
+    review = _tiered_review()
+    assert _wave_block(review, tier=tier) == _wave_block(review)
+    assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in _wave_block(review, tier=tier)
+
+
+def test_fragment_without_tiers_is_byte_identical_for_any_tier():
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    base = _wave_block(review)
+    assert _wave_block(review, tier="lightweight") == base
+
+
+def test_tier_js_gates_agents_at_run_time_and_keeps_the_verdict_offset():
+    block = _wave_block(_tiered_review(), tier_js="_tier")
+    assert '["standard", "full"].includes(_tier)' in block
+    assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in block
+    assert "coordinator:overengineering-reviewer" in block
+
+
+def test_tier_and_tier_js_together_or_unknown_tier_raise():
+    review = _tiered_review()
+    with pytest.raises(ValueError):
+        _wave_block(review, tier="full", tier_js="_t")
+    with pytest.raises(ValueError):
+        _wave_block(review, tier="huge")
+
+
+def test_judge_folds_in_the_ledger_charter_and_fields():
+    from coordinator_core.ops.review_mint.execute_review import compose_criterion_judge
+
+    ledger_schema = {
+        "required": ["items"],
+        "properties": {
+            "items": {"type": "array"},
+            "all_of_pm_ask": {"type": "boolean"},
+            "conflicts": {"type": "array"},
+        },
+    }
+    call = compose_criterion_judge(
+        _judge_review(),
+        stage_schemas={**_STAGE_SCHEMAS, "judge-result": {"type": "object"}},
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        falsifier=None,
+        ledger_charter="LEDGER CHARTER TEXT",
+        ledger_schema=ledger_schema,
+    )
+    schema = _emitted_schema(call)
+    assert "LEDGER CHARTER TEXT" in call
+    assert {"items", "all_of_pm_ask", "conflicts", "differs_from_baseline"} <= set(schema["properties"])
+    assert {"items", "differs_from_baseline"} <= set(schema["required"])
+
+
 def _emitted_schema(call: str) -> dict:
     start = call.index("schema: ") + len("schema: ")
     obj, _ = json.JSONDecoder().raw_decode(call[start:])
@@ -853,4 +936,18 @@ def test_delivery_prompt_carries_owner_clause_but_prep_and_reviewers_do_not():
     assert "_ownerRows" not in with_rows["Review prep"]
     assert "_ownerRows" not in without["Review wave"]
     assert with_rows["Review prep"] == without["Review prep"]
+
+
+def test_mechanical_prep_is_one_review_prep_call_in_either_basis():
+    default = _delivery_and_review_prompts()["Review prep"]
+    worktree = _delivery_and_review_prompts(mechanical_prep=True)["Review prep"]
+    ranged = _delivery_and_review_prompts(mechanical_prep=True, review_terminal_sha="b" * 40)["Review prep"]
+    assert "freeze-review-diff" in default and "freeze-review-diff" not in worktree
+    for block in (worktree, ranged):
+        assert "review.prep" in block and "review.partition_slices" not in block
+        assert "session-claim-cli" not in block
+        assert "const _reviewPrep = await" in block
+        assert "return { halted: 'no-op'," in block
+    assert '"worktree":true' in worktree and '"head"' not in worktree
+    assert f'"head":"{"b" * 40}"' in ranged and '"worktree"' not in ranged
 

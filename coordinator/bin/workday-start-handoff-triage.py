@@ -60,7 +60,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -138,6 +137,17 @@ def _frontmatter_status_is_executing(frontmatter_lines: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 
+def _ensure_engine_on_path() -> None:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
+
+    try:
+        require_colocated_engine_on_path(__file__)
+    except RuntimeError as exc:
+        print(f"{Path(__file__).name}: engine-root resolution failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _git_last_commit_epochs_batch(
     plan_paths: list[Path], cwd: str | None = None
 ) -> dict[Path, int | None]:
@@ -180,43 +190,40 @@ def _git_last_commit_epochs_batch(
     # these keys only while `cwd` happens to be the repo root.
     relspecs = [os.path.relpath(str(p), start=cwd) for p in plan_paths]
     pathspecs = [Path(r).as_posix() for r in relspecs]
-    try:
-        proc = subprocess.run(
-            [
-                "git", "log",
-                "--format=%x01%ct",
-                "--name-only",
-                # Merge commits print NO file-list line under plain
-                # --name-only (git suppresses it by default for merges,
-                # even ones that survive history simplification under a
-                # pathspec because they are non-TREESAME to every parent).
-                # Without this, a path whose most recent touch was a
-                # conflict-resolution merge silently attributes to the
-                # next, older commit that does print a name line — a
-                # stale timestamp with no error signal. A kept merge under
-                # default simplification is always non-TREESAME to its
-                # first parent (implied by non-TREESAME-to-every-parent),
-                # so first-parent diffing always emits its file list.
-                "--diff-merges=first-parent",
-                # Emit names relative to `cwd`, matching `posix_to_path`'s
-                # keys. Without this, a non-repo-root `cwd` makes git report
-                # repo-root-relative names that match no key, so EVERY path
-                # resolves to None and the caller silently finds nothing --
-                # no error, no empty-result signal. Latent from this
-                # function's first batched form (every caller passed
-                # cwd=None, i.e. the repo root, where the two forms
-                # coincide) and activated by C13 passing cwd=plans_dir.
-                "--relative",
-                "--",
-                *pathspecs,
-            ],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError:
-        return result
+    _ensure_engine_on_path()
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(
+        [
+            "log",
+            "--format=%x01%ct",
+            "--name-only",
+            # Merge commits print NO file-list line under plain
+            # --name-only (git suppresses it by default for merges,
+            # even ones that survive history simplification under a
+            # pathspec because they are non-TREESAME to every parent).
+            # Without this, a path whose most recent touch was a
+            # conflict-resolution merge silently attributes to the
+            # next, older commit that does print a name line — a
+            # stale timestamp with no error signal. A kept merge under
+            # default simplification is always non-TREESAME to its
+            # first parent (implied by non-TREESAME-to-every-parent),
+            # so first-parent diffing always emits its file list.
+            "--diff-merges=first-parent",
+            # Emit names relative to `cwd`, matching `posix_to_path`'s
+            # keys. Without this, a non-repo-root `cwd` makes git report
+            # repo-root-relative names that match no key, so EVERY path
+            # resolves to None and the caller silently finds nothing --
+            # no error, no empty-result signal. Latent from this
+            # function's first batched form (every caller passed
+            # cwd=None, i.e. the repo root, where the two forms
+            # coincide) and activated by C13 passing cwd=plans_dir.
+            "--relative",
+            "--",
+            *pathspecs,
+        ],
+        cwd=cwd,
+    )
     if proc.returncode != 0 or not proc.stdout:
         return result
 

@@ -1,4 +1,4 @@
-"""research.close: scouts commits nothing; corpus and deep make exactly one commit."""
+"""research.close: every class makes exactly one commit carrying the trail record."""
 
 from __future__ import annotations
 
@@ -57,14 +57,81 @@ def _count(repo: Path) -> int:
     return int(_git(repo, "rev-list", "--count", "HEAD"))
 
 
-def test_scouts_commits_nothing_and_writes_digest_only(repo, scratch):
-    head = _git(repo, "rev-parse", "HEAD")
+def _trail_files(repo: Path) -> set[str]:
+    return set(_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
+
+
+def test_scouts_commits_the_digest_and_trail_record(repo, scratch):
+    before = _count(repo)
     out = _close(repo, scratch, "scouts")
-    assert out["committed"] is False
-    assert out["digest_path"] == (scratch / "digest.md").as_posix()
+    assert out["exit_code"] == 0 and out["committed"] is True, out
     assert (scratch / "digest.md").read_text() == "alpha\n\nbeta\n"
-    assert _git(repo, "rev-parse", "HEAD") == head
+    assert _count(repo) == before + 1
+    digest = f"docs/research/{datetime.date.today().isoformat()}-topic/digest.md"
+    assert _trail_files(repo) == {digest, "docs/research/trail/r1.yaml"}
+    assert _git(repo, "show", f"HEAD:{digest}") == "alpha\n\nbeta"
     assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_scouts_without_digests_refuses_with_no_commit(repo, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, empty, "scouts")
+    assert out["exit_code"] == 1 and out["committed"] is False
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+
+
+@pytest.mark.parametrize("tier", ["scouts", "corpus", "deep"])
+def test_trail_record_is_in_the_commit_with_repo_relative_paths(repo, scratch, tier):
+    out = _close(repo, scratch, tier, sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 0, out
+    assert "docs/research/trail/r1.yaml" in _trail_files(repo)
+    text = _git(repo, "show", "HEAD:docs/research/trail/r1.yaml")
+    assert f"value_class: \"{tier}\"" in text and f"tier: \"{tier}\"" in text
+    assert 'destination: "repo"' in text and 'sizing: "state/sizings/x.yaml"' in text
+    assert "\\" not in text and ":/" not in text and "paths:\n  - \"docs/research/" in text
+
+
+def test_value_class_param_is_named_in_the_record_and_validated(repo, scratch):
+    assert _close(repo, scratch, "corpus", value_class="nope")["exit_code"] == 1
+    assert not (repo / "docs").exists()
+    out = _close(repo, scratch, "corpus", value_class="scouts", outputs=["final.md"])
+    assert out["exit_code"] == 0
+    assert 'value_class: "scouts"' in _git(repo, "show", "HEAD:docs/research/trail/r1.yaml")
+
+
+def test_an_absolute_sizing_is_refused_with_no_commit(repo, scratch):
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "corpus", sizing="/etc/x.yaml")
+    assert out["exit_code"] == 1 and "trail record refused" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+
+
+def test_a_differing_existing_trail_record_is_refused(repo, scratch):
+    trail = repo / "docs" / "research" / "trail" / "r1.yaml"
+    trail.parent.mkdir(parents=True)
+    trail.write_text("run_id: \"other\"\n", encoding="utf-8")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert out["exit_code"] == 1 and "trail record exists with different content" in out["error"]
+    assert trail.read_text(encoding="utf-8") == "run_id: \"other\"\n"
+    assert not any((repo / "docs" / "research").glob("20*"))
+
+
+def test_a_later_day_reclose_is_refused_as_differing(repo, scratch, monkeypatch):
+    first = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert first["exit_code"] == 0
+
+    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+
+    class _Later(datetime.date):
+        @classmethod
+        def today(cls):
+            return tomorrow
+
+    monkeypatch.setattr("coordinator_core.ops.research_close.datetime.date", _Later)
+    again = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert again["exit_code"] == 1 and "trail record exists with different content" in again["error"]
 
 
 @pytest.mark.parametrize("tier", ["corpus", "deep"])
@@ -75,8 +142,8 @@ def test_one_commit_whose_delta_is_the_copied_paths(repo, scratch, tier):
     assert _count(repo) == before + 1
     assert _git(repo, "rev-parse", "HEAD") == out["sha"]
     changed = set(_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
-    assert changed == set(out["paths"])
-    assert len(changed) == 2 and all(p.startswith("docs/research/") for p in changed)
+    assert changed == set(out["paths"]) | {"docs/research/trail/r1.yaml"}
+    assert len(changed) == 3 and all(p.startswith("docs/research/") for p in changed)
     assert _git(repo, "log", "-1", "--format=%s").startswith("research(topic): close r1")
 
 
@@ -173,17 +240,41 @@ def test_a_missing_or_unsafe_segment_dir_is_refused(repo, scratch):
     assert _close(repo, scratch, "corpus", segment_dirs=["../x"])["exit_code"] != 0
 
 
-def test_local_only_archives_outside_the_repo_and_commits_nothing(repo, scratch, tmp_path):
+def test_local_only_archives_outside_the_repo_and_commits_only_the_trail_record(repo, scratch, tmp_path):
     local = tmp_path / "local"
     local.mkdir()
     before = _count(repo)
     out = _close(repo, scratch, "corpus", local_root=local.as_posix())
-    assert out["exit_code"] == 0 and out["committed"] is False and out["local_only"] is True, out
+    assert out["exit_code"] == 0 and out["committed"] is True and out["local_only"] is True, out
     dest = Path(out["destination"])
     assert dest.parent == local.resolve() and (dest / "final.md").read_text() == "final body\n"
     assert out["claims_out"] == (dest / "topic").as_posix()
-    assert _count(repo) == before and _git(repo, "status", "--porcelain") == ""
-    assert not (repo / "docs").exists()
+    assert _count(repo) == before + 1 and _git(repo, "status", "--porcelain") == ""
+    assert _trail_files(repo) == {"docs/research/trail/r1.yaml"}
+    text = _git(repo, "show", "HEAD:docs/research/trail/r1.yaml")
+    assert 'destination: "local-only"' in text and "paths" not in text
+    assert "output_count: 3" in text
+    assert str(local) not in text and local.as_posix() not in text and "final body" not in text
+
+
+def test_local_only_with_no_artifact_refuses_with_no_commit(repo, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    local = tmp_path / "local"
+    local.mkdir()
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, empty, "corpus", local_root=local.as_posix())
+    assert out["exit_code"] == 1 and out["committed"] is False
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+
+
+def test_local_only_reclose_returns_the_landed_sha(repo, scratch, tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    first = _close(repo, scratch, "corpus", local_root=local.as_posix())
+    n = _count(repo)
+    second = _close(repo, scratch, "corpus", local_root=local.as_posix())
+    assert second["exit_code"] == 0 and second["sha"] == first["sha"] and _count(repo) == n
 
 
 def test_local_only_refuses_a_root_inside_a_checkout(repo, scratch):

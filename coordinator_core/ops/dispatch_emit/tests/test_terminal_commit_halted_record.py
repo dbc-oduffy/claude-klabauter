@@ -1,0 +1,155 @@
+"""dispatch.terminal_commit's halted-run record-only mode: one commit of state/warp/<run_id>/ only."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+RUN = "ask-20261015T000000-aaaaaa"
+OTHER = "ask-20261015T000001-bbbbbb"
+REASON = "sizing refused: estimate L needs a PM touchpoint"
+
+
+def _git(args, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.com"], root)
+    _git(["config", "user.name", "t"], root)
+    (root / "docs").mkdir()
+    (root / "docs" / "guide.md").write_text("seed\n", encoding="utf-8")
+    (root / "product.py").write_text("x = 1\n", encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    (root / "run.mjs").write_text("// script\n", encoding="utf-8")
+    return root
+
+
+def _write_record(root: Path, run_id: str, names=("ask.md", "pm-intent.md", "run.json")) -> Path:
+    rec = root / RECORD_DIR_ROOT / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (rec / name).write_text(f"{name}\n", encoding="utf-8")
+    return rec
+
+
+def _dirty_elsewhere(root: Path) -> set:
+    (root / "docs" / "guide.md").write_text("edited\n", encoding="utf-8")
+    (root / "product.py").write_text("x = 2\n", encoding="utf-8")
+    (root / "state" / "sizings").mkdir(parents=True)
+    (root / "state" / "sizings" / "x.yaml").write_text("a: 1\n", encoding="utf-8")
+    _write_record(root, OTHER, ("ask.md",))
+    return {"run.mjs", "docs/guide.md", "product.py", "state/sizings/x.yaml", f"{RECORD_DIR_ROOT}/{OTHER}/ask.md"}
+
+
+def _call(root: Path, **extra) -> dict:
+    params = {
+        "script_path": "run.mjs",
+        "run_id": RUN,
+        HALTED_RECORD_PARAM: {"halted": "refusal", "reason": REASON},
+        **extra,
+    }
+    return terminal_commit._handler(params, repo_root=root / ".git")
+
+
+def _status(root: Path) -> dict:
+    out = _git(["status", "--porcelain", "-uall"], root)
+    return {line[3:]: line[:2] for line in out.splitlines()}
+
+
+def test_sizing_refusal_lands_one_record_only_commit(repo):
+    _write_record(repo, RUN)
+    others = _dirty_elsewhere(repo)
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+
+    out = _call(repo)
+
+    assert out["committed"] is True
+    assert _git(["rev-parse", "HEAD~1"], repo).strip() == head
+    names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    assert sorted(names) == sorted(f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json"))
+    message = _git(["log", "-1", "--format=%B"], repo)
+    assert "Halted-By: refusal" in message
+    assert REASON in message
+    status = _status(repo)
+    assert set(status) == others
+    assert _git(["diff", "--cached", "--name-only"], repo) == ""
+
+
+def test_halt_after_stage_lands_manifest_and_requirements(repo):
+    _write_record(repo, RUN, ("ask.md", "pm-intent.md", "run.json", "manifest.json", "requirements.md"))
+
+    out = _call(repo, **{HALTED_RECORD_PARAM: {"halted": "ledger-check", "detail": "row R1 open"}})
+
+    assert out["committed"] is True
+    names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    assert len(names) == 5
+    assert all(n.startswith(f"{RECORD_DIR_ROOT}/{RUN}/") for n in names)
+    assert "Halted-By: ledger-check" in _git(["log", "-1", "--format=%B"], repo)
+
+
+def test_tracked_record_file_deleted_from_disk_lands(repo):
+    rec = _write_record(repo, RUN)
+    _git(["add", RECORD_DIR_ROOT], repo)
+    _git(["commit", "-q", "-m", "record"], repo)
+    (rec / "run.json").unlink()
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert _git(["show", "--name-status", "--format=", "HEAD"], repo).split() == [
+        "D", f"{RECORD_DIR_ROOT}/{RUN}/run.json",
+    ]
+
+
+def test_nothing_changed_returns_nothing_to_commit(repo):
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+
+    out = _call(repo)
+
+    assert out["nothing_to_commit"] is True
+    assert out["committed"] is False
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+
+
+def test_unsafe_run_id_and_malformed_halted_by_refuse(repo):
+    _write_record(repo, RUN)
+    out = _call(repo, run_id="../x")
+    assert out["refused"] == "run-id-unsafe"
+    assert out["committed"] is False
+
+    malformed = _call(repo, **{HALTED_RECORD_PARAM: {"reason": REASON}})
+    assert malformed.get("refused") == "missing-run-outcome"
+    assert malformed["committed"] is False
+    assert _status(repo)[f"{RECORD_DIR_ROOT}/{RUN}/ask.md"] == "??"
+
+
+def test_token_stays_live_after_landed_record_commit_and_wrong_token_refuses(repo):
+    _write_record(repo, RUN)
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    refused = _call(repo, run_token="0" * 32)
+    assert refused["refused"] == "run-token"
+    assert run_token.is_live(repo, RUN)
+
+    out = _call(repo, run_token=token)
+
+    assert out["committed"] is True
+    assert run_token.is_live(repo, RUN)
+    assert run_token.admits(repo, RUN, token, "run.mjs")

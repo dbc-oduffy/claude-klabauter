@@ -7,9 +7,12 @@ the history has left stale, completion records with `status: pending-release` at
 a sizing corpus at real count with register-bearing sizings, the plan corpus, and a
 `state/week-changelog/HEADER.md` week header. A plain run chdirs to the fixture and calls
 `brief()` in-process. `--setup-only` stops before importing the brief, so the cost of the call
-(import included) is `full - setup-only`.
+(import included) is `full - setup-only`. `--calls N` (N >= 0, default 1) makes N `brief()`
+calls after setup and the import; `--calls 0` imports the brief but calls nothing, so
+`(calls k - calls 0) / k` is the steady-state per-call cost with interpreter start and import
+cancelled.
 
-    python -m coordinator_core.benchmarks.workweek_complete_brief_full_path <dir> [--build | --setup-only]
+    python -m coordinator_core.benchmarks.workweek_complete_brief_full_path <dir> [--build | --setup-only | --calls N]
 
 `--build` builds and verifies the fixture once and exits; every other invocation reuses it via
 the completion stamp.
@@ -33,6 +36,7 @@ PLANS = 850  # docs/plans/*.md on the real repo
 COMPLETIONS = 650  # archive/completed/*/*.md on the real repo
 PENDING_RELEASE = 120  # of those, the week's pending-release entries
 DOC_LINES = 20  # above ops.doc_staleness.DEFAULT_SWEEP_LINES_THRESHOLD (15)
+SENTINEL_ID = "jp_step10_semver_judgment"  # judgment point the brief must emit; proves the timed run produced a real result
 WEEK_START ="2026-10-05"
 DOCS = ("README.md", "INSTALL.md", "CONTEXT.md", "CONTRIBUTING.md", "docs/guide.md")
 _REGISTRY = (
@@ -126,16 +130,37 @@ def _build(repo: Path) -> None:
     _git(repo, "checkout", "-q", "-f", "main")
 
 
+_USAGE = "usage: workweek_complete_brief_full_path <dir> [--build | --setup-only | --calls N]"
+
+
+def _parse(argv: list[str]) -> tuple[list[str], int] | None:
+    """(positionals, call count), or None on a malformed command line. `--calls` consumes its
+    value token (or takes `--calls=N`) so it never lands among the positionals."""
+    args: list[str] = []
+    calls = 1
+    it = iter(argv)
+    for a in it:
+        if a in ("--setup-only", "--build"):
+            continue
+        if a == "--calls" or a.startswith("--calls="):
+            value = a.partition("=")[2] if "=" in a else next(it, "")
+            if not value.isascii() or not value.isdigit():
+                return None
+            calls = int(value)
+        elif a.startswith("--"):
+            return None
+        else:
+            args.append(a)
+    return (args, calls) if len(args) == 1 else None
+
+
 def main(argv: list[str]) -> int:
     declare_benchmark_origin()
-    args = [a for a in argv if not a.startswith("--")]
-    unknown = [a for a in argv if a.startswith("--") and a not in ("--setup-only", "--build")]
-    if len(args) != 1 or unknown:
-        print(
-            "usage: workweek_complete_brief_full_path <dir> [--build | --setup-only]",
-            file=sys.stderr,
-        )
+    parsed = _parse(argv)
+    if parsed is None:
+        print(_USAGE, file=sys.stderr)
         return 2
+    args, calls = parsed
     repo = ensure_fixture(Path(args[0]))
     if "--build" in argv:
         return 0
@@ -144,11 +169,15 @@ def main(argv: list[str]) -> int:
         return 0
     from coordinator_core.workweek_complete import brief
 
-    rc, envelope = brief.brief()
-    ids = [d.get("id", "") for d in envelope.get("directives", [])]
-    if rc != 0 or not any(i.startswith("d_doc_staleness_ack_") for i in ids):
-        print(f"brief did not report the fixture's stale docs (rc={rc}): {ids[:5]!r}", file=sys.stderr)
-        return 1
+    for _ in range(calls):
+        rc, envelope = brief.brief()
+        ids = [p.get("id", "") for p in envelope.get("judgment_points", [])]
+        if rc != 0 or SENTINEL_ID not in ids:
+            print(
+                f"brief did not report {SENTINEL_ID} (rc={rc}): {ids[:5]!r}",
+                file=sys.stderr,
+            )
+            return 1
     return 0
 
 

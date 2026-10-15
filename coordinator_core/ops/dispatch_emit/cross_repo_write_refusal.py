@@ -33,6 +33,7 @@ the rows land in ``StageManifest.gated``.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 from pathlib import Path
@@ -161,25 +162,57 @@ def is_remote_venue(env: Optional[Mapping[str, str]] = None) -> bool:
     return hit is not None and hit.call == "cloud"
 
 
+GRANT_FILE = "cross-repo-writes.txt"
+
+
+def grant_file(repo_root: Path, session_id: str) -> Path:
+    """The run's cross-repo grant ledger: one absolute posix sibling path per line, written when
+    a run's sibling ``writes:`` pass the approval check and read by
+    ``write_guards.block_cross_repo_agent_write``."""
+    return Path(repo_root) / ".git" / "coordinator-sessions" / session_id / GRANT_FILE
+
+
+def record_grants(repo_root: Path, session_id: str, sibling_paths: Iterable[str]) -> None:
+    """Append ``sibling_paths`` (absolute) to the session's grant ledger, skipping lines already
+    present. Best-effort: an unwritable ledger leaves the guard denying, never raising."""
+    wanted = [_posix(p) for p in sibling_paths]
+    if not wanted:
+        return
+    path = grant_file(repo_root, session_id)
+    try:
+        have = set(path.read_text(encoding="utf-8").split("\n")) if path.is_file() else set()
+        fresh = [p for p in dict.fromkeys(wanted) if p not in have]
+        if fresh:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n".join(fresh) + "\n")
+    except OSError:
+        return
+
+
 def check_cross_repo_writes(
     rows,
     repo_root: Optional[Path],
     *,
     approved: bool = False,
     env: Optional[Mapping[str, str]] = None,
+    session_id: Optional[str] = None,
 ) -> list[str]:
     """Classify every row's ``writes:`` / ``writes_under:`` outside
     ``repo_root``. Returns the sibling-repo names the run will write.
 
     Raises ``CrossRepoWriteError`` naming any write outside every checkout,
     and ``CrossRepoApprovalNeeded`` when sibling writes exist on a non-remote
-    venue without ``approved``. No-op when ``repo_root`` is ``None``."""
+    venue without ``approved``. No-op when ``repo_root`` is ``None``. With
+    ``session_id``, the sibling paths of a passing check are recorded as the
+    run's cross-repo grant (``record_grants``)."""
     if repo_root is None:
         return []
     repo_root = Path(repo_root)
 
     unreachable: list[str] = []
     sibling_rows: list[str] = []
+    granted: list[str] = []
     repos: list[str] = []
     for row in rows:
         candidates: list[str] = []
@@ -193,6 +226,7 @@ def check_cross_repo_writes(
                 unreachable.append(f"{row.id} ({p!r})")
                 continue
             sibling_rows.append(f"{row.id} ({p!r})")
+            granted.append(_posix(str(hit[0] / hit[1])))
             if hit[0].name not in repos:
                 repos.append(hit[0].name)
 
@@ -209,6 +243,8 @@ def check_cross_repo_writes(
             "cross-repo write is okay; on approval re-emit with --cross-repo-approved "
             "(the approval is this session's cross-repo commit assent)."
         )
+    if session_id and granted:
+        record_grants(repo_root, session_id, granted)
     return repos
 
 
@@ -259,3 +295,29 @@ def gated_rows(
             )
         )
     return out
+
+
+def _same_root(a: str, b: object) -> bool:
+    if not a:
+        return False
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def own_gate_owners(raw_rows: Iterable[Mapping], root: Path) -> frozenset[str]:
+    """The ``owner_repo`` names in ``raw_rows``' ``external_gate`` entries whose registered root is
+    ``root``: the run's own repo, so a gate naming it withholds nothing. A third repo's gate, and an
+    unregistered owner, are not in the set. No process is spawned."""
+    owners = {
+        g.get("owner_repo")
+        for raw in raw_rows
+        if isinstance(raw, Mapping)
+        for g in (raw.get("external_gate") if isinstance(raw.get("external_gate"), list) else ())
+        if isinstance(g, Mapping) and isinstance(g.get("owner_repo"), str) and g["owner_repo"]
+    }
+    if not owners:
+        return frozenset()
+    from coordinator_core.machine_resolver import registry_get
+    from coordinator_core.ops.fleet._memo_resolver import receiver_em_to_repo_key
+
+    return frozenset(o for o in owners if _same_root(registry_get(receiver_em_to_repo_key(o)) or "", root))
+

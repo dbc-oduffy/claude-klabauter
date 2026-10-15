@@ -4,8 +4,12 @@ The emit mints one token per run and returns it in the fire args, never in the s
 the harness hands it to the run as `args.runToken`, so no file a peer or a run agent can read
 carries it. The run's final stage hands it to `dispatch.terminal_commit` through a
 `coordinator:git-commit-agent`. `block_subagent_commit` admits that one invocation through
-`admits`, which claims the record atomically (exactly one caller wins); the op then `redeem`s the
-claimed record before it commits. A token admits one commit attempt, never two. Every other
+`admits`, a read-only match; the op then `redeem`s the record, an atomic claim exactly one
+caller wins (a racing second invocation passes the guard and is refused there). After commit_v2
+the op `consume`s the claim when a commit landed, else `release`s it back to live. A token
+admits one landed product commit, never two; a halted run's record-only commit redeems and
+releases it. Accepted residual: an op process killed between `redeem`
+and `release` strands the claim; recovery is a re-mint through workflow.revise. Every other
 subagent commit stays denied.
 
 Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
@@ -28,7 +32,7 @@ from typing import Iterator, Optional
 
 TTL_SECONDS = 24 * 3600
 _DIR = "coordinator-warp-run-tokens"
-#: Where `admits` moves a record it claimed; the op redeems it from here.
+#: Where `redeem` creates the claim record; `consume` or `release` ends it.
 _CLAIMED = "claimed"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -134,10 +138,19 @@ def _well_formed(run_id: object, token: object, script_path: object) -> bool:
 
 
 def admits(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
-    """Claim the run's live record for this one invocation: True for exactly one caller whose
-    `token` and `script_path` match it. The claim is an exclusive create of the claimed record
-    (a rename of one source can succeed for several racing callers on Windows), so a concurrent
-    second invocation, or a retry, is refused."""
+    """Read-only: True while the run's live record is fresh and `token` and `script_path` match
+    it. Claims nothing, so a guard that admits a command whose op then fails to parse strands
+    no record; two racing invocations can both pass here and `redeem` refuses the loser."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    return _matches(_read(_record_path(repo_root, run_id)), run_id, token, script_path)
+
+
+def redeem(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """The op's atomic claim: True for exactly one caller whose `token` and `script_path` match
+    the live record. The claim is an exclusive create of the claimed record (a rename of one
+    source can succeed for several racing callers on Windows). The claimed record stays until
+    `consume` (the commit landed) or `release` (it did not)."""
     if not _well_formed(run_id, token, script_path):
         return False
     live = _record_path(repo_root, run_id)
@@ -163,24 +176,22 @@ def admits(repo_root: Path, run_id: object, token: object, script_path: object) 
     return True
 
 
-def redeem(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
-    """The op's side: remove the record this invocation claimed through the guard (or, called
-    without one, claim the live record first). True for exactly one caller; nothing is left that
-    admits again."""
+def release(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """Return the record this invocation claimed to live after a commit that landed nothing.
+    True when restored; False when the claim is gone (`consume`d, re-minted) or a live record
+    already exists, so a release never revives a spent token or overwrites a fresh mint."""
     if not _well_formed(run_id, token, script_path):
         return False
+    live = _record_path(repo_root, run_id)
     claimed = _record_path(repo_root, run_id, claimed=True)
-    if claimed is None:
+    if live is None or claimed is None:
         return False
-    if not _matches(_read(claimed), run_id, token, script_path):
-        if not admits(repo_root, run_id, token, script_path):
-            return False
-    spent = claimed.with_name(f"{claimed.name}.{secrets.token_hex(4)}.spent")
+    if not _matches(_read(claimed), run_id, token, script_path) or live.exists():
+        return False
     try:
-        os.rename(claimed, spent)
+        os.replace(claimed, live)
     except OSError:
         return False
-    spent.unlink(missing_ok=True)
     return True
 
 
@@ -206,10 +217,12 @@ def live_records(repo_root: Path) -> Iterator[dict]:
 
 
 def consume(repo_root: Path, run_id: str) -> None:
-    """Remove the run's live record; a missing record is already consumed."""
-    path = _record_path(repo_root, run_id)
-    if path is not None:
-        path.unlink(missing_ok=True)
+    """Remove the run's live and claimed records (the commit landed, or the run ended); a
+    missing record is already consumed, and nothing is left for `release` to restore."""
+    for claimed in (False, True):
+        path = _record_path(repo_root, run_id, claimed=claimed)
+        if path is not None:
+            path.unlink(missing_ok=True)
 
 
 def bind_sizing(repo_root: Path, run_id: str, sizing_rel: str) -> bool:

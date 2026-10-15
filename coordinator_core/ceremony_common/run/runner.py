@@ -174,10 +174,14 @@ def _measure_cold(
     return outcome
 
 
-def _warm_request(method: str, params: dict[str, Any], deadline_s: float) -> dict[str, Any] | None:
+def _warm_request(
+    method: str, params: dict[str, Any], deadline_s: float, origin_worktree: str | None = None
+) -> dict[str, Any] | None:
     from coordinator_core.warm.client import try_warm_dispatch
 
-    msg = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    msg: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    if origin_worktree:
+        msg["_origin_worktree"] = origin_worktree
     return try_warm_dispatch(msg, read_deadline_secs=deadline_s)
 
 
@@ -231,12 +235,14 @@ def _dispatch_op(
     step: StepSpec, *, repo_root: Path, run_dir: Path, deadline_s: float, stdin_text: str | None = None
 ) -> ChildOutcome:
     params = json.loads(step.args[0]) if step.args else {}
-    resp = _warm_request(step.target, params, deadline_s)
+    origin = str(repo_root)
+    resp = _warm_request(step.target, params, deadline_s, origin)
     if resp is None:
         from coordinator_core import ipc
 
         start = time.process_time()
-        resp = asyncio.run(ipc.dispatch_message({"jsonrpc": "2.0", "id": 1, "method": step.target, "params": params}))
+        msg = {"jsonrpc": "2.0", "id": 1, "method": step.target, "params": params, "_origin_worktree": origin}
+        resp = asyncio.run(ipc.dispatch_message(msg))
         spent_ms = (time.process_time() - start) * 1000.0
     else:
         spent_ms = None

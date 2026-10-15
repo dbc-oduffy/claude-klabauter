@@ -2206,13 +2206,13 @@ _REMOTE_MUTATING_SUBCOMMANDS = frozenset(
 #: a clone under `<repo>/scratch/` is a subagent's only place to merge a branch. While a
 #: `check()` call runs, this holds `(cwd, main_root, in_scratch_clone)` for the payload's cwd
 #: (None when the command re-points git with `cd`/`-C`/`--git-dir`/`--work-tree`, or names
-#: neither verb). `git clone` is allowed only into `<main_root>/scratch/`, and a non-ff
-#: `git merge` only when the cwd's own repo IS such a clone. The main checkout never gains
-#: either.
+#: neither verb). `git clone` and `git init` are allowed only into `<main_root>/scratch/`, and a
+#: non-ff `git merge` only when the cwd's own repo IS such a clone. The main checkout never
+#: gains any of them. `git init` of a throwaway tree is how a probe builds a fixture repo.
 _SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar(
     "_subagent_scratch_clone_ctx", default=None
 )
-_SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge)\b")
+_SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge|init)\b")
 _REPOINTS_GIT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|\s-C\s|--git-dir|--work-tree")
 #: `git clone` options that take a separate argument; `--template`/`--separate-git-dir`/
 #: `-u`/`--upload-pack`/`--config` can install hooks or run a program and are refused.
@@ -2241,11 +2241,22 @@ def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
     return (here, root, False)
 
 
-def _clone_into_scratch(remaining: List[str]) -> bool:
+def _dest_in_scratch(dest_name: str) -> bool:
     ctx = _SCRATCH_CTX.get()
     if ctx is None:
         return False
     here, main_root, _in_clone = ctx
+    dest = Path(dest_name) if Path(dest_name).is_absolute() else here / dest_name
+    scratch = (main_root / "scratch").resolve()
+    try:
+        return scratch in dest.resolve().parents
+    except OSError:
+        return False
+
+
+def _clone_into_scratch(remaining: List[str]) -> bool:
+    if _SCRATCH_CTX.get() is None:
+        return False
     positionals: List[str] = []
     skip = False
     for tok in remaining:
@@ -2266,12 +2277,37 @@ def _clone_into_scratch(remaining: List[str]) -> bool:
         dest_name = positionals[1]
     else:
         return False
-    dest = Path(dest_name) if Path(dest_name).is_absolute() else here / dest_name
-    scratch = (main_root / "scratch").resolve()
-    try:
-        return scratch in dest.resolve().parents
-    except OSError:
+    return _dest_in_scratch(dest_name)
+
+
+#: `git init` options that take a separate argument. `--template` copies hooks from a caller-
+#: chosen directory and `--separate-git-dir` plants the repo elsewhere; both are refused.
+_INIT_OPTS_WITH_ARG = frozenset({"-b", "--initial-branch", "--object-format", "--ref-format"})
+_INIT_REFUSED_OPTS = ("--template", "--separate-git-dir")
+
+
+def _init_into_scratch(remaining: List[str]) -> bool:
+    """`git init [opts] [<dir>]` where the new repo lands strictly under `<repo>/scratch/`;
+    a bare `git init` initialises the cwd, so it passes only from inside scratch."""
+    if _SCRATCH_CTX.get() is None:
         return False
+    positionals: List[str] = []
+    skip = False
+    for tok in remaining:
+        if skip:
+            skip = False
+            continue
+        if tok.startswith(_INIT_REFUSED_OPTS):
+            return False
+        if tok in _INIT_OPTS_WITH_ARG:
+            skip = True
+            continue
+        if tok.startswith("-"):
+            continue
+        positionals.append(tok)
+    if len(positionals) > 1:
+        return False
+    return _dest_in_scratch(positionals[0] if positionals else ".")
 
 
 def _evaluate_git_segment_anchored(
@@ -2460,6 +2496,10 @@ def _evaluate_git_segment_anchored(
         if _clone_into_scratch(list(remaining or ())):
             return None
         return "git clone (only into <repo>/scratch/)"
+    if subcmd == "init":
+        if _init_into_scratch(list(remaining or ())):
+            return None
+        return "git init (only into <repo>/scratch/)"
     if subcmd == "push":
         return None
     if subcmd in ("checkout", "switch"):

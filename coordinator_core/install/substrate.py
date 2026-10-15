@@ -73,6 +73,7 @@ import argparse
 import contextlib
 import enum
 import filecmp
+import importlib.util
 import json
 import ntpath
 import os
@@ -3706,6 +3707,7 @@ def _published_only_cli_map(
     engine_root: "Optional[Path]",
     agent_helper_target_map: "dict[str, str]",
     static_family_names: "frozenset[str]",
+    withheld_names: "frozenset[str]" = frozenset(),
 ) -> "dict[str, str]":
     """Installed-name -> target map for CLIs the engine ships under a name the
     generator's own ``coordinator/bin/`` does not carry: the publish-time
@@ -3721,7 +3723,9 @@ def _published_only_cli_map(
     return {
         name: target
         for name, target in _derive_agent_helper_target_map(engine_bin).items()
-        if name not in agent_helper_target_map and name not in static_family_names
+        if name not in agent_helper_target_map
+        and name not in static_family_names
+        and name not in withheld_names
     }
 
 
@@ -3753,6 +3757,7 @@ def _write_agent_helper_forwarders(
     engine_root: "Optional[Path]" = None,
     resolver_module: "Optional[str]" = None,
     static_family_names: "frozenset[str]" = frozenset(),
+    withheld_names: "frozenset[str]" = frozenset(),
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
     ``_install_bin_resolvers`` so a second caller (the missing-forwarder
@@ -3858,7 +3863,7 @@ def _write_agent_helper_forwarders(
     """
     native_written: "set[str]" = set()
     published_only = _published_only_cli_map(
-        engine_root, agent_helper_target_map, static_family_names,
+        engine_root, agent_helper_target_map, static_family_names, withheld_names,
     )
 
     # PER-NAME FAILURE MUST NOT EXIT 0 SILENTLY (state/bug-backlog/2026-08-30-
@@ -4033,6 +4038,54 @@ def _live_source_tree_resolver(live_source_root: Path) -> "Optional[Path]":
     return found[0] if len(found) == 1 else None
 
 
+def _publisher_only_names(live_root: Path) -> "frozenset[str]":
+    """The live source tree resolver's own ``PUBLISHER_ONLY_TARGETS`` (on-disk
+    filenames): CLIs no mirror-baked engine can serve. Empty when the tree has
+    no single resolver or the resolver declares none."""
+    resolver_src = _live_source_tree_resolver(live_root)
+    if resolver_src is None:
+        return frozenset()
+    spec = importlib.util.spec_from_file_location(
+        f"_publisher_only_probe_{resolver_src.stem}", resolver_src,
+    )
+    if spec is None or spec.loader is None:
+        return frozenset()
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return frozenset(getattr(module, "PUBLISHER_ONLY_TARGETS", ()))
+
+
+def _door_leg_target_map(
+    agent_helper_target_map: "dict[str, str]", claude_klabauter_root_resolved: Path,
+) -> "dict[str, str]":
+    """``agent_helper_target_map`` minus the publisher-only names, on a dual-tree
+    box. A door image is cut against the running (mirror) engine root, which can
+    never serve those names, so they belong to the live-source-tree leg."""
+    live_source_root = engine_source_root()
+    if not live_source_root or Path(live_source_root) == claude_klabauter_root_resolved:
+        return agent_helper_target_map
+    publisher_only = _publisher_only_names(Path(live_source_root))
+    return {
+        name: target
+        for name, target in agent_helper_target_map.items()
+        if name not in publisher_only and target not in publisher_only
+    }
+
+
+def _retire_door_images(bin_dst: Path, names: "set[str]") -> None:
+    """Drop the native-door leftovers for names the live-tree forwarder now
+    owns: the Windows ``<name>.exe`` image and the manifest entry. On POSIX the
+    forwarder write replaces the image's own directory entry."""
+    for name in names:
+        try:
+            (bin_dst / f"{name}.exe").unlink()
+        except OSError:
+            pass
+    state = _read_native_forwarder_manifest_state(bin_dst)
+    if state.measured and state.names & names:
+        _write_native_forwarder_manifest(bin_dst, set(state.names - names))
+
+
 def _install_live_source_tree_forwarders(
     bin_dst: Path,
     claude_klabauter_root_resolved: Path,
@@ -4093,6 +4146,8 @@ def _install_live_source_tree_forwarders(
     if not only_live:
         return protected
 
+    if not check_only:
+        _retire_door_images(bin_dst, set(only_live))
     _install_one(
         resolver_src, bin_dst / resolver_src.name, False, "resolve-live-source", check_only,
     )
@@ -4276,8 +4331,10 @@ def _install_bin_resolvers(
     agent_cmd_dest_map = _resolve_agent_cmd_dest_collisions(agent_helper_target_map)
 
     resolver_module = rm_family(bin_dst, "resolve-claude-klabauter")
+    door_leg_target_map = _door_leg_target_map(agent_helper_target_map, claude_klabauter_root_resolved)
     agent_helper_resolved = _write_agent_helper_forwarders(
-        agent_helper_target_map, bin_dst, check_only,
+        door_leg_target_map, bin_dst, check_only,
+        withheld_names=frozenset(agent_helper_target_map) - frozenset(door_leg_target_map),
         engine_root=_door_engine_root(),
         resolver_module=resolver_module,
         static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),
@@ -4331,7 +4388,7 @@ def _install_bin_resolvers(
     # `engine_source_root()` returns None on an ordinary consumer install --
     # one tree, so the subset cannot differ and this whole block is skipped.
     live_tree_protected = _install_live_source_tree_forwarders(
-        bin_dst, claude_klabauter_root_resolved, agent_helper_target_map, check_only,
+        bin_dst, claude_klabauter_root_resolved, door_leg_target_map, check_only,
     )
 
     _sweep_orphaned_agent_helpers(

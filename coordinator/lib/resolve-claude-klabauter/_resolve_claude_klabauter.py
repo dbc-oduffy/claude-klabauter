@@ -376,6 +376,7 @@ PUBLISHER_ONLY_TARGETS = frozenset({
     "coordinator-publish.py",
     "coordinator-validate-local-config.py",
     "engine-gap-lint.py",
+    "klabauter-promote.py",
     "percolate-gate.py",
     "percolate-mirror.py",
     "percolate-push.py",

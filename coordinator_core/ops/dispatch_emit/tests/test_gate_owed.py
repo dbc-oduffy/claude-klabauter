@@ -19,6 +19,7 @@ CASES = [
     ("PARTIAL: r.md\nGate-Blocker: Guard-Denied: x", "guard-denied"),
     ("gate-blocker: guard-denied: first line", "guard-denied"),
     ("PARTIAL: r.md\nthe gate-blocker: guard-denied: appeared mid-line", None),
+    ("PARTIAL: r.md\ngate-blocker: needs-dependent: C2 live test", "needs-dependent"),
     ("PARTIAL: r.md\ngate-blocker: made-up-kind: x", None),
     ("PARTIAL: r.md\ngate-blocker: guard-deniedish: x", None),
     ("PARTIAL: r.md", None),

@@ -115,7 +115,7 @@ def test_mains_preflight_refuses_the_synthetic_inverted_table(monkeypatch, tmp_p
     monkeypatch.setattr(
         publish,
         "load_targets",
-        lambda setup_dir, target_filter=None: synthetic_rows,
+        lambda setup_dir, target_filter=None, portable_targets_file=None: synthetic_rows,
     )
 
     exit_code = publish.main([])

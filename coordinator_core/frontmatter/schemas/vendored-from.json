@@ -20,8 +20,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "completion-entry.schema.json": {
-    "blob": "4f75b06478713a84041c2d61642416f71efe40d7",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "88c51de190395b6657cb86874cfb9d1ea37ee0ee",
+    "doe_commit": "298eccf4ef0391b25933dae702ad17435cadee54"
   },
   "completion-receipt.schema.json": {
     "blob": "23342e83820402f4607399d6031ac885420819d1",
@@ -148,8 +148,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "74876045557f304e168250887ef6e9f34092b38a",
-    "doe_commit": "550f72bc2019021003ddd6d943d3d20d86bab9fb"
+    "blob": "9b1d5108a1ff867846636e1c112ad23e57564ade",
+    "doe_commit": "6930997bb442138f1762ebcc9b8424a0c7baea9f"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

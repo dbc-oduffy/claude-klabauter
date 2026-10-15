@@ -43,6 +43,7 @@ from coordinator_core.benchmarks.engine_op_overhead import (
     in_process_sample_ms,
     isolated_warm_engine,
 )
+from coordinator_core.git.run import run_git
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Counted samples per probe and calls per sample. Question: "how many calls amortise the ~15.6ms
@@ -81,7 +82,9 @@ def _door_dir() -> Path:
 
 def _git(repo: Path, *args: str) -> None:
     env = {**os.environ, "GIT_AUTHOR_NAME": "bench", "GIT_AUTHOR_EMAIL": "b@x", "GIT_COMMITTER_NAME": "bench", "GIT_COMMITTER_EMAIL": "b@x"}
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=env, **no_console_creationflags())
+    done = run_git(list(args), cwd=str(repo), env=env)
+    if not done.ok:
+        raise subprocess.CalledProcessError(done.returncode, ["git", *args], done.stdout, done.stderr)
 
 
 def ensure_fixture(workdir: Path) -> Path:

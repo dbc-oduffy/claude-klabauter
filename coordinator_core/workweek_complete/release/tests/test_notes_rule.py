@@ -2,10 +2,12 @@
 
 import hashlib
 
+import pytest
+
+from coordinator_core.workweek_complete.release.contract import RuleResult
 from coordinator_core.workweek_complete.release.notes_rule import evaluate
 
 ENTRY = "state/completions/a.md"
-LINT_OK = [{"id": "lint", "status": "ran", "exit_code": 0}]
 
 
 def _repo(tmp_path, notes="# Notes\n- thing (state/completions/a.md)\n", wrapper="Release v0.7.0\n"):
@@ -21,8 +23,8 @@ def _repo(tmp_path, notes="# Notes\n- thing (state/completions/a.md)\n", wrapper
     return tmp_path
 
 
-def _run(root, rows=LINT_OK, entries=(ENTRY,)):
-    return evaluate(root, version="0.7.0", confirmed_entries=list(entries), ledger_rows=rows)
+def _run(root, entries=(ENTRY,)):
+    return evaluate(root, version="0.7.0", confirmed_entries=list(entries))
 
 
 def test_pass_with_stale_placeholder_beside_good_wrapper(tmp_path):
@@ -56,8 +58,6 @@ def test_wrapper_body_placeholder(tmp_path):
     assert _run(_repo(tmp_path, wrapper="Release <version>\n")).reason == "placeholder-version"
 
 
-def test_lint_failed(tmp_path):
-    root = _repo(tmp_path)
-    assert _run(root, rows=[]).reason == "lint-failed"
-    bad = [{"id": "lint", "status": "ran", "exit_code": 1}]
-    assert _run(root, rows=bad).reason == "lint-failed"
+def test_lint_failed_is_not_a_miss_reason():
+    with pytest.raises(ValueError):
+        RuleResult("release-notes", False, "lint-failed")

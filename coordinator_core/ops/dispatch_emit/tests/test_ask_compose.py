@@ -160,9 +160,8 @@ def test_size_prompt_walks_the_agent_to_a_gate_passing_sizing():
     script = _compose()
     size_line = next(ln for ln in script.splitlines() if "const _scouted" in ln)
     assert "`writes`" in size_line and "exit_criterion" in size_line
-    cmd_line = next(ln for ln in script.splitlines() if "const _assembleCmd" in ln)
     for needle in ("sizing-assemble", "--exit-criterion", "--write", "--no-plan-hand-off"):
-        assert needle in cmd_line, needle
+        assert needle in size_line, needle
 
 
 def test_size_agent_must_return_a_footprint():
@@ -232,7 +231,9 @@ def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
     script = _compose(**_JUDGE_KW)
     assert "agentType: 'coordinator:criterion-judge'" in script
     assert "Criterion judge" in _titles(script)
-    assert "[_testResult, _falsifierResult] = await parallel([" in script
+    assert "[_testResult, _falsifierResult] = await parallel([" not in script
+    test_at = script.index("_testResult = await agent(")
+    assert test_at < script.index("_falsifierResult = await (async () =>")
     assert "let _falsifierResult = null;" in script
     assert "(_planRel ?? _sizingRel)" in script
     assert "PLAN_PATH_SLOT_X" not in script
@@ -242,14 +243,27 @@ def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
 
 def test_the_judge_leg_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
-    assert "() => (_gate.arm !== 'xs' && (_manifest.test_targets ?? []).length) ? agent(" in script
+    assert "(_gate.arm !== 'xs' || _reviewApplied > 0) && (_manifest.test_targets ?? []).length) { try { _testResult = await agent(" in script
+    assert "_falsifierResult = await" in script
+
+
+def test_a_review_fix_reruns_the_scoped_test_before_the_judge_even_on_xs():
+    """The re-run lives inside `_testLeg`, which the judge awaits; the phase-consolidation tail
+    (docs/plans/2026-10-15-engine-ask-phase-consolidation.md) must keep the judge after the last test call."""
+    script = _compose(**_JUDGE_KW)
+    assert "_reviewApplied = (Array.isArray(_reviewWave)" in script
+    assert script.index("const _reviewApplied") < script.index("const _testLeg")
+    judge_at = script.index("_falsifierResult = await")
+    assert script.index("await _testLeg;") < judge_at
+    assert "_testResult = await agent(" not in script[judge_at:]
+    assert script.count("_testResult = await agent(") == 1
 
 
 def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
     script = _compose()
     gate = "if (!_halted && _gate.arm !== 'xs') {\n  phase('review');"
     assert script.count(gate) == 1
-    assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("phase('ledger-check')")
+    assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("const _testLeg")
     assert "if (!_halted && _gate.arm === 'xs') { _reviewWave = []; }" in script
     assert script.index(gate) < script.index("_reviewWave = [];") < script.index("  _nextAction = _closeable")
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
@@ -310,3 +324,40 @@ def test_s_plan_author_is_handed_the_scaffold_launcher_not_a_skill():
     script = _compose()
     assert "/bin/coordinator-doc-new" in script and "--sizing-object" in script
     assert "through the plan skill" not in script
+
+
+def test_doe_typed_calls_take_their_model_from_the_table(tmp_path):
+    from coordinator_core.ops.dispatch_emit import emit
+
+    for name in ("_COMMIT_MODEL", "_DOCS_MODEL"):
+        assert not hasattr(ask_compose, name)
+    script = _compose()
+    commit = ask_compose._agent(
+        "'p'", label="commit", phase="commit", agent_type=ask_compose._COMMIT_AGENT_TYPE, schema={},
+    )
+    assert f"model: '{emit._AGENT_MODELS[emit._COMMIT_AGENT_TYPE]}'" in commit
+    scout = script.split("label: 'size'", 1)[1].split("schema:", 1)[0]
+    assert f"model: '{emit._AGENT_MODELS['coordinator:sizing-scout']}'" in scout
+    accept = script.split("label: 'accept'", 1)[1].split("schema:", 1)[0]
+    assert f"model: '{emit._AGENT_MODELS['coordinator:apm']}'" in accept
+    ledger = script.split("label: 'ledger-check'", 1)[1].split("schema:", 1)[0]
+    assert f"model: '{emit._AGENT_MODELS['coordinator:code-reviewer']}'" in ledger
+
+
+def test_an_override_changing_a_pinned_type_model_is_refused():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    with pytest.raises(emit.MalformedAgentOverrideError):
+        ask_compose._agent(
+            "'p'", label="commit", phase="commit", agent_type=emit._COMMIT_AGENT_TYPE,
+            schema={}, agent_model="sonnet",
+        )
+    with pytest.raises(emit.MalformedAgentOverrideError):
+        emit.resolve_agent_model("coordinator:sizing-scout", "opus")
+
+
+def test_stage_is_folded_into_the_plan_agent_s_last_act():
+    script = _compose()
+    plan_end = script.index("label: 'plan'")
+    plan_prompt = script[script.rindex("agent(", 0, plan_end) : plan_end]
+    assert OP_ASK_STAGE in plan_prompt and "as `manifest`" in plan_prompt

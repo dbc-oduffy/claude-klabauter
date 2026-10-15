@@ -181,8 +181,23 @@ def _composed_objects(op: str) -> list:
 
     from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
-    line = next(ln for ln in _compose().splitlines() if op in ln and "JSON.stringify(" in ln)
+    script = _compose()
+    if op == "dispatch.ask_gate":
+        # A freshly sized run's scout is told the gate command as prose; the JSON.stringify
+        # payload exists only where a standalone gate agent still runs, on an existing sizing.
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rel = "state/sizings/2026-10-12-existing.yaml"
+            (Path(tmp) / "state/sizings").mkdir(parents=True)
+            (Path(tmp) / rel).write_text(
+                yaml.safe_dump({"estimate": {"tshirt": "S"}, "route": "plan", "intent": "x"}), encoding="utf-8"
+            )
+            script = _compose(repo_root=tmp, prompt=None, sizing_rel=rel)
+    line = next(ln for ln in script.splitlines() if op in ln and "JSON.stringify(" in ln)
     expr = line[line.index("JSON.stringify(") :]
+    expr = re.sub(r",\s*\.\.\.\(_sizingRel \? \{ commit_sizing_path: _sizingRel \} : \{\}\)", "", expr)
     return [
         [pair.split(":")[0].strip() for pair in body.split(",")]
         for body in re.findall(r"\{ ([^{}]*?) \}", expr)
@@ -265,3 +280,116 @@ def test_missing_statement_with_another_refusal_stays_a_refusal(repo):
     _put(repo, tshirt="S", route="spec-dispatch", mode="ceo", exit_criterion=None, status="draft")
     v = gate(repo, REL)
     assert v.halt["kind"] == "refusal" and "statement" not in v.halt["reason"]
+
+
+CONCRETE_ROWS = [
+    {"statement": "Add the thing", "writes": ["pkg/a.py", "pkg/tests/test_a.py"], "check": "pytest pkg/tests/test_a.py"},
+    {"statement": "Document it", "writes": ["docs/a.md"], "check": "grep -q thing docs/a.md"},
+]
+
+
+class _FakeDocNew:
+    """The baton mint's schema check refuses `acceptance_rows` until the vendored schema admits it."""
+
+    class SizingMintRefused(Exception):
+        pass
+
+    @staticmethod
+    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None):
+        return {"id": "baton-fixture", "path": "state/handoffs/baton-fixture.md"}
+
+
+def _m_repo(repo, monkeypatch, **over):
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    monkeypatch.setattr(ask_gate, "_load_doc_new", lambda: _FakeDocNew)
+    _put(repo, tshirt="M", route="plan", accepted=ACCEPTED, **over)
+
+
+def test_concrete_m_writes_the_minted_spine_and_returns_its_path(repo, monkeypatch):
+    _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
+    v = gate(repo, REL)
+    assert v.halt is None and v.arm == "m_plus"
+    assert v.spine_plan == "docs/plans/2026-10-01-gate.md"
+    text = (repo / v.spine_plan).read_text(encoding="utf-8")
+    assert "pytest pkg/tests/test_a.py" in text and "pkg/a.py" in text
+    assert v.to_json()["spine_plan"] == v.spine_plan
+
+
+def test_non_concrete_m_has_no_spine_plan(repo, monkeypatch):
+    _m_repo(repo, monkeypatch, acceptance_rows=[{"statement": "x", "writes": ["a.py"], "check": ""}])
+    v = gate(repo, REL)
+    assert v.halt is None and v.spine_plan is None and "spine_plan" not in v.to_json()
+    assert not (repo / "docs" / "plans").exists()
+
+
+def test_m_without_acceptance_rows_has_no_spine_plan(repo, monkeypatch):
+    _m_repo(repo, monkeypatch)
+    assert gate(repo, REL).spine_plan is None
+
+
+def test_existing_spine_is_returned_unchanged_never_overwritten(repo, monkeypatch):
+    _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
+    path = repo / "docs" / "plans" / "2026-10-01-gate.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("edited by the reviewer\n", encoding="utf-8")
+    v = gate(repo, REL)
+    assert v.resume_plan is None
+    assert v.halt["kind"] == "refusal" and "<unparseable>" in v.halt["reason"]
+    assert path.read_text(encoding="utf-8") == "edited by the reviewer\n"
+
+
+def test_existing_matching_spine_is_returned_unchanged(repo, monkeypatch):
+    _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
+    first = gate(repo, REL)
+    path = repo / first.spine_plan
+    path.write_text(path.read_text(encoding="utf-8") + "\nreviewer note\n", encoding="utf-8")
+    again = gate(repo, REL)
+    assert again.halt is None and again.spine_plan == first.spine_plan
+    assert path.read_text(encoding="utf-8").endswith("reviewer note\n")
+
+
+def test_existing_spine_with_stale_rows_refuses_naming_the_rows(repo, monkeypatch):
+    _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
+    path = repo / gate(repo, REL).spine_plan
+    before = path.read_text(encoding="utf-8")
+    _m_repo(repo, monkeypatch, acceptance_rows=[CONCRETE_ROWS[0], {**CONCRETE_ROWS[1], "check": "grep -q other docs/a.md"}])
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "refusal" and "M2" in v.halt["reason"]
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_existing_directory_write_refuses_instead_of_raising(repo, monkeypatch):
+    (repo / "pkg").mkdir()
+    _m_repo(repo, monkeypatch, acceptance_rows=[{"statement": "x", "writes": ["pkg"], "check": "true"}])
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "refusal" and "pkg" in v.halt["reason"]
+    assert not (repo / "docs" / "plans").exists()
+
+
+def test_directory_check_resolves_against_the_gate_repo_root(repo, monkeypatch):
+    # `coordinator_core` is a directory under the engine's own root, not under the tmp repo.
+    _m_repo(repo, monkeypatch, acceptance_rows=[{"statement": "x", "writes": ["coordinator_core"], "check": "true"}])
+    v = gate(repo, REL)
+    assert v.halt is None and v.spine_plan
+
+
+def test_resume_plan_beats_a_concrete_sizing(repo, monkeypatch):
+    _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS, plan="docs/plans/other.md")
+    other = repo / "docs" / "plans" / "other.md"
+    other.parent.mkdir(parents=True)
+    other.write_text(
+        "---\nrun_id: f\n---\n\n## Tasks\n\n```yaml plan-tasks\n- id: A1\n  title: One\n"
+        "  disposition: open\n  writes:\n    - some/one.py\n```\n",
+        encoding="utf-8",
+    )
+    v = gate(repo, REL)
+    assert v.resume_plan == "docs/plans/other.md" and v.spine_plan is None
+    assert not (repo / "docs" / "plans" / "2026-10-01-gate.md").exists()
+
+
+@pytest.mark.parametrize("tshirt,route", [("XS", "dispatch"), ("S", "spec-dispatch")])
+def test_xs_and_s_never_set_spine_plan(repo, tshirt, route):
+    _put(repo, tshirt=tshirt, route=route, accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
+    v = gate(repo, REL, writes=["a.py"] if tshirt == "XS" else ())
+    assert v.halt is None and v.spine_plan is None

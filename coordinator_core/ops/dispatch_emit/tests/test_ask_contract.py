@@ -117,6 +117,14 @@ def test_scout_and_assemble_schema_required_fields():
     assert set(c.ASSEMBLE_SCHEMA["required"]) == {"exit_code", "stdout"}
 
 
+def test_scout_schema_carries_the_closing_act_fields_as_optional():
+    props = c.ASK_SCOUT_SCHEMA["properties"]
+    for field in ("exit_code", "stdout", "arm", "halt", "baton", "resume_plan", "spine_plan", "tshirt", "route"):
+        assert field in props, field
+    assert c.ASK_SCOUT_SCHEMA["required"] == c.SCOUT_SCHEMA["required"]
+    assert "exit_code" not in c.SCOUT_SCHEMA["properties"]
+
+
 def test_shim_commands_name_settings_home():
     for cmd, tail in (
         (c.SIZING_ASSEMBLE_CMD, '/bin/sizing-assemble"'),
@@ -131,3 +139,8 @@ def test_scout_return_clause_names_every_required_field():
         assert field in c.SCOUT_RETURN_CLAUSE
     assert c.SCOUT_RETURN_CLAUSE.startswith("Return its inputs:")
     assert c.SCOUT_RETURN_CLAUSE.endswith("never omit one.")
+
+
+def test_scout_return_clause_forbids_suite_tier_names_and_states_the_phrasing():
+    assert "never name a suite tier" in c.SCOUT_RETURN_CLAUSE
+    assert "'tests covering touched files pass'" in c.SCOUT_RETURN_CLAUSE

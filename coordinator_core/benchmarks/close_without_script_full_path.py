@@ -23,7 +23,7 @@ from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks import terminal_commit_full_path as scripted
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 RUN_ID = "ask-bench.workflow"
 SCRIPT = f"{RUN_ID}.mjs"
@@ -32,10 +32,10 @@ SESSION_ID = scripted.SESSION_ID
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    ).stdout
+    done = run_git(list(args), cwd=str(repo))
+    if not done.ok:
+        raise subprocess.CalledProcessError(done.returncode, ["git", *args], done.stdout, done.stderr)
+    return done.stdout
 
 
 def write_task_output(

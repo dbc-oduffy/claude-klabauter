@@ -711,27 +711,46 @@ def _posix_process_counts() -> tuple:
         return (None, None, None)
 
 
+def _memory_triple(platform: Optional[str] = None) -> tuple:
+    """(used_mb, avail_mb, total_mb) from the platform reader; the one platform switch.
+
+    ``platform`` is "windows" | "darwin" | other (POSIX /proc); None means this host.
+    Unknown-platform and reader failures yield (None, None, None). Never raises, never spawns.
+    """
+    try:
+        if platform is None:
+            platform = "windows" if _IS_WINDOWS else ("darwin" if sys.platform == "darwin" else "linux")
+        if platform == "windows":
+            return _windows_memory_mb()
+        if platform == "darwin":
+            return _darwin_memory_mb()
+        return _posix_memory_mb()
+    except Exception:
+        return (None, None, None)
+
+
+def avail_mb() -> tuple:
+    """The one in-engine memory reader: (available_mb, total_mb), either may be None.
+
+    Field per platform: Windows ullAvailPhys (GlobalMemoryStatusEx), macOS
+    kern.memorystatus_level percent of hw.memsize (page-count fallback), Linux
+    /proc/meminfo MemAvailable. Never raises, never spawns. Every memory gate reads
+    through this; none reads FreePhysicalMemory, Available MBytes or SC_PHYS_PAGES itself.
+    """
+    _used, avail, total = _memory_triple()
+    return (avail, total)
+
+
 def _collect_row() -> dict:
     """Gather one sample's fields. Never raises -- callers already wrap this."""
     t_start = time.perf_counter()
 
+    used_mb, avail_mb_, total_mb = _memory_triple()
     if _IS_WINDOWS:
         cpu_pct = _windows_cpu_pct()
-        used_mb, avail_mb, total_mb = _windows_memory_mb()
         proc_count, claude_count, python_count = _windows_process_counts()
-    elif sys.platform == "darwin":
-        # macOS memory fix (2026-09-27) -- _posix_memory_mb reads
-        # /proc/meminfo, which macOS lacks, so the sink row silently carried
-        # null memory here before this branch. Process counts stay
-        # /proc-based (a known, separately-filed limit -- see module
-        # docstring's "read_load()" section); this branch does not touch
-        # them.
-        cpu_pct = _posix_cpu_pct()
-        used_mb, avail_mb, total_mb = _darwin_memory_mb()
-        proc_count, claude_count, python_count = _posix_process_counts()
     else:
         cpu_pct = _posix_cpu_pct()
-        used_mb, avail_mb, total_mb = _posix_memory_mb()
         proc_count, claude_count, python_count = _posix_process_counts()
 
     sample_cost_ms = (time.perf_counter() - t_start) * 1000.0
@@ -740,7 +759,7 @@ def _collect_row() -> dict:
         "ts": time.time(),
         "cpu_pct": cpu_pct,
         "mem_used_mb": used_mb,
-        "mem_avail_mb": avail_mb,
+        "mem_avail_mb": avail_mb_,
         "mem_total_mb": total_mb,
         "proc_count": proc_count,
         "claude_proc_count": claude_count,
@@ -767,29 +786,26 @@ def read_load() -> dict:
         if _IS_WINDOWS:
             platform_name = "windows"
             cpu_load = _windows_cpu_load()
-            _used_mb, avail_mb, total_mb = _windows_memory_mb()
         elif sys.platform == "darwin":
             platform_name = "darwin"
             cpu_load = _posix_cpu_load()
-            _used_mb, avail_mb, total_mb = _darwin_memory_mb()
         elif sys.platform.startswith("linux"):
             platform_name = "linux"
             cpu_load = _posix_cpu_load()
-            _used_mb, avail_mb, total_mb = _posix_memory_mb()
         else:
             platform_name = "other"
             cpu_load = _posix_cpu_load()
-            avail_mb, total_mb = (None, None)
+        avail, total_mb = (None, None) if platform_name == "other" else avail_mb()
     except Exception:
         platform_name = "other"
         cpu_load = None
-        avail_mb = None
+        avail = None
         total_mb = None
 
     read_cost_ms = (time.perf_counter() - t_start) * 1000.0
     return {
         "cpu_load": cpu_load,
-        "mem_avail_mb": avail_mb,
+        "mem_avail_mb": avail,
         "mem_total_mb": total_mb,
         "platform": platform_name,
         "read_cost_ms": round(read_cost_ms, 3),

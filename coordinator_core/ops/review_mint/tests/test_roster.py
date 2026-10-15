@@ -254,6 +254,31 @@ def test_parse_execute_review_two_judges_refuses():
         parse_execute_review(fragment)
 
 
+def test_agent_tiers_parse_and_default_to_none():
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"][1]["agents"][3]["tiers"] = ["standard", "full"]
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    by_type = {a.agent_type: a for a in review.review_wave}
+    assert by_type["coordinator:delivery-verifier"].tiers == ("standard", "full")
+    assert by_type["coordinator:code-reviewer"].tiers is None
+
+
+def test_accepts_signals_agent_carries_tiers_to_every_resolved_type():
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"][1]["agents"][2]["tiers"] = ["full"]
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    named = [a for a in review.review_wave if a.accepts_signals == "named"]
+    assert [a.tiers for a in named] == [("full",)]
+
+
+@pytest.mark.parametrize("bad", [["huge"], [], "full", ["full", 3]])
+def test_unknown_or_malformed_tiers_refuse(bad):
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"][1]["agents"][0]["tiers"] = bad
+    with pytest.raises(RosterFragmentError, match="tiers"):
+        parse_execute_review(fragment)
+
+
 def test_require_emit_route_listed_passes():
     require_emit_route({"execute_review": {"required_for_emit": [EMIT_ROUTE_PLAN]}}, EMIT_ROUTE_PLAN)
 

@@ -841,9 +841,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/test-fixtures/check-workstream-complete-deletion-blocks/run-smoke.py",
         "coordinator/bin/workday-complete-step1-validate.py",
         "coordinator/bin/workday-complete-step9-append-changelog.py",
-        "coordinator/bin/workday-start-advisory-counters.py",
         "coordinator/bin/workday-start-day-branch-resolve.py",
-        "coordinator/bin/workday-start-handoff-triage.py",
         "coordinator/bin/workweek-complete-close.py",
         "coordinator/bin/workweek-complete-drift-guards.py",
         "coordinator/bin/workweek-start-goal-and-priorities.py",
@@ -1082,7 +1080,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 192
+_PINNED_RUNNER_CEILING = 190
 _PINNED_DIAL_CEILING = 72
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN

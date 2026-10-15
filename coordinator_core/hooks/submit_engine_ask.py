@@ -18,6 +18,9 @@ forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside ei
 (`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
 op's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the
 PM's local cross-repo assent; implied on a remote venue). A bare string `args` is the ask.
+A sizing carrying a non-empty `research` block is emitted on the research route (`from_sizing`,
+with `context` paths as the route's `context`; `brief`/`brief_file` are refused there); any other
+sizing takes the plan chain (`ask` + `sizing_path`); only the plan chain echoes inherited revisions.
 Refusals deny with the engine's own reason; a submission for a sizing a live run is already
 working denies naming that run (`coordinator_core.warp_live`).
 
@@ -45,7 +48,8 @@ GUARD_NAME = "submit-engine-ask"
 SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
 
 _ARGS_SHAPE = (
-    'args: {ask: "<the PM\'s words, verbatim>"} or {sizing: "<state/sizings/x.yaml>"}, '
+    'args: {ask: "<the PM\'s words, verbatim>"} or {sizing: "<state/sizings/x.yaml>", '
+    'writes: ["<repo-relative file>", ...]}, '
     'optional brief: "<your directives>" (or brief_file, context: [paths])'
 )
 
@@ -161,6 +165,17 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
     return _dispatch_emit(params, repo_root)
 
 
+def _has_research_block(root: Path, sizing_rel: str) -> bool:
+    """True when the sizing carries a non-empty `research` mapping; an unreadable sizing is left to the engine's own refusal."""
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
+
+    try:
+        research = load_sizing(root, sizing_rel).get("research")
+    except SizingFireRefused:
+        return False
+    return isinstance(research, dict) and bool(research)
+
+
 def _refuse(text: str) -> dict:
     return deny("PreToolUse", f"{text}\nSubmit shape: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}}).")
 
@@ -220,13 +235,28 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
             )
 
     params: dict = {"session_id": session_id or ""}
-    if sizing_rel:
-        params.update({"ask": True, "sizing_path": sizing_rel})
+    if sizing_rel and _has_research_block(root, sizing_rel):
+        if "ask_brief" in brief or "ask_brief_file" in brief:
+            return _refuse(
+                "A research sizing takes no brief or inline-prose context: the research route has no brief slot. "
+                "Pass context file paths (context: [paths]) instead."
+            )
+        params["from_sizing"] = sizing_rel
+        if brief.get("ask_context"):
+            params["context"] = brief["ask_context"]
     else:
-        params["ask"] = ask
-        if source == ASK_SOURCE_RELAYED:
-            params["ask_source"] = ASK_SOURCE_RELAYED
-    params.update(brief)
+        if sizing_rel:
+            params.update({"ask": True, "sizing_path": sizing_rel})
+            # An XS sizing carries no footprint; a resubmission (applying review findings) names it.
+            args = payload["tool_input"].get("args")
+            writes = args.get("writes") if isinstance(args, dict) else None
+            if isinstance(writes, list) and writes and all(isinstance(w, str) and w.strip() for w in writes):
+                params["writes"] = [w.strip() for w in writes]
+        else:
+            params["ask"] = ask
+            if source == ASK_SOURCE_RELAYED:
+                params["ask_source"] = ASK_SOURCE_RELAYED
+        params.update(brief)
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
 
     args = payload["tool_input"].get("args")
@@ -266,10 +296,16 @@ def evaluate(payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None) -> di
     new_input: dict = {"scriptPath": str(script)}
     if result.get("fire_args"):
         new_input["args"] = result["fire_args"]
+    inherited = result.get("revisions_inherited")
+    carries = (
+        " Carries revisions: " + "; ".join(f"{r['id']} ({r['first_line']})" for r in inherited) + "."
+        if inherited
+        else ""
+    )
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"Submitted to the engine as run {run_id}. It runs to its commit in the background; its "
+        f"Submitted to the engine as run {run_id}.{carries} It runs to its commit in the background; its "
         "completion notification is your one wake. End the turn: no polling, dispatch or "
         "verification meanwhile.",
     )

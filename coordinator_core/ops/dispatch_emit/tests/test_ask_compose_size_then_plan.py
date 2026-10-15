@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -19,8 +16,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     STOP_AFTER_PLAN,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-
-_REPO = Path(__file__).resolve().parents[4]
+from coordinator_core.roadmap.post_stamp_clause import (
+    EXIT_CRITERION_REFUSAL_HEAD,
+    REMEDIATION_MARKER,
+    SUITE_TIER_REMEDIATION,
+    SUITE_TIER_SPELLINGS,
+    suite_tier_refusal,
+)
 
 
 def _stub_wrap(text):
@@ -60,22 +62,70 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
 
 
 def test_sizing_path_prefix_is_emitted_verbatim():
-    assert "const _sizingPath = 'state/sizings/' + " in _compose()
+    assert "const _sizingPath = REPO_ROOT + '/' + 'state/sizings/' + " in _compose()
+
+
+def _scout_line(script):
+    return next(ln for ln in script.splitlines() if "const _scouted" in ln)
+
+
+def test_new_sizing_path_spawns_no_assemble_and_no_gate_agent():
+    script = _compose()
+    assert "label: 'assemble'" not in script and "label: 'gate'" not in script
+    assert "_assembleCmd" not in script and "_assembled" not in script
+    assert "agent(" in _scout_line(script)
+
+
+def test_scout_prompt_no_longer_forbids_assemble_and_names_both_closing_acts():
+    scout = _scout_line(_compose())
+    assert "run no `sizing-assemble`" not in scout
+    assert "closing acts" in scout and "sizing-assemble" in scout and "dispatch.ask_gate" in scout
+    assert scout.index("sizing-assemble") < scout.index("dispatch.ask_gate")
+    assert "Only when exit_code is 0" in scout
 
 
 def test_scout_jtbd_flags_reach_the_assemble_command():
-    cmd = next(ln for ln in _compose().splitlines() if "const _assembleCmd" in ln)
-    assert "_scouted.jtbd_unclear === true ? ' --jtbd-unclear'" in cmd
-    assert "_scouted.well_trodden_step_change === true ? ' --well-trodden-step-change'" in cmd
+    scout = _scout_line(_compose())
+    assert "[--jtbd-unclear when jtbd_unclear is true]" in scout
+    assert "[--well-trodden-step-change when well_trodden_step_change is true]" in scout
 
 
 def test_assemble_command_carries_the_no_hand_off_flag_and_deliverable_id():
-    script = _compose(baton={"path": "docs/plans/p.md", "deliverable_id": "dlv-1"})
-    cmd = next(ln for ln in script.splitlines() if "const _assembleCmd" in ln)
-    assert NO_PLAN_HAND_OFF_FLAG in cmd and "--write" in cmd and "--deliverable-id" in cmd and "dlv-1" in cmd
-    assert "--deliverable-id" not in next(
-        ln for ln in _compose().splitlines() if "const _assembleCmd" in ln
+    scout = _scout_line(_compose(baton={"path": "docs/plans/p.md", "deliverable_id": "dlv-1"}))
+    assert NO_PLAN_HAND_OFF_FLAG in scout and "--write" in scout and "--deliverable-id dlv-1" in scout
+    assert "--deliverable-id" not in _scout_line(_compose())
+
+
+def test_relayed_ask_file_reaches_the_scouts_assemble_command_only_on_a_relayed_ask():
+    assert "--relayed-ask-file" in _scout_line(_compose(ask_source="relayed"))
+    assert "--relayed-ask-file" not in _scout_line(_compose())
+
+
+def test_gate_command_carries_run_id_writes_and_baton():
+    scout = _scout_line(_compose(baton={"path": "docs/plans/p.md", "deliverable_id": "dlv-1"}))
+    assert "dispatch.ask_gate" in scout
+    assert "run-1" in scout and "<your writes>" in scout
+    assert "docs/plans/p.md" in scout
+    assert "docs/plans/p.md" not in _scout_line(_compose())
+
+
+def test_gate_verdict_is_carried_from_the_scouts_return():
+    script = _compose()
+    assert "{ arm: _scouted.arm ?? null, halt: _scouted.halt ?? null" in script
+    assert "route: _scouted.route" in script
+
+
+def test_existing_sizing_path_keeps_its_standalone_gate_agent(tmp_path):
+    import yaml
+
+    rel = "state/sizings/2026-10-12-existing.yaml"
+    (tmp_path / "state/sizings").mkdir(parents=True)
+    (tmp_path / rel).write_text(
+        yaml.safe_dump({"estimate": {"tshirt": "S"}, "route": "plan", "intent": "x"}), encoding="utf-8"
     )
+    script = _compose(repo_root=str(tmp_path), prompt=None, sizing_rel=rel)
+    assert "label: 'gate'" in script
+    assert "const _scouted" not in script and "label: 'assemble'" not in script
 
 
 def test_assemble_decision_parse_tolerates_trailing_stderr_notes():
@@ -90,7 +140,7 @@ def test_assemble_decision_parse_tolerates_trailing_stderr_notes():
 
 def test_failed_assembler_halts_the_chain_naming_what_was_skipped():
     script = _compose()
-    assert "_assembled.exit_code !== 0" in script
+    assert "_scouted.exit_code !== 0" in script
     assert "the gate, plan, stage, execute and review phases were skipped" in script
     assert "_halted ? { arm: null, halt: null }" in script
 
@@ -102,7 +152,7 @@ def test_gate_halt_carries_the_pm_exit_question():
 
 
 def test_halt_expression_does_not_reference_the_relay_parsed_decision():
-    halt = next(ln for ln in _compose().splitlines() if "_assembled.exit_code !== 0" in ln)
+    halt = next(ln for ln in _compose().splitlines() if "_scouted.exit_code !== 0" in ln)
     assert "_decision" not in halt
 
 
@@ -110,8 +160,8 @@ def test_paraphrased_relay_with_exit_zero_still_reaches_the_sizing_path():
     """Composed-branch text only: there is no Node runtime. A prose relay leaves `_decision` null,
     and the only halt condition is the exit code, so the else branch assigns the sizing."""
     script = _compose()
-    assert "if (_assembled.exit_code !== 0)" in script
-    assert "else { _sizingRel = _sizingPath; }" in script
+    assert "if (_scouted.exit_code !== 0)" in script
+    assert "else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }" in script
     assert "!_decision" not in script
 
 
@@ -139,28 +189,15 @@ def test_stop_after_refuses_an_unknown_value():
         _compose(stop_after="execute")
 
 
-@pytest.mark.spawns_process
-def test_stop_after_none_matches_head_for_a_sizing_input(tmp_path, monkeypatch):
-    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
-    head_src = subprocess.run(
-        ["git", "show", "HEAD:coordinator_core/ops/dispatch_emit/ask_compose.py"],
-        cwd=_REPO,
-        capture_output=True,
-        check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout.decode("utf-8")
-    head_file = tmp_path / "ask_compose_head.py"
-    head_file.write_text(head_src, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location("ask_compose_head", head_file)
-    head_mod = importlib.util.module_from_spec(spec)
-    sys.modules["ask_compose_head"] = head_mod
-    try:
-        spec.loader.exec_module(head_mod)
-        monkeypatch.setattr(head_mod, "_known_arm", lambda *_: "xs")
-        over = dict(prompt=None, sizing_rel="state/sizings/x.yaml")
-        assert _compose(stop_after=None, **over) == _compose(compose=head_mod.compose_ask_script, **over)
-    finally:
-        sys.modules.pop("ask_compose_head", None)
+def test_stage_runs_inside_the_plan_agent_only_when_the_script_goes_on_to_stage():
+    full = _compose()
+    assert "const _authored = await agent(" in full and "_stagedManifest = _authored.manifest ?? null;" in full
+    assert "if (_stagedManifest) { _manifest = _stagedManifest; } else {" in full
+    assert full.index("const _authored") < full.index("if (_stagedManifest) { _manifest")
+    assert "label: 'stage'" in full
+    planned = _compose(stop_after=STOP_AFTER_PLAN)
+    assert "_stagedManifest" not in planned.replace("let _stagedManifest = null;", "")
+    assert "ask.stage" not in planned
 
 
 def test_scout_prompt_names_the_pm_turn_log_and_the_em_brief():
@@ -180,3 +217,76 @@ def test_pulled_plan_is_revised_once_and_regated_before_the_halt():
     assert "_pulledEntry.prepGateReport" in block
     assert "if (!_planRel && _pulledEntry)" in block
     assert "_pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath)" in block
+
+
+def _reword_branch(script):
+    start = script.index("if (_scouted.exit_code !== 0 && ")
+    return script[start : script.index("\n  }", start)]
+
+
+def test_sized_in_run_script_has_one_reword_and_one_reassemble_agent():
+    script = _compose()
+    assert script.count("label: 'size-reword'") == 1
+    assert script.count("label: 'assemble-reword'") == 1
+    unsized = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+    assert "size-reword" not in unsized and "assemble-reword" not in unsized
+
+
+def test_reword_branch_is_guarded_by_both_markers_and_a_nonzero_exit():
+    branch = _reword_branch(_compose())
+    assert "_scouted.exit_code !== 0" in branch
+    assert EXIT_CRITERION_REFUSAL_HEAD in branch and REMEDIATION_MARKER in branch
+
+
+def test_reword_merges_only_the_criterion_and_the_halt_follows_it():
+    script = _compose()
+    assert script.count("_scouted.exit_criterion = _reworded.exit_criterion;") == 1
+    assert script.count("const _sizingPath") == 1
+    reword_end = script.index("label: 'assemble-reword'")
+    halt = script.index("if (_scouted.exit_code !== 0) { _halted")
+    assert reword_end < script.index("_decision = JSON.parse") < halt
+    assert "the gate, plan, stage, execute and review phases were skipped" in script[halt:]
+
+
+def test_both_scout_prompts_carry_the_remediation_and_no_spelling():
+    script = _compose()
+    first = next(ln for ln in script.splitlines() if "const _scouted" in ln)
+    reword = next(ln for ln in script.splitlines() if "label: 'size-reword'" in ln)
+    clause = ask_compose.EXIT_CRITERION_RULES_CLAUSE
+    assert SUITE_TIER_REMEDIATION in clause
+    assert suite_tier_refusal(clause) is None
+    for spelling in SUITE_TIER_SPELLINGS:
+        assert spelling.lower() not in clause.lower(), spelling
+        assert spelling.lower() not in first.lower(), spelling
+    for line in (first, reword):
+        assert SUITE_TIER_REMEDIATION in line
+
+
+def test_ask_compose_does_not_import_the_spelling_list():
+    assert "SUITE_TIER_SPELLINGS" not in Path(ask_compose.__file__).read_text(encoding="utf-8")
+
+
+@pytest.mark.spawns_process
+def test_commit_params_carry_repo_relative_forward_slash_sidecar_paths(tmp_path):
+    import json
+    import shutil
+    import subprocess
+
+    script = _compose(repo_root="/work/repo", in_run_commit=True)
+    line = next(ln for ln in script.splitlines() if "_nextAction.params.inline_review" in ln and "_rel" in ln)
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    prog = (
+        "const REPO_ROOT = '/work/repo';\n"
+        "const _nextAction = { params: { inline_review: { wave_sidecar_paths: "
+        "['\\\\work\\\\repo\\\\state\\\\a.md', 'state/b.md'], prep_sidecar: '\\\\work\\\\repo\\\\state\\\\p.md' } } };\n"
+        + line
+        + "\nconsole.log(JSON.stringify(_nextAction.params.inline_review));\n"
+    )
+    f = tmp_path / "norm.js"
+    f.write_text(prog, encoding="utf-8")
+    out = subprocess.run(
+        ["node", str(f)], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+    assert json.loads(out) == {"wave_sidecar_paths": ["state/a.md", "state/b.md"], "prep_sidecar": "state/p.md"}

@@ -1164,3 +1164,84 @@ def test_single_held_pickup_unchanged(tmp_path, monkeypatch, _live_session):
 
     joined = " ".join(args)
     assert "Deliverable-Id: dlv-a" in joined
+
+
+_RUN_SIZING = "state/sizings/run.yaml"
+
+
+def _live_run(repo, writes=("src/a.py",), session=_SID, did="dlv-run", run_id="r1"):
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+
+    sizing = repo / _RUN_SIZING
+    sizing.parent.mkdir(parents=True, exist_ok=True)
+    sizing.write_text(f'status: routed\ndeliverable_id: "{did}"\n', encoding="utf-8")
+    run_dir = repo / "scratch/warp" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    marker = render_marker(CommitRequest(chunks=(ChunkCommit(id="C", title="t", paths=tuple(writes)),), version=1))
+    (run_dir / "commit-request.txt").write_text((marker or "") + "\n", encoding="utf-8")
+    (run_dir / "submission.json").write_text(
+        json.dumps({"session_id": session, "sizing_rel": _RUN_SIZING, "submitted_at": 5.5}), encoding="utf-8"
+    )
+    run_token.mint(repo, run_id, "s.mjs", session_id=session, sizing_rel=_RUN_SIZING)
+
+
+def _trailers(repo, monkeypatch, paths):
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    return " ".join(compute_missing_trailer_args(_msg_file(repo), repo, paths=paths))
+
+
+def test_live_run_tier_beats_pickup(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    _live_run(repo)
+
+    joined = _trailers(repo, monkeypatch, ["src/a.py"])
+
+    assert "Deliverable-Id: dlv-run" in joined
+    assert "dlv-from-pickup" not in joined
+
+
+def test_live_run_tier_loses_to_tier0_artifact(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _live_run(repo, writes=("docs/plans/p.md",))
+    _write_plan(repo, "docs/plans/p.md", 'deliverable_id: "dlv-own"\n')
+
+    joined = _trailers(repo, monkeypatch, ["docs/plans/p.md"])
+
+    assert "Deliverable-Id: dlv-own" in joined
+
+
+def test_live_run_tier_disjoint_paths_keep_pickup(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    _live_run(repo)
+
+    joined = _trailers(repo, monkeypatch, ["other/file.py"])
+
+    assert "Deliverable-Id: dlv-from-pickup" in joined
+
+
+def test_live_run_tier_no_token_keeps_pickup(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+
+    assert "Deliverable-Id: dlv-from-pickup" in _trailers(repo, monkeypatch, ["src/a.py"])
+
+
+def test_live_run_tier_ambiguous_runs_omit_and_ladder_continues(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    _live_run(repo, did="dlv-run-1", run_id="r1")
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    (repo / "state/sizings/run2.yaml").write_text('status: routed\ndeliverable_id: "dlv-run-2"\n', encoding="utf-8")
+    run2 = repo / "scratch/warp/r2"
+    run2.mkdir(parents=True)
+    (run2 / "commit-request.txt").write_text((repo / "scratch/warp/r1/commit-request.txt").read_text(encoding="utf-8"), encoding="utf-8")
+    run_token.mint(repo, "r2", "s.mjs", session_id=_SID, sizing_rel="state/sizings/run2.yaml")
+
+    joined = _trailers(repo, monkeypatch, ["src/a.py"])
+
+    assert "dlv-run-" not in joined
+    assert "Deliverable-Id: dlv-from-pickup" in joined

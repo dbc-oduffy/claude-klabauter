@@ -148,10 +148,10 @@ def test_every_agent_call_site_carries_a_stage_model():
 
 def test_stage_models_override_changes_one_call_and_records_it():
     base = grind_only(_compose())
-    script = grind_only(_compose(stage_models={"triage": "haiku"}))
-    assert script.count("model: 'haiku'") == 1
+    script = grind_only(_compose(stage_models={"triage": "opus"}))
+    assert script.count("model: 'opus'") == base.count("model: 'opus'") + 1
     assert "stage_models: STAGE_MODELS_USED" in script
-    assert 'const STAGE_MODELS_USED = {"triage": "haiku"};' in script
+    assert 'const STAGE_MODELS_USED = {"triage": "opus"};' in script
     assert "STAGE_MODELS_USED" not in base
     assert _compose(stage_models={}) == _compose()
 

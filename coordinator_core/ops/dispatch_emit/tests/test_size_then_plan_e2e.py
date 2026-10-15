@@ -76,7 +76,8 @@ def _script() -> str:
 def _run_script(script: str, stub: dict) -> dict:
     body = script.replace("export const meta", "const meta", 1)
     proc = subprocess.run(
-        [_node(), "-e", _HARNESS % {"script": body}],
+        [_node(), "-"],
+        input=_HARNESS % {"script": body},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, "STUB": json.dumps(stub)},
         **no_console_creationflags(),
@@ -130,16 +131,31 @@ def _fixture(tmp_path: Path, monkeypatch, capsys, tshirt: str, mode: str, flags:
 
 def _stub(scout: dict, decision: dict, verdict: dict) -> dict:
     return {
-        "size": scout,
-        "assemble": {"exit_code": 0, "stdout": json.dumps(decision, indent=2, sort_keys=True),"stderr": ""},
-        "gate": {**verdict, "tshirt": decision["resolved_estimate"]["tshirt"], "route": decision["route"]},
+        "size": {
+            **scout,
+            "exit_code": 0, "stdout": json.dumps(decision, indent=2, sort_keys=True), "stderr": "",
+            **verdict, "tshirt": decision["resolved_estimate"]["tshirt"], "route": decision["route"],
+        },
         "blitz": {"plan_rel": PLAN_PATH},
     }
 
 
-def _replayed_decision(seen: dict, repo: Path, monkeypatch, mode: str, capsys) -> dict:
-    prompt = seen["prompts"]["assemble"]
-    cmd = prompt.split("Do not edit, retry or repair it:\n\n", 1)[1].strip()
+def _replayed_decision(seen: dict, repo: Path, monkeypatch, mode: str, capsys, scout: dict) -> dict:
+    """Fill the scout prompt's assemble template the way the scout would, then run it for real."""
+    prompt = seen["prompts"]["size"]
+    start = prompt.index('"${COORDINATOR_SETTINGS_HOME')
+    cmd = prompt[start:prompt.index(NO_PLAN_HAND_OFF_FLAG, start) + len(NO_PLAN_HAND_OFF_FLAG)]
+    q = shlex.quote
+    cmd = cmd.replace("<tshirt>", q(scout["tshirt"])).replace("<intent>", q(scout["intent"]))
+    cmd = cmd.replace("<premise_provenance>", q(scout["premise_provenance"]))
+    cmd = cmd.replace("<premise_evidence>", q(scout["premise_evidence"]))
+    cmd = cmd.replace("<exit_criterion>", q(scout["exit_criterion"])).replace("<name>", scout["name"])
+    cmd = cmd.replace(
+        "[--jtbd-unclear when jtbd_unclear is true]", "--jtbd-unclear" if scout["jtbd_unclear"] else ""
+    ).replace("[--well-trodden-step-change when well_trodden_step_change is true]", "")
+    assert "'REPO/state/sizings/" in cmd, cmd
+    cmd = cmd.replace("'REPO/state/", f"'{repo.as_posix()}/state/")
+    assert "<" not in cmd, cmd
     argv = shlex.split(cmd, posix=True)
     assert argv[0].endswith("/bin/sizing-assemble")
     return _assemble(repo, argv[1:], monkeypatch, mode, capsys)
@@ -153,10 +169,10 @@ def test_m_plan_route_runs_scout_through_plan_in_one_script(tmp_path, monkeypatc
     out = _run_script(_script(), _stub(scout, decision, verdict))
     assert out["result"]["planned"] == [PLAN_PATH]
     assert "halted_by" not in out["result"]
-    assert out["seen"]["labels"] == ["size", "assemble", "gate", "blitz"]
+    assert out["seen"]["labels"] == ["size", "blitz"]
     assert [p for p in out["seen"]["phases"] if p in ("size", "gate", "plan")] == ["size", "gate", "plan"]
     assert not {"stage", "execute", "review"} & set(out["seen"]["phases"])
-    replayed = _replayed_decision(out["seen"], _make_repo(tmp_path / "replayed"), monkeypatch, "ceo", capsys)
+    replayed = _replayed_decision(out["seen"], _make_repo(tmp_path / "replayed"), monkeypatch, "ceo", capsys, scout)
     assert replayed == {**decision, "write": replayed["write"]}
     assert Path(replayed["write"]["path"]).name == Path(decision["write"]["path"]).name
 
@@ -177,7 +193,20 @@ def test_pm_decision_and_shape_halt_with_the_decisions_pm_exit_question(tmp_path
     assert halted[PM_EXIT_QUESTION_KEY] == question
     assert "planned" not in out["result"]
     assert "plan" not in out["seen"]["phases"] and "blitz" not in out["seen"]["labels"]
-    replayed = _replayed_decision(out["seen"], _make_repo(tmp_path / "replayed"), monkeypatch, "hands-on", capsys)
+    replayed = _replayed_decision(
+        out["seen"], _make_repo(tmp_path / "replayed"), monkeypatch, "hands-on", capsys, scout
+    )
     assert replayed == {**decision, "write": replayed["write"]}
     assert replayed["route"] == ("shape" if "--jtbd-unclear" in flags else decision["route"])
     assert replayed[PM_EXIT_QUESTION_KEY] == question
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_failed_assemble_halts_before_plan_and_spawns_only_the_scout():
+    stub = {"size": {**_scout("M", []), "exit_code": 2, "stdout": "boom", "stderr": "bad flag"}}
+    out = _run_script(_script(), stub)
+    halted = out["result"]["halted_by"]
+    assert halted["halted"] == "refusal" and "sizing-assemble failed (exit 2)" in halted["reason"]
+    assert out["seen"]["labels"] == ["size"]
+    assert "planned" not in out["result"]

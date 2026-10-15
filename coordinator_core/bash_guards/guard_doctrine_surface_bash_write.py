@@ -370,7 +370,13 @@ def _has_write_marker(text: str) -> bool:
     return _has_non_redirect_write_marker(text)
 
 
-_INTERPRETER_RE = re.compile(r"\b(python3?|perl|ruby|node)\b")
+# An interpreter as a command word only: `\b` alone matched `python` inside a
+# hyphenated operand (a sizing slug minted from the ask's words), so a plain
+# read of `state/sizings/...-python-....yaml` was denied as an indirection.
+_INTERPRETER_RE = re.compile(
+    r"(?:^|(?<=[\s;&|(`'\"/]))(python(?:\d+(?:\.\d+)*)?|perl|ruby|node)(?:\.exe)?"
+    r"(?=$|[\s;&|)`'\"])"
+)
 _SHELL_DASH_C_RE = re.compile(r"\b(sh|bash|zsh)\b.{0,40}?-c\b", re.DOTALL)
 _EVAL_RE = re.compile(r"\beval\b")
 _XARGS_RE = re.compile(r"\bxargs\b")

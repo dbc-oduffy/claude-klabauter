@@ -37,21 +37,23 @@ BUDGET_MS = 500.0
 _DRIVER = "coordinator_core.benchmarks.terminal_commit_full_path"
 
 
-def _sample(workdir, *extra: str) -> dict:
+def _sample(workdir, *extra: str, driver: str = _DRIVER) -> dict:
     result = batched_process_time_ms(
-        [sys.executable, "-m", _DRIVER, str(workdir), *extra], k=K_INVOCATIONS
+        [sys.executable, "-m", driver, str(workdir), *extra], k=K_INVOCATIONS
     )
     assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
     return result
 
 
-def _min_sample(workdir, *extra: str) -> dict:
-    return min((_sample(workdir, *extra) for _ in range(SAMPLES)), key=lambda r: r["process_time_ms"])
+def _min_sample(workdir, *extra: str, driver: str = _DRIVER) -> dict:
+    return min(
+        (_sample(workdir, *extra, driver=driver) for _ in range(SAMPLES)), key=lambda r: r["process_time_ms"]
+    )
 
 
-def _measure(workdir, *extra: str) -> dict:
-    setup = _min_sample(workdir, "--setup-only", *extra)
-    full = _min_sample(workdir, *extra)
+def _measure(workdir, *extra: str, driver: str = _DRIVER) -> dict:
+    setup = _min_sample(workdir, "--setup-only", *extra, driver=driver)
+    full = _min_sample(workdir, *extra, driver=driver)
     net_ms = round(full["process_time_ms"] - setup["process_time_ms"], 3)
     net_procs = round(full["procs_per_call"] - setup["procs_per_call"], 3)
     detail = (
@@ -79,6 +81,14 @@ def ask_full_path_measurement(tmp_path_factory):
     return _measure(tmp_path_factory.mktemp("terminal_commit_budget_ask"), "--kind", "ask")
 
 
+@pytest.fixture(scope="module")
+def halted_record_measurement(tmp_path_factory):
+    return _measure(
+        tmp_path_factory.mktemp("terminal_commit_budget_halted"),
+        driver="coordinator_core.benchmarks.halted_record_commit_full_path",
+    )
+
+
 def _assert_under_bar(m: dict) -> None:
     # Positive net is necessary, not sufficient: completion is the driver's rc==0
     # (last of k runs only, see batched_process_time_ms).
@@ -92,6 +102,11 @@ def test_terminal_commit_full_path_is_under_the_500ms_bar(full_path_measurement)
 
 def test_terminal_commit_mise_full_path_is_under_the_500ms_bar(mise_full_path_measurement):
     _assert_under_bar(mise_full_path_measurement)
+
+
+def test_terminal_commit_halted_record_is_under_the_500ms_bar(halted_record_measurement):
+    _assert_under_bar(halted_record_measurement)
+    print(f"TERMINAL-COMMIT-HALTED {halted_record_measurement['detail']}")
 
 
 def test_terminal_commit_ask_full_path_cost_is_observed(ask_full_path_measurement):

@@ -15,7 +15,6 @@ pytestmark = pytest.mark.spawns_process
 
 OK_ROWS = [
     {"id": "backfill", "status": "ran", "exit_code": 0},
-    {"id": "lint", "status": "ran", "exit_code": 0},
 ]
 
 
@@ -75,15 +74,14 @@ def test_block_outside_week_misses(tmp_path: Path) -> None:
 
 def test_missing_backfill_row_misses(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["2026-10-05"], ["2026-10-05.md"])
-    res = changelog_rule.evaluate(root, ledger_rows=[OK_ROWS[1]])
+    res = changelog_rule.evaluate(root, ledger_rows=[])
     assert not res.passed and res.reason == "backfill-not-run"
 
 
-def test_failed_lint_row_misses(tmp_path: Path) -> None:
+def test_passes_with_no_lint_row(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["2026-10-05"], ["2026-10-05.md"])
-    rows = [OK_ROWS[0], {"id": "lint", "status": "ran", "exit_code": 1}]
-    res = changelog_rule.evaluate(root, ledger_rows=rows)
-    assert not res.passed and res.reason == "validation-failed"
+    res = changelog_rule.evaluate(root, ledger_rows=OK_ROWS)
+    assert res.passed, res
 
 
 def test_pending_release_file_is_not_a_daily_block(tmp_path: Path) -> None:

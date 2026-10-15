@@ -42,9 +42,6 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return False
 
-    def is_source_stale(self) -> bool:
-        return False
-
 
 class _FakeListener:
     def __init__(self, results):

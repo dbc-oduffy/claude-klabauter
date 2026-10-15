@@ -342,6 +342,53 @@ def test_occupied_baton_path_refuses_leaving_sizing_byte_identical(repo, monkeyp
     assert sizing.read_bytes() == before
 
 
+def _put_at_derived_path(repo: Path, dlv: str) -> Path:
+    path = repo / "state" / "handoffs" / "2026-10-01-fixture.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'---\ntitle: "picked up"\nhandoff_id: hnd-picked-1\ndeliverable_id: {dlv}\n---\n\n# picked up\n',
+        encoding="utf-8", newline="\n",
+    )
+    return path
+
+
+def test_existing_handoff_at_derived_path_is_adopted_not_refused(repo):
+    sizing = _put(repo, _sizing_text())
+    handoff = _put_at_derived_path(repo, _DLV)
+
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+
+    assert result["created"] is False and result["id"] == "hnd-picked-1"
+    assert result["path"] == "state/handoffs/2026-10-01-fixture.md"
+    assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["baton"] == result["path"]
+    assert _frontmatter(handoff)["handoff_id"] == "hnd-picked-1"
+
+
+def test_race_on_derived_path_adopts_the_winner(repo, monkeypatch):
+    sizing = _put(repo, _sizing_text())
+    real_write = _cli._write_baton_file
+
+    def _raced(out_abs, content):
+        _put_at_derived_path(repo, _DLV)
+        real_write(out_abs, content)
+
+    monkeypatch.setattr(_cli, "_write_baton_file", _raced)
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+
+    assert result["created"] is False and result["id"] == "hnd-picked-1"
+    assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["baton"] == result["path"]
+
+
+def test_existing_handoff_with_other_deliverable_id_still_refuses(repo):
+    sizing = _put(repo, _sizing_text())
+    _put_at_derived_path(repo, "dlv-other-999")
+    before = sizing.read_bytes()
+    with pytest.raises(_cli.SizingMintRefused) as exc:
+        _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+    assert exc.value.fields == ["deliverable_id"]
+    assert sizing.read_bytes() == before
+
+
 def test_stray_edge_to_another_sizings_baton_is_replaced(repo):
     _put_sibling(repo)
     other = _cli.mint_baton_from_sizing(_SIBLING_REL, str(repo))

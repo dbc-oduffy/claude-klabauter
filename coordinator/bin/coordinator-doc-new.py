@@ -5131,13 +5131,15 @@ def mint_baton_from_sizing(
 
     ``baton`` joins that existing baton (repo-relative) to an edge-less sizing; ``deliverable_id``
     is the id a fresh baton carries instead of a minted one. Either disagreeing with the sizing's
-    or the baton's own id refuses before any write.
+    or the baton's own id refuses before any write. A handoff already at the sizing's derived
+    baton path is joined as if passed as ``baton``; a mismatched id refuses.
     """
     _bootstrap_engine()
     _ensure_engine_on_path()
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted  # noqa: PLC0415
     from coordinator_core.ops.deliverable_cascade import _read_sizing_meta  # noqa: PLC0415
 
+    _caller_dlv = deliverable_id
     sizing_rel = _repo_relative_posix(sizing_rel, repo_root)
     _parts = sizing_rel.replace("\\", "/").split("/")
     if os.path.isabs(sizing_rel) or ".." in _parts or _parts[:2] != ["state", "sizings"]:
@@ -5175,6 +5177,10 @@ def mint_baton_from_sizing(
         existing = None
     existing_abs = None
     join_edge = False
+    if not baton and not existing:
+        _derived = _baton_rel_for_sizing(sizing_rel)
+        if os.path.isfile(os.path.join(repo_root, _derived)):
+            baton = _derived
     if baton:
         baton = _repo_relative_posix(baton, repo_root)
         _bparts = baton.split("/")
@@ -5273,10 +5279,6 @@ def mint_baton_from_sizing(
     handoff_id = _mint_artifact_id_from_title("hnd", title, "session-handoff", "handoff_id")
     out_rel = _baton_rel_for_sizing(sizing_rel)
     out_abs = os.path.join(repo_root, out_rel)
-    if os.path.exists(out_abs):
-        raise SizingMintRefused(
-            ["baton"], f"--from-sizing refused for {sizing_rel}: {out_rel} already exists"
-        )
     content = _scaffold_spinoff(
         title=title,
         branch=_current_branch(),
@@ -5303,10 +5305,10 @@ def mint_baton_from_sizing(
     # Baton first, created exclusively: a racing mint fails here, before any sizing write.
     try:
         _write_baton_file(out_abs, content)
-    except FileExistsError as exc:
-        raise SizingMintRefused(
-            ["baton"], f"--from-sizing refused for {sizing_rel}: {out_rel} already exists"
-        ) from exc
+    except FileExistsError:
+        return mint_baton_from_sizing(
+            sizing_rel, repo_root, baton=out_rel, deliverable_id=_caller_dlv
+        )
     try:
         _write_sizing_baton_edge(sizing_abs, out_rel, repo_root, deliverable_id)
     except Exception:

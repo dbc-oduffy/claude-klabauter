@@ -56,6 +56,17 @@ _SUITE_TIER = re.compile(
 )
 
 
+#: Human-readable spellings `_SUITE_TIER` refuses; the regex stays the source of truth.
+SUITE_TIER_SPELLINGS: tuple[str, ...] = (
+    "fast tier", "full suite", "broad suite", "whole suite", "entire suite",
+    "Tier-U", "tierU", "tier u",
+)
+#: The one wording a refusal and a scout prompt both offer in place of a suite tier.
+SUITE_TIER_REMEDIATION = "tests covering touched files pass"
+#: Head and marker together identify a remediable exit-criterion wording refusal.
+EXIT_CRITERION_REFUSAL_HEAD = "exit criterion names a "
+REMEDIATION_MARKER = "Use: "
+
 _TIER_NEGATOR = re.compile(r"\b(?:not|no|never|without|nor|instead\s+of)\b|n't\b", re.IGNORECASE)
 
 
@@ -98,8 +109,9 @@ def suite_tier_refusal(statement: object) -> Optional[str]:
     if m is None:
         return None
     return (
-        f"exit criterion names a suite tier ({m.group(0)!r}). "
-        "Use: tests covering touched files pass."
+        f"{EXIT_CRITERION_REFUSAL_HEAD}suite tier ({m.group(0)!r}); "
+        f"refused spellings: {', '.join(SUITE_TIER_SPELLINGS)}. "
+        f"{REMEDIATION_MARKER}{SUITE_TIER_REMEDIATION}."
     )
 
 

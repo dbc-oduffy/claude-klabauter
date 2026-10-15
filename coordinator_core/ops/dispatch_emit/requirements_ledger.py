@@ -25,14 +25,16 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.locked_write import MutateAbort
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, record_dir
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.session.declared_writes import declare_write
 
 GENERATES = []
 
@@ -41,6 +43,8 @@ INBOX_FILE = "revisions.jsonl"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
+#: Prefix of the `ruling.ref` a `workflow.revise` out_of_scope stamps: `<REVISE_REF>:<run_id>:<revision row id>`.
+REVISE_REF = "workflow.revise"
 STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
 #: Acts that can only exist after the terminal commit; a `post_commit` item names which remain.
 POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo")
@@ -53,6 +57,7 @@ _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
     Field("verbatim", "str"),
     Field("all_of_pm_ask", "bool"),
+    Field("out_of_scope", "str_list"),
 )
 _SIZING_SCHEMA = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "sizing-object.schema.json"
 
@@ -74,11 +79,14 @@ class Item:
 
 @dataclass(frozen=True)
 class Ledger:
-    """The rows a run is judged against: every register row not already ruled deferred/waived."""
+    """The rows a run is judged against: every register row not already ruled deferred/waived.
+    `withheld` (`{id, reason}`) are the rows a `workflow.revise` ruled out of scope: never judged,
+    always carried open."""
 
     items: tuple[Item, ...]
     all_of_pm_ask: bool
     sizing_rel: Optional[str] = None
+    withheld: tuple[dict, ...] = ()
 
     def to_json(self) -> dict:
         return {"items": [i.to_json() for i in self.items], "all_of_pm_ask": self.all_of_pm_ask}
@@ -164,14 +172,28 @@ def _sizing_path(root: Path, sizing_rel: str) -> Path:
     return found
 
 
-def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str]) -> Ledger:
+def _withheld_revision(row: Mapping, run_id: str) -> Optional[str]:
+    """The revision row id that ruled `row` out of scope in run `run_id`, else None."""
+    ruling = row.get(rr.ROW_RULING)
+    ref = ruling.get(rr.RULING_REF) if isinstance(ruling, Mapping) else None
+    prefix = f"{REVISE_REF}:{run_id}:"
+    if row.get(rr.ROW_STATUS) == rr.STATUS_DEFERRED and isinstance(ref, str) and ref.startswith(prefix):
+        return ref[len(prefix):] or None
+    return None
+
+
+def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str], run_id: str = "") -> Ledger:
     items = []
+    withheld = []
     for row in rows:
         if row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
+            revision = _withheld_revision(row, run_id)
+            if revision:
+                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": f"withheld by revision {revision}"})
             continue
         origin, at = _origin(row.get(rr.ROW_ANCHOR))
         items.append(Item(str(row.get(rr.ROW_ID)), str(row.get(rr.ROW_TEXT) or ""), origin, at))
-    return Ledger(tuple(items), all_of, sizing_rel)
+    return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
 
 
 def _next_id(rows: Sequence[Mapping]) -> str:
@@ -256,44 +278,92 @@ def _session_turns(root: Path) -> list[tuple[int, str]]:
     return [(t["turn"], str(t.get("prompt") or "")) for t in found if isinstance(t.get("turn"), int)]
 
 
-def foreign_turn(
+def _norm(text: object) -> str:
+    return " ".join(str(text).split())
+
+
+_MIN_FOREIGN_MATCH = 12  # a shorter turn ("ok", "do it") sits inside too many texts to prove identity
+
+
+def _int_turn(value: object) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def foreign_turns(
     root: Path, sizing: Optional[Mapping], ask_text: Optional[str], relayed_text: Optional[str]
-) -> Optional[int]:
-    """The turn number of a one-turn sizing's lone embedded PM turn when the run's raw ask is
-    provably a different session turn: the sizing embedded the session's newest turn by recency,
-    which belongs to another run. None for a relayed run, a run without an ask, a multi-turn
-    sizing, a turn the ask quotes, or an ask no recorded session turn quotes."""
+) -> dict[int, str]:
+    """`{turn: normalised text}` of the sizing's embedded PM turns that provably belong to another
+    run. One-turn sizing: the lone turn, when the ask does not quote it and quotes a different
+    recorded session turn (the sizing embedded the newest turn by recency). Multi-turn sizing: an
+    embedded turn the ask does not quote that matches a recorded session turn preceding every
+    session turn the ask quotes; a later turn (a follow-up) is never foreign. Empty for a relayed
+    run, a run without an ask, or an ask no recorded session turn quotes."""
     if (relayed_text and relayed_text.strip()) or not (ask_text and ask_text.strip()):
-        return None
-    turns = [v for v in (sizing or {}).get("pm_verbatims") or [] if isinstance(v, Mapping)]
-    if len(turns) != 1 or not isinstance(turns[0].get("turn"), int) or isinstance(turns[0].get("turn"), bool):
-        return None
-    lone = turns[0]["turn"]
-    if _quotes(ask_text, str(turns[0].get("text") or "")):
-        return None
+        return {}
+    embedded = [
+        (n, str(v.get("text") or ""))
+        for v in (sizing or {}).get("pm_verbatims") or []
+        if isinstance(v, Mapping) and (n := _int_turn(v.get("turn"))) is not None
+    ]
+    turns = [(n, t) for n, t in embedded if not _quotes(ask_text, t)]
+    if not turns:
+        return {}
     from coordinator_core.ops.baton_pm_turns import quotes_turn
 
     # Proof of "another run's turn" uses the word-run rule only: a short turn ("ok", "do it")
-    # that happens to sit inside the ask must not prove the lone turn foreign.
-    return lone if any(n != lone and quotes_turn(ask_text, text) for n, text in _session_turns(root)) else None
+    # that happens to sit inside the ask must not prove a turn foreign.
+    session = _session_turns(root)
+    quoted = [n for n, text in session if quotes_turn(ask_text, text)]
+    if not quoted:
+        return {}
+    if len(embedded) == 1:
+        lone, text = turns[0]
+        return {lone: _norm(text)} if any(n != lone for n in quoted) else {}
+    earliest = min(quoted)
+    recorded = {n: _norm(text) for n, text in session}
+    out: dict[int, str] = {}
+    for n, text in turns:
+        mine, theirs = _norm(text), recorded.get(n, "")
+        if n < earliest and min(len(mine), len(theirs)) >= _MIN_FOREIGN_MATCH and (mine in theirs or theirs in mine):
+            out[n] = mine
+    return out
 
 
 FOREIGN_TURN_REASON = "another run's PM turn: the run's ask does not quote it"
 
 
 def _append_rows(
-    root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turn: Optional[int] = None,
+    root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
+    withhold: Optional[Mapping] = None,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
-    (same verbatim text) is not added twice, a revision always is. `drop_turn` removes the open,
-    unclaimed rows derived from that PM turn and lists it in `unrelated_turns`."""
+    (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
+    removes the open, unclaimed rows derived from those PM turns and lists them in
+    `unrelated_turns`. `withhold` (`{"ids": [...], "run_id", "verbatim"}`) defers the named rows
+    with a ruling that cites the row this call appends, in the same register write; an unknown
+    id or a met/waived row refuses the whole write."""
+
+    drop_turns = drop_turns or {}
 
     def edit(rows: list[dict]) -> list[dict]:
-        if drop_turn is not None:
+        named = list((withhold or {}).get("ids") or [])
+        by_id = {str(r.get(rr.ROW_ID)): r for r in rows}
+        unknown = [i for i in dict.fromkeys(named) if i not in by_id]
+        if unknown:
+            raise MutateAbort(f"out_of_scope names no register row: {', '.join(unknown)}")
+        closed = [i for i in dict.fromkeys(named) if by_id[i].get(rr.ROW_STATUS) in (rr.STATUS_MET, rr.STATUS_WAIVED)]
+        if closed:
+            raise MutateAbort(f"out_of_scope names a row already {by_id[closed[0]].get(rr.ROW_STATUS)}: {', '.join(closed)}")
+        if drop_turns:
+            anchors = {f"{ORIGIN_PM_VERBATIMS} turn {n}" for n in drop_turns}
+            texts = set(drop_turns.values())
             rows = [
                 r for r in rows
                 if not (
-                    str(r.get(rr.ROW_ANCHOR) or "") == f"{ORIGIN_PM_VERBATIMS} turn {drop_turn}"
+                    (
+                        str(r.get(rr.ROW_ANCHOR) or "") in anchors
+                        or (r.get(rr.ROW_ANCHOR) == ORIGIN_PM_VERBATIMS and _norm(r.get(rr.ROW_TEXT) or "") in texts)
+                    )
                     and r.get(rr.ROW_STATUS) == rr.STATUS_OPEN and not r.get(rr.ROW_CLAIMED_BY)
                 )
             ]
@@ -307,9 +377,20 @@ def _append_rows(
                 rr.ROW_ID: _next_id(rows), rr.ROW_TEXT: t, rr.ROW_ANCHOR: anchor,
                 rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
             })
+        if named:
+            revision = str(rows[-1].get(rr.ROW_ID))
+            ruling = {
+                rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: str(withhold["verbatim"]),
+                rr.RULING_REF: f"{REVISE_REF}:{withhold['run_id']}:{revision}", rr.RULING_ON: _now()[:10],
+            }
+            for rid in dict.fromkeys(named):
+                row = by_id[rid]
+                if row.get(rr.ROW_STATUS) != rr.STATUS_DEFERRED:
+                    row[rr.ROW_STATUS] = rr.STATUS_DEFERRED
+                    row[rr.ROW_RULING] = dict(ruling)
         return rows
 
-    unrelated = [{"turn": drop_turn, "reason": FOREIGN_TURN_REASON}] if drop_turn is not None else []
+    unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted(drop_turns)]
     return _mutate_register(root, sizing_rel, edit, unrelated=unrelated)
 
 
@@ -331,6 +412,11 @@ def render(ledger: Ledger, run_id: str) -> str:
         lines.append(f"## {item.id} ({tag})")
         lines.append("")
         lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
+        lines.append("")
+    if ledger.withheld:
+        lines.append("## Out of scope (ruled by a revision; never judged, carried open)")
+        lines.append("")
+        lines.extend(f"- {w['id']}: {w['reason']}" for w in ledger.withheld)
         lines.append("")
     return "\n".join(lines)
 
@@ -354,7 +440,7 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     except (LedgerRefused, OSError):
         return Ledger((), all_of, sizing_rel)
     register = rr.read_register(text)
-    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel)
+    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel, Path(dir_).name)
 
 
 def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
@@ -372,6 +458,27 @@ def start(repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False) -> Path:
     _write_run(dir_, {"sizing_rel": None, "all_of_pm_ask": bool(all_of_pm_ask)})
     _write_view(repo_root, dir_, run_id)
     return dir_
+
+
+def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
+    """`pm_words` minus the turns bind must not seed: a turn the sizing's register lists in
+    `unrelated_turns`, one proven foreign this bind, and one an existing register row covers
+    (the `requirement_register.coverage_gaps` rule)."""
+    register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
+    skip = {n for e in register.get(rr.UNRELATED_TURNS_KEY) or [] if isinstance(e, Mapping) and (n := _int_turn(e.get("turn"))) is not None}
+    skip.update(foreign)
+    needles = [n for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping) and (n := _norm(r.get(rr.ROW_TEXT) or ""))]
+    verbatims = [v for v in sizing.get("pm_verbatims") or [] if isinstance(v, Mapping)]
+    if not any(isinstance(v.get("text"), str) and v["text"].strip() for v in verbatims):
+        return [t for t in pm_words(sizing) if not any(n in _norm(t) for n in needles)]
+    out = []
+    for v in verbatims:
+        text = v.get("text")
+        if not (isinstance(text, str) and text.strip()) or _int_turn(v.get("turn")) in skip:
+            continue
+        if not any(n in _norm(text) for n in needles):
+            out.append(text.strip())
+    return out
 
 
 def bind(
@@ -396,11 +503,11 @@ def bind(
     except (OSError, yaml.YAMLError) as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     sizing = sizing if isinstance(sizing, dict) else {}
-    foreign = foreign_turn(root, sizing, ask_text, relayed_text)
+    foreign = foreign_turns(root, sizing, ask_text, relayed_text)
     entries = (
         []
-        if foreign is not None or (relayed_text and relayed_text.strip())
-        else [(t, ORIGIN_PM_VERBATIMS) for t in pm_words(sizing)]
+        if relayed_text and relayed_text.strip()
+        else [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
     )
     if ask_text and ask_text.strip():
         entries.append((ask_text, ORIGIN_ASK))
@@ -408,8 +515,8 @@ def bind(
         entries.append((relayed_text, ORIGIN_RELAYED))
     queued = _inbox(dir_)
     entries.extend((e["text"], f"{ORIGIN_REVISION}@{e.get('at') or _now()}") for e in queued)
-    if entries or foreign is not None:
-        _append_rows(root, sizing_rel, entries, drop_turn=foreign)
+    if entries or foreign:
+        _append_rows(root, sizing_rel, entries, drop_turns=foreign)
     if not bound:
         _write_run(dir_, {**run, "sizing_rel": sizing_rel})
     if queued:
@@ -418,14 +525,19 @@ def bind(
 
 
 def revise(
-    repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None
+    repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
+    out_of_scope: Sequence[str] = (),
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
-    run's sizing is bound, else a queued revision `bind` folds in. Returns (ledger, run dir, the
-    new row id or None)."""
+    run's sizing is bound, else a queued revision `bind` folds in. `out_of_scope` ids are deferred
+    in the same register write as the revision row, the verbatim being their ruling; it needs that
+    verbatim and a bound sizing. Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
+    named = [str(i) for i in out_of_scope]
     if not text and all_of_pm_ask is None:
         raise LedgerRefused("workflow.revise needs a non-empty verbatim, all_of_pm_ask, or both")
+    if named and not text:
+        raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
     if len(text.encode("utf-8")) > VERBATIM_BYTE_CAP:
         raise LedgerRefused(f"verbatim exceeds {VERBATIM_BYTE_CAP} bytes")
     root = Path(repo_root)
@@ -433,21 +545,28 @@ def revise(
     run = read_run(dir_)
     if run is None:
         raise LedgerRefused(f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first")
+    if named and not run.get("sizing_rel"):
+        raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
+    withhold = {"ids": named, "run_id": run_id, "verbatim": text} if named else None
     if all_of_pm_ask is not None:
         run = {**run, "all_of_pm_ask": bool(all_of_pm_ask)}
         _write_run(dir_, run)
+        declare_write(dir_ / RUN_FILE)
     added: Optional[str] = None
     if text:
         at = _now()
         if run.get("sizing_rel"):
-            rows = _append_rows(root, run["sizing_rel"], [(text, f"{ORIGIN_REVISION}@{at}")])
+            rows = _append_rows(root, run["sizing_rel"], [(text, f"{ORIGIN_REVISION}@{at}")], withhold=withhold)
             added = str(rows[-1].get(rr.ROW_ID)) if rows else None
         else:
             from coordinator_core.atomic_append import append_line
 
             append_line(dir_ / INBOX_FILE, (json.dumps({"text": text, "at": at}, ensure_ascii=False) + "\n").encode("utf-8"))
+            declare_write(dir_ / INBOX_FILE)
             added = f"Q{len(_inbox(dir_))}"
     ledger = _write_view(root, dir_, run_id)
+    if ledger is not None:
+        declare_write(dir_ / LEDGER_VIEW_FILE)
     return ledger or Ledger((), bool(run.get("all_of_pm_ask"))), dir_, added
 
 
@@ -488,25 +607,40 @@ def _misrouted(row: Mapping, owed: str) -> Optional[str]:
     return f"judged at {', '.join(read) or 'no root named'}, owed the engine root {owed or '(unresolved)'}"
 
 
-def judge(ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None) -> dict:
-    """`{"pass": bool, "failures": [{"id", "reason"}]}` for a checker `verdict`
-    (`{"items": [{"id", "status", "essential"?, "superseded_by"?, "post_commit_acts"?, "remaining"?,
-    "root_read"?}]}`, read through `normalize_verdict`) against the live register.
+def judge(
+    ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
+    gated: Optional[Iterable[str]] = None,
+) -> dict:
+    """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
+    `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
+    "post_commit_acts"?, "remaining"?, "root_read"?}]}`, read through `normalize_verdict`) against
+    the live register. `open` lists every `not_met` row let through (never passed as met).
+
+    `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
+    nothing. A `not_met` row whose `withheld_by` is in `gated` passes and is listed open
+    (`withheld_by <id>`), whatever `all_of_pm_ask` or `essential` say; a `withheld_by` outside
+    `gated` fails.
 
     `routed` maps an engine-routed item id to the engine root it was owed: a met/not_met/post_commit
     item whose `root_read` (string or list) does not include that root adds a failure. It never
     removes one; None or empty is the cwd-only judgment.
 
+    A row in `ledger.withheld` (ruled out of scope by a revise) is listed in `open` as
+    `withheld by revision <id>` whether the verdict omits or judges it, and never fails.
+
     Every row needs exactly one judgment. `drifted` (lost or reinterpreted) always fails;
     `superseded` passes only when it names a later revision row; `not_met` fails when
-    `all_of_pm_ask` is set or the row is essential (the default); `post_commit` passes only when
+    `all_of_pm_ask` is set or the row is essential (the default), else it passes listed open as
+    `non-essential`; `post_commit` passes only when
     `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`."""
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
-        return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}]}
+        return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}], "open": []}
+    gated_ids = set(gated or ())
     by_id: dict[str, Mapping] = {}
     failures: list[dict] = []
+    open_rows: list[dict] = []
     for row in rows:
         rid = row.get("id") if isinstance(row, Mapping) else None
         if not isinstance(rid, str):
@@ -542,14 +676,28 @@ def judge(ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] =
                 bad = next((a for a in acts if a not in POST_COMMIT_ACTS), None)
                 if bad is not None:
                     failures.append({"id": item.id, "reason": f"post_commit act {bad!r} is not one of {POST_COMMIT_ACTS}"})
-        elif status == "not_met" and (ledger.all_of_pm_ask or row.get("essential", True) is not False):
-            failures.append({
-                "id": item.id,
-                "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask else ""),
-            })
-    unknown = sorted(set(by_id) - set(order))
+        elif status == "not_met":
+            withheld = row.get("withheld_by")
+            if isinstance(withheld, str) and withheld:
+                if withheld in gated_ids:
+                    open_rows.append({"id": item.id, "reason": f"withheld_by {withheld}"})
+                else:
+                    failures.append({
+                        "id": item.id,
+                        "reason": f"withheld_by {withheld} names no gated chunk of the run's manifest",
+                    })
+            elif ledger.all_of_pm_ask or row.get("essential", True) is not False:
+                failures.append({
+                    "id": item.id,
+                    "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask else ""),
+                })
+            else:
+                open_rows.append({"id": item.id, "reason": "non-essential"})
+    withheld_ids = {w["id"] for w in ledger.withheld}
+    unknown = sorted(set(by_id) - set(order) - withheld_ids)
     failures.extend({"id": rid, "reason": "names no requirement row"} for rid in unknown)
-    return {"pass": not failures, "failures": failures}
+    open_rows.extend(dict(w) for w in ledger.withheld)
+    return {"pass": not failures, "failures": failures, "open": open_rows}
 
 
 def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:
@@ -613,7 +761,9 @@ def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
 
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str), `all_of_pm_ask` (bool).
+    """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str), `all_of_pm_ask` (bool),
+    `out_of_scope` (list of register row ids, needs `verbatim`: each is deferred with the verbatim as
+    its ruling, carried open on the commit, and replied as `withheld`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -629,13 +779,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     root = main_worktree_root(Path(repo_root))
     try:
         ledger, dir_, added = revise(
-            root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask")
+            root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
+            out_of_scope=params.get("out_of_scope") or (),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
     from coordinator_core.ops.dispatch_emit import run_token
 
-    return {
+    live = run_token.is_live(root, params["run_id"])
+    out = {
         "ok": True,
         "run_id": params["run_id"],
         "item": added,
@@ -643,5 +795,61 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "all_of_pm_ask": ledger.all_of_pm_ask,
         "sizing": ledger.sizing_rel,
         "ledger": (dir_ / LEDGER_VIEW_FILE).relative_to(root.resolve()).as_posix(),
-        "run_live": run_token.is_live(root, params["run_id"]),
+        "run_live": live,
+    }
+    named = set(params.get("out_of_scope") or ())
+    if named:
+        out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]
+    if not live:
+        out.update(_refire(ledger.sizing_rel, root))
+    return out
+
+
+def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:
+    """`(plan_rel, register row ids the plan's register_claims omit)` for the sizing's `plan:` edge;
+    `(None, [])` when the sizing has no readable plan claiming it. File reads only."""
+    if not sizing_rel:
+        return None, []
+    import yaml
+
+    try:
+        sizing_text = _sizing_path(root, sizing_rel).read_text(encoding="utf-8")
+        sizing = yaml.safe_load(sizing_text)
+    except (LedgerRefused, OSError, yaml.YAMLError):
+        return None, []
+    edge = sizing.get("plan") if isinstance(sizing, dict) else None
+    if not (isinstance(edge, str) and edge.strip()):
+        return None, []
+    plan = contained_path(Path(root) / edge, [Path(root) / "docs" / "plans"])
+    if plan is None or not plan.is_file():
+        return None, []
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    claims = plan_frontmatter(plan.read_text(encoding="utf-8", errors="replace")).get("register_claims")
+    if not isinstance(claims, dict) or claims.get("sizing") != sizing_rel or not isinstance(claims.get("rows"), list):
+        return None, []
+    register = rr.read_register(sizing_text)
+    claimed = {str(r) for r in claims["rows"]}
+    missing = [str(r[rr.ROW_ID]) for r in register.rows if str(r[rr.ROW_ID]) not in claimed] if register else []
+    return (edge, missing) if missing else (None, [])
+
+
+def _refire(sizing_rel: Optional[str], root: Optional[Path] = None) -> dict:
+    """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
+    will. When the sizing's plan omits register rows, the refire would fire that stale plan: the
+    reply names the plan-revision step first and holds the fire call as `then`."""
+    from coordinator_core.warp_fire import fire_command
+
+    plan_rel, missing = _unclaimed_rows(root, sizing_rel) if root is not None else (None, [])
+    if plan_rel:
+        return {
+            "next": {"kind": "revise-plan", "plan": plan_rel, "rows": missing, "then": fire_command(sizing_rel)},
+            "note": (
+                f"run finished: {plan_rel} omits register row(s) {', '.join(missing)} in register_claims.rows; "
+                "a refire would fire the stale plan. Revise the plan to claim them, then refire."
+            ),
+        }
+    return {
+        "next": {"kind": "refire", "call": fire_command(sizing_rel)},
+        "note": "run finished: nothing reads this revision until a refire.",
     }

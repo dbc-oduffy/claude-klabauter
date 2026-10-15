@@ -437,7 +437,7 @@ def _composed_digest(ledger_js: str) -> dict:
         "const _manifest={plan_id:'p'}, _incompleteChunks=[], _notStarted=[], _planHeld={}, _verifications=[], "
         "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewPrep={slices:[1]}, _reviewWave=[], "
         "_deliveryVerdict=null, _testResult=null, _halted=null, _viaRoadmap=false, _RUN_TOKEN=null, "
-        "_sizingRel='s', _planRel=null, _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
+        "_sizingRel='s', _planRel=null, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
         f"_stoppedBy=[], _blockedChunks=[], _docs=null, _commit=null; let _nextAction=null; const _ledger={ledger_js};\n"
     )
     body = script[start:stop].replace("  return { arm:", "  const _out = { arm:", 1)

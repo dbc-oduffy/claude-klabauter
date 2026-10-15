@@ -562,7 +562,7 @@ def _trigger_guard_post_executor_verification() -> Optional[Dict[str, Any]]:
     g = guard_post_executor_verification
     orig_gate, orig_bump = g._gate, g._bump_counter
     g._gate = lambda payload, subject: ("altlive-probe", "/altlive", "deny")
-    g._bump_counter = lambda repo_root, session_id: 1
+    g._bump_counter = lambda repo_root, session_id, armed_since=0.0: 1
     try:
         return g.check(_payload("python3 -m pytest tests", agent_id=None))
     finally:

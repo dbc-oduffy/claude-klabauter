@@ -344,10 +344,10 @@ Negative-spec (hard-won):
                                         caller-supplied docs/plans/<plan>.md
         - plan.append_session:          in-place append of a session record inside the
                                         caller-supplied docs/plans/<plan>.md
-        - completion.stamp_releases:    in-place stamp of release fields on every pending
-                                        archive/completed/**/*.md entry with the earliest
-                                        version tag whose tree held it; also called in process
-                                        by release.cut_tag and release.cut_tag_and_publish
+        - release.write_index:          one archive/releases/<tag>.yaml per version tag
+                                        lacking one, listing the entries its tree first held;
+                                        also called in process by release.cut_tag and
+                                        release.cut_tag_and_publish
         - review_trail.write:           additive-create into state/review-trail/
         D2 bounds: per-record idempotent, git-reversible, content-additive in-place only
         (two named rewrite exceptions: F11's `commits: []` inline-empty-list-to-populated-form

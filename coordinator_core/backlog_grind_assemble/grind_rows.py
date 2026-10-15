@@ -2,11 +2,12 @@
 coordinator_core.backlog_grind_assemble.grind_rows — the `backlog-grind-assemble
 grind-row` verb family: `check`, `append`, `close`, `settle`.
 
-Four small, index-untouched primitives the queue-grind engine's emitted
-`.mjs` script shells out to (via `coordinator-invoke` in a real run, and
-directly here for tests). None of the four stages the git index or spawns
-git — that is exclusively the `commit` stage kind's job (§ Design § Stage
-library), never this module's.
+Small primitives the queue-grind engine's emitted `.mjs` script shells out to
+(via `coordinator-invoke` in a real run, and directly here for tests). None
+stages the git index or spawns git, except `run-record`, which lands the run's
+own bookkeeping through the in-process `ceremony.commit_v2` handler; the
+per-row `commit` stage kind stays the only other committer and never names a
+`state/queue-grind/` path.
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
 § Row verbs, Tasks § C4.
@@ -61,8 +62,8 @@ deletes is declared via `session.declared_writes.declare_write` (DR-276),
 so the session that runs the verb holds the touch-claim the committer's
 own `scoped_git_commit` scope check needs.
 
-None of the five touches the index or spawns git (§ Design § Row verbs,
-"None of the four touches the index").
+Only `run-record` commits (see its docstring); the other verbs leave the
+index untouched.
 
 Exit codes (locally scoped, matching the row's own contract):
   0 — ok
@@ -704,6 +705,101 @@ def cmd_sweep(rest: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _git_blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()  # noqa: S324 -- git object id, not security
+
+
+class _LandSet:
+    """What `run-record` commits: `paths` present on disk and differing from HEAD,
+    `deleted` gone from disk and present in HEAD, `withheld` held by a live peer."""
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+        self.deleted: list[str] = []
+        self.withheld: list[str] = []
+
+
+def _land_set(repo_root: Path, profile: str) -> "_LandSet | str":
+    """The run's own bookkeeping: paths THIS session claims under
+    `state/queue-grind/<profile>/`, plus this session's block-discharge ledger, that
+    differ from HEAD. Returns a refusal string when HEAD cannot be read. Never a
+    directory pathspec, never a path this session does not hold. Zero git spawns."""
+    from coordinator_core.git.git_state import head_sha, read_tree_spine
+    from coordinator_core.session import core, scope
+
+    result = _LandSet()
+    root_str = str(repo_root)
+    sid = core.resolve_session_id(root_str)
+    if not sid:
+        return result
+    home = f"state/queue-grind/{profile}/"
+    held = {p for p in scope.own_path_claims(sid, cwd=root_str) if p.startswith(home)}
+    if "/" not in sid and "\\" not in sid and not sid.startswith("."):
+        held.add(f"state/block-discharge/{sid}.jsonl")
+    candidates = sorted(p for p in held if not (repo_root / p).is_dir())
+    if not candidates:
+        return result
+    if head_sha(repo_root) is None:
+        return result  # unborn branch: nothing to land against
+    spine = read_tree_spine(repo_root, candidates)
+    if spine is None:
+        return "HEAD is unreadable; the run's bookkeeping was not committed"
+
+    dirty: list[str] = []
+    gone: list[str] = []
+    for rel in candidates:
+        head_dir, _, head_name = rel.rpartition("/")
+        entry = spine.get(head_dir, {}).get(head_name)
+        target = repo_root / rel
+        if target.is_file():
+            if entry is None or entry[1] != _git_blob_sha(target.read_bytes()):
+                dirty.append(rel)
+        elif entry is not None:
+            gone.append(rel)
+    contested = scope.contested_by_live_peers(dirty + gone, sid, cwd=root_str) or {}
+    result.withheld = sorted(contested)
+    result.paths = [p for p in dirty if p not in contested]
+    result.deleted = [p for p in gone if p not in contested]
+    return result
+
+
+def _commit_land_set(repo_root: Path, profile: str, run_id: str, land: _LandSet) -> "tuple[str | None, str | None]":
+    """`(sha, None)` on success, `(None, refusal)` otherwise, through the in-process
+    `ceremony.commit_v2` handler."""
+    from coordinator_core.ops.ceremony.commit_v2 import _handler
+
+    ledger_suffix = ".jsonl"
+    removed = sum(1 for p in land.deleted if p.endswith(ledger_suffix))
+    written = sum(1 for p in land.paths if p.endswith(ledger_suffix))
+    subject = f"grind({profile}): run {run_id} bookkeeping"
+    if removed:
+        subject += f", removed {removed} settled ledgers"
+    message = (
+        f"{subject}\n\n"
+        f"Ledgers removed: {removed}. Ledgers written: {written}. "
+        f"Paths committed: {len(land.paths)}, deleted: {len(land.deleted)}.\n"
+    )
+    try:
+        reply = _handler(
+            {
+                "paths": land.paths,
+                "deleted_paths": land.deleted,
+                "message": message,
+                # Every path is this session's own claimed bookkeeping, so the
+                # handler's check-ignore spawn is skipped by declaring none ignored.
+                "ignored_untracked": [],
+            },
+            repo_root=repo_root,
+        )
+    except Exception as exc:  # noqa: BLE001 -- surfaced verbatim; the commit outcome is unknown
+        return None, f"{type(exc).__name__}: {exc}"
+    if reply.get("committed"):
+        return reply.get("sha"), None
+    if reply.get("already_landed_sha"):
+        return reply["already_landed_sha"], None
+    return None, str(reply.get("error") or reply)
+
+
 def cmd_run_record(rest: list[str]) -> int:
     """`run-record --profile P --run-id T [--record-file F|- | --record-urlenc E] --repo-root D`:
     atomically writes `<repo_root>/state/queue-grind/<P>/runs/<T>.json` from
@@ -714,7 +810,18 @@ def cmd_run_record(rest: list[str]) -> int:
     under `--repo-root`. The sole route the committer agent has for the
     drain run record -- it carries no Write tool, so it invokes this verb
     instead of hand-writing the file, and the write is declared like every
-    other row-verb mutation (§ Design § Row verbs, `run-record`)."""
+    other row-verb mutation (§ Design § Row verbs, `run-record`).
+
+    Then lands the run's own bookkeeping in one commit through the in-process
+    `ceremony.commit_v2` handler (no git spawn on the common shape): the paths this
+    session claims under `state/queue-grind/<P>/` (swept and settled ledgers,
+    appended ledgers, evidence, the record) and its own
+    `state/block-discharge/<session>.jsonl`, each only when it differs from HEAD.
+    A path a live peer also claims is withheld and named. Prints
+    `{"path", "commit", "landed", "deleted", "withheld"}`; `commit` is null when
+    nothing was left to land, and also when no session id resolves or the branch
+    is unborn (the record is then written but left uncommitted). A commit refusal exits 1 with the verbatim
+    refusal on stderr, the record already written."""
     flags = _parse_flags(
         rest, required=("profile", "run-id", "repo-root"),
         optional=("record-file", "record-urlenc"),
@@ -772,7 +879,28 @@ def cmd_run_record(rest: list[str]) -> int:
     os.replace(tmp_path, target)
     _declare_under_repo_root(target, repo_root)
 
-    print(json.dumps({"path": str(target)}, sort_keys=True))
+    land = _land_set(repo_root, flags["profile"])
+    if isinstance(land, str):
+        print(f"grind-row run-record: {land}", file=sys.stderr)
+        return EXIT_REFUSAL
+    sha: str | None = None
+    if land.paths or land.deleted:
+        sha, refusal = _commit_land_set(repo_root, flags["profile"], run_id, land)
+        if sha is None:
+            print(f"grind-row run-record: commit refused: {refusal}", file=sys.stderr)
+            return EXIT_REFUSAL
+    print(
+        json.dumps(
+            {
+                "path": str(target),
+                "commit": sha,
+                "landed": land.paths,
+                "deleted": land.deleted,
+                "withheld": land.withheld,
+            },
+            sort_keys=True,
+        )
+    )
     return EXIT_OK
 
 

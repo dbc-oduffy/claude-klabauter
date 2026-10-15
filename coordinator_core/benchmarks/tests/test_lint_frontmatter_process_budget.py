@@ -113,9 +113,15 @@ def _build_fixture(root: Path) -> dict:
 
 
 @pytest.fixture(scope="module")
-def sweep_measurement(tmp_path_factory):
+def lint_fixture(tmp_path_factory):
     root = tmp_path_factory.mktemp("lint_frontmatter_budget")
     scale = _build_fixture(root)
+    return root, scale
+
+
+@pytest.fixture(scope="module")
+def sweep_measurement(lint_fixture):
+    root, scale = lint_fixture
     argv = [sys.executable, str(_SHIM), "--root", str(root), "--json"]
 
     primed = subprocess.run(argv, capture_output=True, text=True, **no_console_creationflags())

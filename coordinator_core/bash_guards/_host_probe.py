@@ -57,13 +57,7 @@ def _platform() -> str:
 
 def _memory_tuple() -> tuple:
     """(used_mb, avail_mb, total_mb) from host_sampler's per-platform reader."""
-    hs = _host_sampler()
-    plat = _platform()
-    if plat == "windows":
-        return hs._windows_memory_mb()
-    if plat == "darwin":
-        return hs._darwin_memory_mb()
-    return hs._posix_memory_mb()
+    return _host_sampler()._memory_triple(_platform())
 
 
 def read_available_mb() -> MemoryReading:

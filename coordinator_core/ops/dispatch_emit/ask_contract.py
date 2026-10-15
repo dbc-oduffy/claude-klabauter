@@ -37,7 +37,8 @@ SIZING_ASSEMBLE_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-s
 SCOUT_RETURN_CLAUSE = (
     "Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), "
     "name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with "
-    "premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` "
+    "premise_evidence, exit_criterion (one sentence stating what done means; never name a suite tier or a "
+    "test-runner command in it -- write 'tests covering touched files pass'), and as `writes` "
     "the repo-relative files the ask will create, edit or delete -- every file the ask names, "
     "plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set "
     "jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), "
@@ -71,6 +72,23 @@ SCOUT_SCHEMA = {
                 "properties": {"title": _STR, "owner_repo": _STR, "requires": _STR},
             },
         },
+    },
+}
+#: The ask scout's return: SCOUT_SCHEMA plus its closing acts (sizing-assemble, then
+#: dispatch.ask_gate). Separate so the grind scout's embedded schema stays byte-identical.
+ASK_SCOUT_SCHEMA = {
+    **SCOUT_SCHEMA,
+    "properties": {
+        **SCOUT_SCHEMA["properties"],
+        "exit_code": {"type": "integer"},
+        "stdout": _STR,
+        "stderr": _STR,
+        "arm": {"type": ["string", "null"]},
+        "halt": {"type": ["object", "null"]},
+        "baton": {"type": ["object", "null"]},
+        "resume_plan": {"type": ["string", "null"]},
+        "spine_plan": {"type": ["string", "null"]},
+        "route": _STR,
     },
 }
 ASSEMBLE_SCHEMA = {
@@ -121,6 +139,25 @@ RUN_RECORD_FILES = (
     PM_INTENT_FILE,
     RELAYED_ASK_FILE,
 )
+#: `dispatch.terminal_commit` params key whose dict value (a non-empty str `halted`) selects the
+#: halted-run record-only mode.
+HALTED_RECORD_PARAM = "halted_by"
+HALT_REASON_FIELDS = ("reason", "detail", "refused", "error")
+HALT_REASON_MAX_CHARS = 300
+
+
+def halted_record_message(run_id: str, halted: dict) -> str:
+    """Commit message for a halted run's record-only commit: subject, blank line, `Halted-By:`
+    and, when the halt carries a reason, one `Halt-Reason:` line (first non-empty of
+    `HALT_REASON_FIELDS`, whitespace collapsed, cut to `HALT_REASON_MAX_CHARS`). Pure."""
+    lines = [f"warp: record halted {run_id} run artifacts", "", f"Halted-By: {halted.get('halted')}"]
+    for field in HALT_REASON_FIELDS:
+        value = halted.get(field)
+        text = " ".join(str(value).split()) if value else ""
+        if text:
+            lines.append(f"Halt-Reason: {text[:HALT_REASON_MAX_CHARS]}")
+            break
+    return "\n".join(lines)
 
 
 def record_dir(repo_root: Path, run_id: str) -> Path:
@@ -161,6 +198,9 @@ class GateVerdict:
     acceptance: dict | None = None
     # Plan path of an accepted, unfired sizing: the script stages it instead of authoring one.
     resume_plan: str | None = None
+    # Plan path of the spine the gate minted at M+ from a sizing whose acceptance rows are all
+    # concrete: the script reviews it instead of planning.
+    spine_plan: str | None = None
     # Set only when the request carried `record`: {"ok": bool, "error"?: str}, the ruling's write.
     recorded: dict | None = None
 
@@ -172,6 +212,8 @@ class GateVerdict:
             out["acceptance"] = self.acceptance
         if self.resume_plan is not None:
             out["resume_plan"] = self.resume_plan
+        if self.spine_plan is not None:
+            out["spine_plan"] = self.spine_plan
         return out
 
 

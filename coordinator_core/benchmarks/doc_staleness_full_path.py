@@ -29,14 +29,13 @@ import importlib.util
 import io
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.workstream_complete_brief_full_path import STAMP_REL, _git
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 HISTORY_COMMITS = 40000  # near the real repo's 43520
 README_COMMITS_BACK = 8000  # spike § Q5: this repo's registered docs' last authored touches sit 8000 and 4000 back
@@ -185,11 +184,10 @@ def _write_split_graph(repo: Path) -> None:
     chunk). If a ruled provisioning route adds Bloom filters to real repos, add
     `--changed-paths` to these writes the same way (C6 owns that change)."""
     for back in (20000, 8000):
-        tip = subprocess.run(
-            ["git", "rev-parse", f"HEAD~{back}"], cwd=str(repo), capture_output=True,
-            check=True, **no_console_creationflags(),
-        ).stdout
-        _git(repo, "commit-graph", "write", "--split=no-merge", "--stdin-commits", stdin=tip.decode())
+        tip = run_git(["rev-parse", f"HEAD~{back}"], cwd=str(repo))
+        if not tip.ok:
+            raise RuntimeError(f"git rev-parse HEAD~{back} failed: {tip.stderr}")
+        _git(repo, "commit-graph", "write", "--split=no-merge", "--stdin-commits", stdin=tip.stdout)
     _git(repo, "commit-graph", "write", "--reachable", "--split=no-merge")
 
 

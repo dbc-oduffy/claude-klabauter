@@ -37,6 +37,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
     gated_rows,
+    own_gate_owners,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -45,7 +46,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
 )
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
 from coordinator_core.ops.dispatch_emit.emit import (
-    _AGENT_MODELS,
+    resolve_agent_model,
     _dispatch_report_path,
     _plan_deliverable_id,
     _dedupe_preserve_order,
@@ -228,6 +229,25 @@ def _rel(root: Path, path: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
 
+def _set_aside_prior_report(root: Path, report_rel: str) -> Optional[str]:
+    """Rename a row report left by an earlier run to `<row id>.prior.md` beside it, replacing an
+    older one, and return that repo-relative path; None when no report sits there. Rename only.
+    Trap: without this a refired executor finds its own report and replays it."""
+    report = root / report_rel
+    if not report.is_file():
+        return None
+    prior = report.with_name(report.stem + ".prior.md")
+    report.replace(prior)
+    return _rel(root, prior)
+
+
+def _prior_report_line(prior_rel: str) -> str:
+    return (
+        f"Prior run's report, set aside: {prior_rel}. It is the previous run's history, never this "
+        "run's answer; this row re-executes against the current requirements."
+    )
+
+
 def _discharge_clauses_for(plan_text: str, root: Path, raw_rows: list) -> dict[str, str]:
     """Self-DR discharge clauses keyed by row id; {} without a readable `sizing_object`."""
     split = split_frontmatter(plan_text)
@@ -324,12 +344,16 @@ def stage(
             named = ", ".join(f"{k} (line {v})" for k, v in sorted(unfilled.items()))
             raise AskStageError(f"PLAN-SCAFFOLD-UNFILLED: {plan_posix} still carries {named}")
     exclusions: list = []
-    rows = read_spine(plan_path, exclusions=exclusions)
     raw_by_id = {
         raw["id"]: raw
         for raw in load_rows(plan_text).rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
+    rows = read_spine(
+        plan_path,
+        exclusions=exclusions,
+        cleared_gate_owners=own_gate_owners(raw_by_id.values(), root),
+    )
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []
@@ -342,7 +366,7 @@ def stage(
         if e.get("reason") in EM_OWNED_REASONS
     ]
     try:
-        check_cross_repo_writes(rows, root, approved=cross_repo_approved)
+        check_cross_repo_writes(rows, root, approved=cross_repo_approved, session_id=session_id)
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
     waves = build_waves(rows)
@@ -384,14 +408,17 @@ def stage(
     for wave_no, wave in enumerate(waves):
         for row in wave:
             agent_type = _row_agent_type(row)
-            _model_opt(agent_type, row.agent_model)  # raises on an unknown agent type or bad model grammar
-            model = row.agent_model or _AGENT_MODELS[agent_type]
+            _model_opt(agent_type, row.agent_model)  # raises on bad model grammar or a pinned-type override
+            model = resolve_agent_model(agent_type, row.agent_model)
             brief = run_dir / "briefs" / f"{row.id}.md"
             text = _row_prompt(row, plan_posix, context)
             if intent:
                 text = intent + "\n" + text
             if row.id in clauses:
                 text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+            prior = _set_aside_prior_report(root, _dispatch_report_path(plan_posix, row.id))
+            if prior:
+                text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
             _write(brief, text)
             paths = _widen_with_test_candidates(
                 commit_pathspec_or_none([row]) or [], root

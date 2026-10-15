@@ -12,6 +12,8 @@ from typing import NamedTuple, Optional, Sequence
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 CHECK_PHASE_TITLE = "Pre-dispatch check"
+# Literal: the check agent is a general-purpose call (agent_type=None) with no DoE
+# definition, so it has no row in emit._AGENT_MODELS.
 CHECK_AGENT_MODEL = "haiku"
 
 ALREADY_DONE_RULE = (

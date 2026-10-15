@@ -168,7 +168,7 @@ def test_in_repo_context_alone_is_admitted(tmp_path):
 
 def test_roadmap_arm_refusal_names_the_workflow_args(monkeypatch):
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_ROADMAP)
-    monkeypatch.setattr(ask_compose, "parse_execute_review", lambda *_: None)
+    monkeypatch.setattr(ask_compose, "parse_execute_review", lambda *_, **__: None)
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "")
     monkeypatch.setattr(ask_compose, "_xl_exit_open", lambda *_: False)
     with pytest.raises(ask_compose.AskComposeRefused) as exc:

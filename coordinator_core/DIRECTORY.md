@@ -54,7 +54,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `commit_anchors.py` | `commit.anchors` | COMPUTE_ONLY — derives git-trailer block from read-model + staged diff |
 | `completion_nature.py` | — | Heuristic completion-nature classifier (replaces per-session Sonnet dispatch) |
 | `completion_ops.py` | — | In-place mutators for completion-entry commits reconciliation + plan session appending |
-| `release_stamp/` | `completion.stamp_releases` | Stamps pending completion entries with the earliest version tag whose tree held them (one git child; attribution and writer modules; no commit) |
+| `release_index.py` | `release.write_index` | Writes one `archive/releases/<tag>.yaml` per version tag lacking one, listing the entries its tree first held (one git child; no commit) |
 | `copy_plugin_template.py` | `repo_setup.copy_console_subprocess_tripwire` | Content-idempotent template copy (write only if absent/byte-identical) + pytest smoke check |
 | `create_github_remote.py` | `repo.create_and_push_remote` | Idempotent GitHub remote creation + first push (existing-remote pre-check) |
 | `deferral_detect_orphan_memo.py` | `deferral.detect_orphan_memo` | Detector: actionable+open+aging cross-repo inbox memo with no owning plan/baton/DR (offers-not-nags). |
@@ -295,6 +295,7 @@ Python port of the coordinator-content-repo coordinator JS text-manipulation pri
 |---|---|
 | `primitives.py` | Core read/write/mutate primitives |
 | `schema_validate.py` | Frontmatter schema validation |
+| `lint_tree.py` | Whole-tree `lint-frontmatter` sweep: verdict store under the git dir, validator imported only on a miss |
 | `body_blocks.py` | Shared fenced-block locator for plan-body YAML blocks (e.g. `## Tasks` `yaml plan-tasks` spine) |
 
 ### `hooks/` — advisory + bookkeeping hook op handlers

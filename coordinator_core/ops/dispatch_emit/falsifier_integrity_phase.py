@@ -25,7 +25,15 @@ from coordinator_core.ops.review_mint.execute_review import resolve_operative_cr
 
 REVIEW_PHASE_TITLE = "Falsifier integrity"
 REVIEWER_AGENT_TYPE = "coordinator:falsifier-integrity-reviewer"
-REVIEWER_AGENT_MODEL = "sonnet"
+
+
+def reviewer_agent_model() -> str:
+    """The reviewer's model from ``emit``'s agent table; imported lazily because
+    ``emit`` imports this module at load."""
+    from coordinator_core.ops.dispatch_emit.emit import resolve_agent_model
+
+    return resolve_agent_model(REVIEWER_AGENT_TYPE)
+
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[3]
 _INSTRUMENT_REL = "coordinator/bin/instrument-can-report-red.py"
@@ -60,7 +68,7 @@ def _falsifier_sha(fields: dict, report_json: Optional[str], instrument_source: 
     """Covers every reviewer input, the instrument report, the instrument source (the reviewer
     can read it and the report omits it) and the reviewer model, so a changed instrument or
     model tier misses instead of replaying a stale verdict."""
-    return _sha(json.dumps([fields, report_json, instrument_source, REVIEWER_AGENT_MODEL], sort_keys=True))
+    return _sha(json.dumps([fields, report_json, instrument_source, reviewer_agent_model()], sort_keys=True))
 
 
 def _read_cached(repo_root: Path, cache_path: str, falsifier_sha: str, plan_sha: str) -> Optional[dict]:
@@ -226,7 +234,7 @@ def _spec(n: int, inp: ReviewInput) -> AgentSpec:
         label=f"falsifier-integrity:{n}",
         phase=REVIEW_PHASE_TITLE,
         agent_type=REVIEWER_AGENT_TYPE,
-        model=REVIEWER_AGENT_MODEL,
+        model=reviewer_agent_model(),
     )
     if inp.cached is not None:
         # Same shape the reviewer's structured output folds from (`tells[].status`), so a

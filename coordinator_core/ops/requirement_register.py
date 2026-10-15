@@ -125,16 +125,22 @@ _str_loader_cache: list[Any] = []
 
 
 def _loader() -> Any:
-    """A SafeLoader that leaves ISO timestamps as strings, so a round-trip keeps their text."""
+    """A safe loader that leaves ISO timestamps as strings, so a round-trip keeps their text.
+
+    Based on `yaml.CSafeLoader` when libyaml is present, else `yaml.SafeLoader`; the timestamp
+    resolver table is Python-side on both bases.
+    """
     if not _str_loader_cache:
         import yaml
 
-        class _StrLoader(yaml.SafeLoader):
+        base = yaml.CSafeLoader if getattr(yaml, "__with_libyaml__", False) else yaml.SafeLoader
+
+        class _StrLoader(base):
             pass
 
         _StrLoader.yaml_implicit_resolvers = {
             ch: [(tag, rx) for tag, rx in resolvers if tag != "tag:yaml.org,2002:timestamp"]
-            for ch, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+            for ch, resolvers in base.yaml_implicit_resolvers.items()
         }
         _str_loader_cache.append(_StrLoader)
     return _str_loader_cache[0]

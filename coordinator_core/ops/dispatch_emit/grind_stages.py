@@ -26,10 +26,10 @@ This module owns the trap text every stage-kind prompt must carry:
 - the triage schema carries the t-shirt size and tradeoff-statement fields
   the engine's size/tradeoff routing gate (DR-404 § Run authority) reads.
 
-Each call's model comes from ``STAGE_MODELS`` (keyed by stage), overridable
-per run by a ``models`` mapping -- never looked up through
-``emit._model_opt``/``emit._AGENT_MODELS``, whose default is Haiku. The
-commit agent's model here is this table's, not the plan path's.
+A call of a DoE-defined agent type takes its model from ``emit._AGENT_MODELS``
+through ``emit.resolve_agent_model``, which refuses a run ``models`` override
+that changes it. A general-purpose stage takes ``STAGE_MODELS`` (keyed by
+stage), overridable per run by a ``models`` mapping.
 
 Every prompt is a pure function of its arguments: no counters, no spend, no
 wall-clock time read anywhere in this module. A run stamp, when a prompt
@@ -69,28 +69,43 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     SIZING_SCOUT_AGENT_TYPE,
     scout_assemble_flags_js,
 )
-from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
+from coordinator_core.ops.dispatch_emit.emit import (
+    _AGENT_MODELS,
+    _COMMIT_AGENT_TYPE,
+    _TEST_AGENT_TYPE,
+    _degrade_agent_type,
+    resolve_agent_model,
+)
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
-#: The two non-op agent types this module's composers dispatch under.
-#: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the third.
+#: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the op-runner type.
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
-COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
+COMMIT_AGENT_TYPE = _COMMIT_AGENT_TYPE
+#: Equals ``pm_adjudication.ADJUDICATOR_AGENT_TYPE``, which imports this module.
+APM_AGENT_TYPE = "coordinator:apm"
 
-#: Default model per stage; a run's ``models`` mapping overrides entries.
+#: Stages that dispatch a DoE-defined agent type: their model is that type's
+#: ``emit._AGENT_MODELS`` entry and no run ``models`` entry may change it.
+STAGE_AGENT_TYPES: dict[str, str] = {
+    "size": SIZING_SCOUT_AGENT_TYPE,
+    "size-assemble": OP_RUNNER_AGENT_TYPE,
+    "verify": _TEST_AGENT_TYPE,
+    "verify-op": OP_RUNNER_AGENT_TYPE,
+    "commit": COMMIT_AGENT_TYPE,
+    "adjudicate": APM_AGENT_TYPE,
+    "ledger-sweep": OP_RUNNER_AGENT_TYPE,
+    "undo": OP_RUNNER_AGENT_TYPE,
+}
+
+#: Model per stage. General-purpose stages carry their own default (a run's
+#: ``models`` mapping overrides it); every other stage reads the engine's
+#: agent-type table.
 STAGE_MODELS: dict[str, str] = {
     "triage": "sonnet",
     "refute-close": "sonnet",
-    "size": "sonnet",
-    "size-assemble": "sonnet",
     "fix": "sonnet",
-    "verify": "sonnet",
-    "verify-op": "sonnet",
-    "commit": "sonnet",
-    "ledger-sweep": "sonnet",
-    "undo": "sonnet",
-    "adjudicate": "sonnet",
+    **{stage: _AGENT_MODELS[t] for stage, t in STAGE_AGENT_TYPES.items()},
 }
 
 _NO_STAGING_CLAUSE = (
@@ -135,16 +150,22 @@ def _agent_call(
     concatenated with a live runtime expression via ``+``), it is emitted
     verbatim instead.
 
-    The model is ``models[stage]`` when ``models`` has the key, else
-    ``STAGE_MODELS[stage]``; ``ValueError`` names a ``stage`` or a ``models``
-    key that ``STAGE_MODELS`` lacks."""
+    A ``agent_type`` in ``emit._AGENT_MODELS`` takes that entry; a ``models``
+    entry naming another model raises ``MalformedAgentOverrideError``. Any
+    other type takes ``models[stage]`` when present, else ``STAGE_MODELS[stage]``;
+    ``ValueError`` names a ``stage`` or a ``models`` key that ``STAGE_MODELS``
+    lacks."""
     if stage not in STAGE_MODELS:
         raise ValueError(f"unknown stage {stage!r}; known: {sorted(STAGE_MODELS)}")
     if models:
         unknown = sorted(k for k in models if k not in STAGE_MODELS)
         if unknown:
             raise ValueError(f"unknown stage model key(s) {unknown}; known: {sorted(STAGE_MODELS)}")
-    model = (models or {}).get(stage, STAGE_MODELS[stage])
+    override = (models or {}).get(stage)
+    if agent_type in _AGENT_MODELS:
+        model = resolve_agent_model(agent_type, override)
+    else:
+        model = override or STAGE_MODELS[stage]
     prompt_text = prompt if is_expr else _js_string_literal(prompt)
     return (
         "  await agent("
@@ -897,7 +918,7 @@ def compose_verify_agent_call(
         models=models,
         label=label,
         phase_title=phase_title,
-        agent_type=GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type=_TEST_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="high",
         schema=schema,
@@ -1027,7 +1048,7 @@ def compose_commit_call(
     agent_type_host: Optional[str] = None,
     trailers: Sequence[str] = (),
 ) -> str:
-    """`commit` (`coordinator:git-commit-agent`, sonnet, low). Stages the
+    """`commit` (`coordinator:git-commit-agent`, haiku, low). Stages the
     worker's touched list, runs the profile's index-regenerate op when one
     is named, commits, and only then settles the row's ledger via the full
     `backlog-grind-assemble grind-row settle --profile P --row-id R
@@ -1067,7 +1088,7 @@ def compose_commit_call(
         (
             "lit",
             "]. Never name a state/queue-grind/ path in either commit path list: the row's "
-            "ledger is working state, settled out of band, never committed.",
+            "ledger is landed by the drain's run-record, not by this committer.",
         )
     )
     if regenerate_op:
@@ -1158,9 +1179,9 @@ def compose_ledger_sweep_call(
 ) -> str:
     """The drain's `ledger-sweep` op-runner call: settles, out of band, every
     ledger whose row left the named queues (`grind-row sweep`), then writes
-    the run-cost record (`grind-row run-record`). Nothing under
-    `state/queue-grind/` is ever staged or committed -- ledgers and run
-    records are working state, not history. ``queue_dirs`` must be the FULL
+    the run-cost record (`grind-row run-record`), which itself commits the
+    run's bookkeeping (swept ledgers, run record, block-discharge row). This
+    op-runner stages and commits nothing. ``queue_dirs`` must be the FULL
     queue set the manifest was selected from: a queue left out reads as
     closed and its live rows' ledgers are settled. With no ``queue_dirs``
     the sweep clause is omitted rather than guessed."""
@@ -1204,8 +1225,9 @@ def compose_ledger_sweep_call(
         (
             "lit",
             ("" if record_js else ".") + " Return `swept` when every command exits 0, else `sweep-failed` with the "
-            "verbatim stderr in `reason`. Ledgers and run records under state/queue-grind/ "
-            "are never committed. " + _NO_STAGING_CLAUSE,
+            "verbatim stderr in `reason`, including a non-zero exit from run-record. "
+            "run-record itself commits this run's own bookkeeping (swept ledgers, run "
+            "record, block-discharge row). " + _NO_STAGING_CLAUSE,
         )
     )
     schema = {

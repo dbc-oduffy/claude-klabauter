@@ -769,6 +769,26 @@ def _resolve_deliverable_id_from_paths(
     return ""
 
 
+def _resolve_deliverable_id_from_live_run(
+    cwd: Union[str, Path], session_id: str, paths: Optional[Sequence[str]]
+) -> str:
+    """Live-run tier: the deliverable id of the sizing-bound warp run this session
+    holds live when a staged path is among that run's declared writes.
+
+    In-process file reads only (no spawn, no transcript). Omit-rather-than-guess:
+    no live run, a disjoint pathspec, two-plus distinct ids, or any failure
+    returns `""` and the ladder continues. Never raises.
+    """
+    if not paths:
+        return ""
+    try:
+        from coordinator_core.ops.warp_run_deliverable import live_run_deliverable_id
+
+        return live_run_deliverable_id(Path(cwd), session_id, paths)
+    except Exception:
+        return ""
+
+
 def _resolve_deliverable_id(
     git_dir: str,
     session_id: str,
@@ -777,9 +797,11 @@ def _resolve_deliverable_id(
 ) -> str:
     """Tier 0 (artifact-first, see `_resolve_deliverable_id_from_paths`),
     then the scope-match tier (`resolve_deliverable_id_from_scope_match`,
-    C2 spec § (1)) over every plan this session holds a claim on, then --
-    gated by the ambiguity predicate `session_holds_multiple_plan_claims`
-    (C2 spec § (2)), which OMITS rather than guesses whenever the session
+    C2 spec § (1)) over every plan this session holds a claim on, then the
+    live-run tier (`_resolve_deliverable_id_from_live_run`: the sizing id of
+    the warp run the session holds live whose declared writes include a staged
+    path), then -- gated by the ambiguity predicate
+    `session_holds_multiple_plan_claims` (C2 spec § (2)), which OMITS rather than guesses whenever the session
     holds more than one plan claim and neither tier above disambiguated --
     check `git_dir`, then fall back to coordinator-content-repo's own git-dir -- the
     cross-repo case where a commit lands directly into claude-klabauter under
@@ -815,6 +837,10 @@ def _resolve_deliverable_id(
     claims = _list_held_plan_claims(cwd)
 
     deliverable_id = resolve_deliverable_id_from_scope_match(cwd, paths, claims)
+    if deliverable_id:
+        return deliverable_id
+
+    deliverable_id = _resolve_deliverable_id_from_live_run(cwd, session_id, paths)
     if deliverable_id:
         return deliverable_id
 

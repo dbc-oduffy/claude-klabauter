@@ -25,7 +25,7 @@ def _detail_expr() -> str:
 
 def test_detail_joins_both_streams_instead_of_falling_through_on_empty_stderr():
     expr = _detail_expr()
-    assert "_assembled.stderr" in expr and "_assembled.stdout" in expr
+    assert "_scouted.stderr" in expr and "_scouted.stdout" in expr
     assert ".join(" in expr
     assert "stderr ??" not in expr
 

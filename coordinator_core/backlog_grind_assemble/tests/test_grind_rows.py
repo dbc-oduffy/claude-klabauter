@@ -1017,3 +1017,137 @@ class TestCloseReleasesRowClaim:
             assert self._close(claimed) == grind_rows.EXIT_OK
         assert list(spawns) == []
         assert not claimed["claim_dir"].exists()
+
+
+class TestRunRecordLandsTheRunsBookkeeping:
+    """`run-record` commits the run's own ledgers, sweep, evidence, record and
+    block-discharge row in one commit, in a real tmp repo."""
+
+    SID = "sid-a"
+
+    @pytest.fixture
+    def repo(self, tmp_path, monkeypatch):
+        from coordinator_core.session import touch_record
+        from coordinator_core.tests.git_seed import seeded_repo
+
+        seeded_repo(tmp_path, readme="x")
+        for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", self.SID)
+        live = {"sid-b"}
+        monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: sid in live)
+        home = tmp_path / "state" / "queue-grind" / "bug"
+        home.mkdir(parents=True)
+        for name in ("old-1", "old-2", "keep"):
+            (home / f"{name}.jsonl").write_text('{"row_id": "%s"}\n' % name, encoding="utf-8")
+        assert _git(["add", "-A"], tmp_path).returncode == 0
+        assert _git(["commit", "-m", "seed ledgers"], tmp_path).returncode == 0
+        return tmp_path
+
+    def _run_record(self, repo, capsys, run_id="20261015T000000Z"):
+        capsys.readouterr()
+        code = grind_rows.main(
+            ["run-record", "--profile", "bug", "--run-id", run_id, "--record-urlenc", "%7B%22a%22%3A1%7D",
+             "--repo-root", str(repo)]
+        )
+        captured = capsys.readouterr()
+        return code, captured
+
+    def _sweep_and_append(self, repo):
+        for row in ("old-1", "old-2"):
+            assert grind_rows.main(["settle", "--profile", "bug", "--row-id", row, "--repo-root", str(repo)]) == 0
+        assert grind_rows.main(
+            ["append", "--profile", "bug", "--row-id", "new-1", "--digest", "d" * 64, "--stage", "triage",
+             "--verdict", "fix", "--outcome", "fix", "--evidence-file", "state/queue-grind/bug/evidence/r/new-1.done.md",
+             "--run-stamp", "20261015T000000Z", "--repo-root", str(repo)]
+        ) == 0
+        evidence = repo / grind_rows.evidence_rel("bug", "r", "new-1", "done")
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text("done\n", encoding="utf-8")
+        grind_rows._declare_under_repo_root(evidence, repo)
+
+    def test_everything_lands_in_one_commit_and_the_tree_is_clean(self, repo, capsys):
+        self._sweep_and_append(repo)
+        discharge = repo / "state" / "block-discharge" / f"{self.SID}.jsonl"
+        discharge.parent.mkdir(parents=True)
+        discharge.write_text('{"fired": 1}\n', encoding="utf-8")
+        before = _git(["rev-list", "--count", "HEAD"], repo).stdout.strip()
+
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["commit"] and out["withheld"] == []
+        assert out["deleted"] == [
+            "state/queue-grind/bug/old-1.jsonl",
+            "state/queue-grind/bug/old-2.jsonl",
+        ]
+        assert set(out["landed"]) == {
+            "state/queue-grind/bug/new-1.jsonl",
+            "state/queue-grind/bug/evidence/r/new-1.done.md",
+            "state/queue-grind/bug/runs/20261015T000000Z.json",
+            f"state/block-discharge/{self.SID}.jsonl",
+        }
+        assert _git(["rev-list", "--count", "HEAD"], repo).stdout.strip() == str(int(before) + 1)
+        assert _git(["status", "--porcelain"], repo).stdout == ""
+        subject = _git(["log", "-1", "--format=%s"], repo).stdout.strip()
+        assert subject == "grind(bug): run 20261015T000000Z bookkeeping, removed 2 settled ledgers"
+
+    def test_a_ledger_a_live_peer_claims_is_withheld_and_left_dirty(self, repo, capsys):
+        from coordinator_core.session import scope, touch_record
+
+        self._sweep_and_append(repo)
+        keep = repo / "state" / "queue-grind" / "bug" / "keep.jsonl"
+        keep.write_text('{"row_id": "keep", "changed": 1}\n', encoding="utf-8")
+        grind_rows._declare_under_repo_root(keep, repo)
+        peer_file = "state/queue-grind/bug/keep.jsonl"
+        scope.touch("sid-b", peer_file, str(repo), kind=touch_record.KIND_WRITE)
+
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["withheld"] == [peer_file]
+        assert peer_file not in out["landed"]
+        assert _git(["status", "--porcelain"], repo).stdout.split() == ["M", peer_file]
+
+    def test_a_run_with_nothing_swept_or_appended_still_lands_its_record(self, repo, capsys):
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["landed"] == ["state/queue-grind/bug/runs/20261015T000000Z.json"]
+        assert out["deleted"] == [] and out["commit"]
+        assert _git(["status", "--porcelain"], repo).stdout == ""
+
+    def test_no_resolvable_session_writes_the_record_and_commits_nothing(self, repo, capsys, monkeypatch):
+        monkeypatch.delenv("COORDINATOR_SESSION_ID")
+
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_OK, captured.err
+        out = json.loads(captured.out)
+        assert out["commit"] is None and out["landed"] == []
+
+    def test_a_commit_refusal_exits_nonzero_with_the_verbatim_reason(self, repo, capsys, monkeypatch):
+        from coordinator_core.ops.ceremony import commit_v2
+
+        monkeypatch.setattr(
+            commit_v2, "_handler", lambda params, repo_root=None: {"committed": False, "sha": None, "error": "gate says no"}
+        )
+
+        code, captured = self._run_record(repo, capsys)
+
+        assert code == grind_rows.EXIT_REFUSAL
+        assert "gate says no" in captured.err
+
+    def test_plain_bookkeeping_spawns_no_git_process(self, repo, capsys, monkeypatch):
+        from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+
+        self._sweep_and_append(repo)
+        capsys.readouterr()
+        with _count_spawns_attributed(monkeypatch) as spawns:
+            code, captured = self._run_record(repo, capsys)
+        assert code == grind_rows.EXIT_OK, captured.err
+        assert json.loads(captured.out)["commit"]
+        assert list(spawns) == []

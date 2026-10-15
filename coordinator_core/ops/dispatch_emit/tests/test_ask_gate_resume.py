@@ -57,6 +57,20 @@ def test_s_with_coded_row_refuses_naming_plan_flag(repo):  # noqa: F811
     assert f"--plan {PLAN_REL}" in v.halt["reason"]
 
 
+def test_s_plan_whose_rows_reported_refuses_rather_than_resuming(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import emit, sizing_fire
+
+    assert sizing_fire._DISPATCH_REPORT_DIR == emit._DISPATCH_REPORT_DIR
+    _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo)
+    report = repo / emit._dispatch_report_path(PLAN_REL, "A1")
+    report.parent.mkdir(parents=True)
+    report.write_text("DONE\n", encoding="utf-8")
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "refusal"
+    assert "already ran" in v.halt["reason"] and "new sizing" in v.halt["reason"]
+
+
 def test_s_without_plan_has_no_resume_plan_key(repo):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     v = gate(repo, REL)

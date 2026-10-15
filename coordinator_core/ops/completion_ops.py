@@ -5,7 +5,7 @@ completion-entry day-coverage sweep.
 Purpose: hosts ``plan.append_session`` (a byte-parity port of
 ``append-plan-session.sh``, DoE 2737ca3d, 2026-07-19) and ``day_coverage_sweep`` —
 plus the ``commits:`` YAML-list parsing shared with the post-commit tail. Release
-stamping lives in ``ops/release_stamp`` (``completion.stamp_releases``).
+indexing lives in ``ops/release_index`` (``release.write_index``).
 ``completion.reconcile_commits`` (the module's original third op) was
 killed and rebuilt from scratch per PM ruling, 2026-08-23; do not resurrect its
 handler, ``resolve_chain_commits``, or the chain-widening helpers it alone used.

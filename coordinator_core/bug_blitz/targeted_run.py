@@ -27,6 +27,7 @@ from coordinator_core.bug_blitz.contract import (
     OUTCOME_REFUSED,
     RunnerRecord,
 )
+from coordinator_core.git.run import run_git
 from coordinator_core.win_portability import no_console_creationflags
 
 DEFAULT_TIMEOUT = 300
@@ -79,16 +80,9 @@ def _load_row(row_path: Path) -> tuple[str, str]:
 
 
 def _js_basename_index(repo_root: Path) -> dict[str, list[str]]:
-    proc = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=str(repo_root),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        **no_console_creationflags(),
-    )
+    proc = run_git(["ls-files", "-z"], cwd=str(repo_root))
     index: dict[str, list[str]] = {}
-    for rel in proc.stdout.decode("utf-8", errors="replace").split("\0"):
+    for rel in proc.stdout.split("\0"):
         m = _JS_TEST_RE.match(PurePosixPath(rel).name) if rel else None
         if m:
             index.setdefault(m.group("stem"), []).append(rel)

@@ -12,8 +12,16 @@ def test_tier_table_total_over_class_and_appetite():
 
 
 def test_medium_appetite_is_as_classed():
-    for vc in rc.VALUE_CLASSES:
+    for vc in set(rc.VALUE_CLASSES) & set(rc.TIERS):
         assert rc.TIER_TABLE[vc]["medium"] == vc
+
+
+def test_spike_resolves_through_shape_as_corpus():
+    from coordinator_core.ops import research_shape
+
+    assert rc.TIER_TABLE["spike"] == rc.TIER_TABLE["corpus"]
+    assert research_shape.shape({"value_class": "spike"})["tier"] == "corpus"
+    assert research_shape.shape({"value_class": "spike", "appetite": "large"})["tier"] == "deep"
 
 
 def test_floor_sources_exclude_web_and_are_sources():

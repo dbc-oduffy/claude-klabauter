@@ -134,7 +134,10 @@ def test_judge_without_summary_fails_completion_entry_and_writes_none(env):
     out = _fire(env, _judge(drop=("completion_summary", "observation")))
 
     close = out["close"]
-    assert close["legs"]["completion-entry"] == {"status": "failed", "detail": "no judge summary"}
+    leg = close["legs"]["completion-entry"]
+    assert leg["status"] == "failed"
+    assert leg["detail"].startswith("no judge summary")
+    assert "coordinator-complete-entry.py" in leg["detail"]
     assert "completion-entry" in close["outstanding"]
     assert _entries(env["repo"]) == [] and close["completion_entry"] is None
 

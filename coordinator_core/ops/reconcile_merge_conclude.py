@@ -11,32 +11,22 @@ paths on stderr, exit 3, and commit nothing. Success prints
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 from coordinator_core.git import reconcile_manifest as rm
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git_lock_retry import run_with_lock_retry
-from coordinator_core.win_portability import no_console_creationflags
 
 _REFUSED = 3
 
 
-def _git(
-    args: list[str], cwd: Path, env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=cwd,
-        **no_console_creationflags(),
-    )
+def _git(args: list[str], cwd: Path, env: dict[str, str] | None = None) -> GitResult:
+    return run_git(args, cwd=str(cwd), env=env)
 
 
-def _echo(proc: subprocess.CompletedProcess) -> None:
+def _echo(proc: GitResult) -> None:
     if proc.stdout:
         sys.stderr.write(proc.stdout)
     if proc.stderr:
@@ -76,7 +66,7 @@ def _parse_name_status(raw: str) -> list[tuple[str, list[str]]]:
     return entries
 
 
-def _commit_merge(repo_root: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+def _commit_merge(repo_root: Path, env: dict[str, str]) -> GitResult:
     return _git(["commit", "--no-edit"], repo_root, env=env)
 
 

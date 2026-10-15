@@ -28,7 +28,7 @@ def test_size_prompt_names_no_mode_and_relays_the_returned_one():
         **REVIEW_KW,
     )
     # sizing-assemble resolves the mode itself; the composed command never supplies one.
-    cmd = next(ln for ln in script.splitlines() if "const _assembleCmd" in ln)
+    cmd = next(ln for ln in script.splitlines() if "const _scouted" in ln)
     assert "--interaction-mode" not in cmd
     assert not re.search(r"\b(hands-on|ceo)\b", cmd)
 

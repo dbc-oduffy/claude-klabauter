@@ -15,6 +15,9 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.session import record_homes
 
+#: `emit._DISPATCH_REPORT_DIR`, restated to keep emit's import weight off the gate; a test pins them equal.
+_DISPATCH_REPORT_DIR = ".coordinator-local/subagent-share/dispatch-reports"
+
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
 _PM_DECISION = "pm-decision"
@@ -129,6 +132,14 @@ def resumable_plan(sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str |
         raise SizingFireRefused(
             [f"{plan_rel} already has coded rows — run `emit-dispatch-workflow --plan {plan_rel}`, not --ask"]
         )
+    # A run whose commit never landed leaves no `coded` row, but its rows' reports stand: resuming
+    # re-dispatches executors that find their own work done and no-op, never reaching the residue.
+    reports = root / _DISPATCH_REPORT_DIR / plan.stem
+    if reports.is_dir() and any(reports.glob("*.md")):
+        raise SizingFireRefused(
+            [f"{plan_rel} already ran (row reports under {_DISPATCH_REPORT_DIR}/{plan.stem}/); "
+             "residue is a new sizing naming it, submitted with its own writes"]
+        )
     return plan_rel
 
 
@@ -181,7 +192,10 @@ def collect_fire_refusals(
     if route != expected:
         out.append(f"`route` is {route!r}, but arm {arm!r} fires only route {expected!r}")
     if arm == ARM_XS and not list(writes):
-        out.append("XS needs `writes` (the ask's file footprint): a sizing carries no footprint")
+        out.append(
+            "XS needs `writes` (the ask's file footprint): a sizing carries no footprint; "
+            "name it as args.writes beside args.sizing"
+        )
     if arm == ARM_S and repo_root is not None:
         plan_rel = s_plan_path(sizing_rel)
         try:

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -184,16 +183,10 @@ def cmd_stale_stashes(repo_root: Path, threshold_days: int) -> dict[str, Any]:
         }
 
 
-def _run_git(args: list[str], repo_root: Path) -> subprocess.CompletedProcess:
-    from coordinator_core.win_portability import no_console_creationflags
+def _run_git(args: list[str], repo_root: Path, *, remote: bool = False):
+    from coordinator_core.git.run import run_git
 
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    )
+    return run_git(args, cwd=str(repo_root), remote=remote)
 
 
 def cmd_local_ahead(repo_root: Path, do_fetch: bool) -> dict[str, Any]:
@@ -217,7 +210,7 @@ def cmd_local_ahead(repo_root: Path, do_fetch: bool) -> dict[str, Any]:
     result["eligible"] = True
 
     if do_fetch:
-        fetch_proc = _run_git(["fetch", "--quiet", "origin", branch], repo_root)
+        fetch_proc = _run_git(["fetch", "--quiet", "origin", branch], repo_root, remote=True)
         if fetch_proc.returncode != 0:
             result["fetch_error"] = fetch_proc.stderr.strip() or "git fetch failed"
 

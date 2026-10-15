@@ -142,11 +142,12 @@ def test_b1_the_sizing_is_written_and_read_in_the_same_repo(world):
     script = _compose(world.target)
     expr = re.search(r"const _sizingPath = (.+);\n", script).group(1)
     sizing = _js_string_value(expr, world.target.as_posix())
-    assemble = script[script.index("const _assembleCmd") : script.index("const _assembled")]
-    write_root = _landing_root(assemble)
+    scout = next(ln for ln in script.splitlines() if "const _scouted" in ln)
+    write_root = _landing_root(scout)
     written = Path(sizing) if Path(sizing).is_absolute() else write_root / sizing
     assert _enclosing_repo(written.parent) == world.target.resolve(), f"sizing written at {written}"
-    assert _landing_root(_command_span(script, "dispatch.ask_gate")) == world.target.resolve()
+    assert "dispatch.ask_gate" in scout
+    assert _landing_root(scout) == world.target.resolve()
 
 
 def test_b2_the_targets_own_rows_are_staged_not_withheld(world, monkeypatch):

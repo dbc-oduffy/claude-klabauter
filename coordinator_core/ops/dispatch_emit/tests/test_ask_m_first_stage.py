@@ -121,4 +121,4 @@ def test_resumed_m_sizing_passes_its_unfired_plan_as_the_baton_plan_path(
     assert v.halt is None, v.halt
     assert v.resume_plan == PLAN_REL
     script = _emit_m_ask(repo, capsys, blitz_text, monkeypatch)
-    assert "planPath: _gate.resume_plan ?? null" in script
+    assert "planPath: _gate.resume_plan ?? _spineFallback ?? null" in script

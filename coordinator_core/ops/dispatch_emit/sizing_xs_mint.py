@@ -33,6 +33,39 @@ def xs_spine_plan_id(stem: str) -> str:
     return f"pln-{slug}-{hashlib.sha1(stem.encode('utf-8')).hexdigest()[:6]}"
 
 
+_RUN_STAMP = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}$")
+
+
+def recorded_xs_writes(repo_root: Path, sizing_rel: str) -> list[str]:
+    """The `X1` writes of the newest earlier run of this sizing whose `manifest.json` recorded
+    them, else `[]`. Reads record files only: no tree walk beyond the two run-dir roots, no spawn."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+
+    stem = PurePosixPath(str(sizing_rel).replace("\\", "/")).stem
+    prefix = f"warp-{stem}-"
+    runs: list[Path] = []
+    for base in (RECORD_DIR_ROOT, RUN_DIR_ROOT):
+        root = Path(repo_root) / base
+        if root.is_dir():
+            runs.extend(
+                d for d in root.iterdir()
+                if d.name.startswith(prefix) and _RUN_STAMP.fullmatch(d.name[len(prefix):]) and d.is_dir()
+            )
+    for run in sorted(runs, key=lambda d: d.name[len(prefix):], reverse=True):
+        try:
+            rows = json.loads((run / "manifest.json").read_text(encoding="utf-8")).get("rows") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        for row in rows:
+            if isinstance(row, Mapping) and row.get("id") == XS_ROW_ID:
+                writes = [w for w in row.get("writes") or () if isinstance(w, str) and w]
+                if writes:
+                    return writes
+    return []
+
+
 def _landed_work_closure_key(gate: Mapping, sizing: Mapping, stem: str, gid: str) -> dict:
     """The `closure_key` for a minted `landed-work` gate: the ask's own well-formed key, else a
     deterministic `deliverable` key so the discharging repo has an id to stamp and a re-mint keeps it.

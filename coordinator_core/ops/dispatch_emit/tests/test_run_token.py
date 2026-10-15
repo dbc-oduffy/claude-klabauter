@@ -40,14 +40,54 @@ def test_a_raw_ask_run_owns_only_the_sizing_its_gate_bound(tmp_path):
     assert not run_token.bind_sizing(repo, "ask-1", "state/sizings/unrelated.yaml")
 
 
-def test_admits_claims_the_record_once(tmp_path):
+def test_admits_checks_without_claiming(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     assert not run_token.admits(repo, "ask-1", token, "b.mjs")
     assert not run_token.admits(repo, "../x", token, "a.mjs")
     assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.is_live(repo, "ask-1")
+
+
+def test_a_guard_admit_with_no_op_run_leaves_the_retry_admissible(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_release_returns_a_claimed_token_to_live_once(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
-    assert not run_token.is_live(repo, "ask-1")
+    assert not run_token.release(repo, "ask-1", "f" * 32, "a.mjs")
+    assert run_token.release(repo, "ask-1", token, "a.mjs")
+    assert not run_token.release(repo, "ask-1", token, "a.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_consume_during_a_claim_leaves_nothing_to_release(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    run_token.consume(repo, "ask-1")
+    assert not run_token.release(repo, "ask-1", token, "a.mjs")
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
+
+
+def test_release_never_overwrites_a_fresh_mint(tmp_path):
+    repo = _repo(tmp_path)
+    first = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", first, "a.mjs")
+    second = run_token.mint(repo, "ask-1", "a.mjs")
+    assert not run_token.release(repo, "ask-1", first, "a.mjs")
+    assert run_token.admits(repo, "ask-1", second, "a.mjs")
+    assert not run_token.admits(repo, "ask-1", first, "a.mjs")
 
 
 @pytest.mark.parametrize("script", [None, "", 7])
@@ -62,8 +102,8 @@ def test_script_path_is_required_to_mint_and_to_admit(tmp_path, script):
 def test_wrong_token_does_not_burn_a_live_record(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
-    assert not run_token.admits(repo, "ask-1", "f" * 32, "a.mjs")
-    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", "f" * 32, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
 
 
 def test_record_with_a_null_script_is_never_admitted(tmp_path):
@@ -74,26 +114,24 @@ def test_record_with_a_null_script_is_never_admitted(tmp_path):
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
 
 
-def test_remint_after_admit_admits_once_more(tmp_path):
+def test_remint_after_redeem_redeems_once_more(tmp_path):
     repo = _repo(tmp_path)
     first = run_token.mint(repo, "ask-1", "a.mjs")
-    assert run_token.admits(repo, "ask-1", first, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", first, "a.mjs")
     second = run_token.mint(repo, "ask-1", "a.mjs")
-    assert not run_token.admits(repo, "ask-1", first, "a.mjs")
-    assert run_token.admits(repo, "ask-1", second, "a.mjs")
-    assert not run_token.admits(repo, "ask-1", second, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", first, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", second, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", second, "a.mjs")
 
 
-def test_redeem_spends_a_claimed_or_a_live_record_exactly_once(tmp_path):
+def test_redeem_claims_exactly_once_and_consume_spends_the_claim(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
-    assert run_token.admits(repo, "ask-1", token, "a.mjs")
     assert not run_token.redeem(repo, "ask-1", "f" * 32, "a.mjs")
     assert run_token.redeem(repo, "ask-1", token, "a.mjs")
     assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
-    other = run_token.mint(repo, "ask-2", "b.mjs")
-    assert run_token.redeem(repo, "ask-2", other, "b.mjs")
-    assert not run_token.admits(repo, "ask-2", other, "b.mjs")
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    run_token.consume(repo, "ask-1")
     assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
 
 
@@ -118,11 +156,11 @@ def test_live_records_skip_claimed_and_expired(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     run_token.mint(repo, "ask-2", "b.mjs")
-    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
     assert [r["run_id"] for r in run_token.live_records(repo)] == ["ask-2"]
 
 
-def test_racing_admits_yield_exactly_one_true(tmp_path):
+def test_racing_redeems_yield_exactly_one_true(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     workers = 8
@@ -131,7 +169,7 @@ def test_racing_admits_yield_exactly_one_true(tmp_path):
 
     def attempt():
         barrier.wait()
-        results.append(run_token.admits(repo, "ask-1", token, "a.mjs"))
+        results.append(run_token.redeem(repo, "ask-1", token, "a.mjs"))
 
     threads = [threading.Thread(target=attempt) for _ in range(workers)]
     for t in threads:

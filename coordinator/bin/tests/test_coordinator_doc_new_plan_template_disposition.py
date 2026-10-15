@@ -135,8 +135,23 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # 3.7.0 -> 3.10.0 (cc3ebdf1ed) re-looked: `voided` disposition, the
         # `memo-send` row kind and an optional `receipt` object (its own
         # `required` applies only when present); no row-level `required` delta.
+        # 3.10.0 -> 3.11.0 (20413076fd) re-looked: optional `appends` only; no
+        # `required` delta.
+        # 3.11.0 -> 3.12.0 (54b741624f) re-looked: optional `signoff` ($defs, its
+        # own `required` applies only when present); no row-level `required` delta.
+        # 3.12.0 -> 3.13.0 (755313987b) re-looked: `signoff.source` widened to
+        # g-em|uhura; no row-level `required` delta.
+        # 3.13.0 -> 3.14.0 (f7ace43dfb) re-looked: `signoff.history` item shape
+        # only; no row-level `required` delta.
+        # 3.14.0 -> 3.15.0 (d971f6537a) re-looked: optional `register_rows`; no
+        # `required` delta.
+        # 3.15.0 -> 3.16.0 (534d3e47e1) re-looked: optional `authorization`; no
+        # `required` delta.
+        # 3.16.0 -> 3.17.0 (9c96a747e6) re-looked: `delivered_elsewhere`
+        # disposition and optional `delivered_via`; the new conditional
+        # `required` fires only on that disposition, never on an open row.
         # Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "3.10.0")
+        self.assertEqual(schema.get("x-schema-version"), "3.17.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

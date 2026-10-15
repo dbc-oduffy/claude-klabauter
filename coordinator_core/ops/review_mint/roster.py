@@ -5,11 +5,18 @@ No file I/O and no cross-repo pointer resolution; ``op.load_fragment`` reads the
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+import re
+from dataclasses import dataclass, replace
+from typing import Dict, List, Optional, Tuple
+
+import yaml
+
+from coordinator_core.frontmatter.primitives import split_frontmatter
 
 
 _VALID_EFFORTS = frozenset({"low", "medium", "high"})
+#: The tiers ``dispatch_emit.emit.derive_review_tier`` returns.
+VALID_TIERS = frozenset({"lightweight", "standard", "full"})
 _VALID_PER_VALUES = frozenset({"slice", "whole-diff"})
 
 
@@ -52,6 +59,18 @@ class ReviewAgent:
     applies: Optional[str]
     schema: str
     accepts_signals: Optional[str] = None
+    #: Review tiers this agent runs at; ``None`` runs at every tier.
+    tiers: Optional[Tuple[str, ...]] = None
+
+    def runs_at(self, tier: Optional[str]) -> bool:
+        """True when this agent runs at ``tier``; an untiered agent or an unknown tier always runs."""
+        return tier is None or self.tiers is None or tier in self.tiers
+
+
+def agent_excluded_at_tier(review: "ExecuteReview", agent_type: str, tier: Optional[str]) -> bool:
+    """True when the review wave names ``agent_type`` and its roster ``tiers`` exclude ``tier``."""
+    agents = [a for a in review.review_wave if a.agent_type == agent_type]
+    return bool(agents) and not any(a.runs_at(tier) for a in agents)
 
 
 @dataclass(frozen=True)
@@ -75,9 +94,50 @@ class ExecuteReview:
     judge: Optional[ReviewAgent] = None
 
 
+#: The roster label of the signal-resolved reviewer stage that required reviewers join.
+NAMED_SIGNAL_LABEL = "named"
+_AGENT_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$")
+
+
+def validate_required_reviewers(raw: object) -> List[str]:
+    """``raw`` as a de-duplicated list of ``plugin:agent`` types; ``None`` is the empty list.
+    Raises ``RosterFragmentError`` on a non-list or a malformed entry."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise RosterFragmentError(f"required_reviewers {raw!r} is not a list of agent types")
+    out: List[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not _AGENT_TYPE_RE.match(item):
+            raise RosterFragmentError(
+                f"required_reviewers entry {item!r} is not a 'plugin:agent' agent type"
+            )
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def plan_required_reviewers(plan_text: Optional[str]) -> List[str]:
+    """The plan frontmatter's ``required_reviewers`` (plan.schema.json), validated; empty when the
+    plan is absent, has no frontmatter, or declares none."""
+    if not plan_text:
+        return []
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return []
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(doc, dict):
+        return []
+    return validate_required_reviewers(doc.get("required_reviewers"))
+
+
 def parse_execute_review(
     fragment: dict,
     signals: Optional[Dict[str, List[str]]] = None,
+    required_reviewers: Optional[List[str]] = None,
 ) -> ExecuteReview:
     """Parse a schema_version 5 ``execute_review`` block (DoE D1 § Contract,
     ``review-roster-fragment.json``) into an :class:`ExecuteReview`.
@@ -99,9 +159,19 @@ def parse_execute_review(
     label; an unresolved label contributes nothing. This module does no
     signal-name lookup of its own -- the caller resolves signals.
 
+    ``required_reviewers`` (``plugin:agent`` types the plan or ask names) join the
+    ``named`` signal label's selection and run at every tier, whatever tiers the
+    fragment's ``named`` entry carries. A fragment with no ``named`` entry in a
+    review-wave stage raises, since the reviewer would otherwise be dropped silently.
+
     Raises ``RosterFragmentError`` on any structural violation, naming
     what is wrong.
     """
+    required = validate_required_reviewers(required_reviewers)
+    if required:
+        merged = list((signals or {}).get(NAMED_SIGNAL_LABEL) or [])
+        merged.extend(t for t in required if t not in merged)
+        signals = {**(signals or {}), NAMED_SIGNAL_LABEL: merged}
     if not isinstance(fragment, dict):
         raise RosterFragmentError("review roster fragment is not a mapping")
 
@@ -182,6 +252,19 @@ def parse_execute_review(
             f"exactly one agent, got {judge_stage_count} stage(s), {len(judge_agents)} agent(s)"
         )
 
+    if required:
+        landed = {a.agent_type for a in wave_agents if a.accepts_signals == NAMED_SIGNAL_LABEL}
+        missing = [t for t in required if t not in landed]
+        if missing:
+            raise RosterFragmentError(
+                f"required_reviewers {missing!r} cannot join: the roster declares no "
+                f"review-wave '{NAMED_SIGNAL_LABEL}' (accepts_signals) entry"
+            )
+        wave_agents = [
+            replace(a, tiers=None) if a.agent_type in required and a.accepts_signals == NAMED_SIGNAL_LABEL else a
+            for a in wave_agents
+        ]
+
     return ExecuteReview(
         prep=prep_agents[0],
         review_wave=wave_agents,
@@ -213,6 +296,20 @@ def _resolve_review_agent(
             f"is not one of {sorted(_VALID_PER_VALUES)!r}"
         )
     applies = raw_agent.get("applies")
+
+    raw_tiers = raw_agent.get("tiers")
+    tiers: Optional[Tuple[str, ...]] = None
+    if raw_tiers is not None:
+        if (
+            not isinstance(raw_tiers, list)
+            or not raw_tiers
+            or any(t not in VALID_TIERS for t in raw_tiers)
+        ):
+            raise RosterFragmentError(
+                f"execute_review stage {stage_index} agent entry 'tiers' {raw_tiers!r} "
+                f"must be a non-empty list drawn from {sorted(VALID_TIERS)!r}"
+            )
+        tiers = tuple(raw_tiers)
 
     agent_type = raw_agent.get("agentType")
     accepts_signals = raw_agent.get("accepts_signals")
@@ -250,6 +347,7 @@ def _resolve_review_agent(
                 applies=applies,
                 schema=schema,
                 accepts_signals=None,
+                tiers=tiers,
             )
         ]
 
@@ -269,6 +367,7 @@ def _resolve_review_agent(
             applies=applies,
             schema=schema,
             accepts_signals=accepts_signals,
+            tiers=tiers,
         )
         for resolved_type in selected
     ]

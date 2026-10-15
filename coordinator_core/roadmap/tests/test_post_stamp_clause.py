@@ -6,7 +6,12 @@ import pytest
 
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.roadmap import prep_gate as pg
-from coordinator_core.roadmap.post_stamp_clause import post_stamp_clause, post_stamp_refusal
+from coordinator_core.roadmap.post_stamp_clause import (
+    SUITE_TIER_SPELLINGS,
+    post_stamp_clause,
+    post_stamp_refusal,
+    suite_tier_refusal,
+)
 
 FOLLOW_ONS = (
     "A warp run on this sizing reaches dispatch.terminal_commit with the DoE-gated row "
@@ -176,3 +181,18 @@ def test_tier_u_as_subject_is_not_a_suite_tier():
     assert suite_tier_refusal("the Tier-U ask names each tier's command and cost") is None
     assert suite_tier_refusal("tier_u arg reaches the tier-u-grant-cli") is None
     assert suite_tier_refusal("Tier-U passes") is not None
+
+
+@pytest.mark.parametrize("spelling", SUITE_TIER_SPELLINGS)
+def test_every_listed_spelling_is_refused(spelling):
+    assert suite_tier_refusal(f"the {spelling} passes") is not None
+
+
+def test_refusal_lists_spellings_and_keeps_remediation_tail():
+    from coordinator_core.roadmap import post_stamp_clause as psc
+    msg = psc.suite_tier_refusal("tierU passes")
+    assert all(s in msg for s in psc.SUITE_TIER_SPELLINGS)
+    assert msg.endswith("Use: tests covering touched files pass.")
+    assert msg.startswith(psc.EXIT_CRITERION_REFUSAL_HEAD)
+    assert psc.REMEDIATION_MARKER in msg
+    assert psc.SUITE_TIER_REMEDIATION == "tests covering touched files pass"

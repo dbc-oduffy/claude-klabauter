@@ -827,6 +827,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "workday-complete-step1-validate.py": frozenset({"self_location"}),
     "workday-start-advisory-counters.py": frozenset({"self_location"}),
     "workday-start-day-branch-resolve.py": frozenset({"self_location"}),
+    "workday-start-handoff-triage.py": frozenset({"self_location"}),
     "workweek-complete-brief.py": frozenset({"self_location"}),
     "workweek-complete-doc-staleness.py": frozenset({"self_location"}),
     "workweek-complete-doc-verify.py": frozenset({"self_location"}),

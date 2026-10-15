@@ -114,6 +114,8 @@ def test_commit_prompt_never_names_a_ledger_in_its_path_lists():
         touched_files=["a.py"], removed_files=["state/bug-backlog/row1.yaml"],
     )
     assert ".jsonl" not in call_text
+    assert "never committed" not in call_text
+    assert "landed by the drain\\'s run-record, not by this committer" in call_text
     assert "Never name a state/queue-grind/ path in either commit path list" in call_text
     # settle runs only after the commit lands
     assert call_text.index("ceremony.commit_v2") < call_text.index("grind-row settle")
@@ -128,6 +130,9 @@ def test_ledger_sweep_names_every_queue_and_never_commits():
     assert "ONE Bash call" in call_text
     assert "encodeURIComponent(REC).replace(/'/g, '%27')" in call_text
     assert "--record-file" not in call_text
+    assert "run-record itself commits this run\\'s own bookkeeping" in call_text
+    assert "never committed" not in call_text
+    assert "non-zero exit from run-record" in call_text
     assert "commit_v2" not in call_text
     assert "coordinator:git-commit-agent" not in call_text
 
@@ -359,9 +364,9 @@ def test_every_composer_carries_its_stage_model():
 
 
 def test_models_override_changes_only_its_stage():
-    calls = _calls_by_stage(models={"triage": "haiku"})
+    calls = _calls_by_stage(models={"triage": "opus"})
     for key, call_text in calls.items():
-        assert ("model: 'haiku'" in call_text) == (key == "triage")
+        assert ("model: 'opus'" in call_text) == (key == "triage")
 
 
 def test_unknown_stage_key_in_models_raises():
@@ -875,9 +880,9 @@ def test_size_assemble_call_is_an_op_runner_at_low_effort():
 def test_size_calls_carry_sonnet_and_follow_a_models_override():
     for call in _size_calls().values():
         assert "model: 'sonnet'" in call
-    calls = _size_calls(models={"size": "haiku"})
-    assert "model: 'haiku'" in calls["size"]
-    assert "model: 'sonnet'" in calls["size-assemble"]
+    assert _size_calls(models={"size": "sonnet"})["size"].count("model: 'sonnet'") == 1
+    with pytest.raises(ValueError, match="pinned to 'sonnet'"):
+        _size_calls(models={"size": "haiku"})
 
 
 def test_size_stages_are_in_the_table_driven_model_helper():
@@ -900,3 +905,49 @@ def test_size_assemble_js_commands():
     chain = js.split("const _sizeChainCmd")[1]
     assert "'cd '" in chain
     assert chain.index("_sizeAssembleCmd") < chain.index("_sizeBatonCmd") < chain.index("_sizeMarkCmd")
+
+
+def test_the_commit_agent_is_haiku_in_every_emitter():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    assert grind_stages.STAGE_MODELS["commit"] == "haiku"
+    assert emit._AGENT_MODELS[emit._COMMIT_AGENT_TYPE] == "haiku"
+    with pytest.raises(ValueError, match="pinned to 'haiku'"):
+        _calls_by_stage(models={"commit": "sonnet"})
+
+
+def test_verify_test_run_is_the_test_runner_on_haiku():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    for targeted in (False, True):
+        call = grind_stages.compose_verify_agent_call(
+            label="v", phase_title="Verify", targeted_runner=targeted
+        )
+        assert f"agentType: '{emit._TEST_AGENT_TYPE}'" in call
+        assert "model: 'haiku'" in call
+
+
+def test_every_doe_typed_call_reads_the_engine_table():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    for stage, agent_type in grind_stages.STAGE_AGENT_TYPES.items():
+        assert grind_stages.STAGE_MODELS[stage] == emit._AGENT_MODELS[agent_type]
+    general = set(grind_stages.STAGE_MODELS) - set(grind_stages.STAGE_AGENT_TYPES)
+    assert general == {"triage", "refute-close", "fix"}
+
+
+@pytest.mark.parametrize("stage", sorted(set(grind_stages.STAGE_AGENT_TYPES) - {"adjudicate"}))
+def test_a_models_override_changing_a_pinned_type_is_refused(stage):
+    with pytest.raises(ValueError, match="pinned to"):
+        _calls_by_stage(models={stage: "opus"})
+
+
+def test_the_adjudicator_override_is_refused_and_its_model_is_opus():
+    from coordinator_core.ops.dispatch_emit import pm_adjudication
+
+    assert pm_adjudication.ADJUDICATOR_AGENT_TYPE == grind_stages.APM_AGENT_TYPE
+    assert "model: 'opus'" in pm_adjudication.compose_adjudicate_block(agent_type_host=None)
+    with pytest.raises(ValueError, match="pinned to 'opus'"):
+        pm_adjudication.compose_adjudicate_block(
+            agent_type_host=None, models={"adjudicate": "haiku"}
+        )

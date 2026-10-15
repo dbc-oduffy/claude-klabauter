@@ -278,7 +278,7 @@ def test_failing_directive_beside_writer_still_commits(repo, monkeypatch, claims
         monkeypatch,
         {
             "list-week-changelog": _write(repo, "out/g.md"),
-            "lint-frontmatter": lambda: 1,
+            "query-records": lambda: 1,
         },
     )
     code, report = wwc_apply.apply()

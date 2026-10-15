@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
     ASK_SOURCES,
     DELIVERY_NOTE_DIR,
+    HALTED_RECORD_PARAM,
     PM_INTENT_FILE,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
@@ -38,8 +39,9 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     SIZING_SCOUT_AGENT_TYPE,
     STOP_AFTER_PLAN,
-    ASSEMBLE_SCHEMA,
     DOC_NEW_CMD,
+    ASK_SCOUT_SCHEMA,
+    ASSEMBLE_SCHEMA,
     SCOUT_RETURN_CLAUSE,
     SCOUT_SCHEMA,
     SIZING_ASSEMBLE_CMD,
@@ -77,6 +79,11 @@ from coordinator_core.ops.review_mint.execute_review import (
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
+from coordinator_core.roadmap.post_stamp_clause import (
+    EXIT_CRITERION_REFUSAL_HEAD,
+    REMEDIATION_MARKER,
+    SUITE_TIER_REMEDIATION,
+)
 from coordinator_core.session.record_homes import home_dir
 
 _OWNER_ROWS_JS = "_crossRepoRows"
@@ -121,18 +128,21 @@ def _agent(
     )
 
 
-#: Model and effort per stage. Sonnet executes and runs mechanical engine calls at low effort;
-#: Opus only where judgment carries the run: the S plan, and the ceo XL exit. Each Opus stage
-#: uses an agent type whose definition pins `model: opus`, so `block_ungranted_opus_subagent`
-#: admits it and `enforce_agent_model_pin` sees an equal model and a cheaper-or-equal effort.
+#: Effort per stage; the model is the agent type's `emit._AGENT_MODELS` entry. Opus stages
+#: (the S plan, the accept ruling, the ceo XL exit) use a type whose definition pins
+#: `model: opus`, so `block_ungranted_opus_subagent` admits it and `enforce_agent_model_pin`
+#: sees an equal model and a cheaper-or-equal effort.
 _MECHANICAL_EFFORT = "low"
+#: One-command relay calls (gate, stage) carry no DoE definition: general-purpose at haiku.
+_MECHANICAL_AGENT_TYPE = "general-purpose"
+_MECHANICAL_MODEL = "haiku"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
-_PLAN_AUTHOR_MODEL, _PLAN_AUTHOR_EFFORT = "opus", "low"
-_XL_EXIT_MODEL, _XL_EXIT_EFFORT = "opus", "low"
-_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
-#: The git-commit-agent definition pins haiku; one fixed command needs nothing more.
-_COMMIT_MODEL = "haiku"
-_DOCS_MODEL = "sonnet"
+_PLAN_AUTHOR_EFFORT = "low"
+_XL_EXIT_EFFORT = "low"
+#: Models of DoE-defined types (commit, docs executor, sizing-scout) come from `emit._AGENT_MODELS`.
+_COMMIT_AGENT_TYPE = _emit._COMMIT_AGENT_TYPE
+_PLAN_REVIEW_AGENT_TYPE = "coordinator:staff-eng"
+_PLAN_REVIEW_EFFORT = "low"
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
 _KEEP_THE_ASK = (
@@ -147,6 +157,12 @@ def _obj(required: list[str], properties: dict) -> dict:
 
 
 _STR = {"type": "string"}
+_REWORD_SCHEMA = _obj(["exit_criterion"], {"exit_criterion": _STR})
+#: Worded positively: the refused spellings live only in suite_tier_refusal, never in a scout prompt.
+EXIT_CRITERION_RULES_CLAUSE = (
+    " The exit_criterion names no test tier and no tier-valued argument; "
+    f"word verification as \"{SUITE_TIER_REMEDIATION}\"."
+)
 _GATE_SCHEMA = _obj(
     ["arm", "halt"],
     {
@@ -156,6 +172,7 @@ _GATE_SCHEMA = _obj(
         "tshirt": _STR,
         "route": _STR,
         "resume_plan": {"type": ["string", "null"]},
+        "spine_plan": {"type": ["string", "null"]},
     },
 )
 _RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
@@ -182,6 +199,11 @@ _ACCEPT_SCHEMA = _obj(
     },
 )
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
+_REVISE_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR})
+_REVISE_STAGED_SCHEMA = _obj(
+    ["plan_rel"],
+    {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": {"type": ["object", "null"]}},
+)
 _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
     {
@@ -219,6 +241,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "id": _STR,
                     "status": {"type": "string", "enum": list(LEDGER_STATUSES)},
                     "essential": {"type": "boolean"},
+                    "withheld_by": _STR,
                     "root_read": {"type": ["string", "array"], "items": _STR},
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
@@ -232,6 +255,38 @@ _LEDGER_CHECK_SCHEMA = _obj(
     },
 )
 _LEDGER_CHECK_AGENT_TYPE = "coordinator:code-reviewer"
+_LEDGER_ITEMS_RULES = (
+    "Return one entry in items for EVERY ledger item, by "
+    "its id (the sizing's requirement_register row id), and on every engine-plane item named above "
+    "set root_read to each root you judged it at: status 'met' when the change makes the "
+    "item literally true, and wired true when the product actually reaches it (an entry a user, "
+    "caller or the engine runs leads to it), not only when code for it exists; 'drifted' "
+    "when it was lost or reinterpreted in transit -- a brief, plan, memo or stage narrowed, "
+    "softened or re-read it (name where in evidence); 'superseded' only when a LATER revision item "
+    "replaces it, named as superseded_by; 'post_commit' when everything the item asks that can be "
+    "true before the commit is met and what remains is only an act that exists after the terminal "
+    "commit -- the commit itself, reporting the landed sha, or a memo naming it -- named in "
+    "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
+    "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. Set essential false only for an "
+    "item that is an aside rather than something the PM asked to have delivered; when the ledger "
+    "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
+    "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
+    "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
+    "and any other gap in plain words. "
+)
+_LEDGER_GATED_RULE = (
+    ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
+    "that chunk id exactly; set withheld_by on no other item. The commit stage runs after this check, so an uncommitted "
+    "change is expected here and 'commit' alone in remaining is not a reason to block. Return "
+    "all_of_pm_ask as the ledger states it, and list any in-repo memo or doctrine that conflicts "
+    "with the ask as conflicts."
+)
+_LEDGER_DOC_WRITES_RULE = (
+    ". When a not_met item's only gap is writing one of those paths, name that path "
+    "exactly as its own entry in remaining; the engine settles it from the docs stage's "
+    "report."
+)
+_GATED_IDS_JS = "(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')"
 #: The stage-start read every judgment-bearing stage makes: the EM can revise the ask mid-run
 #: (`workflow.revise`), so a stage that read the ask only at emit would act on a stale one.
 _LEDGER_CLAUSE = (
@@ -280,6 +335,8 @@ _MANIFEST_SCHEMA = _obj(
         "engine_rows": {"type": "array", "items": _obj(["id"], {"id": _STR, "owner_repo": _STR, "owner_root": _STR, "root_class": _STR, "engine": {"type": "boolean"}})},
     },
 )
+
+_PLAN_STAGED_SCHEMA = _obj(["plan_rel", "manifest"], {"plan_rel": _STR, "manifest": _MANIFEST_SCHEMA})
 
 
 _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
@@ -347,6 +404,22 @@ def _scoped_test_call(
 _USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
 HALT_USAGE_LIMIT = "usage_limit"
 HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
+HALT_REVIEW_BLOCKED = "review_blocked"
+
+#: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
+#: null (degraded / verify-only) wave entries never match.
+_REVIEW_BLOCKED_HALT_JS = (
+    "  if (!_halted) {\n"
+    "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
+    "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
+    "    if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
+    "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
+    "slices: _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
+    "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null })), "
+    "next_action: 'Fix the unapplied findings named in each slice sidecar, then resume the run "
+    "(Workflow with this scriptPath and resumeFromRunId set to this Workflow run id, wf_...).' };\n"
+    "  }"
+)
 
 
 def _usage_limit_helper_js() -> str:
@@ -373,17 +446,44 @@ _JUDGE_PATH_CLAUSE = (
     "\n\nThe plan_path below is the plan, or on the XS route (no plan is authored) the sizing: "
     "then its exit_criterion is the spec and there is no Verification section."
 )
+_FALSIFIER_SCHEMA = _obj(
+    ["how", "baseline_output", "expected_when_true"],
+    {"how": _STR, "baseline_output": _STR, "expected_when_true": _STR},
+)
+_FALSIFIER_AGENT_TYPE = "coordinator:exit-criterion-falsifier"
+#: Rides the judge prompt at run time; XS authors none, so `_falsifierSpec` may be null.
+_FALSIFIER_SUFFIX_JS = (
+    "(_falsifierSpec ? '\\n\\nrecorded falsifier (authored before any change; run its how verbatim at HEAD, "
+    "compare to expected_when_true and baseline_output, and rule not_met when it still shows the baseline): ' "
+    "+ JSON.stringify(_falsifierSpec) : '')"
+)
+
+
+#: JS expression naming the doc paths the docs thunk is writing while the tail's other legs read the tree.
+_DOC_WRITES_IN_FLIGHT_JS = (
+    "'\\n\\nThe docs stage is writing these paths while you read, so judge them as in flight and never "
+    "as a gap: ' + JSON.stringify(_manifest?.doc_writes ?? [])"
+)
 
 
 def _criterion_judge_call(
-    review, stage_schemas: dict, *, run_base_sha: str, head: str, agent_type_host: Optional[str]
+    review, stage_schemas: dict, *, run_base_sha: str, head: str, agent_type_host: Optional[str],
+    docs_in_flight: bool = False,
+    ledger_charter: Optional[str] = None,
 ) -> Optional[str]:
     """The roster judge's call EXPRESSION, naming the plan (or XS sizing) known only at run time.
 
     `compose_criterion_judge` takes `plan_path` as a compile-time literal; the slot stands in and
-    is spliced out for the runtime expression. Trap: no falsifier leg -- the plan's falsifier is
-    unknown until the plan exists, and the judge reads the plan itself.
+    is spliced out for the runtime expression. The plan's own falsifier is unknown until the plan
+    exists, so the judge gets the run's pre-change `_falsifierSpec` instead (null at XS).
+    `ledger_charter` folds the requirements-ledger check into the judge; the run-time gated-chunk
+    list then closes its prompt.
     """
+    suffix_js = f"({owner_repo_clause_js(_OWNER_ROWS_JS)}) + {_FALSIFIER_SUFFIX_JS}"
+    if docs_in_flight:
+        suffix_js = f"({suffix_js}) + {_DOC_WRITES_IN_FLIGHT_JS}"
+    if ledger_charter:
+        suffix_js = f"({suffix_js}) + '\\n\\nThe stage manifest withheld these chunks (gated): ' + {_GATED_IDS_JS}"
     call = compose_criterion_judge(
         review,
         stage_schemas=stage_schemas,
@@ -392,13 +492,48 @@ def _criterion_judge_call(
         falsifier=None,
         prompt_head=head + _JUDGE_PATH_CLAUSE,
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
-        prompt_suffix_js=owner_repo_clause_js(_OWNER_ROWS_JS),
+        prompt_suffix_js=suffix_js,
+        ledger_charter=ledger_charter,
+        ledger_schema=_LEDGER_CHECK_SCHEMA if ledger_charter else None,
     )
     if call is None:
         return None
     if call.count(_PLAN_SLOT) != 2:
         raise AskComposeRefused("criterion judge prompt no longer names its plan path exactly twice")
     return call.replace(_PLAN_SLOT, f"' + {_RUNTIME_PLAN_PATH_JS} + '")
+
+
+def _fire_tier_js() -> str:
+    """JS expression for the execute wave's tier at fire time, from `_gate.tshirt`.
+
+    The map is rendered from `emit._TSHIRT_TO_REVIEW_TIER`; an absent or unknown tshirt reads
+    `full`, which keeps every roster agent.
+    """
+    return f"({json.dumps(_emit._TSHIRT_TO_REVIEW_TIER, sort_keys=True)}[_gate?.tshirt] ?? 'full')"
+
+
+def _folded_ledger_charter(
+    *, relayed: bool, ledger_rel: str, record_dir: str, run_dir: str, in_run_commit: bool
+) -> str:
+    """The requirements-ledger check as a charter the criterion judge carries.
+
+    The judge reads the plan and the sizing itself; the gated-chunk list and the engine-plane
+    clause reach it as a run-time suffix (`_criterion_judge_call`).
+    """
+    return (
+        "Ledger check, folded into this verdict (no separate ledger-check agent runs): also judge "
+        "the result against every requirement "
+        + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
+        + ", never against the plan alone. "
+        f"Re-read the requirements ledger at {ledger_rel} now (revisions may have landed since the run "
+        f"started), then {record_dir}/{PM_INTENT_FILE} when it exists, the change, and the briefs under "
+        f"{run_dir}/briefs. "
+        + _LEDGER_ITEMS_RULES
+        + "The manifest's withheld (gated) chunks close this prompt. Return items, all_of_pm_ask and "
+        "conflicts beside your criterion verdict"
+        + _LEDGER_GATED_RULE
+        + (_LEDGER_DOC_WRITES_RULE if in_run_commit else "")
+    )
 
 
 def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
@@ -531,6 +666,7 @@ def compose_ask_script(
     stop_after: Optional[str] = None,
     in_run_commit: bool = False,
     ask_source: str = "pm",
+    required_reviewers: Sequence[str] = (),
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -540,6 +676,7 @@ def compose_ask_script(
     `ask_source="relayed"` marks `prompt` as an EM's relay: every prompt that would call the ask
     the PM's words names it a relayed ask instead, and the run reads `relayed-ask.md`, not `ask.md`.
 
+    `required_reviewers` (`plugin:agent` types) join the roster's `named` stage at every tier.
     The review roster and stage schemas load from DoE when not injected; `wrap_stage` and
     `plan_blitz_text` default to `ask_plan_blitz.wrap_stage` over the resolved plugin asset, which
     is embedded only when the arm can be M+. `script_path` is the repo-relative path the script
@@ -554,8 +691,8 @@ def compose_ask_script(
     every agent prompt the script composes, plan-blitz's included (through `wrap_stage`'s
     `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`); the roadmap
     arm refuses it. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
-    authoring. A raw ask sizes through the scout agent and one composed
-    `sizing-assemble --write` step; a gate halt carries the assemble decision's `pm_exit_question`.
+    authoring. A raw ask sizes through the scout agent, whose closing acts run
+    `sizing-assemble --write` and `dispatch.ask_gate`; a gate halt carries the assemble decision's `pm_exit_question`.
     `stop_after=STOP_AFTER_PLAN` ends the script at the plan wave with the single exit
     `{planned, sizing, run_id}` (XS: `{route: 'dispatch', sizing}`); stage, execute and review
     are not composed.
@@ -586,7 +723,7 @@ def compose_ask_script(
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
 
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
-    review = parse_execute_review(review_roster_fragment)
+    review = parse_execute_review(review_roster_fragment, required_reviewers=list(required_reviewers))
 
     intake = _intake_sizing(repo_root, sizing_rel)
     # An intake sizing's estimate and route are placeholders: the in-run size stage judges them.
@@ -678,20 +815,32 @@ def compose_ask_script(
         stage_schemas=review_stage_schemas,
         plan_path=manifest_rel,
         run_base_sha=run_base_sha,
+        repo_root=repo_root,
         declared_paths_js="_manifest.review_declared_paths",
         prompt_head=review_head,
         run_key=run_id,
-        prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel)",
+        prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel) + ' session_id: ' + _SESSION_ID",
+        mechanical_prep=True,
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
         owner_rows_js=_OWNER_ROWS_JS,
+        tier_js=_fire_tier_js(),
     )
     review_titles = [title for title, _ in review_blocks]
+    ledger_charter = _folded_ledger_charter(
+        relayed=relayed,
+        ledger_rel=ledger_rel,
+        record_dir=record_dir,
+        run_dir=run_dir,
+        in_run_commit=in_run_commit,
+    )
     judge_expr = _criterion_judge_call(
         review,
         review_stage_schemas,
         run_base_sha=run_base_sha,
         head=head + intent_clause,
         agent_type_host=agent_type_host,
+        docs_in_flight=in_run_commit,
+        ledger_charter=ledger_charter,
     )
 
     b: list[str] = []
@@ -705,12 +854,17 @@ def compose_ask_script(
     b.append("  let _planRel = null;")
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
+    b.append("  let _stagedManifest = null;")
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append(_RUN_TOKEN_DECL_JS)
     b.append("  let _nextAction = null;")
     b.append("  let _docs = null;")
     b.append("  let _commit = null;")
+    b.append("  let _haltCommit = null;")
+    if in_run_commit:
+        b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
+        b.append(_halt_record_commit_fn(head=head, anchor=anchor, script_path=script_path))
     b.append("  let _ledger = null;")
     b.append(_AGENT_DEFS_HELPER_JS)
     if rb_fn:
@@ -736,13 +890,80 @@ def compose_ask_script(
     if judge_expr is not None:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 
+    def _gate_payload(record_js: str = "") -> str:
+        return (
+            "js:JSON.stringify({ sizing_path: _sizingRel, run_id: _runId, writes: _writes"
+            + (", baton: " + json.dumps(baton["path"]) if baton else "")
+            + (f", record: {record_js}" if record_js else "")
+            + " })"
+        )
+
+    def _gate_agent_call(label: str, phase_title: str) -> str:
+        gate_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run `{_INVOKE} {OP_ASK_GATE} '",
+            _gate_payload(),
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan and spine_plan; "
+            "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
+            "and halt both null. Also read the sizing at ",
+            "js:_sizingRel",
+            " and return its estimate.tshirt as tshirt and its route as route.",
+        )
+        return _agent(
+            gate_prompt, label=label, phase=phase_title, agent_type=_MECHANICAL_AGENT_TYPE,
+            agent_model=_MECHANICAL_MODEL, schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT,
+        )
+
     if sized_in_run:
         b.append("  phase('size');")
+        _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
+        sizing_write_rel = (
+            sizing_rel if intake is not None
+            else f"{_sizings_prefix}{date.today().isoformat()}-<name>.yaml"
+        )
+        _deliverable_js = (
+            f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
+        )
+        deliverable_flag = (
+            f" --deliverable-id {shlex.quote(baton['deliverable_id'])}" if baton and baton.get("deliverable_id") else ""
+        )
+        relayed_flag = (
+            f" --relayed-ask-file {shlex.quote(record_dir + '/' + RELAYED_ASK_FILE)}" if relayed else ""
+        )
+        assemble_template = (
+            f"{SIZING_ASSEMBLE_CMD} --tshirt <tshirt> --intent <intent> --name <name> "
+            "--premise-provenance <premise_provenance> --premise-evidence <premise_evidence> "
+            f"--exit-criterion <exit_criterion>{deliverable_flag} [--jtbd-unclear when jtbd_unclear is true] "
+            "[--well-trodden-step-change when well_trodden_step_change is true] "
+            f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
+        )
+        gate_template = (
+            f"{_INVOKE} {OP_ASK_GATE} '"
+            f'{{"sizing_path":"{sizing_write_rel}","run_id":"{run_id}","writes":[<your writes>]'
+            + (f',"baton":{json.dumps(baton["path"])}' if baton else "")
+            + "}'"
+        )
+        scout_closing = (
+            " Your closing acts, in order, once your fields are settled. (1) Run sizing-assemble once: "
+            "replace each <field> in the command below with your own value, POSIX single-quoted (an "
+            "embedded ' written '\\'''), <name> being lowercase kebab-case ([a-z0-9-] only):\n\n"
+            + assemble_template
+            + "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as "
+            "stderr. Do not edit, retry or repair it. (2) Only when exit_code is 0, run the next command "
+            "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
+            + gate_template
+            + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan "
+            f"and spine_plan; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            "and return them as tshirt and route (tshirt replaces your own judged value). "
+            "On a non-zero exit_code run no gate command and return no arm or halt."
+        )
         scout_prompt = prompt_of(
             "Size this ask afresh, never reusing or editing an existing sizing, by following the "
-            "sizing skill (`coordinator:sizing`). Judge only; write no file and run no "
-            "`sizing-assemble`. "
+            "sizing skill (`coordinator:sizing`). Judge first; write no file except through your "
+            "closing `sizing-assemble`. "
             + SCOUT_RETURN_CLAUSE
+            + EXIT_CRITERION_RULES_CLAUSE
+            + scout_closing
             + ledger_clause
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
             f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
@@ -755,7 +976,7 @@ def compose_ask_script(
             + (prompt or str((intake or {}).get("intent") or ""))
         )
         b.append(
-            f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=SCOUT_SCHEMA, agent_model='sonnet')};"
+            f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=ASK_SCOUT_SCHEMA)};"
         )
         b.append("  _writes = _scouted.writes ?? [];")
         b.append("  _gated = _scouted.gated ?? [];")
@@ -763,85 +984,112 @@ def compose_ask_script(
             "  const _slug = String(_scouted.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
             ".replace(/^-+|-+$/g, '') || 'ask';"
         )
-        _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
         if intake is not None:
-            b.append(f"  const _sizingPath = {_lit(sizing_rel)};")
+            b.append(f"  const _sizingPath = REPO_ROOT + '/' + {_lit(sizing_rel)};")
         else:
-            b.append(f"  const _sizingPath = '{_sizings_prefix}' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
+            b.append(
+                f"  const _sizingPath = REPO_ROOT + '/' + '{_sizings_prefix}' + "
+                f"{_lit(date.today().isoformat() + '-')} + _slug + '.yaml';"
+            )
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
-        deliverable = (
-            f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
-        )
-        b.append(
-            f"  const _assembleCmd = {_lit(SIZING_ASSEMBLE_CMD)}"
-            + scout_assemble_flags_js("_scouted", "_q", deliverable)
+        assemble_cmd_js = (
+            f"{_lit(SIZING_ASSEMBLE_CMD)}"
+            + scout_assemble_flags_js("_scouted", "_q", _deliverable_js)
             + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
             + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
-            + ";"
         )
-        assemble_prompt = _cat(
+        reassemble_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             "Run exactly this one command and nothing else, then return its exit code as exit_code and "
             "its stdout verbatim as stdout (stderr as stderr). Do not edit, retry or repair it:\n\n",
-            "js:_assembleCmd",
+            "js:_reassembleCmd",
+        )
+        # One reword: a remediable exit-criterion refusal from the scout's closing sizing-assemble goes
+        # back to the scout, then re-assembles and re-gates in fresh agents. `_scouted` is mutated in
+        # place so the halt and decision lines below read the final attempt; a second refusal falls
+        # through to the halt.
+        reword_prompt = prompt_of(
+            "sizing-assemble refused your exit_criterion. Return only a reworded exit_criterion that "
+            "clears the refusal; judge nothing else and write no file." + EXIT_CRITERION_RULES_CLAUSE,
+            "\n\nRefusal:\n",
+            "js:_asmOut.slice(0, 1500)",
+            "\n\nRefused exit_criterion:\n",
+            "js:String(_scouted.exit_criterion ?? '')",
         )
         b.append(
-            f"  const _assembled = await {_agent(assemble_prompt, label='assemble', phase='size', agent_type=agent_type, schema=ASSEMBLE_SCHEMA)};"
+            "  const _asmOut = String(_scouted.stderr ?? '') + '\\n' + String(_scouted.stdout ?? '');"
         )
+        b.append(
+            f"  if (_scouted.exit_code !== 0 && _asmOut.includes({_lit(EXIT_CRITERION_REFUSAL_HEAD)}) "
+            f"&& _asmOut.includes({_lit(REMEDIATION_MARKER)})) {{"
+        )
+        b.append(
+            f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA)};"
+        )
+        b.append("    _scouted.exit_criterion = _reworded.exit_criterion;")
+        b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
+        b.append(
+            f"    const _reassembled = await {_agent(reassemble_prompt, label='assemble-reword', phase='size', agent_type=agent_type, schema=ASSEMBLE_SCHEMA)};"
+        )
+        b.append(
+            "    _scouted.exit_code = _reassembled.exit_code; _scouted.stdout = _reassembled.stdout; "
+            "_scouted.stderr = _reassembled.stderr;"
+        )
+        b.append("    if (_scouted.exit_code === 0) {")
+        b.append("      _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1);")
+        b.append(f"      const _regated = await {_gate_agent_call('gate-reword', 'size')};")
+        b.append(
+            "      Object.assign(_scouted, { arm: _regated.arm ?? null, halt: _regated.halt ?? null, "
+            "baton: _regated.baton ?? null, tshirt: _regated.tshirt, route: _regated.route, "
+            "resume_plan: _regated.resume_plan ?? null, spine_plan: _regated.spine_plan ?? null });"
+        )
+        b.append("    }")
+        b.append("  }")
         b.append("  let _decision = null;")
         # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
         # JSON; the decision is the span from the first `{` to the last column-0 `}`.
         b.append(
-            "  try { const _out = String(_assembled.stdout ?? ''); "
+            "  try { const _out = String(_scouted.stdout ?? ''); "
             "_decision = JSON.parse(_out.slice(_out.indexOf('{'), _out.lastIndexOf('\\n}') + 2)); } "
             "catch (_e) { _decision = null; }"
         )
         b.append(
-            "  if (_assembled.exit_code !== 0) { _halted = { halted: "
-            f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _assembled.exit_code + '); "
+            "  if (_scouted.exit_code !== 0) { _halted = { halted: "
+            f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _scouted.exit_code + '); "
             "the gate, plan, stage, execute and review phases were skipped', "
-            "detail: String(_assembled.stderr ?? _assembled.stdout ?? '').slice(0, 300), run_id: _runId }; }"
+            "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
+            ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
-        b.append("  else { _sizingRel = _sizingPath; }")
+        b.append("  else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }")
         b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")
 
     b.append("  phase('gate');")
-    def _gate_payload(record_js: str = "") -> str:
-        return (
-            "js:JSON.stringify({ sizing_path: _sizingRel, run_id: _runId, writes: _writes"
-            + (", baton: " + json.dumps(baton["path"]) if baton else "")
-            + (f", record: {record_js}" if record_js else "")
-            + " })"
+    if sized_in_run:
+        # The scout's closing acts ran the gate; a failed assemble leaves nothing to carry.
+        b.append(
+            "  let _gate = _halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
+            "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
+            "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
+            "spine_plan: _scouted.spine_plan ?? null };"
         )
-
-    gate_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        f"Run `{_INVOKE} {OP_ASK_GATE} '",
-        _gate_payload(),
-        "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan. "
-        "Also read the sizing at ",
-        "js:_sizingRel",
-        " and return its estimate.tshirt as tshirt and its route as route.",
-    )
-    gate_call = _agent(
-        gate_prompt, label="gate", phase="gate", agent_type=agent_type,
-        schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT,
-    )
-    b.append(
-        f"  let _gate = {'_halted ? { arm: null, halt: null } : ' if sized_in_run else ''}await {gate_call};"
-    )
+    else:
+        # An existing sizing has no scout to close for it.
+        b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate')};")
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
         """The ruling agent's own record call; the engine refuses a gated ruling before it writes."""
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan and spine_plan, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
         ]
 
+    # Accept and xl-exit stay separate from the scout and the plan reviewer: reviewer independence
+    # (the delegate rules a criterion it did not write) and the APM delegate's own record write
+    # through the gated op. Each runs only when a halt is owed, so most runs spawn neither.
     if accept_pending or xl_possible:
         apm_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -864,7 +1112,7 @@ def compose_ask_script(
         )
         apm_call = _agent(
             apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ruling_schema(_ACCEPT_SCHEMA), agent_model="sonnet"
+            schema=_ruling_schema(_ACCEPT_SCHEMA),
         )
         xl_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -885,10 +1133,10 @@ def compose_ask_script(
         )
         xl_call = _agent(
             xl_prompt, label="xl-exit", phase="xl-exit", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ruling_schema(_XL_SCHEMA), agent_model=_XL_EXIT_MODEL, effort=_XL_EXIT_EFFORT,
+            schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, spine_plan: %s.spine_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
@@ -902,7 +1150,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 4)}\n"
+            f"      {take_gate % (('_apm',) * 5)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
@@ -917,7 +1165,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 4)}\n"
+            f"      {take_gate % (('_xl',) * 5)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (!_progressed && _xl) {{\n"
@@ -954,6 +1202,21 @@ def compose_ask_script(
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
         "empty -- never an empty manifest without the error.",
     )
+    fold_stage = not stop_after
+
+    def stage_fold(lead: str) -> tuple[str, ...]:
+        """Prompt parts that make the plan agent stage its own plan and return the reply as `manifest`."""
+        return (
+            f"{lead} run `{_INVOKE} {OP_ASK_STAGE} '",
+            "js:JSON.stringify({ run_id: _runId, plan_path: '<plan_rel>', writes: _writes, "
+            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
+            "'` with <plan_rel> replaced by the plan's repo-relative path, and return its JSON reply "
+            "verbatim as `manifest`. If it replies `{\"error\": ...}`, return that message as `error` "
+            "with run_dir and marker_path empty and rows and review_declared_paths empty -- never an "
+            "empty manifest without the error.",
+        )
+
     plan_author = _cat(
         f"{head}\n\n{anchor}\n\n",
         "Author the plan for the sizing at ",
@@ -975,13 +1238,22 @@ def compose_ask_script(
             if plan_blitz_args
             else ""
         ),
+        *(stage_fold(" Once the plan is filled and carries no marker,") if fold_stage else ()),
     )
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_S)}) {{")
     b.append("    if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
     b.append("    phase('plan');")
-    b.append(
-        f"    _planRel = (await {_agent(plan_author, label='plan', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_PLAN_SCHEMA, agent_model=_PLAN_AUTHOR_MODEL, effort=_PLAN_AUTHOR_EFFORT)}).plan_rel;"
+    plan_call = _agent(
+        plan_author, label="plan", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
+        schema=_PLAN_STAGED_SCHEMA if fold_stage else _PLAN_SCHEMA,
+        effort=_PLAN_AUTHOR_EFFORT,
     )
+    if fold_stage:
+        b.append(f"    const _authored = await {plan_call};")
+        b.append("    _planRel = _authored.plan_rel;")
+        b.append("    _stagedManifest = _authored.manifest ?? null;")
+    else:
+        b.append(f"    _planRel = (await {plan_call}).plan_rel;")
     b.append("    }")
     b.append("  }")
     if blitz_fn:
@@ -989,6 +1261,48 @@ def compose_ask_script(
         b.append("    phase('plan');")
         # gateReportPath binds from the runtime `_sizingRel`: a raw ask's sizing is minted in-run.
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
+        review_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "The ask gate minted a dispatch spine from the sizing's concrete acceptance rows at ",
+            "js:_gate.spine_plan",
+            ". Review it as the plan reviewer: every row's writes are real, bounded paths, its done "
+            "condition is a runnable check, and together the rows serve the sizing's exit criterion. "
+            "Apply every finding IN PLACE with Edit -- never scaffold a new plan, never change its "
+            "path -- then return its repo-relative path as plan_rel. Then run the "
+            "`plan.readiness_verdict` op on the reviewed plan and return that reply's pull_class and "
+            "verdict alongside plan_rel."
+            + ledger_clause,
+            " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+            *(
+                stage_fold(" When the final verdict is `ready`, also stage the plan:")
+                + (" Otherwise leave `manifest` null.",)
+                if fold_stage
+                else ()
+            ),
+        )
+        review_call = _agent(
+            review_prompt, label="plan-review", phase="plan", agent_type=_PLAN_REVIEW_AGENT_TYPE,
+            schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
+            effort=_PLAN_REVIEW_EFFORT,
+        )
+        b.append("    let _spineFallback = null;")
+        b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
+        b.append(f"      const _spineReview = await {review_call};")
+        b.append("      _spineFallback = _spineReview?.plan_rel || _gate.spine_plan;")
+        b.append("      if (_spineReview?.verdict === 'ready') {")
+        b.append("        _planRel = _spineFallback;")
+        if fold_stage:
+            b.append("        if (Array.isArray(_spineReview.manifest?.rows)) { _stagedManifest = _spineReview.manifest; }")
+        b.append("      } else {")
+        b.append(
+            "        _halted = { halted: " + _lit(HALT_REFUSAL) + ", reason: 'spine plan review verdict ' + "
+            "String(_spineReview?.verdict ?? 'none') + ' (not ready)', review: _spineReview ?? null, "
+            "sizing: _sizingRel, run_id: _runId };"
+        )
+        b.append("      }")
+        b.append("    }")
+        b.append("    if (!_planRel && !_halted) {")
+
         def _blitz_call(plan_path_js: str) -> str:
             return (
                 f"await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
@@ -998,7 +1312,7 @@ def compose_ask_script(
                 f"planPath: {plan_path_js}, executionOpen: true }}] }});"
             )
 
-        b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? null')}")
+        b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? _spineFallback ?? null')}")
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
@@ -1009,25 +1323,55 @@ def compose_ask_script(
             "js:_pulledEntry.planPath",
             " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
             "change its path -- so every finding below is resolved, then return its repo-relative path "
-            "as plan_rel.\n\nPull reason:\n",
+            "as plan_rel. Then run the `plan.readiness_verdict` op on the revised plan, passing the "
+            "pull's coverage and reviews values below when they are not null, apply every "
+            "mechanical_repairs entry in place with Edit, then re-run the op with the plan alone "
+            "(no coverage, no reviews: the repairs answered those findings, and the same values "
+            "would pull the plan again), and return that reply's pull_class and verdict "
+            "alongside plan_rel.\n\nPull reason:\n",
             "js:String(_pulledEntry.reason ?? '')",
+            "\n\nPull coverage: ",
+            "js:JSON.stringify(_pulledEntry.coverage ?? null)",
+            "\nPull reviews: ",
+            "js:JSON.stringify(_pulledEntry.reviews ?? null)",
             "\n\nGate report (read it first):\n",
             "js:String(_pulledEntry.prepGateReport ?? '(none)')",
             ledger_clause,
             " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+            *(
+                stage_fold(
+                    " When the final verdict is `ready` and pull_class is `mechanical`, also stage the plan:"
+                )
+                + (" Otherwise leave `manifest` null.",)
+                if fold_stage
+                else ()
+            ),
         )
         b.append(
-            f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_PLAN_SCHEMA, agent_model=_PLAN_AUTHOR_MODEL, effort=_PLAN_AUTHOR_EFFORT)};"
+            f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA, effort=_PLAN_AUTHOR_EFFORT)};"
+        )
+        b.append(
+            "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
+            "{ _planRel = _revised.plan_rel || _pulledEntry.planPath;"
+            + (
+                " if (_planRel === _revised.plan_rel && Array.isArray(_revised.manifest?.rows)) "
+                "{ _stagedManifest = _revised.manifest; }"
+                if fold_stage
+                else ""
+            )
+            + " } else {"
         )
         b.append(f"      const _reblitz = {_blitz_call('_revised?.plan_rel || _pulledEntry.planPath')}")
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
+        b.append("      }")
         b.append("    }")
         b.append(
             f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
         )
+        b.append("    }")
         b.append("  }")
     else:
         b.append(
@@ -1037,8 +1381,10 @@ def compose_ask_script(
         )
 
     if stop_after:
+        if in_run_commit:
+            _append_halt_record_commit(b)
         b.append(
-            "  return _halted ? { halted_by: _halted, sizing: _sizingRel, run_id: _runId } : "
+            "  return _halted ? { halted_by: _halted, halt_commit: _haltCommit, sizing: _sizingRel, run_id: _runId } : "
             f"(_gate.arm === {_lit(ARM_XS)} ? {{ route: 'dispatch', sizing: _sizingRel }} : "
             "{ planned: [_planRel], sizing: _sizingRel, run_id: _runId });"
         )
@@ -1074,12 +1420,36 @@ def compose_ask_script(
                 "sizing: _sizingRel, run_id: _runId };"
             )
         b.append("  }")
+    if judge_expr is not None:
+        falsifier_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "Before any change lands, author the baseline falsifier for the prime exit criterion in the sizing at ",
+            "js:_sizingRel",
+            " (its exit_criterion.statement). The observation runs through the production entry point the "
+            "criterion names -- the command, import path or call site a user reaches -- never a unit test of "
+            "one helper. Run it now against the unchanged tree and record what it prints as baseline_output: "
+            "it must show the criterion FALSE today. Write no repo file; scratch only under the run dir. Return "
+            "how (one runnable observation, verbatim), baseline_output, and expected_when_true (what the same "
+            "observation shows once the criterion holds).",
+        )
+        b.append("  let _falsifierSpec = null;")
+        b.append(f"  if (!_halted && !_viaRoadmap && _gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{")
+        b.append("    phase('falsifier');")
+        b.append(
+            f"    _falsifierSpec = await {_agent(falsifier_prompt, label='falsifier', phase='falsifier', agent_type=_FALSIFIER_AGENT_TYPE, schema=_FALSIFIER_SCHEMA, agent_model=_emit._AGENT_MODELS[_FALSIFIER_AGENT_TYPE], effort=_MECHANICAL_EFFORT)};"
+        )
+        b.append("  }")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
+    # Stage is folded into the plan agent's last act (stage_fold) wherever a plan agent runs. This
+    # standalone haiku call stays only for the arms with no plan agent to fold into (XS, a resumed
+    # plan, stop_after) -- there is no prior agent whose last act could carry it.
+    b.append("  if (_stagedManifest) { _manifest = _stagedManifest; } else {")
     b.append("  phase('stage');")
     b.append(
-        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT)};"
+        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT)};"
     )
+    b.append("  }")
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
     b.append(
@@ -1114,6 +1484,9 @@ def compose_ask_script(
     b.append("    }")
     b.append("  }")
     b.append("  await Promise.all(Object.values(_rows));")
+    # verify:<row> (emit.py's _runRow) stays one test-runner per row, not folded into the
+    # executor: an executor never runs a test tier, and the runner is an independent check that
+    # runs beside the later waves rather than on the row's critical path.
     b.append("  await Promise.all(_verifications);")
     b.append("  }")
     b.append(
@@ -1128,34 +1501,21 @@ def compose_ask_script(
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_XS)}) {{ _reviewWave = []; }}")
+    b.append(_REVIEW_BLOCKED_HALT_JS)
     test_call = _scoped_test_call(agent_type_host, run_base_sha or "HEAD", brief_prefix + _AGENT_DEFS_MARKER)
-    test_guard = f"_gate.arm !== {_lit(ARM_XS)} && (_manifest.test_targets ?? []).length"
+    test_guard = (
+        f"(_gate.arm !== {_lit(ARM_XS)} || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
+    )
+    review_applied = (
+        "const _reviewApplied = (Array.isArray(_reviewWave) ? _reviewWave : [])"
+        ".reduce((n, w) => n + ((w && w.applied) || 0), 0);"
+    )
     # A spine whose writes map to no runnable test target (`pathspec.NoTestTargetError`, e.g. a
     # .ts-only change in a repo the locator cannot see tests for) is degraded, never a pass.
     no_target = (
         f"  if (!_halted && _manifest && _manifest.no_test_target) {{ {_emit._TEST_RESULT_VAR} = "
         "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }; }"
     )
-    if judge_expr is None:
-        b.append(f"  if (!_halted && {test_guard}) {{")
-        b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
-        b.append("    try {")
-        b.append(f"    {_emit._TEST_RESULT_VAR} = await {test_call};")
-        b.append("    } catch (e) { _haltOnUsageLimit(e); }")
-        b.append("  }")
-    else:
-        b.append("  if (!_halted) {")
-        b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
-        b.append("    try {")
-        b.append(
-            f"    [{_emit._TEST_RESULT_VAR}, {_emit._FALSIFIER_RESULT_VAR}] = await parallel([\n"
-            f"      () => ({test_guard}) ? {test_call} : null,\n"
-            f"      () => {_emit._never_stranding_criterion(judge_expr, judge=True)},\n"
-            "    ]);"
-        )
-        b.append("    } catch (e) { _haltOnUsageLimit(e); }")
-        b.append("  }")
-    b.append(no_target)
     review_vars = _emit.review_stage_vars(
         review,
         bookkeeping_stem_literal=_lit(review_wave_bookkeeping_stem(run_id, None)),
@@ -1171,48 +1531,88 @@ def compose_ask_script(
         script_path=script_path,
         session_id=session_id,
     )
-    ledger_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        "phase: ledger-check\n\nRead-only: edit, stage and commit nothing. You are the run's final "
-        "checker: judge the result against every requirement "
-        + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
-        + ", never against the "
-        f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
-        f"since the run started), then {record_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
-        "(`git status --porcelain` and `git diff`)",
-        "js:" + owner_repo_clause_js(_OWNER_ROWS_JS),
-        ", the plan when one exists (",
-        "js:(_planRel ?? 'none')",
-        f"), and the briefs under {run_dir}/briefs. Return one entry in items for EVERY ledger item, by "
-        "its id (the sizing's requirement_register row id), and on every engine-plane item named above "
-        "set root_read to each root you judged it at: status 'met' when the change makes the "
-        "item literally true, and wired true when the product actually reaches it (an entry a user, "
-        "caller or the engine runs leads to it), not only when code for it exists; 'drifted' "
-        "when it was lost or reinterpreted in transit -- a brief, plan, memo or stage narrowed, "
-        "softened or re-read it (name where in evidence); 'superseded' only when a LATER revision item "
-        "replaces it, named as superseded_by; 'post_commit' when everything the item asks that can be "
-        "true before the commit is met and what remains is only an act that exists after the terminal "
-        "commit -- the commit itself, reporting the landed sha, or a memo naming it -- named in "
-        "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
-        "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. Set essential false only for an "
-        "item that is an aside rather than something the PM asked to have delivered; when the ledger "
-        "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
-        "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
-        "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
-        "and any other gap in plain words. The commit stage runs after this check, so an uncommitted "
-        "change is expected here and 'commit' alone in remaining is not a reason to block. Return "
-        "all_of_pm_ask as the ledger states it, and list any in-repo memo or doctrine that conflicts "
-        "with the ask as conflicts.",
+    test_leg = (
+        f"const _testLeg = (async () => {{ if ({test_guard}) {{ try {{ {_emit._TEST_RESULT_VAR} = await {test_call}; }} "
+        "catch (e) { _haltOnUsageLimit(e); } } })();"
     )
-    ledger_call = _agent(
-        ledger_prompt, label="ledger-check", phase="ledger-check",
-        # A bare host has no coordinator review type; the prompt carries the whole charter.
-        agent_type="general-purpose" if agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED else _LEDGER_CHECK_AGENT_TYPE,
-        schema=_LEDGER_CHECK_SCHEMA, agent_model="sonnet", effort=_MECHANICAL_EFFORT,
-    )
+    thunks = ["() => _testLeg"]
+    if judge_expr is not None:
+        # The judge reads the scoped test's verdict, so it starts only once the test leg has settled.
+        thunks.append(
+            f"async () => {{ await _testLeg; try {{ {_emit._FALSIFIER_RESULT_VAR} = await "
+            f"{_emit._never_stranding_criterion(judge_expr, judge=True)}; }} "
+            "catch (e) { _haltOnUsageLimit(e); } }"
+        )
+    else:
+        ledger_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "phase: ledger-check\n\nRead-only: edit, stage and commit nothing. You are the run's final "
+            "checker: judge the result against every requirement "
+            + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
+            + ", never against the "
+            f"plan alone. Re-read the requirements ledger at {ledger_rel} now (revisions may have landed "
+            f"since the run started), then {record_dir}/{PM_INTENT_FILE} when it exists, then the run's change "
+            "(`git status --porcelain` and `git diff`)",
+            "js:" + owner_repo_clause_js(_OWNER_ROWS_JS),
+            ", the plan when one exists (",
+            "js:(_planRel ?? 'none')",
+            f"), and the briefs under {run_dir}/briefs. " + _LEDGER_ITEMS_RULES
+            + "The stage manifest withheld these chunks (gated): ",
+            "js:" + _GATED_IDS_JS,
+            _LEDGER_GATED_RULE,
+            *(("js:" + _DOC_WRITES_IN_FLIGHT_JS, _LEDGER_DOC_WRITES_RULE) if in_run_commit else ()),
+        )
+        ledger_call = _agent(
+            ledger_prompt, label="ledger-check", phase="ledger-check",
+            # A bare host has no coordinator review type; the prompt carries the whole charter.
+            agent_type="general-purpose" if agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED else _LEDGER_CHECK_AGENT_TYPE,
+            schema=_LEDGER_CHECK_SCHEMA, effort=_MECHANICAL_EFFORT,
+            agent_model=_emit._AGENT_MODELS[_LEDGER_CHECK_AGENT_TYPE] if agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED else None,
+        )
+        thunks.append(f"async () => {{ try {{ _ledger = await {ledger_call}; }} catch (e) {{ _haltOnUsageLimit(e); }} }}")
+    if in_run_commit:
+        docs_call = _docs_call(head=head, anchor=anchor, run_id=run_id, manifest_rel=manifest_rel)
+        thunks.append(
+            f"async () => {{ if ({_DOCS_PRE_TAIL_GUARD}) {{ try {{ _docs = await {docs_call}; }} "
+            "catch (e) { _haltOnUsageLimit(e); } } }"
+        )
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
-    b.append("    phase('ledger-check');")
-    b.append(f"    try {{ _ledger = await {ledger_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
+    b.append("    " + review_applied)
+    b.append("    " + test_leg)
+    b.append("    await parallel([\n      " + ",\n      ".join(thunks) + "\n    ]);")
+    b.append("  }")
+    b.append(no_target)
+    b.append("  if (!_halted && _manifest && !_manifest.error) {")
+    if judge_expr is not None:
+        v = _emit._FALSIFIER_RESULT_VAR
+        b.append(
+            f"    _ledger = (!_manifest.error && Array.isArray({v}?.items)) ? "
+            f"{{ all_of_pm_ask: {v}.all_of_pm_ask === true, items: {v}.items, "
+            f"conflicts: Array.isArray({v}.conflicts) ? {v}.conflicts : [] }} : null;"
+        )
+    b.append(
+        "    const _reconciled = [];\n"
+        "    for (const i of (_ledger?.items ?? [])) {\n"
+        "      if (!i || i.status !== 'not_met' || !Array.isArray(i.remaining) || !i.remaining.length) continue;\n"
+        "      const rest = i.remaining.filter((a) => !((_manifest.doc_writes ?? []).includes(a) "
+        "&& (_docs?.doc_paths ?? []).includes(a)));\n"
+        "      if (rest.length === i.remaining.length) continue;\n"
+        "      if (rest.length) i.remaining = rest; else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
+        "    }"
+    )
+    if judge_expr is not None:
+        v = _emit._FALSIFIER_RESULT_VAR
+        b.append(
+            f"    if ({v}?.status === 'not_met' && (_ledger?.items ?? []).length "
+            "&& (_ledger.items).every((i) => i && i.status === 'met') "
+            f"&& !String({v}.reason ?? '').startsWith('not wired up: ') "
+            f"&& [undefined, 'pass', 'not_present'].includes({v}.falsifier?.verdict) "
+            f"&& (!Array.isArray({v}.clauses) || {v}.clauses.every((c) => !c || c.status === 'met'))) "
+            f"{{ {v} = {{ ...{v}, status: 'met', differs_from_baseline: null, "
+            "reason: _reconciled.join(', ') ? 'met after reconcile: ' + _reconciled.join(', ') : 'met: every ledger item met', "
+            "reconciled_from: 'not_met' }; }"
+        )
     b.append(
         f"    const _postCommitActs = {json.dumps(list(POST_COMMIT_ACTS))};\n"
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
@@ -1222,6 +1622,8 @@ def compose_ask_script(
         "? 'post_commit' : i.status;\n"
         "      const acts = status === 'post_commit' && i.status === 'not_met' ? rem : i.post_commit_acts;\n"
         "      if (status === 'drifted') return true;\n"
+        "      if (status === 'not_met' && typeof i.withheld_by === 'string' && i.withheld_by) "
+        "return !(_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by);\n"
         "      if (status === 'not_met') return l.all_of_pm_ask === true || i.essential !== false;\n"
         "      if (status === 'post_commit') return !Array.isArray(acts) || !acts.length "
         "|| acts.some((a) => !_postCommitActs.includes(a));\n"
@@ -1233,18 +1635,19 @@ def compose_ask_script(
         "{ _halted = { halted: 'ledger-check', "
         "items: _ledger ? _ledgerBlocking(_ledger) : [], "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
-        "next_action: 'Revise the ask with coordinator-invoke workflow.revise (run_id, verbatim), or fix the "
-        "change, then re-fire.' }; }"
+        "next_action: 'Ledger rows ' + ((_ledger ? _ledgerBlocking(_ledger) : []).map((i) => i && i.id).filter(Boolean)"
+        ".join(', ') || '(ledger unreadable)') + ' block the commit. Run coordinator-invoke workflow.revise with run_id ' "
+        "+ _runId + ' with out_of_scope: [row ids] for the rows ruled out, and a verbatim stating scope.' }; }"
     )
     b.append("  }")
     b.append("  }")
     b.append(f"  {CAP_HELPER_JS}")
-    b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
-    criterion_open = (
-        f" && !({_emit._FALSIFIER_RESULT_VAR} && {_emit._FALSIFIER_RESULT_VAR}.status === 'not_met')"
-        if judge_expr is not None
-        else ""
-    )
+    if not in_run_commit:
+        b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
+    _fv = _emit._FALSIFIER_RESULT_VAR
+    criterion_open = " && !_criterionOpen" if judge_expr is not None else ""
+    if judge_expr is not None:
+        b.append(f"  const _criterionOpen = !!({_fv} && {_fv}.status === 'not_met');")
     b.append(
         "  const _closeable = !!(!_halted && _manifest && !_manifest.error"
         f"{criterion_open} && !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL'));"
@@ -1253,7 +1656,8 @@ def compose_ask_script(
         "  const _mkRevise = () => ({ run_id: _runId, sizing: _sizingRel, "
         "reason: (_halted && _halted.halted) ? _halted.halted : (!_manifest || _manifest.error) ? 'manifest-error' : "
         + (
-            f"({_emit._FALSIFIER_RESULT_VAR} && {_emit._FALSIFIER_RESULT_VAR}.status === 'not_met') ? 'criterion not_met' : "
+            f"_criterionOpen ? (String({_fv}.reason ?? '').startsWith('not wired up: ') ? String({_fv}.reason).slice(0, 200) : "
+            f"'criterion not_met' + ({_fv}.reason ? ': ' + String({_fv}.reason).slice(0, 200) : '')) : "
             if judge_expr is not None
             else ""
         )
@@ -1276,13 +1680,26 @@ def compose_ask_script(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}), "
+        "...(i.withheld_by ? { withheld_by: i.withheld_by } : {}), "
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
+    )
+    # A review agent may return a sidecar as an absolute Windows path; the commit command must carry
+    # repo-relative forward slashes only, or a re-escaping commit agent corrupts the JSON.
+    b.append(
+        "  if (_nextAction.params && _nextAction.params.inline_review) { "
+        "const _root = REPO_ROOT.replace(/\\\\/g, '/').replace(/\\/+$/, '') + '/'; "
+        "const _rel = (p) => { const s = String(p).replace(/\\\\/g, '/'); "
+        "return s.toLowerCase().startsWith(_root.toLowerCase()) ? s.slice(_root.length) : s; }; "
+        "const _ir = _nextAction.params.inline_review; "
+        "if (Array.isArray(_ir.wave_sidecar_paths)) { _ir.wave_sidecar_paths = _ir.wave_sidecar_paths.map(_rel); } "
+        "if (typeof _ir.prep_sidecar === 'string') { _ir.prep_sidecar = _rel(_ir.prep_sidecar); } }"
     )
     stage_titles: list[str] = []
     if in_run_commit:
         stage_titles = ["docs", "commit"]
         _append_docs_and_commit(b, head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, manifest_rel=manifest_rel)
+        _append_halt_record_commit(b)
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
@@ -1290,7 +1707,7 @@ def compose_ask_script(
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
         "owed: ((_manifest && !_manifest.error) ? (_manifest.owed ?? []) : []).map((o) => ({ id: o.id, reason: o.reason ?? '', detail: o.detail ?? '' })), "
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
-        "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
+        "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
         + (
@@ -1323,7 +1740,7 @@ def compose_ask_script(
             extra=[
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["roadmap-blitz", *rb_phases, "workstream-complete"] if rb_fn else []),
-                "ledger-check",
+                *([] if judge_expr is not None else ["ledger-check"]),
                 *stage_titles,
             ],
         ),
@@ -1357,30 +1774,29 @@ def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titl
     return script
 
 
-def _append_docs_and_commit(
-    b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str
-) -> None:
-    """The run's last two stages, under a live terminal-commit `_nextAction` and no halt: a Sonnet
-    docs stage that edits only the run's declared doc writes (`_manifest.doc_writes`, which the
-    stage put in the commit request's `docs` chunk: the delivery note and the sizing's
-    `doc_consumers`/`ask_conflicts` paths), then a git-commit-agent running
-    `dispatch.terminal_commit` with the run token. The commit lands product only: plans, sizings,
-    briefs and sidecars are process records it never carries, and a doc no chunk declares stays
-    out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run.
+#: The docs thunk starts with the tail, before any ledger or criterion halt is known, so it
+#: carries only what is settled by then.
+_DOCS_PRE_TAIL_GUARD = (
+    "!_halted && _manifest && !_manifest.error && !_viaRoadmap && _RUN_TOKEN "
+    "&& !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL')"
+)
 
-    Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
-    `block_subagent_commit` run-token leg admits nothing else.
+
+def _docs_call(*, head: str, anchor: str, run_id: str, manifest_rel: str) -> str:
+    """The docs stage's `agent(...)` call expression, one thunk of the parallel tail.
+
+    It edits only `_manifest.doc_writes`; the delivery note's `## Verdicts` section is
+    `dispatch.terminal_commit`'s, so the prompt carries none of the tail's own results.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
-    live = "_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
     docs_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: docs\n\nThis run's change is on disk, uncommitted. Read the sizing at ",
         "js:_sizingRel",
         "js:(_planRel ? ', the plan at ' + _planRel : '')",
-        f", and the run manifest at {manifest_rel}. The run's verdicts, verbatim:\n",
-        "js:_cap(JSON.stringify({ ledger: _ledger, delivery: _deliveryVerdict, integration: _reviewIntegration, "
-        f"wave: _reviewWave, tests: {_emit._TEST_RESULT_VAR}, criterion: (typeof {_emit._FALSIFIER_RESULT_VAR} === 'undefined' ? null : {_emit._FALSIFIER_RESULT_VAR}) }}), 12000)",
+        f", and the run manifest at {manifest_rel}. The review's verdicts, verbatim:\n",
+        "js:_cap(JSON.stringify({ delivery: _deliveryVerdict, integration: _reviewIntegration, "
+        "wave: _reviewWave }), 12000)",
         "\n\nThe files you may write are exactly this run's declared doc writes: ",
         "js:JSON.stringify(_manifest.doc_writes ?? [])",
         ". Edit no other file: a README or wiki page the change makes stale that is not in that list "
@@ -1389,18 +1805,35 @@ def _append_docs_and_commit(
         "or supersede the text at each `ask_conflicts` path so it no longer contradicts the ask -- the "
         "ask outranks it. "
         f"(2) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/"
-        f"{run_id}/{LEDGER_VIEW_FILE}) with the ledger checker's status for it, what shipped (files "
-        "and why), each review finding and how it was resolved, the test result, and every decision "
+        f"{run_id}/{LEDGER_VIEW_FILE}) with what the change did for it, what shipped (files "
+        "and why), each review finding and how it was resolved, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
         f"{RUN_DIR_ROOT}/{run_id}/briefs",
         ", which are never committed. Never edit a plan, sizing or other process record to carry "
-        "this. Never write under scratch/, never stage or commit. Return as doc_paths every "
+        "this. Write no verdicts section: the ledger checker's, the tests' and the criterion's results "
+        "are appended to the note by the commit. Never write under scratch/, never stage or commit. "
+        "Return as doc_paths every "
         "repo-relative file you wrote or edited, the note's path as note_path, and stale_docs.",
     )
-    docs_call = _agent(
+    return _agent(
         docs_prompt, label="docs", phase="docs", agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=_DOCS_SCHEMA, agent_model=_DOCS_MODEL,
+        schema=_DOCS_SCHEMA,
     )
+
+
+def _append_docs_and_commit(
+    b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str
+) -> None:
+    """The run's commit stage, under a live terminal-commit `_nextAction` and no halt: a
+    git-commit-agent running `dispatch.terminal_commit` with the run token. The docs stage ran
+    earlier, as a thunk of the parallel tail. The commit lands product only: plans, sizings,
+    briefs and sidecars are process records it never carries, and a doc no chunk declares stays
+    out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run.
+
+    Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
+    `block_subagent_commit` run-token leg admits nothing else.
+    """
+    live = "_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
     commit_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
@@ -1411,14 +1844,12 @@ def _append_docs_and_commit(
         "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped and close, verbatim "
         "(null where absent). Run nothing else.",
     )
+    # Stays its own agent: a commit is denied to every agent but git-commit-agent
+    # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
     commit_call = _agent(
         commit_prompt, label="commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
-        schema=_COMMIT_SCHEMA, agent_model=_COMMIT_MODEL, effort=_MECHANICAL_EFFORT,
+        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
     )
-    b.append(f"  if ({live}) {{")
-    b.append("    phase('docs');")
-    b.append(f"    try {{ _docs = await {docs_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
-    b.append("  }")
     b.append(f"  if ({live}) {{")
     b.append("    phase('commit');")
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
@@ -1432,4 +1863,36 @@ def _append_docs_and_commit(
         "_nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
         "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); }"
     )
+    b.append("  }")
+
+
+def _halt_record_commit_fn(*, head: str, anchor: str, script_path: Optional[str]) -> str:
+    """`async function _commitHaltRecord()`: a git-commit-agent runs `dispatch.terminal_commit` in
+    `halted_by` mode, landing only `state/warp/<run_id>/`. Declared among the script's hoisted
+    helpers so the commit stage's own label scan sees one `commit` agent after the tail.
+
+    Trap: the command stays one bare `coordinator-invoke` segment, as in the commit stage.
+    """
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "phase: commit\n\nThis run halted. Run exactly this one command as its own Bash call: no "
+        "`cd &&`, no wrapper, no env prefix, no edit to it.\n\n",
+        f"js:_terminalCommitCli({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
+        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted }})",
+        "\n\nReturn from its JSON reply committed, sha, error and refused, verbatim (null where "
+        "absent). Run nothing else.",
+    )
+    call = _agent(
+        prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
+        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
+    )
+    return f"  async function _commitHaltRecord() {{ return await {call}; }}"
+
+
+def _append_halt_record_commit(b: list[str]) -> None:
+    """The halt's record-only commit stage, composed only for a run that minted a token
+    (`_RUN_TOKEN`) and skipped once a product commit landed."""
+    b.append("  if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true)) {")
+    b.append("    phase('commit');")
+    b.append("    try { _haltCommit = await _commitHaltRecord(); } catch (e) { _haltOnUsageLimit(e); }")
     b.append("  }")

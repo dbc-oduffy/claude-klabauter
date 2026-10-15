@@ -1644,6 +1644,16 @@ def _heredoc_repo_write_advise_setup(
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
+def _move_from_inside_cwd_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    root = scratch_dir.as_posix()
+    return {
+        _CMD_OVERRIDE_KEY: "mv %s/a %s/z" % (root, root),
+        _CWD_OVERRIDE_KEY: "%s/a" % root,
+    }
+
+
 def _headless_plugin_dir_dev_install_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1937,6 +1947,39 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         _REWRITE,
         False,
+    ),
+    CorpusRow(
+        "trailing-background-ampersand",
+        "trailing-background-ampersand-fire",
+        "sleep 5 &",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "trailing-background-ampersand",
+        "trailing-background-ampersand-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "move-from-inside-cwd",
+        "move-from-inside-cwd-fire",
+        "mv a z",
+        True,
+        _REWRITE,
+        True,
+        setup=_move_from_inside_cwd_setup,
+    ),
+    CorpusRow(
+        "move-from-inside-cwd",
+        "move-from-inside-cwd-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        True,
     ),
     CorpusRow(
         "git-commit-safe-commit-advise",
@@ -3076,6 +3119,27 @@ def _wg_fleet_delegation_write_fire(
     }
 
 
+def _wg_cross_repo_agent_write_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `block_cross_repo_agent_write.check`: an agent's Edit into a
+    registered checkout that is not the payload cwd's repo."""
+    from coordinator_core import machine_resolver
+
+    run = scratch_dir / "run-repo"
+    sibling = scratch_dir / "sibling-repo"
+    (run / ".git").mkdir(parents=True)
+    (sibling / ".git").mkdir(parents=True)
+    mp.setattr(machine_resolver, "merged_flat_registry", lambda: {"repos.sib": str(sibling)})
+    return {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(sibling / "merge.py")},
+        "cwd": str(run),
+        "agent_id": "deadbeef0123",
+        "session_id": "sess-xrepo",
+    }
+
+
 def _wg_foreign_family_sidecar_write_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -3229,6 +3293,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "block_confined_agent_write", "fire", True, _wg_confined_agent_write_fire
     ),
     WriteGuardRow("block_confined_agent_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_cross_repo_agent_write", "fire", True, _wg_cross_repo_agent_write_fire
+    ),
+    WriteGuardRow("block_cross_repo_agent_write", "control", False, _wg_benign),
     WriteGuardRow("nudge_authoring_leak", "fire", True, _wg_authoring_leak_fire),
     WriteGuardRow("nudge_authoring_leak", "control", False, _wg_benign),
     WriteGuardRow("block_consumed_handoff_edit", "fire", True, _wg_consumed_handoff_fire),

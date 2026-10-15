@@ -162,6 +162,7 @@ def test_a_research_manifest_fired_by_name_closes_through_research_close(stubs, 
     reply = _dispatch_emit(_params(tmp_path, pipeline="notebooklm"))
     params = reply["next_action"]["params"]
     assert reply["next_action"]["op"] == "research.close"
+    assert params["value_class"] == "corpus"
     assert params["tier"] == "corpus" and params["run_id"] == reply["run_id"] and params["topic_slug"] == "brief"
     assert params["scratch_dir"] == (tmp_path / reply["scratch_dir"]).as_posix()
     assert "next_action" not in _dispatch_emit(_params(tmp_path))
@@ -173,5 +174,6 @@ def test_the_emit_creates_the_em_mailbox_and_names_its_tail(stubs, tmp_path):
     box = Path(reply["em_mailbox"])
     assert box == tmp_path / reply["scratch_dir"] / "mail" / "_em.jsonl"
     assert box.is_file() and box.read_bytes() == b""
-    assert reply["em_watch"].endswith(box.as_posix())
-    assert reply["em_rewatch"] == f"tail -n 0 -F {box.as_posix()}"
+    mod = "python -m coordinator_core.workflow_watch.mailbox_line"
+    assert reply["em_watch"] == f"{mod} --from-start {box.as_posix()}"
+    assert reply["em_rewatch"] == f"{mod} {box.as_posix()}"

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
@@ -145,13 +146,65 @@ def test_hidden_mode_dispatches_wrapper(tmp_path, monkeypatch):
     assert seen == [(Path("/rag"), tmp_path.resolve())]
 
 
+def _admission(monkeypatch, avail_mb, trusted=True):
+    from coordinator_core.ops.ceremony import post_close_admission as adm
+    from coordinator_core.group_em import admission_post
+
+    posts = []
+    monkeypatch.setattr(adm, "read_available", lambda: (avail_mb, trusted))
+    monkeypatch.setattr(
+        admission_post, "post", lambda kind, **kw: posts.append((kind, kw)) or {"posted": True}
+    )
+    return posts
+
+
 def test_spawn_ensure_launches_detached_wrapper_not_ensure(tmp_path, monkeypatch):
+    posts = _admission(monkeypatch, 100000)
     captured = {}
     monkeypatch.setattr(sir.subprocess, "Popen", lambda cmd, **kw: captured.update(cmd=cmd, kw=kw))
     sir.spawn_ensure(Path("/rag"), tmp_path)
     assert "--run-and-record" in captured["cmd"] and "ensure" not in captured["cmd"]
     assert captured["kw"]["stdout"] == subprocess.DEVNULL
     assert ("creationflags" in captured["kw"]) or captured["kw"].get("start_new_session")
+    assert [p[0] for p in posts] == ["START"]
+
+
+def test_spawn_ensure_admitted_child_is_below_normal(tmp_path, monkeypatch):
+    _admission(monkeypatch, 100000)
+    captured = {}
+    monkeypatch.setattr(sir.subprocess, "Popen", lambda cmd, **kw: captured.update(kw=kw))
+    monkeypatch.setattr(sir.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
+    monkeypatch.setattr(sir.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(sir.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    niced = []
+    fake_os = types.SimpleNamespace(name="nt", nice=niced.append)
+    monkeypatch.setattr(sir, "os", fake_os)
+    sir.spawn_ensure(Path("/rag"), tmp_path)
+    assert captured["kw"]["creationflags"] & 0x4000
+    fake_os.name = "posix"
+    sir.spawn_ensure(Path("/rag"), tmp_path)
+    captured["kw"]["preexec_fn"]()
+    assert niced == [sir.POSIX_NICE]
+
+
+def test_spawn_ensure_defers_and_records_when_memory_short(tmp_path, monkeypatch):
+    posts = _admission(monkeypatch, 9000)  # 2048 + 8192 > 9000
+    monkeypatch.setattr(
+        sir.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned despite deferral")
+    )
+    assert sir.spawn_ensure(Path("/rag"), tmp_path) is None
+    rec = json.loads((tmp_path / ".structural-index" / "refresh-last.json").read_text(encoding="utf-8"))
+    assert "need 10240MB > avail 9000MB" in rec["deferred"]
+    assert posts == []
+
+
+def test_unreadable_memory_defers_and_refresh_reports(tmp_path, monkeypatch):
+    _admission(monkeypatch, None, trusted=False)
+    monkeypatch.setattr(sir, "resolve_index_repo", lambda: Path("/rag"))
+    monkeypatch.setattr(
+        sir.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned despite deferral")
+    )
+    assert "deferred" in sir.refresh(tmp_path, 1, env={})
 
 
 def test_main_exits_zero_on_unexpected_error(tmp_path, monkeypatch, capsys):

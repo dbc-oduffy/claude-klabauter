@@ -19,7 +19,7 @@ import pytest
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.pending_fix]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 K_INVOCATIONS = 5
 SAMPLES = 5
@@ -35,10 +35,8 @@ def _build(workdir) -> None:
     assert built.returncode == 0, f"fixture build failed: {built.stderr}"
 
 
-def _sample(workdir, *extra: str) -> dict:
-    result = batched_process_time_ms(
-        [sys.executable, "-m", _DRIVER, str(workdir), *extra], k=K_INVOCATIONS
-    )
+def _sample(workdir, *extra: str, k: int = K_INVOCATIONS) -> dict:
+    result = batched_process_time_ms([sys.executable, "-m", _DRIVER, str(workdir), *extra], k=k)
     assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
     return result
 
@@ -78,3 +76,30 @@ def test_workstream_complete_brief_is_under_the_500ms_bar(brief_measurement):
     m = brief_measurement
     assert m["net_ms"] > 0 and m["net_procs"] > 0, f"brief cost not observed (full <= setup-only): {m['detail']}"
     assert m["net_ms"] < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"
+
+
+def test_workstream_complete_brief_cold_claim_index_is_under_the_500ms_bar(brief_measurement, tmp_path_factory):
+    """Same net, but the stale leg's claim index is deleted before every sample (k=1: a k>1
+    batch would find it warm from its own first invocation)."""
+    from coordinator_core.lifecycle import git_common_dir
+    from coordinator_core.session import handoff_claim_index
+
+    workdir = tmp_path_factory.mktemp("workstream_complete_brief_budget_cold")
+    _build(workdir)
+    cache = handoff_claim_index.cache_path_for(git_common_dir(workdir / "fixture"))
+    setups, colds = [], []
+    for _ in range(SAMPLES):
+        setups.append(_sample(workdir, "--setup-only", k=1))
+        cache.unlink(missing_ok=True)
+        colds.append(_sample(workdir, k=1))
+    setup = min(setups, key=lambda r: r["process_time_ms"])
+    cold = min(colds, key=lambda r: r["process_time_ms"])
+    net_ms = round(cold["process_time_ms"] - setup["process_time_ms"], 3)
+    detail = (
+        f"cold claim index, net tree process time: {net_ms}ms "
+        f"(setup+call {cold['process_time_ms']}ms / {cold['procs_per_call']} procs; "
+        f"setup-only {setup['process_time_ms']}ms; k=1, min of {SAMPLES}); warm: {brief_measurement['net_ms']}ms"
+    )
+    print(f"WORKSTREAM-COMPLETE-BRIEF-BUDGET-COLD {detail}")
+    assert net_ms > 0, f"cold brief cost not observed: {detail}"
+    assert net_ms < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {detail}"

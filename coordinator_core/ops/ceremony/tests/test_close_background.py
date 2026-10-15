@@ -1,4 +1,5 @@
-"""Tests for close.background: record writes per leg, isolation of a raising leg, budget guard."""
+"""Tests for close.background: record writes per leg, isolation of a raising leg, budget guard,
+post-close memory admission."""
 
 from __future__ import annotations
 
@@ -170,6 +171,17 @@ def _verdict(chain, closed):
 BATONS = ("state/handoffs/a.md", "state/handoffs/b.md")
 
 
+@pytest.fixture(autouse=True)
+def _admission(monkeypatch):
+    """Ample trusted reading, notices recorded; individual tests re-patch the reading."""
+    from coordinator_core.ops.ceremony import post_close_admission as pca
+
+    notices = []
+    monkeypatch.setattr(pca, "read_available", lambda: (65536, True))
+    monkeypatch.setattr(pca, "notice", lambda verdict, run_id: notices.append(verdict.label) or True)
+    return notices
+
+
 def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path, monkeypatch):
     calls = []
     stub = _chain_stub(calls, [_verdict("dlv-x", True), _verdict("dlv-x", True)])
@@ -221,6 +233,64 @@ def test_post_close_survives_a_failing_launcher(tmp_path, monkeypatch):
     monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
     result = cb._post_close(_ctx(tmp_path))
     assert "structural-index OSError" in result.detail and "scip-rebuild" in result.detail
+
+
+def _reading(monkeypatch, avail, trusted=True):
+    from coordinator_core.ops.ceremony import post_close_admission as pca
+
+    monkeypatch.setattr(pca, "read_available", lambda: (avail, trusted))
+
+
+def test_low_reading_defers_both_launchers_and_the_leg_stays_ran(tmp_path, monkeypatch, _admission):
+    calls = []
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
+    _reading(monkeypatch, 4608)
+    result = cb._post_close(_ctx(tmp_path))
+    assert calls == []
+    assert result.status == "ran"
+    assert "deferred: structural-index" in result.detail and "scip-rebuild" in result.detail
+    assert _admission == []
+
+
+def test_reading_admitting_only_the_first_defers_the_second(tmp_path, monkeypatch, _admission):
+    calls = []
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
+    _reading(monkeypatch, 2048 + 8192)
+    result = cb._post_close(_ctx(tmp_path))
+    assert calls == ["structural"]
+    assert _admission == ["structural-index"]
+    assert "launched: structural-index; deferred: scip-rebuild" in result.detail
+
+
+def test_untrusted_reading_defers_both_as_unreadable(tmp_path, monkeypatch, _admission):
+    calls = []
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
+    _reading(monkeypatch, 65536, trusted=False)
+    result = cb._post_close(_ctx(tmp_path))
+    assert calls == [] and _admission == []
+    assert result.detail.count("memory unreadable") == 2
+
+
+def test_ample_reading_launches_both_with_one_notice_each(tmp_path, monkeypatch, _admission):
+    calls = []
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
+    result = cb._post_close(_ctx(tmp_path))
+    assert calls == ["structural", "scip"]
+    assert _admission == ["structural-index", "scip-rebuild"]
+    assert "deferred" not in result.detail
+
+
+def test_deferral_survives_detail_truncation_behind_a_long_chain_list(tmp_path, monkeypatch):
+    names = [_verdict(f"dlv-{'x' * 30}-{i}", True) for i in range(8)]
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([], names))
+    _reading(monkeypatch, 4608)
+    result = cb._post_close(_ctx(tmp_path, batons=BATONS))
+    assert len(result.detail) == cb._DETAIL_MAX
+    assert "deferred: structural-index" in result.detail
 
 
 def test_scrub_removes_every_path_shape():

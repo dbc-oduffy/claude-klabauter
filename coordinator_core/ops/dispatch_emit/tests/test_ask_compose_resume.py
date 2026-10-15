@@ -31,7 +31,7 @@ def test_s_arm_stages_resume_plan_and_authors_only_without_one():
 
 def test_m_plus_baton_revises_the_resumed_plan():
     script = _compose()
-    assert "planPath: _gate.resume_plan ?? null" in script
+    assert "planPath: _gate.resume_plan ?? _spineFallback ?? null" in script
     assert "planPath: null" not in script
 
 

@@ -6,7 +6,8 @@ The async `_handler` below stays advisory; `op()` advises in every
 session (unsized, sized, plan-routed) and never denies product-code Edits.
 
 Suppression conditions (no_advisory):
-  1. agent_id present — subagent writes are always allowed; executors write code.
+  1. agent_id present — subagent writes are allowed; executors write code. The one exception is
+       a product write while this session's raw-ask run has bound no sizing (the size stage).
   2. file_path absent or extension in DOC_DATA_EXTENSIONS denylist.
   3. Session sentinel present, platform-temp-dir-rooted, resolved via
        coordinator_core.session.dispatch_nudge_sentinel.sentinel_path.
@@ -56,6 +57,7 @@ import sys
 import tokenize
 from pathlib import PurePosixPath
 
+from coordinator_core._hook_envelope import deny
 from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
@@ -535,16 +537,49 @@ _PLAN_ROUTE_ADVISORY = (
 )
 
 
+_SIZE_STAGE_DENY = (
+    "Size stage: change no file but the sizing. The run's execute stage makes the change "
+    "and its review checks it."
+)
+
+
+def _size_stage_write_deny(payload: dict) -> dict | None:
+    """A subagent's product write while this session's raw-ask run has bound no sizing: only the
+    size stage runs then, and a fix it writes ships unreviewed."""
+    tool_input = payload.get("tool_input") or {}
+    file_path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    if not isinstance(file_path, str) or not file_path:
+        return None
+    if os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS:
+        return None
+    if _is_bootstrap_or_out_of_repo(file_path) or _is_scratch_or_tmp(file_path):
+        return None
+    from coordinator_core import warp_live
+    from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+
+    root = _repo_root(payload)
+    session_id = payload.get("session_id")
+    if root is None or not isinstance(session_id, str):
+        return None
+    try:
+        run = warp_live.unsized_run(root, session_id)
+    except Exception:
+        return None
+    if run is None:
+        return None
+    return deny("PreToolUse", _SIZE_STAGE_DENY)
+
+
 def op(payload: dict) -> dict | None:
     """Advise on the main EM's product-code write; never deny. The advisory
     repeats on every Edit and names the step for the session's sizing state.
 
-    Exempt: subagents, doc/data files, bootstrap/out-of-repo, semantic-bypass
+    Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass
     diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason
     (each honoured sentinel is logged to the session escape log).
     """
     if "agent_id" in payload:
-        return None
+        return _size_stage_write_deny(payload)
 
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):

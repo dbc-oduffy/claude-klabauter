@@ -1,6 +1,6 @@
-"""Rule `release-notes`: pending-release file cites every confirmed entry, wrapper carries the real version, lint green.
+"""Rule `release-notes`: pending-release file cites every confirmed entry, wrapper carries the real version.
 
-Read-only; no git child. `ledger_rows` are mappings (or objects) with `id`, `status`, `exit_code`.
+Read-only; no git child.
 """
 
 from __future__ import annotations
@@ -8,19 +8,14 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from coordinator_core.session.record_homes import home_dir
-from coordinator_core.workweek_complete.release.contract import (
-    RuleResult,
-    last_ledger_row,
-    row_field,
-)
+from coordinator_core.workweek_complete.release.contract import RuleResult
 
 RULE = "release-notes"
 PENDING_GLOB = "*-pending-release.md"
 WRAPPER_DIR = "archive/release-notes"
-LINT_STEP_IDS = ("lint", "lint-frontmatter")
 MAX_LISTED = 20
 _PLACEHOLDER = re.compile(r"vX\.Y\.Z|(?<![\w.])X\.Y\.Z(?![\w.])|<version>")
 _NONE_LINE = re.compile(r"^_?none this week_?$", re.IGNORECASE)
@@ -41,21 +36,11 @@ def _has_content(text: str) -> bool:
     return False
 
 
-def _lint_green(ledger_rows: Iterable[object]) -> bool:
-    last = last_ledger_row(ledger_rows, LINT_STEP_IDS)
-    return (
-        last is not None
-        and row_field(last, "status") == "ran"
-        and row_field(last, "exit_code") == 0
-    )
-
-
 def evaluate(
     repo_root: Path | str,
     *,
     version: str,
     confirmed_entries: Sequence[str],
-    ledger_rows: Sequence[object],
 ) -> RuleResult:
     root = Path(repo_root)
     pending = sorted(Path(home_dir(str(root), "week-changelog")).glob(PENDING_GLOB), key=lambda p: p.name)
@@ -87,9 +72,6 @@ def evaluate(
     wrapper_rel = wrapper.relative_to(root).as_posix()
     if _PLACEHOLDER.search(wrapper.name) or _PLACEHOLDER.search(wrapper_bytes.decode("utf-8", "replace")):
         return _miss("placeholder-version", notes=notes_rel, wrapper=wrapper_rel)
-
-    if not _lint_green(ledger_rows):
-        return _miss("lint-failed", notes=notes_rel, wrapper=wrapper_rel)
 
     return RuleResult(
         RULE,

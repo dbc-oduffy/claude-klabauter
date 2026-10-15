@@ -31,8 +31,21 @@ def _entries(root):
 
 def test_no_summary_fails_and_writes_nothing(root):
     result, paths = rcc.completion_entry_leg(root, "r1", PLAN, {"status": "met"})
-    assert (result.status, result.detail) == ("failed", "no judge summary")
+    assert result.status == "failed" and result.detail.startswith("no judge summary; ")
     assert paths == [] and _entries(root) == []
+
+
+@pytest.mark.parametrize("crit", [None, {}, {"status": "indeterminate"}])
+def test_unmet_detail_names_entry_path_and_runnable_cli(root, crit):
+    from coordinator_core.ops.ceremony.completion_entry import _completion_entry_rel_path
+
+    result, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)
+    entry = _completion_entry_rel_path("Shipped the thing").as_posix()
+    assert result.status == "failed" and paths == []
+    assert entry in result.detail
+    assert "coordinator/bin/coordinator-complete-entry.py" in result.detail
+    assert "/" not in result.detail.split(";")[0] and "\n" not in result.detail
+    assert _entries(root) == []
 
 
 def test_met_observation_is_the_prose_when_no_summary(root):
@@ -53,14 +66,14 @@ def test_summary_wins_over_observation(root):
 def test_not_met_with_observation_still_fails(root):
     crit = {"status": "not_met", "observation": "nope"}
     result, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)
-    assert (result.status, result.detail) == ("failed", "criterion not_met")
+    assert result.status == "failed" and result.detail.startswith("criterion not_met; ")
     assert paths == [] and _entries(root) == []
 
 
 def test_not_met_fails_and_writes_nothing(root):
     crit = {"status": "not_met", "completion_summary": "It shipped."}
     result, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)
-    assert (result.status, result.detail) == ("failed", "criterion not_met")
+    assert result.status == "failed" and result.detail.startswith("criterion not_met; ")
     assert paths == [] and _entries(root) == []
 
 

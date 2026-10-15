@@ -135,6 +135,24 @@ def test_run_live_reports_the_unredeemed_run_token(run):
     assert _revise(repo, verbatim="c")["run_live"] is False
 
 
+def test_a_non_live_run_replies_the_refire_next_and_a_live_one_does_not(run):
+    from coordinator_core.warp_fire import fire_command
+
+    repo, _d = run
+    out = _revise(repo, verbatim="a")
+    assert out["next"] == {"kind": "refire", "call": fire_command(REL)}
+    assert "refire" in out["note"]
+    run_token.mint(repo, RUN, "s.mjs")
+    live = _revise(repo, verbatim="b")
+    assert "next" not in live and "note" not in live
+
+
+def test_a_non_live_run_with_no_sizing_names_the_raw_ask_form(repo):
+    rl.start(repo, RUN)
+    out = _revise(repo, verbatim="early")
+    assert out["sizing"] is None and '"ask"' in out["next"]["call"] and '"sizing"' not in out["next"]["call"]
+
+
 def test_revise_spawns_nothing_and_holds_the_bar(run, monkeypatch):
     repo, _d = run
 
@@ -157,7 +175,7 @@ def _ledger(run):
 
 
 def test_judge_passes_every_item_met(run):
-    assert rl.judge(_ledger(run), _verdict(("R1", "met"), ("R2", "met"), ("R3", "met"))) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), _verdict(("R1", "met"), ("R2", "met"), ("R3", "met"))) == {"pass": True, "failures": [], "open": []}
 
 
 def test_judge_fails_drift_and_an_unjudged_revision(run):
@@ -186,6 +204,43 @@ def test_all_of_pm_ask_makes_an_inessential_item_mandatory(run):
 
 def test_not_met_defaults_to_essential(run):
     assert not rl.judge(_ledger(run), _verdict(("R1", "met"), ("R2", "not_met"), ("R3", "met")))["pass"]
+
+
+@pytest.mark.parametrize("all_of", [False, True])
+def test_a_not_met_row_withheld_by_a_gated_chunk_passes_and_is_open(run, all_of):
+    if all_of:
+        _revise(run[0], all_of_pm_ask=True)
+    verdict = _verdict(("R1", "met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated={"C9"})
+    assert out == {"pass": True, "failures": [], "open": [{"id": "R2", "reason": "withheld_by C9"}]}
+
+
+@pytest.mark.parametrize("gated", [None, [], {"C1"}])
+def test_withheld_by_naming_no_gated_chunk_fails(run, gated):
+    verdict = _verdict(("R1", "met"), ("R2", "not_met", {"withheld_by": "C7"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated=gated)
+    assert not out["pass"] and out["open"] == []
+    assert out["failures"] == [
+        {"id": "R2", "reason": "withheld_by C7 names no gated chunk of the run's manifest"}
+    ]
+
+
+def test_an_essential_not_met_row_still_fails_beside_a_withheld_one(run):
+    verdict = _verdict(("R1", "not_met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated={"C9"})
+    assert [f["id"] for f in out["failures"]] == ["R1"]
+    assert out["open"] == [{"id": "R2", "reason": "withheld_by C9"}]
+
+
+def test_open_lists_withheld_and_non_essential_rows_in_ledger_order(run):
+    verdict = _verdict(
+        ("R3", "not_met", {"essential": False}), ("R2", "not_met", {"withheld_by": "C9"}), ("R1", "met")
+    )
+    out = rl.judge(_ledger(run), verdict, gated=("C9",))
+    assert out["pass"] is True
+    assert out["open"] == [
+        {"id": "R2", "reason": "withheld_by C9"}, {"id": "R3", "reason": "non-essential"},
+    ]
 
 
 def test_judge_refuses_unknown_and_duplicate_ids_and_a_shapeless_verdict(run):
@@ -218,7 +273,7 @@ def test_judge_passes_a_post_commit_item_and_the_landing_writes_it_back(run):
         ("R1", "post_commit", {"post_commit_acts": ["commit", "sha_reply"], "wired": True}),
         ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
     )
-    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": [], "open": []}
     rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
     rows = {r["id"]: r for r in _rows(repo)}
     assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@abc1234"]
@@ -255,7 +310,7 @@ def test_not_met_with_only_a_commit_remaining_passes_and_lands_met(run):
         ("R1", "not_met", {"essential": True, "remaining": ["commit"], "wired": True}),
         ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),
     )
-    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), verdict) == {"pass": True, "failures": [], "open": []}
     assert verdict["items"][0]["status"] == "not_met"
     rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
     rows = {r["id"]: r for r in _rows(repo)}
@@ -337,4 +392,55 @@ def test_routed_item_must_name_the_engine_root_it_read(run, tmp_path):
 
 def test_unrouted_judgment_ignores_root_read(run):
     verdict = _verdict(("R1", "met", {"root_read": "anywhere"}), ("R2", "met"), ("R3", "met"))
-    assert rl.judge(_ledger(run), verdict) == rl.judge(_ledger(run), verdict, {}) == {"pass": True, "failures": []}
+    assert rl.judge(_ledger(run), verdict) == rl.judge(_ledger(run), verdict, {}) == {"pass": True, "failures": [], "open": []}
+
+
+def _declared(fn):
+    from coordinator_core.session import declared_writes
+
+    with declared_writes.collecting() as paths:
+        fn()
+    return {str(p) for p in paths}
+
+
+def test_revise_declares_the_run_dir_files_it_wrote(run):
+    repo, d = run
+    assert _declared(lambda: rl.revise(repo, RUN, verbatim="more")) >= {str(d / "requirements.md")}
+    both = _declared(lambda: rl.revise(repo, RUN, verbatim="again", all_of_pm_ask=True))
+    assert both >= {str(d / "requirements.md"), str(d / "run.json")}
+
+
+def test_revise_on_an_unbound_run_declares_the_inbox(repo):
+    d = rl.start(repo, RUN)
+    got = _declared(lambda: rl.revise(repo, RUN, verbatim="early"))
+    assert got >= {str(d / "revisions.jsonl"), str(d / "requirements.md")}
+
+
+def test_workflow_revise_leaves_the_session_owning_a_current_requirements_md(run, monkeypatch):
+    import asyncio
+
+    from coordinator_core.ipc import dispatch_message
+    from coordinator_core.session import touch_record
+
+    repo, d = run
+    sid = "sid-revise"
+    for var in ("CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    rel = f"{RECORD_DIR_ROOT}/{RUN}/requirements.md"
+    sink = repo / ".git" / "coordinator-sessions" / sid / "touch-record.jsonl"
+    sink.parent.mkdir(parents=True)
+    touch_record.append_event(
+        sink, session_id=sid, agent_id=None, verb=touch_record.VERB_TOUCH, path=rel,
+        timestamp=1.0, content_hash="0" * 64,
+    )
+    msg = {
+        "jsonrpc": "2.0", "id": 1, "method": "workflow.revise",
+        "params": {"run_id": RUN, "verbatim": "a late revision"}, "_origin_worktree": str(repo),
+    }
+    assert "error" not in asyncio.run(dispatch_message(msg))
+    events = [touch_record.decode_line(line) for line in touch_record.iter_complete_lines(sink.read_bytes())]
+    mine = [e for e in events if e.path == rel]
+    assert mine[-1].verb == touch_record.VERB_TOUCH and mine[-1].session_id == sid
+    assert mine[-1].content_hash in (None, touch_record.compute_content_hash(d / "requirements.md"))
+    assert len(mine) > 1

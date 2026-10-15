@@ -51,7 +51,7 @@ def test_intake_sizing_with_brief_emits_the_brief_clause_and_sizes_in_run(repo, 
     script = _script(repo)
     assert EM_BRIEF_VAR in script and BRIEF in script
     assert "phase('size')" in script
-    assert re.search(rf"const _sizingPath = ['\"]{re.escape(REL)}['\"];", script)
+    assert re.search(rf"const _sizingPath = REPO_ROOT \+ '/' \+ ['\"]{re.escape(REL)}['\"];", script)
 
 
 def test_intake_sizing_without_brief_emits_no_clause(repo, capsys):

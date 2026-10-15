@@ -93,7 +93,7 @@ def test_prompt_is_blinded_and_labels_are_ordinal_and_stable(tmp_path):
             assert leak not in s.prompt
         assert "stem-one" not in s.label
         assert s.agent_type == fip.REVIEWER_AGENT_TYPE
-        assert s.model == fip.REVIEWER_AGENT_MODEL
+        assert s.model == fip.reviewer_agent_model()
         assert s.schema == "falsifier_integrity_result"
 
 
@@ -181,3 +181,9 @@ def test_only_sound_and_broken_verdicts_are_ever_replayed(tmp_path):
     _write_verdict(tmp_path, base, verdict="UNREVIEWABLE", tells=[])
     [again] = fip.review_inputs([a], repo_root=tmp_path, report_dir=report_dir)
     assert again.cached is None
+
+
+def test_reviewer_model_is_the_engine_table_entry():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    assert fip.reviewer_agent_model() == emit._AGENT_MODELS[fip.REVIEWER_AGENT_TYPE]

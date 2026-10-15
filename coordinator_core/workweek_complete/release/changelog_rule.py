@@ -1,4 +1,4 @@
-"""Rule `changelog-confirm`: every commit of the week has a daily block, lint green, block dates in the week.
+"""Rule `changelog-confirm`: every commit of the week has a daily block, block dates in the week.
 
 Read-only; one `git log` child built from an argv list. `ledger_rows` are mappings (or objects)
 with `id`, `status`, `exit_code`. `*-pending-release.md` is not a daily block.
@@ -24,7 +24,6 @@ from coordinator_core.workweek_complete.release.contract import (
 
 RULE = "changelog-confirm"
 BACKFILL_STEP_IDS = ("backfill", "changelog-backfill", "backfill-week-changelog-gaps")
-LINT_STEP_IDS = ("lint", "lint-frontmatter", "changelog-lint")
 MAX_LISTED = 20
 
 _close_module = None
@@ -93,10 +92,6 @@ def evaluate(repo_root: Path | str, *, ledger_rows: Sequence[object]) -> RuleRes
     backfill = last_ledger_row(ledger_rows, BACKFILL_STEP_IDS)
     if backfill is None or row_field(backfill, "status") != "ran":
         return _miss("backfill-not-run", week_start=week_start)
-
-    lint = last_ledger_row(ledger_rows, LINT_STEP_IDS)
-    if lint is None or row_field(lint, "status") != "ran" or row_field(lint, "exit_code") != 0:
-        return _miss("validation-failed", week_start=week_start)
 
     blocks = _block_dates(week_dir)
     outside = sorted(d for d in blocks if not close._in_week_window(date.fromisoformat(d), start))

@@ -101,6 +101,73 @@ def test_only_live_names_get_a_forwarder_bound_to_the_live_resolver(dual_tree):
     assert {"percolate-push", "shared-cli", "_resolve_claude_klabauter.py"} <= protected
 
 
+@pytest.fixture
+def stale_mirror_tree(monkeypatch, tmp_path):
+    """A mirror that still carries a publisher-only name the live tree owns."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(
+        substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root")
+    )
+    names = ["shared-cli", "klabauter-promote"]
+    live = _make_tree(tmp_path / "live", resolver_stem="_resolve_claude_klabauter", bin_names=names)
+    resolver = live / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
+    resolver.write_text(
+        'PUBLISHER_ONLY_TARGETS = frozenset({"klabauter-promote.py"})\n'
+        "def exec_cli(target):\n    pass\n",
+        encoding="utf-8",
+    )
+    mirror = _make_tree(tmp_path / "mirror", resolver_stem="_resolve_published", bin_names=names)
+    bin_dst = tmp_path / "settings-home-bin"
+    bin_dst.mkdir()
+    monkeypatch.setattr(substrate, "engine_source_root", lambda: str(live))
+    return live, mirror, bin_dst
+
+
+def test_publisher_only_name_in_both_trees_leaves_the_door_leg(stale_mirror_tree):
+    live, mirror, bin_dst = stale_mirror_tree
+    full_map = substrate._derive_agent_helper_target_map(mirror / "coordinator" / "bin")
+
+    door_map = substrate._door_leg_target_map(full_map, mirror)
+
+    assert "klabauter-promote" not in door_map
+    assert "shared-cli" in door_map
+
+
+def test_publisher_only_name_in_both_trees_gets_the_live_forwarder_and_no_door(stale_mirror_tree):
+    live, mirror, bin_dst = stale_mirror_tree
+    full_map = substrate._derive_agent_helper_target_map(mirror / "coordinator" / "bin")
+    door_map = substrate._door_leg_target_map(full_map, mirror)
+
+    protected = _install_live_source_tree_forwarders(bin_dst, mirror, door_map, False)
+
+    body = (bin_dst / "klabauter-promote").read_text(encoding="utf-8")
+    assert "from _resolve_claude_klabauter import exec_cli" in body
+    assert not (bin_dst / "klabauter-promote.exe").exists()
+    assert "klabauter-promote" in protected
+
+
+def test_existing_door_image_is_replaced_and_leaves_the_native_manifest(stale_mirror_tree):
+    live, mirror, bin_dst = stale_mirror_tree
+    (bin_dst / "klabauter-promote").write_bytes(b"\x7fELF-door-image")
+    (bin_dst / "klabauter-promote.exe").write_bytes(b"MZ-door-image")
+    substrate._write_native_forwarder_manifest(bin_dst, {"klabauter-promote", "shared-cli"})
+    full_map = substrate._derive_agent_helper_target_map(mirror / "coordinator" / "bin")
+    door_map = substrate._door_leg_target_map(full_map, mirror)
+
+    _install_live_source_tree_forwarders(bin_dst, mirror, door_map, False)
+
+    assert (bin_dst / "klabauter-promote").read_text(encoding="utf-8").startswith("#")
+    assert not (bin_dst / "klabauter-promote.exe").exists()
+    assert substrate._read_native_forwarder_manifest(bin_dst) == {"shared-cli"}
+
+
+def test_door_leg_keeps_every_name_when_the_engine_is_the_source_tree(stale_mirror_tree):
+    live, _mirror, _bin_dst = stale_mirror_tree
+    full_map = substrate._derive_agent_helper_target_map(live / "coordinator" / "bin")
+
+    assert substrate._door_leg_target_map(full_map, live) == full_map
+
+
 def test_single_tree_box_is_a_no_op(monkeypatch, tmp_path):
     monkeypatch.setattr(substrate, "engine_source_root", lambda: None)
     bin_dst = tmp_path / "bin"

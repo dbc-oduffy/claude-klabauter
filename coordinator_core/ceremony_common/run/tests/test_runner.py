@@ -342,3 +342,39 @@ def test_source_names_no_ceremony():
     for mod in (runner, ledger):
         text = open(mod.__file__, encoding="utf-8").read()
         assert "workday-start" not in text and "workday_start" not in text
+
+
+def _op_step():
+    return StepSpec(
+        id="o", stage="s", kind="op", target="git.maintenance", args=('{"k": 1}',), depends_on=None,
+        already_satisfied=False, detail="", heading="o", cost_class="engine",
+    )
+
+
+def test_op_dispatch_warm_path_carries_origin_worktree(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_try(msg, read_deadline_secs):
+        seen.update(msg)
+        return {"result": {"ok": True}}
+
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", fake_try)
+    out = runner._dispatch_op(_op_step(), repo_root=tmp_path, run_dir=tmp_path, deadline_s=5.0)
+    assert out.exit_code == 0
+    assert seen["_origin_worktree"] == str(tmp_path) and seen["params"] == {"k": 1}
+
+
+def test_op_dispatch_cold_path_carries_origin_worktree(tmp_path, monkeypatch):
+    from coordinator_core import ipc
+
+    seen = {}
+
+    async def fake_dispatch(msg):
+        seen.update(msg)
+        return {"result": {"ok": True}}
+
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", lambda *a, **k: None)
+    monkeypatch.setattr(ipc, "dispatch_message", fake_dispatch)
+    out = runner._dispatch_op(_op_step(), repo_root=tmp_path, run_dir=tmp_path, deadline_s=5.0)
+    assert out.exit_code == 0
+    assert seen["_origin_worktree"] == str(tmp_path)

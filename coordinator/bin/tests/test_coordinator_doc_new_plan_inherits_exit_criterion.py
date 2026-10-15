@@ -194,7 +194,7 @@ class ScaffoldPlanProposedCriterionTest(unittest.TestCase):
 
 
 class ScaffoldPlanNoCriterionTest(unittest.TestCase):
-    def test_no_criterion_is_byte_identical_and_silent(self):
+    def test_no_criterion_changes_nothing_but_pm_brief_and_is_silent(self):
         import io
         import contextlib as _ctx
 
@@ -212,7 +212,15 @@ class ScaffoldPlanNoCriterionTest(unittest.TestCase):
                     sizing_object=_NO_CRITERION_SIZING_PATH,
                     sizing_repo_root=str(repo),
                 )
-            self.assertEqual(content, baseline)
+            # A cited sizing now always adds a `pm_brief:` line; the criterion path must
+            # change nothing else.
+            pm_brief_lines = [ln for ln in content.splitlines() if ln.startswith("pm_brief:")]
+            self.assertEqual(len(pm_brief_lines), 1)
+            self.assertIn("source: baton-originating-ask", pm_brief_lines[0])
+            without_pm_brief = "\n".join(
+                ln for ln in content.split("\n") if not ln.startswith("pm_brief:")
+            )
+            self.assertEqual(without_pm_brief, baseline)
             self.assertEqual(stderr_capture.getvalue(), "")
 
 

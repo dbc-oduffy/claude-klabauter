@@ -46,3 +46,14 @@ def test_sanctioned_writer_does_not_launder_a_write_or_execution():
         f"{_SA} --write state/sizings/x.yaml; python3 -c 'open(\"state/sizings/y\",\"w\")'",
     ):
         assert _check(cmd) is not None, cmd
+
+
+def test_read_of_a_sizing_whose_slug_names_an_interpreter_is_allowed():
+    # The engine-ask gate stage's own call: the slug is minted from the ask's words.
+    rel = "state/sizings/2026-10-15-python-repo-with-setup-py-setup-cfg-but.yaml"
+    assert _check(f"cat {rel}") is None
+    assert _check(
+        '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" '
+        f"dispatch.ask_gate '{{\"sizing_path\":\"{rel}\"}}'; echo ---; cat {rel}"
+    ) is None
+    assert _check(f"python3 -c 'open(\"{rel}\",\"w\")'") is not None

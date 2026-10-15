@@ -360,12 +360,27 @@ def test_agent_model_is_escaped_not_interpolated_raw():
             _wave_row(
                 "C1",
                 ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_type="coordinator:workflow-maker",
                 agent_model="opus-model",
             )
         ]
     ]
     script = compose_script(waves, name="wf", description="agent_model escaping", **REVIEW_KW)
     assert "model: 'opus-model'" in script
+
+
+def test_row_agent_model_changing_a_pinned_type_is_refused():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_model="opus",
+            )
+        ]
+    ]
+    with pytest.raises(MalformedAgentOverrideError):
+        compose_script(waves, name="wf", description="pinned override", **REVIEW_KW)
 
 
 def test_spine_text_agent_type_reaches_emitted_call(tmp_path):

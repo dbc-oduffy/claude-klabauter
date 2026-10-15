@@ -646,6 +646,13 @@ def main(argv: List[str], *, repo_root: Optional[str] = None) -> int:
             "(shipped_in failed to land — manual investigation)"
         )
 
+    try:
+        from coordinator_core.ops import promote_hand_shipped_sizings
+
+        promote_hand_shipped_sizings.report(promote_hand_shipped_sizings.run(repo_root_path))
+    except Exception as exc:  # noqa: BLE001 -- advisory leg; never blocks the stub closer
+        print(f"{_PROG}: WARNING hand-shipped sizing sweep failed: {exc!r}", file=sys.stderr)
+
     if promoted == 0:
         print("no in_flight spinoff-roadmap stubs promoted")
     else:

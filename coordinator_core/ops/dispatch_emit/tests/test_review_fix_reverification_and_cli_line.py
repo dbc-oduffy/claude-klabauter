@@ -151,7 +151,8 @@ def test_a_windows_path_in_the_params_round_trips_through_the_cli_line(tmp_path)
 
     _, body = _heredoc(line)
     assert json.loads(body) == digest["next_action"]["params"]
-    assert json.dumps("E:\\x\\.coordinator-local\\w.md")[1:-1] in body
+    assert "\\\\" not in body
+    assert "E:\\u005cx\\u005c.coordinator-local\\u005cw.md" in body  # abs-path-ok: escape fixture
 
     # The file route: the shell hands the heredoc to the CLI's `--params-file -` untouched.
     bash = shutil.which("bash")

@@ -73,7 +73,7 @@ def test_the_wrapper_source_maximalist_installs_is_the_one_this_guard_checks():
     source = (_CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "install" / "maximalist.py").read_text(
         encoding="utf-8"
     )
-    assert 'os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-author"])' in source, (
+    assert "claude_author_wrapper_source(Path(claude_klabauter_root))" in source, (
         "maximalist's Step 3.5b no longer derives the claude-author wrapper source the way "
         "this guard assumes — reconcile _BYTE_COPIED_POSIX_EXEC_SOURCES with the new "
         "derivation."

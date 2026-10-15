@@ -713,6 +713,32 @@ deliverable_id: "{deliverable_id}"
     return _run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
 
 
+def test_main_runs_the_hand_shipped_sizing_leg(git_fixture, monkeypatch, capsys):
+    """`main` invokes the hand-shipped sizing sweep and prints its advisory lines."""
+    from coordinator_core.ops import promote_hand_shipped_sizings as leg
+
+    monkeypatch.chdir(git_fixture)
+    seen = []
+    monkeypatch.setattr(leg, "run", lambda root: seen.append(root) or {"lines": ["leg-advisory-line"]})
+
+    assert main([], repo_root=str(git_fixture)) == 0
+    assert seen == [git_fixture]
+    assert "leg-advisory-line" in capsys.readouterr().out
+
+
+def test_main_survives_a_failing_hand_shipped_sizing_leg(git_fixture, monkeypatch, capsys):
+    from coordinator_core.ops import promote_hand_shipped_sizings as leg
+
+    monkeypatch.chdir(git_fixture)
+
+    def boom(root):
+        raise RuntimeError("leg broke")
+
+    monkeypatch.setattr(leg, "run", boom)
+    assert main([], repo_root=str(git_fixture)) == 0
+    assert "hand-shipped sizing sweep failed" in capsys.readouterr().err
+
+
 def test_ac4_real_producer_end_to_end_promotes_stub(git_fixture, monkeypatch, capsys):
     """AC4: the real `commit.anchors` producer stamps `Resolves: <dlv-id>` at
     a completion event, and that real trailer — not a hand-authored one — is

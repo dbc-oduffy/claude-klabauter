@@ -53,8 +53,15 @@ Negative-spec:
     ``requirement_register``, and writes that verdict back onto the rows once it
     lands. The ledger is an extra gate: it never stands in for the delivery
     verdict, the terminal judge or falsifier integrity, at any size.
-  - A ``run_token`` is redeemed (single use) before anything else is read: a
-    refused or failed commit spends it as surely as a landed one.
+  - A ``run_token`` is redeemed before anything else is read, so a racing second
+    caller is refused. It admits one LANDED commit: a landed commit consumes it;
+    every return where none landed (an error, a refusal, nothing to commit, an
+    exception before commit_v2 returned) releases it for a retry.
+  - A call whose ``halted_by`` is a dict with a ``halted`` kind is a halted run's record-only
+    commit (``halted_record_commit``): it lands only the changed top-level files of
+    ``state/warp/<run_id>/`` in one commit_v2 call, the halt in the message. It never consumes
+    the run token (redeems, then releases) and is not a delivery: no receipt, sizing ship, plan
+    stamp or close job.
   - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine.
   - Does NOT write a receipt when there is nothing to commit.
@@ -383,9 +390,12 @@ def _register_gate(
         for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
         if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
     }
+    ledger_ids = {str(i) for i in ledger_judged}
     for row in claimed:
         rid, surface = row.get(rr.ROW_ID), row.get(rr.ROW_SURFACE)
         got = judged.get(str(rid))
+        if got is None and str(rid) in ledger_ids:
+            continue
         if got is None:
             why = "not judged"
         elif got.get(rr.ROW_STATUS) != rr.STATUS_MET:
@@ -1321,29 +1331,98 @@ def _routed_from_manifest(manifest_path: Optional[Path]) -> dict:
         return {}
 
 
+_VERDICTS_HEADING = "## Verdicts"
+
+
+def _verdicts_section(ledger_verdict: object, inline_review: dict) -> str:
+    """The delivery note's ``## Verdicts`` section: the ledger checker's per-item status and the
+    review, test and criterion results, rendered from the params the commit already holds."""
+    def cell(value: object) -> str:
+        return str(value if value not in (None, "") else "-").replace("|", "\\|").replace("\n", " ")
+
+    lines = [_VERDICTS_HEADING, "", "Written by dispatch.terminal_commit from the run's verdict params.", ""]
+    items = ledger_verdict.get("items") if isinstance(ledger_verdict, dict) else None
+    if isinstance(items, list) and items:
+        lines += ["### Requirements ledger", "", "| item | status | essential | wired | remaining |", "|---|---|---|---|---|"]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            remaining = item.get("remaining")
+            lines.append(
+                f"| {cell(item.get('id'))} | {cell(item.get('status'))} | {cell(item.get('essential'))} "
+                f"| {cell(item.get('wired'))} | {cell('; '.join(map(str, remaining)) if isinstance(remaining, list) else None)} |"
+            )
+        lines.append("")
+    prep = inline_review.get("prep") if isinstance(inline_review.get("prep"), dict) else {}
+    delivery = inline_review.get("delivery") if isinstance(inline_review.get("delivery"), dict) else {}
+    lines += [
+        "### Review", "",
+        f"- delivery verdict: {cell(delivery.get('verdict'))}; unbacked claims: {cell(delivery.get('claims_unbacked'))}",
+        f"- product files: {cell(prep.get('product_files'))}; slices reviewed: {cell(inline_review.get('slices'))}; "
+        f"fixes applied: {cell(inline_review.get('fixes'))}",
+        "",
+    ]
+    tests = inline_review.get("tests") if isinstance(inline_review.get("tests"), dict) else {}
+    lines += [
+        "### Tests", "",
+        f"- status: {cell(tests.get('status'))}; run: {cell(tests.get('run'))}; failed: {cell(tests.get('failed'))}",
+        "",
+    ]
+    criterion = inline_review.get("criterion") if isinstance(inline_review.get("criterion"), dict) else {}
+    lines += [
+        "### Criterion", "",
+        f"- status: {cell(criterion.get('status'))}",
+        f"- observation: {cell(criterion.get('observation'))}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _write_note_verdicts(note_abs: Path, ledger_verdict: object, inline_review: object) -> None:
+    """Append ``## Verdicts`` to the docs stage's delivery note, once. Never raises: the note is
+    a record, and a failed append must not refuse the product commit."""
+    if not isinstance(inline_review, dict):
+        return
+    try:
+        text = note_abs.read_text(encoding="utf-8")
+        if _VERDICTS_HEADING in text:
+            return
+        note_abs.write_text(
+            text.rstrip("\n") + "\n\n" + _verdicts_section(ledger_verdict, inline_review),
+            encoding="utf-8", newline="\n",
+        )
+    except (OSError, ValueError):
+        return
+
+
 def _ledger_gate(
-    worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None
-) -> tuple[Optional[dict], object]:
-    """(refusal or None, ledger) for a ledger-bearing ask run: the refusal when ``verdict`` does not
-    pass ``requirements_ledger.judge`` against the live register rows, an engine-routed item
-    (``manifest_path``'s ``engine_rows``) included when it names another root than the one owed.
-    A run emitted without a ledger is not gated (``(None, None)``). The pass is one gate among
+    worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
+    gated: Optional[Sequence[str]] = None,
+) -> tuple[Optional[dict], object, list]:
+    """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
+    does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
+    item (``manifest_path``'s ``engine_rows``) included when it names another root than the one
+    owed. ``gated`` is the manifest's gated chunk ids; a ``not_met`` row whose ``withheld_by`` names
+    one passes and comes back in ``open`` (``[{id, reason}]``), as does a non-essential one.
+    A run emitted without a ledger is not gated (``(None, None, [])``). The pass is one gate among
     the review stage's; it discharges none of them."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
     ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
     if ledger is None:
-        return None, None
+        return None, None, []
     if not isinstance(verdict, dict):
         return _error(
             "the run is ledger-bearing but params.ledger_verdict is absent: the final ledger "
             "checker's verdict gates this commit. Re-run the run's ledger check and pass its "
             "verdict, or revise with workflow.revise and re-run the check",
             refused="ledger-unjudged",
-        ), ledger
-    result = requirements_ledger.judge(ledger, verdict, _routed_from_manifest(manifest_path))
+        ), ledger, []
+    result = requirements_ledger.judge(
+        ledger, verdict, _routed_from_manifest(manifest_path), gated=gated
+    )
     if result["pass"]:
-        return None, ledger
+        return None, ledger, result.get("open") or []
     return _error(
         "the requirements are not met: "
         + "; ".join(f"{f['id']}: {f['reason']}" for f in result["failures"][:10]),
@@ -1351,7 +1430,7 @@ def _ledger_gate(
         ledger_failures=result["failures"],
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
-    ), ledger
+    ), ledger, []
 
 
 def _ledger_writeback(worktree_root: Path, ledger, verdict: object, run_id: str, sha: str) -> dict:
@@ -1844,6 +1923,36 @@ def _changed(snapshot: Optional[_Snapshot], worktree_root: Path, paths: list) ->
     return out
 
 
+def _commit_residue(
+    worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
+    report_cache: dict, session_id: Optional[str], *, excluded: set,
+    unfinished: set, commit_v2_mod,
+) -> dict:
+    """``{path: reason}`` for every path a chunk declares (or claims by prefix) that the
+    pre-commit read saw changed and the commit did not carry; ``excluded`` holds the paths
+    the commit carried or legitimately dropped. A path the snapshot does not cover costs
+    one scoped status spawn. The reason is the unfinished
+    chunk ids declaring it, ``peer-held``, or ``unexplained``."""
+    owners: dict = {}
+    for chunk in request.chunks:
+        for p in list(chunk.paths) + (_own_prefix_files(worktree_root, chunk, report_cache) or []):
+            owners.setdefault(p, []).append(chunk.id)
+    candidates = [p for p in owners if p not in excluded]
+    if not candidates:
+        return {}
+    dirty = _changed(snapshot, worktree_root, candidates)
+    if not dirty:
+        return {}
+    peer: list = []
+    commit_v2_mod._peer_claim_warnings(worktree_root, sorted(dirty), peer, own_sid=session_id)
+    peer_paths = {p for p, _sid in peer}
+    out: dict = {}
+    for p in sorted(dirty):
+        ids = sorted(set(owners[p]) & unfinished)
+        out[p] = (", ".join(ids) if ids else "peer-held" if p in peer_paths else "unexplained")
+    return out
+
+
 def _entangled_chunks(
     worktree_root: Path, request: CommitRequest, stranded_ids: set, report_cache: dict,
     snapshot: Optional[_Snapshot] = None,
@@ -2248,7 +2357,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              when canonical-UUID shaped.
         ledger_verdict (dict, optional)  -- an ask run's final ledger-checker
                                              verdict ``{items: [{id, status,
-                                             essential?, wired?, superseded_by?,
+                                             essential?, wired?, withheld_by?
+                                             (a gated chunk id of the run's
+                                             manifest: the not_met row passes,
+                                             stays open and is named by a
+                                             ``Requirement-Open`` trailer),
+                                             superseded_by?,
                                              post_commit_acts?, remaining?}]}``; the reply
                                              carries ``post_commit_owed`` for
                                              each ``sha_memo`` item;
@@ -2330,7 +2444,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     reply = _terminal_commit(
         params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx=close_ctx
     )
-    if _is_no_script_call(params):
+    if _is_no_script_call(params) or _is_halted_record_call(params):
         return reply
     if close_ctx:
         reply["close"] = _close_block(close_ctx, reply)
@@ -2430,6 +2544,12 @@ def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set
     return out
 
 
+def _is_halted_record_call(params: object) -> bool:
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import is_halted_record_call
+
+    return is_halted_record_call(params)
+
+
 def _is_no_script_call(params: object) -> bool:
     """True for a call that names a plan and a run and carries no ``script_path`` key of its own."""
     return (
@@ -2446,11 +2566,51 @@ def _terminal_commit(
     regraded: Optional[dict] = None,
     close_ctx: Optional[dict] = None,
 ) -> dict:
+    """Run the commit and settle the run token it redeemed: a landed commit consumes the claim;
+    every other return, and an exception raised before commit_v2 landed one, releases it."""
+    token_state: dict = {}
+    try:
+        reply = _terminal_commit_inner(
+            params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx, token_state
+        )
+    except BaseException:
+        _settle_token(token_state, landed=bool(token_state.get("landed")))
+        raise
+    _settle_token(token_state, landed=bool(token_state.get("landed")))
+    return reply
+
+
+def _settle_token(token_state: dict, *, landed: bool) -> None:
+    claim = token_state.get("claim")
+    if claim is None:
+        return
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, run_id, token, script_path = claim
+    if landed:
+        run_token.consume(root, run_id)
+    else:
+        run_token.release(root, run_id, token, script_path)
+
+
+def _terminal_commit_inner(
+    params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
+    withheld: Optional[dict], blockers: Optional[dict],
+    regraded: Optional[dict],
+    close_ctx: Optional[dict],
+    token_state: dict,
+) -> dict:
     if repo_root is None:
         return _error(
             "dispatch.terminal_commit requires a common_dir-keyed dispatch; "
             "repo_root (git common dir) was not supplied"
         )
+
+    if _is_halted_record_call(params):
+        from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
+        from coordinator_core.ops.fleet._common import main_worktree_root
+
+        return commit_halted_record(main_worktree_root(repo_root), repo_root, params)
 
     if _is_no_script_call(params):
         from coordinator_core.ops.dispatch_emit import close_without_script
@@ -2495,9 +2655,10 @@ def _terminal_commit(
         if not run_token.redeem(worktree_root, params.get("run_id"), params["run_token"], script_path_raw):
             return _error(
                 "params.run_token does not match a live, unspent token minted for params.run_id and "
-                "this script (a token admits one commit attempt)",
+                "this script (a token admits one landed commit)",
                 refused="run-token",
             )
+        token_state["claim"] = (worktree_root, params.get("run_id"), params["run_token"], script_path_raw)
 
     guarded_script = contained_path(worktree_root / script_path_raw, [worktree_root])
     if guarded_script is None:
@@ -2614,9 +2775,11 @@ def _terminal_commit(
             refused="unreviewed",
         )
     ledger = None
+    open_rows: list = []
     if ask_run_dir is not None:
-        unmet, ledger = _ledger_gate(
-            worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs
+        unmet, ledger, open_rows = _ledger_gate(
+            worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
+            [g.id for g in manifest.gated],
         )
         if unmet is not None:
             return unmet
@@ -2760,6 +2923,7 @@ def _terminal_commit(
         candidate = f"{DELIVERY_NOTE_DIR}/{ask_run_dir.name}.md"
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
+            _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review)
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
@@ -2853,14 +3017,10 @@ def _terminal_commit(
         all_paths.append(bookkeeping_record_path)
 
     if record_dir_rel is not None and snapshot is not None:
-        record_dir_abs = worktree_root / record_dir_rel
-        if record_dir_abs.is_dir():
-            on_disk = sorted(
-                f"{record_dir_rel}/{child.name}" for child in record_dir_abs.iterdir() if child.is_file()
-            )
-            all_paths.extend(
-                p for p in on_disk if p in snapshot.changed and p not in all_paths
-            )
+        from coordinator_core.ops.dispatch_emit.halted_record_commit import record_dir_changes
+
+        present, _gone = record_dir_changes(worktree_root, record_dir_rel, snapshot.changed)
+        all_paths.extend(p for p in present if p not in all_paths)
 
     # A sibling-checkout path never reaches the home commit (it would drop as
     # absent-at-HEAD); each sibling repo lands its own commit after the home one.
@@ -3037,6 +3197,10 @@ def _terminal_commit(
     resolves = None if anchor_only or incomplete_chunks else _resolving_sizing(worktree_root, request.plan_path)
     if resolves is not None:
         trailers.append(f"Resolves-Sizing: {resolves['id']} {resolves['tshirt']}")
+    trailers.extend(
+        "Requirement-Open: " + " ".join((str(row["id"]) + " " + str(row["reason"])).split())
+        for row in open_rows
+    )
     trailers.append(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
@@ -3088,6 +3252,8 @@ def _terminal_commit(
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     reply = dict(reply)
+    if reply.get("committed"):
+        token_state["landed"] = True
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []
@@ -3292,6 +3458,23 @@ def _terminal_commit(
         criterion = inline_review.get("criterion")
         if isinstance(criterion, dict) and criterion.get("status"):
             reply["criterion_status"] = criterion["status"]
+    if reply.get("committed") and reply.get("sha"):
+        residue = _commit_residue(
+            worktree_root, request, snapshot, report_cache, session_id,
+            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | {p for ps in sibling_paths.values() for p in ps},
+            unfinished=incomplete_chunks | held_ids,
+            commit_v2_mod=commit_v2_mod,
+        )
+        if residue:
+            reply["residue"] = residue
+            bad = sorted(p for p, why in residue.items() if why == "unexplained")
+            if bad:
+                reply["ok"] = False
+                reply["error"] = (
+                    "commit landed but requested path(s) are still dirty or untracked: "
+                    + ", ".join(bad)
+                    + ". The run token is spent: commit them through ceremony.commit_v2"
+                )
     reply["receipts"] = receipt_paths
     reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
     if (

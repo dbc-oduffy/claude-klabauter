@@ -137,6 +137,8 @@ ADVISORY_REWRITE_NAMES = [
     "sed-range-read-advise",
     "cat-heredoc-write-advise",
     "heredoc-repo-write-advise",
+    "trailing-background-ampersand",
+    "move-from-inside-cwd",
     "git-commit-safe-commit-advise",
     "multiprobe-banner-rewrite",
     "head-tail-plumbing-rewrite",
