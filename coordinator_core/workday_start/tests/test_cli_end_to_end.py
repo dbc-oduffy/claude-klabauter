@@ -1,6 +1,7 @@
 """workday-start-run end to end: fixture repo under tmp_path, fake dispatch table, fixture template."""
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -12,9 +13,32 @@ import pytest
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.ceremony_common.run import ledger, single_flight
 from coordinator_core.ceremony_common.run.runner import ChildOutcome
-from coordinator_core.workday_start import cli, manifest
+from coordinator_core.ceremony_common.run.contract import StepSpec
+from coordinator_core.workday_start import cli, manifest, run_spec
 
 DAY1, DAY2, DAY3 = "2026-10-12", "2026-10-13", "2026-10-14"
+FIXTURE_ENVELOPE = "fixture-envelope"
+_FIXTURE_ENVELOPE_STEP = StepSpec(
+    id=FIXTURE_ENVELOPE, stage="orient", kind="inproc", target="fixture:envelope", args=(),
+    depends_on=None, already_satisfied=False, detail="Test-only envelope producer.",
+    heading="Observations", cost_class="engine",
+)
+
+
+def _fixture_spec():
+    """The real spec with a test-only envelope step spliced in after Step 0's stage."""
+    base = run_spec.SPEC.front_door
+
+    def front_door(**kw):
+        steps = list(base(**kw))
+        at = 1 + max(
+            (i for i, s in enumerate(steps) if isinstance(s, StepSpec) and s.stage == "step0"), default=-1
+        )
+        steps.insert(at, _FIXTURE_ENVELOPE_STEP)
+        return steps
+
+    return dataclasses.replace(run_spec.SPEC, front_door=front_door, envelope_step=FIXTURE_ENVELOPE)
+
 TEMPLATE = (
     "export const meta = {\n  name: 'fixture',\n}\n"
     "export default async function run() { return args.digest.run_id }\n"
@@ -31,6 +55,7 @@ class Box:
         self.state = tmp_path / "state"
         monkeypatch.setenv("CWS_TEST_STATE_ROOT", str(self.state))
         monkeypatch.setattr(manifest, "_cost_rows", lambda: {})
+        monkeypatch.setattr(cli, "SPEC", _fixture_spec())
         self.plugin = tmp_path / "plugin"
         (self.plugin / "workflows").mkdir(parents=True)
         self.capsys = capsys
@@ -46,7 +71,7 @@ class Box:
         def run(step, *, repo_root, run_dir, deadline_s):
             self.ran.append(step.id)
             out = self.outputs.get(step.id, (0, "", ""))
-            if step.id == cli.ORIENT_STEP and step.id not in self.outputs:
+            if step.id == FIXTURE_ENVELOPE and step.id not in self.outputs:
                 out = (0, json.dumps({"judgment_points": [], "directives": []}), "")
             if step.id == cli.INBOX_STEP and step.id not in self.outputs:
                 out = (0, json.dumps({"state": "inventory"}), "")
@@ -76,7 +101,7 @@ class Box:
         return self.go(["launch"], **kw)
 
     def envelope(self, points=(), directives=()):
-        self.outputs[cli.ORIENT_STEP] = (0, json.dumps({
+        self.outputs[FIXTURE_ENVELOPE] = (0, json.dumps({
             "judgment_points": list(points), "directives": list(directives), "next_move": "",
         }), "")
 
@@ -132,6 +157,33 @@ def test_launch_without_agent_work_prints_briefing_and_no_workflow(box):
     assert out.startswith("# Workday-start briefing: 2026-10-12 (work/test)")
     assert box.marker() and not box.lock().exists()
     assert {r["id"] for r in box.rows()} >= {"step0-branch-setup", "marker-write-workday-start-marker"}
+
+
+def test_a_launch_with_no_envelope_step_composes_and_decides_with_no_points(box, monkeypatch):
+    monkeypatch.setattr(cli, "SPEC", dataclasses.replace(run_spec.SPEC, envelope_step=None))
+    code, out, _ = box.launch()
+    rows = {r["id"]: r for r in box.rows()}
+    assert code == 0 and out.startswith("# Workday-start briefing")
+    assert FIXTURE_ENVELOPE not in rows
+    assert rows["decide-resolve"]["status"] == "ran"
+    assert rows["decide-resolve"]["stdout"].startswith("0 judgment point(s) decided by rule, 0 routed")
+    assert not (box.runs()[-1] / "decisions.jsonl").exists()
+
+
+REBUILT_STEPS = (
+    "hyg-watch-state-ignore", "orient-day-envelope", "triage-stale-executing-plans",
+    "memo-outbox-stale-drafts", "rollup-local-ahead-unpublished", "rollup-recheck-due-markers",
+)
+
+
+def test_the_real_spec_names_the_day_envelope_step_and_launch_composes_each_rebuilt_step(box, monkeypatch):
+    monkeypatch.setattr(cli, "SPEC", run_spec.SPEC)
+    assert run_spec.SPEC.envelope_step == run_spec.ENVELOPE_STEP == "orient-day-envelope"
+    box.outputs[run_spec.ENVELOPE_STEP] = (0, json.dumps({"judgment_points": [], "directives": []}), "")
+    code, _, _ = box.launch()
+    rows = {r["id"]: r for r in box.rows()}
+    assert code == 0
+    assert all(rows[s]["status"] == "ran" for s in REBUILT_STEPS)
 
 
 def test_inbox_dispatch_writes_script_with_matching_receipt_and_one_workflow_line(box):
@@ -226,7 +278,7 @@ def test_open_merge_halts_committing_stages_and_emits_one_reconcile_group(box):
     assert rows["step0-branch-setup"]["status"] == "ran" and rows["step0-branch-setup"]["reason"] == "held:reconcile-open"
     halted = rows["step0-normalize-consumed-frontmatter"]
     assert halted["status"] == "halted-by-gate" and halted["reason"] == "held:reconcile-open"
-    assert "step0-normalize-consumed-frontmatter" not in box.ran and cli.ORIENT_STEP in box.ran
+    assert "step0-normalize-consumed-frontmatter" not in box.ran and FIXTURE_ENVELOPE in box.ran
     digest = json.loads((box.runs()[-1] / cli.DIGEST_FILE).read_text(encoding="utf-8"))
     (group,) = [g for g in digest["agent_work"]["groups"] if g["id"] == "reconcile"]
     (entry,) = group["entries"]

@@ -54,7 +54,9 @@ def test_vendored_schema_matches_doe_when_present():
 
 def test_key_sets_are_derived_from_the_schema():
     schema = json.loads(VENDORED.read_text(encoding="utf-8"))
-    assert pm._STAGE_KEYS == set(schema["$defs"]["stage"]["properties"])
+    assert pm._STAGE_KEYS == set(schema["$defs"]["stage"]["properties"]) | {
+        "halts_unless_nonempty", "halts_unless_count",
+    }
     assert pm._TOP_KEYS == set(schema["properties"])
     assert pm._INPUT_KEYS == set(schema["properties"]["inputs"]["properties"])
     assert {"produces_brief", "halts_unless"} <= pm._STAGE_KEYS
@@ -134,6 +136,131 @@ def test_halts_unless_on_a_list_fanned_stage(tmp_path):
                 fan_out={"over": "stage.src.return.xs"}, output="{{scratch_dir}}/a-{{item}}",
             ),
         ],
+    )
+
+
+SOURCES_SCHEMA = {
+    "type": "object", "required": ["usable_sources"],
+    "properties": {"usable_sources": {"type": "array", "items": {"type": "string"}}},
+}
+COUNT_SCHEMA = {
+    "type": "object", "required": ["worker_count", "notebooks"],
+    "properties": {"worker_count": {"type": "integer"}, "notebooks": {"type": "array"}},
+}
+COUNT = {"fields": ["worker_count", "notebooks"], "equals": "inputs.notebooks"}
+
+
+def _load_lists(tmp_path, stages):
+    root = tmp_path / "content" / "pipelines" / "dr"
+    root.mkdir(parents=True)
+    doc = {
+        "schema_version": 1, "pipeline": "p",
+        "inputs": {"brief": "required", "lists": {"notebooks": {"kind": "strings"}}}, "stages": stages,
+    }
+    (root / "p.manifest.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    (root / "t.md").write_text("hello {{brief}}", encoding="utf-8")
+    return load_manifest(tmp_path / "content", "p")
+
+
+def _refusal_lists(tmp_path, stages):
+    with pytest.raises(PipelineEmitRefused) as exc:
+        _load_lists(tmp_path, stages)
+    return "\n".join(exc.value.reasons)
+
+
+def test_both_new_halts_load(tmp_path):
+    manifest = _load_lists(tmp_path, [
+        _stage("scout", halts_unless_nonempty="usable_sources", schema=SOURCES_SCHEMA),
+        _stage("scope", halts_unless_count=COUNT, schema=COUNT_SCHEMA, depends_on=["scout"]),
+    ])
+    scout, scope = manifest.stages
+    assert scout.halts_unless_nonempty == "usable_sources" and scout.halts_unless_count is None
+    assert scope.halts_unless_count.fields == ("worker_count", "notebooks")
+    assert scope.halts_unless_count.equals == "notebooks"
+
+
+def test_optional_stage_may_carry_a_halt(tmp_path):
+    manifest = _load_lists(tmp_path, [
+        _stage("scout", optional=True, halts_unless_nonempty="usable_sources", schema=SOURCES_SCHEMA),
+    ])
+    assert manifest.stages[0].optional is True
+
+
+def test_nonempty_on_a_fanned_stage(tmp_path):
+    assert "halts_unless_nonempty is not legal on a stage fanned over a list" in _refusal_lists(tmp_path, [
+        _stage("src", schema={"type": "object", "properties": {"xs": {"type": "array"}}}),
+        _stage("a", halts_unless_nonempty="usable_sources", schema=SOURCES_SCHEMA, depends_on=["src"],
+               fan_out={"over": "stage.src.return.xs"}, output="{{scratch_dir}}/a-{{item}}"),
+    ])
+
+
+def test_count_on_a_fanned_stage(tmp_path):
+    assert "halts_unless_count is not legal on a stage fanned over a list" in _refusal_lists(tmp_path, [
+        _stage("src", schema={"type": "object", "properties": {"xs": {"type": "array"}}}),
+        _stage("a", halts_unless_count=COUNT, schema=COUNT_SCHEMA, depends_on=["src"],
+               fan_out={"over": "stage.src.return.xs"}, output="{{scratch_dir}}/a-{{item}}"),
+    ])
+
+
+def test_nonempty_needs_an_inline_schema(tmp_path):
+    assert "halts_unless_nonempty needs an inline object schema" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_nonempty="usable_sources")]
+    )
+
+
+def test_count_needs_an_inline_schema(tmp_path):
+    assert "halts_unless_count needs an inline object schema" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_count=COUNT)]
+    )
+
+
+def test_nonempty_field_not_an_array(tmp_path):
+    schema = {**SOURCES_SCHEMA, "properties": {"usable_sources": {"type": "string"}}}
+    assert "'usable_sources' is not a required array field" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_nonempty="usable_sources", schema=schema)]
+    )
+
+
+def test_nonempty_field_not_required(tmp_path):
+    schema = {**SOURCES_SCHEMA, "required": []}
+    assert "'usable_sources' is not a required array field" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_nonempty="usable_sources", schema=schema)]
+    )
+
+
+def test_count_field_wrong_type(tmp_path):
+    schema = {**COUNT_SCHEMA, "properties": {**COUNT_SCHEMA["properties"], "worker_count": {"type": "string"}}}
+    assert "field 'worker_count' is not a required integer or array field" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_count=COUNT, schema=schema)]
+    )
+
+
+def test_count_field_not_required(tmp_path):
+    schema = {**COUNT_SCHEMA, "required": ["notebooks"]}
+    assert "field 'worker_count' is not a required integer or array field" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_count=COUNT, schema=schema)]
+    )
+
+
+def test_count_equals_undeclared_list(tmp_path):
+    bad = {**COUNT, "equals": "inputs.ghosts"}
+    assert "names undeclared list 'ghosts'" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_count=bad, schema=COUNT_SCHEMA)]
+    )
+
+
+@pytest.mark.parametrize("bad", [
+    "oops", {"fields": ["a"]}, {"fields": [], "equals": "inputs.notebooks"},
+    {"fields": ["a", "a"], "equals": "inputs.notebooks"}, {"fields": ["a"], "equals": "notebooks"},
+    {"fields": ["a"], "equals": "inputs.notebooks", "extra": 1},
+])
+def test_malformed_count_is_a_refusal_not_an_exception(tmp_path, bad):
+    assert "halts_unless_count" in _refusal_lists(tmp_path, [_stage("a", halts_unless_count=bad, schema=COUNT_SCHEMA)])
+
+
+def test_malformed_nonempty_name(tmp_path):
+    assert "halts_unless_nonempty must be a field name" in _refusal_lists(
+        tmp_path, [_stage("a", halts_unless_nonempty="1bad", schema=SOURCES_SCHEMA)]
     )
 
 

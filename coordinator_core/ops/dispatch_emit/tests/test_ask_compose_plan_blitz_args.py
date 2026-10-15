@@ -56,3 +56,26 @@ def test_writes_with_quote_and_backslash_round_trip_through_the_literal():
 
 def test_plan_author_prompt_reads_scout_evidence_when_args_given():
     assert "scout_evidence" in _compose(plan_blitz_args={"k": 1})
+
+
+def _blitz_calls(script):
+    return [seg.split("\n", 1)[0] for seg in script.split("await planBlitz(")[1:]]
+
+
+def test_both_planblitz_calls_carry_the_stage_ready_op_without_plan_path():
+    calls = _blitz_calls(_compose())
+    assert len(calls) == 2
+    for call in calls:
+        assert "readyOp: { op: 'dispatch.ask_stage'" in call
+        assert "!_stagedManifest" in call
+        ready = call.split("readyOp:", 1)[1].split("repoRoot:", 1)[0]
+        assert "plan_path" not in ready
+        for key in ("run_id", "writes", "cross_repo_approved", "session_id", "commit_sizing_path"):
+            assert key in ready
+
+
+def test_a_stop_after_script_carries_no_ready_op():
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
+
+    script = _compose(stop_after=STOP_AFTER_PLAN)
+    assert "readyOp" not in script

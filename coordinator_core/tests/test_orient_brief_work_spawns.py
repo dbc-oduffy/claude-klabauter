@@ -70,7 +70,7 @@ def test_req_w9_agent_worktree_states(real_repo):
     _git(ahead, "add", "g.txt")
     _git(ahead, "commit", "-m", "ahead")
 
-    result = _work.collect("day", repo_root=real_repo)
+    result = _work.collect("session", repo_root=real_repo)
     directives = _by_id(result.directives)
     assert [d["id"] for d in result.directives if d["id"].startswith("d-worktree")] == [
         "d-worktree-reap-1",
@@ -86,7 +86,7 @@ def test_req_w9_agent_worktree_states(real_repo):
 
 
 def test_req_w9_absent_without_agent_worktrees_or_an_active_branch(real_repo, tmp_path):
-    assert [d for d in _work.collect("day", repo_root=real_repo).directives if d["id"].startswith("d-worktree")] == []
+    assert [d for d in _work.collect("session", repo_root=real_repo).directives if d["id"].startswith("d-worktree")] == []
     _git(real_repo, "worktree", "add", "-b", "b9", str(real_repo / ".claude" / "worktrees" / "agent-x"))
     (real_repo / ".git" / "HEAD").write_text("0" * 40 + "\n")
     assert _work._worktree_entries(real_repo) == ([], [])

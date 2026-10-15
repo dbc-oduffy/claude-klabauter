@@ -818,8 +818,11 @@ def _resolve_mint(
         run_rel = integration_path.relative_to(repo_root).as_posix()
         reverified = latest_delivery_supersession(repo_root, run_rel)
         if reverified is not None:
+            null_slot = delivery_data.get("verdict") is None
+            if null_slot:
+                _require_same_diff_sha(repo_root, run_rel, terminal_sha)
             delivery_data = reverified
-            if not landed_here:
+            if not landed_here and not null_slot:
                 terminal_sha = str(reverified.get("head_sha") or terminal_sha)
             reverified_criterion = latest_criterion_supersession(repo_root, run_rel)
             if reverified_criterion is not None:
@@ -940,6 +943,27 @@ def _resolve_mint(
     )
 
 
+def _require_same_diff_sha(repo_root: Path, run_rel: str, terminal_sha: str) -> None:
+    """A re-run record clearing a null delivery slot must name the run's terminal commit as its
+    `diff_sha`; a missing or different one raises `MintRefusal`."""
+    from coordinator_core.ops.dispatch_emit.verdict_supersession import DIFF_SHA_KEY, latest_delivery_binding
+
+    binding = latest_delivery_binding(repo_root, run_rel)
+    if binding is None:
+        return
+    record, diff_sha = binding["record_path"], binding[DIFF_SHA_KEY]
+    if not diff_sha:
+        raise MintRefusal(
+            f"review-stamp: refusing to mint: delivery-verdict record {record} carries no {DIFF_SHA_KEY}, "
+            "so it is not bound to the reviewed diff; re-verify the run's terminal commit"
+        )
+    if diff_sha != terminal_sha:
+        raise MintRefusal(
+            f"review-stamp: refusing to mint: delivery-verdict record {record} is bound to {diff_sha}, "
+            f"not the run's terminal commit {terminal_sha}; re-verify the run's terminal commit"
+        )
+
+
 def _delivery_verifier_off_tier(plan_path: Path, repo_root: Path, plan_text: str) -> bool:
     """True when the plan's review tier is one the roster's `tiers` keep the delivery-verifier
     off, by the same agent filter `compose_execute_review` applies. Unknown tier or unreadable
@@ -1010,6 +1034,17 @@ def _gate_refusal_with_hints(r: _Resolved) -> str:
             "; a fix-forward clears this by re-verifying delivery at HEAD: "
             f"emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} --reverify-delivery {hint}, "
             "then reverify-delivery record"
+        )
+    if r.delivery_verdict is None and "delivery verdict is" in refusal:
+        from coordinator_core.ops.dispatch_emit.verdict_supersession import DELIVERY_NOT_RUN_KEY
+
+        not_run = r.integration_data.get(DELIVERY_NOT_RUN_KEY)
+        run_hint = _rel_or_abs(r.integration_path, repo_root) if r.integration_path is not None else '""'
+        if isinstance(not_run, str) and not_run:
+            refusal += f"; delivery not run: {not_run}"
+        refusal += (
+            "; a re-run clears this: emit-dispatch-workflow --plan "
+            f"{_rel_or_abs(plan_path, repo_root)} --reverify-delivery {run_hint}, then reverify-delivery record"
         )
     if "exit criterion is" in refusal:
         refusal += (

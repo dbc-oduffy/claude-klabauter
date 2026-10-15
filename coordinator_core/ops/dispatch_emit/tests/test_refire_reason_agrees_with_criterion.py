@@ -44,14 +44,14 @@ def test_gated_withheld_row_with_not_met_criterion_still_blocks():
     assert out["halted_by"] is None
     revise = out["revise_and_refire"]
     assert revise is not None and revise["reason"].startswith("criterion not_met")
-    assert out["commit"] is None and "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
     assert out["ledger"]["items"][0]["status"] == "not_met"
 
 
 def test_a_non_doc_gap_left_after_reconcile_keeps_the_criterion_open():
     item = _item("R1", "not_met", remaining=[_DOC, "the test is red"])
     (out,) = _run([_judged([item])], judged=True, doc_writes=(_DOC,), doc_paths=(_DOC,))
-    assert out["commit"] is None and "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
     assert out["revise_and_refire"] is not None
 
 
@@ -93,14 +93,14 @@ def test_an_unmet_clause_keeps_a_met_ledger_criterion_open():
     )
     (out,) = _run([judge], judged=True)
     assert out["revise_and_refire"] is not None
-    assert out["commit"] is None and "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
 
 
 def test_a_failing_falsifier_verdict_keeps_a_met_ledger_criterion_open():
     judge = _judge_result([_item("R1", "met")], clauses=[{"status": "met"}], falsifier={"verdict": "fail"})
     (out,) = _run([judge], judged=True)
     assert out["revise_and_refire"] is not None
-    assert out["commit"] is None and "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
 
 
 def test_a_met_judge_and_met_ledger_do_not_revise():

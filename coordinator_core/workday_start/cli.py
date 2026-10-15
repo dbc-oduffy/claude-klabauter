@@ -23,7 +23,6 @@ from coordinator_core.workday_start.run_spec import (  # noqa: F401
     CEREMONY,
     FRESHNESS_STEP,
     INBOX_STEP,
-    ORIENT_STEP,
     SPEC,
     TEMPLATE_RELPATH,
 )

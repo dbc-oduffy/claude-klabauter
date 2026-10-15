@@ -2929,10 +2929,9 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, str], str]:
 # memo-outbox-is-the-sent-state-n-c3db55355656.yaml pins "an empty outbox is
 # the SENT state" as an existing, relied-upon convention (a workstream-
 # complete B-wave reviewer treats an absent outbox file as evidence of send),
-# and coordinator_core/ops/workday_start_cross_repo_memo_outbox_surface.py's
-# stale-draft nudge scans every *.md directly under the outbox dir with no
-# status filter — a stamped file left in place would be mis-flagged as a
-# stale draft forever. `<outbox_dir>/sent/` mirrors the sibling
+# and any scan of every *.md directly under the outbox dir has no status
+# filter — a stamped file left in place would read as a stale draft forever.
+# `<outbox_dir>/sent/` mirrors the sibling
 # lessons-outbox convention (`<outbox>/drained/`, see cross-repo/archive/
 # 2026-07-23-claude-central-em-lessons-outbox-relocation-and-subject-
 # confirmation.md § 2/§ "no drained/ has ever existed") of parking

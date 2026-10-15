@@ -1130,12 +1130,9 @@ class _SenderCommit(NamedTuple):
 
 def _row_is_older_than_cutoff_dict(row: dict, cutoff: datetime.datetime) -> bool:
     """True iff this ALREADY-PARSED ledger row carries a `sent_at` older than
-    `cutoff`. Shared by both this module's own line-based wrapper below (the
-    row cap's read-modify-write only has raw lines in hand) and
-    `workday_start_cross_repo_memo_outbox_surface._gone_delivery_lines` (which
-    already holds parsed dicts via `_iter_ledger_rows`, so parsing here
-    again would be pure waste) — one comparator, not two (Review:
-    overengineering-reviewer).
+    `cutoff`. Shared with this module's own line-based wrapper below (the
+    row cap's read-modify-write only has raw lines in hand) — one comparator,
+    not two.
 
     UNDATABLE ROWS ARE NEVER EVICTED BY AGE -- a row with no `sent_at`, or
     one this cannot parse, returns False and lives until the row cap

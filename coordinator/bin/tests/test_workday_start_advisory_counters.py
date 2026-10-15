@@ -2,21 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-# Declared, not excused: 3 of this file's tests (test_local_ahead_*) spawn a real git
-# process because the property under test is git's own ahead-count/no-origin
-# resolution against a real branch/remote, which no mock stands in for. Each builds
-# its own small repo (3-9 git calls) exercising a genuinely different branch/remote
-# scenario, so there is no shared state to hoist to module scope without conflating
-# those scenarios. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
-# and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+pytestmark = pytest.mark.cadence
 
 _BIN_DIR = Path(__file__).parent.parent
 
@@ -33,15 +24,6 @@ def _load_module():
 
 
 _mod = _load_module()
-
-
-def _init_git_repo(path: Path) -> None:
-    subprocess.run(["git", "init", "--quiet"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), check=True)
-    (path / "README.md").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=str(path), check=True)
-    subprocess.run(["git", "commit", "--quiet", "-m", "seed"], cwd=str(path), check=True)
 
 
 def test_improvement_queue_central_resolved_and_oldest(tmp_path, monkeypatch):
@@ -190,62 +172,6 @@ def test_push_failures_engine_error_degrades_to_error_field(tmp_path, monkeypatc
     assert "boom" in result["error"]
 
 
-def test_local_ahead_ineligible_branch_skips_git_network_calls(tmp_path):
-    _init_git_repo(tmp_path)
-    subprocess.run(["git", "checkout", "--quiet", "-B", "main"], cwd=str(tmp_path), check=True)
-
-    result = _mod.cmd_local_ahead(tmp_path, do_fetch=True)
-
-    assert result["branch"] == "main"
-    assert result["eligible"] is False
-    assert result["ahead_count"] == 0
-    assert result["no_origin"] is False
-
-
-def test_local_ahead_no_origin_counts_all_local_commits(tmp_path):
-    _init_git_repo(tmp_path)
-    subprocess.run(["git", "checkout", "--quiet", "-b", "work/testmachine/2026-07-23"], cwd=str(tmp_path), check=True)
-    (tmp_path / "file2.txt").write_text("more\n", encoding="utf-8")
-    subprocess.run(["git", "add", "file2.txt"], cwd=str(tmp_path), check=True)
-    subprocess.run(["git", "commit", "--quiet", "-m", "second"], cwd=str(tmp_path), check=True)
-
-    result = _mod.cmd_local_ahead(tmp_path, do_fetch=False)
-
-    assert result["branch"] == "work/testmachine/2026-07-23"
-    assert result["eligible"] is True
-    assert result["no_origin"] is True
-    assert result["ahead_count"] == 2
-
-
-def test_local_ahead_ahead_of_origin_counts_delta(tmp_path):
-    origin = tmp_path / "origin.git"
-    origin.mkdir()
-    subprocess.run(["git", "init", "--quiet", "--bare"], cwd=str(origin), check=True)
-
-    work = tmp_path / "work"
-    work.mkdir()
-    _init_git_repo(work)
-    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=str(work), check=True)
-    subprocess.run(["git", "checkout", "--quiet", "-b", "work/testmachine/2026-07-23"], cwd=str(work), check=True)
-    subprocess.run(
-        ["git", "push", "--quiet", "-u", "origin", "work/testmachine/2026-07-23"],
-        cwd=str(work),
-        check=True,
-    )
-
-    (work / "file2.txt").write_text("more\n", encoding="utf-8")
-    subprocess.run(["git", "add", "file2.txt"], cwd=str(work), check=True)
-    subprocess.run(["git", "commit", "--quiet", "-m", "second"], cwd=str(work), check=True)
-
-    result = _mod.cmd_local_ahead(work, do_fetch=True)
-
-    assert result["branch"] == "work/testmachine/2026-07-23"
-    assert result["eligible"] is True
-    assert result["no_origin"] is False
-    assert result["ahead_count"] == 1
-    assert result["fetch_error"] is None
-
-
 def test_stale_stashes_delegates_to_engine_op(tmp_path, monkeypatch):
     called_with = {}
 
@@ -315,12 +241,12 @@ def test_main_improvement_queue_prints_one_json_line_and_exits_zero(tmp_path, mo
 
 
 def test_main_never_raises_on_unexpected_exception(tmp_path, monkeypatch, capsys):
-    def _boom(_repo_root, do_fetch):
+    def _boom(_repo_root):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(_mod, "cmd_local_ahead", _boom)
+    monkeypatch.setattr(_mod, "cmd_push_failures", _boom)
 
-    rc = _mod.main(["local-ahead", "--repo-root", str(tmp_path)])
+    rc = _mod.main(["push-failures", "--repo-root", str(tmp_path)])
     out = capsys.readouterr().out
 
     assert rc == 0

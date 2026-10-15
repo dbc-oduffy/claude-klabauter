@@ -65,7 +65,7 @@ def _by_id(entries: list[dict]) -> dict[str, dict]:
     return {e["id"]: e for e in entries}
 
 
-def _collect(root: Path, cadence: str = "day"):
+def _collect(root: Path, cadence: str = "week"):
     return _work.collect(cadence, repo_root=root)
 
 
@@ -125,7 +125,7 @@ def test_a_failing_probe_loses_only_its_own_entries(tmp_path, monkeypatch, capsy
 # ---------------------------------------------------------------------------
 
 
-def test_req_w1_stale_executing_plans(tmp_path):
+def test_req_w1_stale_executing_plans_emit_no_directive(tmp_path):
     root = _repo(tmp_path)
     old = _plan(root, "2026-09-01-old.md", status="executing")
     _age(old, 10)
@@ -136,18 +136,6 @@ def test_req_w1_stale_executing_plans(tmp_path):
     prefix = _plan(root, "2026-09-04-prefix.md", status="executing-foo")
     _age(prefix, 5)
 
-    directive = _by_id(_collect(root).directives)["d-handoff-triage-stale-plans"]
-    assert directive["cli"] == "workday-start-handoff-triage" and directive["args"] == ["stale-plans"]
-    lines = directive["detail"].splitlines()
-    assert lines == [
-        f"  - {old} (status: executing, untouched 10d)",
-        f"  - {prefix} (status: executing, untouched 5d)",
-    ]
-
-
-def test_req_w1_absent_when_every_executing_plan_is_fresh(tmp_path):
-    root = _repo(tmp_path)
-    _plan(root, "2026-09-01-live.md", status="executing")
     assert "d-handoff-triage-stale-plans" not in _by_id(_collect(root).directives)
 
 
@@ -431,28 +419,24 @@ def _addon_fixture(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
     return plugins, consumer
 
 
-@pytest.mark.parametrize("cadence,mode", [("day", "--red-and-stale"), ("session", "--red-only"), ("week", "--red-only")])
-def test_req_w6_addon_health_matches_the_shipped_scan(monkeypatch, tmp_path, cadence, mode):
+def test_req_w6_addon_health_matches_the_shipped_scan(monkeypatch, tmp_path):
     from coordinator_core.plugin_health import scan
 
     _addon_fixture(monkeypatch, tmp_path)
-    expected, _ = scan._run(mode)
-    directives = _work._addon_health_directives(cadence, time.time())
+    expected, _ = scan._run("--red-only")
+    directives = _work._addon_health_directives()
     assert [d["detail"] for d in directives] == expected
     assert [d["id"] for d in directives] == [f"d-addon-health-{i}" for i in range(1, len(expected) + 1)]
-    assert all(d["cli"] == "scan-addon-health" and d["args"] == [mode] for d in directives)
-    assert (len(expected) > 5) == (cadence == "day")
+    assert all(d["cli"] == "scan-addon-health" and d["args"] == ["--red-only"] for d in directives)
+    assert len(expected) <= 5
 
 
-def test_req_w6_unreadable_sentinel_is_a_finding_at_day_only(monkeypatch, tmp_path):
+def test_req_w6_unreadable_sentinel_is_not_a_finding(monkeypatch, tmp_path):
     plugins = tmp_path / "plugins"
     monkeypatch.setenv("COORDINATOR_PLUGINS_ROOT", str(plugins))
     (plugins / "broken" / "data").mkdir(parents=True)
     (plugins / "broken" / "data" / "doctor-last-run.json").write_text("{not json")
-    details = [d["detail"] for d in _work._addon_health_directives("day", time.time())]
-    assert len(details) == 1 and details[0].startswith("[health] broken: sentinel unreadable at ")
-    assert details[0].endswith("(malformed JSON?). Run /broken:doctor.")
-    assert _work._addon_health_directives("session", time.time()) == []
+    assert _work._addon_health_directives() == []
 
 
 # ---------------------------------------------------------------------------

@@ -108,11 +108,12 @@ def stale_mirror_tree(monkeypatch, tmp_path):
     monkeypatch.setattr(
         substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root")
     )
-    names = ["shared-cli", "klabauter-promote"]
+    names = ["shared-cli", "klabauter-promote", "percolate-push"]
     live = _make_tree(tmp_path / "live", resolver_stem="_resolve_claude_klabauter", bin_names=names)
     resolver = live / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
     resolver.write_text(
-        'PUBLISHER_ONLY_TARGETS = frozenset({"klabauter-promote.py"})\n'
+        'PUBLISHER_ONLY_TARGETS = frozenset({"klabauter-promote.py", "percolate-push.py"})\n'
+        'PUBLISHER_ONLY_LAUNCHABLE = frozenset({"klabauter-promote.py"})\n'
         "def exec_cli(target):\n    pass\n",
         encoding="utf-8",
     )
@@ -159,6 +160,21 @@ def test_existing_door_image_is_replaced_and_leaves_the_native_manifest(stale_mi
     assert (bin_dst / "klabauter-promote").read_text(encoding="utf-8").startswith("#")
     assert not (bin_dst / "klabauter-promote.exe").exists()
     assert substrate._read_native_forwarder_manifest(bin_dst) == {"shared-cli"}
+
+
+def test_publisher_only_name_outside_the_launchable_set_gets_no_forwarder(stale_mirror_tree):
+    live, mirror, bin_dst = stale_mirror_tree
+    (bin_dst / "percolate-push").write_bytes(b"\x7fELF-door-image")
+    (bin_dst / "percolate-push.exe").write_bytes(b"MZ-door-image")
+    full_map = substrate._derive_agent_helper_target_map(mirror / "coordinator" / "bin")
+    door_map = substrate._door_leg_target_map(full_map, mirror)
+
+    protected = _install_live_source_tree_forwarders(bin_dst, mirror, door_map, False)
+
+    assert not (bin_dst / "percolate-push").exists()
+    assert not (bin_dst / "percolate-push.exe").exists()
+    assert "percolate-push" not in protected
+    assert (bin_dst / "klabauter-promote").read_text(encoding="utf-8").startswith("#")
 
 
 def test_door_leg_keeps_every_name_when_the_engine_is_the_source_tree(stale_mirror_tree):

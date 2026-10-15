@@ -280,3 +280,30 @@ def test_local_only_reclose_returns_the_landed_sha(repo, scratch, tmp_path):
 def test_local_only_refuses_a_root_inside_a_checkout(repo, scratch):
     out = _close(repo, scratch, "corpus", local_root=(repo / "corpus").as_posix())
     assert out["exit_code"] != 0 and "inside the git checkout" in out["error"]
+
+
+@pytest.mark.parametrize("body", [None, "[]", "{}", "not json", '"x"'])
+def test_require_claims_refuses_missing_empty_or_non_array(repo, scratch, body):
+    if body is not None:
+        (scratch / "claims.json").write_text(body)
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "corpus", require_claims=["claims.json"])
+    assert out["exit_code"] == 1 and out["committed"] is False and out["deliverable"] is False
+    assert "claims.json holds no claims" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+
+
+def test_require_claims_with_a_claim_closes_deliverable(repo, scratch):
+    (scratch / "claims.json").write_text('[{"id": 1}]')
+    out = _close(repo, scratch, "corpus", require_claims=["claims.json"])
+    assert out["exit_code"] == 0 and out["committed"] is True and out["deliverable"] is True
+
+
+def test_require_claims_escape_is_refused(repo, scratch):
+    out = _close(repo, scratch, "corpus", require_claims=["../x.json"])
+    assert out["exit_code"] == 1 and "escapes" in out["error"]
+
+
+def test_without_require_claims_behaviour_is_unchanged(repo, scratch):
+    out = _close(repo, scratch, "corpus")
+    assert out["exit_code"] == 0 and out["committed"] is True

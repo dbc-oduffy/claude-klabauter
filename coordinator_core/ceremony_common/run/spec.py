@@ -11,7 +11,8 @@ class CeremonySpec:
     """Everything the runner needs to know about one ceremony.
 
     `name` is the digest's `ceremony` value. `marker_path` is None for a ceremony with no
-    once-per-day rule. `envelope_step` is the directive id whose stdout is the brief envelope.
+    once-per-day rule. `envelope_step` is the directive id whose stdout is the brief envelope, or None for a
+    ceremony with no envelope step: no step matches, so the run carries no judgment points.
     `stage_of(directive_id)` returns the stage and raises on an unknown id. `rules` maps rule
     id to callable; its keys are the ceremony's rule ids and no second list is kept.
     `spec_points(envelope, flags, ledger_rows)` returns the judgment points the spec makes
@@ -30,7 +31,7 @@ class CeremonySpec:
     launch_stages: tuple[str, ...]
     finish_stages: tuple[str, ...]
     front_door: Any
-    envelope_step: str
+    envelope_step: str | None
     stage_of: Callable[[str], str]
     residue: Sequence[Any]
     rules: Mapping[str, Callable[..., Any]]

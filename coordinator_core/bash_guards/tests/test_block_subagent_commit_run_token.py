@@ -4,6 +4,7 @@ commit; no other subagent, shape or token gets through."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -113,6 +114,88 @@ def test_expired_token_no_longer_admits(repo, monkeypatch):
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     monkeypatch.setattr(run_token, "TTL_SECONDS", -1)
     assert _check(_cmd(_params(token))) is not None
+
+
+def _spawn(tmp_path, params: dict, name: str = "agent-a.jsonl") -> str:
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    d = tmp_path / "proj" / "subagents" / "workflows" / "wf_x"
+    d.mkdir(parents=True, exist_ok=True)
+    block = chan.render_params_block(params)
+    prompt = "\n".join("  " + ln for ln in ["Commit.", *block.split("\n")])
+    f = d / name
+    f.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n", encoding="utf-8")
+    return str(f)
+
+
+def _file_cmd(repo, run_id: str = "ask-1", head: str = "coordinator-invoke dispatch.terminal_commit") -> str:
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    return f"{head} --params-file {chan.params_path(repo, run_id).as_posix()}"
+
+
+def _check_t(cmd: str, transcript, agent_type: str = _COMMIT_AGENT):
+    return guard.check(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "session_id": "s",
+            "cwd": None,
+            "agent_id": "deadbeef0123",
+            "agent_type": agent_type,
+            "transcript_path": transcript,
+        }
+    )
+
+
+def test_params_file_shape_is_admitted_and_the_guard_writes_the_file(repo):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    params = {**_params(token), "note": "C:\\x\\y and E:\\z"}  # abs-path-ok: fixture text
+    tp = _spawn(repo, params)
+    path = chan.params_path(repo, "ask-1")
+    path.parent.mkdir(parents=True)
+    path.write_text('{"run_id": "planted"}', encoding="utf-8")
+    assert _check_t(_file_cmd(repo), tp) is None
+    assert json.loads(path.read_text(encoding="utf-8")) == params
+
+
+def test_params_file_shape_posix_style_root_is_admitted(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _spawn(repo, _params(token))
+    assert _check_t(_file_cmd(repo), tp) is None
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["other_path", "other_run_path", "outside_workflows", "missing", "no_block", "bad_token", "second_segment", "env_prefix", "other_agent"],
+)
+def test_params_file_shape_denials(repo, case):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _spawn(repo, _params("f" * 32 if case == "bad_token" else token))
+    cmd = _file_cmd(repo)
+    agent = _COMMIT_AGENT
+    if case == "other_path":
+        cmd = cmd.replace("terminal-commit-params.json", "evil.json")
+    elif case == "other_run_path":
+        cmd = _file_cmd(repo, run_id="ask-2")
+    elif case == "outside_workflows":
+        moved = repo / "elsewhere.jsonl"
+        moved.write_text(Path(tp).read_text(encoding="utf-8"), encoding="utf-8")
+        tp = str(moved)
+    elif case == "missing":
+        tp = str(repo / "subagents" / "workflows" / "wf" / "nope.jsonl")
+    elif case == "no_block":
+        tp = _spawn(repo, _params(token), name="x.jsonl")
+        Path(tp).write_text(json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n", encoding="utf-8")
+    elif case == "second_segment":
+        cmd += " ; git add -A"
+    elif case == "env_prefix":
+        cmd = "FOO=1 " + cmd
+    elif case == "other_agent":
+        agent = "coordinator:executor"
+    assert _check_t(cmd, tp, agent_type=agent) is not None
 
 
 def test_record_stores_no_plain_token_and_lives_in_the_git_dir(repo):

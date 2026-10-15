@@ -25,8 +25,6 @@ itself is not called because it resolves the registry per key through `machine-l
 
 Negative spec:
   * Never `git_perf_config.apply_fleet` (134 spawns even with `dry_run=True`).
-  * Never `drift.check_plugin` at any setting (`_check_default` spawns git per mirror);
-    REQ-H8 is the sentinel + refresh-log predicate, and its directive names the full walk.
   * Never `git_maintenance.run_tier`, `workweek_trail_scope.main`, or
     `check_weekly_staleness.main`: each spawns git or writes.
   * Never a worktree `status`/`diff` read (REQ-B3 is retired).
@@ -37,7 +35,6 @@ import contextlib
 import importlib.util
 import io
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -62,7 +59,6 @@ _PROBES_CLI = "workday-start-health-probes"
 #: Hook of the per-cadence ceremony whose post-command REQ-H5 surfaces.
 _CEREMONY_BY_CADENCE = {
     "session": "workstream-start",
-    "day": "workday-start",
     "week": "workweek-start",
 }
 
@@ -74,10 +70,8 @@ _COVERAGE_TYPES = ("handoff", "plan", "debt", "bug", "improvement")
 
 _HEADER_REL = "state/week-changelog/HEADER.md"
 
-_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
-
-#: Bytes read from the head of a record when asking "does this file mention a stub
-#: pair". Frontmatter longer than this is read in full by `_frontmatter_bytes`.
+#: Bytes read from the head of a record to find its frontmatter. Frontmatter longer than
+#: this is read in full by `_frontmatter_bytes`.
 _HEAD_BYTES = 8192
 
 
@@ -346,10 +340,9 @@ def _marker_freshness(ctx: _Ctx) -> ReaderResult:
     """REQ-H6: is this cadence's freshness marker current?
 
     session: `state/.workday-start-marker` is not today and the repo is registered and
-    onboarded -> a day-review-due judgment point. day: marker not today -> directive
-    naming the writer. week: the week header's staleness is STALE or MILD -> reset or
-    update-in-place judgment point. The state root is the weekly-staleness resolver's,
-    not the target root's.
+    onboarded -> a day-review-due judgment point. week: the week header's staleness is
+    STALE or MILD -> reset or update-in-place judgment point. The state root is the
+    weekly-staleness resolver's, not the target root's.
     """
     state_root = _state_root(ctx.flat)
     if not state_root:
@@ -385,14 +378,6 @@ def _marker_freshness(ctx: _Ctx) -> ReaderResult:
     if marker == today:
         return ReaderResult()
 
-    if ctx.cadence == "day":
-        return ReaderResult(directives=[_directive(
-            "d-workday-marker-write",
-            "write-workday-start-marker",
-            [],
-            f"workday-start marker is {marker or 'absent'}, today is {today}",
-        )])
-
     from coordinator_core.repo_standing import repo_standing
 
     standing = repo_standing(ctx.root)
@@ -427,225 +412,8 @@ def _frontmatter_bytes(path: str) -> Optional[bytes]:
         return None
 
 
-# path -> [(mtime_ns, size), head bytes or None, parsed `_stub_record` or None].
-# Process-lifetime: the brief is read-only (REQ-C10), so the reuse is the warm
-# engine's, never a file. A head is kept only when it names a stub at all, and is
-# parsed only when it names a live one, so a cold call parses a handful of records.
-_STUB_MEMO: dict = {}
-
-
-def _stub_record(raw: bytes) -> Any:
-    """The stub-relevant fields of one record, or 0 when its frontmatter is unreadable."""
-    from coordinator_core.dag import _parse_frontmatter
-    from coordinator_core.frontmatter.primitives import split_frontmatter
-    from coordinator_core.ops import origin_stub_staleness as oss
-
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return 0
-    if split_frontmatter(text) is None:
-        return 0
-    meta = _parse_frontmatter(text)
-    own = oss.read_pair(meta)
-    return {
-        "own": tuple(own) if own else None,
-        "closes": [tuple(p) for p in oss.read_closes_stubs(meta)],
-        "state": meta.get("deployment_state"),
-        "status": meta.get("status"),
-        "baton": bool(oss.is_baton_kind(meta.get("kind"))),
-    }
-
-
-def _parsed(entry: list) -> Any:
-    if entry[2] is None:
-        entry[2] = _stub_record(entry[1])
-    return entry[2]
-
-
-def _stub_heads(trees: tuple) -> dict:
-    """path -> memo entry for every `.md` in `trees` whose head names a stub, revalidated
-    by `(mtime_ns, size)`. The signature comes free with `os.scandir` on Windows, so a
-    warm call over an unchanged corpus opens nothing."""
-    from coordinator_core.ops import origin_stub_staleness as oss
-
-    out: dict = {}
-
-    def visit(entry: os.DirEntry) -> None:
-        st = entry.stat()
-        sig = (st.st_mtime_ns, st.st_size)
-        hit = _STUB_MEMO.get(entry.path)
-        if hit is None or hit[0] != sig:
-            raw = _frontmatter_bytes(entry.path)
-            if raw is not None and oss._PREFILTER_STUB not in raw and oss._PREFILTER_CLOSES not in raw:
-                raw = None
-            hit = _STUB_MEMO[entry.path] = [sig, raw, None]
-        if hit[1] is not None:
-            out[entry.path] = hit
-
-    def walk(base: str, recursive: bool) -> None:
-        try:
-            it = os.scandir(base)
-        except OSError:
-            return
-        with it:
-            for e in it:
-                if e.is_file() and e.name.endswith(".md"):
-                    visit(e)
-                elif recursive and e.is_dir():
-                    walk(e.path, True)
-
-    for base, recursive in trees:
-        walk(str(base), recursive)
-    return out
-
-
-def _stale_origin_stubs(ctx: _Ctx) -> ReaderResult:
-    """REQ-H7 (day): live origin stubs whose `(roadmap_id, stub_id)` pair a shipping record carries.
-
-    Verdicts are `origin_stub_staleness.survey`'s: a plan in `SPEC_RIPE_STATUSES` or a
-    `shipped` handoff carrying the pair, other than the stub itself. Heads come from
-    `_stub_heads`, so a warm call opens only records changed since the last.
-    """
-    from coordinator_core.lifecycle_constants import SPEC_RIPE_STATUSES
-    from coordinator_core.ops import origin_stub_staleness as oss
-
-    root = ctx.root
-    handoffs = str(root / oss._HANDOFFS_ROOT)
-    trees = (
-        (handoffs, False, "handoff"),
-        (str(root / "archive" / "handoffs"), True, "handoff"),
-        (str(root / "docs" / "plans"), False, "plan"),
-        (str(root / "archive" / "specs"), True, "plan"),
-    )
-    heads = _stub_heads(tuple((b, r) for b, r, _k in trees))
-
-    def rel(p: str) -> str:
-        return Path(p).relative_to(root).as_posix()
-
-    live: list[tuple[str, tuple[str, str], str]] = []
-    for path, entry in heads.items():
-        if os.path.dirname(path) != handoffs:
-            continue
-        rec = _parsed(entry)
-        if rec and rec["own"] and rec["baton"] and rec["state"] in oss._LIVE_STATES:
-            live.append((rel(path), rec["own"], rec["state"]))
-    if not live:
-        return ReaderResult()
-
-    wanted = {pair for _r, pair, _s in live}
-    id_re = re.compile(b"|".join(sorted({re.escape(p[1].encode("utf-8")) for p in wanted})))
-    evidence: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    for path, entry in heads.items():
-        if id_re.search(entry[1]) is None:
-            continue
-        rec = _parsed(entry)
-        if not rec:
-            continue
-        kind = next(k for b, _r, k in trees if path.startswith(b))
-        if kind == "plan":
-            shipped = rec["status"] in SPEC_RIPE_STATUSES
-        else:
-            shipped = rec["state"] == "shipped"
-        if not shipped:
-            continue
-        pairs = list(rec["closes"])
-        if rec["own"]:
-            pairs.append(rec["own"])
-        for pair in pairs:
-            if pair in wanted:
-                evidence.setdefault(pair, []).append((rel(path), kind))
-
-    stale: list[tuple[str, str, str, str, str]] = []
-    for stub_rel, pair, state in live:
-        carriers = [e for e in sorted(evidence.get(pair, ())) if e[0] != stub_rel]
-        if carriers:
-            stale.append((stub_rel, f"{pair[0]}/{pair[1]}", state, carriers[0][1], carriers[0][0]))
-    if not stale:
-        return ReaderResult()
-
-    lines = [
-        f"{path} ({pair}, {state}) <- {kind} {ev}" for path, pair, state, kind, ev in stale
-    ]
-    return ReaderResult(judgment_points=[build_judgment_point(
-        {
-            "disposition": "close_stubs",
-            "rationale": "a shipping record already carries each stub's pair; "
-            "closing is the recorded remedy (handoff.close_origin_stub)",
-        },
-        id="j-stale-origin-stubs",
-        question=f"{len(stale)} live origin stub(s) already have a shipping record. Close them?",
-        dispositions=[build_disposition("close_stubs"), build_disposition("leave_as_is")],
-        evidence=truncate_external_text("; ".join(lines)),
-        reason="the shipping record may not be the stub's own; closing is the EM's confirmation",
-        reportable=True,
-    )])
-
-
-def _plugin_mirrors(flat: Mapping[str, Any]) -> dict[str, dict[str, str]]:
-    prefix = "plugin.mirrors."
-    mirrors: dict[str, dict[str, str]] = {}
-    for key, val in flat.items():
-        if not key.startswith(prefix):
-            continue
-        name, _, field = key[len(prefix):].partition(".")
-        if name and field:
-            mirrors.setdefault(name, {})[field] = "" if val is None else str(val).strip()
-    return mirrors
-
-
-def _plugin_drift(ctx: _Ctx) -> ReaderResult:
-    """REQ-H8 (day): has a `copy_install` plugin mirror drifted?
-
-    A deliberately weaker, pure-file-read check than the full `check-plugin-drift` walk:
-    the live install's `version.txt` sentinel is absent or not a 40-hex sha, or the source
-    `pyproject.toml` hash differs from the refresh-log baseline. It can miss a live-tree
-    edit that leaves both intact; the directive names the full walk.
-    """
-    from coordinator_core.plugin_health import refresh_log as drift
-
-    mirrors = _plugin_mirrors(ctx.flat)
-    refresh_log = drift.resolve_refresh_log()
-    found: list[str] = []
-    for name in sorted(mirrors):
-        m = mirrors[name]
-        if m.get("propagation_mode") != "copy_install":
-            continue
-        legs: list[str] = []
-        live = Path(m.get("live_path", "").replace("\\", "/") or os.devnull)
-        sentinel = live / "version.txt"
-        try:
-            sha = sentinel.read_text(encoding="utf-8", errors="replace").strip("\r\n")
-        except OSError:
-            sha = None
-        if sha is None:
-            legs.append("sentinel missing")
-        elif not _SHA40_RE.match(sha):
-            legs.append("sentinel malformed")
-        source = m.get("source_path", "")
-        pyproject = Path(source.replace("\\", "/")) / "pyproject.toml" if source else None
-        if pyproject is not None and pyproject.is_file():
-            try:
-                current = drift.pyproject_hash(pyproject)
-            except OSError:
-                current = ""
-            baseline = drift.refresh_log_baseline_hash(refresh_log, name) if current else ""
-            if baseline and baseline != current:
-                legs.append("pyproject changed since last refresh")
-        if legs:
-            found.append(f"{name} ({', '.join(legs)})")
-    if not found:
-        return ReaderResult()
-    return ReaderResult(directives=[_directive(
-        "d-plugin-drift",
-        "check-plugin-drift",
-        [],
-        "plugin mirror drift: " + "; ".join(found) + " -- full walk: check-plugin-drift",
-    )])
-
-
 def _git_maintenance(ctx: _Ctx) -> ReaderResult:
-    """REQ-H9 (day, week): is git-maintenance liveness stale or never stamped for this repo?
+    """REQ-H9 (week): is git-maintenance liveness stale or never stamped for this repo?
 
     Reads the stamp only; never runs a maintenance tier. The never-stamped and stale
     states are distinct and both fire, because "maintenance never ran" and "ran and is
@@ -653,7 +421,7 @@ def _git_maintenance(ctx: _Ctx) -> ReaderResult:
     """
     from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 
-    tier = {"day": "daily", "week": "weekly"}[ctx.cadence]
+    tier = "weekly"
     status = hl.liveness_status(str(ctx.root), [hl.GIT_MAINTENANCE])[hl.GIT_MAINTENANCE]
     if status == hl.STATUS_FRESH:
         return ReaderResult()
@@ -735,7 +503,7 @@ def _trail_scope(ctx: _Ctx) -> ReaderResult:
 
 
 # (name, probe, cadences it runs at)
-_ALL = ("session", "day", "week")
+_ALL = ("session", "week")
 _PROBES: tuple[tuple[str, Callable[[_Ctx], ReaderResult], tuple[str, ...]], ...] = (
     ("REQ-H1", _claude_klabauter_bin_sentinel, _ALL),
     ("REQ-H2", _working_repo_registration, _ALL),
@@ -743,9 +511,7 @@ _PROBES: tuple[tuple[str, Callable[[_Ctx], ReaderResult], tuple[str, ...]], ...]
     ("REQ-H4", _git_perf_currency, _ALL),
     ("REQ-H5", _ceremony_hook, _ALL),
     ("REQ-H6", _marker_freshness, _ALL),
-    ("REQ-H7", _stale_origin_stubs, ("day",)),
-    ("REQ-H8", _plugin_drift, ("day",)),
-    ("REQ-H9", _git_maintenance, ("day", "week")),
+    ("REQ-H9", _git_maintenance, ("week",)),
     ("REQ-H10", _goal_coverage, ("week",)),
     ("REQ-H11", _trail_scope, ("week",)),
 )

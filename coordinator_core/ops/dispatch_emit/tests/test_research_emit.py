@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import coordinator_core.ops.dispatch_emit as _pkg
 from coordinator_core.ops import research_shape
+from coordinator_core.ops.dispatch_emit import cli as cli_module
+from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit import research_emit as re_
-from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+from coordinator_core.ops.dispatch_emit.pipeline_contract import HaltCount, PipelineEmitRefused, PipelineInputs
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
+from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing
 
 CONTENT = Path(__file__).parent / "fixtures" / "pipeline_research"
 SCRATCH = "scratch/run-1"
@@ -73,7 +79,10 @@ def test_slug_is_filename_safe_and_capped():
 
 
 def test_notebooklm_and_web_corpus_yields_preflight_web_notebooklm_all_valid():
-    shape, segs = _segments({"value_class": "corpus", "sources": ["web", "notebooklm"]})
+    shape, segs = _segments(
+        {"value_class": "corpus", "sources": ["web", "notebooklm"]},
+        targets=[{"source": "notebooklm", "ref": "A"}],
+    )
     assert shape["pipelines"] == ["nlm-preflight", "web", "notebooklm"]
     assert [p for p, _ in segs] == ["nlm-preflight", "web", "notebooklm"]
     assert all(i.brief == BRIEF and i.scratch_dir == SCRATCH for _, i in segs)
@@ -152,3 +161,93 @@ def test_no_context_keeps_the_brief_and_a_missing_file_is_refused(tmp_path):
     assert re_.bind_context(tmp_path, SCRATCH, "b.md", []) == "b.md"
     with pytest.raises(PipelineEmitRefused, match="nope.md"):
         re_.bind_context(tmp_path, SCRATCH, "b.md", ["nope.md"])
+
+
+def _gated():
+    return re_.gate_notebooklm(load_manifest(CONTENT, "notebooklm"))
+
+
+def _stage(manifest, sid):
+    return next(s for s in manifest.stages if s.id == sid)
+
+
+def test_gate_binds_the_scope_and_scout_halts_and_fans_workers_over_the_scope_return():
+    manifest = _gated()
+    scope, scout, workers = (_stage(manifest, s) for s in ("scope", "scout", "workers"))
+    assert scope.halts_unless_count.fields == ("worker_count", "notebooks")
+    assert scope.halts_unless_count.equals == "notebooks"
+    assert manifest.schemas[scope.schema]["required"] == ["strategy_path", "worker_count", "notebooks"]
+    assert scout.halts_unless_nonempty == "usable_sources"
+    assert "403" in manifest.schemas[scout.schema]["properties"]["usable_sources"]["items"]["properties"]["ref"]["description"]
+    assert (workers.fan_out.source, workers.fan_out.field) == ("scope", "notebooks")
+    assert not workers.fan_out.over_inputs
+
+
+@pytest.mark.parametrize("missing", ["scope", "scout", "workers", "sweep"])
+def test_gate_refuses_a_manifest_lacking_a_gated_stage_id(missing):
+    manifest = load_manifest(CONTENT, "notebooklm")
+    stripped = replace(manifest, stages=tuple(s for s in manifest.stages if s.id != missing))
+    with pytest.raises(PipelineEmitRefused, match=f"lacks stage '{missing}'"):
+        re_.gate_notebooklm(stripped)
+
+
+def test_gate_keeps_a_stage_s_own_declared_halt():
+    manifest = load_manifest(CONTENT, "notebooklm")
+    own = HaltCount(("worker_count",), "notebooks")
+    stages = tuple(replace(s, halts_unless_count=own) if s.id == "scope" else s for s in manifest.stages)
+    assert _stage(re_.gate_notebooklm(replace(manifest, stages=stages)), "scope").halts_unless_count is own
+
+
+def test_gated_manifest_validates_and_names_the_claims_output():
+    manifest = _gated()
+    inputs = PipelineInputs(brief=BRIEF, subjects=(), scratch_dir=SCRATCH, flags={}, lists={"notebooks": ("A", "B")})
+    validate(manifest, inputs)
+    assert re_.claims_output(manifest) == "merged-claims.json"
+
+
+class _Admitted:
+    @staticmethod
+    def await_admission(start_dir, *, hold_allowed):
+        return {"verdict": "disabled"}
+
+
+def _emit_from_sizing(monkeypatch, tmp_path, capsys, *research_flags):
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: CONTENT)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-research-gate")
+    rel = _write_sizing(tmp_path, "--research-class", "corpus", "--research-source", "notebooklm", *research_flags)
+    capsys.readouterr()
+    assert cli_module.main(["--from-sizing", rel]) == cli_module.EXIT_OK
+    return json.loads(capsys.readouterr().out)
+
+
+def test_a_notebooklm_run_halts_on_scope_and_scout_and_requires_claims_under_its_dir(monkeypatch, tmp_path, capsys):
+    reply = _emit_from_sizing(monkeypatch, tmp_path, capsys, "--research-target", "notebooklm=A", "--research-target", "notebooklm=B")
+    assert reply["next_action"]["params"]["require_claims"] == ["notebooklm/merged-claims.json"]
+    script = Path(reply["path"]).read_text(encoding="utf-8")
+    assert "usable_sources" in script and "worker_count" in script
+
+
+def test_a_notebooklm_manifest_missing_a_gated_id_is_refused_at_emit(monkeypatch, tmp_path, capsys):
+    from coordinator_core.ops.dispatch_emit import pipeline_manifest as pm
+
+    original = pm.load_manifest
+
+    def without_scout(root, name):
+        m = original(root, name)
+        return replace(m, stages=tuple(s for s in m.stages if s.id != "scout")) if name == "notebooklm" else m
+
+    monkeypatch.setattr(pm, "load_manifest", without_scout)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: CONTENT)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-research-gate")
+    rel = _write_sizing(
+        tmp_path, "--research-class", "corpus", "--research-source", "notebooklm", "--research-target", "notebooklm=A"
+    )
+    capsys.readouterr()
+    assert cli_module.main(["--from-sizing", rel]) != cli_module.EXIT_OK
+    assert "lacks stage 'scout'" in capsys.readouterr().err

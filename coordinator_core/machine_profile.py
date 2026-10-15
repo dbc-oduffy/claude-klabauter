@@ -228,6 +228,8 @@ GUARD_DEFAULT_LEVEL = {
     "check-test-suite-invocation": "strict",
     # PM ruling 2026-10-10: blocks. A warning reads as permission to proceed.
     "guard-heavy-command-admission": "strict",
+    # PM ruling R1 2026-10-15: a cap warning everyone ignores does not hold the cap.
+    "guard-memory-store-cap": "strict",
 }
 
 #: Guards whose deny is floor for a dispatched caller only: no level lowers it

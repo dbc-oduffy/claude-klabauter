@@ -366,6 +366,14 @@ def test_the_execute_wave_is_tier_filtered_by_the_fire_time_size_from_the_one_ma
     assert script.count(".includes(") >= 1 and "_deliveryVerdict = _reviewWave[" in script
 
 
+def test_the_ask_script_predeclares_and_assigns_the_delivery_not_run_reason():
+    script = _compose(review_roster_fragment=_tiered_roster())
+    assert script.count("let _deliveryNotRun = null;") == 1
+    assert "const _deliveryNotRun" not in script
+    assert "  _deliveryNotRun = _deliveryVerdict ? null : (_deliveryNotRunReason ?? 'returned no result');" in script
+    assert "excludes coordinator:delivery-verifier" in script
+
+
 def test_a_roster_without_tiers_composes_an_ungated_wave():
     assert '.includes((' not in _compose().split("phase('Review wave')")[1].split("phase('Review integration')")[0]
 
@@ -386,3 +394,14 @@ def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshi
     program = f"const _gate = {{ tshirt: {json.dumps(tshirt)} }}; console.log({ask_compose._fire_tier_js()});"
     out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30)
     assert out.stdout.strip() == tier, out.stderr
+
+
+def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_guard():
+    script = _compose()
+    assert "readyOp:" in script
+    for entry in ("_ready", "_reready"):
+        adopt = f"Array.isArray({entry}.readyOpReply?.rows)) {{ _stagedManifest = {entry}.readyOpReply; }}"
+        assert adopt in script and f"!{entry}.readyOpReply?.error" in script
+    body = script.split("if (_stagedManifest) { _manifest = _stagedManifest; } else {", 1)[1]
+    assert "phase('stage')" in body.split("label: 'stage'", 1)[0]
+    assert "phase('stage')" not in script.split("if (_stagedManifest) { _manifest = _stagedManifest; } else {", 1)[0]

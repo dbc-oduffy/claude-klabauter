@@ -3758,6 +3758,8 @@ def _write_agent_helper_forwarders(
     resolver_module: "Optional[str]" = None,
     static_family_names: "frozenset[str]" = frozenset(),
     withheld_names: "frozenset[str]" = frozenset(),
+    publisher_only_names: "frozenset[str]" = frozenset(),
+    publisher_only_launchable: "frozenset[str]" = frozenset(),
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
     ``_install_bin_resolvers`` so a second caller (the missing-forwarder
@@ -3919,6 +3921,21 @@ def _write_agent_helper_forwarders(
                 door_source = None
         for f, target in sorted({**published_only, **agent_helper_target_map}.items()):
             try:
+                if _is_publisher_only_name(f, target, publisher_only_names):
+                    if not check_only:
+                        _retire_door_images(bin_dst, {f})
+                        door_install.remove_stale_named_forwarder(bin_dst, f)
+                    if not _is_publisher_only_name(f, target, publisher_only_launchable):
+                        continue
+                    py_dst = bin_dst / f
+                    if resolver_module is None:
+                        resolver_module = _installed_resolver_module(bin_dst)
+                    _write_agent_forwarder(
+                        f, py_dst, check_only, target=target,
+                        resolver_module=resolver_module,
+                    )
+                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+                    continue
                 native_dst = _cut_over_to_native_door(
                     f, bin_dst, check_only, engine_root=engine_root,
                     static_family_names=static_family_names, source=door_source,
@@ -4038,7 +4055,9 @@ def _live_source_tree_resolver(live_source_root: Path) -> "Optional[Path]":
     return found[0] if len(found) == 1 else None
 
 
-def _publisher_only_names(live_root: Path) -> "frozenset[str]":
+def _publisher_only_names(
+    live_root: Path, attr: str = "PUBLISHER_ONLY_TARGETS",
+) -> "frozenset[str]":
     """The live source tree resolver's own ``PUBLISHER_ONLY_TARGETS`` (on-disk
     filenames): CLIs no mirror-baked engine can serve. Empty when the tree has
     no single resolver or the resolver declares none."""
@@ -4052,7 +4071,18 @@ def _publisher_only_names(live_root: Path) -> "frozenset[str]":
         return frozenset()
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return frozenset(getattr(module, "PUBLISHER_ONLY_TARGETS", ()))
+    return frozenset(getattr(module, attr, ()))
+
+
+def _is_publisher_only_name(
+    name: str, target: str, publisher_only_names: "frozenset[str]",
+) -> bool:
+    """True when the installed ``name`` / on-disk ``target`` is a member of the
+    resolver's ``PUBLISHER_ONLY_TARGETS`` (bare or ``.py`` spelling)."""
+    return bool(
+        publisher_only_names
+        and {name, f"{name}.py", target} & publisher_only_names
+    )
 
 
 def _door_leg_target_map(
@@ -4127,6 +4157,19 @@ def _install_live_source_tree_forwarders(
         return frozenset()
 
     live_map = _derive_agent_helper_target_map(live_bin)
+    publisher_only = _publisher_only_names(live_root)
+    launchable = _publisher_only_names(live_root, "PUBLISHER_ONLY_LAUNCHABLE")
+    no_launcher = {
+        name for name, target in live_map.items()
+        if _is_publisher_only_name(name, target, publisher_only)
+        and not _is_publisher_only_name(name, target, launchable)
+    }
+    live_map = {n: t for n, t in live_map.items() if n not in no_launcher}
+    if no_launcher and not check_only:
+        from coordinator_core.install import door_install
+        _retire_door_images(bin_dst, no_launcher)
+        for name in no_launcher:
+            door_install.remove_stale_named_forwarder(bin_dst, name)
     protected = frozenset(
         set(live_map)
         | set(_resolve_agent_cmd_dest_collisions(live_map).values())
@@ -4335,6 +4378,10 @@ def _install_bin_resolvers(
     agent_helper_resolved = _write_agent_helper_forwarders(
         door_leg_target_map, bin_dst, check_only,
         withheld_names=frozenset(agent_helper_target_map) - frozenset(door_leg_target_map),
+        publisher_only_names=_publisher_only_names(claude_klabauter_root_resolved),
+        publisher_only_launchable=_publisher_only_names(
+            claude_klabauter_root_resolved, "PUBLISHER_ONLY_LAUNCHABLE"
+        ),
         engine_root=_door_engine_root(),
         resolver_module=resolver_module,
         static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),

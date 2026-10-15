@@ -71,6 +71,43 @@ def test_malformed_line_and_terminal_stamp_are_skipped_not_fatal(tmp_path):
     assert list(summary.keys()) == ["a1"]
 
 
+def _agent(tmp_path, agent_id, phase, model, records):
+    (tmp_path / f"agent-{agent_id}.meta.json").write_text(
+        json.dumps({"workflowPhase": phase, "model": model, "agentType": "x"}), encoding="utf-8")
+    if records is not None:
+        (tmp_path / f"agent-{agent_id}.jsonl").write_text(
+            "not json\n" + "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+
+def _rec(msg_id, inp, cc, out, cr):
+    return {"type": "assistant", "message": {"id": msg_id, "usage": {
+        "input_tokens": inp, "cache_creation_input_tokens": cc,
+        "output_tokens": out, "cache_read_input_tokens": cr}}}
+
+
+def test_phase_tokens_dedups_by_message_id_and_groups_phase(tmp_path):
+    journal = _write_journal(tmp_path, [])
+    _agent(tmp_path, "a", "Prep gate", "sonnet", [_rec("m1", 1, 2, 3, 10), _rec("m1", 1, 2, 3, 10)])
+    _agent(tmp_path, "b", "Prep gate", "haiku", [_rec("m2", 0, 0, 4, 5)])
+    phases = wj.phase_tokens(str(journal))
+    assert phases["Prep gate"] == {
+        "agents": 2, "models": ["sonnet", "haiku"], "fresh": 10, "cache_read": 15}
+
+
+def test_phase_tokens_skips_meta_without_transcript(tmp_path):
+    journal = _write_journal(tmp_path, [])
+    _agent(tmp_path, "a", "stage", "haiku", None)
+    assert wj.phase_tokens(str(journal)) == {}
+
+
+def test_cli_tokens_prints_table_exit_zero(tmp_path, capsys):
+    journal = _write_journal(tmp_path, [])
+    _agent(tmp_path, "a", "stage", "haiku", [_rec("m1", 1, 1, 1, 7)])
+    assert wj.main(["workflow-journal", str(journal), "--tokens"]) == wj.EXIT_OK
+    out = capsys.readouterr().out
+    assert "stage" in out and "TOTAL" in out and "7" in out
+
+
 def test_cli_label_filter_and_missing_label_exit_code(tmp_path, capsys):
     events = [
         {"agentId": "a1", "type": "started", "label": "executor-C1"},

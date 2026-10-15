@@ -6813,8 +6813,50 @@ def _deny_reason(
 _RUN_TOKEN_OP = "dispatch.terminal_commit"
 
 
+def _bare_params_file_value(args: List[str]) -> Optional[str]:
+    """The path of a lone `--params-file <path>` (path is not `-`), else None."""
+    if len(args) == 2 and args[0] == "--params-file" and args[1] != "-":
+        return args[1]
+    return None
+
+
+def _prompt_sourced_params_admit(
+    typed_path: str, git_root: str, transcript_path: Any
+) -> bool:
+    """Admit `--params-file <path>` from the spawn's own prompt, writing the file itself.
+
+    Trap: params come only from the spawn prompt's block, never from the typed text and never
+    from the file at `typed_path` (reading it would let any file authorize a commit). The
+    typed path must be the canonical one for the prompt's run id; an unreadable transcript
+    denies rather than falling back to typed text.
+    """
+    from pathlib import Path
+
+    from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_params_channel as chan
+
+    params = chan.prompt_params(chan.read_spawn_prompt(transcript_path))
+    if params is None:
+        return False
+    canonical = chan.params_path(git_root, params["run_id"])
+    if canonical is None:
+        return False
+    try:
+        if Path(typed_path).resolve() != canonical.resolve():
+            return False
+    except (OSError, ValueError):
+        return False
+    if not run_token.admits(git_root, params["run_id"], params["run_token"], params["script_path"]):
+        return False
+    return chan.materialize(canonical, params)
+
+
 def _warp_run_token_admits(
-    raw_cmd: str, cmd_for_scan: str, git_root: str, legs: Set[str], heredoc_hit: bool
+    raw_cmd: str,
+    cmd_for_scan: str,
+    git_root: str,
+    legs: Set[str],
+    heredoc_hit: bool,
+    transcript_path: Any = None,
 ) -> bool:
     """A warp run's own terminal commit: exactly one bare `coordinator-invoke
     dispatch.terminal_commit <params>` segment whose params carry the run token the emit
@@ -6842,6 +6884,10 @@ def _warp_run_token_admits(
     if any(t.split("=", 1)[0] == "--repo" for t in seg[1:op_idx]):
         return False
     from coordinator_core.ops.dispatch_emit import run_token
+
+    params_file = _bare_params_file_value(seg[op_idx + 1:])
+    if params_file is not None:
+        return _prompt_sourced_params_admit(params_file, git_root, transcript_path)
 
     params = run_token.token_params_from_command(raw_cmd)
     return params is not None and run_token.admits(
@@ -7000,7 +7046,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if may_commit:
             return None
         if git_root and _warp_run_token_admits(
-            cmd, cmd_for_scan, git_root, payload_legs, heredoc_stdin_import_hit
+            cmd,
+            cmd_for_scan,
+            git_root,
+            payload_legs,
+            heredoc_stdin_import_hit,
+            transcript_path=payload.get("transcript_path"),
         ):
             return None
 

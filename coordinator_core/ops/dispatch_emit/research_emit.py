@@ -2,11 +2,13 @@
 
 `segments_for` turns a research.shape result into the ordered `(pipeline, PipelineInputs)` segments
 the chain composer runs; `write_ask` writes the ask file the scouts read as `{{brief}}`;
-`bind_context` names the caller's non-corpus context files in the brief every member reads.
+`bind_context` names the caller's non-corpus context files in the brief every member reads;
+`gate_notebooklm` binds the scope/scout halts and the strategy-driven worker fan-out onto the
+notebooklm manifest, and `claims_output` names its sweep output for `research.close`'s `require_claims`.
 Scout questions are slugged to [a-z0-9-] (at most 48 chars) because the scouts template names
 `digest-{{item}}.md`.
 
-Negative-spec: loads and validates no manifest, composes no script, resolves no content root; the
+Negative-spec: loads and validates no manifest (`gate_notebooklm` only rewrites one it is handed), composes no script, resolves no content root; the
 only writes are ask.md and brief.md under the caller's repo-relative scratch dir.
 """
 
@@ -15,13 +17,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from coordinator_core.ops import _research_contract as rc
-from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
+from coordinator_core.ops.dispatch_emit.pipeline_contract import (
+    FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
+)
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "ask_digest", "run_id_for", "bind_context", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -190,6 +195,85 @@ def bind_context(root: Path, scratch_rel: str, brief_rel: str, context: Sequence
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(f"The brief is `{brief_rel}`; read it first.\n\n{section}", encoding="utf-8", newline="\n")
     return rel
+
+
+_GATED_STAGES = ("scope", "scout", "workers", "sweep")
+_SCRATCH_PREFIX = "{{scratch_dir}}/"
+
+_SCOPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "strategy_path": {"type": "string"},
+        "worker_count": {"type": "integer"},
+        "notebooks": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["strategy_path", "worker_count", "notebooks"],
+}
+
+_SCOUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "usable_sources": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "notebook": {"type": "string"},
+                    "ref": {
+                        "type": "string",
+                        "description": (
+                            "A source is usable only when its content was fetched. A 403 or other error "
+                            "page, an empty page or a login wall is not usable. A notebook whose strategy "
+                            "says research_start contributes one entry with ref research_start."
+                        ),
+                    },
+                },
+                "required": ["notebook", "ref"],
+            },
+        },
+    },
+    "required": ["usable_sources"],
+}
+
+
+def gate_notebooklm(manifest: Manifest) -> Manifest:
+    """The notebooklm manifest with the scope count gate, the scout usable-sources gate and workers fanned over strategy.md's notebooks.
+
+    A stage that already declares a schema or halt keeps it. Refuses a manifest lacking any of the
+    stage ids scope, scout, workers and sweep, naming the missing ones.
+    """
+    ids = {stage.id for stage in manifest.stages}
+    missing = [sid for sid in _GATED_STAGES if sid not in ids]
+    if missing:
+        raise PipelineEmitRefused([
+            f"notebooklm manifest lacks stage {sid!r}; the research gate binds scope, scout, workers and sweep"
+            for sid in missing
+        ])
+    schemas = dict(manifest.schemas)
+    stages = []
+    for stage in manifest.stages:
+        if stage.id == "scope":
+            if stage.schema is None:
+                schemas["<inline:scope>"] = _SCOPE_SCHEMA
+                stage = replace(stage, schema="<inline:scope>")
+            if stage.halts_unless_count is None:
+                stage = replace(stage, halts_unless_count=HaltCount(("worker_count", "notebooks"), "notebooks"))
+        elif stage.id == "scout":
+            if stage.schema is None:
+                schemas["<inline:scout>"] = _SCOUT_SCHEMA
+                stage = replace(stage, schema="<inline:scout>")
+            if stage.halts_unless_nonempty is None:
+                stage = replace(stage, halts_unless_nonempty="usable_sources")
+        elif stage.id == "workers":
+            stage = replace(stage, fan_out=FanOut(kind=FAN_OUT_OVER, source="scope", field="notebooks"))
+        stages.append(stage)
+    return replace(manifest, stages=tuple(stages), schemas=schemas)
+
+
+def claims_output(manifest: Manifest) -> str:
+    """The sweep stage's output path relative to the segment's scratch dir."""
+    sweep = next(stage for stage in manifest.stages if stage.id == "sweep")
+    return sweep.output.removeprefix(_SCRATCH_PREFIX)
 
 
 def _deep_roster(sources: Sequence[str]) -> list[dict[str, str]]:

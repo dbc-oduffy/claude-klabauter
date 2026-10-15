@@ -92,7 +92,7 @@ __all__ = ["ReaderResult", "collect"]
 
 #: the one cadence this reader self-gates on — the seam calls every reader
 #: unconditionally for every cadence and trusts each to self-gate (mirrors
-#: `orient-assemble brief --cadence day`'s day-cadence-only health gating, one
+#: `orient-assemble brief`'s per-cadence health gating, one
 #: layer up: there the gate is a cadence VALUE test, here it is a cadence
 #: IDENTITY test, since this reader owns exactly one of backlog-grind's five
 #: mirror surfaces rather than a severity-tuned subset of a shared one).

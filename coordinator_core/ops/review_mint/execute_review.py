@@ -55,6 +55,14 @@ _DELIVERY_VERIFIER_AGENT_TYPE = "coordinator:delivery-verifier"
 #: exposes a readable currency signal -- then route this type through
 #: `_HOST_NATIVE_AGENT_TYPE_ROSTER` like the rest and drop both constants.
 _DELIVERY_VERIFIER_HOST_NATIVE_TYPE = "general-purpose"
+
+#: Block-local JS slot the in-wave delivery paths write their null reason into; the block publishes
+#: it as `_deliveryNotRun` after the wave. Never a `let _deliveryNotRun` in the block:
+#: `emit._unconst` strips only `const `, so it would shadow the script-scope pre-declaration.
+_DELIVERY_REASON_VAR = "_deliveryNotRunReason"
+_DELIVERY_REJECTED_JS = (
+    f"{_DELIVERY_REASON_VAR} = 'rejected: ' + String(e && e.message || e);"
+)
 _DELIVERY_VERIFIER_ROLE_PREAMBLE = (
     "You are acting as the delivery-verifier reviewer: confirm the diff "
     "actually delivers what the plan/brief promised (not just that it "
@@ -175,16 +183,19 @@ def _size_gated(full_prompt: str, lean_prompt: str) -> str:
     return f"({_SMALL_DIFF_JS} ? {_prompt_literal(lean_prompt)} : {_prompt_literal(full_prompt)})"
 
 
-def _degrading(call: str) -> str:
+def _degrading(call: str, on_error: str = "") -> str:
     """``call`` (``agent(...)`` or ``() => agent(...)``) rewritten so a
     rejection resolves to ``null`` instead of throwing the run past its
     terminal commit. Null, not an object: the wake digest's review and
     delivery legs treat any truthy result as a phase that ran, and null is
-    already their not_run reading. Review-phase calls only."""
+    already their not_run reading. ``on_error`` is a JS statement run in the
+    catch, with the rejection bound to ``e``, before the null return.
+    Review-phase calls only."""
     body = call[len("() => "):] if call.startswith("() => ") else call
     wrapped = (
         "(async () => { try { return await " + body + "; } catch (e) { "
-        "return null; } })()"
+        + (on_error + " " if on_error else "")
+        + "return null; } })()"
     )
     return f"() => {wrapped}" if call.startswith("() => ") else wrapped
 
@@ -740,11 +751,16 @@ def compose_execute_review(
             )
         )
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
-        degraded = _degrading(call)
+        degraded = _degrading(call, _DELIVERY_REJECTED_JS if is_delivery_verifier else "")
         line = degraded if is_delivery_verifier else f"() => _verifyOnly ? null : ({degraded})()"
         gate = _tier_gate(agent)
         if gate:
-            line = f"() => ({gate} ? ({line})() : null)"
+            skipped = (
+                f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
+                if is_delivery_verifier
+                else "null"
+            )
+            line = f"() => ({gate} ? ({line})() : {skipped})"
         item_lines.append(f"    {line}")
 
     map_lines = ",\n".join(item_lines)
@@ -758,17 +774,25 @@ def compose_execute_review(
         None,
     )
 
-    wave_lines = [
-        f"  phase({_js_string_literal(wave_phase)});",
-        f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);",
-    ]
+    wave_lines = [f"  phase({_js_string_literal(wave_phase)});"]
+    if delivery_index is not None:
+        wave_lines.append(f"  let {_DELIVERY_REASON_VAR} = null;")
+    wave_lines.append(f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);")
     if delivery_index is not None:
         offset_from_end = len(whole_diff_agents) - delivery_index
         wave_lines.append(
             f"  const _deliveryVerdict = _reviewWave[_reviewWave.length - {offset_from_end}];"
         )
+        wave_lines.append(
+            f"  const _deliveryNotRun = _deliveryVerdict ? null : ({_DELIVERY_REASON_VAR} ?? 'returned no result');"
+        )
     elif any(a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE for a in all_whole_diff_agents):
         wave_lines.append("  const _deliveryVerdict = null;")
+        wave_lines.append(
+            "  const _deliveryNotRun = "
+            + _js_string_literal(f"tier {tier} excludes {_DELIVERY_VERIFIER_AGENT_TYPE}")
+            + ";"
+        )
     phases.append((wave_phase, "\n".join(wave_lines)))
 
     # -- 3. integration (only when the fragment declares one stage) --------

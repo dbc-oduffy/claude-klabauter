@@ -14,7 +14,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
-from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+from coordinator_core.ops.dispatch_emit.pipeline_contract import ITEM_MARK, PipelineEmitRefused
 from coordinator_core.ops.dispatch_emit.pipeline_inputs import subjects_from_value
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest
 from coordinator_core.ops.dispatch_emit.tests.pipeline_graph import agent_graph, subjects
@@ -237,7 +237,8 @@ def test_flag_when_removes_the_stage_and_its_phase(monkeypatch, tmp_path):
     script = _run(monkeypatch, tmp_path, stages, inputs, flags={"mode": "plan"}, lists={"xs": ["a", "b"]})
     assert "phases: ['On', 'After']" in script
     assert len(agent_graph(script)) == 2
-    assert "do a for" in script and "do b for" in script
+    assert script.count("do {ITEM} for".replace("{ITEM}", json.dumps(ITEM_MARK)[1:-1])) == 1
+    assert '"a"' in script and '"b"' in script
 
 
 def test_flag_without_a_value_is_refused_and_a_boolean_flag_defaults_false(monkeypatch, tmp_path):
@@ -337,6 +338,22 @@ def test_doe_manifest_emits(pipeline, monkeypatch, tmp_path):
     script = _emit(monkeypatch, tmp_path, root, pipeline, **_DOE_CASES[pipeline])
     assert agent_graph(script)
     assert re.search(r"phases: \['[^']+'", script)
+
+
+def test_research_gate_accepts_does_live_notebooklm_manifest():
+    from coordinator_core.ops.dispatch_emit import research_emit
+    from coordinator_core.ops.dispatch_emit.pipeline_manifest import validate
+    from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineInputs
+
+    root = _doe_content_root()
+    if root is None:
+        pytest.skip("coordinator-content-repo tree not present")
+    gated = research_emit.gate_notebooklm(load_manifest(root, "notebooklm"))
+    inputs = PipelineInputs(
+        brief="brief.md", subjects=(), scratch_dir="scratch/r", flags={}, lists={"notebooks": ("a", "b")}
+    )
+    validate(gated, inputs)
+    assert research_emit.claims_output(gated) == "merged-claims.json"
 
 
 def test_every_doe_manifest_loads():

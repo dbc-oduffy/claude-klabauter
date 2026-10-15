@@ -48,9 +48,9 @@ import sys
 sys.path.insert(0, {engine_root!r})
 from coordinator_core import orient_brief
 try:
-    orient_brief.brief("day")
+    orient_brief.brief("session")
     for _ in range(int(sys.argv[1])):
-        orient_brief.brief("day")
+        orient_brief.brief("session")
 except NotImplementedError as exc:
     print("NOT_IMPLEMENTED " + str(exc))
 """
@@ -102,7 +102,7 @@ def test_warm_op_is_under_the_bar(tree, scratch):
 
 
 def test_cold_op_is_under_the_bar(tree, scratch):
-    cmd = [sys.executable, "-m", "coordinator_core.orient_brief", "brief", "--cadence", "day"]
+    cmd = [sys.executable, "-m", "coordinator_core.orient_brief", "brief", "--cadence", "session"]
     # cwd is the tree under measurement; PYTHONPATH supplies this engine to `-m`.
     res = single_invocation_tree_process_time(
         cmd,
@@ -134,7 +134,7 @@ def test_cold_cli_route_is_informational(tree, scratch):
         str(_ENGINE_ROOT / "coordinator" / "bin" / "orient-assemble.py"),
         "brief",
         "--cadence",
-        "day",
+        "session",
     ]
     res = single_invocation_tree_process_time(
         cmd,

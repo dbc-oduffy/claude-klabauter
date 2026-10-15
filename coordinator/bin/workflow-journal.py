@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -84,6 +85,81 @@ def summarize(journal_path: str) -> "dict[str, dict]":
     return agents
 
 
+def _int_field(usage: dict, key: str) -> int:
+    value = usage.get(key)
+    return value if isinstance(value, int) else 0
+
+
+def _transcript_usage(path: Path) -> "tuple[int, int]":
+    """(fresh+output, cache_read) summed over assistant records, one count per
+    `message.id`: a message split across content blocks repeats its usage."""
+    seen: "set[str]" = set()
+    fresh = cache_read = 0
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or record.get("type") != "assistant":
+                continue
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            message_id = message.get("id")
+            if isinstance(message_id, str) and message_id:
+                if message_id in seen:
+                    continue
+                seen.add(message_id)
+
+            fresh += (_int_field(usage, "input_tokens") + _int_field(usage, "cache_creation_input_tokens")
+                      + _int_field(usage, "output_tokens"))
+            cache_read += _int_field(usage, "cache_read_input_tokens")
+    return fresh, cache_read
+
+
+def phase_tokens(journal_path: str) -> "dict[str, dict]":
+    """Per-phase token totals from the `agent-<id>.meta.json` / `.jsonl` pairs
+    beside `journal_path`. Returns ``{phase: {"agents": int, "models": [str],
+    "fresh": int, "cache_read": int}}``. A meta without a readable transcript,
+    or an unreadable meta, is skipped."""
+    phases: "dict[str, dict]" = {}
+    for meta_path in sorted(Path(journal_path).resolve().parent.glob("agent-*.meta.json")):
+        transcript = meta_path.with_name(meta_path.name[: -len(".meta.json")] + ".jsonl")
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            fresh, cache_read = _transcript_usage(transcript)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        phase = meta.get("workflowPhase")
+        entry = phases.setdefault(
+            phase if isinstance(phase, str) and phase else "(no phase)",
+            {"agents": 0, "models": [], "fresh": 0, "cache_read": 0},
+        )
+        entry["agents"] += 1
+        entry["fresh"] += fresh
+        entry["cache_read"] += cache_read
+        model = meta.get("model")
+        if isinstance(model, str) and model and model not in entry["models"]:
+            entry["models"].append(model)
+    return phases
+
+
+def _print_tokens(phases: "dict[str, dict]") -> None:
+    print(f"{'phase':<28} {'agents':>6}  {'model':<16} {'fresh+output':>13} {'cache_read':>12}")
+    for name, e in phases.items():
+        print(f"{name:<28} {e['agents']:>6}  {','.join(e['models']):<16} "
+              f"{e['fresh']:>13} {e['cache_read']:>12}")
+    print(f"{'TOTAL':<28} {sum(e['agents'] for e in phases.values()):>6}  {'':<16} "
+          f"{sum(e['fresh'] for e in phases.values()):>13} "
+          f"{sum(e['cache_read'] for e in phases.values()):>12}")
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(
         prog="workflow-journal",
@@ -94,7 +170,19 @@ def main(argv: list) -> int:
     parser.add_argument(
         "--label", default=None, help="print only the agent whose label matches exactly"
     )
+    parser.add_argument(
+        "--tokens", action="store_true",
+        help="print a per-phase token table from the agent transcripts beside the journal",
+    )
     args = parser.parse_args(argv[1:])
+
+    if args.tokens:
+        phases = phase_tokens(args.journal)
+        if not phases:
+            print("workflow-journal: no agent transcripts beside this journal", file=sys.stderr)
+            return EXIT_OK
+        _print_tokens(phases)
+        return EXIT_OK
 
     try:
         agents = summarize(args.journal)

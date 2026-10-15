@@ -34,6 +34,18 @@ def memory_dir(monkeypatch, tmp_path):
     return mem
 
 
+_LEVEL_ENV = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_GUARD-MEMORY-STORE-CAP"
+
+
+@pytest.fixture(autouse=True)
+def _plain_deny_and_isolated_lessons(monkeypatch, tmp_path):
+    """Legacy classes assert the plain deny text (reroute unarmed at warn); the
+    lessons root is pinned so no test can write into the real repo."""
+    monkeypatch.setenv(_LEVEL_ENV, "warn")
+    monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path / "lessons-root"))
+    (tmp_path / "lessons-root").mkdir()
+
+
 def _rows(n: int, prefix: str = "x") -> str:
     return "\n".join(f"- [{prefix}{i}](slug{i}.md) short" for i in range(n))
 
@@ -439,3 +451,109 @@ class TestOverCapStoreCanShrink:
         target.write_text("# Memory Index\n\n" + _rows(8), encoding="utf-8")
         result = guard.check(_write_payload(str(target), "# Memory Index\n\n" + _rows(9)))
         assert result is not None
+
+
+class TestOverCapWriteReroutesToLesson:
+    """At strict the refused content lands in state/lessons/ and the deny names it."""
+
+    @pytest.fixture(autouse=True)
+    def _strict(self, monkeypatch):
+        monkeypatch.setenv(_LEVEL_ENV, "strict")
+
+    @staticmethod
+    def _lessons(tmp_path):
+        return sorted((tmp_path / "lessons-root" / "state" / "lessons").glob("*.yaml"))
+
+    @staticmethod
+    def _seed(memory_dir, n=None):
+        n = guard.MAX_MEMORY_FILES if n is None else n
+        for i in range(n):
+            (memory_dir / f"body-{i}.md").write_text(f"keep {i}", encoding="utf-8")
+
+    @staticmethod
+    def _snapshot(memory_dir):
+        return {p.name: p.read_bytes() for p in memory_dir.iterdir()}
+
+    @staticmethod
+    def _reason(result):
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        return result["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_overcap_body_write_reroutes_to_lesson_at_strict(self, memory_dir, tmp_path):
+        import yaml
+
+        self._seed(memory_dir)
+        before = self._snapshot(memory_dir)
+        content = "---\nname: Pin root\n---\n\nPin CLAUDE_KLABAUTER_ROOT first.\n"
+        result = guard.check(_write_payload(str(memory_dir / "sixth.md"), content))
+
+        lessons = self._lessons(tmp_path)
+        assert len(lessons) == 1
+        assert yaml.safe_load(lessons[0].read_text(encoding="utf-8"))["body"].strip() == content.strip()
+        reason = self._reason(result)
+        assert lessons[0].name in reason
+        assert "do not retry" in reason
+        assert self._snapshot(memory_dir) == before
+        assert not (memory_dir / "sixth.md").exists()
+
+    def test_overcap_body_bytes_reroute(self, memory_dir, tmp_path):
+        content = "x" * 900
+        reason = self._reason(guard.check(_write_payload(str(memory_dir / "big.md"), content)))
+        lessons = self._lessons(tmp_path)
+        assert len(lessons) == 1 and lessons[0].name in reason
+        assert content in lessons[0].read_text(encoding="utf-8")
+
+    def test_memory_md_reroutes_only_the_added_row(self, memory_dir, tmp_path):
+        import yaml
+
+        index = memory_dir / "MEMORY.md"
+        original = "# Memory Index\n\n" + _rows(5)
+        index.write_text(original, encoding="utf-8")
+        new_row = "- [brand-new](new.md) added row"
+        result = guard.check(_write_payload(str(index), original + "\n" + new_row))
+
+        lessons = self._lessons(tmp_path)
+        assert len(lessons) == 1
+        body = yaml.safe_load(lessons[0].read_text(encoding="utf-8"))["body"]
+        assert body.strip() == new_row
+        assert lessons[0].name in self._reason(result)
+        assert index.read_text(encoding="utf-8") == original
+
+    def test_warn_level_denies_plainly_and_writes_no_lesson(self, memory_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv(_LEVEL_ENV, "warn")
+        self._seed(memory_dir)
+        reason = self._reason(guard.check(_write_payload(str(memory_dir / "sixth.md"), "y")))
+        assert "evict oldest" in reason
+        assert self._lessons(tmp_path) == []
+
+    def test_failed_reroute_is_the_plain_deny_not_an_allow(self, memory_dir, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "reroute_to_lesson", lambda *a, **k: None)
+        self._seed(memory_dir)
+        reason = self._reason(guard.check(_write_payload(str(memory_dir / "sixth.md"), "y")))
+        assert "evict oldest" in reason
+        assert self._lessons(tmp_path) == []
+
+    def test_shrinking_edit_of_overcap_file_allowed_without_lesson(self, memory_dir, tmp_path):
+        target = memory_dir / "fat.md"
+        target.write_text("y" * 1000, encoding="utf-8")
+        result = guard.check(_edit_payload(str(target), old="y" * 1000, new="y" * 900))
+        assert result is None
+        assert self._lessons(tmp_path) == []
+
+    def test_same_refused_write_twice_is_one_lesson(self, memory_dir, tmp_path):
+        payload = _write_payload(str(memory_dir / "big.md"), "z" * 900)
+        first = self._reason(guard.check(payload))
+        second = self._reason(guard.check(payload))
+        assert first == second
+        assert len(self._lessons(tmp_path)) == 1
+
+    def test_reroute_leg_process_time_is_under_the_bar(self, memory_dir):
+        import time
+
+        guard.check(_write_payload(str(memory_dir / "warm.md"), "v" * 900))
+        payload = _write_payload(str(memory_dir / "big.md"), "w" * 900)
+        start = time.process_time()
+        reason = self._reason(guard.check(payload))
+        elapsed = time.process_time() - start
+        assert "Saved as a lesson" in reason
+        assert elapsed < 0.5

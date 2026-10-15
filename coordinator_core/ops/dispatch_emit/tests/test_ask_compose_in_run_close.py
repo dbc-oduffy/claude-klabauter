@@ -98,6 +98,24 @@ def test_refused_commit_halts_and_returns_revise_and_refire(monkeypatch):
     assert "kind: 'close_job'" in tail[: tail.index("else { if (!_halted)")]
 
 
+def test_commit_prompt_carries_a_path_command_and_an_uncopied_params_block(monkeypatch):
+    script = _script(monkeypatch, repo_root="C:/repo")  # abs-path-ok: drive-letter-shaped fixture root
+    command = (
+        "coordinator-invoke dispatch.terminal_commit --params-file "
+        "C:/repo/scratch/warp/run-1/terminal-commit-params.json"  # abs-path-ok: fixture root
+    )
+    # The product commit stage and the halt-record commit both run it.
+    assert script.count(command) == 2
+    start = script.rindex("phase: commit", 0, script.index("commit stage (`coordinator:git-commit-agent`"))
+    prompt = script[start : script.index("Return from its JSON reply", start)]
+    assert "--params-file -" not in prompt and "<<'JSON'" not in prompt
+    assert "_terminalCommitCli(" not in prompt
+    assert prompt.count("_terminalCommitParamsBlock({ ..._nextAction.params") == 1
+    assert script.count("function _terminalCommitParamsBlock(") == 1
+    assert "Do not copy, edit or pass it" in prompt
+    assert prompt.index(command) < prompt.index("_terminalCommitParamsBlock({")
+
+
 def test_token_less_composition_keeps_the_commit_hand_off(monkeypatch):
     script = _script(monkeypatch, in_run_commit=False)
     assert "revise_and_refire', op" not in script

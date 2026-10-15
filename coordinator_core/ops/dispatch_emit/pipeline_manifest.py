@@ -4,6 +4,11 @@ load_manifest answers: what stage graph does this pipeline declare? validate ans
 graph emittable for these inputs, and in what levels does it run? Both collect every refusal
 into one PipelineEmitRefused before raising. No spawn, no glob: the manifest and the files its
 stages name are the only reads.
+
+Constructs beyond the vendored schema: stage `halts_unless_nonempty: <array field>` and
+`halts_unless_count: {fields: [..], equals: inputs.<list>}` (claude-klabauter-side, both need an inline
+object schema on an un-fanned stage); `${CLAUDE_PLUGIN_ROOT}` in a template is bound to the
+content root at load.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_NONE, FAN_OUT_OVER, FAN_OUT_PER_SUBJECT, MANIFEST_SUFFIX, PIPELINES_DIR,
     PLACEHOLDER_RE, SCHEMA_VERSION, SCOPE_POST, SCOPE_PRE,
     SCOPE_SUBJECT, SUBJECTS_MODE_SEQUENTIAL, WHEN_FLAG, WHEN_NONEMPTY, WHEN_RETURN, FanOut,
-    FlagSpec, Manifest, PipelineEmitRefused, PipelineInputs, Schedule, Stage, VALIDATOR_TOKEN, When,
+    FlagSpec, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs, Schedule, Stage, VALIDATOR_TOKEN, When,
     subject_key, subject_slug, validator_bound,
 )
 
@@ -49,7 +54,9 @@ _LIST_KINDS = ("strings", "roster")
 _MODELS = ("haiku", "sonnet", "opus")
 _EFFORTS = ("low", "medium", "high")
 _WHEN_KEYS = {"flag", "return", "nonempty", "equals"}
-_STAGE_KEYS = set(_SCHEMA["$defs"]["stage"]["properties"])
+_CLAUDE_KLABAUTER_STAGE_KEYS = {"halts_unless_nonempty", "halts_unless_count"}
+_STAGE_KEYS = set(_SCHEMA["$defs"]["stage"]["properties"]) | _CLAUDE_KLABAUTER_STAGE_KEYS
+_PLUGIN_ROOT_TOKEN = "${CLAUDE_PLUGIN_ROOT}"
 _STAGE_REQUIRED = ("id", "template", "output")
 _SCOPE_RANK = {SCOPE_PRE: 0, SCOPE_SUBJECT: 1, SCOPE_POST: 2}
 
@@ -104,7 +111,7 @@ def load_manifest(content_root: Path, pipeline: str) -> Manifest:
         reasons.append("stages must be a non-empty list")
         raw_stages = []
     for index, raw_stage in enumerate(raw_stages):
-        stage = _load_stage(raw_stage, index, root, templates, schemas, reasons)
+        stage = _load_stage(raw_stage, index, root, templates, schemas, reasons, content_root.as_posix())
         if stage is not None:
             stages.append(stage)
 
@@ -205,7 +212,7 @@ def _load_when(raw: object, label: str, reasons: list[str]) -> When | None:
 
 def _load_stage(
     raw: object, index: int, root: Path, templates: dict[str, str], schemas: dict[str, dict],
-    reasons: list[str],
+    reasons: list[str], plugin_root: str,
 ) -> Stage | None:
     if not isinstance(raw, dict):
         reasons.append(f"stages[{index}] must be a mapping")
@@ -247,6 +254,11 @@ def _load_stage(
     if halts_unless is not None and not (isinstance(halts_unless, str) and _HALT_FIELD_RE.match(halts_unless)):
         reasons.append(f"{label}: halts_unless must be a field name matching ^[A-Za-z][A-Za-z0-9_]*$")
         halts_unless = None
+    halts_nonempty = raw.get("halts_unless_nonempty")
+    if halts_nonempty is not None and not (isinstance(halts_nonempty, str) and _HALT_FIELD_RE.match(halts_nonempty)):
+        reasons.append(f"{label}: halts_unless_nonempty must be a field name matching ^[A-Za-z][A-Za-z0-9_]*$")
+        halts_nonempty = None
+    halts_count = _load_halt_count(raw["halts_unless_count"], label, reasons) if "halts_unless_count" in raw else None
     when = _load_when(raw["when"], label, reasons) if "when" in raw else None
 
     depends = raw.get("depends_on") or []
@@ -263,7 +275,7 @@ def _load_stage(
     if isinstance(template, str):
         text = _read_named(root, template, f"{label} template", reasons)
         if text is not None:
-            templates[template] = text
+            templates[template] = text.replace(_PLUGIN_ROOT_TOKEN, plugin_root)
     if isinstance(schema, dict):
         if "type" not in schema:
             reasons.append(f"{label}: inline schema needs a type")
@@ -293,7 +305,27 @@ def _load_stage(
         output=raw["output"], phase=raw.get("phase"), agent_type_from=from_ref,
         effort=raw.get("effort"), max_concurrent=max_concurrent, when=when, optional=optional,
         produces_brief=produces_brief, halts_unless=halts_unless,
+        halts_unless_nonempty=halts_nonempty, halts_unless_count=halts_count,
     )
+
+
+def _load_halt_count(raw: object, label: str, reasons: list[str]) -> HaltCount | None:
+    if not isinstance(raw, dict) or set(raw) != {"fields", "equals"}:
+        reasons.append(f"{label}: halts_unless_count must be a mapping with exactly fields and equals")
+        return None
+    fields, equals = raw["fields"], raw["equals"]
+    ok = True
+    if not (
+        isinstance(fields, list) and fields and len(set(fields)) == len(fields)
+        and all(isinstance(f, str) and _HALT_FIELD_RE.match(f) for f in fields)
+    ):
+        reasons.append(f"{label}: halts_unless_count.fields must be a non-empty unique list of field names")
+        ok = False
+    match = _OVER_INPUTS_RE.match(equals) if isinstance(equals, str) else None
+    if match is None:
+        reasons.append(f"{label}: halts_unless_count.equals must be inputs.<list>")
+        ok = False
+    return HaltCount(fields=tuple(fields), equals=match.group(1)) if ok else None
 
 
 def _load_fan_out(raw: object, label: str, reasons: list[str]) -> FanOut | None:
@@ -361,6 +393,42 @@ def _check_halts_unless(stage: Stage, schemas: dict[str, dict], reasons: list[st
         reasons.append(f"stage {stage.id!r}: halts_unless needs a remedy property typed array of string")
 
 
+def _inline_halt_schema(stage: Stage, what: str, schemas: dict[str, dict], reasons: list[str]) -> dict | None:
+    """The stage's inline schema when a halt may be declared on it; else a refusal and None."""
+    if stage.fan_out.kind == FAN_OUT_OVER:
+        reasons.append(f"stage {stage.id!r}: {what} is not legal on a stage fanned over a list")
+    schema = schemas.get(stage.schema or "") if stage.schema and stage.schema.startswith("<inline:") else None
+    if schema is None:
+        reasons.append(f"stage {stage.id!r}: {what} needs an inline object schema")
+    return schema
+
+
+def _check_halts_nonempty(stage: Stage, schemas: dict[str, dict], reasons: list[str]) -> None:
+    schema = _inline_halt_schema(stage, "halts_unless_nonempty", schemas, reasons)
+    if schema is None:
+        return
+    name = stage.halts_unless_nonempty
+    field = (schema.get("properties") or {}).get(name)
+    if name not in (schema.get("required") or []) or not isinstance(field, dict) or field.get("type") != "array":
+        reasons.append(f"stage {stage.id!r}: halts_unless_nonempty {name!r} is not a required array field of its schema")
+
+
+def _check_halts_count(stage: Stage, schemas: dict[str, dict], lists: dict[str, str], reasons: list[str]) -> None:
+    schema = _inline_halt_schema(stage, "halts_unless_count", schemas, reasons)
+    halt = stage.halts_unless_count
+    if halt.equals not in lists:
+        reasons.append(f"stage {stage.id!r}: halts_unless_count.equals names undeclared list {halt.equals!r}")
+    if schema is None:
+        return
+    props, required = schema.get("properties") or {}, schema.get("required") or []
+    for name in halt.fields:
+        field = props.get(name)
+        if name not in required or not isinstance(field, dict) or field.get("type") not in ("integer", "array"):
+            reasons.append(
+                f"stage {stage.id!r}: halts_unless_count field {name!r} is not a required integer or array field of its schema"
+            )
+
+
 def _check_graph_shape(
     stages: list[Stage], schemas: dict[str, dict], flags: dict[str, FlagSpec],
     lists: dict[str, str], reasons: list[str],
@@ -386,6 +454,10 @@ def _check_graph_shape(
             reasons.append(f"stage {stage.id!r}: produces_brief is legal only on stages[0] with fan_out none")
         if stage.halts_unless is not None:
             _check_halts_unless(stage, schemas, reasons)
+        if stage.halts_unless_nonempty is not None:
+            _check_halts_nonempty(stage, schemas, reasons)
+        if stage.halts_unless_count is not None:
+            _check_halts_count(stage, schemas, lists, reasons)
         if stage.fan_out.over_inputs and stage.fan_out.inputs not in lists:
             reasons.append(f"stage {stage.id!r}: fan_out.over names undeclared list {stage.fan_out.inputs!r}")
         when = stage.when

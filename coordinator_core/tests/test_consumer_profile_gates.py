@@ -124,7 +124,6 @@ def test_check_rag_state_honours_injected_state_on_consumer(consumer, monkeypatc
 
 @pytest.mark.parametrize("modname", [
     "workday_start_cross_repo_memo_surface",
-    "workday_start_cross_repo_memo_outbox_surface",
 ])
 def test_workday_memo_surfaces_silent_on_consumer(consumer, capsys, modname):
     import importlib

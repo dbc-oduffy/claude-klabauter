@@ -62,6 +62,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     load_sizing,
     resolve_arm,
 )
+from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
@@ -94,7 +95,7 @@ _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
 )
-_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_reviewIntegration")
+_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", "_reviewIntegration")
 
 
 class AskComposeRefused(ValueError):
@@ -864,7 +865,10 @@ def compose_ask_script(
     b.append("  let _haltCommit = null;")
     if in_run_commit:
         b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
-        b.append(_halt_record_commit_fn(head=head, anchor=anchor, script_path=script_path))
+        b.append(f"  {PARAMS_BLOCK_JS}")
+        b.append(_halt_record_commit_fn(
+            head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
+        ))
     b.append("  let _ledger = null;")
     b.append(_AGENT_DEFS_HELPER_JS)
     if rb_fn:
@@ -1029,7 +1033,7 @@ def compose_ask_script(
         b.append("    _scouted.exit_criterion = _reworded.exit_criterion;")
         b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
         b.append(
-            f"    const _reassembled = await {_agent(reassemble_prompt, label='assemble-reword', phase='size', agent_type=agent_type, schema=ASSEMBLE_SCHEMA)};"
+            f"    const _reassembled = await {_agent(reassemble_prompt, label='assemble-reword', phase='size', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, effort=_MECHANICAL_EFFORT, schema=ASSEMBLE_SCHEMA)};"
         )
         b.append(
             "    _scouted.exit_code = _reassembled.exit_code; _scouted.stdout = _reassembled.stdout; "
@@ -1303,9 +1307,18 @@ def compose_ask_script(
         b.append("    }")
         b.append("    if (!_planRel && !_halted) {")
 
+        # plan-blitz-ready-op-contract: omitted once staged and in a stop_after script (never stages).
+        ready_op_js = (
+            f"...(!_stagedManifest ? {{ readyOp: {{ op: {_lit(OP_ASK_STAGE)}, params: {{ run_id: _runId, "
+            "writes: _writes, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } } } : {}), "
+            if fold_stage
+            else ""
+        )
+
         def _blitz_call(plan_path_js: str) -> str:
             return (
-                f"await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
+                f"await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', {ready_op_js}repoRoot: REPO_ROOT, waveIndex: 0, "
                 "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
                 f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
                 "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
@@ -1314,6 +1327,11 @@ def compose_ask_script(
 
         b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? _spineFallback ?? null')}")
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
+        if fold_stage:
+            b.append(
+                "    if (_ready && typeof _ready === 'object' && !_stagedManifest && !_ready.readyOpReply?.error "
+                "&& Array.isArray(_ready.readyOpReply?.rows)) { _stagedManifest = _ready.readyOpReply; }"
+            )
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
         b.append("    if (!_planRel && _pulledEntry) {")
@@ -1363,6 +1381,11 @@ def compose_ask_script(
         )
         b.append(f"      const _reblitz = {_blitz_call('_revised?.plan_rel || _pulledEntry.planPath')}")
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
+        if fold_stage:
+            b.append(
+                "      if (_reready && typeof _reready === 'object' && !_stagedManifest && !_reready.readyOpReply?.error "
+                "&& Array.isArray(_reready.readyOpReply?.rows)) { _stagedManifest = _reready.readyOpReply; }"
+            )
         b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
         b.append("      }")
@@ -1831,16 +1854,23 @@ def _append_docs_and_commit(
     out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run.
 
     Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
-    `block_subagent_commit` run-token leg admits nothing else.
+    `block_subagent_commit` run-token leg admits nothing else. The params ride in the prompt's
+    fenced block, which the leg reads back from the spawn transcript; the agent types only the
+    forward-slash file path, never JSON.
     """
     live = "_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
+    params_file = params_path(repo_root, run_id)
+    if params_file is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
     commit_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
         "stage). Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env "
         "prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the run's commit "
         "request, so no `paths` array is owed.\n\n",
-        "js:_terminalCommitCli({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
+        f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
+        "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
+        "js:_terminalCommitParamsBlock({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
         "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped and close, verbatim "
         "(null where absent). Run nothing else.",
     )
@@ -1866,18 +1896,26 @@ def _append_docs_and_commit(
     b.append("  }")
 
 
-def _halt_record_commit_fn(*, head: str, anchor: str, script_path: Optional[str]) -> str:
+def _halt_record_commit_fn(
+    *, head: str, anchor: str, script_path: Optional[str], repo_root: object, run_id: str
+) -> str:
     """`async function _commitHaltRecord()`: a git-commit-agent runs `dispatch.terminal_commit` in
     `halted_by` mode, landing only `state/warp/<run_id>/`. Declared among the script's hoisted
     helpers so the commit stage's own label scan sees one `commit` agent after the tail.
 
-    Trap: the command stays one bare `coordinator-invoke` segment, as in the commit stage.
+    Trap: the command stays one bare `coordinator-invoke` segment, as in the commit stage, and the
+    params ride the same fenced block: the agent types only the file path, never JSON.
     """
+    params_file = params_path(repo_root, run_id)
+    if params_file is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
     prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis run halted. Run exactly this one command as its own Bash call: no "
         "`cd &&`, no wrapper, no env prefix, no edit to it.\n\n",
-        f"js:_terminalCommitCli({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
+        f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
+        "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
+        f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
         f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted }})",
         "\n\nReturn from its JSON reply committed, sha, error and refused, verbatim (null where "
         "absent). Run nothing else.",

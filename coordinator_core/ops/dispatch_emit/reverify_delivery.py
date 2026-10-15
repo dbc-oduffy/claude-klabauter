@@ -47,6 +47,7 @@ from coordinator_core.ops.review_mint.execute_review import (
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.dispatch_emit.verdict_supersession import (  # noqa: F401 -- re-exported for callers of this module
+    DIFF_SHA_KEY,
     RECORD_KIND,
     REJUDGE_KIND,
     VERDICT_DIR,
@@ -131,19 +132,32 @@ def _unsettled(record: dict) -> bool:
     return _criterion_unsettled(record) or _tests_stale(record)
 
 
+def _null_slot(repo_root: Optional[Path], record: dict) -> bool:
+    """True when the run's review ran (a `prep` block exists) but its delivery slot holds no verdict."""
+    delivery = load_delivery(repo_root, record)
+    if delivery is not None and delivery.get("verdict") is not None:
+        return False
+    prep = prep_of(repo_root, record) if repo_root is not None else record.get("prep")
+    return isinstance(prep, dict)
+
+
 def prior_unbacked_claims(
     record_path: Path, repo_root: Optional[Path] = None
 ) -> tuple[Dict[str, Any], List[dict]]:
     """`(record, claims)` of a run record's frozen delivery FAIL, each claim `{claim, anchor}`.
     A delivery PASS whose criterion is `not_met`/`indeterminate`, or whose tests
     are `fail`/`error`, returns `(record, [])`: there is
-    nothing to re-check claim by claim, but the verdict and criterion are stale. Raises
-    `ReverifyRefused` when the record is unreadable, or when delivery PASSed and nothing else
+    nothing to re-check claim by claim, but the verdict and criterion are stale. A null delivery
+    slot on a run whose review ran returns `(record, [])` too: the verdict was never produced.
+    Raises `ReverifyRefused` when the record is unreadable, or when delivery PASSed and nothing else
     is stale (nothing to supersede). `repo_root` enables the `whole_diff_sidecars` delivery fallback."""
     record = _frontmatter(record_path)
     if record is None:
         raise ReverifyRefused(f"reverify-delivery: cannot read run record {record_path}")
-    delivery = load_delivery(repo_root or _repo_of_record(record_path), record)
+    owner = repo_root or _repo_of_record(record_path)
+    delivery = load_delivery(owner, record)
+    if _null_slot(owner, record):
+        return record, []
     if delivery is not None and delivery.get("verdict") != "FAIL" and _unsettled(record):
         return record, []
     if delivery is None or delivery.get("verdict") != "FAIL":
@@ -269,10 +283,12 @@ def compose_reverify_script(
     rerun_tests: bool = False,
     repo_root: Optional[Path] = None,
     host_degraded: bool = False,
+    diff_sha: Optional[str] = None,
 ) -> str:
     """A Workflow script holding one delivery-verifier agent call, briefed with the prior FAIL's
     unbacked claims and told to verify them at `head_sha`, then the roster's criterion judge
-    (when declared) against the same HEAD."""
+    (when declared) against the same HEAD. `diff_sha` (a null-slot run's terminal commit) makes the
+    verifier judge `run_base..diff_sha` and is carried in the result ident."""
     review = parse_execute_review(fragment)
     agent = next((a for a in review.review_wave if a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE), None)
     if agent is None:
@@ -282,7 +298,14 @@ def compose_reverify_script(
     )
     base = run_base_sha or "run_base_sha"
     criterion = resolve_operative_criterion_for_plan(plan_path, repo_root)
-    if claims:
+    if diff_sha:
+        lead = (
+            "Verify delivery for a run whose delivery verifier never returned a verdict. The reviewed "
+            f"diff is `git diff {base}..{diff_sha}` (the run's terminal commit {diff_sha}); judge that "
+            "diff, not HEAD, and verify the plan's deliverables against it. Return FAIL with "
+            "claims_unbacked listing every claim unbacked, PASS only when all are backed.\n"
+        )
+    elif claims:
         lead = (
             "Re-verify delivery at HEAD. A prior verdict FAILed this run with the unbacked claims "
             "below; follow-up commits may have delivered them. Check EACH claim against the tree at "
@@ -401,6 +424,7 @@ def compose_reverify_script(
         "plan_id": plan_id,
         "head_sha": head_sha,
         "plan_path": plan_path,
+        **({"diff_sha": diff_sha} if diff_sha else {}),
         **tests_ident,
     }
     return (
@@ -429,8 +453,10 @@ def record_delivery_verdict(
     criterion: Optional[dict] = None,
     tests: Optional[dict] = None,
     foreign_claims: Optional[List[str]] = None,
+    diff_sha: Optional[str] = None,
 ) -> str:
-    """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path."""
+    """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path.
+    `diff_sha` binds the record to the reviewed terminal commit a null-slot re-run judged."""
     if verdict not in ("PASS", "FAIL"):
         raise ReverifyRefused(f"reverify-delivery: result verdict {verdict!r} is neither PASS nor FAIL")
     now = datetime.now(timezone.utc)
@@ -445,6 +471,8 @@ def record_delivery_verdict(
         "session_id": session_id,
         "delivery": {"verdict": verdict, "unbacked": unbacked if verdict == "FAIL" else []},
     }
+    if diff_sha:
+        fm[DIFF_SHA_KEY] = diff_sha
     if criterion is not None:
         status = criterion.get("status")
         if status not in _CRITERION_STATUSES:
@@ -644,19 +672,27 @@ def _is_run_record(fm: Optional[Dict[str, Any]]) -> bool:
 
 def _has_reverifiable(repo_root: Path, fm: Dict[str, Any]) -> bool:
     block = load_delivery(repo_root, fm)
+    if _null_slot(repo_root, fm):
+        return True
     return bool(block) and (block.get("verdict") == "FAIL" or _unsettled(fm))
 
 
-def _trailer_record(repo_root: Path, plan_id: str, plan_path: Optional[str]) -> Optional[Path]:
+def _terminal_of(repo_root: Path, plan_id: str, plan_path: Optional[str]) -> Optional[tuple[str, Path]]:
+    """`(terminal_sha, integration_sidecar_path)` of the run's `Inline-Review` commit; `None` when none resolves."""
     from coordinator_core.ops.review_stamp import MintRefusal, _resolve_terminal_commit
 
     try:
-        _sha, path, _data = _resolve_terminal_commit(
+        sha, path, _data = _resolve_terminal_commit(
             repo_root, plan_id, Path(plan_path) if plan_path else None
         )
     except MintRefusal:
         return None
-    return path
+    return sha, path
+
+
+def _trailer_record(repo_root: Path, plan_id: str, plan_path: Optional[str]) -> Optional[Path]:
+    found = _terminal_of(repo_root, plan_id, plan_path)
+    return found[1] if found else None
 
 
 def resolve_delivery_in_force(
@@ -706,7 +742,7 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
         if not fm or str(fm.get("plan_id")) != plan_id:
             continue
         block = load_delivery(repo_root, fm)
-        if block and (block.get("verdict") == "FAIL" or _unsettled(fm)):
+        if _null_slot(repo_root, fm) or (block and (block.get("verdict") == "FAIL" or _unsettled(fm))):
             return path
     return None
 
@@ -748,6 +784,15 @@ def emit_reverify(
     if not plan_id:
         split = split_frontmatter(Path(plan_path).read_text(encoding="utf-8", errors="replace"))
         plan_id = read_fm_field_unquoted(split.fm_text, "plan_id") if split else None
+    diff_sha = None
+    if _null_slot(repo_root, record):
+        terminal = _terminal_of(repo_root, str(plan_id), plan_path) if plan_id else None
+        if terminal is None:
+            raise ReverifyRefused(
+                f"reverify-delivery: {record_file} has a null delivery slot and no Inline-Review "
+                "terminal commit resolves for the plan; nothing to bind the re-run verdict to"
+            )
+        diff_sha = terminal[0]
     rel = _run_rel(repo_root, record_file)
     script = compose_reverify_script(
         fragment=fragment,
@@ -761,6 +806,7 @@ def emit_reverify(
         rerun_tests=_tests_stale(record),
         repo_root=repo_root,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
+        diff_sha=diff_sha,
     )
     Path(out_path).write_text(script, encoding="utf-8", newline="\n")
     from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
@@ -1142,6 +1188,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             criterion=result.get("criterion") or None,
             tests=result.get("tests") or None,
             foreign_claims=live_foreign_claims(repo_root, frozen or [], ident["head_sha"]),
+            diff_sha=ident.get("diff_sha"),
         )
         settle_tests_sidecar(
             repo_root,

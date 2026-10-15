@@ -769,7 +769,7 @@ def _resolve_deliverable_id_from_paths(
     return ""
 
 
-def _resolve_deliverable_id_from_live_run(
+def resolve_deliverable_id_from_live_run(
     cwd: Union[str, Path], session_id: str, paths: Optional[Sequence[str]]
 ) -> str:
     """Live-run tier: the deliverable id of the sizing-bound warp run this session
@@ -798,7 +798,7 @@ def _resolve_deliverable_id(
     """Tier 0 (artifact-first, see `_resolve_deliverable_id_from_paths`),
     then the scope-match tier (`resolve_deliverable_id_from_scope_match`,
     C2 spec § (1)) over every plan this session holds a claim on, then the
-    live-run tier (`_resolve_deliverable_id_from_live_run`: the sizing id of
+    live-run tier (`resolve_deliverable_id_from_live_run`: the sizing id of
     the warp run the session holds live whose declared writes include a staged
     path), then -- gated by the ambiguity predicate
     `session_holds_multiple_plan_claims` (C2 spec § (2)), which OMITS rather than guesses whenever the session
@@ -840,7 +840,7 @@ def _resolve_deliverable_id(
     if deliverable_id:
         return deliverable_id
 
-    deliverable_id = _resolve_deliverable_id_from_live_run(cwd, session_id, paths)
+    deliverable_id = resolve_deliverable_id_from_live_run(cwd, session_id, paths)
     if deliverable_id:
         return deliverable_id
 

@@ -36,7 +36,7 @@ sys.path.insert(0, {engine_root!r})
 from coordinator_core import orient_brief as ob
 if {run_brief!r}:
     try:
-        ob.main(["brief", "--cadence", "day"])
+        ob.main(["brief", "--cadence", "session"])
     except SystemExit:
         pass
 forbidden = {forbidden!r}

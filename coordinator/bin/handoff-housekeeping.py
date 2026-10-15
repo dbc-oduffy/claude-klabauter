@@ -12,8 +12,7 @@ SECOND JOB (C6, `archive/specs/2026-09/2026-09-11-memo-deliveries-survive-the-re
 o.md`): this is also the `/workday-start` door that runs `memo.heal_inbox`
 against the invoking repo, before `housekeeping.cycle`. It lives here, on this
 CLI, rather than on the memo surfacer or inside `housekeeping.cycle` itself,
-because neither of those can do it: the surfacer
-(`coordinator_core/ops/workday_start_cross_repo_memo_outbox_surface.py`) is
+because neither of those can do it: the memo surfacer is
 READ-ONLY by its own negative-spec, and `housekeeping.cycle` forbids a second
 commit route through it — a heal is a commit (a restore lands a file and a
 commit; retire/rekey/adopt land ref writes). This door already IS the

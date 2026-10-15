@@ -297,9 +297,11 @@ def test_synthesis_follows_awaited_fan_outs_and_subjects_run_sequentially():
     assert "parallel(" not in script.split("for (const s of subjects)", 1)[1].replace("fanOut(", "")
 
 
-def test_every_stage_prompt_opens_with_the_brief_precedence_clause():
+def test_relay_clause_is_declared_once_and_prefixed_at_every_agent_call():
     # addon-28 NotebookLM run: scope, scout and sweep answered the PM's relayed chat instead.
-    from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE
+    from coordinator_core.ops.dispatch_emit.pipeline_contract import PIPELINE_RELAY_CLAUSE
 
     script = _compose()
-    assert script.count(_BRIEF_PRECEDENCE_CLAUSE.split(" -- ")[0]) == 4 * 2
+    assert script.count("Do the whole task and quote that text") == 1
+    assert script.count("const RELAY = ") == 1
+    assert script.count("(RELAY + '\\n\\n' + ") == len(agent_graph(script))

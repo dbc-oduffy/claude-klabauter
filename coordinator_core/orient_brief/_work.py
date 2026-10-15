@@ -1,4 +1,5 @@
-"""Work-state family: handoff triage and clean-ops directives (R0 rows REQ-W1..REQ-W9).
+"""Work-state family: handoff triage and clean-ops directives (R0 rows REQ-W2..REQ-W9;
+REQ-W1, stale plans, has no directive).
 
 Zero spawns on a tree with no agent worktree. Every probe reads the files its question is
 about; the only subprocesses are the two git reads that classify an agent worktree that
@@ -10,12 +11,6 @@ Import discipline: nothing here may pull `coordinator_core.ipc`, `invoke` or an 
 (`records.query`, `plan.list_orphaned`, `plugin_health.scan`) sit behind that stack and cost
 60-300ms a call, so each question is re-asked here against the files it is about.
 `test_orient_brief_work.py` pins every re-ask against the shipped op on a fixture tree.
-
-Divergence for the EM (REQ-W1): "untouched Nd" is read from the plan file's mtime, not from
-git history. The history walk that answers it exactly measured 0.8-1.2s on this repo and a
-3-day-window walk 160ms, and every form is a spawn the work family's 40ms budget does not
-hold. An mtime read is zero-spawn; its cost is that a checkout resets the clock, so a plan
-reads as touched when the checkout was. The nudge is advisory and degrades toward silence.
 """
 from __future__ import annotations
 
@@ -42,14 +37,12 @@ from coordinator_core.contract.decision_object.reader_result import (
 from coordinator_core.lifecycle_constants import PLAN_ORPHAN_TERMINAL_STATUS
 
 _LIST_CAP = 15
-_STALE_PLAN_DAYS = 3
 _GATE_STALE_DAYS = 6
 _ORPHAN_AGE_DAYS = 14
 _UNRECOGNIZED_STATUS_LINE_CAP = 10
 _MEMO_CAP = 15
 _MEMO_CUTOFF_DATE = "2026-05-21"
 _HEAD_BYTES = 16384
-_SECONDS_PER_DAY = 86400
 _EXPECTED_EFFORT = "medium"
 
 # Mirrors draft_plan_aging.py; test_orient_brief_work.py pins these against the shipped module.
@@ -71,7 +64,6 @@ _MODEL_RE = re.compile(r'"model":\s*"([^"]*)"')
 _AGENT_WORKTREE_MARKER = "/.claude/worktrees/agent-"
 _BENIGN_WORKTREE_PATHS = frozenset({".claude/settings.local.json", ".last-cleanup"})
 _BACKUP_DIR_RE = re.compile(r"^(?:_.*|.*\.bak|.*-bak-.*|.*\.preisource-bak-.*)$")
-_HOOK_SCRIPT_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[^\s;\"'&|<>]+)")
 _SENTINEL_REL = Path("data") / "doctor-last-run.json"
 _MEMO_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)")
 _MEMO_REASON = (
@@ -294,7 +286,7 @@ def _handoff_directives(root: Path, rows: list[_Handoff]) -> list[dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
-# Plans: REQ-W1 (stale executing plans) and REQ-W4 (orphan tiers).
+# Plans: REQ-W4 (orphan tiers).
 # ---------------------------------------------------------------------------
 
 
@@ -312,11 +304,8 @@ def _plan_created(token: Optional[str]) -> Optional[date]:
         return None
 
 
-def _plan_directives(root: Path, handoffs: list[_Handoff], today: date, now: float) -> list[dict[str, Any]]:
-    """REQ-W1: which `status: executing` plans have been untouched for more than 3 days
-    (advisory; age from file mtime, see the module docstring).
-
-    REQ-W4: the tiered orphan census over `docs/plans` — P1 authorized orphans one line each,
+def _plan_directives(root: Path, handoffs: list[_Handoff], today: date) -> list[dict[str, Any]]:
+    """REQ-W4: the tiered orphan census over `docs/plans` — P1 authorized orphans one line each,
     the P3 parked count, the legacy-unjoinable count, and unrecognized-status plans. A plan is
     owned when an `open`/`claimed` handoff carries its `deliverable_id`. Each plan's frontmatter
     is read once.
@@ -329,7 +318,6 @@ def _plan_directives(root: Path, handoffs: list[_Handoff], today: date, now: flo
     name_set = frozenset(names)
     owners = {h.deliverable for h in handoffs if h.owns_plan and h.deliverable}
 
-    stale: list[str] = []
     authorized: list[tuple[str, str]] = []
     unrecognized: list[tuple[str, Optional[str]]] = []
     parked = legacy = 0
@@ -341,14 +329,6 @@ def _plan_directives(root: Path, handoffs: list[_Handoff], today: date, now: flo
             continue
         fm, closed, _ = read
         status_raw = _raw(fm, "status")
-        if status_raw is not None and status_raw.lstrip(" \t").startswith("executing"):
-            try:
-                age = int((now - os.stat(path).st_mtime) // _SECONDS_PER_DAY)
-            except OSError:
-                age = 0
-            if age > _STALE_PLAN_DAYS:
-                stale.append(f"  - {path} (status: executing, untouched {age}d)")
-
         if not closed or _is_plan_sidecar(name, name_set):
             continue
         status = _token(status_raw)
@@ -372,9 +352,6 @@ def _plan_directives(root: Path, handoffs: list[_Handoff], today: date, now: flo
             parked += 1
 
     out: list[dict[str, Any]] = []
-    if stale:
-        out.append(_directive("d-handoff-triage-stale-plans", "workday-start-handoff-triage", ["stale-plans"], "\n".join(stale)))
-
     tiers = [
         f"P1 authorized_orphan: {rel} (execution_authorized_by={truncate_external_text(by)})"
         for rel, by in authorized
@@ -573,7 +550,7 @@ def _sentinel_dirs(root: Optional[Path], *, skip_backups: bool) -> list[Path]:
     ]
 
 
-def _verdict_lines(mode: str, now: float, stale_sec: int) -> list[str]:
+def _verdict_lines() -> list[str]:
     plugins, consumer, sh_plugins, sh_consumer = _addon_roots()
     sh_plugin_dirs = _sentinel_dirs(sh_plugins, skip_backups=True)
     sh_consumer_dirs = _sentinel_dirs(sh_consumer, skip_backups=False)
@@ -592,137 +569,29 @@ def _verdict_lines(mode: str, now: float, stale_sec: int) -> list[str]:
         try:
             data = json.loads(sentinel.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 - a malformed sentinel is one finding, not a crash
-            if mode == "--red-and-stale":
-                lines.append(
-                    f"[health] {plugin}: sentinel unreadable at {sentinel} "
-                    f"(malformed JSON?). Run /{plugin}:doctor."
-                )
             continue
-        ran_at = str(data.get("ran_at", "") or "")
         verdict = str(data.get("verdict", "") or "")
         hint = str(data.get("hint", "") or "")
         plugin = str(data.get("plugin", "") or "") or plugin
         probes = ",".join(data.get("red_probes") or [])
 
-        age_days: Optional[int] = None
-        stale = True
-        if ran_at:
-            try:
-                epoch = int(datetime.fromisoformat(ran_at.strip().replace("Z", "+00:00")).timestamp())
-            except Exception:  # noqa: BLE001
-                epoch = None
-            if epoch is not None:
-                age_sec = int(now) - epoch
-                age_days = age_sec // _SECONDS_PER_DAY
-                stale = age_sec > stale_sec
-
-        hint_clause = f" — {hint}." if hint else ""
         if verdict == "RED":
+            hint_clause = f" — {hint}." if hint else ""
             probe_clause = f" ({probes})" if probes else ""
             lines.append(f"[health] {plugin}: doctor RED{probe_clause}{hint_clause} Run /{plugin}:doctor for details.")
-        elif verdict == "AMBER":
-            if mode == "--red-and-stale":
-                aged = f" ({age_days}d old)" if stale and age_days is not None else ""
-                lines.append(f"[health] {plugin}: doctor AMBER{aged}{hint_clause} Run /{plugin}:doctor to re-probe.")
-        elif verdict in ("GREEN", ""):
-            if mode == "--red-and-stale" and stale:
-                if age_days is None:
-                    lines.append(f"[health] {plugin}: doctor sentinel ran_at unparseable. Run /{plugin}:doctor.")
-                else:
-                    lines.append(f"[health] {plugin}: doctor stale (last run {age_days}d ago). Run /{plugin}:doctor.")
-        elif mode == "--red-and-stale":
-            lines.append(f"[health] {plugin}: doctor unknown verdict '{verdict}'. Run /{plugin}:doctor.")
     return lines
 
 
-def _has_doctor_command(plugin_dir: str, plugin: str) -> bool:
-    """A `commands/doctor.md` or `commands/<plugin>:doctor.md` whose file sits within four
-    levels of the plugin directory. Only directories are listed; a `commands` directory is
-    probed for the two names directly."""
-    pending = [(plugin_dir, 0)]
-    while pending:
-        directory, depth = pending.pop()
-        try:
-            entries = [e for e in os.scandir(directory) if e.is_dir(follow_symlinks=False)]
-        except OSError:
-            continue
-        for entry in entries:
-            if entry.name == "commands" and any(
-                os.path.isfile(os.path.join(entry.path, n)) for n in ("doctor.md", f"{plugin}:doctor.md")
-            ):
-                return True
-            if depth + 1 < 3:
-                pending.append((entry.path, depth + 1))
-    return False
+def _addon_health_directives() -> list[dict[str, Any]]:
+    """REQ-W6: is any installed addon, or the coordinator doctor, red?
 
-
-def _never_run_lines(plugins: Path, sh_plugins: Optional[Path]) -> list[str]:
-    """Plugins declaring a doctor command with no sentinel in either lane. The sentinel is
-    tested first: the doctor-command walk is the expensive half and only an absent one needs it."""
-    try:
-        entries = sorted(e.name for e in os.scandir(plugins) if e.is_dir())
-    except OSError:
-        return []
-    lines = []
-    for plugin in entries:
-        if _BACKUP_DIR_RE.match(plugin):
-            continue
-        if (plugins / plugin / _SENTINEL_REL).is_file():
-            continue
-        if sh_plugins is not None and (sh_plugins / plugin / _SENTINEL_REL).is_file():
-            continue
-        if _has_doctor_command(str(plugins / plugin), plugin):
-            lines.append(
-                f"[health] {plugin}: doctor has never run (sentinel absent). Run /{plugin}:doctor to bootstrap."
-            )
-    return lines
-
-
-def _missing_hook_script_lines(plugins: Path) -> list[str]:
-    """SessionStart hooks whose `${CLAUDE_PLUGIN_ROOT}` script is absent on disk."""
-    try:
-        names = [n for n in sorted(os.listdir(plugins)) if not _BACKUP_DIR_RE.match(n)]
-    except OSError:
-        return []
-    lines = []
-    for shape in (("hooks", "hooks.json"), ("plugin", "hooks", "hooks.json")):
-        for plugin in names:
-            hooks_json = plugins / plugin / Path(*shape)
-            try:
-                cfg = json.loads(hooks_json.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001 - absent or malformed: nothing to check
-                continue
-            plugin_dir = plugins / plugin / Path(*shape[:-2])
-            seen: list[str] = []
-            for group in (cfg.get("hooks", {}) or {}).get("SessionStart", []) or []:
-                for hook in group.get("hooks", []) or []:
-                    match = _HOOK_SCRIPT_RE.search(hook.get("command", "") or "")
-                    rel = match.group(1).lstrip("/") if match else ""
-                    if not rel or rel in seen:
-                        continue
-                    seen.append(rel)
-                    if not (plugin_dir / rel).exists():
-                        lines.append(
-                            f"[health] {plugin}: SessionStart hook references missing script '{rel}' "
-                            f"(declared in hooks/hooks.json, not on disk — Claude Code silently "
-                            f"skips it). Re-run the plugin's installer or /coordinator:install."
-                        )
-    return lines
-
-
-def _addon_health_directives(cadence: str, now: float) -> list[dict[str, Any]]:
-    """REQ-W6: is any installed addon, or the coordinator doctor, red (and, at day, stale)?
-
-    One directive per report line, naming `scan-addon-health` in the cadence's mode:
-    `--red-and-stale` at day, `--red-only` otherwise. Reads the sentinel files directly.
+    One directive per report line, naming `scan-addon-health --red-only`. Reads the
+    sentinel files directly.
     """
-    mode = "--red-and-stale" if cadence == "day" else "--red-only"
-    lines = _verdict_lines(mode, now, int(os.environ.get("COORDINATOR_HEALTH_STALE_SEC") or _SECONDS_PER_DAY))
-    if mode == "--red-and-stale":
-        plugins, _, sh_plugins, _ = _addon_roots()
-        lines += _never_run_lines(plugins, sh_plugins)
-        lines += _missing_hook_script_lines(plugins)
-    return [_directive(f"d-addon-health-{i}", "scan-addon-health", [mode], line) for i, line in enumerate(lines, 1)]
+    return [
+        _directive(f"d-addon-health-{i}", "scan-addon-health", ["--red-only"], line)
+        for i, line in enumerate(_verdict_lines(), 1)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -948,7 +817,7 @@ def _guarded(probe: str, fn: Callable[[], Any], default: Any) -> Any:
 
 
 def _register_stall_points(root: Path) -> list[dict[str, Any]]:
-    """Day/week only: the requirement-register stall point, empty when nothing has stalled."""
+    """Week only: the requirement-register stall point, empty when nothing has stalled."""
     from coordinator_core.ops.requirement_register import stall_judgment_point, stall_report
 
     point = stall_judgment_point(stall_report(root, date.today()), id="j-requirement-register-stall")
@@ -957,14 +826,13 @@ def _register_stall_points(root: Path) -> list[dict[str, Any]]:
 
 def collect(cadence: str, *, repo_root: Path) -> ReaderResult:
     root = Path(repo_root)
-    now = datetime.now(timezone.utc).timestamp()
     directives: list[dict[str, Any]] = []
     points: list[dict[str, Any]] = []
 
-    directives += _guarded("addon-health", lambda: _addon_health_directives(cadence, now), [])
+    directives += _guarded("addon-health", _addon_health_directives, [])
     directives += _guarded("rag-staleness", _rag_directive, [])
     handoffs = _guarded("handoffs", lambda: _scan_handoffs(root), [])
-    directives += _guarded("plans", lambda: _plan_directives(root, handoffs, date.today(), now), [])
+    directives += _guarded("plans", lambda: _plan_directives(root, handoffs, date.today()), [])
     directives += _guarded("handoff-triage", lambda: _handoff_directives(root, handoffs), [])
     reap, dirty_points = _guarded("worktrees", lambda: _worktree_entries(root), ([], []))
     directives += reap

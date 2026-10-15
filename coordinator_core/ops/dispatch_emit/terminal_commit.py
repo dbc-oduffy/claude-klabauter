@@ -1307,6 +1307,9 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
     if not isinstance(inline_review.get("prep"), dict):
         return None
     out: dict = {k: inline_review.get(k) for k in ("prep", "delivery", "tests", "criterion")}
+    not_run = inline_review.get("delivery_not_run")
+    if isinstance(not_run, str) and not_run:
+        out["delivery_not_run"] = not_run
     fixes = inline_review.get("fixes")
     if isinstance(fixes, int) and not isinstance(fixes, bool):
         out["fixes_applied"] = fixes

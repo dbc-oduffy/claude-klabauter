@@ -66,11 +66,10 @@ _BRIEF_DIRECTIVE_IDS: frozenset[str] = frozenset({
     "d-branch-span-mismatch", "d-claude-klabauter-bin-sentinel", "d-working-repo-registration", "d-hook-currency",
     "d-git-perf-currency", "d-ceremony-hook-output", "d-workday-marker-write", "d-plugin-drift",
     "d-goal-coverage", "d-workweek-trail-scope", "d-handoff-triage-ready", "d-handoff-triage-awaiting-gate",
-    "d-handoff-triage-stale-plans", "d-plan-orphan-tiers", "d-rag-staleness-regen",
+    "d-plan-orphan-tiers", "d-rag-staleness-regen",
 })
 _BRIEF_DIRECTIVE_PREFIXES: tuple[str, ...] = ("d-git-maintenance-", "d-addon-health-", "d-worktree-reap-")
 _ORPHAN_DIRECTIVE = "d-plan-orphan-tiers"
-_STALE_PLANS_DIRECTIVE = "d-handoff-triage-stale-plans"
 
 ENGINE_GAP_STEPS: Mapping[str, str] = {
     "w_step3_prior_week_digest": "No engine-computed prior-week digest yet — see `state/week-changelog/*.md` for the raw record.",
@@ -310,7 +309,6 @@ def _scan_goals(text: str) -> list[dict[str, Any]]:
     return goals
 
 
-_PLAN_LINE = re.compile(r"^\s*-\s+(?P<path>\S+\.md)\s+\(status: executing")
 _P1_LINE = re.compile(r"^P1 authorized_orphan:\s*(?P<path>\S+)")
 
 
@@ -329,7 +327,7 @@ def _candidates(
     carried: Sequence[Mapping[str, Any]], envelope: Mapping[str, Any], rows: Mapping[str, Any],
     *, carried_claimed: bool,
 ) -> list[dict[str, Any]]:
-    """Preference order: carried, active goals, executing plans under no goal, P1 orphans. Deduplicated by title."""
+    """Preference order: carried, active goals, P1 orphans. Deduplicated by title."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -345,11 +343,6 @@ def _candidates(
     goals = _scan_goals(scan) if scan else []
     for g in goals:
         add(g["title"], "active-goal", f"goal-coverage-scan: {g['path']}", g["path"])
-    covered = {c.split(" (")[0] for g in goals for c in g["covers"]}
-    for line in _directive_detail(envelope, _STALE_PLANS_DIRECTIVE).splitlines():
-        m = _PLAN_LINE.match(line)
-        if m and m["path"] not in covered:
-            add(_stem(m["path"]), "executing-plan", f"{_STALE_PLANS_DIRECTIVE}: {m['path']}", None)
     for line in _directive_detail(envelope, _ORPHAN_DIRECTIVE).splitlines():
         m = _P1_LINE.match(line)
         if m:

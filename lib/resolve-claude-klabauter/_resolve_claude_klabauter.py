@@ -393,6 +393,16 @@ PUBLISHER_ONLY_TARGETS = frozenset({
 })
 
 
+# The subset of PUBLISHER_ONLY_TARGETS meant to be invoked by bare name from
+# PATH, so the installer writes a live-tree-resolving forwarder for them. Every
+# other member gets no launcher at all (PM ruling 2026-08-29, on `publish`:
+# "we shouldn't need a publish.exe nor a publish.cmd") and is run from its own
+# checkout. `klabauter-promote` is the PM's manual promotion verb (DR-314).
+PUBLISHER_ONLY_LAUNCHABLE = frozenset({
+    "klabauter-promote.py",
+})
+
+
 def _is_publisher_only_target(target: str) -> bool:
     """True iff *target* names a member of ``PUBLISHER_ONLY_TARGETS``.
 

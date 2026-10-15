@@ -26,7 +26,7 @@ def _assert_envelope(obj: dict) -> None:
 
 
 def test_cadences_are_the_closed_set():
-    assert CADENCES == ("session", "day", "week")
+    assert CADENCES == ("session", "week")
 
 
 @pytest.mark.parametrize("cadence", CADENCES)
@@ -54,7 +54,7 @@ def test_main_success_exit_0(cadence, capsys, monkeypatch, tmp_path):
 
 
 def test_main_equals_form(capsys, tmp_path):
-    assert main(["brief", "--cadence=day", f"--target-root={tmp_path}"]) == 0
+    assert main(["brief", "--cadence=session", f"--target-root={tmp_path}"]) == 0
     _assert_envelope(_envelope(capsys))
 
 
@@ -63,7 +63,8 @@ def test_main_equals_form(capsys, tmp_path):
     ["brief"],
     ["brief", "--cadence", "bogus"],
     ["brief", "--cadence"],
-    ["brief", "--cadence", "day", "--extra"],
+    ["brief", "--cadence", "session", "--extra"],
+    ["brief", "--cadence", "day"],
     ["nonsense"],
 ])
 def test_usage_errors_exit_2_with_envelope(argv, capsys):
@@ -82,7 +83,7 @@ def test_help_exit_0_is_one_plain_usage_line(argv, capsys):
 
 
 def test_bad_target_root_exits_2_without_envelope(capsys, tmp_path):
-    assert main(["brief", "--cadence", "day", "--target-root", str(tmp_path / "absent")]) == 2
+    assert main(["brief", "--cadence", "session", "--target-root", str(tmp_path / "absent")]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "is not a directory" in captured.err
@@ -90,14 +91,14 @@ def test_bad_target_root_exits_2_without_envelope(capsys, tmp_path):
 
 def test_outside_a_git_tree_exits_2_without_envelope(capsys, monkeypatch, tmp_path):
     monkeypatch.setattr(orient_brief._repo_root_mod, "show_toplevel", lambda cwd: None)
-    assert main(["brief", "--cadence", "day"]) == 2
+    assert main(["brief", "--cadence", "session"]) == 2
     assert capsys.readouterr().out == ""
 
 
 def test_target_root_scopes_the_brief(capsys, monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(_work, "collect", lambda c, *, repo_root: seen.append(repo_root) or ReaderResult())
-    assert main(["brief", "--cadence", "day", "--target-root", str(tmp_path)]) == 0
+    assert main(["brief", "--cadence", "session", "--target-root", str(tmp_path)]) == 0
     assert seen == [tmp_path.resolve()]
 
 
@@ -106,7 +107,7 @@ def test_raising_family_is_dropped_and_named(capsys, monkeypatch, tmp_path):
         raise RuntimeError("probe exploded")
 
     monkeypatch.setattr(_work, "collect", boom)
-    assert main(["brief", "--cadence", "day", "--target-root", str(tmp_path)]) == 0
+    assert main(["brief", "--cadence", "session", "--target-root", str(tmp_path)]) == 0
     captured = capsys.readouterr()
     _assert_envelope(json.loads(captured.out))
     assert "reader work failed (RuntimeError: probe exploded)" in captured.err
@@ -129,7 +130,7 @@ def test_envelope_artifact_narration_and_next_move(tmp_path, monkeypatch):
 def test_family_entries_are_merged_in_order(tmp_path, monkeypatch):
     monkeypatch.setattr(_work, "collect", lambda c, *, repo_root: ReaderResult(directives=[{"id": "w"}]))
     monkeypatch.setattr(_health, "collect", lambda c, *, repo_root: ReaderResult(directives=[{"id": "h"}]))
-    env = brief("day", repo_root=tmp_path)
+    env = brief("session", repo_root=tmp_path)
     assert [d["id"] for d in env["directives"]] == ["w", "h"]
 
 

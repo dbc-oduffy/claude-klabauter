@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from coordinator_core.contract.decision_object.reader_result import build_directive
-from coordinator_core.session.record_homes import home_dir
 from coordinator_core.workday_start import contract
 
 STEP_COSTS_PATH = Path(__file__).resolve().parent / "step_costs.json"
@@ -23,32 +22,12 @@ STEP_COSTS_PATH = Path(__file__).resolve().parent / "step_costs.json"
 WEEKLY_MARKER = "state/.workday-start-weekly-marker"
 WEEKLY_WINDOW_DAYS = 7
 DRAFT_PLAN_MIN_ENTRIES = 5
-OUTBOX_DIR = (Path(home_dir(".", "cross-repo")) / "outbox").as_posix()
 GOAL_EVENT_TEXT = ".coordinator-local/workday-start-goal-event.txt"
 SNIPPETS_PREFIX = "coordinator/snippets/"
 HARVEST_DEBT_NONE_WITHIN_SCAN = 99
 
-ENGINE_GAP_TARGET = "engine-gap"
-ENGINE_GAP_REASON = "not-composed: engine-gap, no producer exists for this step"
-
-# Barewords an `orient-assemble brief --cadence day` directive can name (C1's list), so a
-# directive a decision opens is admitted at `finish` and not dropped.
-ORIENT_DIRECTIVE_CLIS: frozenset[str] = frozenset({
-    "workday-start-day-branch-resolve",
-    "workday-start-health-probes",
-    "workday-start-handoff-triage",
-    "write-workday-start-marker",
-    "check-plugin-drift",
-    "coordinator-git-maintenance",
-    "goal-coverage-scan",
-    "generate-repomap",
-    "agent-worktree-sweep",
-    "list-orphaned-plans",
-    "scan-addon-health",
-    "workweek-trail-scope",
-})
-
-_PROBES = "coordinator_core.workday_start.probes"
+_WS = "coordinator_core.workday_start"
+_PROBES = f"{_WS}.probes"
 
 
 def _cli(id_: str, cli: str, args: list[str], detail: str) -> dict[str, Any]:
@@ -87,20 +66,20 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
          "Step -0.4: install the meta-repo precommit hook."),
     _cli("hyg-gitignore-template-drift", "check-gitignore-template-drift", [],
          "Report-only gitignore template drift."),
-    _cli("hyg-watch-state-gitignore-fleet", "check-watch-state-gitignore-fleet", [],
-         "Report-only per-repo watch-state gitignore check."),
     _cli("hyg-check-bin-forwarders", "check-bin-forwarders", [],
          "DoE bin files the engine owns must stay thin forwarders."),
     _cli("hyg-fleet-claude-md-handoff-convention", "check-fleet-claude-md-handoff-convention", [],
          "Fleet CLAUDE.md files teaching the retired handoff location."),
     _op("hyg-git-maintenance-daily", "git.maintenance", '{"tier":"daily","repo":"{repo_root}"}',
         "Maintenance checkpoint, daily tier."),
+    _inproc("hyg-watch-state-ignore", f"{_WS}.watch_state_ignore:watch_state_ignore", [],
+            "Report-only watch-state gitignore and untracked check for this repo."),
     _cli("step0-branch-setup", "workday-start-step0", [],
          "Step 0: sync, precedence switch and reconcile. Its exit code gates every later stage."),
     _cli("hyg-span-assert", "workday-start-day-branch-resolve", ["span-assert"],
          "Branch span assertion."),
-    _cli("orient-assemble-brief-day", "orient-assemble", ["brief", "--cadence", "day"],
-         "The cadence-invariant orient spine: directives and judgment points."),
+    _inproc("orient-day-envelope", f"{_WS}.day_envelope:day_envelope", [],
+            "The day's orient envelope: directives and judgment points."),
     _cli("step0-normalize-consumed-frontmatter", "normalize-consumed-frontmatter", [],
          "Idempotent frontmatter and status sync."),
     _cli("step0-handoff-triage-trim-notes", "workday-start-handoff-triage", ["trim-notes"],
@@ -109,10 +88,8 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
          "Step 1: actionable handoffs."),
     _cli("triage-awaiting-gate", "workday-start-handoff-triage", ["awaiting-gate"],
          "Step 1.2: gated handoffs."),
-    _cli("triage-stale-plans", "workday-start-handoff-triage", ["stale-plans"],
-         "Stale executing plans."),
-    _inproc("gap-commit-closure", ENGINE_GAP_TARGET, [],
-            "Step 1.3: no CLI derives closure from commit history."),
+    _inproc("triage-stale-executing-plans", f"{_WS}.stale_plans:stale_executing_plans", [],
+            "Executing plans untouched past the stale window."),
     _cli("triage-query-completions", "query-completions",
          ["--where", "created>={since_30d}", "--format", "json"],
          "Step 1.4: completed entries of the last 30 days."),
@@ -122,16 +99,18 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
          "Step 1.47: promote shipped in-flight stubs."),
     _cli("triage-handoff-housekeeping", "handoff-housekeeping", [],
          "Step 1.47: archive and release handoffs."),
-    _cli("memo-outbox-surface", "workday-start-cross-repo-memo-outbox-surface", [],
-         "Step 1.45: outbox drafts awaiting send."),
+    _inproc("memo-outbox-stale-drafts", f"{_WS}.outbox_drafts:stale_outbox_drafts", [],
+            "Outbox drafts awaiting send past the stale window."),
     _cli("memo-inbox-blitz-assemble", "workday-start-inbox-blitz-assemble", [],
          "Step 1.45a: size and shard the inbox response."),
     _cli("rollup-counters-improvement-queue", "workday-start-advisory-counters", ["improvement-queue"],
          "Step 1.6."),
     _cli("rollup-counters-push-failures", "workday-start-advisory-counters", ["push-failures"],
          "Step 1.9."),
-    _cli("rollup-counters-local-ahead", "workday-start-advisory-counters", ["local-ahead"],
-         "Step 1.91."),
+    _inproc("rollup-local-ahead-unpublished", f"{_WS}.local_ahead:local_ahead", [],
+            "Whether the work branch's tip is unpublished."),
+    _inproc("rollup-recheck-due-markers", f"{_WS}.recheck_due:recheck_due", [],
+            "Recheck-due markers due within the window."),
     _cli("rollup-counters-stale-stashes", "workday-start-advisory-counters", ["stale-stashes"],
          "Step 1.92."),
     _op("rollup-scratch-hygiene-dryrun", "fleet.scratch_hygiene",
@@ -143,8 +122,6 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
             "Step 1.66: test-red delta."),
     _inproc("read-mcp-registration", f"{_PROBES}:mcp_registration", [],
             "Count of MCP servers registered in ~/.claude.json."),
-    _inproc("gap-recheck-due", ENGINE_GAP_TARGET, [],
-            "Step 1.7: the four recheck-due family patterns are not in tracked text."),
     _cli("sentinel-check-plugin-drift", "check-plugin-drift", [], "Live-install drift."),
     _cli("sentinel-doctor-sentinel-full", "coordinator-doctor-sentinel", ["--full"],
          "Writes the sentinel read by the boot currency banner."),
@@ -158,14 +135,10 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
          ["observer-sidecar-scan", "--dir", "archive/daily-summaries"], "Observer sidecar gaps."),
     _cli("sentinel-corpus-currency-probe", "corpus-currency-probe", [],
          "Writes the cache read by the corpus currency banner."),
-    _cli("sentinel-memo-outbox-tracking-guard", "memo-outbox-tracking-guard", [],
-         "Delivered memos losing their sender-side record."),
     _cli("sentinel-mcp-namespace-registration", "check-mcp-namespace-registration", [],
          "Agent-claimed namespaces no config registers."),
     _inproc("sentinel-check-fixture-sync", f"{_PROBES}:fixture_sync_presence", [],
             "Reports bin/check-fixture-sync.sh when present; it is not run (shell-out)."),
-    _inproc("gap-source-guard-drift", ENGINE_GAP_TARGET, [],
-            "Step 1.82: no detector for CLAUDE_PLUGIN_ROOT source-guard drift."),
     _op("fresh-commit-delta", "freshness.commit_delta", "{}",
         "Steps 2, 3, 3.5: doc, test and bug-sweep commit deltas."),
     _cli("blast-radius", "tier-last-run", ["blast-radius"], "Step 3.7."),
@@ -214,37 +187,36 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
     "hyg-ensure-hooks-fleet": {"stage": "hygiene", "heading": _OBS},
     "hyg-install-meta-repo-precommit-hook": {"stage": "hygiene", "heading": _OBS},
     "hyg-gitignore-template-drift": {"stage": "hygiene", "heading": _OBS},
-    "hyg-watch-state-gitignore-fleet": {"stage": "hygiene", "heading": _OBS},
     "hyg-check-bin-forwarders": {"stage": "hygiene", "heading": _OBS},
     "hyg-fleet-claude-md-handoff-convention": {"stage": "hygiene", "heading": _OBS},
     "hyg-git-maintenance-daily": {"stage": "hygiene", "heading": _OBS},
+    "hyg-watch-state-ignore": {"stage": "hygiene", "heading": _OBS},
     "step0-branch-setup": {
         "stage": "step0", "heading": _OBS, "gates_next": True,
         "on_exit": {2: "step0-stale-branch", 3: "step0-reconcile-outcome"},
     },
     "hyg-span-assert": {"stage": "step0", "heading": "Branch Span Mismatch"},
-    "orient-assemble-brief-day": {"stage": "orient", "heading": _OBS},
+    "orient-day-envelope": {"stage": "orient", "heading": _OBS},
     "step0-normalize-consumed-frontmatter": {"stage": "normalize", "heading": _OBS},
     "step0-handoff-triage-trim-notes": {"stage": "normalize", "heading": _OBS},
     "triage-ready": {"stage": "triage", "heading": "Handoffs"},
     "triage-awaiting-gate": {"stage": "triage", "heading": "Handoffs"},
-    "triage-stale-plans": {"stage": "triage", "heading": "Handoffs"},
-    "gap-commit-closure": {"stage": "triage", "heading": _OBS},
+    "triage-stale-executing-plans": {"stage": "triage", "heading": "Handoffs"},
     "triage-query-completions": {"stage": "triage", "heading": "Alignment Check"},
     "triage-sweep-terminal-handoffs": {"stage": "triage", "heading": "Handoffs"},
     "triage-promote-shipped-in-flight-stubs": {"stage": "triage", "heading": "Handoffs"},
     "triage-handoff-housekeeping": {"stage": "triage", "heading": "Handoffs"},
-    "memo-outbox-surface": {"stage": "memos", "heading": "Inbox", "gate": "outbox"},
+    "memo-outbox-stale-drafts": {"stage": "memos", "heading": "Inbox"},
     "memo-inbox-blitz-assemble": {"stage": "inbox-assemble", "heading": "Inbox"},
     "rollup-counters-improvement-queue": {"stage": "rollup", "heading": _OBS},
     "rollup-counters-push-failures": {"stage": "rollup", "heading": "Auto-Push Health"},
-    "rollup-counters-local-ahead": {"stage": "rollup", "heading": "Auto-Push Health"},
+    "rollup-local-ahead-unpublished": {"stage": "rollup", "heading": "Auto-Push Health"},
+    "rollup-recheck-due-markers": {"stage": "rollup", "heading": _OBS},
     "rollup-counters-stale-stashes": {"stage": "rollup", "heading": _OBS},
     "rollup-scratch-hygiene-dryrun": {"stage": "rollup", "heading": _OBS},
     "rollup-stall-report": {"stage": "rollup", "heading": _OBS},
     "read-test-red-delta": {"stage": "rollup", "heading": "Test-Red Delta"},
     "read-mcp-registration": {"stage": "rollup", "heading": _OBS},
-    "gap-recheck-due": {"stage": "rollup", "heading": _OBS},
     "sentinel-check-plugin-drift": {"stage": "sentinels", "heading": "Addon Health"},
     "sentinel-doctor-sentinel-full": {"stage": "sentinels", "heading": "Addon Health"},
     "sentinel-engine-drift": {"stage": "sentinels", "heading": "Addon Health"},
@@ -254,10 +226,8 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
     "sentinel-global-doctrine-mirror": {"stage": "sentinels", "heading": "Addon Health"},
     "sentinel-observer-sidecar-scan": {"stage": "sentinels", "heading": "Addon Health"},
     "sentinel-corpus-currency-probe": {"stage": "sentinels", "heading": "Addon Health"},
-    "sentinel-memo-outbox-tracking-guard": {"stage": "sentinels", "heading": "Addon Health"},
     "sentinel-mcp-namespace-registration": {"stage": "sentinels", "heading": "Addon Health"},
     "sentinel-check-fixture-sync": {"stage": "sentinels", "heading": "Addon Health"},
-    "gap-source-guard-drift": {"stage": "sentinels", "heading": _OBS},
     "fresh-commit-delta": {"stage": "freshness", "heading": "Context Freshness"},
     "blast-radius": {"stage": "freshness", "heading": "Blast Radius"},
     "weekly-orphan-branch-sweep": {"stage": "weekly", "heading": "Orphan Sweep", "gate": "weekly"},
@@ -284,7 +254,6 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
 
 CONSUMES_MANIFEST: frozenset[str] = (
     frozenset(d["cli"] for d in STEP_TABLE if "cli" in d)
-    | ORIENT_DIRECTIVE_CLIS
     | {"coordinator-queue-append"}
 )
 
@@ -297,8 +266,6 @@ def _kind_of(record: Mapping[str, Any]) -> str:
 
 
 def _cost_class(step_id: str) -> str:
-    if step_id.startswith("gap-"):
-        return "over-bar"
     return _cost_rows().get(step_id, {}).get("cost_class", "unmeasured")
 
 
@@ -325,10 +292,6 @@ def _to_spec(record: Mapping[str, Any], values: Mapping[str, str]) -> contract.S
     directive = dict(record)
     directive["cli"] = directive.pop(kind, directive.get("cli"))
     directive["args"] = _expand(record["args"], values)
-    detail = record["detail"]
-    if directive["cli"] == ENGINE_GAP_TARGET:
-        detail = f"{ENGINE_GAP_REASON} ({detail})"
-    directive["detail"] = detail
     return contract.step_from_directive(
         directive,
         stage=run["stage"],
@@ -360,11 +323,6 @@ def _doc_commit_delta(row: Mapping[str, Any] | None) -> int | None:
         if isinstance(layer, dict) and isinstance(layer.get("doc_commit_delta"), int):
             return layer["doc_commit_delta"]
     return None
-
-
-def _outbox_has_files(repo_root: Path) -> bool:
-    outbox = Path(repo_root) / OUTBOX_DIR
-    return outbox.is_dir() and any(p.is_file() for p in outbox.rglob("*"))
 
 
 def _plans_at_least(repo_root: Path, n: int) -> bool:
@@ -401,8 +359,6 @@ def _gate_reason(
         if any(str(p).replace("\\", "/").startswith(SNIPPETS_PREFIX) for p in step0_changed_paths):
             return ""
         return "weekly-marker-fresh" if weekly_fresh else ""
-    if gate == "outbox":
-        return "" if _outbox_has_files(repo_root) else "outbox-empty"
     if gate == "goal-text":
         return "" if (Path(repo_root) / GOAL_EVENT_TEXT).is_file() else "no-suggestion-batch"
     if gate == "tasks-dir":

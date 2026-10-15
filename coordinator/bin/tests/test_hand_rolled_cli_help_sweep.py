@@ -363,7 +363,6 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "workday-complete-step2_5-dirty-tree.py",
     "workday-complete-step3-consolidate.py",
     "workday-complete-step9-append-changelog.py",
-    "workday-start-cross-repo-memo-outbox-surface.py",
     "workday-start-cross-repo-memo-surface.py",
     "workday-start-health-probes.py",
     "workday-start-inbox-blitz-assemble.py",

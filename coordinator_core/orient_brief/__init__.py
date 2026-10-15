@@ -9,7 +9,7 @@ Contract:
     CADENCES                       -- the closed set of cadences.
     brief(cadence, *, repo_root)   -- the decision-object envelope (a dict);
                                       ValueError on an unknown cadence.
-    main(argv)                     -- `brief --cadence {session|day|week}
+    main(argv)                     -- `brief --cadence {session|week}
                                       [--target-root <path>]`, `--help`;
                                       exit 0 ok, 2 usage, 3 transport.
 
@@ -52,7 +52,7 @@ EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
-CADENCES = ("session", "day", "week")
+CADENCES = ("session", "week")
 
 # Order is the order directives and judgment points appear in the envelope.
 _FAMILIES = (_work, _branch, _health)

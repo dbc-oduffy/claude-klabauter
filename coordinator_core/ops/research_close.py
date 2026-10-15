@@ -17,7 +17,9 @@ path segments: a multi-pipeline run writes every segment after the first under
 ``<scratch_dir>/<pipeline>/``, archived at the same relative path), ``local_root``
 (optional, absolute: a local-only run archives to ``<local_root>/<YYYY-MM-DD>-<topic_slug>/``
 outside every git checkout and commits only its trail record, which carries no paths and no
-content; the reply's ``claims_out`` is the ``claims-emit --out`` stem there).
+content; the reply's ``claims_out`` is the ``claims-emit --out`` stem there), ``require_claims`` (optional list of non-empty scratch-relative paths, each of
+which must hold a non-empty JSON array; otherwise the close is refused with
+``deliverable: false`` before any copy or commit).
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -44,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import os
 import re
 import shutil
@@ -300,9 +303,13 @@ def _close_committed(
             "trail": trail_rel,
             "claims_out": (dest_dir / topic_slug).as_posix(),
             "run_id": run_id,
+            "deliverable": True,
         }
     return _with_strays(
-        {"exit_code": 0, "committed": True, "sha": sha or "", "paths": rel_paths, "trail": trail_rel},
+        {
+            "exit_code": 0, "committed": True, "deliverable": True, "sha": sha or "",
+            "paths": rel_paths, "trail": trail_rel,
+        },
         worktree, dest_dir, since,
     )
 
@@ -317,6 +324,27 @@ def _with_strays(result: dict, worktree: Path, dest_dir: Path, since: float) -> 
             "and re-close, or delete it"
         )
     return result
+
+
+def _missing_claims(scratch: Path, require_claims) -> Optional[dict]:
+    """A refusal reply when a ``require_claims`` path is not a non-empty JSON array, else None."""
+    if require_claims is None:
+        return None
+    if not isinstance(require_claims, list) or not all(
+        isinstance(r, str) and r for r in require_claims
+    ):
+        return _err("require_claims must be a list of non-empty scratch-relative paths")
+    for rel in require_claims:
+        p = contained_path(scratch / rel, [scratch])
+        if p is None:
+            return _err(f"require_claims entry escapes scratch_dir: {rel!r}")
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if not isinstance(data, list) or not data:
+            return _err(f"run is not deliverable: {rel} holds no claims", deliverable=False)
+    return None
 
 
 def _close_sync(worktree: Path, params: dict) -> dict:
@@ -349,6 +377,9 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         isinstance(d, str) and safe_id(d) for d in segment_dirs
     ):
         return _err(f"segment_dirs must be a list of safe path segments: {segment_dirs!r}")
+    problem = _missing_claims(scratch, params.get("require_claims"))
+    if problem:
+        return problem
     if tier == "scouts":
         problem = _build_digest(scratch)
         if problem:
@@ -368,9 +399,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params: see the module docstring; ``run_id`` and ``topic_slug`` are required for every tier.
 
-    Returns (exit_code 0): ``{committed: true, sha, paths, trail}``; local-only adds
-    ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
-    ``{committed: false, error}``.
+    Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail}``;
+    local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
+    ``{committed: false, error}``; a ``require_claims`` refusal adds ``deliverable: false``.
     """
     if repo_root is None:
         return _err("repo_root (engine common_dir) is required for research.close")

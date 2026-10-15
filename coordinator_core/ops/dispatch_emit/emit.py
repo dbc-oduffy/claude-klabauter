@@ -2042,6 +2042,7 @@ def review_stage_vars(review, *, bookkeeping_stem_literal: str, plan_id_literal:
         "prep": "_reviewPrep",
         "wave": "_reviewWave",
         "delivery": "_deliveryVerdict",
+        "delivery_not_run": "_deliveryNotRun",
         "bookkeeping_stem": bookkeeping_stem_literal,
         "plan_id_literal": plan_id_literal,
     }
@@ -5117,6 +5118,7 @@ def compose_script(
     body_blocks.append("  let _reviewPrep = null;")
     body_blocks.append("  let _reviewWave = null;")
     body_blocks.append("  let _deliveryVerdict = null;")
+    body_blocks.append("  let _deliveryNotRun = null;")
     body_blocks.append("  let _reviewIntegration = null;")
     body_blocks.append(f"  let {_TEST_RESULT_VAR} = null;")
     body_blocks.append(f"  let {_FALSIFIER_RESULT_VAR} = null;")
@@ -5128,6 +5130,7 @@ def compose_script(
         "_reviewPrep",
         "_reviewWave",
         "_deliveryVerdict",
+        "_deliveryNotRun",
         "_reviewIntegration",
     )
     review_vars: Optional[dict] = None

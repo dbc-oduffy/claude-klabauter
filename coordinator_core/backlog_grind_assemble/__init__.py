@@ -7,7 +7,7 @@ duplicated backlog-grind spines (`bug-blitz.md`, `mise-en-place.md`,
 `bug-sweep/SKILL.md`, `debt-triage/SKILL.md`, `dogfood/SKILL.md`). Cadence
 here names WHICH of the five mirror surfaces is asking
 (`"bug-blitz" | "mise-en-place" | "bug-sweep" | "debt-triage" | "dogfood"`)
-— it is the `orient-assemble brief --cadence {session,day,week}` severity/depth-knob naming convention
+— it is the `orient-assemble brief --cadence {session,week}` severity/depth-knob naming convention
 reused over a disjoint surface-selection set, never a severity tier (D-2).
 
 `orient-assemble brief`, NOT `pickup_assemble`/`baton_assemble`, is the model for
@@ -30,7 +30,7 @@ envelope. Cadence self-gating (each reader is a no-op `ReaderResult()` for
 every cadence but its own) is decided INSIDE each reader's own `collect()`,
 never re-decided here — this seam calls all five unconditionally for every
 cadence and trusts each reader to self-gate, exactly mirroring
-the day-cadence-only health gating of `orient-assemble brief --cadence day`.
+the per-cadence health gating of `orient-assemble brief`.
 
 `run_id` (the CLI's `--run-id`) is threaded through that same seam the same
 way, and for the same reason: it is passed to ALL five readers on every

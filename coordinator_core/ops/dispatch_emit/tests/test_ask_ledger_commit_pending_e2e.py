@@ -41,7 +41,8 @@ let _docs = null, _commit = null, _nextAction = null;
 let _incompleteChunks = [], _notStarted = [], _blockedChunks = [], _heldBy = [], _unansweredBriefs = [];
 let _stoppedBy = [], _verifications = [], _planHeld = {};
 let _reviewIntegration = { fixes_applied: 0, sidecar_path: 'x' }, _reviewPrep = { slices: [1] };
-let _reviewWave = [], _deliveryVerdict = null, _testResult = null;
+let _reviewWave = [], _deliveryVerdict = null, _deliveryNotRun = null, _testResult = null;
+let _haltCommit = null; const _commitHaltRecord = async () => null; const _terminalCommitParamsBlock = (p) => JSON.stringify(p);
 let _ledger = null, _falsifierResult = null, _falsifierSpec = null;
 const log = () => {};
 const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings/x.yaml', _planRel = null, REPO_ROOT = '/r';
@@ -158,7 +159,7 @@ def test_a_pre_commit_gap_still_halts_and_is_listed():
     halted = out["halted_by"]
     assert halted and halted["halted"] == "ledger-check"
     assert [i["id"] for i in halted["items"]] == ["R1"]
-    assert "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
 
 
 @pytest.mark.spawns_process
@@ -173,7 +174,7 @@ def test_a_ledger_halt_with_docs_edits_on_disk_still_yields_revise_and_refire():
     assert out["halted_by"]["halted"] == "ledger-check"
     assert out["next_action"]["kind"] == "revise_and_refire" and out["next_action"]["op"] == "workflow.revise"
     assert out["revise_and_refire"] is not None
-    assert out["commit"] is None and "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
 
 
 @pytest.mark.spawns_process
@@ -205,7 +206,7 @@ def test_a_doc_gap_docs_did_not_write_or_mixed_with_another_gap_still_halts(doc_
         [{"verdict": "fail", "items": [item], "conflicts": []}], doc_writes=doc_writes, doc_paths=doc_paths
     )
     assert out["halted_by"] and out["halted_by"]["halted"] == "ledger-check"
-    assert "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)
 
 
 _PARITY_ITEMS = {

@@ -94,6 +94,21 @@ def test_heavy_command_admission_blocks_at_every_level(reg):
     assert mp.apply_guard_level("guard-heavy-command-admission", _deny(), subagent=True) is not None
 
 
+def test_memory_store_cap_is_strict_under_box_wide_warn(reg):
+    _write(reg, '"coordinator.guard_level" = "warn"\n')
+    assert mp.guard_level("guard-memory-store-cap") == "strict"
+    assert "guard-memory-store-cap" not in mp.FLOOR_GUARDS
+
+
+def test_memory_store_cap_per_guard_key_still_lowers(reg):
+    _write(
+        reg,
+        '"coordinator.guard_level" = "warn"\n'
+        '"coordinator.guard_level.guard-memory-store-cap" = "warn"\n',
+    )
+    assert mp.guard_level("guard-memory-store-cap") == "warn"
+
+
 def test_heavy_ue_launch_guard_is_a_subagent_floor():
     assert "guard-subagent-heavy-ue-launch" in mp.SUBAGENT_FLOOR_GUARDS
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
 
 from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_script, compose_pipeline_script
-from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineInputs
+from coordinator_core.ops.dispatch_emit.pipeline_contract import HaltCount, PipelineInputs
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
 from coordinator_core.ops.dispatch_emit.tests.pipeline_graph import agent_graph
 
@@ -59,6 +60,44 @@ def test_halts_unless_emits_the_early_return_carrying_the_remedy(tmp_path):
     assert "halted: 'pre.gate'" in script[check:ret + 80]
     assert ret < script.index("main/work.md")
     assert len(agent_graph(script)) == 2
+
+
+def _halting(tmp_path, **halt):
+    schema = {
+        "type": "object",
+        "required": ["worker_count", "notebooks"],
+        "properties": {"worker_count": {"type": "integer"}, "notebooks": {"type": "array"}},
+    }
+    seg = _segment(tmp_path, "nb", [_stage("scope", schema=schema), _stage("work", depends_on=["scope"])])
+    manifest, inputs, schedule = seg
+    stages = (replace(manifest.stages[0], **halt), manifest.stages[1])
+    inputs = replace(inputs, lists={"nbs": tuple("ABCDEFGH")})
+    return replace(manifest, stages=stages), inputs, schedule
+
+
+def test_halts_unless_nonempty_guards_null_non_object_and_empty_array_before_the_next_stage(tmp_path):
+    script = _compose([_halting(tmp_path, halts_unless_nonempty="notebooks")])
+    guard = script.index(
+        "!pre['scope'] || typeof pre['scope'] !== 'object' || !Array.isArray(pre['scope']['notebooks'])"
+        " || pre['scope']['notebooks'].length === 0"
+    )
+    ret = script.index("return { halted: 'nb.scope', decision_required: ['stage scope returned no notebooks", guard)
+    assert ret < script.index("phase('work')") < script.index("pre['work'] = await")
+
+
+def test_halts_unless_count_compares_each_field_to_the_literal_roster_length(tmp_path):
+    halts = HaltCount(fields=("worker_count", "notebooks"), equals="nbs")
+    script = _compose([_halting(tmp_path, halts_unless_count=halts)])
+    guard = script.index("if (!pre['scope'] ||")
+    block = script[guard:script.index("phase('work')")]
+    assert "(Array.isArray(pre['scope']['worker_count']) ? pre['scope']['worker_count'].length : pre['scope']['worker_count']) !== 8" in block
+    assert "pre['scope']['notebooks'].length : pre['scope']['notebooks']) !== 8" in block
+    assert "8-entry nbs roster" in block and "return { halted: 'nb.scope'" in block
+
+
+def test_a_stage_without_halts_emits_no_guard(tmp_path):
+    script = _compose([_halting(tmp_path)])
+    assert "halted" not in script
 
 
 def test_two_segment_chain_keeps_distinct_stores_and_scratch(tmp_path):

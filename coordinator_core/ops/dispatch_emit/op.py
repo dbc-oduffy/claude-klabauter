@@ -1007,6 +1007,12 @@ def _research_route_setup(
     claimed: set[str] = set()
     for pipeline, inputs in pairs:
         manifest = load_manifest(content_root, pipeline)
+        if pipeline == "notebooklm":
+            try:
+                manifest = research_emit.gate_notebooklm(manifest)
+            except PipelineEmitRefused as exc:
+                reasons.extend(f"pipeline {pipeline!r}: {r}" for r in exc.reasons)
+                continue
         defaults = research_emit.corpus_default_lists(pipeline, questions)
         given = {
             **{k: v for k, v in defaults.items() if k in manifest.lists and k not in inputs.lists},
@@ -1052,6 +1058,10 @@ def _research_route_setup(
         close_params["sizing"] = brief_rel
     if local_root is not None:
         close_params["local_root"] = local_root.as_posix()
+    for index, (manifest, _, _) in enumerate(segments):
+        if manifest.pipeline == "notebooklm":
+            claims = research_emit.claims_output(manifest)
+            close_params["require_claims"] = [claims if index == 0 else f"notebooklm/{claims}"]
     if len(segments) > 1:
         # pipeline_compose writes every segment after the first under <scratch>/<pipeline>/.
         close_params["segment_dirs"] = [m.pipeline for m, _, _ in segments[1:]]

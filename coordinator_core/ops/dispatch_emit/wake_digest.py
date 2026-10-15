@@ -73,8 +73,10 @@ CAP_HELPER_JS = (
 )
 
 
-#: Always a quoted stdin heredoc (`--params-file -`): no argv shell-quoting layer exists to
-#: lose a Windows path's backslash escaping, and neither ARG_MAX nor an apostrophe applies.
+#: Quoted stdin heredoc (`--params-file -`): neither ARG_MAX nor an apostrophe applies. Trap: the
+#: Bash tool halves backslashes in a heredoc body, so a Windows path loses an escape level; the
+#: `\u005c` rewrite below survives that. The in-run commit stage does not use this helper: it runs
+#: `--params-file <path>` and never sends params through a heredoc.
 TERMINAL_COMMIT_CLI_HELPER_JS = (
     "function _terminalCommitCli(p) { "
     "if (!p) return null; "
@@ -377,6 +379,11 @@ def next_action_parts(
                 + f"product_files: {delivery_var}.product_files ?? null, "
                 + f"claims_unbacked: ({delivery_var}.claims_unbacked ?? []).length, "
                 + f"unbacked: ({delivery_var}.claims_unbacked ?? []).map(c => ({{ claim: c && c.claim, anchor: c && c.anchor }})) }} : null)"
+                + (
+                    f", delivery_not_run: ({review_vars['delivery_not_run']} ?? null)"
+                    if "delivery_not_run" in review_vars
+                    else ""
+                )
                 + f", tests: {{ status: ({tests_status_expr} === 'pass-with-skips' ? 'pass' : {tests_status_expr}), "
                 + "skipped: " + record_skips + f", run: {test_num('tests_run')}, "
                 + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')} }}"

@@ -160,8 +160,6 @@ def test_no_prior_lines_makes_exactly_one_entry_listing_the_active_goals():
 
 def test_brief_sources_join_the_candidates_in_preference_order():
     envelope = {"directives": [
-        {"id": "d-handoff-triage-stale-plans", "detail": "  - docs/plans/p1.md (status: executing, untouched 4d)\n"
-                                                           "  - docs/plans/p2.md (status: executing, untouched 5d)"},
         {"id": "d-plan-orphan-tiers", "detail": "P1 authorized_orphan: docs/plans/p3.md (execution_authorized_by=x)\n"
                                                   "P2 orphan: docs/plans/p4.md"},
     ]}
@@ -169,7 +167,7 @@ def test_brief_sources_join_the_candidates_in_preference_order():
     entry = _entry(res, rs.PRIORITIES_POINT)
     assert [(c["title"], c["source"]) for c in entry["candidates"]] == [
         ("Ship the engine", "active-goal"), ("Idle goal", "active-goal"),
-        ("p2", "executing-plan"), ("p3", "p1-orphan"),
+        ("p3", "p1-orphan"),
     ]
 
 

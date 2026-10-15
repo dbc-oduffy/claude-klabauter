@@ -18,10 +18,11 @@ import json
 from dataclasses import replace
 from typing import Mapping, Sequence
 
-from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE, _degrade_agent_type
+from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER,
     ITEM_MARK,
+    PIPELINE_RELAY_CLAUSE,
     PLACEHOLDER_RE,
     SCOPE_POST,
     SCOPE_PRE,
@@ -35,6 +36,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     Stage,
     WHEN_FLAG,
     WHEN_NONEMPTY,
+    WORKFLOW_SCRIPT_CAP_BYTES,
     stage_phase,
     subject_key,
     subject_slug,
@@ -67,6 +69,8 @@ _PRODUCED = """const produced = async (label, call) => {
   if (text === '' || text === '{}' || text === '[]') throw new Error(`stage ${label} produced nothing`);
   return value;
 };"""
+
+_RELAY_DECL = f"const RELAY = {_js_string_literal(PIPELINE_RELAY_CLAUSE)};"
 
 _RETURN_NAME = {SCOPE_PRE: "pre", SCOPE_SUBJECT: "ret", SCOPE_POST: "post"}
 
@@ -199,7 +203,8 @@ def _agent_call(
     stage: Stage, manifest: Manifest, inputs: PipelineInputs, agent_type_host: str | None,
     prompt: str, label: str, slug: str,
 ) -> str:
-    """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type."""
+    """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type. Every prompt resolves to the script's `RELAY` clause plus its template."""
+    prompt = f"(RELAY + '\\n\\n' + {prompt})"
     if stage.agent_type_from is None:
         call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, stage.agent_type, agent_type_host)} }})"
         return f"produced({label}, {call})"
@@ -334,15 +339,17 @@ def _level_lines(
                 lines.append(f"{indent}  {target}[{_js_string_literal(stage_id)}] = level[{k}];")
             lines.append(f"{indent}}}")
         for stage_id in level:
-            lines += _halt_lines(stages[stage_id], scope, manifest.pipeline, indent, tag)
+            lines += _halt_lines(stages[stage_id], scope, manifest.pipeline, inputs, indent, tag)
         lines.append("")
     return lines
 
 
-def _halt_lines(stage: Stage, scope: str, pipeline: str, indent: str, tag: str) -> list[str]:
-    """The early return of a `halts_unless` stage: its recorded boolean is false, so the run ends carrying the stage's remedy."""
-    if stage.halts_unless is None:
-        return []
+def _halt_lines(stage: Stage, scope: str, pipeline: str, inputs: PipelineInputs, indent: str, tag: str) -> list[str]:
+    """The early returns of a stage's halts, each ending the run before the next stage.
+
+    `halts_unless` trusts the stage's own boolean; `halts_unless_nonempty` and `halts_unless_count`
+    compare structured return fields against the emit-time roster, with a remedy composed here.
+    """
     ref = f"{_RETURN_NAME[scope]}[{_js_string_literal(stage.id)}]"
     push = (
         f"results.push({{ subject: s.subject, returns: ret{tag} }});"
@@ -350,12 +357,48 @@ def _halt_lines(stage: Stage, scope: str, pipeline: str, indent: str, tag: str) 
         else f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});"
     )
     halted = _js_string_literal(f"{pipeline}.{stage.id}")
-    return [
-        f"{indent}if ({ref} && {ref}[{_js_string_literal(stage.halts_unless)}] === false) {{",
-        f"{indent}  {push}",
-        f"{indent}  return {{ halted: {halted}, decision_required: {ref}.remedy || [], results }};",
-        f"{indent}}}",
-    ]
+
+    def block(condition: str, remedy: str) -> list[str]:
+        return [
+            f"{indent}if ({condition}) {{",
+            f"{indent}  {push}",
+            f"{indent}  return {{ halted: {halted}, decision_required: {remedy}, results }};",
+            f"{indent}}}",
+        ]
+
+    lines: list[str] = []
+    if stage.halts_unless is not None:
+        lines += block(
+            f"{ref} && {ref}[{_js_string_literal(stage.halts_unless)}] === false",
+            f"{ref}.remedy || []",
+        )
+    if stage.halts_unless_nonempty is not None:
+        field = _js_string_literal(stage.halts_unless_nonempty)
+        message = _js_string_literal(
+            f"stage {stage.id} returned no {stage.halts_unless_nonempty}; "
+            f"fix the stage's inputs and re-run, nothing downstream ran"
+        )
+        lines += block(
+            f"!{ref} || typeof {ref} !== 'object' || !Array.isArray({ref}[{field}]) || {ref}[{field}].length === 0",
+            f"[{message}]",
+        )
+    if stage.halts_unless_count is not None:
+        count = stage.halts_unless_count
+        size = len(inputs.lists[count.equals])
+
+        def value(name: str) -> str:
+            cell = f"{ref}[{_js_string_literal(name)}]"
+            return f"(Array.isArray({cell}) ? {cell}.length : {cell})"
+
+        mismatch = " || ".join(f"{value(f)} !== {size}" for f in count.fields)
+        seen = " + ', ' + ".join(
+            f"{_js_string_literal(f + '=')} + String({ref}[{_js_string_literal(f)}] === undefined ? 'missing' : {value(f)})"
+            for f in count.fields
+        )
+        lead = _js_string_literal(f"stage {stage.id} disagrees with the {size}-entry {count.equals} roster (")
+        tail = _js_string_literal("); reconcile them and re-run, nothing downstream ran")
+        lines += block(f"!{ref} || {mismatch}", f"[{lead} + {seen} + {tail}]")
+    return lines
 
 
 def _element_value(element: object) -> object:
@@ -398,8 +441,7 @@ def _segment(
         )
         if rebinds and stage.id != first.id:
             kwargs["brief"] = _fill(first.output, **{**kwargs, "item": None})
-        # Relayed driving-session chat reached pipeline agents as if it were their task.
-        return f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_fill(template, **kwargs)}", _fill(stage.output, **kwargs)
+        return _fill(template, **kwargs), _fill(stage.output, **kwargs)
 
     def scoped(scope: str, subject: str | dict | None) -> dict[str, dict]:
         name = None if subject is None else subject_key(subject)
@@ -416,9 +458,13 @@ def _segment(
                     items[stage.id].append(
                         {"prompt": prompt, "output": output, "slug": value if isinstance(value, str) else None}
                     )
-                # One shared prompt when every roster item's prompt differs only by its slug: N copies
-                # of a multi-KB template otherwise ride in the script.
-                if not elements or not all(isinstance(e, dict) and "slug" in e for e in elements):
+                # One shared prompt when every item's prompt differs only by its slug (a roster
+                # entry's slug, or a string element itself): N copies of a multi-KB template
+                # otherwise ride in the script.
+                if not elements or not (
+                    all(isinstance(e, dict) and "slug" in e for e in elements)
+                    or all(isinstance(e, str) for e in elements)
+                ):
                     continue
                 seen = len(errors)
                 shared, _ = fill_stage(stage, name, ITEM_MARK)
@@ -526,6 +572,7 @@ def compose_chain_script(
         "};",
         "",
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
+        _RELAY_DECL,
     ]
     if not chained:
         out += parts[0][2][0]
@@ -547,7 +594,18 @@ def compose_chain_script(
         out += ["return results;", ""]
     else:
         out += [f"return {{ results, next_action: {json.dumps(dict(next_action), sort_keys=True)} }};", ""]
-    return "\n".join(out)
+    text = "\n".join(out)
+    size = len(text.encode("utf-8"))
+    if size > WORKFLOW_SCRIPT_CAP_BYTES:
+        sizes = {
+            m.pipeline: len("\n".join(data + body).encode("utf-8")) for m, _, (data, body, _) in parts
+        }
+        largest = max(sizes, key=sizes.__getitem__)
+        raise PipelineEmitRefused([
+            f"the script is {size} bytes, over the Workflow cap of {WORKFLOW_SCRIPT_CAP_BYTES}; "
+            f"largest segment: {largest} ({sizes[largest]} bytes)"
+        ])
+    return text
 
 
 def compose_pipeline_script(

@@ -27,7 +27,7 @@ DISPATCH_KEY = "workday_start"
 TEMPLATE_RELPATH = "workflows/workday-start.mjs"
 
 STEP0_STEP = "step0-branch-setup"
-ORIENT_STEP = "orient-assemble-brief-day"
+ENVELOPE_STEP = "orient-day-envelope"
 INBOX_STEP = "memo-inbox-blitz-assemble"
 FRESHNESS_STEP = "fresh-commit-delta"
 BACKFILL_SCAN_STEP = "weekly-backfill-scan"
@@ -273,7 +273,7 @@ SPEC = WorkdayStartSpec(
     launch_stages=LAUNCH_STAGES,
     finish_stages=FINISH_STAGES,
     front_door=_stages(LAUNCH_STAGES[: LAUNCH_STAGES.index(PHASE_ONE_LAST_STAGE) + 1]),
-    envelope_step=ORIENT_STEP,
+    envelope_step=ENVELOPE_STEP,
     stage_of=lambda _directive_id: DIRECTIVE_STAGE,
     residue=(_stages(LAUNCH_STAGES[LAUNCH_STAGES.index(PHASE_ONE_LAST_STAGE) + 1 :]),),
     rules=RULES,

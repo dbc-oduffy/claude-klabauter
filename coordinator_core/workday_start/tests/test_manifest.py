@@ -45,8 +45,7 @@ def test_every_cli_step_is_dispatchable_and_has_a_bin_file() -> None:
     assert missing == []
 
 
-def test_orient_directive_clis_and_queue_append_are_admitted() -> None:
-    assert manifest.ORIENT_DIRECTIVE_CLIS <= manifest.CONSUMES_MANIFEST
+def test_queue_append_is_admitted() -> None:
     assert "coordinator-queue-append" in manifest.CONSUMES_MANIFEST
 
 
@@ -62,13 +61,44 @@ def test_engine_steps_cost_at_or_under_the_bar() -> None:
     assert over == []
 
 
-def test_class_comes_from_the_costs_file_and_engine_gaps_are_not_started() -> None:
+KILLED_IDS = (
+    "memo-outbox-surface", "sentinel-memo-outbox-tracking-guard", "triage-stale-plans",
+    "hyg-watch-state-gitignore-fleet", "rollup-counters-local-ahead", "orient-assemble-brief-day",
+    "gap-commit-closure", "gap-recheck-due", "gap-source-guard-drift",
+)
+
+
+def test_the_nine_killed_ids_are_in_no_table_and_no_cost_row() -> None:
+    assert not set(KILLED_IDS) & {r["id"] for r in manifest.STEP_TABLE}
+    assert not set(KILLED_IDS) & set(manifest.RUN_FIELDS)
+    assert not set(KILLED_IDS) & set(_costs())
+    assert not [r["id"] for r in manifest.STEP_TABLE if r["id"].startswith("gap-")]
+
+
+REBUILT_IDS = (
+    "hyg-watch-state-ignore", "orient-day-envelope", "triage-stale-executing-plans",
+    "memo-outbox-stale-drafts", "rollup-local-ahead-unpublished", "rollup-recheck-due-markers",
+)
+
+
+def test_rebuilt_steps_are_inproc_targets_that_resolve_with_measured_engine_rows() -> None:
+    import importlib
+
+    by_id = {r["id"]: r for r in manifest.STEP_TABLE}
+    costs = _costs()
+    assert not set(REBUILT_IDS) & set(KILLED_IDS)
+    for sid in REBUILT_IDS:
+        module, _, func = by_id[sid]["inproc"].partition(":")
+        assert callable(getattr(importlib.import_module(module), func)), sid
+        row = costs[sid]
+        assert row["cost_class"] == "engine" and row["basis"] == "measured", sid
+        assert row["samples"] == 5 and row["process_ms_median"] < 500 and row["spawns"] == 0, sid
+
+
+def test_class_comes_from_the_costs_file() -> None:
     costs = _costs()
     for spec in _all(Path(".")):
-        if spec.id.startswith("gap-"):
-            assert spec.cost_class == "over-bar"
-            assert spec.detail.startswith(manifest.ENGINE_GAP_REASON)
-        elif spec.id in costs:
+        if spec.id in costs:
             assert spec.cost_class == costs[spec.id]["cost_class"]
         else:
             assert spec.kind == "inproc" and spec.cost_class == "unmeasured"
@@ -197,20 +227,6 @@ def test_snippet_sync_runs_early_when_step0_changed_snippets(tmp_path: Path) -> 
     assert "weekly-verify-snippet-sync" in _weekly_ids(tmp_path, today)[1]
     changed = ["coordinator\\snippets\\example-retrieval-repo-preamble.md"]
     assert "weekly-verify-snippet-sync" in _weekly_ids(tmp_path, today, step0_changed_paths=changed)[0]
-
-
-def test_outbox_surface_needs_a_file_in_the_outbox(tmp_path: Path) -> None:
-    def ids() -> tuple[set[str], set[str]]:
-        owed = manifest.steps_for(("memos",), repo_root=tmp_path, today=TODAY)
-        skipped = manifest.cadence_skipped(("memos",), repo_root=tmp_path, today=TODAY)
-        return {s.id for s in owed}, {s.id for s, _ in skipped}
-
-    assert ids() == (set(), {"memo-outbox-surface"})
-    outbox = tmp_path / manifest.OUTBOX_DIR
-    outbox.mkdir(parents=True)
-    assert ids() == (set(), {"memo-outbox-surface"})
-    (outbox / "memo.md").write_text("x")
-    assert ids() == ({"memo-outbox-surface"}, set())
 
 
 def test_weekly_touch_runs_only_when_the_weekly_group_did(tmp_path: Path) -> None:

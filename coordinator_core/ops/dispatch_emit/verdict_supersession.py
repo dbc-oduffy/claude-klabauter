@@ -35,12 +35,35 @@ def _frontmatter(path: Path) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+DIFF_SHA_KEY = "diff_sha"
+DELIVERY_NOT_RUN_KEY = "delivery_not_run"
+
+
 def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
     """The newest record superseding `run_record_rel`, recorded no earlier than the run record.
 
     Trap: a run record's path is plan-scoped, so a later run (a late-delta review) rewrites the
     same path; a verdict recorded before that rewrite superseded the earlier run, and applying it
     would pull the stamp back to the old head and its old tests."""
+    found = _newest_supersession_entry(repo_root, run_record_rel)
+    return found[1] if found else None
+
+
+def latest_delivery_binding(repo_root: Path, run_record_rel: str) -> Optional[dict]:
+    """`{record_path, diff_sha}` of the record `_newest_supersession` selects, `None` when there
+    is none. `record_path` is repo-relative posix; `diff_sha` is `None` when the record omits it."""
+    found = _newest_supersession_entry(repo_root, run_record_rel)
+    if not found:
+        return None
+    path, fm = found
+    diff = fm.get(DIFF_SHA_KEY)
+    return {
+        "record_path": path.relative_to(repo_root).as_posix(),
+        DIFF_SHA_KEY: str(diff) if diff else None,
+    }
+
+
+def _newest_supersession_entry(repo_root: Path, run_record_rel: str) -> Optional[tuple]:
     base = repo_root / VERDICT_DIR
     if not base.is_dir():
         return None
@@ -57,7 +80,7 @@ def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]
             continue
         key = (str(fm.get("recorded_at") or ""), path.name)
         if best is None or key > best[0]:
-            best = (key, fm)
+            best = (key, (path, fm))
     return best[1] if best else None
 
 

@@ -410,7 +410,7 @@ def test_lightweight_tier_drops_tiered_agents_and_nulls_the_delivery_verdict():
     block = _wave_block(_tiered_review(), tier="lightweight")
     assert "coordinator:code-reviewer" in block
     assert "coordinator:overengineering-reviewer" not in block
-    assert "delivery-verifier" not in block
+    assert "agent(" in block and block.count("delivery-verifier") == 1
     assert "const _deliveryVerdict = null;" in block
     assert "coordinator:staff-eng" in block
 
@@ -433,6 +433,33 @@ def test_tier_js_gates_agents_at_run_time_and_keeps_the_verdict_offset():
     assert '["standard", "full"].includes(_tier)' in block
     assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in block
     assert "coordinator:overengineering-reviewer" in block
+
+
+def test_compile_tier_exclusion_binds_the_delivery_reason_literal():
+    block = _wave_block(_tiered_review(), tier="lightweight")
+    assert "const _deliveryNotRun = 'tier lightweight excludes coordinator:delivery-verifier';" in block
+
+
+def test_delivery_reason_binds_on_the_tier_skip_rejection_and_empty_paths():
+    block = _wave_block(_tiered_review(), tier_js="_tier")
+    assert "let _deliveryNotRunReason = null;" in block
+    assert (
+        "(_deliveryNotRunReason = 'tier ' + String(_tier) + ' excludes coordinator:delivery-verifier', null)"
+        in block
+    )
+    assert "catch (e) { _deliveryNotRunReason = 'rejected: ' + String(e && e.message || e); return null; }" in block
+    assert (
+        "const _deliveryNotRun = _deliveryVerdict ? null : (_deliveryNotRunReason ?? 'returned no result');"
+        in block
+    )
+    assert "let _deliveryNotRun " not in block and "let _deliveryNotRun;" not in block
+    assert block.count("_deliveryNotRunReason = ") == 3  # the declaration plus two writers
+
+
+def test_only_the_delivery_verifier_carries_the_reason_hook():
+    block = _wave_block(_tiered_review(), tier_js="_tier")
+    assert block.count("'rejected: '") == 1
+    assert block.count("catch (e) { _deliveryNotRunReason") == 1
 
 
 def test_tier_and_tier_js_together_or_unknown_tier_raise():

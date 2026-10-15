@@ -935,6 +935,23 @@ def test_a_digest_carrying_stage_returns_mints_the_review_stamp_into_the_coded_c
     assert "C4, C5" in out["plan_status_refusal"]
 
 
+def test_the_run_record_carries_the_delivery_not_run_reason_for_a_null_delivery():
+    review = {
+        "prep": {"run_base_sha": "a" * 40},
+        "delivery": None,
+        "delivery_not_run": "tier S excludes coordinator:delivery-verifier",
+    }
+    out = terminal_commit._stage_returns(review)
+    assert out["delivery"] is None
+    assert out["delivery_not_run"] == "tier S excludes coordinator:delivery-verifier"
+
+
+@pytest.mark.parametrize("reason", [None, "", 3])
+def test_the_run_record_omits_an_empty_delivery_not_run(reason):
+    review = {"prep": {"run_base_sha": "a" * 40}, "delivery": None, "delivery_not_run": reason}
+    assert "delivery_not_run" not in terminal_commit._stage_returns(review)
+
+
 _SINGLE_ROW_PLAN = """---
 title: p
 status: executing

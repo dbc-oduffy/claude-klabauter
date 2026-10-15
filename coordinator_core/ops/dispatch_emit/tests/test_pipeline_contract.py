@@ -43,6 +43,25 @@ def test_dataclasses_are_frozen():
             setattr(obj, field, "x")
 
 
+def test_halt_fields_default_none_and_halt_count_frozen():
+    fan = pc.FanOut(pc.FAN_OUT_NONE)
+    stage = pc.Stage("s", "t", "m", "s.md", None, False, (), fan, "o")
+    assert stage.halts_unless_nonempty is None
+    assert stage.halts_unless_count is None
+    hc = pc.HaltCount(("a", "b"), "notebooks")
+    with pytest.raises(FrozenInstanceError):
+        hc.equals = "x"
+
+
+def test_relay_clause_and_script_cap():
+    assert pc.WORKFLOW_SCRIPT_CAP_BYTES == 524288
+    clause = pc.PIPELINE_RELAY_CLAUSE.lower()
+    assert "relayed chat" in clause and "quote" in clause
+    assert "genuine instruction to stop" not in clause
+    for name in ("PIPELINE_RELAY_CLAUSE", "WORKFLOW_SCRIPT_CAP_BYTES", "HaltCount"):
+        assert name in pc.__all__
+
+
 def test_pinned_constants():
     assert pc.SCHEMA_VERSION == 1
     assert pc.MANIFEST_SUFFIX == ".manifest.yaml"

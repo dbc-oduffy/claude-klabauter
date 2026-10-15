@@ -1,4 +1,4 @@
-"""The requirement-register stall point rides the day and week cadences of the work family."""
+"""The requirement-register stall point rides the week cadence of the work family."""
 from __future__ import annotations
 
 import os
@@ -58,9 +58,8 @@ def _points(result) -> list[dict]:
     return [p for p in result.judgment_points if p["id"] == POINT_ID]
 
 
-@pytest.mark.parametrize("cadence", ["day", "week"])
-def test_point_names_all_three_stalls(tmp_path, cadence):
-    points = _points(_work.collect(cadence, repo_root=_tree(tmp_path)))
+def test_point_names_all_three_stalls(tmp_path):
+    points = _points(_work.collect("week", repo_root=_tree(tmp_path)))
     assert len(points) == 1
     evidence = points[0]["evidence"]
     assert "stale rows" in evidence and "row stale" in evidence
@@ -75,15 +74,14 @@ def test_session_cadence_never_runs_the_scan(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_scan_failure_is_guarded_at_day(tmp_path, monkeypatch, capsys):
+def test_scan_failure_is_guarded_at_week(tmp_path, monkeypatch, capsys):
     def boom(*_a, **_k):
         raise RuntimeError("x")
 
     monkeypatch.setattr(rr, "stall_report", boom)
-    assert _points(_work.collect("day", repo_root=_tree(tmp_path))) == []
+    assert _points(_work.collect("week", repo_root=_tree(tmp_path))) == []
     assert "work/register-stall" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("cadence", ["day", "week"])
-def test_no_register_means_no_point(tmp_path, cadence):
-    assert _points(_work.collect(cadence, repo_root=_tree(tmp_path, with_register=False))) == []
+def test_no_register_means_no_point(tmp_path):
+    assert _points(_work.collect("week", repo_root=_tree(tmp_path, with_register=False))) == []

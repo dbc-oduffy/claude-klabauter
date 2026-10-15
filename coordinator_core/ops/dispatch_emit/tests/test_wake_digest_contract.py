@@ -398,6 +398,16 @@ def test_terminal_commit_params_carry_script_path_and_session_id():
     assert "script_path" not in wd.completion_return_js(**_kwargs())
 
 
+def test_inline_review_carries_the_delivery_not_run_reason_when_the_binding_is_named():
+    review_vars = {**_kwargs()["review_vars"], "delivery_not_run": "_deliveryNotRun"}
+    js = wd.completion_return_js(**_kwargs(review_vars=review_vars))
+    assert "delivery_not_run: (_deliveryNotRun ?? null)" in js
+
+
+def test_inline_review_omits_delivery_not_run_for_older_callers():
+    assert "delivery_not_run" not in wd.completion_return_js(**_kwargs())
+
+
 def _digest_for(tmp_path, *, test_js, verifications_js, gate_owed_js="{}"):
     js = wd.completion_return_js(**_kwargs(review_vars=None, has_commit_request=False, skipped_rows=[]))
     node = _find_node()
