@@ -47,8 +47,12 @@ def test_criterion_not_met_blocks_close_when_a_judge_runs(monkeypatch):
     script = _script(monkeypatch)
     var = ask_compose._emit._FALSIFIER_RESULT_VAR
     pred = script[script.index("const _closeable = ") :].split("\n", 1)[0]
-    assert f"!({var} && {var}.status === 'not_met')" in pred
-    assert f"({var} && {var}.status === 'not_met') ? 'criterion not_met'" in script
+    assert "!_criterionOpen" in pred
+    assert f"const _criterionOpen = !!({var} && {var}.status === 'not_met');" in script
+    assert (
+        f"_criterionOpen ? (String({var}.reason ?? '').startsWith('not wired up: ') ? String({var}.reason).slice(0, 200) : "
+        f"'criterion not_met' + ({var}.reason ? ': ' + String({var}.reason).slice(0, 200) : ''))"
+    ) in script
 
 
 def test_revise_and_refire_rides_beside_next_action(monkeypatch):

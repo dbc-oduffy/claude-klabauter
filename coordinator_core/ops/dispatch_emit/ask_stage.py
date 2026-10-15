@@ -228,6 +228,25 @@ def _rel(root: Path, path: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
 
+def _set_aside_prior_report(root: Path, report_rel: str) -> Optional[str]:
+    """Rename a row report left by an earlier run to `<row id>.prior.md` beside it, replacing an
+    older one, and return that repo-relative path; None when no report sits there. Rename only.
+    Trap: without this a refired executor finds its own report and replays it."""
+    report = root / report_rel
+    if not report.is_file():
+        return None
+    prior = report.with_name(report.stem + ".prior.md")
+    report.replace(prior)
+    return _rel(root, prior)
+
+
+def _prior_report_line(prior_rel: str) -> str:
+    return (
+        f"Prior run's report, set aside: {prior_rel}. It is the previous run's history, never this "
+        "run's answer; this row re-executes against the current requirements."
+    )
+
+
 def _discharge_clauses_for(plan_text: str, root: Path, raw_rows: list) -> dict[str, str]:
     """Self-DR discharge clauses keyed by row id; {} without a readable `sizing_object`."""
     split = split_frontmatter(plan_text)
@@ -389,6 +408,9 @@ def stage(
                 text = intent + "\n" + text
             if row.id in clauses:
                 text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+            prior = _set_aside_prior_report(root, _dispatch_report_path(plan_posix, row.id))
+            if prior:
+                text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
             _write(brief, text)
             paths = _widen_with_test_candidates(
                 commit_pathspec_or_none([row]) or [], root

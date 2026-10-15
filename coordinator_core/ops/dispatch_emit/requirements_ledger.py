@@ -29,6 +29,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.locked_write import MutateAbort
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, record_dir
@@ -41,6 +42,8 @@ INBOX_FILE = "revisions.jsonl"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
+#: Prefix of the `ruling.ref` a `workflow.revise` out_of_scope stamps: `<REVISE_REF>:<run_id>:<revision row id>`.
+REVISE_REF = "workflow.revise"
 STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
 #: Acts that can only exist after the terminal commit; a `post_commit` item names which remain.
 POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo")
@@ -53,6 +56,7 @@ _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
     Field("verbatim", "str"),
     Field("all_of_pm_ask", "bool"),
+    Field("out_of_scope", "str_list"),
 )
 _SIZING_SCHEMA = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "sizing-object.schema.json"
 
@@ -74,11 +78,14 @@ class Item:
 
 @dataclass(frozen=True)
 class Ledger:
-    """The rows a run is judged against: every register row not already ruled deferred/waived."""
+    """The rows a run is judged against: every register row not already ruled deferred/waived.
+    `withheld` (`{id, reason}`) are the rows a `workflow.revise` ruled out of scope: never judged,
+    always carried open."""
 
     items: tuple[Item, ...]
     all_of_pm_ask: bool
     sizing_rel: Optional[str] = None
+    withheld: tuple[dict, ...] = ()
 
     def to_json(self) -> dict:
         return {"items": [i.to_json() for i in self.items], "all_of_pm_ask": self.all_of_pm_ask}
@@ -164,14 +171,28 @@ def _sizing_path(root: Path, sizing_rel: str) -> Path:
     return found
 
 
-def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str]) -> Ledger:
+def _withheld_revision(row: Mapping, run_id: str) -> Optional[str]:
+    """The revision row id that ruled `row` out of scope in run `run_id`, else None."""
+    ruling = row.get(rr.ROW_RULING)
+    ref = ruling.get(rr.RULING_REF) if isinstance(ruling, Mapping) else None
+    prefix = f"{REVISE_REF}:{run_id}:"
+    if row.get(rr.ROW_STATUS) == rr.STATUS_DEFERRED and isinstance(ref, str) and ref.startswith(prefix):
+        return ref[len(prefix):] or None
+    return None
+
+
+def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str], run_id: str = "") -> Ledger:
     items = []
+    withheld = []
     for row in rows:
         if row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
+            revision = _withheld_revision(row, run_id)
+            if revision:
+                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": f"withheld by revision {revision}"})
             continue
         origin, at = _origin(row.get(rr.ROW_ANCHOR))
         items.append(Item(str(row.get(rr.ROW_ID)), str(row.get(rr.ROW_TEXT) or ""), origin, at))
-    return Ledger(tuple(items), all_of, sizing_rel)
+    return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
 
 
 def _next_id(rows: Sequence[Mapping]) -> str:
@@ -312,15 +333,26 @@ FOREIGN_TURN_REASON = "another run's PM turn: the run's ask does not quote it"
 
 def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
+    withhold: Optional[Mapping] = None,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
     (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
     removes the open, unclaimed rows derived from those PM turns and lists them in
-    `unrelated_turns`."""
+    `unrelated_turns`. `withhold` (`{"ids": [...], "run_id", "verbatim"}`) defers the named rows
+    with a ruling that cites the row this call appends, in the same register write; an unknown
+    id or a met/waived row refuses the whole write."""
 
     drop_turns = drop_turns or {}
 
     def edit(rows: list[dict]) -> list[dict]:
+        named = list((withhold or {}).get("ids") or [])
+        by_id = {str(r.get(rr.ROW_ID)): r for r in rows}
+        unknown = [i for i in dict.fromkeys(named) if i not in by_id]
+        if unknown:
+            raise MutateAbort(f"out_of_scope names no register row: {', '.join(unknown)}")
+        closed = [i for i in dict.fromkeys(named) if by_id[i].get(rr.ROW_STATUS) in (rr.STATUS_MET, rr.STATUS_WAIVED)]
+        if closed:
+            raise MutateAbort(f"out_of_scope names a row already {by_id[closed[0]].get(rr.ROW_STATUS)}: {', '.join(closed)}")
         if drop_turns:
             anchors = {f"{ORIGIN_PM_VERBATIMS} turn {n}" for n in drop_turns}
             texts = set(drop_turns.values())
@@ -344,6 +376,17 @@ def _append_rows(
                 rr.ROW_ID: _next_id(rows), rr.ROW_TEXT: t, rr.ROW_ANCHOR: anchor,
                 rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
             })
+        if named:
+            revision = str(rows[-1].get(rr.ROW_ID))
+            ruling = {
+                rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: str(withhold["verbatim"]),
+                rr.RULING_REF: f"{REVISE_REF}:{withhold['run_id']}:{revision}", rr.RULING_ON: _now()[:10],
+            }
+            for rid in dict.fromkeys(named):
+                row = by_id[rid]
+                if row.get(rr.ROW_STATUS) != rr.STATUS_DEFERRED:
+                    row[rr.ROW_STATUS] = rr.STATUS_DEFERRED
+                    row[rr.ROW_RULING] = dict(ruling)
         return rows
 
     unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted(drop_turns)]
@@ -369,6 +412,11 @@ def render(ledger: Ledger, run_id: str) -> str:
         lines.append("")
         lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
         lines.append("")
+    if ledger.withheld:
+        lines.append("## Out of scope (ruled by a revision; never judged, carried open)")
+        lines.append("")
+        lines.extend(f"- {w['id']}: {w['reason']}" for w in ledger.withheld)
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -391,7 +439,7 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     except (LedgerRefused, OSError):
         return Ledger((), all_of, sizing_rel)
     register = rr.read_register(text)
-    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel)
+    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel, Path(dir_).name)
 
 
 def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
@@ -476,14 +524,19 @@ def bind(
 
 
 def revise(
-    repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None
+    repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
+    out_of_scope: Sequence[str] = (),
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
-    run's sizing is bound, else a queued revision `bind` folds in. Returns (ledger, run dir, the
-    new row id or None)."""
+    run's sizing is bound, else a queued revision `bind` folds in. `out_of_scope` ids are deferred
+    in the same register write as the revision row, the verbatim being their ruling; it needs that
+    verbatim and a bound sizing. Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
+    named = [str(i) for i in out_of_scope]
     if not text and all_of_pm_ask is None:
         raise LedgerRefused("workflow.revise needs a non-empty verbatim, all_of_pm_ask, or both")
+    if named and not text:
+        raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
     if len(text.encode("utf-8")) > VERBATIM_BYTE_CAP:
         raise LedgerRefused(f"verbatim exceeds {VERBATIM_BYTE_CAP} bytes")
     root = Path(repo_root)
@@ -491,6 +544,9 @@ def revise(
     run = read_run(dir_)
     if run is None:
         raise LedgerRefused(f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first")
+    if named and not run.get("sizing_rel"):
+        raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
+    withhold = {"ids": named, "run_id": run_id, "verbatim": text} if named else None
     if all_of_pm_ask is not None:
         run = {**run, "all_of_pm_ask": bool(all_of_pm_ask)}
         _write_run(dir_, run)
@@ -498,7 +554,7 @@ def revise(
     if text:
         at = _now()
         if run.get("sizing_rel"):
-            rows = _append_rows(root, run["sizing_rel"], [(text, f"{ORIGIN_REVISION}@{at}")])
+            rows = _append_rows(root, run["sizing_rel"], [(text, f"{ORIGIN_REVISION}@{at}")], withhold=withhold)
             added = str(rows[-1].get(rr.ROW_ID)) if rows else None
         else:
             from coordinator_core.atomic_append import append_line
@@ -563,6 +619,9 @@ def judge(
     `routed` maps an engine-routed item id to the engine root it was owed: a met/not_met/post_commit
     item whose `root_read` (string or list) does not include that root adds a failure. It never
     removes one; None or empty is the cwd-only judgment.
+
+    A row in `ledger.withheld` (ruled out of scope by a revise) is listed in `open` as
+    `withheld by revision <id>` whether the verdict omits or judges it, and never fails.
 
     Every row needs exactly one judgment. `drifted` (lost or reinterpreted) always fails;
     `superseded` passes only when it names a later revision row; `not_met` fails when
@@ -629,8 +688,10 @@ def judge(
                 })
             else:
                 open_rows.append({"id": item.id, "reason": "non-essential"})
-    unknown = sorted(set(by_id) - set(order))
+    withheld_ids = {w["id"] for w in ledger.withheld}
+    unknown = sorted(set(by_id) - set(order) - withheld_ids)
     failures.extend({"id": rid, "reason": "names no requirement row"} for rid in unknown)
+    open_rows.extend(dict(w) for w in ledger.withheld)
     return {"pass": not failures, "failures": failures, "open": open_rows}
 
 
@@ -695,7 +756,9 @@ def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
 
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str), `all_of_pm_ask` (bool).
+    """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str), `all_of_pm_ask` (bool),
+    `out_of_scope` (list of register row ids, needs `verbatim`: each is deferred with the verbatim as
+    its ruling, carried open on the commit, and replied as `withheld`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -711,7 +774,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     root = main_worktree_root(Path(repo_root))
     try:
         ledger, dir_, added = revise(
-            root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask")
+            root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
+            out_of_scope=params.get("out_of_scope") or (),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -728,6 +792,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "ledger": (dir_ / LEDGER_VIEW_FILE).relative_to(root.resolve()).as_posix(),
         "run_live": live,
     }
+    named = set(params.get("out_of_scope") or ())
+    if named:
+        out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]
     if not live:
         out.update(_refire(ledger.sizing_rel, root))
     return out

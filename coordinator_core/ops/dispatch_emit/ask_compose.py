@@ -1442,14 +1442,27 @@ def compose_ask_script(
             f"conflicts: Array.isArray({v}.conflicts) ? {v}.conflicts : [] }} : null;"
         )
     b.append(
+        "    const _reconciled = [];\n"
         "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'not_met' || !Array.isArray(i.remaining) || !i.remaining.length) continue;\n"
         "      const rest = i.remaining.filter((a) => !((_manifest.doc_writes ?? []).includes(a) "
         "&& (_docs?.doc_paths ?? []).includes(a)));\n"
         "      if (rest.length === i.remaining.length) continue;\n"
-        "      if (rest.length) i.remaining = rest; else { i.status = 'met'; delete i.remaining; }\n"
+        "      if (rest.length) i.remaining = rest; else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
         "    }"
     )
+    if judge_expr is not None:
+        v = _emit._FALSIFIER_RESULT_VAR
+        b.append(
+            f"    if ({v}?.status === 'not_met' && (_ledger?.items ?? []).length "
+            "&& (_ledger.items).every((i) => i && i.status === 'met') "
+            f"&& !String({v}.reason ?? '').startsWith('not wired up: ') "
+            f"&& [undefined, 'pass', 'not_present'].includes({v}.falsifier?.verdict) "
+            f"&& (!Array.isArray({v}.clauses) || {v}.clauses.every((c) => !c || c.status === 'met'))) "
+            f"{{ {v} = {{ ...{v}, status: 'met', differs_from_baseline: null, "
+            "reason: _reconciled.join(', ') ? 'met after reconcile: ' + _reconciled.join(', ') : 'met: every ledger item met', "
+            "reconciled_from: 'not_met' }; }"
+        )
     b.append(
         f"    const _postCommitActs = {json.dumps(list(POST_COMMIT_ACTS))};\n"
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
@@ -1474,17 +1487,16 @@ def compose_ask_script(
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         "next_action: 'Ledger rows ' + ((_ledger ? _ledgerBlocking(_ledger) : []).map((i) => i && i.id).filter(Boolean)"
         ".join(', ') || '(ledger unreadable)') + ' block the commit. Run coordinator-invoke workflow.revise with run_id ' "
-        "+ _runId + ' and a verbatim stating scope: which of those row ids are in or out.' }; }"
+        "+ _runId + ' with out_of_scope: [row ids] for the rows ruled out, and a verbatim stating scope.' }; }"
     )
     b.append("  }")
     b.append("  }")
     b.append(f"  {CAP_HELPER_JS}")
     b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
-    criterion_open = (
-        f" && !({_emit._FALSIFIER_RESULT_VAR} && {_emit._FALSIFIER_RESULT_VAR}.status === 'not_met')"
-        if judge_expr is not None
-        else ""
-    )
+    _fv = _emit._FALSIFIER_RESULT_VAR
+    criterion_open = " && !_criterionOpen" if judge_expr is not None else ""
+    if judge_expr is not None:
+        b.append(f"  const _criterionOpen = !!({_fv} && {_fv}.status === 'not_met');")
     b.append(
         "  const _closeable = !!(!_halted && _manifest && !_manifest.error"
         f"{criterion_open} && !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL'));"
@@ -1493,7 +1505,8 @@ def compose_ask_script(
         "  const _mkRevise = () => ({ run_id: _runId, sizing: _sizingRel, "
         "reason: (_halted && _halted.halted) ? _halted.halted : (!_manifest || _manifest.error) ? 'manifest-error' : "
         + (
-            f"({_emit._FALSIFIER_RESULT_VAR} && {_emit._FALSIFIER_RESULT_VAR}.status === 'not_met') ? 'criterion not_met' : "
+            f"_criterionOpen ? (String({_fv}.reason ?? '').startsWith('not wired up: ') ? String({_fv}.reason).slice(0, 200) : "
+            f"'criterion not_met' + ({_fv}.reason ? ': ' + String({_fv}.reason).slice(0, 200) : '')) : "
             if judge_expr is not None
             else ""
         )
