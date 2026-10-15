@@ -636,6 +636,7 @@ def compose_ask_script(
     stop_after: Optional[str] = None,
     in_run_commit: bool = False,
     ask_source: str = "pm",
+    required_reviewers: Sequence[str] = (),
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -645,6 +646,7 @@ def compose_ask_script(
     `ask_source="relayed"` marks `prompt` as an EM's relay: every prompt that would call the ask
     the PM's words names it a relayed ask instead, and the run reads `relayed-ask.md`, not `ask.md`.
 
+    `required_reviewers` (`plugin:agent` types) join the roster's `named` stage at every tier.
     The review roster and stage schemas load from DoE when not injected; `wrap_stage` and
     `plan_blitz_text` default to `ask_plan_blitz.wrap_stage` over the resolved plugin asset, which
     is embedded only when the arm can be M+. `script_path` is the repo-relative path the script
@@ -691,7 +693,7 @@ def compose_ask_script(
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
 
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
-    review = parse_execute_review(review_roster_fragment)
+    review = parse_execute_review(review_roster_fragment, required_reviewers=list(required_reviewers))
 
     intake = _intake_sizing(repo_root, sizing_rel)
     # An intake sizing's estimate and route are placeholders: the in-run size stage judges them.

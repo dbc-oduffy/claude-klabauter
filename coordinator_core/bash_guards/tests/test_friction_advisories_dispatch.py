@@ -45,7 +45,8 @@ def test_move_from_inside_cwd_advisory_reaches_the_envelope(tmp_path):
         _payload(f"mv {root}/a {root}/z", f"{root}/a"), host_is_windows=True
     )
     reason = _reason(out)
-    assert "MOVE-FROM-INSIDE-CWD" in reason
+    assert "BLOCKED" in reason
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny" if isinstance(out, str) else out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert f"{root}/a" in reason.replace("\\", "/")
 
 
@@ -54,7 +55,7 @@ def test_move_outside_the_cwd_is_silent(tmp_path):
     out = dispatch.evaluate_payload_json(
         _payload(f"mv {root}/a {root}/z", f"{root}/b"), host_is_windows=True
     )
-    assert "MOVE-FROM-INSIDE-CWD" not in _reason(out)
+    assert "BLOCKED" not in _reason(out)
 
 
 @pytest.mark.parametrize("name", ["trailing-background-ampersand", "move-from-inside-cwd"])

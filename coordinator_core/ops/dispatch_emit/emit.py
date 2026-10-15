@@ -369,7 +369,11 @@ from coordinator_core.ops.review_mint.execute_review import (
     resolve_operative_criterion,
     compose_execute_review,
 )
-from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
+from coordinator_core.ops.review_mint.roster import (
+    RosterFragmentError,
+    parse_execute_review,
+    plan_required_reviewers,
+)
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
@@ -5102,7 +5106,9 @@ def compose_script(
             "review roster fragment is schema_version "
             f"{review_roster_fragment.get('schema_version')!r}, not 5"
         )
-    review = parse_execute_review(review_roster_fragment)
+    review = parse_execute_review(
+        review_roster_fragment, required_reviewers=plan_required_reviewers(plan_text)
+    )
     declared_paths = sorted(
         {path for paths in row_pathspecs.values() for path in paths} | set(prior_surface)
     )

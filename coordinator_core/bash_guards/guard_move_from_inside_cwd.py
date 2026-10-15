@@ -1,9 +1,12 @@
 """coordinator_core.bash_guards.guard_move_from_inside_cwd --
-``check_move_from_inside_cwd``: advisory (never a deny) when ``mv`` (Bash) or
-``Move-Item``/``mv``/``move`` (PowerShell) moves a directory the shell's own cwd
-is inside. Windows refuses that move while the persistent shell holds the
-directory. Path arithmetic only: no spawn, no stat. Silent on any operand that
-is not a literal path (glob, ``$VAR``, substitution).
+``check_move_from_inside_cwd``: denies, before any segment runs, a command that
+moves or removes (``mv``/``rm``/``rmdir`` in Bash; ``Move-Item``/``Remove-Item``
+and aliases in PowerShell) a directory the shell's own cwd is inside. Windows
+refuses that while the persistent shell holds the directory, and an earlier
+segment of the same command may already have run. The cwd is the payload cwd,
+so a cwd left behind by an earlier call counts. Path arithmetic only: no spawn,
+no stat. Silent on any operand that is not a literal path (glob, ``$VAR``,
+substitution).
 """
 
 from __future__ import annotations
@@ -14,15 +17,15 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._command_tokenizer import normalize_executable_basename
-from coordinator_core.bash_guards._rewrite_support import _advisory
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
 
 _GUARD_NAME = "guard_move_from_inside_cwd"
-_PREFILTER = re.compile(r"(?i)\b(mv|move|move-item|mi)\b")
+_PREFILTER = re.compile(r"(?i)\b(mv|move|move-item|mi|rm|rmdir|rd|del|erase|ri|remove-item)\b")
 _MOVE_HEADS = frozenset({"mv", "move", "move-item", "mi"})
+_REMOVE_HEADS = frozenset({"rm", "rmdir", "rd", "del", "erase", "ri", "remove-item"})
 _CD_HEADS = frozenset({"cd", "chdir", "set-location", "sl"})
 _NON_LITERAL = re.compile(r"[*?\[\]$`(){}<>|;&,~]|^%")
 _PS_PATH_FLAGS = frozenset({"-path", "-literalpath", "-lp", "-pspath"})
@@ -31,9 +34,19 @@ _PS_VALUE_FLAGS = frozenset(
 )
 
 _MESSAGE = (
-    "MOVE-FROM-INSIDE-CWD: the shell cwd `{cwd}` is inside `{src}`; Windows refuses "
-    "the move (Permission denied) while the shell holds it. `cd` out first."
+    "BLOCKED: the shell cwd `{cwd}` is inside `{src}`; Windows refuses to {verb} "
+    "a directory the shell holds. `cd` out first."
 )
+
+
+def _deny(msg: str) -> Dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": msg,
+        }
+    }
 
 
 def _literal(token: str, powershell: bool) -> Optional[str]:
@@ -83,7 +96,18 @@ def _bash_sources(args: List[str]) -> List[str]:
     return positional if target_dir_flag else positional[:-1]
 
 
-def _ps_sources(args: List[str]) -> List[str]:
+def _bash_remove_sources(args: List[str]) -> List[str]:
+    ended = False
+    out: List[str] = []
+    for tok in args:
+        if not ended and tok == "--":
+            ended = True
+        elif ended or not (tok.startswith("-") and len(tok) > 1):
+            out.append(tok)
+    return out
+
+
+def _ps_sources(args: List[str], all_positional: bool = False) -> List[str]:
     named: List[str] = []
     positional: List[str] = []
     i = 0
@@ -102,7 +126,7 @@ def _ps_sources(args: List[str]) -> List[str]:
             i += 1
     if named:
         return named
-    return positional[:1]
+    return positional if all_positional else positional[:1]
 
 
 def check_move_from_inside_cwd(
@@ -133,14 +157,18 @@ def check_move_from_inside_cwd(
             lit = _literal(target, powershell) if target else None
             effective = _resolve(effective, lit) if (lit and effective) else None
             continue
-        if head not in _MOVE_HEADS or effective is None:
+        removing = head in _REMOVE_HEADS
+        if not (removing or head in _MOVE_HEADS) or effective is None:
             continue
-        sources = _ps_sources(args) if powershell else _bash_sources(args)
+        if powershell:
+            sources = _ps_sources(args, all_positional=removing)
+        else:
+            sources = _bash_remove_sources(args) if removing else _bash_sources(args)
         for operand in sources:
             lit = _literal(operand, powershell)
             if lit is None:
                 continue
             src = _resolve(effective, lit)
             if _inside(effective, src):
-                return _advisory(_MESSAGE.format(cwd=effective, src=src))
+                return _deny(_MESSAGE.format(cwd=effective, src=src, verb="remove" if removing else "move"))
     return None

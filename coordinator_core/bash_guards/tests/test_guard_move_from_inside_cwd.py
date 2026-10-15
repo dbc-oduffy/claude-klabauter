@@ -1,4 +1,4 @@
-"""Tests for guard_move_from_inside_cwd: advisory naming the shell cwd when a move takes it away."""
+"""Tests for guard_move_from_inside_cwd: deny naming the shell cwd when a move or removal takes it away."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from coordinator_core.bash_guards.guard_move_from_inside_cwd import check_move_f
 
 
 def _ctx(out):
-    return out["hookSpecificOutput"]["additionalContext"]
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def _run(cmd, cwd, tool_name="Bash"):
@@ -31,8 +31,8 @@ def test_cwd_inside_source_fires_and_names_cwd(tree):
     out = _run(f"mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", cwd)
     assert out is not None
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert "MOVE-FROM-INSIDE-CWD" in _ctx(out)
+    assert hso["permissionDecision"] == "deny"
+    assert "BLOCKED" in _ctx(out)
     assert "a" in _ctx(out) and "b" in _ctx(out)
     assert str(cwd) in _ctx(out)
 
@@ -60,7 +60,7 @@ def test_powershell_move_item_named_params_fires(tree):
         tree / "a" / "b",
         tool_name="PowerShell",
     )
-    assert out is not None and "MOVE-FROM-INSIDE-CWD" in _ctx(out)
+    assert out is not None and "BLOCKED" in _ctx(out)
 
 
 def test_powershell_relative_path_from_cwd(tree):
@@ -111,3 +111,26 @@ def test_cost_under_five_ms_per_call(tree):
         _run(cmd, tree / "a" / "b")
     per_call_ms = (time.perf_counter() - t0) * 1000 / n
     assert per_call_ms < 5.0
+
+
+def test_compound_command_denied_before_earlier_segment_runs(tree):
+    """The example-game-repo-3b shape: cwd inherited from an earlier call, mv after a commit in one call."""
+    cwd = tree / "a" / "b"
+    out = _run(f"git commit -m x && mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", cwd)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf {a}", "rm -r -- {a}", "rmdir {a}"])
+def test_remove_of_cwd_ancestor_denied(tree, cmd):
+    out = _run(cmd.format(a=(tree / "a").as_posix()), tree / "a" / "b")
+    assert out is not None and "remove" in _ctx(out)
+
+
+def test_powershell_remove_item_denied(tree):
+    out = _run(f"Remove-Item -Recurse -Force '{(tree / 'a').as_posix()}'", tree / "a" / "b", "PowerShell")
+    assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_control_remove_sibling(tree):
+    assert _run(f"rm -rf {(tree / 'sib').as_posix()}", tree / "a" / "b") is None

@@ -762,6 +762,7 @@ _PARAM_FIELDS = (
     Field("ask_source", "str"),
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
+    Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
@@ -1355,6 +1356,7 @@ def _dispatch_emit(
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "ask_source": ask_source,
+            "required_reviewers": list(params.get("required_reviewers") or ()),
         }
         if ask_baton is not None:
             ask_ctx["baton"] = ask_baton
@@ -1702,6 +1704,7 @@ def _dispatch_emit(
             stop_after=params.get("stop_after"),
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
+            required_reviewers=ask_ctx["required_reviewers"],
         )
         if ask_ctx["prompt"]:
             # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
