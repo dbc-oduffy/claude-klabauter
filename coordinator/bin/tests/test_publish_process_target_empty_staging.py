@@ -100,7 +100,7 @@ def _run_row(tmp_path, monkeypatch, *, only_paths, shadow_files, rename_pairs=()
     def pre_rsync(*_a, **_k):
         run.pre_rsync_calls += 1
 
-    def post_rsync(_ctx, _store, sync_target, _src, *, visited_sink=None, sync_changed_paths=None, scope="full"):
+    def post_rsync(_ctx, _store, sync_target, _src, *, visited_sink=None, sync_changed_paths=None, scope="full", liveness_root=None):
         run.scopes.append(("post_rsync", scope))
         run.staging_at_post_rsync = _files(sync_target.dest_dir)
         if visited_sink is not None:

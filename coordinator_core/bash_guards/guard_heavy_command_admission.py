@@ -612,6 +612,22 @@ def _write_lease(heavy_name: str, anchor, launch_ctime: int = 0) -> None:
     )
 
 
+def release_session_leases(payload: Mapping[str, Any], holder_pid: Optional[int] = None) -> int:
+    """Release verb: delete the calling session's heavy leases (only holder_pid's when given) and
+    return the count; 0 when the session anchor cannot be resolved. Other sessions' leases stay."""
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+    from coordinator_core.bash_guards import _session_census as census_mod
+
+    primitives = _primitives()
+    rows = primitives.snapshot()
+    if rows is None:
+        return 0
+    anchor = census_mod.resolve_anchor({"pid": _caller_pid(payload)}, primitives, snapshot=rows)
+    if anchor is None:
+        return 0
+    return leases.release(anchor.pid, anchor.ctime, holder_pid)
+
+
 # --------------------------------------------------------------------------- entry
 
 def check(

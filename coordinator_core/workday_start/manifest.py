@@ -74,6 +74,8 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
         "Maintenance checkpoint, daily tier."),
     _inproc("hyg-watch-state-ignore", f"{_WS}.watch_state_ignore:watch_state_ignore", [],
             "Report-only watch-state gitignore and untracked check for this repo."),
+    _op("hyg-reap-abandoned-runs", "dispatch.reap_abandoned_runs", "{}",
+        "Land abandoned ask-run records."),
     _cli("step0-branch-setup", "workday-start-step0", [],
          "Step 0: sync, precedence switch and reconcile. Its exit code gates every later stage."),
     _cli("hyg-span-assert", "workday-start-day-branch-resolve", ["span-assert"],
@@ -174,7 +176,6 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
     _cli("cache-orientation-cache", "regenerate-orientation-cache", ["--invoker", "workday-start"],
          "Step 5.5: regenerate state/orientation_cache.md."),
     _cli("cache-copy-currency-refresh", "copy-currency-refresh", [], "Step 5.65."),
-    _cli("index-structural-index-refresh", "structural-index-refresh", [], "Step 5.66."),
     _cli("hook-ceremony-hook-output", "coordinator-ceremony-hook", ["workday-start"],
          "Step 5.6: the workday_start_post_command output."),
 )
@@ -191,6 +192,7 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
     "hyg-fleet-claude-md-handoff-convention": {"stage": "hygiene", "heading": _OBS},
     "hyg-git-maintenance-daily": {"stage": "hygiene", "heading": _OBS},
     "hyg-watch-state-ignore": {"stage": "hygiene", "heading": _OBS},
+    "hyg-reap-abandoned-runs": {"stage": "hygiene", "heading": _OBS},
     "step0-branch-setup": {
         "stage": "step0", "heading": _OBS, "gates_next": True,
         "on_exit": {2: "step0-stale-branch", 3: "step0-reconcile-outcome"},
@@ -248,7 +250,6 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
     "marker-weekly-touch": {"stage": "marker", "heading": _OBS, "gate": "weekly"},
     "cache-orientation-cache": {"stage": "orientation-cache", "heading": _OBS, "gate": "tasks-dir"},
     "cache-copy-currency-refresh": {"stage": "copies-cache", "heading": _OBS},
-    "index-structural-index-refresh": {"stage": "structural-index", "heading": _OBS},
     "hook-ceremony-hook-output": {"stage": "ceremony-hook", "heading": _OBS},
 }
 

@@ -12,11 +12,9 @@ from typing import Mapping, Sequence
 import yaml
 
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.dispatch_emit.ask_contract import ResumePlan
 from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.session import record_homes
-
-#: `emit._DISPATCH_REPORT_DIR`, restated to keep emit's import weight off the gate; a test pins them equal.
-_DISPATCH_REPORT_DIR = ".coordinator-local/subagent-share/dispatch-reports"
 
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
@@ -107,14 +105,23 @@ def s_plan_path(sizing_rel: str) -> str:
     return f"docs/plans/{PurePosixPath(str(sizing_rel).replace(chr(92), '/')).stem}.md"
 
 
-def resumable_plan(sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str | None = None) -> str | None:
-    """Repo-relative path of an existing, unfired plan for this sizing, else None.
+def resumable_plan(
+    sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str | None = None
+) -> ResumePlan | None:
+    """The existing plan for this sizing and its rows still to run, else None.
 
-    The plan is the sizing's `plan:` edge, else at arm S `s_plan_path`. A plan with any `coded` row
-    has fired: that raises SizingFireRefused naming `--plan`. A plan with no readable spine is not
-    resumable (None). One file read, no spawn.
+    The plan is the sizing's `plan:` edge, else at arm S `s_plan_path`. Incomplete rows are those
+    neither closed by disposition (`coded`, `delivered_elsewhere`, ...) nor landed by a checkpoint
+    commit of this plan; any row reports on disk are stale history and do not refuse. A plan with
+    rows, every one landed, raises SizingFireRefused ("already ran"). A plan with no readable
+    spine or no rows is not resumable (None). One file read; one `git log` only when a row is open.
     """
-    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        NON_DISPATCHABLE_DISPOSITIONS,
+        load_rows_memo,
+        with_canonical_disposition,
+    )
 
     edge = sizing.get("plan")
     plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_path(sizing_rel) if arm == ARM_S else None)
@@ -124,23 +131,30 @@ def resumable_plan(sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str |
     plan = contained_path(root / plan_rel, [root / "docs" / "plans"])
     if plan is None or not plan.is_file():
         return None
-    try:
-        coded = coded_row_ids(plan)
-    except SpineReadError:
+    result = load_rows_memo(plan.read_text(encoding="utf-8"))
+    if result.status is not LocateStatus.LOCATED:
         return None
-    if coded:
+    rows = [with_canonical_disposition(r) for r in result.rows]
+    ids = [r["id"] for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)]
+    if not ids:
+        return None
+    open_ids = [
+        r["id"]
+        for r in rows
+        if isinstance(r, dict)
+        and isinstance(r.get("id"), str)
+        and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
+    ]
+    if open_ids:
+        from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_rows
+
+        landed = checkpoint_landed_rows(root, plan_rel)
+        open_ids = [i for i in open_ids if i not in landed]
+    if not open_ids:
         raise SizingFireRefused(
-            [f"{plan_rel} already has coded rows — run `emit-dispatch-workflow --plan {plan_rel}`, not --ask"]
+            [f"{plan_rel} already ran: every row is landed; residue is a new sizing naming it"]
         )
-    # A run whose commit never landed leaves no `coded` row, but its rows' reports stand: resuming
-    # re-dispatches executors that find their own work done and no-op, never reaching the residue.
-    reports = root / _DISPATCH_REPORT_DIR / plan.stem
-    if reports.is_dir() and any(reports.glob("*.md")):
-        raise SizingFireRefused(
-            [f"{plan_rel} already ran (row reports under {_DISPATCH_REPORT_DIR}/{plan.stem}/); "
-             "residue is a new sizing naming it, submitted with its own writes"]
-        )
-    return plan_rel
+    return ResumePlan(plan_rel, tuple(open_ids))
 
 
 def _acceptance_skipped(sizing: Mapping) -> bool:
@@ -156,10 +170,13 @@ def collect_fire_refusals(
     arm: str,
     writes: Sequence[str],
     repo_root: Path | None = None,
+    resume_sink: list | None = None,
 ) -> list[str]:
     """Every failing fire input, one message each, never stopping at the first; [] when fireable.
 
     `repo_root` enables the arm-s check that the stage-1 plan path is still free.
+    `resume_sink`, when given, receives the arm-s `resumable_plan` answer (a `ResumePlan`, or
+    None; nothing when it refused) so the caller does not repeat that read's `git log`.
     """
     out: list[str] = []
     ec = sizing.get("exit_criterion")
@@ -200,6 +217,8 @@ def collect_fire_refusals(
         plan_rel = s_plan_path(sizing_rel)
         try:
             resumable = resumable_plan(sizing, sizing_rel, Path(repo_root), arm)
+            if resume_sink is not None:
+                resume_sink.append(resumable)
         except SizingFireRefused as exc:
             out.extend(exc.fields)
             resumable = plan_rel

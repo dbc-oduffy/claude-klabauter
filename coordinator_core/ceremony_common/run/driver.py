@@ -631,6 +631,48 @@ def _file_failures(run: _Run, spec: Any, table: Dispatch, filed: set[str]) -> li
     return display
 
 
+def _filed_row_paths(run: _Run) -> list[str]:
+    """Repo-relative paths of the rows this run's `backlog:` steps wrote; a cited open row is not ours."""
+    paths: list[str] = []
+    for row in ledger.read(run.run_dir):
+        if not row["id"].startswith(BACKLOG_PREFIX) or row["status"] != "ran" or row.get("reason") == "open-row-cited":
+            continue
+        outcome = run.captured.get(row["id"])
+        lines = [ln.strip() for ln in (outcome.stdout if outcome else "").splitlines() if ln.strip()]
+        if not lines:
+            continue
+        written = Path(lines[-1])
+        if written.is_absolute():
+            try:
+                written = written.relative_to(run.repo_root)
+            except ValueError:
+                continue
+        rel = written.as_posix()
+        if rel not in paths:
+            paths.append(rel)
+    return paths
+
+
+def _commit_filed_rows(run: _Run, spec: Any) -> None:
+    """Land every row filed this run in ONE scoped commit; a failure becomes a ledger row, never an exception."""
+    paths = _filed_row_paths(run)
+    if not paths:
+        return
+    try:
+        from coordinator_core.ops.ceremony import git_native
+
+        msg_file = run.run_dir / "backlog-commit-msg.txt"
+        msg_file.write_text(
+            f"{spec.name}: file failure rows (run {run.run_id})\n\n" + "\n".join(f"- {p}" for p in paths) + "\n",
+            encoding="utf-8", newline="\n",
+        )
+        result = git_native.commit_scoped(paths, msg_file, run.repo_root)
+        if not result.ok:
+            ledger.append(run.run_dir, _row("backlog-commit", "failed", (result.stderr or result.stdout or "commit failed").strip()[:300]))
+    except Exception as exc:  # noqa: BLE001 -- the finish must still complete and print its receipt
+        ledger.append(run.run_dir, _row("backlog-commit", "failed", f"{type(exc).__name__}: {exc}"[:300]))
+
+
 def _render(run: _Run, spec: Any, steps: Sequence[StepSpec], results: "Mapping[str, Any] | None") -> str:
     rows = ledger.read(run.run_dir)
     decisions = _read_decisions(run.run_dir)
@@ -764,6 +806,7 @@ def _finish_run(
             merged = dict(digest, chained=chained)
             if not validate_digest(merged):
                 _write_json(run.run_dir / DIGEST_FILE, merged)
+        _commit_filed_rows(run, spec)
         _write_json(run.run_dir / DONE_FILE, {"briefing": str(run.run_dir / BRIEFING_FILE)})
         return _Finished(text, undecided=bool(undecided), chained_workflow=chain_workflow)
     finally:

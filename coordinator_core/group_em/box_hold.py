@@ -50,6 +50,23 @@ def _parse(raw: str) -> Optional[Hold]:
     return Hold(sess, reason, float(set_at), float(expires))
 
 
+BARRED = "heavy commands (builds, test runs, typecheck, reindex, UE launch)"
+
+DENIAL_ALTERNATIVE = (
+    "Edits stay allowed; batch visual checks until the hold ends; "
+    "inside a workflow row or terminal test, report the command as an owed gate "
+    "(gate-blocker: guard-denied) and continue"
+)
+
+
+def denial_text(hold: Hold, expires_hms: str) -> tuple[str, str]:
+    """(fact, alternative) for the admission guard's box-hold denial: what is barred, what is not."""
+    fact = "box held by %s until %s: %s; %s are barred" % (
+        hold.set_by_session, expires_hms, hold.reason, BARRED,
+    )
+    return fact, DENIAL_ALTERNATIVE
+
+
 def read_hold(now: Optional[float] = None, directory: Optional[Path] = None) -> Optional[Hold]:
     """Return the live hold, or None when absent, expired or malformed. One open+read."""
     try:

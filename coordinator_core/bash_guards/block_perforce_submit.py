@@ -104,11 +104,18 @@ def _offence(cmd: str) -> Optional[str]:
     return f"P4Python `{m.group(0)}`" if m else None
 
 
+ANCHOR = "P4-SUBMIT-AND-SHELVE-ARE-DENIED-ON-A-NO-SUBMIT-BOX"
+WIKI_PATH = (
+    "coordinator-content-repo:coordinator/docs/wiki/coordinator-tripwires/"
+    "p4-submit-and-shelve-are-denied-on-a-no-submit-box.md"
+)
+
+
 def _deny_reason(what: str) -> str:
     return (
-        f"BLOCKED: {what} writes to Perforce. Box policy: this depot is read, synced, "
-        "built and edited locally, never submitted or shelved. Leave the change "
-        "opened locally and hand the changelist to a human."
+        f"BLOCKED: {what} writes to Perforce. {ANCHOR}. Box policy: this depot is read, "
+        "synced, built and edited locally, never submitted or shelved. Alternative: "
+        f"leave the change opened locally and hand the changelist to a human. Wiki: {WIKI_PATH}"
     )
 
 

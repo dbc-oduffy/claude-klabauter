@@ -242,6 +242,7 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "block_perforce_submit": lambda mod: "p4.exe submit -d msg",
     "block_topic_branch": lambda mod: "git checkout -b wip-nonstandard-name",
+    "block_push_pr_non_owned_remote": lambda mod: "git.exe push https://github.com/x/r.git main",
     # Dev-install-only guard: the monkeypatch below supplies the sentinel and root.
     "guard_headless_claude_plugin_dir": lambda mod: "claude -p hi",
     "guard_piped_pytest_exit": lambda mod: "python -m pytest x | tail -3",
@@ -349,6 +350,10 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
     },
     "block_perforce_submit": lambda mod, mp: (
         mp.setattr(mod, "_armed", lambda: True),
+        {},
+    )[-1],
+    "block_push_pr_non_owned_remote": lambda mod, mp: (
+        mp.setattr(mod, "_configured_prefixes", lambda: ["github.com/x/"]),
         {},
     )[-1],
     "p4_verb_fence": lambda mod, mp: (

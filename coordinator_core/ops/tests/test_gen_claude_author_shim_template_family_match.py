@@ -72,11 +72,11 @@ def test_neutral_template_names_are_not_second_guessed(tmpl, family):
     assert _template_family_mismatch(tmpl, family) is None
 
 
-def test_maximalist_selects_its_template_by_shell_family():
-    """The call site that had the defect must derive, never hardcode.
+def test_maximalist_does_not_hardcode_a_shim_template():
+    """The installer no longer renders the shim (Step 3.5a.2 was retired).
 
-    Source-level: the live consequence only reproduces on native Windows, and
-    this must fail on a POSIX CI run too.
+    Source-level: reintroducing a render call must name both templates and pass
+    ``--shell`` explicitly, or a native-Windows install writes bash into the .ps1.
     """
     from pathlib import Path
 
@@ -84,14 +84,9 @@ def test_maximalist_selects_its_template_by_shell_family():
         Path(__file__).resolve().parents[3] / "coordinator_core" / "install" / "maximalist.py"
     ).read_text(encoding="utf-8")
 
-    # Anchor on the CODE markers, not the bare step number — the module's
-    # summary docstring lists the same numbers earlier in the file.
-    start = src.index("-- Step 3.5a.2 -- gen-claude-author-shim --")
-    step = src[start : src.index("-- Step 3.5b --", start)]
-
-    assert "claude-author-shim.ps1.tmpl" in step, (
-        "maximalist Step 3.5a.2 never names the powershell template — it is hardcoded to bash again"
+    if "gen_claude_author_shim" not in src and "gen-claude-author-shim" not in src:
+        return
+    assert "claude-author-shim.ps1.tmpl" in src and "claude-author-shim.sh.tmpl" in src, (
+        "maximalist renders the shim from one hardcoded template"
     )
-    assert '"--shell"' in step, (
-        "maximalist Step 3.5a.2 must pass --shell explicitly so template and family cannot drift"
-    )
+    assert '"--shell"' in src, "maximalist must pass --shell explicitly"

@@ -726,6 +726,27 @@ def test_main_runs_the_hand_shipped_sizing_leg(git_fixture, monkeypatch, capsys)
     assert "leg-advisory-line" in capsys.readouterr().out
 
 
+def test_stubs_sweep_runs_the_hand_shipped_leg(git_fixture, monkeypatch, capsys):
+    """The unmocked leg, reached through `main` (what the bin shim forwards to), ships a routed
+    sizing with no run record on its Deliverable-Id trailer."""
+    monkeypatch.chdir(git_fixture)
+    sizing = git_fixture / "state" / "sizings" / "a.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text(
+        "schema: sizing-object\nintent: i\nestimate:\n  tshirt: M\n  provisional: true\n"
+        "route: spec-dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\n"
+        'deliverable_id: "dlv-stubs-leg"\npremise:\n  provenance: read\n  evidence: fixture\n',
+        encoding="utf-8",
+    )
+    stamp = 1_700_000_000
+    os.utime(sizing, (stamp, stamp))
+    _commit(git_fixture, "work\n\nDeliverable-Id: dlv-stubs-leg\n", "work.txt")
+
+    assert main([], repo_root=str(git_fixture)) == 0
+    assert "status: shipped" in sizing.read_text(encoding="utf-8")
+    assert "shipped state/sizings/a.yaml" in capsys.readouterr().out
+
+
 def test_main_survives_a_failing_hand_shipped_sizing_leg(git_fixture, monkeypatch, capsys):
     from coordinator_core.ops import promote_hand_shipped_sizings as leg
 

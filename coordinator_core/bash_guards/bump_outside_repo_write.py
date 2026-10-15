@@ -314,6 +314,7 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards.guard_memory_store_cap import bash_write_verdict
 
 _STAND_DOWN_MARKER = "STAND-DOWN-OUTSIDE-REPO-WRITE"
 _STAND_DOWN_SINK = "outside-repo-write.log"
@@ -885,6 +886,16 @@ def check_bump_outside_repo_write(
             continue
         target_gitdir = resolve_gitdir(probe_dir)
         if target_gitdir is not None:
+            continue
+
+        if is_agent_memory_store_path(probe_dir):
+            cap_reason = bash_write_verdict(target_dir)
+            if cap_reason:
+                return apply_guard_level(
+                    "guard-memory-store-cap",
+                    _deny(cap_reason),
+                    risk="A Bash write creates a memory file past the store's file-count cap.",
+                )
             continue
 
         if _target_is_always_allowed(probe_dir, anchor_git_root_str, effective_sid, env=env):

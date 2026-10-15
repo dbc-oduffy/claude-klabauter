@@ -2310,6 +2310,146 @@ def _init_into_scratch(remaining: List[str]) -> bool:
     return _dest_in_scratch(positionals[0] if positionals else ".")
 
 
+#: SESSION-SCRATCHPAD FIXTURE REPOS. `(cwd, session_id, repointed)` for the running `check()`;
+#: `repointed` is True when the command `cd`s or sets `--git-dir`/`--work-tree`, which makes the
+#: cwd say nothing about where a bare `git init` lands. Only this session's own scratchpad
+#: (`<temp>/claude/<project>/<session_id>/scratchpad/`) counts, never another session's.
+_SP_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar(
+    "_subagent_scratchpad_ctx", default=None
+)
+#: Per-`check()` memo of `_scratchpad_target` answers by raw argument: a long segment chain asks the
+#: same question per segment and each answer costs several `realpath` syscalls.
+_SP_MEMO: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "_subagent_scratchpad_memo", default=None
+)
+_SP_REPOINT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|--git-dir|--work-tree")
+_SP_CONFIG_KEYS = frozenset(
+    {"user.name", "user.email", "commit.gpgsign", "init.defaultbranch", "core.autocrlf"}
+)
+
+
+def _scratchpad_dir_of(path: str, session_id: str) -> Optional[str]:
+    """The scratchpad directory holding `path` when `path` lies strictly under this session's own."""
+    if not session_id:
+        return None
+    from coordinator_core.bash_guards._write_bump_applicability import _all_temp_roots
+
+    try:
+        real = os.path.normcase(os.path.realpath(path))
+        for root in _all_temp_roots():
+            base = os.path.normcase(os.path.realpath(str(root)))
+            if not real.startswith(base + os.sep):
+                continue
+            parts = real[len(base) + 1 :].split(os.sep)
+            if (
+                len(parts) >= 5
+                and parts[0] == "claude"
+                and parts[3] == "scratchpad"
+                and parts[2] == os.path.normcase(session_id)
+            ):
+                return base + os.sep + os.sep.join(parts[:4])
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _scratchpad_target(raw: str) -> Optional[tuple]:
+    """`(resolved_path, scratchpad_dir)` for `raw` (cwd-relative or absolute) under this session's scratchpad."""
+    ctx = _SP_CTX.get()
+    if ctx is None:
+        return None
+    memo = _SP_MEMO.get()
+    if memo is not None and raw in memo:
+        return memo[raw]
+    cwd, session_id, _repointed = ctx
+    p = raw.replace("\\", "/")
+    full = p if os.path.isabs(p) else os.path.join(cwd, p)
+    sp = _scratchpad_dir_of(full, session_id)
+    target = (os.path.realpath(full), sp) if sp else None
+    if memo is not None:
+        memo[raw] = target
+    return target
+
+
+def _scratchpad_fixture_init(remaining: List[str]) -> bool:
+    """`git init [opts] [<dir>]` landing strictly under this session's scratchpad, with no
+    existing repo between the scratchpad and the new directory."""
+    ctx = _SP_CTX.get()
+    if ctx is None or ctx[2]:
+        return False
+    positionals: List[str] = []
+    skip = False
+    for tok in remaining:
+        if skip:
+            skip = False
+            continue
+        if tok.startswith(_INIT_REFUSED_OPTS):
+            return False
+        if tok in _INIT_OPTS_WITH_ARG:
+            skip = True
+            continue
+        if tok.startswith("-"):
+            continue
+        positionals.append(tok)
+    if len(positionals) > 1:
+        return False
+    target = _scratchpad_target(positionals[0] if positionals else ".")
+    if target is None:
+        return False
+    dest, sp = target
+    parent = os.path.dirname(dest)
+    while os.path.normcase(parent) != os.path.normcase(sp) and len(parent) > len(sp):
+        if os.path.exists(os.path.join(parent, ".git")):
+            return False
+        parent = os.path.dirname(parent)
+    return not os.path.exists(os.path.join(sp, ".git"))
+
+
+def _dash_c_value(seg: str) -> Optional[str]:
+    if _exceeds_tokenizable_ceiling(seg):
+        return None
+    try:
+        toks = shlex.split(seg.replace("\\", "/"))
+    except ValueError:
+        return None
+    for i, tok in enumerate(toks[:-1]):
+        if tok == "-C":
+            return toks[i + 1]
+        if tok in ("add", "commit", "config"):
+            break
+    return None
+
+
+def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Optional[str]:
+    """Verdict for `git [-C <p>] add|commit|config` aimed at a repo outside the session scratchpad
+    (denied when `<p>` is inside the cwd's own repo), else `_NO_VERDICT`."""
+    ctx = _SP_CTX.get()
+    dash_c = _dash_c_value(seg)
+    if ctx is None or (dash_c is None and ctx[2]):
+        return _NO_VERDICT
+    cwd = ctx[0]
+    raw = dash_c if dash_c is not None else "."
+    path = raw if os.path.isabs(raw) else os.path.join(cwd, raw)
+    target = _scratchpad_target(raw)
+    if target is not None:
+        if not os.path.exists(os.path.join(target[0], ".git")):
+            return _NO_VERDICT
+        if subcmd == "config":
+            args = [t for t in remaining if not t.startswith("-")]
+            if len(args) == 2 and args[0].lower() in _SP_CONFIG_KEYS:
+                return None
+            return "git config (scratchpad fixture repo: only user.name/user.email/commit.gpgsign/init.defaultBranch/core.autocrlf)"
+        return None
+    if dash_c is not None:
+        tgt_root = _repo_root_of(Path(os.path.realpath(path)))
+        if tgt_root is not None and "scratch" not in tgt_root.parts:
+            return f"git -C {subcmd} (only into a repo under the session scratchpad)"
+    return _NO_VERDICT
+
+
+_NO_VERDICT = "\0no-verdict"
+
+
 def _evaluate_git_segment_anchored(
     seg: str, subcmd: Optional[str], remaining: Optional[List[str]] = None
 ) -> Optional[str]:
@@ -2463,6 +2603,10 @@ def _evaluate_git_segment_anchored(
     # arbitrary file. `find_git_diff_family_write_flag` (shared with
     # `block_reviewer_bash_outside_allowlist` via `_helpers`) now gates
     # every member on `remaining` before allowing.
+    if subcmd in ("add", "commit", "config"):
+        sp_verdict = _scratchpad_repo_verdict(seg, subcmd, list(remaining or ()))
+        if sp_verdict != _NO_VERDICT:
+            return sp_verdict
     if subcmd in _SAFE_GIT_SUBCOMMANDS:
         bad_option = find_git_diff_family_write_flag(remaining)
         if bad_option is not None:
@@ -2497,9 +2641,9 @@ def _evaluate_git_segment_anchored(
             return None
         return "git clone (only into <repo>/scratch/)"
     if subcmd == "init":
-        if _init_into_scratch(list(remaining or ())):
+        if _init_into_scratch(list(remaining or ())) or _scratchpad_fixture_init(list(remaining or ())):
             return None
-        return "git init (only into <repo>/scratch/)"
+        return "git init (only into <repo>/scratch/ or the session scratchpad)"
     if subcmd == "push":
         return None
     if subcmd in ("checkout", "switch"):
@@ -4027,10 +4171,20 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = _extract_command(payload) or ""
-    token = _SCRATCH_CTX.set(_scratch_ctx_for(cmd.replace("\r", ""), payload.get("cwd")))
+    flat = cmd.replace("\r", "")
+    token = _SCRATCH_CTX.set(_scratch_ctx_for(flat, payload.get("cwd")))
+    cwd = payload.get("cwd")
+    sp_token = _SP_CTX.set(
+        (str(Path(cwd).resolve()), payload.get("session_id") or "", bool(_SP_REPOINT_RE.search(flat)))
+        if cwd and re.search(r"\bgit\b", flat)
+        else None
+    )
+    memo_token = _SP_MEMO.set({})
     try:
         return _check_unscoped(payload)
     finally:
+        _SP_MEMO.reset(memo_token)
+        _SP_CTX.reset(sp_token)
         _SCRATCH_CTX.reset(token)
 
 

@@ -15,7 +15,7 @@ import pytest
 from coordinator_core.ceremony_common.run import decide
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.workday_start import rules
+from coordinator_core.workday_start import rules, run_spec
 from coordinator_core.workday_start.contract import (
     DECISIONS_FILE,
     HANDBACK_DISPOSITIONS,
@@ -215,3 +215,34 @@ def test_open_merge_holds_and_records_resolve_in_run_even_after_a_prior_conflict
     row = json.loads((runs / "20261012T000000Z-b" / DECISIONS_FILE).read_text())
     assert row["decision"] == "resolve-in-run" and "paths=a.py,b.py" in row["evidence"]
     assert "outcome=RECONCILE-CONFLICT-OPEN" in row["evidence"]
+
+
+def _nomination(exit_code, stdout="", stderr=""):
+    return run_spec.ChildOutcome(exit_code, None, None, stdout, stderr)
+
+
+_NO_RECORD = "no nomination on record for /some/repo\n"
+
+
+def test_nomination_none_exit_3_with_no_record_text_is_an_answer():
+    assert rules.nomination_none(None, _nomination(3, stderr=_NO_RECORD)) is True
+    assert rules.nomination_none(None, _nomination(3, stdout=_NO_RECORD)) is True
+
+
+@pytest.mark.parametrize("outcome", [
+    _nomination(3, stderr="something else broke"),
+    _nomination(1, stderr=_NO_RECORD),
+    _nomination(0, stdout=_NO_RECORD),
+])
+def test_nomination_none_other_exit_or_text_stays_failed(outcome):
+    assert rules.nomination_none(None, outcome) is False
+
+
+def test_after_step_records_no_nomination_as_a_clean_exit():
+    step = SimpleNamespace(id=run_spec.NOMINATION_STEP)
+    out = run_spec._after_step(step, _nomination(3, stderr=_NO_RECORD), envelope=None)
+    assert (out.exit_code, out.stdout) == (0, rules.NO_NOMINATION_OBSERVATION)
+    failed = run_spec._after_step(step, _nomination(1, stderr="boom"), envelope=None)
+    assert failed.exit_code == 1
+    other = run_spec._after_step(SimpleNamespace(id="other"), _nomination(3, stderr=_NO_RECORD), envelope=None)
+    assert other.exit_code == 3

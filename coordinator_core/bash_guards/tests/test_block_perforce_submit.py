@@ -35,6 +35,28 @@ def test_server_writes_denied_when_armed(armed, cmd):
 
 
 @pytest.mark.parametrize(
+    "tool,cmd",
+    [
+        ("Bash", "p4 submit"),
+        ("Bash", "p4 submit -c 123"),
+        ("Bash", "p4 -c ws -u me submit"),
+        ("Bash", "p4 shelve -c 123"),
+        ("Bash", "p4 edit f && p4 submit"),
+        ("PowerShell", "& p4.exe submit"),
+    ],
+)
+def test_deny_reason_names_anchor_and_wiki_path(armed, tool, cmd):
+    out = guard.check({"tool_name": tool, "tool_input": {"command": cmd}})
+    assert out is not None
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "P4-SUBMIT-AND-SHELVE-ARE-DENIED-ON-A-NO-SUBMIT-BOX" in reason
+    assert (
+        "coordinator-content-repo:coordinator/docs/wiki/coordinator-tripwires/"
+        "p4-submit-and-shelve-are-denied-on-a-no-submit-box.md"
+    ) in reason
+
+
+@pytest.mark.parametrize(
     "cmd",
     [
         "p4 edit a.cpp",

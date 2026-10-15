@@ -336,7 +336,7 @@ def _stub_fast_tier_execution(
         "enforce_tier_u_gate",
         lambda cmd, *, repo_root=None: TierUGateResult(proceed=True),
     )
-    monkeypatch.setattr(cli_module, "_run_resolved_command", lambda cmd: 0)
+    monkeypatch.setattr(cli_module, "_run_resolved_command", lambda cmd, **_kw: 0)
     return calls
 
 

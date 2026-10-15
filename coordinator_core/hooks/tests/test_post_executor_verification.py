@@ -216,16 +216,23 @@ def test_wrapped_non_pytest_not_counted(cmd) -> None:
 
 
 @pytest.mark.parametrize("cmd", [
-    "python3 -c 'from pkg.mod import f; print(f())'",
-    "python3 -c 'import os, pkg'",
-    "timeout 60 python3 -c 'import pkg.x as m; m.run()'",
-    "n=$(python3 -c 'from pkg import a' | wc -l)",
-    "bash -c 'python3 -c \"import pkg\"'",
-    "ls scratch && python3 - <<'PY'\nimport importlib.util\nm = load(\"pkg/mod.py\", \"a\")\nPY",
-    "python3 <<PY\nfrom pkg import a\nPY",
-    "python3 -c 'spec_from_file_location(\"m\", \"./pkg/mod.py\")'",
+    "python3 -c 'from pkg.mod import f; import pytest; pytest.main([f()])'",
+    "python3 -c 'import os, pkg, unittest'",
+    "timeout 60 python3 -c 'import pkg.x as m, pytest; m.run()'",
+    "n=$(python3 -c 'from pkg import a; import pytest' | wc -l)",
+    "python3 -I /elsewhere/scratchpad/census.py",
+    "python3 -I ../scratch/probe.py",
+    "bash -c 'python3 -c \"import pkg, pytest\"'",
+    "ls scratch && python3 - <<'PY'\nimport importlib.util, pytest\nm = load(\"pkg/mod.py\", \"a\")\nPY",
+    "python3 <<PY\nfrom pkg import a\nimport unittest\nPY",
+    "python3 -c 'import pytest; spec_from_file_location(\"m\", \"./pkg/mod.py\")'",
 ])
-def test_probe_forms_counted(repo, cmd) -> None:
+def test_probe_forms_counted(repo, cmd, tmp_path) -> None:
+    for rel in ("elsewhere/scratchpad/census.py", "scratch/probe.py"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("import pkg, pytest\npytest.main(['a.py'])\n")
+    cmd = cmd.replace("/elsewhere/", (tmp_path / "elsewhere").as_posix() + "/").replace("../scratch", (tmp_path / "scratch").as_posix())
     assert g.runs_verification(cmd, str(repo), str(repo))
 
 
@@ -233,13 +240,13 @@ def _script(tmp_path, rel: str, source: str) -> str:
     path = tmp_path / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source)
-    return str(path)
+    return path.as_posix()
 
 
 @pytest.mark.parametrize("rel,source", [
-    ("scratchpad/census.py", "from pkg.mod import f\nf()\n"),
-    ("scratch/probe.py", "import os, pkg\n"),
-    ("tmp/probe.py", "spec_from_file_location('m', './pkg/mod.py')\n"),
+    ("scratchpad/census.py", "import pytest\nfrom pkg.mod import f\nf()\n"),
+    ("scratch/probe.py", "import os, pkg, pytest\n"),
+    ("tmp/probe.py", "import pytest\nspec_from_file_location('m', './pkg/mod.py')\n"),
 ])
 def test_scratch_script_importing_repo_counted(repo, tmp_path, rel, source) -> None:
     path = _script(tmp_path, rel, source)
@@ -247,7 +254,7 @@ def test_scratch_script_importing_repo_counted(repo, tmp_path, rel, source) -> N
 
 
 def test_scratch_script_relative_path_counted(repo, tmp_path) -> None:
-    _script(tmp_path, "scratch/probe.py", "import pkg\n")
+    _script(tmp_path, "scratch/probe.py", "import pkg, pytest\n")
     assert g.runs_verification("python3 -I ../scratch/probe.py", str(repo), str(repo))
 
 
@@ -270,6 +277,26 @@ def test_unreadable_scratch_script_fails_open(repo, tmp_path) -> None:
 def test_probe_read_is_size_capped(repo, tmp_path) -> None:
     path = _script(tmp_path, "scratchpad/big.py", "#" * (g._PROBE_READ_CAP + 10) + "\nimport pkg\n")
     assert not g.runs_verification(f"python3 {path}", str(repo), str(repo))
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -c 'from pkg.workstream_complete import apply; apply(plan=1)'",
+    "python3 -c 'import pkg'",
+    "python3 - <<'PY'\nfrom pkg import register\nprint(register.pin())\nPY",
+])
+def test_bookkeeping_code_not_verification(repo, cmd) -> None:
+    assert not g.runs_verification(cmd, str(repo), str(repo))
+
+
+def test_read_only_probe_script_is_not_verification(repo, tmp_path) -> None:
+    pin = tmp_path / "tmp" / "register_pin.py"
+    pin.write_text("from pkg import register\nprint(register.read())\n")
+    assert not g.runs_verification(f"python3 {pin}", str(repo), str(repo))
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, f"python3 {pin}")) is None
+    assert g.check(_bash(repo, "python3 -c 'from pkg.workstream_complete import apply; apply()'")) is None
+    assert _denied(g.check(_bash(repo, "pytest b.py")))
 
 
 @pytest.mark.parametrize("cmd", [
@@ -336,7 +363,7 @@ def test_unscoped_pytest_in_execute_plan_session_still_denied(repo, cmd) -> None
     assert g.check(_bash(repo, "pytest pkg/test_a.py -k exempt_leaves_counter_untouched")) is None
     # An exempt run does not bump the counter; the probe is the first (free) bump so
     # that ``cmd`` is the second and would be denied.
-    assert g.check(_bash(repo, "python3 -c 'import pkg'")) is None
+    assert g.check(_bash(repo, "python3 -c 'import pkg, pytest'")) is None
     assert _denied(g.check(_bash(repo, cmd)))
 
 
@@ -368,14 +395,14 @@ def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_
 def test_probe_shares_pytest_counter(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest a.py")) is None
-    out = g.check(_bash(repo, "python3 -c 'import pkg'"))
+    out = g.check(_bash(repo, "python3 -c 'import pkg, pytest'"))
     assert _denied(out)
     assert "honoured once." in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_probe_first_free_then_probe_denied(repo, tmp_path) -> None:
     _executor_ran(repo)
-    path = _script(tmp_path, "scratchpad/census.py", "import pkg\n")
+    path = _script(tmp_path, "scratchpad/census.py", "import pkg, pytest\n")
     assert g.check(_bash(repo, "python3 -c 'import os'")) is None
     assert g.check(_bash(repo, f"python3 {path}")) is None
     assert _denied(g.check(_bash(repo, f"python3 {path}")))
@@ -455,7 +482,7 @@ def _counter(repo):
 @pytest.mark.parametrize("cmd", [
     f"{_MEASURE} -- python -X importtime -c 'import pkg'",
     f"{_MEASURE} --k 3 --once -- python tools/x.py",
-    f"{_MEASURE} --json -- python -c 'import pkg; pkg.run()'",
+    f"{_MEASURE} --json -- python -c 'import pkg, pytest; pkg.run()'",
     f"{_MEASURE} --",
     _MEASURE,
 ])
@@ -486,7 +513,7 @@ def test_measure_wrapped_scoped_pytest_gets_the_scoped_exemption(repo) -> None:
     _execute_plan_session(repo)
     assert g.check(_bash(repo, "python -m pytest pkg/test_a.py")) is None
     assert g.check(_bash(repo, f"{_MEASURE} -- python -m pytest pkg/test_a.py -q")) is None
-    assert g.check(_bash(repo, "python3 -c 'import pkg'")) is None
+    assert g.check(_bash(repo, "python3 -c 'import pkg, pytest'")) is None
     assert _denied(g.check(_bash(repo, f"{_MEASURE} -- pytest")))
 
 

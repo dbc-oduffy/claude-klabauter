@@ -440,3 +440,27 @@ def test_really_gated_awaiting_gate_still_refuses(tmp_path, extra):
     fm = {"deployment_state": "awaiting_gate", "deliverable_id": "dlv-test-000000", **extra}
     reason = asyncio.run(cascade_mod._predicate_refusal(handoff, fm, repo / ".git"))
     assert reason is not None and "live-but-blocked" in reason
+
+
+def test_plan_fk_write_is_a_noop_when_the_value_is_unchanged(tmp_path):
+    """The cascade's ship leaves a quoted `plan:` that already names the plan byte-identical;
+    only the status line differs."""
+    from coordinator_core.ops.tests.test_requirement_register_fifa_replay import (
+        ALL_SHIPPABLE,
+        PLAN,
+        seed,
+    )
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    path = seed(repo, route="plan", fix=ALL_SHIPPABLE)
+    text = path.read_text(encoding="utf-8").replace(
+        "status: routed\n", f'status: routed\nplan: "{PLAN}"\n', 1
+    )
+    path.write_bytes(text.encode("utf-8"))
+    before = path.read_text(encoding="utf-8")
+
+    advanced, refusal = cascade_mod._advance_one_sizing(path, PLAN, repo / ".git")
+
+    assert (advanced, refusal) == (True, None)
+    assert path.read_text(encoding="utf-8").replace("status: shipped", "status: routed") == before

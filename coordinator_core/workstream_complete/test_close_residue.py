@@ -358,6 +358,26 @@ def test_owned_dirty_sizing_paths_selects_only_dirty_sizings(repo: Path) -> None
     assert paths == ["state/sizings/a.yaml"]
 
 
+def test_closing_sessions_block_discharge_ledger_is_staged_and_a_peers_is_not(repo: Path) -> None:
+    ledger_dir = repo / "state" / "block-discharge"
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / f"{SID}.jsonl").write_text("{}\n", encoding="utf-8")
+    (ledger_dir / "sid-peer.jsonl").write_text("{}\n", encoding="utf-8")
+    _claim(repo, "tracked.txt")
+
+    snap = cr.snapshot(repo, SID)
+    paths = cr.owned_dirty_sizing_paths(repo, snap)
+
+    assert paths == [f"state/block-discharge/{SID}.jsonl"]
+    assert "state/block-discharge/sid-peer.jsonl" not in snap.owned_paths
+
+
+def test_no_ledger_file_adds_nothing_to_the_snapshot(repo: Path) -> None:
+    _claim(repo, "tracked.txt")
+
+    assert cr.snapshot(repo, SID).owned_paths == ("tracked.txt",)
+
+
 # --- orphan_sizing_paths -------------------------------------------------------
 
 _VALID_SIZING = """schema: sizing-object

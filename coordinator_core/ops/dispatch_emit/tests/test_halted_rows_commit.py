@@ -1,0 +1,127 @@
+"""dispatch.commit_halted_rows: per-row commits of a halted run, hunk-scoped where write sets overlap."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.ops.dispatch_emit import halted_rows_commit
+from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+SHARED_SEED = "".join(f"line {i}\n" for i in range(1, 31))
+ROW_HUNK = SHARED_SEED.replace("line 2\n", "line 2 by r1\n")
+BOTH_HUNKS = ROW_HUNK.replace("line 28\n", "line 28 by r3\n")
+_DIFFS: dict = {}
+
+
+def _git(args, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.com"], root)
+    _git(["config", "user.name", "t"], root)
+    for name, body in (("a.py", "a = 0\n"), ("b.py", "b = 0\n"), ("c.py", "c = 0\n"), ("shared.py", SHARED_SEED)):
+        (root / name).write_text(body, encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    chunks = (
+        ChunkCommit(id="r1", title="first", paths=("a.py", "shared.py")),
+        ChunkCommit(id="r2", title="second", paths=("b.py",)),
+        ChunkCommit(id="r3", title="withheld", paths=("c.py", "shared.py")),
+    )
+    marker = render_marker(CommitRequest(chunks=chunks))
+    (root / "run.mjs").write_text(marker + "\n", encoding="utf-8")
+    (root / "a.py").write_text("a = 1\n", encoding="utf-8")
+    (root / "b.py").write_text("b = 1\n", encoding="utf-8")
+    (root / "c.py").write_text("c = 1\n", encoding="utf-8")
+    (root / "shared.py").write_text(ROW_HUNK, encoding="utf-8")
+    r1_diff = _git(["diff", "--", "shared.py"], root)
+    (root / "shared.py").write_text(BOTH_HUNKS, encoding="utf-8")
+    _DIFFS[str(root)] = r1_diff
+    return root
+
+
+def _call(root: Path, delivered, with_diff=True, **extra) -> dict:
+    params = {
+        "script_path": "run.mjs",
+        "delivered": delivered,
+        "open_rows": [{"id": "r3", "reason": "gated on DoE field"}],
+        **extra,
+    }
+    if with_diff:
+        params.setdefault("row_diffs", {"shared.py": _DIFFS[str(root)]})
+    return halted_rows_commit._handler(params, repo_root=root / ".git")
+
+
+def _show(root: Path, rev: str, path: str) -> str:
+    return _git(["show", f"{rev}:{path}"], root)
+
+
+def test_halted_run_lands_delivered_rows_and_leaves_withheld_open(repo):
+    out = _call(repo, ["r1", "r2"])
+
+    assert out["ok"] is True, out
+    assert [x["row"] for x in out["landed"]] == ["r1", "r2"]
+    status = _git(["status", "--porcelain"], repo)
+    assert "c.py" in status
+    assert "b.py" not in status and " a.py" not in status
+    message = _git(["log", "--format=%B", "-n", "2"], repo)
+    assert "Requirement-Open: r3 gated on DoE field" in message
+    assert "Halted-Run-Row: r1" in message
+
+
+def test_overlapping_file_carries_only_the_rows_own_hunks(repo):
+    out = _call(repo, ["r1"])
+
+    assert out["ok"] is True, out
+    assert _show(repo, "HEAD", "shared.py") == ROW_HUNK
+    assert (repo / "shared.py").read_text(encoding="utf-8") == BOTH_HUNKS
+    assert _git(["diff", "--cached", "--name-only"], repo).strip() == ""
+
+
+def test_overlapping_file_without_a_recorded_diff_refuses_the_row(repo):
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _call(repo, ["r1"], with_diff=False)
+
+    assert out["ok"] is False
+    assert out["refused"][0]["row"] == "r1"
+    assert "shared.py" in out["refused"][0]["reason"]
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_a_diff_naming_another_file_is_refused(repo):
+    out = _call(repo, ["r1"], row_diffs={"shared.py": _DIFFS[str(repo)].replace("shared.py", "a.py")})
+
+    assert out["refused"] and "other than" in out["refused"][0]["reason"]
+
+
+def test_second_call_is_a_noop(repo):
+    _call(repo, ["r1", "r2"])
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _call(repo, ["r1", "r2"])
+
+    assert out["ok"] is True, out
+    assert out["landed"] == []
+    assert sorted(out["noop"]) == ["r1", "r2"]
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_unknown_row_is_rejected(repo):
+    out = _call(repo, ["r9"])
+
+    assert out["ok"] is False and "r9" in out["error"]

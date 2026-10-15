@@ -103,27 +103,38 @@ def spawn_transcript_path(payload: dict) -> Optional[str]:
     return str(hits[0]) if len(hits) == 1 else None
 
 
-def read_spawn_prompt(transcript_path: object) -> Optional[str]:
-    """The spawn prompt from the transcript's first record, or None. Never raises.
+#: A run fired from a raw ask opens each spawn transcript with the harness's relay of the
+#: user's request; the spawn prompt is the record after it.
+_USER_REQUEST_RELAY_PREFIX = "[Workflow harness — user request]"
 
-    Reads exactly one capped line of the path the hook payload hands over: no listing,
-    no second record.
-    """
-    if not isinstance(transcript_path, str) or not _is_workflow_spawn_path(transcript_path):
+
+def _user_record_content(line: bytes) -> Optional[str]:
+    if len(line) > READ_CAP_BYTES:
         return None
-    try:
-        with open(transcript_path, "rb") as fh:
-            line = fh.readline(READ_CAP_BYTES + 1)
-        if len(line) > READ_CAP_BYTES:
-            return None
-        record = json.loads(line.decode("utf-8"))
-    except (OSError, ValueError):
-        return None
+    record = json.loads(line.decode("utf-8"))
     if not isinstance(record, dict) or record.get("type") != "user":
         return None
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     return content if isinstance(content, str) else None
+
+
+def read_spawn_prompt(transcript_path: object) -> Optional[str]:
+    """The spawn prompt from the transcript's first record, or from its second when the first
+    is the harness's user-request relay; None otherwise. Never raises.
+
+    Reads at most two capped lines of the path the hook payload hands over: no listing.
+    """
+    if not isinstance(transcript_path, str) or not _is_workflow_spawn_path(transcript_path):
+        return None
+    try:
+        with open(transcript_path, "rb") as fh:
+            content = _user_record_content(fh.readline(READ_CAP_BYTES + 1))
+            if content is not None and content.startswith(_USER_REQUEST_RELAY_PREFIX):
+                content = _user_record_content(fh.readline(READ_CAP_BYTES + 1))
+    except (OSError, ValueError):
+        return None
+    return content
 
 
 def materialize(path: Path, params: dict) -> bool:

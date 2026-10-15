@@ -1023,6 +1023,42 @@ def _undischarged_ship_dispositions(
     }
 
 
+def _claim_minted_batons(
+    worktree_root: "Union[Path, str]", sid: Optional[str], decisions: dict[str, Any]
+) -> list[str]:
+    """Claims, for `sid`, each active baton named in `decisions["handoff_dispositions"]`
+    whose `authoring_session` is `sid` and that no claim holds yet, so the ship/close
+    resolvers (which select held claims only) see it. Best-effort; returns the basenames
+    claimed. A baton authored by another session is never claimed here."""
+    dispositions = decisions.get("handoff_dispositions")
+    if not sid or not isinstance(dispositions, dict) or not dispositions:
+        return []
+    from coordinator_core.ops._fm_util import extract_frontmatter_scalar
+    from coordinator_core.session.claims import claim_handoff
+
+    try:
+        held = set(directives_commit_tail._held_handoff_basenames(worktree_root, sid))  # noqa: SLF001 - the exact reader the resolvers use
+    except Exception:  # noqa: BLE001 - best-effort pre-pass
+        return []
+    claimed: list[str] = []
+    for basename in dispositions:
+        if basename in held:
+            continue
+        path = Path(worktree_root) / "state" / "handoffs" / basename
+        try:
+            authored_by = extract_frontmatter_scalar(path.read_text(encoding="utf-8"), "authoring_session")
+        except OSError:
+            continue
+        if authored_by != sid:
+            continue
+        try:
+            if claim_handoff(basename, cwd=str(worktree_root)):
+                claimed.append(basename)
+        except Exception:  # noqa: BLE001 - best-effort
+            continue
+    return claimed
+
+
 def _run_post_close_directives(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Dispatches the directives held back for after the close commit (those
     carrying `AFTER_CLOSE_COMMIT_KEY`), in list order, each through the same
@@ -1577,6 +1613,7 @@ def _run_close_commit_tail(
         # sequence this commit already stages. See
         # `directives_commit_tail`'s own module comment for the candidate
         # rule and the two validating writers this routes through.
+        _claim_minted_batons(worktree_root, sid, decisions)
         ship_candidates = directives_commit_tail.resolve_ship_stamp_candidates(
             worktree_root, sid, decisions
         )

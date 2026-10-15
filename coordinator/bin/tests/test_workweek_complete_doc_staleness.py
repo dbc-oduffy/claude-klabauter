@@ -49,6 +49,7 @@ def repo(tmp_path: Path) -> Path:
     (root / "code.txt").write_text("x\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "code")
+    _git(root, "commit-graph", "write", "--reachable")
     return root
 
 

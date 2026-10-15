@@ -1046,6 +1046,42 @@ def _reap_session_touched_repos(target_roots: List[Path]) -> dict:
 # Result envelope builders
 # ---------------------------------------------------------------------------
 
+_TEST_RESIDUE_NAME_RE = re.compile(r"^(?:s1|probe-.+|sess-.+)$")
+_LIVE_BOOKKEEPING_DIRS = frozenset(
+    {"decisions", "handoff-claims", "logs", "plan-claims", "workday-start-runs"}
+)
+
+
+def _purge_test_residue(
+    sessions_dir: Path, live_sids: frozenset
+) -> Tuple[List[str], List[dict]]:
+    """Sync: rm -rf hub children whose NAME is a known test-residue shape
+    (`s1`, `probe-*`, `sess-*`) and that no live session id names.
+
+    Name-matched only, never a glob over non-UUID dirs: the bookkeeping dirs and
+    any other unrecognised child are kept. Each removal is logged by name."""
+    purged: List[str] = []
+    failed: List[dict] = []
+    for sdir in sorted(sessions_dir.iterdir()):
+        name = sdir.name
+        if (
+            name in _LIVE_BOOKKEEPING_DIRS
+            or name.startswith(".")
+            or not _TEST_RESIDUE_NAME_RE.match(name)
+            or name in live_sids
+            or not sdir.is_dir()
+        ):
+            continue
+        try:
+            shutil.rmtree(sdir)
+        except OSError as exc:
+            failed.append({"id": name, "reason": f"test-residue purge failed: {exc}"})
+            continue
+        _LOG.info("session.reap: purged test residue dir %s", name)
+        purged.append(name)
+    return purged, failed
+
+
 def _build_result(
     *,
     cadence_gated: bool,
@@ -1055,6 +1091,7 @@ def _build_result(
     pruned_agent_archive: List[str],
     deferred: List[dict],
     failed: List[dict],
+    purged_test_residue: Optional[List[str]] = None,
 ) -> dict:
     """Build the session.reap result envelope.
 
@@ -1070,6 +1107,7 @@ def _build_result(
         "reaped_agents": reaped_agents,
         "reaped_claims": reaped_claims,
         "pruned_agent_archive": pruned_agent_archive,
+        "purged_test_residue": purged_test_residue or [],
         "deferred": deferred,
         "failed": failed,
     }
@@ -1238,6 +1276,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     pruned_agent_archive = pruned_agent_archive + pruned_session_archive
     failed_prune = failed_prune + failed_session_prune
 
+    # --- Sub-reap (vi): named test-residue purge (skipped when liveness is unknown) ---
+    purged_residue: List[str] = []
+    failed_residue: List[dict] = []
+    if liveness_error is None:
+        purged_residue, failed_residue = await asyncio.to_thread(
+            _purge_test_residue, sessions_dir, live_sids
+        )
+
     # Update .last-reap cadence marker to now (regardless of partial failures).
     # Only reached on a full run (force OR cadence-elapsed) — the gated fast
     # no-op path above returns before this point and never touches the marker.
@@ -1250,7 +1296,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reaped_claims=[],
         pruned_agent_archive=pruned_agent_archive,
         deferred=deferred_sessions + deferred_agents,
-        failed=failed_sessions + failed_agents + failed_prune,
+        failed=failed_sessions + failed_agents + failed_prune + failed_residue,
+        purged_test_residue=purged_residue,
     )
 
 

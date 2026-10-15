@@ -87,6 +87,7 @@ _PARAMS = (
     Field("gated", "list"),
     Field("cross_repo_approved", "bool"),
     Field("session_id", "str"),
+    Field("only_rows", "str_list"),
 )
 
 __all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "relayed_ask_block"]
@@ -297,6 +298,23 @@ def _engine_rows(
     return tuple(engine_owner_rows(plan_rows, [r for r in register if isinstance(r, Mapping)], evidence, root))
 
 
+def _only_rows(rows: list, exclusions: list, keep: frozenset) -> tuple[list, list]:
+    """The resume subset of a spine read: `keep` rows only, edges onto the dropped (landed) rows
+    stripped, and only `keep` rows among the owed/gated exclusions."""
+    known = {r.id for r in rows} | {e.get("id") for e in exclusions}
+    unknown = keep - known
+    if unknown:
+        raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(unknown)}")
+    landed = known - keep
+    kept = []
+    for row in rows:
+        if row.id not in keep:
+            continue
+        edges = [e for e in row.depends_on if not (isinstance(e, dict) and e.get("chunk") in landed)]
+        kept.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
+    return kept, [e for e in exclusions if e.get("id") in keep]
+
+
 def stage(
     repo_root: Path,
     *,
@@ -308,8 +326,14 @@ def stage(
     cross_repo_approved: bool = False,
     session_id: Optional[str] = None,
     commit_sizing_rel: Optional[str] = None,
+    only_rows: Optional[Sequence[str]] = None,
 ) -> StageManifest:
-    """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`)."""
+    """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
+
+    `only_rows` (a resume: the halted plan's incomplete row ids) stages just those rows; the rest
+    are landed, so an edge onto one is satisfied. A resume whose rows are all owed or gated
+    returns a manifest with no rows and the owed/gated lists.
+    """
     root = Path(repo_root)
     if not safe_id(run_id):
         raise AskStageError(f"run_id {run_id!r} is not a single safe path segment")
@@ -354,6 +378,8 @@ def stage(
         exclusions=exclusions,
         cleared_gate_owners=own_gate_owners(raw_by_id.values(), root),
     )
+    if only_rows is not None:
+        rows, exclusions = _only_rows(rows, exclusions, frozenset(only_rows))
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []
@@ -370,7 +396,7 @@ def stage(
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
     waves = build_waves(rows)
-    if not waves:
+    if not waves and not (only_rows is not None and (owed or gated)):
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:
             named += f"; owed by the EM: {', '.join(o.id for o in owed)}"
@@ -517,6 +543,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             cross_repo_approved=bool(params.get("cross_repo_approved")),
             session_id=params.get("session_id") or None,
             commit_sizing_rel=params.get("commit_sizing_path") or None,
+            only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
         )
     except (AskStageError, SizingFireRefused) as exc:
         return {"error": str(exc)}

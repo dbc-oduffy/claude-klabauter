@@ -424,6 +424,21 @@ def _prepare_commit_tail() -> tuple[Optional[str], str, Optional[dict[str, str]]
     return root, sid, _dirty_snapshot(root), None
 
 
+def _uncommitted_after_skip(root: Any, before: Optional[dict[str, str]]) -> Optional[list[str]]:
+    """Paths left dirty by a skipped tail so the caller can see what was not
+    committed: dirty now minus the pre-pass snapshot (all dirty when there was
+    none). Scans cwd when the worktree is linked or no root resolves; `None`
+    when git cannot answer."""
+    try:
+        target = Path.cwd() if not root or _in_linked_worktree(root) else root
+        after = _dirty_snapshot(target)
+    except Exception:  # noqa: BLE001 - reporting aid only
+        return None
+    if after is None:
+        return None
+    return sorted(set(after) - set(before or {}))
+
+
 def _run_workweek_commit_tail(
     root: Any, before: Optional[dict[str, str]], decisions: dict[str, Any], sid: str
 ) -> dict[str, Any]:
@@ -537,6 +552,10 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 commit = _run_workweek_commit_tail(root, before, effective_decisions, sid)
             except Exception as exc:  # noqa: BLE001 - the tail never crashes apply
                 commit = {"attempted": True, "commit_failed": True, "error": str(exc)}
+        if commit.get("skipped") and commit["skipped"] != "workweek-commit:nothing-dispatched":
+            left = _uncommitted_after_skip(root, before)
+            if left is not None:
+                commit["uncommitted"] = left
         report["commit"] = commit
         if exit_code == int(WorkweekApplyExitCode.SUCCESS) and (
             commit.get("commit_failed") or commit.get("post_commit_dirty")

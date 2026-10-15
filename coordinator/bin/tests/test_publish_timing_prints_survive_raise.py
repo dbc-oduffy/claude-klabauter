@@ -113,7 +113,7 @@ def test_field7_span_prints_when_the_declaration_check_raises(monkeypatch, tmp_p
 
 
 def test_allowlist_span_prints_when_the_build_raises(monkeypatch, tmp_path):
-    monkeypatch.setattr(publish, "_field7_declaration_check", lambda: (True, "", None))
+    monkeypatch.setattr(publish, "_field7_declaration_check", lambda *_a, **_k: (True, "", None))
     monkeypatch.setattr(publish, "build_allowlisted_source", _raise)
     assert "[timing] t: run_pre_sync_gates: allowlist " in _gates(monkeypatch, tmp_path).getvalue()
 

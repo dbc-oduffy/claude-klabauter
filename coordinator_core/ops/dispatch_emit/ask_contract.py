@@ -12,7 +12,8 @@ Signatures implemented in their own modules:
                   `accept_pending` or on a raw ask)
   ask_plan_blitz.wrap_stage(plan_blitz_text: str, *, agent_prefix_var: str | None = None)
                   -> tuple[str, list[str]]
-  sizing_fire.resumable_plan(sizing, sizing_rel: str, repo_root) -> str | None
+  sizing_fire.resumable_plan(sizing, sizing_rel: str, repo_root, arm) -> ResumePlan | None
+                  (`ResumePlan` is declared here; a plan with every row landed raises SizingFireRefused)
   ask_brief.load_em_brief(repo_root, *, brief, brief_file, context=(), session_id="") -> EmBrief | None
 """
 
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
@@ -87,6 +88,7 @@ ASK_SCOUT_SCHEMA = {
         "halt": {"type": ["object", "null"]},
         "baton": {"type": ["object", "null"]},
         "resume_plan": {"type": ["string", "null"]},
+        "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
         "manifest": {"type": ["object", "null"]},
@@ -186,6 +188,14 @@ def record_dir(repo_root: Path, run_id: str) -> Path:
 DELIVERY_NOTE_DIR = "docs/delivery"
 
 
+class ResumePlan(NamedTuple):
+    """`sizing_fire.resumable_plan`'s return: the plan to resume and the ids of its rows still
+    to run, in spine order."""
+
+    plan_rel: str
+    incomplete: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class GateVerdict:
     """dispatch.ask_gate reply: an arm to run, or a halt dict
@@ -200,6 +210,8 @@ class GateVerdict:
     acceptance: dict | None = None
     # Plan path of an accepted, unfired sizing: the script stages it instead of authoring one.
     resume_plan: str | None = None
+    # With `resume_plan`: the ids of its rows still to run; the script stages only these.
+    resume_rows: list[str] | None = None
     # Plan path of the spine the gate minted at M+ from a sizing whose acceptance rows are all
     # concrete: the script reviews it instead of planning.
     spine_plan: str | None = None
@@ -214,6 +226,8 @@ class GateVerdict:
             out["acceptance"] = self.acceptance
         if self.resume_plan is not None:
             out["resume_plan"] = self.resume_plan
+        if self.resume_rows is not None:
+            out["resume_rows"] = list(self.resume_rows)
         if self.spine_plan is not None:
             out["spine_plan"] = self.spine_plan
         return out

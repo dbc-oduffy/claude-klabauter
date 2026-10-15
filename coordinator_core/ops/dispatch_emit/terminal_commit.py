@@ -377,6 +377,41 @@ def _register_target(
     return target, ids, target == own, pins
 
 
+def _derive_judge_status(inline_review: object) -> Optional[str]:
+    """Re-derive ``inline_review.criterion.status`` from its structured ``clauses``, in place.
+
+    Any ``not_met`` clause gives ``not_met``; else any non-``met`` clause gives ``indeterminate``;
+    a ``met`` reply whose ``clauses`` or ``observed`` list is present and empty is
+    ``indeterminate`` (a reply that omits the key is a digest shape that never carried it, left
+    alone). A derived status
+    that differs from the reply's is written over it and the disagreement appended to
+    ``criterion["deviations"]``; a derived status never upgrades a non-``met`` reply. Returns the
+    deviation text, or ``None`` when the reply agrees or carries no judged criterion.
+    """
+    criterion = inline_review.get("criterion") if isinstance(inline_review, dict) else None
+    if not isinstance(criterion, dict) or criterion.get("status") != "met":
+        return None
+    clauses = criterion.get("clauses")
+    if not isinstance(clauses, list):
+        return None
+    statuses = [c.get("status") if isinstance(c, dict) else None for c in clauses]
+    if "not_met" in statuses:
+        derived, why = "not_met", "a clause is not_met"
+    elif any(s != "met" for s in statuses):
+        derived, why = "indeterminate", "a clause is not met or indeterminate"
+    elif not statuses:
+        derived, why = "indeterminate", "met reply carries no clauses"
+    elif "observed" in criterion and not criterion["observed"]:
+        derived, why = "indeterminate", "met reply observed nothing"
+    else:
+        return None
+    note = f"judge reply status 'met' disagrees with its clauses: derived {derived} ({why})"
+    criterion["status"] = derived
+    criterion["reason"] = note
+    criterion["deviations"] = [*(criterion.get("deviations") or []), note]
+    return note
+
+
 def _register_gate(
     worktree_root: Path, plan_path: Optional[str], inline_review: dict, ledger_judged: Sequence[str] = (),
 ) -> Optional[str]:
@@ -2924,6 +2959,8 @@ def _terminal_commit_inner(
     # no JS-callable "invoke a Python op" primitive
     # (review_mint/wave_bookkeeping.py's own module docstring).
     bookkeeping_record_path: Optional[str] = None
+    if not anchor_only:
+        _derive_judge_status(inline_review)
     register_failure = (
         None if anchor_only else _register_gate(
             worktree_root, request.plan_path, inline_review,
@@ -3479,11 +3516,12 @@ def _terminal_commit_inner(
         ):
             consumed_baton = _cited_baton(worktree_root, shipped_sizing)
             archive_targets = (shipped_sizing, consumed_baton) if consumed_baton else (shipped_sizing,)
-        stamp_commit = not product_only or (
+        plan_commits = not product_only or (
             bool(request.plan_path)
             and snapshot is not None
             and not snapshot.ignored_among([request.plan_path])
         )
+        stamp_commit = bool(shipped_sizing) or plan_commits
         reply.update(
             _stamp_coded_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
@@ -3492,14 +3530,24 @@ def _terminal_commit_inner(
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
                 snapshot=snapshot,
                 flip_plan=request.plan_path if flips else None,
-                receipt=request.plan_path if reply.get("review_stamp") == "minted" else None,
+                receipt=request.plan_path if plan_commits and reply.get("review_stamp") == "minted" else None,
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
                 archive_after_flip=archive_targets,
             )
         )
         flipped = reply.pop("_flip", None)
-        scope["landed"].update(reply.pop("_committed", ()))
+        stamp_committed = tuple(reply.pop("_committed", ()))
+        scope["landed"].update(stamp_committed)
+        if shipped_sizing:
+            archived_to = reply.get("archived") or {}
+            if shipped_sizing not in stamp_committed and shipped_sizing not in archived_to:
+                reply["ok"] = False
+                reply["error"] = (
+                    f"shipped sizing {shipped_sizing} did not land: "
+                    + str(reply.get("coded_stamp_error") or "stamp commit carried no path for it")
+                    + ". The product commit stands; ship it through ceremony.commit_v2"
+                )
         if paying_close:
             _settle_close(worktree_root, close_ctx, "coded_stamp_error" not in reply)
         if shipped_sizing:

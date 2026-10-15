@@ -1672,6 +1672,27 @@ def _is_assignment_captured_substitution_read_shape(
     return True
 
 
+def _neutralize_home_path_operands(
+    segment: str, identifiers_lower: Tuple[str, ...]
+) -> str:
+    """``segment`` with the filename part of every operand under a governed
+    DIRECTORY home (an identifier ending ``/``) replaced by ``x``.
+
+    A slug minted from prose (``state/sizings/...-patch-the-guard.yaml``) holds
+    words the write-marker patterns read as commands (``patch``, ``tee``,
+    ``ed``), so a pathspec after ``--`` was judged a write. The home prefix is
+    kept, so a redirect or ``tee`` TARGETING the home still names it."""
+    for identifier in identifiers_lower:
+        if not identifier.endswith("/"):
+            continue
+        segment = re.sub(
+            r"(?i)(" + re.escape(identifier) + r")[^\s'\"`;&|()<>]+",
+            r"\1x",
+            segment,
+        )
+    return segment
+
+
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """The whole predicate, isolated from payload plumbing so it is directly
     unit-testable. ``identifiers_lower`` is the per-call resolved governed-
@@ -1731,6 +1752,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     for segment in data_stripped_segments:
         if not _mentions_governed_identifier(segment, identifiers_lower):
             continue
+        segment = _neutralize_home_path_operands(segment, identifiers_lower)
         if _is_git_content_mutation(segment):
             return True
         if (

@@ -284,3 +284,49 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
         assert deferred[0]["id"] == _SID_UNKNOWN_TS
         assert failed == []
         assert sdir.exists()
+
+
+class TestPurgeTestResidue:
+
+    def _hub(self, tmp_path):
+        hub = tmp_path / "coordinator-sessions"
+        for name in ("s1", "probe-x", "sess-ws", "decisions", "handoff-claims",
+                     "logs", "plan-claims", "workday-start-runs", "other-dir",
+                     _SID_DEAD):
+            (hub / name).mkdir(parents=True)
+            (hub / name / "f.log").write_text("x", encoding="utf-8")
+        return hub
+
+    def test_residue_purged_bookkeeping_kept_and_second_call_noop(self, tmp_path):
+        hub = self._hub(tmp_path)
+
+        purged, failed = reap._purge_test_residue(hub, frozenset())
+
+        assert purged == ["probe-x", "s1", "sess-ws"]
+        assert failed == []
+        assert sorted(p.name for p in hub.iterdir()) == sorted(
+            ["decisions", "handoff-claims", "logs", "plan-claims",
+             "workday-start-runs", "other-dir", _SID_DEAD]
+        )
+        assert reap._purge_test_residue(hub, frozenset()) == ([], [])
+
+    def test_live_named_residue_dir_is_kept(self, tmp_path):
+        hub = self._hub(tmp_path)
+
+        purged, _ = reap._purge_test_residue(hub, frozenset({"sess-ws"}))
+
+        assert "sess-ws" not in purged
+        assert (hub / "sess-ws").is_dir()
+
+    def test_handler_force_run_reports_purge(self, tmp_path, monkeypatch):
+        import asyncio
+
+        repo = _make_repo(tmp_path)
+        hub = Path(reap._sessions_dir(repo / ".git"))
+        (hub / "probe-y").mkdir(parents=True)
+        monkeypatch.setattr(reap, "resolve_live_session_ids", lambda: frozenset())
+
+        result = asyncio.run(reap._handler({"force": True}, repo_root=repo / ".git"))
+
+        assert result["purged_test_residue"] == ["probe-y"]
+        assert not (hub / "probe-y").exists()

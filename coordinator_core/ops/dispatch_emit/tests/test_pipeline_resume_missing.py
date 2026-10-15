@@ -60,15 +60,22 @@ def _script(reply):
     return Path(reply["path"]).read_text(encoding="utf-8")
 
 
+def _readers(reply):
+    """Roster fan-outs carry one shared prompt plus per-item slugs (75b08994b6), not N filled prompts."""
+    script = _script(reply)
+    body = script.split("const common = ", 1)[1].split("\n};", 1)[0] + "\n}"
+    common = json.loads(body)
+    assert common["prompts"]["readers"].startswith("Read batch ")
+    return [item["slug"] for item in common["items"]["readers"]]
+
+
 def test_only_batches_without_a_landed_result_are_re_emitted(repo):
     (repo / "scratch/run/batch-b1.json").write_text("{}", encoding="utf-8")
     (repo / "scratch/run/batch-b3.json").write_text("{}", encoding="utf-8")
 
     reply = _emit(repo, resume_missing=True)
 
-    script = _script(reply)
-    assert "Read batch b2" in script and "Read batch b4" in script
-    assert "Read batch b1" not in script and "Read batch b3" not in script
+    assert _readers(reply) == ["b2", "b4"]
     assert reply["resume_missing"] == {"batches": {"expected": 4, "present": 2, "missing": 2}}
     receipt = json.loads(Path(reply["receipt"]).read_text(encoding="utf-8"))
     assert receipt["resume_missing"] == reply["resume_missing"]
@@ -81,7 +88,7 @@ def test_an_empty_result_file_does_not_count_as_landed(repo):
     reply = _emit(repo, resume_missing=True)
 
     assert reply["resume_missing"]["batches"]["present"] == 0
-    assert "Read batch b1" in _script(reply) and "Read batch b2" in _script(reply)
+    assert _readers(reply) == ["b1", "b2", "b3", "b4"]
 
 
 def test_nothing_missing_is_refused_with_nothing_written(repo):
@@ -98,7 +105,7 @@ def test_without_the_flag_every_batch_is_emitted(repo):
 
     reply = _emit(repo)
 
-    assert "Read batch b1" in _script(reply)
+    assert _readers(reply) == ["b1", "b2", "b3", "b4"]
     assert "resume_missing" not in reply
 
 

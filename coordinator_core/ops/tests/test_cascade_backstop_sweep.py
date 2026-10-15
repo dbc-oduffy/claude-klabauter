@@ -180,6 +180,7 @@ class TestDivergenceDetection:
         _seed_handoff(
             repo, "blocked.md", deliverable_id="dlv-abc-222222",
             deployment_state="awaiting_gate",
+            extra="blocking_notes: waiting on the DoE answer\n",
         )
 
         result = _run({}, repo_root=repo / ".git")

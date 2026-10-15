@@ -432,3 +432,31 @@ def test_loader_parses_identically_on_both_bases(_fresh_loader, monkeypatch, lib
         pytest.skip("libyaml not available")
     monkeypatch.setattr(yaml, "__with_libyaml__", libyaml, raising=False)
     assert rr._load(_LOADER_DOC) == _LOADER_EXPECT
+
+
+def test_constraint_row_recorded_honoured_unblocks_ship(tmp_path):
+    """A standing-constraint row is recorded honoured through the existing amend verb (met, wired,
+    with an evidence ref in met_by); ship_refusal stops naming it."""
+    import coordinator_core.ops.sizing_record_register as record
+
+    (tmp_path / ".git").mkdir()
+    rel = "state/sizings/20260101-c.yaml"
+    constraint = {"id": "T4", "surface": "internal", "status": "open",
+                  "source_text": "never add a git spawn to the commit path"}
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "schema: sizing-object\nintent: i\nestimate:\n  tshirt: M\n  provisional: true\n"
+        "route: spec-dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\n"
+        "premise:\n  provenance: read\n  evidence: fixture\n", encoding="utf-8")
+    sources = [{"doc": "docs/x.md", "ref": "abc"}]
+    seed = record._handler(
+        {"sizing": rel, "register": {"sources": sources, "rows": [constraint]}}, repo_root=tmp_path / ".git")
+    assert seed["exit_code"] == 0, seed
+    assert rr.ship_refusal(rr.read_register(path.read_text(encoding="utf-8"))) == "row T4 (internal) is open"
+
+    honoured = {"rows": [{"id": "T4", "status": "met", "wired": True, "met_by": ["git:1e60562b55"]}]}
+    reply = record._handler(
+        {"sizing": rel, "register": honoured, "amend": True}, repo_root=tmp_path / ".git")
+    assert reply["exit_code"] == 0, reply
+    assert rr.ship_refusal(rr.read_register(path.read_text(encoding="utf-8"))) is None

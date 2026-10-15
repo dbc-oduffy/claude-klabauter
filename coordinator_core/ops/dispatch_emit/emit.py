@@ -295,6 +295,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit.test_caller_widen import widen_waves as _widen_waves
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.ops.dispatch_emit.typecheck_leg import (
     TypecheckLeg,
@@ -1086,6 +1087,22 @@ def _widen_with_test_candidates(
     if not paths:
         return paths
     return _dedupe_preserve_order([*paths, *candidate_test_additions(paths, repo_root)])
+
+
+def _widen_waves_with_test_referencers(waves: list, repo_root: Path) -> list:
+    """``waves`` with each row's ``writes`` widened to the test files that import a module
+    it writes (``test_caller_widen``). One ``git grep`` per emit; a failed grep widens nothing."""
+    from coordinator_core.git.run import run_git
+
+    def run_grep(pattern: str, pathspecs) -> Optional[str]:
+        result = run_git(
+            ["grep", "-E", "-e", pattern, "--", *pathspecs], cwd=str(repo_root)
+        )
+        if result.timed_out or result.returncode not in (0, 1):
+            return None
+        return result.stdout
+
+    return _widen_waves(waves, run_grep)
 
 
 def _is_immutable_body_path(path: str) -> bool:
@@ -4703,6 +4720,9 @@ def compose_script(
             "boundary in the module docstring)"
         )
 
+    if repo_root is not None and not review_only:
+        waves = _widen_waves_with_test_referencers(waves, repo_root)
+
     # bug 2026-09-23-a-stop-rule-halt-stops-the-whole-lane: a mise-inventory
     # compose carries rows from more than one plan (each row's OWN plan read
     # off its body's `Spec: <path> (<id>)` line -- `_row_source_plan`,
@@ -4881,7 +4901,7 @@ def compose_script(
         body_blocks.append(_run_row_helper_js(agent_type_host))
 
     gate_commands_all = _distinct_gate_commands(flat_rows, plan_context)
-    if gate_commands_all and not review_only:
+    if (gate_commands_all or carried_gate_owed) and not review_only:
         body_blocks.append(_GATE_BASELINE_JS)
     pre_check_specs: list[AgentSpec] = []
     if predispatch:

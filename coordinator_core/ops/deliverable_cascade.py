@@ -1025,7 +1025,8 @@ def _advance_one_sizing(
             # fires with its archive path, which the sizing schema's `plan` pattern refuses.
             plan_fk_value = _plan_origin(plan_path)
             if read_fm_field(fm_text, "plan") is not None:
-                fm_text = replace_fm_field(fm_text, "plan", plan_fk_value)
+                if read_fm_field_unquoted(fm_text, "plan") != plan_fk_value:
+                    fm_text = replace_fm_field(fm_text, "plan", plan_fk_value)
             else:
                 fm_text = insert_fm_field(fm_text, "plan", plan_fk_value, "status")
 

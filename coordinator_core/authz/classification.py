@@ -2279,6 +2279,35 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
     "dispatch.ask_stage": OpClass.MUTATING,
+    # dispatch.reap_abandoned_runs — MUTATING: commits the state/warp/<run_id>/ record files of runs with no
+    # live token and their orphaned sizings in one ceremony.commit_v2 call (ops/dispatch_emit/abandoned_runs.py).
+    # DR-208 five-question affirmation (citing dispatch.reap_abandoned_runs handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One git commit over record and sizing files; no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Reads the token dir and stats record files; the commit is delegated to ceremony.commit_v2.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The git index and history, through commit_v2.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The landed commit.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.reap_abandoned_runs": OpClass.MUTATING,
+    # dispatch.commit_halted_rows — MUTATING: lands a halted run's delivered rows, one ceremony.commit_v2 call
+    # per row, hunk-scoped through `git apply --cached` where a withheld row shares the file
+    # (ops/dispatch_emit/halted_rows_commit.py).
+    # DR-208 five-question affirmation (citing dispatch.commit_halted_rows handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Git commits and, for a hunk-scoped file, the index; no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Reads the run script; commits are delegated to ceremony.commit_v2.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The git index and history.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The landed commits.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.commit_halted_rows": OpClass.MUTATING,
     # workflow.revise — MUTATING: appends a PM verbatim row to the run's sizing requirement_register (or
     # queues it in the record dir's inbox until the sizing exists) and rewrites the record dir's
     # (state/warp/<run_id>/) requirements view (ops/dispatch_emit/requirements_ledger.py); nothing else.

@@ -86,6 +86,21 @@ def test_general_purpose_explicit_model_opus_rewrites_to_sonnet_at_every_level(
     _assert_explicit_rewritten_to_sonnet(mod.check(payload), payload, "opus")
 
 
+@pytest.mark.parametrize("profile", ["author", "consumer"])
+def test_explicit_model_opus_rewrites_at_the_unset_default_level(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: str
+) -> None:
+    import coordinator_core.machine_profile as mp
+
+    monkeypatch.setattr(mp, "_explicit", lambda key, levels: None)
+    monkeypatch.setattr(mp, "machine_profile", lambda: profile)
+    monkeypatch.setattr(mp, "_slot", lambda: {})
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
+    payload = _agent_payload("general-purpose", model="opus", transcript_path=transcript)
+    _assert_explicit_rewritten_to_sonnet(mod.check(payload), payload, "opus")
+
+
 def test_fable_pinned_type_with_no_model_param_still_denies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

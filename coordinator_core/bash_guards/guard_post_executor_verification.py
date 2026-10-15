@@ -5,11 +5,12 @@ Once the session has dispatched a ``coordinator:executor``, the EM's own
 verification runs are capped at one (the falsifier run); a second routes through
 ``coordinator:test-runner``. A verification run is pytest, ``python -c`` or
 heredoc-fed (``python -``) code that imports a top-level package of the repo under
-test or loads one of its ``.py`` files by quoted path, or ``python <x>.py`` whose
-script sits outside the repo under a temp or scratch(pad) dir and whose source
-(read once, size-capped, unreadable fails open) imports such a package or loads
-such a file (a probe; a stdlib-only script and installed tools outside the repo
-are not). ``python -m
+test or loads one of its ``.py`` files by quoted path AND names a test runner
+(pytest/unittest/doctest), or ``python <x>.py`` whose script sits outside the repo
+under a temp or scratch(pad) dir and whose source (read once, size-capped, unreadable
+fails open) imports such a package or loads such a file AND names a test runner (a
+probe; a stdlib-only script and installed tools outside the repo are not). Read-only
+scripts and in-process apply calls are bookkeeping. ``python -m
 coordinator_core.benchmarks.measure [opts] -- <argv>`` is a verification run only when
 ``<argv>`` is itself a pytest run (the same scoped exemption applies); any other measured
 argv is neither counted nor denied. A ``-c`` importing
@@ -152,6 +153,25 @@ def _code_imports_repo(code: str, repo_root: str) -> bool:
     return any(m.group(1) in pkgs for m in _REPO_PY_PATH_RE.finditer(code))
 
 
+_RUNNER_RE = re.compile(r"\b(?:pytest|unittest|doctest)\b")
+
+
+def _code_verifies(code: str, repo_root: str) -> bool:
+    """Repo-importing code that also names a test runner; read-only or apply code is bookkeeping."""
+    return _RUNNER_RE.search(code) is not None and _code_imports_repo(code, repo_root)
+
+
+def _script_runs_suite(path: str, cwd: str) -> bool:
+    """A probe script naming a test runner. An unreadable script runs nothing we can see."""
+    if "$" in path:
+        return True
+    try:
+        with open(os.path.join(cwd, os.path.expanduser(path)), "r", encoding="utf-8", errors="replace") as fh:
+            return _RUNNER_RE.search(fh.read(65536)) is not None
+    except OSError:
+        return False
+
+
 def _heredoc_code(cmd: str) -> str:
     """Every heredoc body in ``cmd``: the tokenizer splits them into segments of their own."""
     return "\n".join(m.group(3) for m in _HEREDOC_RE.finditer(cmd))
@@ -202,7 +222,7 @@ def _python_verification(rest: List[str], repo_root: str, cwd: str, stdin_code: 
     while i < len(rest):
         tok = rest[i]
         if tok == "-" or tok.startswith("<<"):
-            return _code_imports_repo(stdin_code, repo_root)
+            return _code_verifies(stdin_code, repo_root)
         if tok == "-m":
             if i + 1 < len(rest) and rest[i + 1] == _MEASURE_MODULE:
                 return _measured_pytest(_measure_tail(rest, i + 2))
@@ -213,14 +233,14 @@ def _python_verification(rest: List[str], repo_root: str, cwd: str, stdin_code: 
                 return _measured_pytest(_measure_tail(rest, i + 1))
             return m.group(1) == "pytest"
         if tok == "-c":
-            return i + 1 < len(rest) and _code_imports_repo(rest[i + 1], repo_root)
+            return i + 1 < len(rest) and _code_verifies(rest[i + 1], repo_root)
         if tok in _PY_OPTS_WITH_ARG:
             i += 2
             continue
         if tok.startswith("-"):
             i += 1
             continue
-        return tok.endswith(".py") and _is_probe_script(tok, repo_root, cwd)
+        return tok.endswith(".py") and _is_probe_script(tok, repo_root, cwd) and _script_runs_suite(tok, cwd)
     return False
 
 

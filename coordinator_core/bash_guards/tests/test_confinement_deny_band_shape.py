@@ -109,6 +109,14 @@ def _perforce_armed_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str
     return {}
 
 
+def _non_owned_remote_armed_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+    """`block-push-pr-non-owned-remote` arms from machine-local policy; declare a remote for the row."""
+    from coordinator_core.bash_guards import block_push_pr_non_owned_remote as guard
+
+    mp.setattr(guard, "_configured_prefixes", lambda: ["github.com/shape-probe/"])
+    return {}
+
+
 def _noncanonical_branch_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -174,6 +182,15 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         GuardBand.CONFINEMENT_DENY,
         False,
         setup=_perforce_armed_setup,
+    ),
+    CorpusRow(
+        "block-push-pr-non-owned-remote",
+        "block-push-pr-non-owned-remote-fire",
+        "git push https://github.com/shape-probe/r.git main",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=_non_owned_remote_armed_setup,
     ),
     CorpusRow(
         "block-unreal-engine-resave",

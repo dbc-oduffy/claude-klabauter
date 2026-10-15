@@ -981,6 +981,23 @@ class TestOrphanAttribution:
         out = guard.check(_payload("tsc --noEmit"))
         assert out is not None and "already runs a typecheck" in _reason(out)
 
+    def test_release_verb_frees_the_sessions_lease_and_a_later_typecheck_is_admitted(self, host, monkeypatch):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 22)
+        self._live(monkeypatch, host)
+        self._open("typecheck", 20)
+        assert guard.release_session_leases(_payload("x")) == 1
+        assert leases.live_leases() == []
+        assert guard.check(_payload("tsc --noEmit")) is None
+
+    def test_an_unrelated_long_lived_process_is_not_charged_to_an_unmarked_lease(self, host, monkeypatch):
+        server = [ProcRow(500, 9999, 12, "bash.exe"), ProcRow(501, 500, 13, "node.exe")]
+        host.rows = [CLAUDE, TOOL, CALLER] + server
+        self._live(monkeypatch, host)
+        self._open("typecheck", 0)
+        assert guard.check(_payload("tsc --noEmit")) is None
+        assert 500 not in {r.holder_pid for r in leases.live_leases()}
+        assert 501 not in {r.holder_pid for r in leases.live_leases()}
+
     def test_an_orphan_created_before_the_launch_is_not_charged(self, host, monkeypatch):
         host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 18) + self._orphan(600, 19)
         self._live(monkeypatch, host)

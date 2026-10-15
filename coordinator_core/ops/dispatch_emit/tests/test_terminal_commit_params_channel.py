@@ -82,6 +82,18 @@ def test_read_spawn_prompt_returns_prompt_exactly(tmp_path):
     assert ch.read_spawn_prompt(str(_spawn_file(tmp_path, _record(prompt)))) == prompt
 
 
+def test_read_spawn_prompt_skips_the_user_request_relay(tmp_path):
+    relay = _record("[Workflow harness — user request] relayed\n  please commit")
+    prompt = _indent("x\n" + ch.render_params_block(PARAMS))
+    f = _spawn_file(tmp_path, relay, json.dumps(_record(prompt)) + "\n")
+    assert ch.prompt_params(ch.read_spawn_prompt(str(f))) == PARAMS
+
+
+def test_read_spawn_prompt_reads_no_second_record_after_a_task_prompt(tmp_path):
+    f = _spawn_file(tmp_path, _record("first"), json.dumps(_record("second")) + "\n")
+    assert ch.read_spawn_prompt(str(f)) == "first"
+
+
 def test_read_spawn_prompt_accepts_backslash_separators(tmp_path):
     f = _spawn_file(tmp_path, _record("hello"))
     assert ch.read_spawn_prompt(str(f).replace("/", "\\")) == "hello"

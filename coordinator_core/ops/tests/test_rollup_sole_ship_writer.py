@@ -48,7 +48,7 @@ def test_plan_routed_register_sizing_refused_by_both_writers(repo, row, fixed):
     fix = {k: v for k, v in ALL_SHIPPABLE.items() if k != row}
     path = seed(repo, route="plan", fix=fix)
     shipped = ship_mod._handler({"sizing_path": str(path)}, repo_root=repo)
-    assert shipped["exit_code"] == 1 and "rollup" in shipped["error"]
+    assert shipped["exit_code"] == 1 and "requirement register is not met" in shipped["error"]
     advanced, refusal = cascade_mod._advance_one_sizing(path, PLAN, repo / ".git")
     assert advanced is False and f"row {row}" in refusal and fixed in refusal
     assert _status(path) == "routed"

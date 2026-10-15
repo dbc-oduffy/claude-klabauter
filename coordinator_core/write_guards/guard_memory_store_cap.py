@@ -481,6 +481,31 @@ def _check_new_body_file_count(resolved: Path, display: str) -> "Optional[_Refus
     )
 
 
+def memory_cap_verdict(store_dir: Path, filename: str) -> "Optional[str]":
+    """Deny reason when creating ``filename`` in the project ``memory/`` dir
+    ``store_dir`` breaches the file-count cap, else ``None``. A Bash write
+    carries no measurable content, so only the count limit applies; a write
+    to an existing file or to ``MEMORY.md`` passes."""
+    if filename.casefold() == _MEMORY_MD_FILENAME.casefold():
+        return None
+    display = f"{store_dir.parent.name}/{store_dir.name}/{filename}"
+    refusal = _check_new_body_file_count(store_dir / filename, display)
+    return refusal[0] if refusal else None
+
+
+def bash_write_verdict(target: str) -> "Optional[str]":
+    """``memory_cap_verdict`` for a Bash write target path; ``None`` unless
+    ``target`` is a direct child of a project ``memory/`` dir. Never raises."""
+    try:
+        match = _memory_target(os.path.abspath(target))
+        if match is None:
+            return None
+        resolved, filename, _display = match
+        return memory_cap_verdict(resolved.parent, filename)
+    except Exception:
+        return None
+
+
 def _reroute_armed() -> bool:
     """True when the guard's resolved level is strict, so the deny stands and
     a lesson written beside it duplicates nothing."""

@@ -1,7 +1,7 @@
 """dispatch.ask_gate handler: one sizing in, an arm to run or a halt (room, touchpoint, refusal) out.
 
 Reads the sizing; at M+ with no halt it mints the baton record in-process (a write). An unfired
-plan already on disk rides the verdict as `resume_plan`.
+plan on disk with rows still to run rides the verdict as `resume_plan` and `resume_rows`.
 """
 
 from __future__ import annotations
@@ -116,8 +116,10 @@ def gate(
             **extra,
         )
 
+    resume_sink: list = []
     refusals = collect_fire_refusals(
-        sizing, sizing_rel=sizing_rel, arm=arm, writes=writes, repo_root=repo_root
+        sizing, sizing_rel=sizing_rel, arm=arm, writes=writes, repo_root=repo_root,
+        resume_sink=resume_sink,
     )
     accepted_null = lacks_human_acceptance((sizing.get("exit_criterion") or {}).get("accepted"))
     mode = sizing.get("interaction_mode")
@@ -159,17 +161,23 @@ def gate(
             "ruling": "2026-10-08",
         }
     resume = None
-    if arm != ARM_ROADMAP:
+    if resume_sink:
+        resume = resume_sink[0]
+    elif arm != ARM_ROADMAP:
         try:
             resume = resumable_plan(sizing, sizing_rel, repo_root, arm)
         except SizingFireRefused as exc:
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
+    resume_plan = resume.plan_rel if resume else None
+    resume_rows = list(resume.incomplete) if resume else None
 
     if arm != ARM_M_PLUS:
         # roadmap mints no baton: roadmap-blitz stubs are the batons
-        return GateVerdict(arm=arm, halt=None, acceptance=acceptance, resume_plan=resume)
+        return GateVerdict(
+            arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows
+        )
 
     doc_new = _load_doc_new()
     try:
@@ -190,7 +198,8 @@ def gate(
         halt=None,
         baton=minted,
         acceptance=acceptance,
-        resume_plan=resume,
+        resume_plan=resume_plan,
+        resume_rows=resume_rows,
         spine_plan=spine,
     )
 

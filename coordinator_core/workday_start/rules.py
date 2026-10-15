@@ -219,6 +219,22 @@ def step0_reconcile_outcome(step: Any, result: Any, *, repo_root: Path, run_dir:
     return f"reconcile-unresolved:{outcome}:{branch}" if repeated else True
 
 
+NOMINATION_EXIT = 3
+NO_NOMINATION_TEXT = "no nomination on record for "
+NO_NOMINATION_OBSERVATION = "no nomination"
+
+
+def nomination_none(step: Any, result: Any, *, repo_root: Path = None, run_dir: Path = None) -> bool:
+    """`group-em-nomination who` exit 3 with the no-record text is an answer: the step ran.
+
+    Any other exit, or exit 3 with other text, is not resolved. Writes and commits nothing.
+    """
+    if getattr(result, "exit_code", None) != NOMINATION_EXIT:
+        return False
+    text = f"{getattr(result, 'stdout', '') or ''}\n{getattr(result, 'stderr', '') or ''}"
+    return NO_NOMINATION_TEXT in text
+
+
 RULES: dict[str, Callable[..., Any]] = {
     "step0-stale-branch": step0_stale_branch,
     "step0-reconcile-outcome": step0_reconcile_outcome,

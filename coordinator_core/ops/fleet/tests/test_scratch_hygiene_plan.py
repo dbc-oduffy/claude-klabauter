@@ -221,7 +221,7 @@ def test_queued_leg_inside_deadline_holds_the_run(repo):
         assert r["reason"] == "open-run-close-job:a.workflow"
 
 
-@pytest.mark.parametrize("deadline", [_PAST, "not-a-date"])
+@pytest.mark.parametrize("deadline", [_PAST, "not-a-date"], ids=["past", "unparseable"])
 def test_queued_leg_past_or_unparseable_deadline_is_finished(repo, deadline):
     for p in _run(repo, "a", record=_record(deadline, "queued")):
         assert _classify(repo, p)["action"] == "would-delete"

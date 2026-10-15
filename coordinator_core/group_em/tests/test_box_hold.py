@@ -18,6 +18,13 @@ def test_round_trip(tmp_path):
     assert got.expires_at == 1060.0
 
 
+def test_denial_text_names_barred_allows_edits_and_batches_visual_checks():
+    hold = box_hold.Hold("s1", "swap", 0.0, 60.0)
+    fact, alt = box_hold.denial_text(hold, "00:01:00Z")
+    assert "s1" in fact and "swap" in fact and "barred" in fact and "builds" in fact
+    assert "Edits stay allowed" in alt and "batch visual checks" in alt
+
+
 def test_absent_reads_none(tmp_path):
     assert box_hold.read_hold(directory=tmp_path) is None
 

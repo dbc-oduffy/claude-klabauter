@@ -77,13 +77,25 @@ def _script(reply):
     return Path(reply["path"]).read_text(encoding="utf-8")
 
 
+def _common(reply):
+    """Roster fan-outs carry one shared prompt plus per-item slugs (75b08994b6), not N filled prompts."""
+    body = _script(reply).split("const common = ", 1)[1].split("\n};", 1)[0] + "\n}"
+    return json.loads(body)
+
+
+def _slugs(common, stage):
+    return [item["slug"] for item in common["items"][stage]]
+
+
 def test_validator_runs_once_per_batch_after_the_readers(repo):
     reply = _emit(repo, validator="python3 check.py --strict")
 
     script = _script(reply)
-    assert script.count("Run `python3 check.py --strict` over batch b1") == 1
-    assert script.count("Run `python3 check.py --strict` over batch b2") == 1
-    assert script.index("Read batch b2") < script.index("Run `python3 check.py --strict` over batch b1")
+    common = _common(reply)
+    assert common["prompts"]["validate"].count("Run `python3 check.py --strict` over batch") == 1
+    assert _slugs(common, "validate") == ["b1", "b2"]
+    assert _slugs(common, "readers") == ["b1", "b2"]
+    assert script.index("phase('Read')") < script.index("phase('Validate')")
     receipt = json.loads(Path(reply["receipt"]).read_text(encoding="utf-8"))
     assert receipt["validator"] == "python3 check.py --strict"
 
@@ -92,7 +104,8 @@ def test_without_a_validator_the_validate_stage_is_not_emitted(repo):
     reply = _emit(repo)
 
     script = _script(reply)
-    assert "Read batch b1" in script
+    assert _slugs(_common(reply), "readers") == ["b1", "b2"]
+    assert "validate" not in _common(reply)["items"]
     assert "phases: ['Read']" in script and "Run `" not in script
     assert "validator" not in json.loads(Path(reply["receipt"]).read_text(encoding="utf-8"))
 
@@ -121,9 +134,9 @@ def test_resume_missing_re_emits_the_validator_for_a_batch_without_its_verdict(r
     (repo / "scratch/run/batch-b2.json").write_text("{}", encoding="utf-8")
     (repo / "scratch/run/valid-b1.txt").write_text("ok", encoding="utf-8")
 
-    script = _script(_emit(repo, validator="v.py", resume_missing=True))
+    common = _common(_emit(repo, validator="v.py", resume_missing=True))
 
-    assert "over batch b2" in script and "over batch b1" not in script
+    assert _slugs(common, "validate") == ["b2"]
 
 
 def test_cli_validator_flag_requires_the_pipeline_route(capsys):

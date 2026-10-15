@@ -55,7 +55,7 @@ EXIT_USAGE = 2
 
 OUT_SUFFIX = ".workflow.mjs"
 BOX_TERMS_KEY = "dispatch.box_terms_path"
-ACCEPTED_FLAGS = frozenset({"--plan", "--out", "--force", "--repo-root"})
+ACCEPTED_FLAGS = frozenset({"--plan", "--out", "--force", "--repo-root", "--resume-rows"})
 
 
 class ForeignEmissionError(ValueError):
@@ -74,7 +74,7 @@ def _parse(argv: "list[str]") -> "tuple[dict, Optional[str]]":
     for item in items:
         flag, eq, inline = item.partition("=")
         if flag not in ACCEPTED_FLAGS:
-            return {}, f"unrecognized argument {item!r}; the plan route takes --plan --out [--force] [--repo-root]"
+            return {}, f"unrecognized argument {item!r}; the plan route takes --plan --out [--force] [--repo-root] [--resume-rows ID,ID]"
         if flag == "--force":
             if eq:
                 return {}, "--force takes no value"
@@ -85,6 +85,13 @@ def _parse(argv: "list[str]") -> "tuple[dict, Optional[str]]":
             return {}, f"{flag} needs a value"
         parsed[flag] = value
     return parsed, None
+
+
+def _resume_set(value: Optional[str]) -> "Optional[frozenset]":
+    """The `--resume-rows` ids, or None when the flag is absent."""
+    if value is None:
+        return None
+    return frozenset(part.strip() for part in value.split(",") if part.strip())
 
 
 def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
@@ -270,10 +277,27 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     try:
         regenerable_dirty = None
         guard_root = repo_root or _repo_root_for_plan(plan_arg)
-        if guard_root is not None and not _write_set_provably_clean(Path(plan_arg), guard_root):
+        resume = _resume_set(parsed.get("--resume-rows"))
+        landed_rows = None
+        if resume is not None:
+            landed_rows = frozenset(r.id for r in read_spine(Path(plan_arg))) - resume
+        if guard_root is not None and (resume is not None or not _write_set_provably_clean(Path(plan_arg), guard_root)):
             from coordinator_core.ops.dispatch_emit.dirty_write_set import guard_against_dirty_write_set
 
-            regenerable_dirty = guard_against_dirty_write_set(Path(plan_arg), guard_root)
+            regenerable_dirty = guard_against_dirty_write_set(
+                Path(plan_arg), guard_root,
+                **({} if resume is None else {"landed": landed_rows, "own": resume}),
+            )
+            if regenerable_dirty and "own_leftover" in regenerable_dirty:
+                regenerable_dirty = dict(regenerable_dirty)
+                for row_id, paths in sorted(regenerable_dirty.pop("own_leftover").items()):
+                    print(
+                        f"emit-dispatch-workflow: {row_id}: {len(paths)} uncommitted path(s) "
+                        "in its own writes carried as its prior draft",
+                        file=sys.stderr,
+                    )
+                if "count" not in regenerable_dirty:
+                    regenerable_dirty = None
 
         target_root = str(repo_root) if repo_root is not None else str(Path(out_arg).resolve().parent)
         guarded_path = contained_path(Path(out_arg), [Path(target_root)])
@@ -304,6 +328,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 cross_repo_approved=cross_repo_approved,
                 credit_rows=rows_backed_before_base,
                 auto_split=True,
+                landed_rows=landed_rows,
             )
         except NoWavesError as empty:
             from coordinator_core.ops.dispatch_emit.spine_read import describe_exclusions
@@ -345,6 +370,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             guarded_path, plan_arg, {"session_id": session_id}, extras=extras, sha256=script_sha256
         )
     except WidthOverCapError:
+        if parsed.get("--resume-rows") is not None:
+            return _usage("--resume-rows: the resumed plan is too wide for one workflow; resume fewer rows")
         from coordinator_core.ops.dispatch_emit import cli
 
         return cli.main(argv)

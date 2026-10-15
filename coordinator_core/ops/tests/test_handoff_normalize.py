@@ -517,7 +517,7 @@ def test_backfilled_h1_summary_truncation_is_loud(capsys):
 
     captured = capsys.readouterr()
     assert "WARNING" in captured.err
-    assert "state/handoffs/x.md" in captured.err
+    assert str(Path("state/handoffs/x.md")) in captured.err
     assert "truncated" in captured.err
 
 

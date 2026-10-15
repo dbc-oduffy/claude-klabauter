@@ -150,7 +150,7 @@ def test_docs_dirty_fresh_and_source_dirty_stale_in_two_spawns(repo, monkeypatch
 
 def test_state_and_root_md_dirty_fresh_py_stale(repo):
     _record(repo)
-    (repo / "state").mkdir()
+    (repo / "state").mkdir(exist_ok=True)
     (repo / "state" / "q.yaml").write_text("a: 1\n")
     (repo / "README.md").write_text("hi\n")
     assert _fresh(repo) == {"fresh": True}

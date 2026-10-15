@@ -194,7 +194,7 @@ def test_a_baton_outside_the_handoffs_home_is_not_committed(repo, cited):
     assert "docs/reference/x.md" not in _git(repo, "ls-files").split()
 
 
-def test_ask_run_with_a_gitignored_plan_makes_one_commit_and_stamps_on_disk(repo, monkeypatch):
+def test_ask_run_with_a_gitignored_plan_stamps_it_on_disk_and_lands_only_the_sizing_in_a_second_commit(repo, monkeypatch):
     ignored_plan = "scratch/plans/p.md"
     _closable_plan(repo, ignored_plan)
     request = CommitRequest(
@@ -204,8 +204,9 @@ def test_ask_run_with_a_gitignored_plan_makes_one_commit_and_stamps_on_disk(repo
     calls = _count_commit_v2(monkeypatch)
     out = _call(repo, inline_review=_MINTING_REVIEW)
     assert out["committed"] is True, out
-    assert len(calls) == 1
-    assert "coded_stamp_error" not in out, out
+    assert len(calls) == 2
+    assert ignored_plan not in calls[1]["paths"] and SIZING in calls[1]["paths"], calls[1]
+    assert "coded_stamp_error" not in out, out.get("coded_stamp_error")
     assert f"disposition_ref: {out['sha']}" in (repo / ignored_plan).read_text(encoding="utf-8")
 
 

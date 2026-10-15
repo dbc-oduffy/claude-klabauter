@@ -509,10 +509,15 @@ def bind(
         if relayed_text and relayed_text.strip()
         else [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
     )
-    if ask_text and ask_text.strip():
-        entries.append((ask_text, ORIGIN_ASK))
-    if relayed_text and relayed_text.strip():
-        entries.append((relayed_text, ORIGIN_RELAYED))
+    register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
+    rows_now = [r for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping)]
+    asked = any(r.get(rr.ROW_ANCHOR) in (ORIGIN_ASK, ORIGIN_RELAYED) for r in rows_now)
+    held = {str(r.get(rr.ROW_TEXT) or "").strip() for r in rows_now}
+    # A reused sizing already holds its first ask: a later, different ask is a revision of it.
+    for text, origin in ((ask_text, ORIGIN_ASK), (relayed_text, ORIGIN_RELAYED)):
+        if text and text.strip():
+            fresh = asked and text.strip() not in held
+            entries.append((text, f"{ORIGIN_REVISION}@{_now()}" if fresh else origin))
     queued = _inbox(dir_)
     entries.extend((e["text"], f"{ORIGIN_REVISION}@{e.get('at') or _now()}") for e in queued)
     if entries or foreign:
@@ -617,7 +622,8 @@ def judge(
     the live register. `open` lists every `not_met` row let through (never passed as met).
 
     `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
-    nothing. A `not_met` row whose `withheld_by` is in `gated` passes and is listed open
+    nothing. A verdict id naming a gated chunk is a plan row, not a requirement: it is ignored,
+    never judged and never a failure. A `not_met` row whose `withheld_by` is in `gated` passes and is listed open
     (`withheld_by <id>`), whatever `all_of_pm_ask` or `essential` say; a `withheld_by` outside
     `gated` fails.
 
@@ -694,7 +700,7 @@ def judge(
             else:
                 open_rows.append({"id": item.id, "reason": "non-essential"})
     withheld_ids = {w["id"] for w in ledger.withheld}
-    unknown = sorted(set(by_id) - set(order) - withheld_ids)
+    unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids)
     failures.extend({"id": rid, "reason": "names no requirement row"} for rid in unknown)
     open_rows.extend(dict(w) for w in ledger.withheld)
     return {"pass": not failures, "failures": failures, "open": open_rows}

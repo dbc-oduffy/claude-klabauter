@@ -113,7 +113,7 @@ def test_no_sizing_denies(monkeypatch, repo_root):
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert 'args: {"ask": ' in reason
+    assert 'args: {ask: ' in reason
 
 
 def test_sized_xs_allows(monkeypatch, repo_root):

@@ -92,6 +92,12 @@ _EXEMPT: Dict[Tuple[str, str], str] = {
         "would raise `TypeError` (no such parameter exists), so an "
         "on-the-call keyword is structurally impossible here, not omitted."
     ),
+    ("coordinator_core.git.run", "run_git_stream"): (
+        "Same `Popen` constraint as `run_git`: no `timeout=` constructor "
+        "parameter. The bound is a `threading.Timer` watchdog armed at "
+        "`_wall_bound(timeout, remote)` that kills the child. Not reachable "
+        "from dispatch (its sole caller is testing.baseline_export)."
+    ),
 }
 
 

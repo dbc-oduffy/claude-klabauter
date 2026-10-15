@@ -128,30 +128,28 @@ def render_result_line(sha: str, export: str, why: str | None, runner_exit: int 
     )
 
 
-def _no_console() -> dict:
-    if not _IS_NT:
-        return {}
-    from coordinator_core.win_portability import no_console_creationflags
+def _git_popen(args: list[str], cwd: str | os.PathLike[str], **kw):
+    """The only door to git, a `run_git_stream` context manager; tests count spawns here."""
+    from coordinator_core.git.run import run_git_stream
 
-    return no_console_creationflags()
-
-
-def _git_popen(args: list[str], cwd: str | os.PathLike[str], **kw) -> subprocess.Popen:
-    """The only door to git; tests count spawns here."""
-    return subprocess.Popen(["git", *args], cwd=cwd, **_no_console(), **kw)
+    return run_git_stream(args, cwd=os.fspath(cwd), **kw)
 
 
 def resolve(sha: str, cwd: str | os.PathLike[str]) -> tuple[str, str]:
     """(toplevel, sha40) for `sha` as a commit; one git spawn. Raises ExportError."""
     if not _SHA_RE.fullmatch(sha):
         raise ExportError(f"--sha is not a 4-40 hex commit id: {sha!r}")
-    proc = _git_popen(
-        ["rev-parse", "--show-toplevel", "--verify", "--end-of-options", f"{sha}^{{commit}}"],
-        cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    out, err = proc.communicate()
+    with tempfile.TemporaryFile() as errf:
+        with _git_popen(
+            ["rev-parse", "--show-toplevel", "--verify", "--end-of-options", f"{sha}^{{commit}}"],
+            cwd, stderr=errf, text=True,
+        ) as proc:
+            out = proc.stdout.read()
+            rc = proc.wait()
+        errf.seek(0)
+        err = errf.read().decode("utf-8", "replace")
     lines = out.splitlines()
-    if proc.returncode != 0 or len(lines) != 2 or not re.fullmatch(r"[0-9a-f]{40}", lines[1]):
+    if rc != 0 or len(lines) != 2 or not re.fullmatch(r"[0-9a-f]{40}", lines[1]):
         raise ExportError(f"cannot resolve {sha!r} to a commit: {(err or out).strip() or 'git rev-parse failed'}")
     return os.path.realpath(lines[0]), lines[1]
 
@@ -159,24 +157,22 @@ def resolve(sha: str, cwd: str | os.PathLike[str]) -> tuple[str, str]:
 def export(toplevel: str, sha40: str, root: Path) -> None:
     """Extract `git archive <sha40>` into `root` through tarfile's data filter; one git spawn."""
     with tempfile.TemporaryFile() as errf:
-        proc = _git_popen(
-            ["--no-optional-locks", "archive", "--format=tar", sha40],
-            toplevel, stdout=subprocess.PIPE, stderr=errf,
-        )
         failure: BaseException | None = None
-        try:
-            with tarfile.open(fileobj=proc.stdout, mode="r|") as tf:
-                for member in tf:
-                    tf.extract(member, path=root, filter="data")
-        except (tarfile.TarError, OSError) as exc:
-            failure = exc
-        finally:
-            if failure is not None or proc.poll() is None:
-                with contextlib.suppress(OSError):
-                    proc.kill()
-            if proc.stdout is not None:
-                proc.stdout.close()
-            rc = proc.wait()
+        with _git_popen(
+            ["--no-optional-locks", "archive", "--format=tar", sha40],
+            toplevel, stderr=errf,
+        ) as proc:
+            try:
+                with tarfile.open(fileobj=proc.stdout, mode="r|") as tf:
+                    for member in tf:
+                        tf.extract(member, path=root, filter="data")
+            except (tarfile.TarError, OSError) as exc:
+                failure = exc
+            finally:
+                if failure is not None or proc.poll() is None:
+                    with contextlib.suppress(OSError):
+                        proc.kill()
+                rc = proc.wait()
         if failure is None and rc != 0:
             errf.seek(0)
             failure = ExportError(errf.read().decode("utf-8", "replace").strip() or f"git archive exited {rc}")

@@ -172,8 +172,12 @@ _GATE_SCHEMA = _obj(
         "tshirt": _STR,
         "route": _STR,
         "resume_plan": {"type": ["string", "null"]},
+        "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
     },
+)
+_ONLY_ROWS_JS = (
+    "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {}), "
 )
 #: The pre-sized gate agent's return: the gate reply plus the stage it runs as its closing act.
 _GATE_STAGED_SCHEMA = {
@@ -430,6 +434,19 @@ _REVIEW_BLOCKED_HALT_JS = (
     "next_action: 'Fix the unapplied findings named in each slice sidecar, then resume the run "
     "(Workflow with this scriptPath and resumeFromRunId set to this Workflow run id, wf_...).' };\n"
     "  }"
+)
+
+
+#: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
+#: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
+_TEST_VERDICT_EMPTY_HALT_JS = (
+    "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
+    "&& _testResult.status && _testResult.status !== 'not_run' "
+    "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
+    "{ _halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
+    "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests', "
+    "next_action: 'Re-run the scoped tests, then resume the run (Workflow with this scriptPath and "
+    "resumeFromRunId set to this Workflow run id, wf_...).' }; }"
 )
 
 
@@ -955,7 +972,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan and spine_plan; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows and spine_plan; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -1016,8 +1033,8 @@ def compose_ask_script(
             "stderr. Do not edit, retry or repair it. (2) Only when exit_code is 0, run the next command "
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
-            + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan "
-            f"and spine_plan; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, "
+            f"resume_rows and spine_plan; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1087,7 +1104,7 @@ def compose_ask_script(
             "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. "
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan and "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows and "
             "spine_plan; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
@@ -1141,7 +1158,7 @@ def compose_ask_script(
         b.append(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
             "baton: _reworded.baton ?? null, tshirt: _reworded.tshirt, route: _reworded.route, "
-            "resume_plan: _reworded.resume_plan ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, spine_plan: _reworded.spine_plan ?? null, "
             "manifest: _reworded.manifest ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
@@ -1172,7 +1189,7 @@ def compose_ask_script(
             "  let _gate = _halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
-            "spine_plan: _scouted.spine_plan ?? null };"
+            "resume_rows: _scouted.resume_rows ?? null, spine_plan: _scouted.spine_plan ?? null };"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -1201,7 +1218,7 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan and spine_plan, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan, resume_rows and spine_plan, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
@@ -1256,7 +1273,7 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, spine_plan: %s.spine_plan ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, spine_plan: %s.spine_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
@@ -1270,7 +1287,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 5)}\n"
+            f"      {take_gate % (('_apm',) * 6)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
@@ -1285,7 +1302,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 5)}\n"
+            f"      {take_gate % (('_xl',) * 6)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (!_progressed && _xl) {{\n"
@@ -1314,7 +1331,7 @@ def compose_ask_script(
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
         "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, "
-        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS +
         "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
         ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, "
         "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID })",
@@ -1329,7 +1346,7 @@ def compose_ask_script(
         return (
             f"{lead} run `{_INVOKE} {OP_ASK_STAGE} '",
             "js:JSON.stringify({ run_id: _runId, plan_path: '<plan_rel>', writes: _writes, "
-            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS +
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
             "'` with <plan_rel> replaced by the plan's repo-relative path, and return its JSON reply "
             "verbatim as `manifest`. If it replies `{\"error\": ...}`, return that message as `error` "
@@ -1427,7 +1444,8 @@ def compose_ask_script(
         ready_op_js = (
             f"...(!_stagedManifest ? {{ readyOp: {{ op: {_lit(OP_ASK_STAGE)}, params: {{ run_id: _runId, "
             "writes: _writes, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
-            "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } } } : {}), "
+            + _ONLY_ROWS_JS
+            + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } } } : {}), "
             if fold_stage
             else ""
         )
@@ -1606,7 +1624,9 @@ def compose_ask_script(
     b.append(
         "  if (_manifest.error || !(_manifest.rows ?? []).length) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
-        "'stage staged no rows', sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
+        "((_manifest.owed ?? []).length || (_manifest.gated ?? []).length "
+        "? 'resume staged no dispatchable rows; its owed and withheld rows ride the returned owed and withheld lists' "
+        ": 'stage staged no rows'), sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
     )
     b.append("  }")
 
@@ -1727,6 +1747,7 @@ def compose_ask_script(
     b.append("    " + review_applied)
     b.append("    " + test_leg)
     b.append("    await parallel([\n      " + ",\n      ".join(thunks) + "\n    ]);")
+    b.append(_TEST_VERDICT_EMPTY_HALT_JS.replace("TEST_GUARD", test_guard))
     b.append("  }")
     b.append(no_target)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")

@@ -250,6 +250,14 @@ def test_judge_refuses_unknown_and_duplicate_ids_and_a_shapeless_verdict(run):
     assert not rl.judge(ledger, None)["pass"]
 
 
+def test_a_verdict_id_naming_a_gated_chunk_is_ignored_not_judged(run):
+    ledger = _ledger(run)
+    verdict = _verdict(("R1", "met"), ("R2", "met"), ("R3", "met"), ("X1", "met"))
+    assert rl.judge(ledger, verdict, gated=("X1",)) == {"pass": True, "failures": [], "open": []}
+    out = rl.judge(ledger, verdict)
+    assert [(f["id"], f["reason"]) for f in out["failures"]] == [("X1", "names no requirement row")]
+
+
 def test_apply_verdict_writes_met_wired_and_superseded_rows(run):
     repo, _d = run
     _revise(repo, verbatim="drop the 500ms bar")

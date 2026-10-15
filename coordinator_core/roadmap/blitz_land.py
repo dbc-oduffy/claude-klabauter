@@ -43,8 +43,12 @@ Negative-spec:
     `ready` one when the baton already names a different plan.
   - Does NOT re-queue `surfacedToPm`. Those need a PM answer first, and a loop
     that silently retried them would be answering on the PM's behalf.
-  - Does NOT commit. Landing writes records; committing them is the caller's act,
-    so a caller can inspect the diff before it becomes history.
+  - Does NOT commit the records it stamps (batons, plans, sizing-objects): that is
+    the caller's act, so a caller can inspect the diff before it becomes history.
+    The ONE commit it makes is the wave's trail, `state/plan-blitz/<ts>/`, which has
+    no other committer: `land_trail` lands exactly the files under it, as explicit
+    paths in a single `ceremony.commit_v2` call, skipping any path a live peer
+    session holds and never naming a directory.
   - Does NOT fire the next wave. It reports what the next wave WOULD be
     (`next_wave`); firing is the driver's move, which keeps a runaway loop one
     explicit call away rather than implicit in a landing.
@@ -1135,6 +1139,73 @@ def _archived_records_this_wave_names(
     return found
 
 
+def _trail_run_dir(worktree_root: Path, wave_result: Dict[str, Any]) -> Optional[Path]:
+    """`state/plan-blitz/<ts>` holding the wave's trail, or None when it names none."""
+    slot = wave_result.get("trailSlotDir") or wave_result.get("trailDir")
+    if not slot:
+        return None
+    candidate = Path(str(slot).replace("\\", "/"))
+    if not candidate.is_absolute():
+        candidate = worktree_root / candidate
+    try:
+        parts = candidate.relative_to(worktree_root).parts
+    except ValueError:
+        return None
+    if len(parts) < 3 or parts[:2] != ("state", "plan-blitz"):
+        return None
+    return worktree_root.joinpath(*parts[:3])
+
+
+def land_trail(worktree_root: Path, wave_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Commit the wave's trail files in one `ceremony.commit_v2` call.
+
+    Paths are the files under the run dir, named one by one: never a directory
+    pathspec. Gitignored ones (`fire-*.mjs`, `.emitted.json`) are dropped by the
+    committer; a path a live peer session holds is left out and reported. Never
+    raises: a commit failure is reported on the row and the landing proceeds.
+    Returns `{committed, sha, paths, skipped_peer_held, error}`.
+    """
+    out: Dict[str, Any] = {
+        "committed": False, "sha": None, "paths": [], "skipped_peer_held": [], "error": None,
+    }
+    run_dir = _trail_run_dir(worktree_root, wave_result)
+    if run_dir is None or not run_dir.is_dir():
+        return out
+    rels = sorted(
+        p.relative_to(worktree_root).as_posix() for p in run_dir.rglob("*") if p.is_file()
+    )
+    if not rels:
+        return out
+    try:
+        from coordinator_core.ops.ceremony.commit_v2 import _handler, _peer_claim_warnings
+
+        holds: List[Any] = []
+        _peer_claim_warnings(worktree_root, rels, holds)
+        held = {path for path, _sid in holds}
+        out["skipped_peer_held"] = sorted(held)
+        paths = [p for p in rels if p not in held]
+        out["paths"] = paths
+        if not paths:
+            return out
+        reply = _handler(
+            {
+                "paths": paths,
+                "message": f"plan-blitz: land trail {run_dir.name} wave {wave_result.get('waveIndex')}",
+                "drop_ignored": True,
+            },
+            repo_root=worktree_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported on the row, never fails the landing
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
+    if reply.get("committed"):
+        out["committed"] = True
+        out["sha"] = reply.get("sha")
+    else:
+        out["error"] = str(reply.get("error") or reply)
+    return out
+
+
 def land_wave(
     worktree_root: Path,
     wave_result: Dict[str, Any],
@@ -1445,6 +1516,7 @@ def land_wave(
     ]
 
     return {
+        "trail_commit": land_trail(worktree_root, wave_result),
         "approved": approved,
         # XS batons the wave executed and this landing stamped terminal. Separate
         # from `approved` because they mean the opposite thing downstream: an

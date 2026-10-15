@@ -6,12 +6,18 @@ no chunk declares it, so without the ride-along it stayed dirty after the commit
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_MANIFEST_MARKER,
+    RUN_DIR_ROOT,
+    StageManifest,
+)
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -88,3 +94,66 @@ def test_a_sizing_outside_state_sizings_is_never_carried(repo):
 
     assert out["committed"] is True
     assert "other.yaml" not in _git(["show", "--name-only", "--format=", out["sha"]], repo)
+
+
+def _ask_fire(repo: Path, plan_rel: str) -> dict:
+    run_dir = repo / RUN_DIR_ROOT / "run1"
+    run_dir.mkdir(parents=True)
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t1", paths=("a.py",)),), plan_path=plan_rel
+    )
+    (run_dir / "commit-request.txt").write_text(render_marker(request) + "\n", encoding="utf-8")
+    manifest = StageManifest(
+        run_dir=f"{RUN_DIR_ROOT}/run1", rows=(), review_declared_paths=(),
+        marker_path=f"{RUN_DIR_ROOT}/run1/commit-request.txt",
+    )
+    (run_dir / "manifest.json").write_text(json.dumps(manifest.to_json()), encoding="utf-8")
+    (repo / "run.mjs").write_text(
+        f"{ASK_MANIFEST_MARKER}{RUN_DIR_ROOT}/run1/manifest.json\n", encoding="utf-8"
+    )
+    return terminal_commit._handler(
+        {"inline_review": _REVIEWED, "script_path": "run.mjs", "incomplete_chunks": []},
+        repo_root=repo / ".git",
+    )
+
+
+@pytest.fixture
+def shipping(monkeypatch, repo):
+    def ship(worktree_root, repo_root, plan_path):
+        (worktree_root / _SIZING).write_text("status: shipped\n", encoding="utf-8")
+        return {"sizing_shipped": _SIZING}
+
+    monkeypatch.setattr(terminal_commit, "_ship_cited_sizing", ship)
+    monkeypatch.setattr(terminal_commit, "_write_resolution", lambda *a, **k: {})
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    return repo
+
+
+def test_an_ignored_plan_run_still_lands_the_shipped_sizing(shipping):
+    repo = shipping
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    plan = repo / "scratch" / "plan.md"
+    plan.parent.mkdir()
+    plan.write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")
+
+    out = _ask_fire(repo, "scratch/plan.md")
+
+    assert out["committed"] is True, out
+    assert "coded_stamp_error" not in out
+    assert _git(["show", "HEAD:" + _SIZING], repo) == "status: shipped\n"
+    assert _git(["status", "--porcelain", "--", _SIZING], repo) == ""
+
+
+def test_a_stamp_commit_that_cannot_land_the_sizing_fails_the_run(shipping, monkeypatch):
+    repo = shipping
+    real = terminal_commit._stamp_coded_commit
+
+    def refused(*args, **kwargs):
+        out = real(lambda params, root: {"committed": False, "error": "denied"}, *args[1:], **kwargs)
+        return out
+
+    monkeypatch.setattr(terminal_commit, "_stamp_coded_commit", refused)
+    out = _ask_fire(repo, "docs/plan.md")
+
+    assert out["ok"] is False
+    assert _SIZING in out["error"]

@@ -152,6 +152,7 @@ from coordinator_core.bash_guards import guard_heavy_command_admission
 from coordinator_core.bash_guards import guard_deploy_dirty_tree
 from coordinator_core.bash_guards import block_whole_filesystem_scan
 from coordinator_core.bash_guards import block_perforce_submit
+from coordinator_core.bash_guards import block_push_pr_non_owned_remote
 from coordinator_core.bash_guards import block_unreal_engine_resave
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
@@ -670,6 +671,18 @@ def _trigger_block_perforce_submit() -> Optional[Dict[str, Any]]:
         block_perforce_submit._armed = orig_armed
 
 
+def _trigger_block_push_pr_non_owned_remote() -> Optional[Dict[str, Any]]:
+    """The guard denies only toward a declared non-owned remote; declare one for the probe."""
+    orig = block_push_pr_non_owned_remote._configured_prefixes
+    block_push_pr_non_owned_remote._configured_prefixes = lambda: ["github.com/altlive-probe/"]
+    try:
+        return block_push_pr_non_owned_remote.check(
+            _payload("git push https://github.com/altlive-probe/r.git main", agent_id=None)
+        )
+    finally:
+        block_push_pr_non_owned_remote._configured_prefixes = orig
+
+
 LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_no_verify": lambda: _dc.check_no_verify('git commit --no-verify -m "x"', "altlive-probe"),
     "check_runaway_find": lambda: _dc.check_runaway_find("find / -name '*.py'", "altlive-probe"),
@@ -742,6 +755,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         _payload("UnrealEditor-Cmd Proj.uproject -run=ResavePackages", agent_id=None)
     ),
     "block_perforce_submit": _trigger_block_perforce_submit,
+    "block_push_pr_non_owned_remote": _trigger_block_push_pr_non_owned_remote,
     "block_subagent_stash_creation": lambda: block_subagent_stash_creation.check(
         _payload(" ".join(["git", "stash", "push"]), agent_type="coordinator:executor")
     ),

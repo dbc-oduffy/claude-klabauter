@@ -103,6 +103,7 @@ Decision backlink: docs/decisions/DR-344-the-brightline-process-budget-for-claud
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -671,6 +672,77 @@ def run_git(
         timed_out=False,
         stdout_bytes=_as_bytes(completed.stdout),
     )
+
+
+@contextlib.contextmanager
+def run_git_stream(
+    args: Sequence[str],
+    *,
+    cwd: Optional[str] = None,
+    timeout: Optional[float] = None,
+    remote: bool = False,
+    env: Optional[Mapping[str, str]] = None,
+    stderr=None,
+    text: bool = False,
+):
+    """Yield a `Popen` for `git <args>` with `stdout=PIPE`, read incrementally by the caller.
+
+    For output that must not be buffered whole (`git archive` into a tar reader). Same
+    console flags, spawn accounting and Windows job charging as `run_git`.
+    `stderr` is passed to `Popen` as given; the default is DEVNULL because an unread PIPE
+    deadlocks a streaming reader. `timeout=None` sets no deadline; a number arms a wall
+    watchdog of `_wall_bound(timeout, remote)` that kills the child, after which the reader
+    sees EOF and the caller reads `proc.returncode`.
+
+    On exit the child is killed if still running, reaped, its pipes closed and its job
+    charged, on every path including an exception in the body. Raises `OSError` when git
+    cannot be spawned, unlike `run_git`: there is no result object to carry it.
+    """
+    import subprocess
+    import threading
+
+    if not spawn_counter.audit_hook_installed():
+        spawn_counter.bump()
+    job = _open_charging_job()
+    spawn_flags = _console_flags(args)
+    if job is not None:
+        spawn_flags = {"creationflags": spawn_flags.get("creationflags", 0) | _CREATE_SUSPENDED}
+    timer = None
+    try:
+        with subprocess.Popen(
+            [_git_exe(), *args],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL if stderr is None else stderr,
+            env=_remote_env(env) if remote else (dict(env) if env is not None else None),
+            text=text,
+            **spawn_flags,
+        ) as proc:
+            try:
+                if job is not None and not _assign_and_resume(job, proc):
+                    proc.kill()
+                    raise OSError("git could not be resumed inside its charging job")
+                if timeout is not None:
+                    timer = threading.Timer(_wall_bound(timeout, remote), proc.kill)
+                    timer.daemon = True
+                    timer.start()
+                yield proc
+            finally:
+                if timer is not None:
+                    timer.cancel()
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                try:
+                    proc.wait(timeout=_SPAWN_SCHEDULING_HEADROOM_SECS)
+                except subprocess.TimeoutExpired:
+                    pass
+    finally:
+        if job is not None:
+            _charge_and_close_job(job)
 
 
 def git_ok(args: Sequence[str], **kwargs) -> bool:

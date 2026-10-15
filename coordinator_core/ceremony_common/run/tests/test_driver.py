@@ -263,6 +263,72 @@ def test_a_failing_gate_step_halts_the_rest_and_exits_5(box):
     assert "tail-1" not in box.ran
 
 
+def _two_failing_tails(box):
+    spec = box.spec(finish_steps=lambda decisions, rows, *, run: [_step("tail-1", "tail"), _step("tail-2", "tail")])
+    box.outputs["tail-1"] = (1, "", "boom")
+    box.outputs["tail-2"] = (1, "", "bang")
+    box.outputs["backlog:tail-1"] = (0, "state/bug-backlog/2026-10-12-a.yaml\n", "")
+    box.outputs["backlog:tail-2"] = (0, str(box.root / "state/bug-backlog/2026-10-12-b.yaml") + "\n", "")
+    return spec
+
+
+@pytest.fixture
+def commits(monkeypatch):
+    from coordinator_core.ops.ceremony import git_native
+
+    calls = []
+
+    class _Ok:
+        ok, stdout, stderr = True, "sha", ""
+
+    def fake(paths, msg_file, cwd, **kw):
+        calls.append((list(paths), Path(msg_file).read_text(encoding="utf-8")))
+        return _Ok()
+
+    monkeypatch.setattr(git_native, "commit_scoped", fake)
+    return calls
+
+
+def test_filed_failure_rows_land_in_one_scoped_commit(box, commits):
+    code, _, _ = box.launch(_two_failing_tails(box))
+    assert code == 0
+    (paths, msg), = commits
+    assert paths == ["state/bug-backlog/2026-10-12-a.yaml", "state/bug-backlog/2026-10-12-b.yaml"]
+    assert msg.startswith("fixture: file failure rows (run ")
+
+
+def test_a_run_with_no_failures_makes_no_commit(box, commits):
+    box.launch()
+    assert commits == []
+
+
+def test_a_cited_open_row_commits_nothing(box, commits):
+    directory = box.root / "state" / "bug-backlog"
+    directory.mkdir(parents=True)
+    spec = box.spec(finish_steps=lambda decisions, rows, *, run: [_step("tail-1", "tail")])
+    box.outputs["tail-1"] = (1, "", "boom")
+    box.launch(spec)
+    reason = box.status("tail-1")[1]
+    (directory / "old.yaml").write_text(f"title: fixture step tail-1 failed: {reason}\nstatus: open\n", encoding="utf-8")
+    commits.clear()
+    box.launch(spec)
+    assert box.status("backlog:tail-1") == ("ran", "open-row-cited")
+    assert commits == []
+
+
+def test_a_failed_commit_becomes_a_ledger_row_and_the_finish_completes(box, monkeypatch):
+    from coordinator_core.ops.ceremony import git_native
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no git")
+
+    monkeypatch.setattr(git_native, "commit_scoped", boom)
+    code, out, _ = box.launch(_two_failing_tails(box))
+    assert code == 0 and out.startswith("# fixture receipt")
+    assert box.status("backlog-commit")[0] == "failed"
+    assert (box.runs()[-1] / driver.DONE_FILE).exists()
+
+
 def test_the_driver_names_no_ceremony():
     text = Path(driver.__file__).read_text(encoding="utf-8").lower()
     assert not [name for name in ("workday", "workweek") if name in text]

@@ -263,6 +263,7 @@ def test_commit_semantics_unchanged_by_relay_step(tmp_path):
     assert set(result.keys()) == {
         "committed",
         "sha",
+        "tree",
         "staged_preferred",
         "worktree_over_staged",
         "no_delta",

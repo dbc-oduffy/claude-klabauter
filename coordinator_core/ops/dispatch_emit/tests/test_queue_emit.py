@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -577,8 +578,13 @@ def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path):
     (tmp_path / "b").mkdir()
     plain = _emit(tmp_path / "a")
     haiku = _emit(tmp_path / "b", stage_models={"triage": "haiku"})
-    assert haiku.script.count("model: 'haiku'") == 1
-    assert "model: 'haiku'" not in plain.script
+    # verify-agent (test-runner), commit and review-fix-commit (git-commit-agent)
+    # are agent types pinned to haiku, so the override adds exactly the triage call.
+    pinned = plain.script.count("model: 'haiku'")
+    assert pinned == 3
+    assert haiku.script.count("model: 'haiku'") == pinned + 1
+    assert re.search(r"label: 'triage'[^\n]*?model: 'haiku'", haiku.script)
+    assert re.search(r"label: 'triage'[^\n]*?model: 'sonnet'", plain.script)
     argv = haiku.receipt_extras["reemit"]
     assert argv[argv.index("--stage-model") + 1] == "triage=haiku"
     assert "--stage-model" not in plain.receipt_extras["reemit"]

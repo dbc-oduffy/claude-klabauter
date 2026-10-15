@@ -32,6 +32,7 @@ from coordinator_core.bash_guards import (
     block_stash_destruction,
     block_topic_branch,
     block_perforce_submit,
+    block_push_pr_non_owned_remote,
     block_unreal_engine_resave,
     block_editor_kill_by_name,
     block_whole_filesystem_scan,
@@ -130,6 +131,15 @@ def _perforce_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
 
     with mock.patch.object(block_perforce_submit, "_armed", lambda: True):
         return block_perforce_submit.check(_bash(cmd))
+
+
+def _non_owned_remote_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
+    from unittest import mock
+
+    with mock.patch.object(
+        block_push_pr_non_owned_remote, "_configured_prefixes", lambda: ["github.com/x/"]
+    ):
+        return block_push_pr_non_owned_remote.check(_bash(cmd))
 
 
 def _dirty_repo(ctx: _Ctx) -> str:
@@ -253,6 +263,11 @@ _DENIED: List[Tuple[str, str, Runner]] = [
     ("block-topic-branch", "git checkout -b topic/x", _check_module(block_topic_branch, _bash)),
     ("block-topic-branch", "git push origin topic/x", _check_module(block_topic_branch, _bash)),
     ("block-perforce-submit", "p4 submit -d x", _perforce_armed),
+    (
+        "block-push-pr-non-owned-remote",
+        "git push https://github.com/x/r.git main",
+        _non_owned_remote_armed,
+    ),
     (
         "block-unreal-engine-resave",
         "UnrealEditor-Cmd G.uproject -run=ResavePackages",

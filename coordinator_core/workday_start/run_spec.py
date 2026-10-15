@@ -29,6 +29,7 @@ TEMPLATE_RELPATH = "workflows/workday-start.mjs"
 STEP0_STEP = "step0-branch-setup"
 ENVELOPE_STEP = "orient-day-envelope"
 INBOX_STEP = "memo-inbox-blitz-assemble"
+NOMINATION_STEP = "groupem-nomination-who"
 FRESHNESS_STEP = "fresh-commit-delta"
 BACKFILL_SCAN_STEP = "weekly-backfill-scan"
 ALIGNMENT_STEPS = ("priority-whats-next", "triage-query-completions")
@@ -119,6 +120,8 @@ def _stages(stages: Sequence[str]) -> Callable[..., list[Any]]:
 
 
 def _after_step(step: Any, outcome: ChildOutcome, *, envelope: "Mapping[str, Any] | None") -> ChildOutcome:
+    if step.id == NOMINATION_STEP and rules.nomination_none(step, outcome):
+        return dataclasses.replace(outcome, exit_code=0, stdout=rules.NO_NOMINATION_OBSERVATION, stderr="")
     if outcome.exit_code != 0:
         return outcome
     if step.id == INBOX_STEP:

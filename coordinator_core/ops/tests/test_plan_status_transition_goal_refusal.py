@@ -114,7 +114,7 @@ class TestGoalGateRefusesTheFlip:
         assert _head_sha(root) == before_head
         err = capsys.readouterr().err
         assert "falsifier_verdict_not_pass" in err
-        assert "close-out" in err
+        assert "plan-status-transition stamp-implemented" in err
 
     def test_exit_criterion_not_asserted_refuses(self, tmp_path, capsys):
         root = tmp_path
@@ -134,7 +134,7 @@ class TestGoalGateRefusesTheFlip:
         assert _head_sha(root) == before_head
         err = capsys.readouterr().err
         assert "exit_criterion_not_asserted" in err
-        assert "close-out" in err
+        assert "plan-status-transition stamp-implemented" in err
 
     def test_falsifier_absent_refuses_with_its_own_next_move(self, tmp_path, capsys):
         root = tmp_path
@@ -148,7 +148,7 @@ class TestGoalGateRefusesTheFlip:
         assert rc == 1
         err = capsys.readouterr().err
         assert "falsifier_absent" in err
-        assert "close-out" in err
+        assert "plan-status-transition stamp-implemented" in err
 
 
 class TestGoalGateLetsThePassingPlanThrough:

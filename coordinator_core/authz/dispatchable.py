@@ -239,7 +239,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "promote-shipped-in-flight-stubs",
         "query-completions",
         "regenerate-orientation-cache",
-        "structural-index-refresh",
         "sweep-terminal-handoffs",
         "tier-last-run",
         "verify-snippet-sync",

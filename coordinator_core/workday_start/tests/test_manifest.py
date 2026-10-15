@@ -75,6 +75,20 @@ def test_the_nine_killed_ids_are_in_no_table_and_no_cost_row() -> None:
     assert not [r["id"] for r in manifest.STEP_TABLE if r["id"].startswith("gap-")]
 
 
+def test_the_structural_index_refresh_step_is_killed_in_manifest_and_costs() -> None:
+    sid = "index-structural-index-refresh"
+    assert sid not in {r["id"] for r in manifest.STEP_TABLE}
+    assert sid not in manifest.RUN_FIELDS and sid not in _costs()
+    assert "structural-index-refresh" not in {r["cli"] for r in manifest.STEP_TABLE if "cli" in r}
+
+
+def test_every_non_inproc_manifest_step_has_a_cost_row() -> None:
+    table_ids = {r["id"] for r in manifest.STEP_TABLE}
+    costs = set(_costs())
+    inproc_only = {r["id"] for r in manifest.STEP_TABLE if "inproc" in r}
+    assert table_ids - costs <= inproc_only
+
+
 REBUILT_IDS = (
     "hyg-watch-state-ignore", "orient-day-envelope", "triage-stale-executing-plans",
     "memo-outbox-stale-drafts", "rollup-local-ahead-unpublished", "rollup-recheck-due-markers",
@@ -93,6 +107,15 @@ def test_rebuilt_steps_are_inproc_targets_that_resolve_with_measured_engine_rows
         row = costs[sid]
         assert row["cost_class"] == "engine" and row["basis"] == "measured", sid
         assert row["samples"] == 5 and row["process_ms_median"] < 500 and row["spawns"] == 0, sid
+
+
+def test_reap_abandoned_runs_step_is_wired_as_an_engine_op() -> None:
+    by_id = {r["id"]: r for r in manifest.STEP_TABLE}
+    assert by_id["hyg-reap-abandoned-runs"]["op"] == "dispatch.reap_abandoned_runs"
+    assert manifest.RUN_FIELDS["hyg-reap-abandoned-runs"] == {"stage": "hygiene", "heading": "Observations"}
+    assert _costs()["hyg-reap-abandoned-runs"]["basis"] == "measured"
+    spec = next(s for s in _all(Path(".")) if s.id == "hyg-reap-abandoned-runs")
+    assert spec.cost_class == "engine"
 
 
 def test_class_comes_from_the_costs_file() -> None:

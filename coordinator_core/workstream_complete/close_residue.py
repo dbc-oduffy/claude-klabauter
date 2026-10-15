@@ -87,7 +87,18 @@ def snapshot(worktree_root: Union[Path, str], sid: Optional[str]) -> ResidueSnap
         sink = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
         if os.path.exists(sink) and touch_record.read_stream_claims_and_held_kind(sink)[2]:
             degraded = True
+    ledger = _block_discharge_ledger_rel(sid)
+    if ledger and ledger not in owned and os.path.isfile(os.path.join(cwd, ledger)):
+        owned = (*owned, ledger)
     return ResidueSnapshot(owned, held, degraded)
+
+
+def _block_discharge_ledger_rel(sid: str) -> Optional[str]:
+    """The session's own block-discharge ledger, repo-relative; the writer
+    never claims it, so the snapshot adds it by name. `None` for an unsafe id."""
+    if "/" in sid or "\\" in sid or sid.startswith("."):
+        return None
+    return f"state/block-discharge/{sid}.jsonl"
 
 
 def landing_states(worktree_root: Union[Path, str], rels: Iterable[str]) -> dict[str, str]:
@@ -337,10 +348,16 @@ def owned_dirty_sizing_paths(
     *,
     peer_claimed: Iterable[str] = (),
 ) -> list[str]:
-    """Owned paths under the sizings record home that are untracked,
-    uncommitted or dirty, minus those a live peer also claims."""
+    """Owned paths under the sizings record home, plus the session's own
+    block-discharge ledger (exact path, never its directory), that are
+    untracked, uncommitted or dirty, minus those a live peer also claims."""
     prefix = record_homes.home_dir("", "sizings").replace(os.sep, "/") + "/"
     peers = set(peer_claimed)
-    candidates = [rel for rel in snap.owned_paths if rel.startswith(prefix) and rel not in peers]
+    candidates = [
+        rel
+        for rel in snap.owned_paths
+        if (rel.startswith(prefix) or (rel.startswith("state/block-discharge/") and rel.endswith(".jsonl")))
+        and rel not in peers
+    ]
     states = landing_states(worktree_root, candidates)
     return [rel for rel in candidates if states[rel] in (UNTRACKED, UNCOMMITTED, DIRTY)]

@@ -137,8 +137,8 @@ def attribute(
     the count narrowed.
 
     A lease takes only a tree whose command (its lead image) is of its class, created at or after its launch mark,
-    and not already held; the soonest such tree, or the newest when the lease has no mark. Leases
-    claim in launch order, one tree each.
+    and not already held; the soonest such tree. Leases claim in launch order, one tree each. A lease
+    without a launch mark has no link to any tree and is left to the TTL.
 
     TRAP: binding a lease to whatever heavy process is newest pinned a typecheck lease on an
     unrelated long-running python script, and the one-typecheck rule then named that script.
@@ -148,7 +148,7 @@ def attribute(
     open_ = sorted(
         (
             (path, r) for path, r in entries
-            if r is not None and _is_unattributed(r)
+            if r is not None and _is_unattributed(r) and r.launch_ctime > 0
             and (r.session_pid, r.session_ctime) == (session_pid, session_ctime)
         ),
         key=lambda pr: pr[1].launch_ctime,
@@ -164,8 +164,7 @@ def attribute(
         ]
         if not fits:
             continue
-        pick = min if rec.launch_ctime > 0 else max
-        tree = pick(fits, key=lambda t: t.root.ctime)
+        tree = min(fits, key=lambda t: t.root.ctime)
         held.add((tree.root.pid, tree.root.ctime))
         _write_atomic(path, LeaseRecord(
             holder_pid=tree.root.pid,
@@ -178,6 +177,27 @@ def attribute(
         ))
         narrowed += 1
     return narrowed
+
+
+def release(
+    session_pid: int,
+    session_ctime: int,
+    holder_pid: Optional[int] = None,
+    directory: Optional[Path] = None,
+) -> int:
+    """Delete the session's leases (only the one held by holder_pid when given); return the count.
+
+    Never touches another session's lease.
+    """
+    removed = 0
+    for path, rec in _entries(directory or leases_dir()):
+        if rec is None or (rec.session_pid, rec.session_ctime) != (session_pid, session_ctime):
+            continue
+        if holder_pid is not None and rec.holder_pid != holder_pid:
+            continue
+        _remove(path)
+        removed += 1
+    return removed
 
 
 def oldest_open_launch(

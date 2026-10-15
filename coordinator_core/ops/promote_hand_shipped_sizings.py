@@ -6,6 +6,9 @@ A run that never reached its terminal commit leaves its sizing `routed` and its 
 `commit-request.txt` declared, the work landed and this leg closes the record: `sizing.ship` flips
 the sizing, then `warp_run_deliverable.write_reconciled` leaves the run-local marker.
 
+A `routed` sizing no run references is shipped when a commit since the sizing's mtime carries a
+`Deliverable-Id` equal to its own; it leaves no `reconciled.json` because it has no run dir.
+
 Invariants: one `git log` spawn for the whole sweep, none when no run is a candidate; a commit
 counts for a run only at or after its `submitted_at`, by `Deliverable-Id` equal to the sizing's or
 by the submitting `Session-Id`; a run declaring no writes is never promoted. The sizing is never
@@ -89,7 +92,10 @@ def run(repo_root: Path) -> Dict[str, object]:
     }
     lines: List[str] = counters["lines"]  # type: ignore[assignment]
     candidates: List[tuple] = []
+    run_sizings = set()
     for record in run_records(root):
+        if record.sizing_rel:
+            run_sizings.add(_norm(record.sizing_rel))
         if record.reconciled or not record.sizing_rel or record.submitted_at <= 0:
             continue
         if sizing_scalar(root, record.sizing_rel, "status") not in _SHIPPABLE:
@@ -102,11 +108,28 @@ def run(repo_root: Path) -> Dict[str, object]:
             lines.append(f"{_PROG}: run {record.run_id} declares no writes; not promoted")
             continue
         candidates.append((record, deliverable_id))
-    counters["candidates"] = len(candidates)
-    if not candidates:
+    runless = _runless_sizings(root, run_sizings)
+    counters["candidates"] = len(candidates) + len(runless)
+    if not candidates and not runless:
         return counters
 
-    commits = _commits_since(root, min(r.submitted_at for r, _ in candidates))
+    since = [r.submitted_at for r, _ in candidates] + [m for _, _, m in runless]
+    commits = _commits_since(root, min(since))
+    for sizing_rel, deliverable_id, mtime in runless:
+        shas = [c["sha"] for c in commits if c["ct"] >= mtime and deliverable_id in c["dids"]]
+        if not shas:
+            continue
+        refusal = _ship(root, sizing_rel)
+        if refusal:
+            counters["refused"] += 1
+            lines.append(f"{_PROG}: sizing.ship refused {sizing_rel}: {refusal}")
+            continue
+        declare_write(str((root / sizing_rel).resolve()))
+        counters["promoted"] += 1
+        lines.append(
+            f"{_PROG}: shipped {sizing_rel} (no run record; hand-commit "
+            f"{', '.join(s[:8] for s in shas)} carries its Deliverable-Id)"
+        )
     for record, deliverable_id in candidates:
         matched = _qualifying(record, deliverable_id, commits)
         covered = set().union(*(c["paths"] for c in matched)) if matched else set()
@@ -126,6 +149,19 @@ def run(repo_root: Path) -> Dict[str, object]:
             f"{', '.join(s[:8] for s in shas)}; {RECONCILED_FILE} written)"
         )
     return counters
+
+
+def _runless_sizings(root: Path, run_sizings: set) -> List[tuple]:
+    """`(sizing_rel, deliverable_id, mtime)` for each shippable sizing no warp run references."""
+    found: List[tuple] = []
+    for path in sorted((root / "state" / "sizings").glob("*.yaml")):
+        rel = _norm(path.relative_to(root).as_posix())
+        if rel in run_sizings or sizing_scalar(root, rel, "status") not in _SHIPPABLE:
+            continue
+        deliverable_id = sizing_scalar(root, rel, "deliverable_id")
+        if deliverable_id:
+            found.append((rel, deliverable_id, path.stat().st_mtime))
+    return found
 
 
 def _qualifying(record: RunRecord, deliverable_id: str, commits: List[dict]) -> List[dict]:

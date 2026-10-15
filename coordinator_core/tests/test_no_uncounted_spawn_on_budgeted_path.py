@@ -2015,6 +2015,20 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`dirty_touched_path_refusal`); the attribution is itself asserted on every run.",
     ),
     (
+        "dispatch.ask_gate",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_ask_gate_spawn_count.py",
+        executed="Measured 2026-10-15: attributed by stack to git/run.py::run_git under "
+        "`test_a_resumable_plan_with_an_open_row_spawns_exactly_the_budgeted_checkpoint_log` "
+        "(`assert len(spawns) == budget`, read from the manifest's dispatch.ask_gate "
+        "`resume_checkpoint_log`); the attribution is itself asserted on every run.",
+    ),
+    (
         "dispatch.emit",
         "coordinator_core/git/run.py",
         "run_git",
@@ -7038,6 +7052,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
     # on it. The launch is a single site; a second one is a budget increase.
     "dispatch.terminal_commit": 6,
+    "dispatch.reap_abandoned_runs": 1,
+    "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
     "fleet.delete_superseded_decisions": 8,
     "fleet.prune_closed_bugs": 3,

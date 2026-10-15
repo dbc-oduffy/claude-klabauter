@@ -1,7 +1,7 @@
 """Exact-equality spawn count for `roadmap.blitz_stage`, through the real commit_v2.
 
-Two scoped commits (stubs, then the frozen report) spawn no git process: commit_v2 stages in
-process. The count does not grow with the number of stubs. The figure is read from the budget manifest, never chosen here.
+Two scoped commits (stubs, then the frozen report) each spawn one `git check-ignore` because they
+add only new files; commit_v2 stages in process. The count does not grow with the number of stubs. The figure is read from the budget manifest, never chosen here.
 """
 
 from __future__ import annotations

@@ -1248,6 +1248,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-push-pr-non-owned-remote",
+        "block-push-pr-non-owned-remote-control",
+        "git fetch upstream",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "deploy-dirty-tree",
         "deploy-dirty-tree-control",
         "echo firebase deploy",

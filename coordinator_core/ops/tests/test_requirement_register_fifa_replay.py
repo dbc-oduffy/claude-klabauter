@@ -73,12 +73,29 @@ def _status(path: Path) -> str:
     return read_fm_field_unquoted(path.read_text(encoding="utf-8"), "status")
 
 
-@pytest.mark.parametrize("route", [None, "plan"])
-def test_sizing_ship_refuses_the_replayed_register_naming_the_rollup(repo, route):
-    path = seed(repo, route=route, fix=ALL_SHIPPABLE)
+def test_sizing_ship_refuses_a_met_register_on_a_cascade_only_route(repo):
+    """Re-pinned at 0434abd4d9: sizing.ship defers to the register's own rule, so a met
+    register no longer refuses; the cascade-only route does."""
+    path = seed(repo, route=None, fix=ALL_SHIPPABLE)
     result = _ship(repo, path)
     assert result["exit_code"] == 1 and not result["applied"]
-    assert "requirement register" in result["error"] and "rollup" in result["error"]
+    assert "deliverable cascade" in result["error"]
+    assert _status(path) == "routed"
+
+
+def test_sizing_ship_ships_a_met_register_on_the_plan_route(repo):
+    """Re-pinned at 0434abd4d9: a met and wired register ships through sizing.ship."""
+    path = seed(repo, route="plan", fix=ALL_SHIPPABLE)
+    result = _ship(repo, path)
+    assert result["exit_code"] == 0 and result["applied"] is True
+    assert _status(path) == "shipped"
+
+
+def test_sizing_ship_refuses_an_unmet_register_naming_it(repo):
+    path = seed(repo, route="plan")
+    result = _ship(repo, path)
+    assert result["exit_code"] == 1 and not result["applied"]
+    assert "requirement register is not met" in result["error"]
     assert _status(path) == "routed"
 
 

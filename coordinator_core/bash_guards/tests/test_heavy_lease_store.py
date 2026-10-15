@@ -73,7 +73,7 @@ def test_holders_names_pid_and_class(tmp_path):
 
 
 def test_attribute_narrows_only_matching_session(tmp_path):
-    store.write_lease(_rec(), tmp_path)
+    store.write_lease(LeaseRecord(10, 100, 10, 100, "build", 1000.0, 50), tmp_path)
     store.write_lease(_rec(holder=(20, 200), session=(20, 200)), tmp_path)
     assert store.attribute(10, 100, [_tree(33, 330, heavy=("pnpm", "node"))], tmp_path) == 1
     got = {(r.holder_pid, r.session_pid) for r in store.live_leases(tmp_path)}
@@ -99,10 +99,35 @@ class TestAttribute:
         write_lease(_open(launch=100), tmp_path)
         assert store.attribute(1, 10, [_tree(40, 90, heavy=("node",))], tmp_path) == 0
 
+    def test_a_lease_without_a_launch_mark_binds_no_tree(self, tmp_path):
+        path = write_lease(_open(launch=0), tmp_path)
+        assert store.attribute(1, 10, [_tree(40, 500, heavy=("node", "tsc"))], tmp_path) == 0
+        assert json.loads(path.read_text(encoding="utf-8"))["holder_pid"] == 1
+
     def test_a_held_tree_is_not_bound_twice(self, tmp_path):
         write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", time.time(), 100), tmp_path)
         write_lease(_open(launch=105), tmp_path)
         assert store.attribute(1, 10, [_tree(40, 110, heavy=("node",))], tmp_path) == 0
+
+
+class TestRelease:
+    def test_release_frees_only_the_sessions_leases(self, tmp_path):
+        write_lease(_open(launch=100, session=(1, 10)), tmp_path)
+        write_lease(_open(launch=100, session=(2, 20)), tmp_path)
+        assert store.release(1, 10, directory=tmp_path) == 1
+        assert [(r.session_pid) for r in live_leases(tmp_path)] == [2]
+
+    def test_release_by_holder_leaves_the_sessions_other_leases(self, tmp_path):
+        write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", 1000.0, 100), tmp_path)
+        write_lease(LeaseRecord(41, 111, 1, 10, "build", 1000.0, 100), tmp_path)
+        assert store.release(1, 10, holder_pid=40, directory=tmp_path) == 1
+        assert [r.holder_pid for r in live_leases(tmp_path)] == [41]
+
+    def test_a_dead_holders_lease_is_reaped_a_live_one_is_not(self, tmp_path):
+        write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", 1000.0, 100), tmp_path)
+        write_lease(LeaseRecord(41, 111, 1, 10, "build", 1000.0, 100), tmp_path)
+        assert store.reap(_Prims([(41, 111)]), tmp_path, now=lambda: 1001.0) == 1
+        assert [r.holder_pid for r in live_leases(tmp_path)] == [41]
 
 
 def test_two_writers_racing(tmp_path):

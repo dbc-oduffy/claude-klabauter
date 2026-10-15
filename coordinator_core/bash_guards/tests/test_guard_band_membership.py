@@ -52,6 +52,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-stash-creation",
     "block-topic-branch",
     "block-perforce-submit",
+    "block-push-pr-non-owned-remote",
     "deploy-dirty-tree",
     "block-unreal-engine-resave",
     "block-editor-kill-by-name",

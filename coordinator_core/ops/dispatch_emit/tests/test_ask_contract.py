@@ -67,6 +67,24 @@ def test_gate_verdict_to_json_omits_acceptance_when_unset():
     assert c.GateVerdict("s", None, acceptance=stamp).to_json()["acceptance"] == stamp
 
 
+def test_resume_rows_absent_from_json_when_unset_and_ordered_when_set():
+    assert "resume_rows" not in c.GateVerdict("s", None, resume_plan="p.md").to_json()
+    out = c.GateVerdict("s", None, resume_plan="p.md", resume_rows=["M1", "A1"]).to_json()
+    assert out["resume_rows"] == ["M1", "A1"]
+
+
+def test_scout_schema_admits_resume_rows_array_or_null():
+    prop = c.ASK_SCOUT_SCHEMA["properties"]["resume_rows"]
+    assert set(prop["type"]) == {"array", "null"}
+    assert prop["items"] == {"type": "string"}
+
+
+def test_resume_plan_is_a_named_tuple():
+    r = c.ResumePlan("docs/plans/p.md", ("A1", "M0"))
+    plan_rel, incomplete = r
+    assert (plan_rel, incomplete) == (r.plan_rel, r.incomplete) == ("docs/plans/p.md", ("A1", "M0"))
+
+
 def test_record_dir_root_is_state_warp_and_run_dir_root_unchanged():
     assert c.RECORD_DIR_ROOT.endswith("/warp") and c.RECORD_DIR_ROOT.startswith("state")
     assert c.RUN_DIR_ROOT == "scratch/warp"

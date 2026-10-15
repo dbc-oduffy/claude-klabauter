@@ -365,9 +365,20 @@
         "value": 0.2
       },
       "spawn_count_budget": {
-        "commit_stubs_and_report": 0
+        "commit_stubs_and_report": 2
       },
-      "_rationale": "Two scoped commits through ceremony.commit_v2's handler, one over the scaffolded stubs and one over the frozen gate report, each with explicit paths. Measured 0 git spawns for the pair (commit_v2 stages in process); git/run.py::run_git is reachable only on its refusal branches. Counted by coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py with exact equality."
+      "_rationale": "Two scoped commits through ceremony.commit_v2's handler, one over the scaffolded stubs and one over the frozen gate report, each with explicit paths. Measured 2 git spawns for the pair: one `git check-ignore -z --stdin` per commit, since 45509ca448 made commit_v2 refuse new gitignored paths and both commits add only new files; commit_v2 stages in process otherwise. The check is load-bearing (a gitignored path fails the whole add batch) and the count does not grow with the number of stubs. Counted by coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py with exact equality."
+    },
+    "dispatch.ask_gate": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "resume_checkpoint_log": 1
+      },
+      "_rationale": "The gate reads the sizing and mints in process. A plan already on disk with a row still open adds exactly one `git log --grep=^Checkpoint-Plan:` (emit.py::checkpoint_landed_state via git/run.py::run_git) to subtract the rows a checkpoint commit landed; a plan with no open row, or none on disk, starts no process. Counted by coordinator_core/ops/dispatch_emit/tests/test_ask_gate_spawn_count.py with exact equality."
     },
     "dispatch.emit": {
       "target_ms": 300,

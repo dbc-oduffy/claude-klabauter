@@ -44,8 +44,9 @@ from coordinator_core.hooks.nudge_unrouted_sizing import (
     _session_touched_sizing_files,
 )
 from coordinator_core.ops.read_sizing_object_fields import _read_sizing_object_fields
+from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
-from coordinator_core.warp_fire import fire_step
+from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_step
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -84,18 +85,27 @@ def _in_live_reconcile_manifest(repo_root: str, file_path: str) -> bool:
         if manifest is None:
             return False
         rel = os.path.relpath(file_path, repo_root).replace("\\", "/")
-        return rel in manifest.paths
+        folded = casefold_path(rel)
+        return any(folded == casefold_path(p) for p in manifest.paths)
     except Exception:
         return False
 
 
-def _no_sizing_deny() -> Dict[str, Any]:
+_ASK_SUBMIT_FORM = (
+    f'Workflow({{name: "{SUBMIT_WORKFLOW_NAME}", '
+    'args: {ask: "<the PM\'s words, verbatim>"}})'
+)
+
+
+def _no_sizing_deny(file_path: str) -> Dict[str, Any]:
+    target = _sanitize_for_reason(os.path.basename(file_path.replace("\\", "/")))
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "strict_dispatch: no sizing this session.\n" + fire_step()
+                f"strict_dispatch: no sizing this session; {target} is code.\n"
+                f"Submit the ask instead: {_ASK_SUBMIT_FORM}"
             ),
         }
     }
@@ -143,7 +153,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         paths = [os.path.join(repo_root, t) for t in touched]
         paths = [p for p in paths if os.path.exists(p)]
         if not paths:
-            return _no_sizing_deny()
+            return _no_sizing_deny(file_path)
         fields = _read_sizing_object_fields(max(paths, key=os.path.getmtime))
         estimate = fields.get("estimate")
         tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None

@@ -173,6 +173,27 @@ def test_untracked_dir_and_modified_file_both_committed(repo, monkeypatch, claim
     assert _git(["status", "--porcelain"], repo) == ""
 
 
+def test_week_changelog_backfill_files_are_committed(repo, monkeypatch, claims):
+    days = ("2026-10-12", "2026-10-13", "2026-10-14")
+    rels = [f"state/week-changelog/{d}-all-machines.md" for d in days]
+    _install(
+        monkeypatch,
+        {
+            "backfill-week-changelog-gaps": _all(
+                *(_write(repo, rel, f"# {rel}\n") for rel in rels)
+            )
+        },
+    )
+    before = _head_sha(repo)
+    code, report = wwc_apply.apply()
+    commit = report["commit"]
+    assert code == SUCCESS
+    assert commit["committed_sha"] and commit["committed_sha"] != before
+    assert sorted(commit["staged"]) == rels
+    assert set(rels) <= _head_files(repo)
+    assert _git(["status", "--porcelain"], repo) == ""
+
+
 def test_preexisting_dirty_file_is_not_committed(repo, monkeypatch, claims):
     (repo / "doc.md").write_text("operator wip\n", encoding="utf-8")
     _install(
@@ -231,8 +252,52 @@ def test_no_session_id_skips_without_moving_exit_code(repo, monkeypatch, claims)
     before = _head_sha(repo)
     code, report = wwc_apply.apply()
     assert code == SUCCESS
-    assert report["commit"] == {"attempted": False, "skipped": "workweek-commit:no-session-id"}
+    assert report["commit"] == {
+        "attempted": False,
+        "skipped": "workweek-commit:no-session-id",
+        "uncommitted": ["out/d.md"],
+    }
     assert _head_sha(repo) == before
+
+
+def test_skipped_tail_names_the_backfill_files_it_left(repo, monkeypatch, claims):
+    rel = "state/week-changelog/2026-10-13-all-machines.md"
+    _install(monkeypatch, {"backfill-week-changelog-gaps": _write(repo, rel)})
+
+    def unavailable(*_a, **_k):
+        raise tail.PeerAttributionUnavailable("down")
+
+    monkeypatch.setattr(tail, "resolve_known_concurrent_paths", unavailable)
+    _code, report = wwc_apply.apply()
+    assert report["commit"]["skipped"] == "workweek-commit:peer-attribution-unavailable"
+    assert report["commit"]["uncommitted"] == [rel]
+
+
+def test_no_repo_root_skip_names_the_backfill_files_it_left(repo, monkeypatch, claims):
+    rel = "state/week-changelog/2026-10-13-all-machines.md"
+    monkeypatch.setattr(wwc_apply, "_resolve_commit_root", lambda: None)
+    _install(monkeypatch, {"backfill-week-changelog-gaps": _write(repo, rel)})
+    before = _head_sha(repo)
+    _code, report = wwc_apply.apply()
+    assert report["commit"]["skipped"] == "workweek-commit:no-repo-root"
+    assert report["commit"]["uncommitted"] == [rel]
+    assert _head_sha(repo) == before
+
+
+def test_snapshot_failed_skip_names_the_files_it_left(repo, monkeypatch, claims):
+    rel = "state/week-changelog/2026-10-13-all-machines.md"
+    real = wwc_apply._dirty_snapshot
+    calls = {"n": 0}
+
+    def flaky(root):
+        calls["n"] += 1
+        return None if calls["n"] == 2 else real(root)
+
+    monkeypatch.setattr(wwc_apply, "_dirty_snapshot", flaky)
+    _install(monkeypatch, {"backfill-week-changelog-gaps": _write(repo, rel)})
+    _code, report = wwc_apply.apply()
+    assert report["commit"]["skipped"] == "workweek-commit:snapshot-failed"
+    assert report["commit"]["uncommitted"] == [rel]
 
 
 def test_pre_snapshot_failure_skips(repo, monkeypatch, claims):
@@ -379,8 +444,12 @@ def test_linked_worktree_refuses_but_directives_run(repo, tmp_path, monkeypatch,
     before = _head_sha(repo)
     code, report = wwc_apply.apply()
     assert code == SUCCESS
-    assert report["commit"] == {"attempted": False, "skipped": "workweek-commit:linked-worktree"}
-    assert snapshots == []
+    assert report["commit"] == {
+        "attempted": False,
+        "skipped": "workweek-commit:linked-worktree",
+        "uncommitted": [],
+    }
+    assert snapshots == [Path.cwd()]
     assert ran == [1]
     assert _head_sha(repo) == before
 

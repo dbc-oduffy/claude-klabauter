@@ -191,6 +191,49 @@ def test_hand_shipped_zero_candidates_spawns_nothing(repo, monkeypatch):
     assert spawns == []
 
 
+def _age_sizing(repo):
+    stamp = time.time() - 3600
+    os.utime(repo / SIZING, (stamp, stamp))
+
+
+def test_routed_sizing_without_a_run_record_ships_on_its_trailer(repo):
+    _sizing(repo)
+    _age_sizing(repo)
+    sha = _commit(repo, WRITES, session=OTHER_SESSION, did=DID)
+    counters = subject.run(repo)
+    assert counters["promoted"] == 1
+    assert _status(repo) == "shipped"
+    assert sha[:8] in counters["lines"][0]
+
+
+def test_runless_sizing_without_a_matching_trailer_stays_routed(repo):
+    _sizing(repo)
+    _age_sizing(repo)
+    _commit(repo, WRITES, session=SESSION, did="dlv-someone-else")
+    counters = subject.run(repo)
+    assert counters["promoted"] == 0 and counters["candidates"] == 1
+    assert _status(repo) == "routed"
+
+
+def test_runless_sizing_ignores_a_trailer_commit_older_than_the_sizing(repo):
+    _sizing(repo)
+    _commit(repo, WRITES, did=DID, date="2020-01-02T00:00:00Z")
+    assert subject.run(repo)["promoted"] == 0
+    assert _status(repo) == "routed"
+
+
+def test_runless_sweep_adds_no_second_git_spawn(repo, monkeypatch):
+    _sizing(repo)
+    _age_sizing(repo)
+    _run_dir(repo, "r1")
+    _commit(repo, WRITES, did=DID)
+    calls = []
+    real = git_run.run_git
+    monkeypatch.setattr(subject, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    subject.run(repo)
+    assert len(calls) == 1
+
+
 def test_hand_shipped_one_git_spawn_for_many_candidates(repo, monkeypatch):
     _sizing(repo)
     _run_dir(repo, "r1")

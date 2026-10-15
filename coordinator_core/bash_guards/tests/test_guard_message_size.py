@@ -290,7 +290,12 @@ RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # 2026-09-29) is a new corpus population member, not a trimmable
     # regression -- raw raised from 165 to ceil5(172.46)=175.
     "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
-    "platform-conditioned-deny": 560 + JITTER_ALLOWANCE_BYTES,
+    # Legitimate bump: multiprobe-banner embeds the machine-local interpreter
+    # path (`_rewrite_support._bt_python3_invocation`); on a box with no
+    # `python3` on PATH that is a ~58b quoted path instead of 7b, lifting the
+    # band mean 555 -> 580. No change to the banner text or its seam script
+    # since 18e3f6c0a2 (git log -S).
+    "platform-conditioned-deny": 580 + JITTER_ALLOWANCE_BYTES,
     "directory:write_guards": 145 + JITTER_ALLOWANCE_BYTES,
     # Legitimate bump (this dispatch): five new `hooks/*` corpus rows
     # (guard_config_change_hookstack_selfdefence, nudge_cross_repo_cwd_
