@@ -63,6 +63,18 @@ def test_notice_admitted_posts_one_start(monkeypatch):
     phase, kw = calls[0]
     assert phase == "START" and kw["run"] == "run1" and kw["session_id"] == "close:run1"
     assert "structural-index" in kw["note"]
+    assert kw["require_holder"] is False
+
+
+def test_notice_without_holder_appends_to_admission_jsonl(tmp_path, monkeypatch):
+    from coordinator_core.group_em import nomination
+
+    monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: None)
+    real = admission_post.post
+    monkeypatch.setattr(admission_post, "post", lambda *a, **k: real(*a, directory=tmp_path, **k))
+    assert pca.notice(pca.admit("structural-index", 20000, True), "run9") is True
+    text = admission_post.admission_path(tmp_path).read_text(encoding="utf-8")
+    assert '"phase":"START"' in text and '"run":"run9"' in text
 
 
 def test_notice_deferred_posts_nothing(monkeypatch):

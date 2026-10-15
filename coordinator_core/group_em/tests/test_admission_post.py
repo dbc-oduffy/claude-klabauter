@@ -51,6 +51,16 @@ def test_no_holder_fails_open_and_writes_nothing(tmp_path, monkeypatch):
     assert not (tmp_path / "box").exists()
 
 
+def test_holderless_start_written_when_holder_not_required(tmp_path, monkeypatch):
+    _holder(monkeypatch, None)
+    r = admission_post.post(
+        "START", "s1", [os.getpid()], run="r", directory=tmp_path, require_holder=False
+    )
+    assert r["posted"] and r["holder_live"] is False
+    (line,) = _lines(tmp_path)
+    assert line["phase"] == "START" and line["holder_session"] is None
+
+
 def test_bad_phase_refused(tmp_path, monkeypatch):
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     r = admission_post.post("PAUSE", "s1", [], directory=tmp_path)

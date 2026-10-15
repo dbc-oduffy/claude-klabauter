@@ -2,8 +2,8 @@
 
 Channel: ``<settings-home>/state/group-em/box/admission.jsonl`` beside nomination's
 ``box/holder.json``; the Group EM tails it with ``workflow_watch/mailbox_line.py``. ``post``
-fails open: with no verified box holder it writes nothing. Only PIDs live at call time are
-reported as live; the rest are listed as ``dead_pids``.
+fails open: with no verified box holder it writes nothing unless ``require_holder=False``.
+Only PIDs live at call time are reported as live; the rest are listed as ``dead_pids``.
 """
 
 from __future__ import annotations
@@ -35,18 +35,23 @@ def post(
     note: str = "",
     directory: Optional[Path] = None,
     now: Optional[float] = None,
+    require_holder: bool = True,
 ) -> dict:
     """Append one admission line for the box Group EM; return a structured reply.
 
     ``posted`` is False with ``reason`` ``bad_phase`` or ``no_box_holder`` when nothing was
     written. A non-live holder still receives the line: it is tailed once the holder is back.
+    With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
+    ``holder_live`` False) so a governor reading the file sees the line.
     """
     phase = str(phase).upper()
     if phase not in PHASES:
         return {"posted": False, "reason": "bad_phase"}
     holder = nomination.box_holder(directory, now)
     if holder is None:
-        return {"posted": False, "reason": "no_box_holder"}
+        if require_holder:
+            return {"posted": False, "reason": "no_box_holder"}
+        holder = {}
     live: list[int] = []
     dead: list[int] = []
     for raw in list(pids)[:MAX_PIDS]:

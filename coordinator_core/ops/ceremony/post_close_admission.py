@@ -60,8 +60,8 @@ def admit(
 def notice(verdict: Verdict, run_id: str) -> bool:
     """Post one START line for an admitted verdict; False when deferred, not posted, or on error.
 
-    With no box Group EM holder nothing is written (``admission_post.post`` fails open), so the
-    notice is best-effort, not guaranteed; no END line follows a launch."""
+    The line is appended whether or not a box Group EM holder exists; no END line follows a
+    launch."""
     if not verdict.admitted:
         return False
     try:
@@ -72,7 +72,9 @@ def notice(verdict: Verdict, run_id: str) -> bool:
             f"post-close {verdict.label}: peak {peak}MB + {RESERVE_MB}MB reserve "
             f"<= avail {verdict.avail_mb}MB"
         )
-        reply = admission_post.post("START", session_id=f"close:{run_id}", run=run_id, note=note)
+        reply = admission_post.post(
+            "START", session_id=f"close:{run_id}", run=run_id, note=note, require_holder=False
+        )
         return bool(reply.get("posted"))
     except Exception:
         return False
