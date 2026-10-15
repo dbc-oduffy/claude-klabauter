@@ -6179,7 +6179,7 @@ def emit_script(
     slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
-    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved)
+    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved, session_id=session_id)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))

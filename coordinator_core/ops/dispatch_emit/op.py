@@ -2444,6 +2444,10 @@ def _gate_sizing_at_emit(
     )
     from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES, sizing_acceptance_skipped
 
+    if not writes:
+        from coordinator_core.ops.dispatch_emit.sizing_xs_mint import recorded_xs_writes
+
+        writes = recorded_xs_writes(Path(root), sizing_rel)
     try:
         check_cross_repo_writes(
             [SimpleNamespace(id="--writes", writes=list(writes), writes_under=())],

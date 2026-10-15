@@ -341,7 +341,7 @@ def stage(
         raise AskStageError(pin_drift_reason(_drift))
     gated = _with_owner_roots(gated_rows(exclusions, raw_by_id))
     try:
-        check_cross_repo_writes(rows, root, approved=cross_repo_approved)
+        check_cross_repo_writes(rows, root, approved=cross_repo_approved, session_id=session_id)
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
     waves = build_waves(rows)
