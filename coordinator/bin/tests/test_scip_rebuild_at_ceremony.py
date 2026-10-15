@@ -255,20 +255,6 @@ def test_unknown_available_memory_still_spawns(tool, monkeypatch, tmp_path):
     assert tool.run("merge-to-main", tmp_path).startswith("scip-rebuild: spawned")
 
 
-def test_available_memory_gb_reads_the_fleet_avail_mb_helper(monkeypatch):
-    from coordinator_core.telemetry import host_sampler
-
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (2048, 8192))
-    assert _load().available_memory_gb() == 2.0
-
-
-def test_available_memory_gb_none_when_helper_cannot_say(monkeypatch):
-    from coordinator_core.telemetry import host_sampler
-
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (None, None))
-    assert _load().available_memory_gb() is None
-
-
 def test_available_memory_reads_this_host():
     value = _load().available_memory_gb()
     assert value is None or value > 0

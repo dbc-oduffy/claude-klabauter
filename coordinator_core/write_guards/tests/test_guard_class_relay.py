@@ -157,7 +157,6 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_completion_monolith_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 171],
 "block_confined_agent_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 48],
 "block_consumed_handoff_edit": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 50],
-"block_cross_repo_agent_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 51],
 "block_cutover_phase_hand_edit": ["hard-deny", ["Write", "Edit", "MultiEdit"], 112],
 "block_derived_global_doctrine_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 10],
 "block_hand_set_test_verdict": ["hard-deny", ["Write", "Edit", "MultiEdit"], 32],

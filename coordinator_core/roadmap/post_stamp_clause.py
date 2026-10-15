@@ -49,7 +49,9 @@ def post_stamp_refusal(statement: object) -> Optional[str]:
 
 
 _SUITE_TIER = re.compile(
-    r"\b(?:fast|full|broad|whole|entire)(?:[\s-]+test)?[\s-]+(?:tier|suite)s?\b|\btier[\s-]*u\b",
+    # "Tier-U ask/grant/..." names the grant surface as a subject, not a suite to run.
+    r"\b(?:fast|full|broad|whole|entire)(?:[\s-]+test)?[\s-]+(?:tier|suite)s?\b"
+    r"|\btier[\s-]*u\b(?![\s-]+(?:ask|grant(?![\s-]+run)|prompt|wording|decision|arg|gate|question|cli)s?\b)",
     re.IGNORECASE,
 )
 

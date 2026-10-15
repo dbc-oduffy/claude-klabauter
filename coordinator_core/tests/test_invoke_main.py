@@ -562,44 +562,6 @@ def test_params_file_dash_reads_stdin():
     assert json.loads(result.stdout).get("ok") is True
 
 
-_ESCAPED_BACKSLASH_PARAMS = (
-    '{"run_id":"x","verbatim":"Invalid \\\\ escape","path":"dir\\\\sub\\\\x"}'
-)
-
-
-def test_params_file_parses_json_holding_an_escaped_backslash(tmp_path):
-    """The reader json.loads the file text as-is: a JSON-escaped backslash survives."""
-    params_path = tmp_path / "backslash-params.json"
-    params_path.write_text(_ESCAPED_BACKSLASH_PARAMS, encoding="utf-8")
-    assert "\\\\" in params_path.read_text(encoding="utf-8")
-
-    result = _invoke("ping", "--params-file", str(params_path))
-
-    assert result.returncode == 0, (
-        f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
-    )
-    assert "Invalid params_json" not in result.stderr
-    assert "Invalid" not in result.stdout
-
-
-def test_params_file_dash_parses_json_holding_an_escaped_backslash():
-    result = subprocess.run(
-        [sys.executable, "-m", "coordinator_core.invoke", "ping",
-         "--params-file", "-", "--bare", "--allow-unstamped-dispatch"],
-        input=_ESCAPED_BACKSLASH_PARAMS,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        cwd=str(_PROJECT_ROOT),
-        env=_make_env(),
-        creationflags=_NO_CONSOLE,
-    )
-    assert result.returncode == 0, (
-        f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
-    )
-    assert json.loads(result.stdout).get("ok") is True
-
-
 def test_params_file_dash_rejects_invalid_stdin_json():
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "ping",

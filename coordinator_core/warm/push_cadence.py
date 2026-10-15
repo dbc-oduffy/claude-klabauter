@@ -270,13 +270,12 @@ def reset_cadence_for_test() -> None:
 
 
 def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
-    """True once every `interval_secs` -- the counter-on-an-existing-tick this
-    module's docstring names. The first tick after boot or a test reset only
-    seeds the clock and returns False, so an idle engine spawns nothing until
-    one full interval has passed. Trade: work a predecessor's exit sweep
-    could not reach waits up to one interval; it is publish-class work
-    outside the process bar, and a generation shorter than one interval
-    relies on its exit sweep alone.
+    """True on the first tick after boot or a test reset, then once every
+    `interval_secs` -- the counter-on-an-existing-tick this module's
+    docstring names. The first tick sweeps because a successor generation
+    inherits whatever its predecessor's exit sweep could not reach (a
+    publish restart lands mid-cadence), and a sweep of clean repos costs no
+    spawn.
     """
     global _last_sweep_monotonic
     now = clock()
@@ -284,7 +283,7 @@ def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
         last = _last_sweep_monotonic
         if last is None:
             _last_sweep_monotonic = now
-            return False
+            return True
         if now - last < interval_secs:
             return False
         _last_sweep_monotonic = now

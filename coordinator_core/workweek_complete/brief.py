@@ -32,7 +32,7 @@ drawn from exactly this set):
     workweek-trail-scope, check-arch-audit-staleness,
     check-atlas-watch-drift, query-completions, workweek-complete-close,
     check-version-consistency, coordinator-ceremony-hook, emit-cadence,
-    workweek-complete-doc-verify
+    workweek-complete-doc-staleness, workweek-complete-doc-verify
 
 Negative-spec:
     - Does NOT reimplement `build_envelope`/`emit`/`build_judgment_point`/
@@ -88,11 +88,10 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
     partition_reportable,
 )
+from coordinator_core.git.repo_root import git_common_dir
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.resolution.facade import resolve_operator_config
-from coordinator_core.workweek_complete.brief_inputs import (
-    _resolve_repo_root,
-    compute_brief_inputs,
-)
+from coordinator_core.workweek_complete.brief_inputs import compute_brief_inputs
 
 _ROOT_UNSET: Any = object()
 
@@ -128,6 +127,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workweek-complete-close",
     "check-version-consistency",
     "coordinator-ceremony-hook",
+    "workweek-complete-doc-staleness",
     "workweek-complete-doc-verify",
     "tier-u-grant-cli",
 )
@@ -168,14 +168,41 @@ def _directive(
 
 
 def _resolve_repo_root_for_doc_staleness(start: Optional[Path] = None) -> Optional[str]:
-    """Delegates to `brief_inputs._resolve_repo_root`; keeps apply.py's native `str(Path)` form,
-    not the forward-slash form the directive args use. Name kept for apply.py's import."""
-    root = _resolve_repo_root(start)
-    return str(Path(root)) if root else None
+    cwd = start or Path.cwd()
+    out = git_common_dir(str(cwd))
+    if not out:
+        return None
+    try:
+        return str(main_worktree_root(Path(out)))
+    except Exception:  # noqa: BLE001 - never fail the ceremony
+        return None
+
+
+def _doc_staleness_slug(path: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
+
+
+def _doc_staleness_jp_id(path: str) -> str:
+    return f"jp_doc_staleness_{_doc_staleness_slug(path)}"
+
+
+def _doc_staleness_ack_directive_id(path: str) -> str:
+    return f"d_doc_staleness_ack_{_doc_staleness_slug(path)}"
+
+
+def _doc_staleness_evidence(entry: dict[str, Any]) -> str:
+    return (
+        f"{entry.get('path')}: commits_since={entry.get('commits_since')} "
+        f"(threshold {entry.get('threshold_commits')}), "
+        f"days_since={entry.get('days_since')} "
+        f"(threshold {entry.get('threshold_days')}), "
+        f"last_touch={entry.get('last_touch_sha')}@{entry.get('last_touch_date')}, "
+        f"changed_areas={entry.get('changed_areas')}"
+    )
 
 
 def _doc_verify_slug(path: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
+    return _doc_staleness_slug(path)
 
 
 def _doc_verify_jp_id(path: str) -> str:
@@ -196,6 +223,7 @@ def _doc_verify_evidence(path: str, findings: list[dict[str, Any]]) -> str:
 
 
 def _build_directives(
+    stale_docs: Optional[list[dict[str, Any]]] = None,
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
     repo_root: Optional[str] = _ROOT_UNSET,
 ) -> list[dict[str, Any]]:
@@ -235,19 +263,37 @@ def _build_directives(
     and neither is `shellcheck-sweep`/`console-flash-guard`/`multi-event-
     hook-guard` (Step 6 concerns, outside the 4b-4k census).
 
-    Doc-staleness is not computed here: Step 5 runs
-    `workweek-complete-doc-staleness` by hand, never as a directive.
+    Doc-staleness gate (plan `docs/plans/2026-07-28-human-facing-doc-
+    staleness-detector.md`, chunk C5) — composes the two existing
+    primitives, adding ONE advisory entry to the battery (now eleven) and
+    leaving the existing hard-blocking-three/advisory-seven split
+    otherwise untouched (B1 anti-scope):
+      (a) `d_step4b_4k_doc_staleness` — ordinary advisory entry
+          (`hard_block=False`), ungated, always runs; its own CLI output
+          carries the AC6 evidence per doc into the Step 5 render, same
+          shape as `d_step4b_4k_arch_audit_staleness`.
+      (b) One per-stale-doc follow-on directive
+          (`d_doc_staleness_ack_<slug>`), gated via `depends_on` on that
+          doc's judgment point (`_build_judgment_points`) — reuses the
+          same CLI scoped to one doc (`--doc <path> --ack`), never fires
+          until the EM records an explicit disposition. `depends_on` is
+          singular per directive (contract, `_directive`), which is why
+          this is one directive per doc rather than N judgment points
+          fanning into a single shared directive. `stale_docs` is
+          `BriefInputs.stale_docs`, pre-filtered to
+          `stale` entries by `brief()` before being threaded into both
+          this function and `_build_judgment_points`.
 
-    Doc-content-verification gate (chunk C6c) — same delivery shape as
-    `d_step4b_4k_arch_audit_staleness`: "is what the doc says still true"
-    (the `b644d5a9` incident shape). Adds ONE advisory entry to the battery
-    (now eleven):
-    `d_step4b_4k_doc_verify` — ordinary advisory entry
+    Doc-content-verification gate (chunk C6c) — same delivery shape as (a)/
+    (b) above, ONE gate with TWO signal types (AC14): staleness asks "has
+    this doc moved recently", verification asks "is what it says still
+    true" (the `b644d5a9` incident shape). Adds ONE further advisory entry
+    to the battery (now twelve):
+      (c) `d_step4b_4k_doc_verify` — ordinary advisory entry
           (`hard_block=False`), ungated, always runs; its CLI output
           carries every citation finding across the declared doc registry
-          into the Step 5 render, same shape as
-          `d_step4b_4k_arch_audit_staleness`.
-      (c) One per-doc follow-on directive (`d_doc_verify_ack_<slug>`), gated
+          into the Step 5 render, same shape as (a).
+      (d) One per-doc follow-on directive (`d_doc_verify_ack_<slug>`), gated
           via `depends_on` on that doc's judgment point, ONLY for docs that
           actually carry findings — `doc_verify_findings_by_doc` is
           `BriefInputs`'s findings grouped by doc, never one directive per individual
@@ -255,6 +301,7 @@ def _build_directives(
           unbounded, so the fan-out is bounded by doc count, not finding
           count).
     """
+    stale_docs = stale_docs or []
     doc_verify_findings_by_doc = doc_verify_findings_by_doc or {}
     _repo_root = (
         _resolve_repo_root_for_doc_staleness() if repo_root is _ROOT_UNSET else repo_root
@@ -375,6 +422,11 @@ def _build_directives(
             args=[],
         ),
         _directive(
+            "d_step4b_4k_doc_staleness",
+            cli="workweek-complete-doc-staleness",
+            args=[],
+        ),
+        _directive(
             "d_step4b_4k_doc_verify",
             cli="workweek-complete-doc-verify",
             args=[],
@@ -387,6 +439,15 @@ def _build_directives(
         _directive("d_step6_query_completions", cli="query-completions", args=[]),
         _directive("d_step7_6_trail_scope", cli="workweek-trail-scope", args=[]),
         _directive("d_step13_archive_close", cli="workweek-complete-close", args=[]),
+        *(
+            _directive(
+                _doc_staleness_ack_directive_id(entry["path"]),
+                cli="workweek-complete-doc-staleness",
+                args=["--doc", entry["path"], "--ack"],
+                depends_on=_doc_staleness_jp_id(entry["path"]),
+            )
+            for entry in stale_docs
+        ),
         *(
             _directive(
                 _doc_verify_ack_directive_id(doc_path),
@@ -440,7 +501,9 @@ def _build_directives(
 
 
 def _build_judgment_points(
+    stale_docs: Optional[list[dict[str, Any]]] = None,
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
+    register_stall: Any = None,
     version_recommendation: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """Tier-2 (judgment, recommendation required) and Tier-3 (your-call, no
@@ -460,12 +523,25 @@ def _build_judgment_points(
     `jp_step10_5_gh_release_publish` (irreversibility: `gh release` publish
     is an external, irreversible action).
 
+    Doc-staleness gate (C5, see `_build_directives`): one
+    `jp_doc_staleness_<slug>` per `stale_docs` entry, `recommendation=None`
+    with `reason="pm-scoped-tradeoff"` — same category as
+    `jp_step7_5_staff_eng_fire_discretion`/`jp_step9_editorial_bucketing`
+    (an editorial/prioritization call the evidence doesn't pre-decide, not
+    a missing-evidence gap: AC6's full evidence is attached). Emitted only
+    for docs the op actually marked stale — a repo with a clean report
+    emits none, mirroring `jp_step2_5_dirty_tree_ambiguous`'s
+    only-when-live conditional shape in the sibling workday assembler.
+    `resolves` on each disposition names that doc's own follow-on
+    directive (`d_doc_staleness_ack_<slug>`) — never auto-resolved.
+
     Doc-content-verification gate (C6c, see `_build_directives` for the
     paired directive shape): one `jp_doc_verify_<slug>` per doc that carries
     at least one finding (AC14's per-doc, not per-finding, cardinality
     bound) — `recommendation=None` with `reason="pm-scoped-tradeoff"`, same
-    Tier-3 category as `jp_step7_5_staff_eng_fire_discretion`. Disposition
-    vocabulary: `fixed` / `bug-filed` /
+    Tier-3 category as the staleness judgment point above. Disposition
+    vocabulary is deliberately DIFFERENT from staleness's softer
+    `reviewed_ok`/`queued_for_update` pair: `fixed` / `bug-filed` /
     `resolves-cross-repo` / `not-a-defect-with-reason` — no `noted` option.
     That asymmetry is the point (AC14): a citation that fails verification
     is a correctness defect (the `b644d5a9` shape), not a freshness nudge,
@@ -482,7 +558,34 @@ def _build_judgment_points(
     muscle memory the anti-scope forbids. `resolves` on each disposition
     names that doc's own follow-on directive (`d_doc_verify_ack_<slug>`).
     """
+    stale_docs = stale_docs or []
     doc_verify_findings_by_doc = doc_verify_findings_by_doc or {}
+    doc_staleness_points = [
+        build_judgment_point(
+            None,
+            id=_doc_staleness_jp_id(entry["path"]),
+            question=(
+                f"'{entry['path']}' looks stale per the doc-staleness "
+                "detector — reviewed and still current, or queue it for "
+                "an update?"
+            ),
+            dispositions=[
+                build_disposition(
+                    "reviewed_ok",
+                    resolves=[_doc_staleness_ack_directive_id(entry["path"])],
+                ),
+                build_disposition(
+                    "queued_for_update",
+                    resolves=[_doc_staleness_ack_directive_id(entry["path"])],
+                ),
+            ],
+            evidence=_doc_staleness_evidence(entry),
+            reason="pm-scoped-tradeoff",
+            revalidate_at_dispatch=True,
+            round_trip="terminal",
+        )
+        for entry in stale_docs
+    ]
     doc_verify_points = [
         build_judgment_point(
             None,
@@ -677,7 +780,17 @@ def _build_judgment_points(
             revalidate_at_dispatch=True,
             round_trip="terminal",
         ),
-    ] + doc_verify_points
+    ] + doc_staleness_points + doc_verify_points
+    if register_stall is not None:
+        from coordinator_core.ops.requirement_register import (  # noqa: PLC0415
+            stall_judgment_point,
+        )
+
+        stall_point = stall_judgment_point(
+            register_stall, id="jp_requirement_register_stall"
+        )
+        if stall_point is not None:
+            points.append(stall_point)
     return points
 
 
@@ -702,9 +815,13 @@ def brief(
         return int(WorkweekExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
     inputs = compute_brief_inputs()
-    directives = _build_directives(inputs.doc_verify_findings_by_doc, inputs.repo_root)
+    directives = _build_directives(
+        inputs.stale_docs, inputs.doc_verify_findings_by_doc, inputs.repo_root
+    )
     all_judgment_points = _build_judgment_points(
+        inputs.stale_docs,
         inputs.doc_verify_findings_by_doc,
+        inputs.register_stall,
         inputs.version_recommendation,
     )
 

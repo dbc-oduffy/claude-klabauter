@@ -178,14 +178,23 @@ def _terminate_group(proc: subprocess.Popen) -> None:
 
 
 def _usable_ram_gb() -> float:
-    """Available RAM in GB from `host_sampler.avail_mb()`; an unreadable value
-    yields the conservative 4.0 constant, never total RAM."""
-    from coordinator_core.telemetry import host_sampler
+    """Best-effort available-RAM estimate, cross-platform: `psutil` if
+    installed (most accurate -- available, not total), else POSIX
+    `os.sysconf` (`SC_PAGE_SIZE` * `SC_PHYS_PAGES`, unavailable on Windows),
+    else a conservative fixed fallback so a worker-count computation never
+    raises on a platform/environment neither path covers."""
+    try:
+        import psutil
 
-    avail = host_sampler.avail_mb()[0]
-    if avail is None:
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except ImportError:
+        pass
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        return (page_size * phys_pages) / (1024 ** 3)
+    except (ValueError, AttributeError, OSError):
         return 4.0
-    return avail / 1024
 
 
 def _xdist_worker_count() -> int:

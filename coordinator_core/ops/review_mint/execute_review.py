@@ -22,7 +22,6 @@ from coordinator_core.ops.review_mint.roster import (
     ExecuteReview,
     ReviewAgent,
     RosterFragmentError,
-    VALID_TIERS,
 )
 from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -367,10 +366,6 @@ def compose_execute_review(
     slice_identity_sha: Optional[str] = None,
     owner_rows_js: Optional[str] = None,
     review_terminal_sha: Optional[str] = None,
-    tier: Optional[str] = None,
-    tier_js: Optional[str] = None,
-    mechanical_prep: bool = False,
-    repo_root: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -406,20 +401,6 @@ def compose_execute_review(
     ``review_terminal_sha`` marks a review-only run: the prep prompt freezes and partitions the
     committed range ``run_base_sha..review_terminal_sha`` and never the working tree. ``None``
     keeps the worktree prompt byte-identical.
-
-    ``tier`` (``lightweight``/``standard``/``full``) omits every review-wave agent whose roster
-    ``tiers`` excludes it; ``tier_js`` is a JS expression for a tier known only at fire time,
-    which gates those agents at run time instead. An agent without ``tiers`` always runs, and
-    neither argument leaves the wave byte-identical. An omitted delivery verifier leaves
-    ``_deliveryVerdict`` bound to ``null``. Prep, integration and the judge never filter.
-
-    ``mechanical_prep`` replaces the prep agent's multi-step prompt with one ``review.prep`` engine
-    call whose reply it returns verbatim; the freeze, partition and foreign-claim work then runs
-    in-process in the op. ``False`` keeps the prompt byte-identical.
-
-    ``repo_root`` pins the mechanical prep command to the repo that minted ``run_base_sha`` with
-    ``--repo``, so a run driven from another repo's cwd resolves the base in the right object
-    store. ``None`` leaves the command unpinned.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -524,28 +505,6 @@ def compose_execute_review(
         f"run_base_sha: {run_base_sha}\n"
         f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
     ).strip()
-    if mechanical_prep:
-        mode_args = (
-            f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
-        )
-        repo_pin = f" --repo '{repo_root}'" if repo_root else ""
-        prep_prompt = (
-            f"{prompt_head}\n\n{prep_role}"
-            f"Run this run's review prep as ONE engine call, never your own freeze, grouping or "
-            f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
-            f"review.prep '{{{mode_args},\"base\":\"{base_ref}\","
-            f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>],"
-            f"\"plan_path\":\"<plan_path>\"}}'{repo_pin}`, its command word exactly as written (a guard denies "
-            f"the prefix moved into a shell variable). <plan_path> is the `plan:` value below when it "
-            f"is given, else the `plan_path:` line. When a non-empty `session_id:` value is given, add "
-            f"it as `\"session_id\"`. Return the reply's whole_diff_path, product_files, verdict, "
-            f"slices, whole_diff_sidecars, foreign_claims, error and sidecar_path verbatim, and "
-            f"nothing else. A non-null error is a refusal: return it as is. Never report a missing "
-            f"binary in place of the reply.\n"
-            f"plan_path: {plan_path}\n"
-            f"run_base_sha: {run_base_sha}\n"
-            f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
-        ).strip()
     prep_call = _agent_call_literal(
         prep_type,
         prep_prompt,
@@ -618,23 +577,8 @@ def compose_execute_review(
 
     # -- 2. review-wave -----------------------------------------------------
     wave_phase = "Review wave"
-    if tier is not None and tier_js is not None:
-        raise ValueError("compose_execute_review takes at most one of tier / tier_js")
-    if tier is not None and tier not in VALID_TIERS:
-        raise ValueError(f"tier {tier!r} is not one of {sorted(VALID_TIERS)!r}")
-
-    def _tier_gate(agent: ReviewAgent) -> Optional[str]:
-        """JS test that ``agent`` runs at the fire-time tier; ``None`` when ungated."""
-        if tier_js is None or agent.tiers is None:
-            return None
-        return f"{json.dumps(list(agent.tiers))}.includes({tier_js})"
-
-    def _runs_at_compile_tier(agent: ReviewAgent) -> bool:
-        return agent.runs_at(tier)
-
-    all_whole_diff_agents = [a for a in review.review_wave if a.per != "slice"]
-    slice_agents = [a for a in review.review_wave if a.per == "slice" and _runs_at_compile_tier(a)]
-    whole_diff_agents = [a for a in all_whole_diff_agents if _runs_at_compile_tier(a)]
+    slice_agents = [a for a in review.review_wave if a.per == "slice"]
+    whole_diff_agents = [a for a in review.review_wave if a.per != "slice"]
 
     item_lines: List[str] = []
     for agent in slice_agents:
@@ -670,9 +614,9 @@ def compose_execute_review(
             f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + "
             f"JSON.stringify(s), " + call[len(prefix):]
         )
-        slice_items = f"(_reviewPrep?.slices ?? []).map(s => () => {_degrading(spliced_call)})"
-        gate = _tier_gate(agent)
-        item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")
+        item_lines.append(
+            f"    ...(_reviewPrep?.slices ?? []).map(s => () => {_degrading(spliced_call)})"
+        )
 
     for agent in whole_diff_agents:
         is_delivery_verifier = agent.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE
@@ -741,11 +685,9 @@ def compose_execute_review(
         )
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
         degraded = _degrading(call)
-        line = degraded if is_delivery_verifier else f"() => _verifyOnly ? null : ({degraded})()"
-        gate = _tier_gate(agent)
-        if gate:
-            line = f"() => ({gate} ? ({line})() : null)"
-        item_lines.append(f"    {line}")
+        item_lines.append(
+            f"    {degraded}" if is_delivery_verifier else f"    () => _verifyOnly ? null : ({degraded})()"
+        )
 
     map_lines = ",\n".join(item_lines)
 
@@ -767,8 +709,6 @@ def compose_execute_review(
         wave_lines.append(
             f"  const _deliveryVerdict = _reviewWave[_reviewWave.length - {offset_from_end}];"
         )
-    elif any(a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE for a in all_whole_diff_agents):
-        wave_lines.append("  const _deliveryVerdict = null;")
     phases.append((wave_phase, "\n".join(wave_lines)))
 
     # -- 3. integration (only when the fragment declares one stage) --------
@@ -1070,8 +1010,6 @@ def compose_criterion_judge(
     evidence_path: Optional[str] = None,
     evidence: Optional[JudgeEvidence] = None,
     em_owned_rows: Optional[List[str]] = None,
-    ledger_charter: Optional[str] = None,
-    ledger_schema: Optional[dict] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. ``evidence_path`` names the
@@ -1079,12 +1017,7 @@ def compose_criterion_judge(
     string expression appended to the prompt at run time, for a path the
     script learns only then. Pointers only, except the register tier: ``evidence``
     inlines claimed rows, row rulings and the PM's quotes verbatim and in full;
-    without it tier 1 is a pointer to the sizing's register.
-
-    ``ledger_charter`` folds the requirements-ledger check into this judge: its text is
-    appended to the prompt, and ``ledger_schema`` (an object schema whose properties carry
-    ``items``, ``all_of_pm_ask`` and ``conflicts``) is merged into the widened result schema,
-    with its ``required`` fields required. Both ``None`` leaves the call byte-identical."""
+    without it tier 1 is a pointer to the sizing's register."""
     if review.judge is None:
         return None
     falsifier_clause = ""
@@ -1106,14 +1039,7 @@ def compose_criterion_judge(
         f"{falsifier_clause}"
         f"{em_owned_clause(em_owned_rows)}"
         + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence and `criterion_evidence` clause entries; weigh them, cite them)" if evidence_path else "")
-        + (f"\n{ledger_charter}" if ledger_charter else "")
     ).strip()
-    schema_literal = _widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas))
-    if ledger_schema is not None:
-        merged = json.loads(schema_literal)
-        merged.setdefault("properties", {}).update(ledger_schema.get("properties", {}))
-        merged["required"] = sorted({*merged.get("required", []), *ledger_schema.get("required", [])})
-        schema_literal = json.dumps(merged, sort_keys=True)
     call = _agent_call_literal(
         judge_type,
         prompt,
@@ -1121,7 +1047,7 @@ def compose_criterion_judge(
         schema=True,
         as_arrow=False,
         agent_opts=_agent_opts_for(review.judge, emitted_agent_type=judge_type),
-        schema_literal=schema_literal,
+        schema_literal=_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)),
     )
     if prompt_suffix_js:
         prefix = f"agent({_prompt_literal(prompt)}"

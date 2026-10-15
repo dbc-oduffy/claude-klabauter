@@ -12,9 +12,7 @@ DoE ``query-records.js`` (``subprocess.run([*resolve_launchable(...), "--type",
 .query_records`` in-process — no ``node`` binary, no subprocess spawn, no
 ``resolve_launchable``/``_script_dir`` co-location lookup. Only the flag surface
 supported is ``--since``, ``--where``, ``--sort``, ``--limit``, ``--format``,
-``--root``, and the bare ``--unreleased`` (keeps only records whose file name no
-release index lists, via ``release_index.released_names``; runs before ``--limit``).
-``--older-than`` was listed in the bash oracle's usage banner but is
+``--root``. ``--older-than`` was listed in the bash oracle's usage banner but is
 NOT implemented by the native seam (``ceremony.records_query``'s own
 negative-spec) — passing it fails loud instead of silently behaving differently.
 
@@ -65,7 +63,6 @@ from typing import Any, List, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
-from coordinator_core.ops.release_index import released_names
 from coordinator_core.win_portability import no_console_creationflags
 
 _HELP_TEXT = """query-completions.sh — Query completion-log entries.
@@ -76,23 +73,20 @@ forwards to query-records.js.
 Usage:
   query-completions.sh [--since <date>] [--where "<expr>"]
                        [--sort <field>|-<field>]
-                       [--limit N] [--root <path>] [--unreleased]
+                       [--limit N] [--root <path>]
                        [--format markdown-list|json|paths]
 
 Examples:
-  query-completions --since 7d --unreleased
   query-completions.sh --since 7d
   query-completions.sh --where "status=pending-release"
   query-completions.sh --since 2026-05-01 --format json
 
---unreleased drops entries no release index (archive/releases/) lists; it filters before --limit.
 --sort orders before --limit; a leading '-' sorts descending (newest first for -created).
 Unsupported (fails loud, does not silently differ): --older-than.
 Default --limit is 50 when omitted; pass --limit 0 for unlimited.
 """
 
-_BARE_FLAGS = {"--unreleased"}
-_SUPPORTED_FLAGS = {"--since", "--where", "--sort", "--limit", "--format", "--root"} | _BARE_FLAGS
+_SUPPORTED_FLAGS = {"--since", "--where", "--sort", "--limit", "--format", "--root"}
 _UNSUPPORTED_FLAGS = {"--older-than"}
 _VALID_FORMATS = ("markdown-list", "json", "paths")
 _DEFAULT_LIMIT = 50
@@ -193,15 +187,10 @@ def _parse_args(argv: List[str]) -> dict:
         "limit": str(_DEFAULT_LIMIT),
         "format": "markdown-list",
         "root": None,
-        "unreleased": False,
     }
     i = 0
     while i < len(normalized):
         flag = normalized[i]
-        if flag in _BARE_FLAGS:
-            opts[flag[2:]] = True
-            i += 1
-            continue
         if flag in _UNSUPPORTED_FLAGS:
             raise ValueError(
                 f"{flag} is not supported by the native records reader "
@@ -251,7 +240,6 @@ def main(argv: List[str]) -> int:
 
     root = _detect_root(opts["root"])
 
-    unreleased = opts["unreleased"]
     try:
         records = query_records(
             "completion",
@@ -259,16 +247,10 @@ def main(argv: List[str]) -> int:
             where=opts["where"],
             since=opts["since"],
             sort=opts["sort"],
-            limit=0 if unreleased else opts["limit"],
+            limit=opts["limit"],
         )
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 1
-
-    if unreleased:
-        released = released_names(root)
-        records = [r for r in records if r["path"].rpartition("/")[2] not in released]
-        if opts["limit"] > 0:
-            records = records[: opts["limit"]]
 
     if opts["format"] == "json":
         output = json.dumps(records, indent=2)

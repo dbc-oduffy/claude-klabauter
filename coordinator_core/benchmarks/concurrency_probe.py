@@ -162,12 +162,8 @@ def read_machine_state() -> MachineState:
         return MachineState(readable=False, error=f"psutil unavailable: {exc!r}")
 
     try:
-        from coordinator_core.telemetry import host_sampler
-
-        avail, _total = host_sampler.avail_mb()
-        if avail is None:
-            return MachineState(readable=False, error="avail_mb unreadable")
-        free_ram_gb = avail / 1024
+        vm = psutil.virtual_memory()
+        free_ram_gb = vm.available / (1024 ** 3)
         cpu_percent = psutil.cpu_percent(interval=0.1)
         process_count = len(psutil.pids())
     except Exception as exc:  # noqa: BLE001 -- any read failure fails closed

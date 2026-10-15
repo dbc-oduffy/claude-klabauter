@@ -913,12 +913,8 @@ def read_spine(
     keep_coded: frozenset = frozenset(),
     *,
     schema_preflight: bool = True,
-    cleared_gate_owners: frozenset = frozenset(),
 ) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
-
-    ``cleared_gate_owners`` names ``external_gate`` ``owner_repo`` values this call treats as the
-    run's own repo: their gates withhold nothing. Per-call, so concurrent reads never share it.
 
     ``keep_coded`` names ``coded`` rows to return as rows anyway (a review of
     hand-landed work needs the row the dispatch would otherwise skip).
@@ -1039,19 +1035,6 @@ def read_spine(
 
     frontmatter_gates = _frontmatter_external_gates(source, row_ids)
 
-    if cleared_gate_owners:
-
-        def keep(g):
-            return not (isinstance(g, dict) and g.get("owner_repo") in cleared_gate_owners)
-
-        raw_rows = [
-            {**raw, "external_gate": [g for g in raw["external_gate"] if keep(g)] or None}
-            if isinstance(raw.get("external_gate"), list)
-            else raw
-            for raw in raw_rows
-        ]
-        frontmatter_gates = {k: tuple(g for g in v if keep(g)) for k, v in frontmatter_gates.items()}
-
     rows: list[EmitterRow] = []
     rows_using_reads: list[str] = []
     for raw in raw_rows:
@@ -1114,14 +1097,6 @@ def read_spine(
             )
         else:
             reads_at_head = tuple(reads_at_head)
-
-        for field_name, entries in (("reads", declared_reads), ("consumes", consumes)):
-            for entry in entries:
-                if not isinstance(entry, str):
-                    raise InvalidFieldTypeError(
-                        f"row {row_id!r} {field_name}: entry {entry!r} is not a path string; "
-                        f"write `{field_name}: [<repo-relative path>]`"
-                    )
 
         # reads is the ordering set: declared `reads:` union `consumes:`.
         reads = list(dict.fromkeys([*declared_reads, *consumes]))

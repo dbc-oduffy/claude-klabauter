@@ -419,33 +419,3 @@ def test_fork_non_execution_brief_on_opus_parent_passes(monkeypatch: pytest.Monk
     payload = _agent_payload("fork", prompt="Survey where the loader is called and report.")
     payload["model"] = "claude-opus-5-5"
     assert mod.check(payload) is None
-
-
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        "Questions: does the repro verify the fix? Give verdicts with file:line evidence. "
-        "Probe the cache path. Write findings only.",
-        "Check the probe results; review only, do not edit anything.",
-        "Go through commit 1f533cd05a and judge whether the fix is sound.",
-        "Second opinion on the diff abc1234: is the patch correct? Review commit.",
-    ],
-)
-def test_findings_only_or_commit_review_brief_passes(
-    monkeypatch: pytest.MonkeyPatch, prompt: str
-) -> None:
-    _patch_pins(monkeypatch, _SID)
-    assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt)) is None
-
-
-@pytest.mark.parametrize(
-    "prompt", ["Fix the loader and commit.", "Inspect commit abc1234, then fix it and commit."]
-)
-def test_execution_brief_still_blocks_and_names_phrase(
-    monkeypatch: pytest.MonkeyPatch, prompt: str
-) -> None:
-    _patch_pins(monkeypatch, _SID)
-    envelope = mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt))
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "'Fix'" in reason or "'fix'" in reason
-    assert mod._OVERRIDE_ENV not in reason

@@ -13,10 +13,6 @@ Negative-spec:
     whole word in no other production file and no unmodelled registration surface (a barrel
     `export * from`, `__all__`, a manifest or settings file) could carry it. Everything the op
     does not model is `undecidable`, because a false `unreachable` fails a run.
-  - A function whose name appears again in its own file beyond the definition is `undecidable`:
-    same-file reachability is not modelled.
-  - With declared writes (`plan` or `paths`), a diff file outside them is another run's and
-    contributes no entry; with neither, every diff file counts.
   - An untracked referrer is scanned only when the plan declares it or it sits beside a changed file.
   - Click paths are traced on the Next.js app router only; any other stack is `undecidable`.
   - A middleware/proxy rewrite or redirect is not modelled: with one present, a step the trace
@@ -25,7 +21,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import time
@@ -145,15 +140,14 @@ def _route_of(rel: str) -> tuple[str, bool]:
     return "/" + "/".join(seg), any(s.startswith(("[", "@")) for s in seg)
 
 
-def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str], sym_counts: dict):
+def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str]):
     """One pass over production code files -> (symbol hits, route-hit set, barrels).
 
     symbol hits: {symbol: {file}}; barrels: [(file, spec)] for `export * from`.
-    `sym_counts` is filled with {(symbol, file): whole-word occurrences}, the definition included.
     """
     files = [p for p in read_index(root) if p.endswith(_CODE_EXT) and not _TEST_RE.search(p)]
     seen = set(files)
-    files += [e for e in dict.fromkeys(extra) if e not in seen and e.endswith(_CODE_EXT) and not _TEST_RE.search(e)]
+    files += [e for e in extra if e not in seen and e.endswith(_CODE_EXT) and not _TEST_RE.search(e)]
     sym_re = None
     if symbols:
         sym_re = re.compile(b"(" + b"|".join(re.escape(s.encode()) for s in sorted(symbols, key=len, reverse=True)) + b")")
@@ -176,9 +170,7 @@ def _scan(root: Path, extra: list[str], symbols: set[str], routes: set[str], sym
                 i, j = m.span()
                 if (i and _WORD.match(b, i - 1)) or _WORD.match(b, j):
                     continue
-                name = m.group(1).decode()
-                sym_hits.setdefault(name, set()).add(f)
-                sym_counts[(name, f)] = sym_counts.get((name, f), 0) + 1
+                sym_hits.setdefault(m.group(1).decode(), set()).add(f)
             if b"export" in b:
                 barrels += [(f, m.group(1).decode("utf-8", "replace")) for m in _BARREL.finditer(b)]
         if route_re is not None:
@@ -191,7 +183,7 @@ def _manifest_text(root: Path) -> str:
     return "\n".join(_read(root, m) for m in _MANIFESTS)
 
 
-def _verdicts(root, found, sym_hits, route_hits, barrels, manifest_text, sym_counts) -> list[dict]:
+def _verdicts(root, found, sym_hits, route_hits, barrels, manifest_text) -> list[dict]:
     ents = []
     manifest = None
     for kind, sym, rel in found:
@@ -199,8 +191,6 @@ def _verdicts(root, found, sym_hits, route_hits, barrels, manifest_text, sym_cou
         if kind == "exported-function" and sym and rel.endswith(_CODE_EXT[:-1]):
             if sym_hits.get(sym, set()) - {rel}:
                 v = "reachable"
-            elif sym_counts.get((sym, rel), 0) > 1:
-                v = "undecidable"
             else:
                 stem = Path(rel).stem
                 if manifest is None:
@@ -375,16 +365,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if w not in tracked:
             added[w] = _read(root, w).splitlines()
 
-    declared = set(writes) if writes else None
-
-    def _declared(rel: str) -> bool:
-        return rel in declared or any(
-            fnmatch.fnmatchcase(rel, w) or (w.endswith("/") and rel.startswith(w)) for w in declared
-        )
-
     found: list[tuple[str, str, str]] = []
     for rel, lines in added.items():
-        if _TEST_RE.search(rel) or (declared is not None and not _declared(rel)):
+        if _TEST_RE.search(rel):
             continue
         for kind, sym in _classify(rel, "\n".join(lines)):
             if kind in kinds:
@@ -398,11 +381,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             writes += [(Path(d) / n).as_posix() for n in os.listdir(root / d) if n.endswith(_CODE_EXT)]
         except OSError:
             pass
-    sym_counts: dict[tuple[str, str], int] = {}
-    sym_hits, route_hits, barrels = (
-        ({}, {}, []) if not (symbols or routes) else _scan(root, writes, symbols, routes, sym_counts)
-    )
-    ents = _verdicts(root, found, sym_hits, route_hits, barrels, lambda: _manifest_text(root), sym_counts)
+    sym_hits, route_hits, barrels = ({}, {}, []) if not (symbols or routes) else _scan(root, writes, symbols, routes)
+    ents = _verdicts(root, found, sym_hits, route_hits, barrels, lambda: _manifest_text(root))
 
     touches_next = any(
         re.match(r"(src/)?app/", r) or r.endswith((".tsx", ".ts")) for _, _, r in found

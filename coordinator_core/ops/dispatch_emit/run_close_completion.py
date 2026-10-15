@@ -41,16 +41,6 @@ def _plan_title(root: Path, plan_rel: str, run_id: str) -> str:
     return title or run_id
 
 
-def _remedy(reason: str, title: str) -> str:
-    from coordinator_core.ops.ceremony.completion_entry import _completion_entry_rel_path
-
-    entry = _posix(str(_completion_entry_rel_path(title)))
-    return (
-        f"{reason}; no entry written at {entry}; write it by hand: "
-        f"python coordinator/bin/coordinator-complete-entry.py"
-    )
-
-
 def _existing_entry(root: Path, run_id: str, title: str) -> Optional[str]:
     from coordinator_core.ops.ceremony.completion_entry import _slug_from_title
 
@@ -96,14 +86,14 @@ def completion_entry_leg(
     criterion = criterion or {}
     status = str(criterion.get("status") or "absent")
     summary = criterion.get("completion_summary")
-    title = _plan_title(root, plan_rel, run_id)
     if status != "met":
-        return LegResult("failed", _remedy(f"criterion {status}", title)), []
+        return LegResult("failed", f"criterion {status}"), []
     if not isinstance(summary, str) or not summary.strip():
         summary = criterion.get("observation")
     if not isinstance(summary, str) or not summary.strip():
-        return LegResult("failed", _remedy("no judge summary", title)), []
+        return LegResult("failed", "no judge summary"), []
 
+    title = _plan_title(root, plan_rel, run_id)
     existing = _existing_entry(root, run_id, title)
     if existing:
         return LegResult("discharged", f"entry {existing}"), []

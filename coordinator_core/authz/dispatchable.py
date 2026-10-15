@@ -146,6 +146,7 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "workweek-complete-close",
         "check-version-consistency",
         "coordinator-ceremony-hook",
+        "workweek-complete-doc-staleness",
         "workweek-complete-doc-verify",
         "tier-u-grant-cli",
     }),

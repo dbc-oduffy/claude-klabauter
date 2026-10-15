@@ -526,11 +526,9 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
         if not isinstance(row, dict):
             continue
         for p in (row.get("writes") or []):
-            if isinstance(p, str):
-                written_paths.add(_norm_path(p))
+            written_paths.add(_norm_path(p))
         for p in (row.get("writes_under") or []):
-            if isinstance(p, str):
-                written_paths.add(_norm_path(p))
+            written_paths.add(_norm_path(p))
 
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -567,7 +565,7 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
                 }
             )
         for p in (row.get("reads_at_head") or []):
-            if isinstance(p, str) and _norm_path(p) in written_paths:
+            if _norm_path(p) in written_paths:
                 advisories.append(
                     {
                         "row": label,
@@ -580,8 +578,6 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
                     }
                 )
         for p in (row.get("consumes") or []):
-            if not isinstance(p, str):
-                continue
             if _norm_path(p) not in written_paths:
                 advisories.append(
                     {

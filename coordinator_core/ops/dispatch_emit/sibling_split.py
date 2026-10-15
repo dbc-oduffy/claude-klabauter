@@ -266,7 +266,7 @@ def _cli(params: Optional[dict]) -> Optional[str]:
 
     if not params:
         return None
-    s = json.dumps(params, separators=(",", ":"), ensure_ascii=False).replace("\\\\", "\\u005c")
+    s = json.dumps(params, separators=(",", ":"), ensure_ascii=False)
     head = "coordinator-invoke dispatch.terminal_commit"
     return head + " --params-file - <<'JSON'\n" + s + "\nJSON"
 

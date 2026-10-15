@@ -109,14 +109,6 @@ def test_m_plus_script_has_one_return_and_it_is_the_terminal_one(monkeypatch):
     assert script[found[0] :].startswith("return { arm:")
 
 
-def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritten(monkeypatch):
-    script = _m_plus_script(monkeypatch)
-    assert "review.prep" in script and "review.partition_slices" not in script
-    assert "freeze-review-diff" not in script
-    assert "return { halted: 'no-op'," not in script
-    assert "_halted = { halted: 'no-op'," in script
-
-
 def test_m_plus_script_validates_with_zero_errors(monkeypatch):
     findings = run_checks(_m_plus_script(monkeypatch))
     assert [f for f in findings if f.severity is Severity.ERROR] == []

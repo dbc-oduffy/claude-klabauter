@@ -93,10 +93,7 @@ from coordinator_core.git.path_canon import (  # noqa: F401 - re-exported for ca
     canonical_repo_relative_path_refusal,
     first_non_canonical_path_refusal,
 )
-from coordinator_core.ops.ceremony.commit_admission import (
-    governed_surface_refusal,
-    skill_weight_check,
-)
+from coordinator_core.ops.ceremony.commit_admission import governed_surface_refusal
 from coordinator_core.ops.ceremony.commit_path_legality import illegal_path_refusal
 from coordinator_core.git.commit_signing import (
     commit_signing_enabled,
@@ -4813,9 +4810,6 @@ def _commit_via_head_spine(
                 f"that its admission ledger does not admit:\n{admission_refusal}"
             ),
         )
-    skill_weight, _ = skill_weight_check(root, assembled)  # could-not-run note: commit_v2 only
-    if skill_weight is not None:
-        return GitResult(returncode=1, stdout="", stderr=skill_weight)
     legality_refusal = illegal_path_refusal(assembled)
     if legality_refusal is not None:
         return GitResult(

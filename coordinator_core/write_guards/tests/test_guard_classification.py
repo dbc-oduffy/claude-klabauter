@@ -154,7 +154,6 @@ HARD_DENY_NAMES = [
     "block_completion_monolith_write",
     "block_confined_agent_write",
     "block_consumed_handoff_edit",
-    "block_cross_repo_agent_write",
     "block_cutover_phase_hand_edit",
     "block_derived_global_doctrine_write",
     "block_dev_repo_sentinel_write",

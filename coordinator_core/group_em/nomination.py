@@ -60,10 +60,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Optional
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.group_em import atomic_record, human_entry, session_registry
+from coordinator_core.group_em import human_entry, session_registry
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.liveness import session_live
 
@@ -444,63 +444,6 @@ def who(repo_root: str, directory: Optional[Path] = None) -> Optional[dict]:
     annotated["live_reason"] = liveness.live_reason
     annotated["entry_status"] = entry_status(record, directory=directory)["status"]
     return annotated
-
-
-class StandDownResult(NamedTuple):
-    """`ok`; `exit_code` 0 stood down | 3 no record | 4 unlink failed | 5 not the holder."""
-
-    ok: bool
-    exit_code: int
-    message: str
-    record: Optional[dict]
-
-
-def stand_down(
-    repo_root: str, session_id: Optional[str], directory: Optional[Path] = None
-) -> StandDownResult:
-    """Remove the holder's per-repo record and, when it names the same session, the box record.
-
-    `session_id` None stands down whoever holds the repo record; a given id that is not the holder
-    is refused (5) and both records are kept. The box record naming another session is never
-    touched."""
-    path = _record_path(repo_root, directory)
-    with atomic_record.holder_lock(path):
-        existing = read_record(repo_root, directory)
-        if existing is None:
-            return StandDownResult(False, 3, f"no nomination on record for {repo_root}", None)
-        ok, exit_code, detail = atomic_record.remove_holder_record(path, existing, session_id)
-        if ok:
-            _remove_box_record_of(str(existing.get("session_id") or ""), directory)
-    if ok:
-        return StandDownResult(
-            True, 0, f"stood down {existing.get('session_id')} for {repo_root}", existing
-        )
-    if exit_code == 5:
-        return StandDownResult(
-            False,
-            5,
-            f"refused: {session_id} does not hold the Group EM role for {repo_root} "
-            f"(held by {detail})",
-            existing,
-        )
-    return StandDownResult(
-        False,
-        4,
-        f"failed to remove nomination record at {path} ({detail}); "
-        f"{existing.get('session_id')} may still hold the role",
-        existing,
-    )
-
-
-def _remove_box_record_of(holder_sid: str, directory: Optional[Path]) -> None:
-    box_path = _box_record_path(directory)
-    box = atomic_record.read_json_tolerant(box_path)
-    if box is None or not holder_sid or str(box.get("session_id") or "") != holder_sid:
-        return
-    try:
-        box_path.unlink()
-    except OSError:
-        pass
 
 
 def _session_id_for_name(name: str) -> Optional[str]:

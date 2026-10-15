@@ -106,9 +106,9 @@ def test_the_terminal_return_validates_as_a_wake_digest_for_a_plain_run():
     assert obj["next_action"]["kind"] == "terminal_commit"
 
 
-def test_a_resolved_scope_runs_before_the_falsifier_judge():
-    """When both a resolved test scope and a plan-declared falsifier exist,
-    the scoped test is awaited first, then the falsifier (never one parallel)."""
+def test_a_resolved_scope_and_a_falsifier_run_together_in_one_parallel():
+    """AC14: when both a resolved test scope and a plan-declared falsifier
+    exist, they compose into ONE parallel([...]) rather than either alone."""
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     falsifier = {
         "how": "run the migration",
@@ -120,12 +120,11 @@ def test_a_resolved_scope_runs_before_the_falsifier_judge():
     )
 
     terminal = script[script.index("phase('Scoped test run')") :]
-    assert "await parallel([" not in terminal
-    test_at = terminal.index("_testResult = await agent(")
-    falsifier_at = terminal.index("_falsifierResult = await ")
-    assert test_at < falsifier_at
-    assert "test:terminal'" in terminal[test_at:falsifier_at]
-    assert "test:terminal-falsifier'" in terminal[falsifier_at:]
+    assert "await parallel([" in terminal
+    parallel_block = terminal[terminal.index("await parallel([") :]
+    body = parallel_block.split("]);", 1)[0]
+    assert "test:terminal'" in body
+    assert "test:terminal-falsifier'" in body
 
 
 def test_a_falsifier_alone_never_touches_tests_status():
@@ -588,8 +587,8 @@ def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
         waves, name="wf", description="judge+falsifier", falsifier=falsifier,
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
-    body = script[script.index("_testResult = await agent(") :]
-    assert body.index("test:terminal'") < body.index("_falsifierResult = await ")
+    body = script[script.index("[_testResult, _falsifierResult] = await parallel([") :].split("]);", 1)[0]
+    assert "test:terminal'" in body
     assert "coordinator:criterion-judge" in body and "run it" in body
     assert "test:terminal-falsifier'" not in script
 

@@ -9,18 +9,13 @@ The task is found through the submission record this module writes beside the ru
 the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) capture
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
-A run whose submitting call was refused (no launch record and a lone non-launch `tool_result`
-for the stored `tool_use_id`) has ended too, for every reader and every session.
-
 A token owns a sizing only when its record names it: from the emit (a `--sizing` run) or from the
 gate's `bind_sizing` (a raw ask). A raw ask's run is also reachable through `live_run_for_session`.
 `unlaunched_run_for_sizing` names this session's token whose submitting call was refused (a
 non-launch result for the stored `tool_use_id`). Launch records are read from the managed temp dir
 and the legacy top-level dir.
 
-Read-only except `record_submission`, the `managed_tempdir` mkdir on an unscoped lookup, and
-`run_token.consume` of a run that ended on evidence (task terminal, halted returns included, or a
-refused submitting call); the unlaunched-grace timer answers "not live" but never consumes. No spawn. Every read failure answers "not live": a wrong
+Read-only except `record_submission` and the `managed_tempdir` mkdir on an unscoped lookup. No spawn. Every read failure answers "not live": a wrong
 "live" refuses a legitimate fire, a wrong "not live" costs at most a duplicate run.
 """
 
@@ -46,9 +41,6 @@ UNLAUNCHED_GRACE_SECONDS = 15 * 60
 #: Transcript bytes searched for the terminal notification (the notification is appended after
 #: the launch, so the tail holds it unless the session has run long past the run's end).
 _TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
-
-_EVIDENCE = "evidence"
-_TIMER = "timer"
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -153,70 +145,18 @@ def _task_ended(transcript_tail: str, task_id: str) -> bool:
 
 
 def _run_ended(
-    session_id: object,
-    script_path: object,
-    transcript_path: object,
-    minted_at: float,
-    dirs: list[str],
-    tool_use_id: object = None,
-) -> Optional[str]:
-    """Why the run is over, else None while it is live: `_EVIDENCE` once the harness reported the
-    run's task terminal (halted returns included) or the submitting call was refused; `_TIMER`
-    once the unlaunched grace has passed, which is not evidence and never spends the token."""
+    session_id: object, script_path: object, transcript_path: object, minted_at: float, dirs: list[str]
+) -> bool:
+    """True once the harness reported the run's task terminal, or its launch never happened."""
     if not isinstance(session_id, str) or not isinstance(script_path, str):
-        return None
-    task_ids = _launched_task_ids(session_id, script_path, dirs)
-    has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
-    tail = _tail(transcript_path) if has_transcript else ""
-    if not task_ids:
-        if tail and isinstance(tool_use_id, str) and tool_use_id:
-            if _call_refused(tail, tool_use_id):
-                return _EVIDENCE
-            recovered = _launch_task_id(tail, tool_use_id)
-            if recovered:
-                task_ids = [recovered]
-        if not task_ids:
-            return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
-    if not tail:
-        return None
-    task_id = task_ids[-1]
-    return _EVIDENCE if _task_ended(tail, task_id) or _task_gone(tail, task_id) else None
-
-
-def _task_gone(transcript_tail: str, task_id: str) -> bool:
-    """True when a tail line reports `No task found` for `task_id`: the harness never ran it, or
-    reaped it, so no terminal notification can follow."""
-    if task_id not in transcript_tail:
         return False
-    return any("No task found" in ln and task_id in ln for ln in transcript_tail.split("\n"))
-
-
-def _launch_task_id(transcript_tail: str, tool_use_id: str) -> Optional[str]:
-    """The harness task id of the lone `async_launched` result for `tool_use_id` in the tail, for
-    a run whose `workflow-run-*` launch record temp cleanup removed."""
-    if tool_use_id not in transcript_tail:
-        return None
-    for line in transcript_tail.split("\n"):
-        if tool_use_id not in line or '"tool_result"' not in line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        message = obj.get("message") if isinstance(obj, dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, list):
-            continue
-        blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
-        if len(blocks) != 1 or blocks[0].get("tool_use_id") != tool_use_id:
-            continue
-        launch = obj.get("toolUseResult")
-        if isinstance(launch, dict) and launch.get("status") == "async_launched":
-            task_id = launch.get("taskId")
-            if isinstance(task_id, str) and _SAFE_ID_RE.match(task_id):
-                return task_id
-        return None
-    return None
+    task_ids = _launched_task_ids(session_id, script_path, dirs)
+    if not task_ids:
+        return time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return False
+    tail = _tail(transcript_path)
+    return bool(tail) and _task_ended(tail, task_ids[-1])
 
 
 def _record_live(
@@ -229,12 +169,7 @@ def _record_live(
         transcript_path if run_session and run_session == session_id else None
     )
     script = submission.get("script_path") or record.get("script_path")
-    ended = _run_ended(
-        run_session, script, transcript, float(record["minted_at"]), dirs, submission.get("tool_use_id")
-    )
-    if ended == _EVIDENCE:
-        _run_token.consume(root, run_id)
-    return ended is None
+    return not _run_ended(run_session, script, transcript, float(record["minted_at"]), dirs)
 
 
 def live_run_for_sizing(

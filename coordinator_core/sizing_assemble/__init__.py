@@ -549,27 +549,6 @@ _POST_SIZE_PROMPT_TSHIRTS = ("M", "L", "XL", "XXL")
 _PREMISE_DETENT_TSHIRTS = ("M", "L", "XL", "XXL")
 
 
-SUITE_TIER_REWRITE = "tests covering touched files pass"
-
-_SINGLE_CLAIM_BREAK = re.compile(r"[;\n]|\.\s|[,:]|\b(?:and|then|or|but|not|no|except|unless|without|plus|also)\b", re.IGNORECASE)
-
-
-def _suite_tier_rewrite_is_safe(statement: object) -> bool:
-    """True when a tier-naming statement is one tests-on-touched-files-pass claim.
-
-    Only then does replacing the whole statement with SUITE_TIER_REWRITE lose
-    nothing; a bare tier name or a multi-claim statement is refused instead.
-    """
-    text = " ".join(str(statement or "").split())
-    if _SINGLE_CLAIM_BREAK.search(text):
-        return False
-    return bool(
-        re.search(r"\btests?\b", text, re.IGNORECASE)
-        and re.search(r"\btouched\b", text, re.IGNORECASE)
-        and re.search(r"\bpass(?:es)?\b", text, re.IGNORECASE)
-    )
-
-
 class SizingAssembleError(ValueError):
     pass
 
@@ -1051,9 +1030,7 @@ def route(
     scout_evidence = list(scout_evidence or [])
     tier_refusal = suite_tier_refusal(exit_criterion)
     if tier_refusal is not None:
-        if not _suite_tier_rewrite_is_safe(exit_criterion):
-            raise SizingAssembleError(tier_refusal)
-        exit_criterion = SUITE_TIER_REWRITE
+        raise SizingAssembleError(tier_refusal)
     if click_paths and not exit_criterion:
         raise SizingAssembleError("--click-path needs --exit-criterion: a click path belongs to a criterion")
     exit_criterion_field = (

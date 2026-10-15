@@ -2,7 +2,8 @@
 coordinator_core.hooks.nudge_em_code_dispatch — PreToolUse op.
 
 Purpose: Routes the EM's (main-agent) inline code writes to executor dispatch.
-The async `_handler` below stays advisory; `op()` denies.
+The async `_handler` below stays advisory; `op()` advises in every
+session (unsized, sized, plan-routed) and never denies product-code Edits.
 
 Suppression conditions (no_advisory):
   1. agent_id present — subagent writes are always allowed; executors write code.
@@ -23,10 +24,10 @@ Suppression conditions (no_advisory):
      diff sizes was REJECTED (one session's datapoint, wrong unit — see
      `_is_semantic_bypass_edit`'s docstring) in favor of this semantic mechanism.
 
-  6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` DENIES the main EM's
-     product-code write at every size (default strict dispatch). The sentinel
-     (3) suppresses only when its content is a non-empty reason line; each
-     honoured sentinel appends a JSON line to the per-session escape log
+  6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` answers the main EM's
+     product-code write with a repeating advisory.
+     The sentinel (3) suppresses it only when its content is a non-empty
+     reason line. Each honoured sentinel appends a JSON line to the per-session escape log
      (`dispatch-escapes.jsonl` in the session's share dir).
 
 Negative-spec:
@@ -48,17 +49,14 @@ from __future__ import annotations
 
 import difflib
 import io
-import json
 import os
 import re
 import socket
 import sys
 import tokenize
-from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core._hook_envelope import deny
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
@@ -66,12 +64,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
 )
-from coordinator_core.hooks.dispatch_escape import (  # noqa: F401
-    ESCAPE_LOG_NAME,
-    _log_escape,
+from coordinator_core.hooks.dispatch_escape import (
     _take_escape,
     _resolve_session_id_op,
-    _sentinel_reason,
 )
 from coordinator_core.session.mode_resolution import resolve_mode
 from coordinator_core.warp_fire import fire_step
@@ -525,23 +520,24 @@ def _session_sizing_state(payload: dict, session_id: str) -> tuple[bool, bool]:
 
 _SESSION_SIZING = "<this session's sizing path>"
 
-_UNSIZED_DENY = "No sizing this session. " + fire_step()
+_UNSIZED_ADVISORY = (
+    "[em-code-dispatch nudge] No sizing this session. " + fire_step()
+)
 
-_SIZED_DENY = "EM edits route through the warp run. " + fire_step(_SESSION_SIZING)
+_SIZED_ADVISORY = (
+    "[em-code-dispatch nudge] EM edits route through the warp run. "
+    + fire_step(_SESSION_SIZING)
+)
 
-_PLAN_ROUTE_DENY = "This session's sizing routed to a plan. " + fire_step(_SESSION_SIZING)
-
-
-def _escape_tail(session_id: str) -> str:
-    """The logged escape every deny branch names: path, precondition, logging."""
-    return (
-        f"Escape: a reason line in {dispatch_nudge_sentinel_path(session_id)} is "
-        f"honoured once, beside a PM grant or a failed/BLOCKED executor, and logged."
-    )
+_PLAN_ROUTE_ADVISORY = (
+    "[em-code-dispatch nudge] This session's sizing routed to a plan. "
+    + fire_step(_SESSION_SIZING)
+)
 
 
 def op(payload: dict) -> dict | None:
-    """Deny the main EM's product-code write at every size.
+    """Advise on the main EM's product-code write; never deny. The advisory
+    repeats on every Edit and names the step for the session's sizing state.
 
     Exempt: subagents, doc/data files, bootstrap/out-of-repo, semantic-bypass
     diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason
@@ -598,9 +594,8 @@ def op(payload: dict) -> dict | None:
         return None
 
     has_sizing, plan_pending = _session_sizing_state(payload, session_id)
-    tail = _escape_tail(session_id)
     if not has_sizing:
-        return deny("PreToolUse", f"{_UNSIZED_DENY} {tail}")
+        return context_only("PreToolUse", _UNSIZED_ADVISORY)
     if plan_pending:
-        return deny("PreToolUse", f"{_PLAN_ROUTE_DENY} {tail}")
-    return deny("PreToolUse", f"{_SIZED_DENY} {tail}")
+        return context_only("PreToolUse", _PLAN_ROUTE_ADVISORY)
+    return context_only("PreToolUse", _SIZED_ADVISORY)

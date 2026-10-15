@@ -1,7 +1,4 @@
-"""The gate-owed marker contract: one line, three kinds, shared by every reader.
-
-``needs-dependent`` names a later row (``gate-blocker: needs-dependent: <row id> <why>``)
-whose run the PARTIAL row's live test waits on; only that row is released.
+"""The gate-owed marker contract: one line, two kinds, shared by every reader.
 
 An executor whose build gate was its only miss ends its reply with
 ``gate-blocker: <kind>: <detail>`` beneath the status line. The emitted row runner
@@ -18,8 +15,7 @@ from typing import Optional
 
 KIND_OUTSIDE_FOOTPRINT = "outside-footprint"
 KIND_GUARD_DENIED = "guard-denied"
-KIND_NEEDS_DEPENDENT = "needs-dependent"
-KINDS = (KIND_OUTSIDE_FOOTPRINT, KIND_GUARD_DENIED, KIND_NEEDS_DEPENDENT)
+KINDS = (KIND_OUTSIDE_FOOTPRINT, KIND_GUARD_DENIED)
 
 GATE_OWED_VAR = "_gateOwed"
 

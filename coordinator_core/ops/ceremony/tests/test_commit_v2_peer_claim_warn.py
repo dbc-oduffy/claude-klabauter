@@ -10,17 +10,13 @@ handler returns, which a mock of either module would beg the question of.
 
 from __future__ import annotations
 
-import json
-import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.session import core as session_core
-from coordinator_core.session import liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -182,88 +178,3 @@ def test_both_message_lines_present_for_mixed_paths(repo, monkeypatch):
     joined = " ".join(result["warnings"])
     assert live_peer in joined and live_rel in joined
     assert dead_peer not in joined
-
-
-def _age_session(repo: Path, sid: str, *, record_files: bool) -> None:
-    """Age meta `last_activity` past the abandonment window; with `record_files`, every regular file too."""
-    sdir = Path(session_core.session_dir(sid, str(repo)))
-    meta = sdir / "meta.json"
-    data = json.loads(meta.read_text(encoding="utf-8"))
-    data["last_activity"] = "2020-01-01T00:00:00Z"
-    meta.write_text(json.dumps(data), encoding="utf-8")
-    if record_files:
-        old = time.time() - 2 * liveness._ABANDONMENT_WINDOW_SEC
-        for f in sdir.iterdir():
-            if f.is_file():
-                os.utime(f, (old, old))
-
-
-def _live_holder(repo, monkeypatch, peer_sid, rel):
-    _seed_tracked(repo, rel, "v1\n")
-    session_core.init(peer_sid, cwd=str(repo))
-    session_scope.touch(peer_sid, rel, cwd=str(repo))
-    monkeypatch.setattr(
-        commit_v2.session_liveness, "session_live", lambda sid, cwd=None: True
-    )
-    (repo / rel).write_text("v2\n", encoding="utf-8")
-    _own_sid(monkeypatch, peer_sid + "-self")
-
-
-def test_abandoned_live_holder_is_released_and_disclosed(repo, monkeypatch):
-    peer_sid = "commit-v2-peer-claim-abandoned"
-    rel = "state/handoff-tracker.md"
-    _live_holder(repo, monkeypatch, peer_sid, rel)
-    _age_session(repo, peer_sid, record_files=True)
-
-    result = _call(repo, {"paths": [rel], "message": "update tracker"})
-
-    assert result["committed"] is True
-    assert any(rel in w and peer_sid in w and "released" in w for w in result["warnings"]), result["warnings"]
-    body = subprocess.run(
-        ["git", "log", "-1", "--format=%B"], cwd=str(repo), capture_output=True,
-        text=True, check=True, **no_console_creationflags(),
-    ).stdout
-    assert f"{commit_v2.ABSORBED_PEER_CLAIM_PREFIX} {peer_sid} {rel}" in body, body
-
-    peer_holds: list = []
-    abandoned_holds: list = []
-    commit_v2._peer_claim_warnings(
-        repo, [rel], peer_holds, own_sid="someone-else", abandoned_holds=abandoned_holds
-    )
-    assert abandoned_holds == [(rel, peer_sid)]
-    assert peer_holds == []
-
-
-def test_last_activity_aged_only_is_still_a_peer_hold(repo, monkeypatch):
-    peer_sid = "commit-v2-peer-claim-fresh-record"
-    rel = "state/handoff-tracker.md"
-    _live_holder(repo, monkeypatch, peer_sid, rel)
-    _age_session(repo, peer_sid, record_files=False)
-
-    peer_holds: list = []
-    abandoned_holds: list = []
-    commit_v2._peer_claim_warnings(
-        repo, [rel], peer_holds, own_sid="someone-else", abandoned_holds=abandoned_holds
-    )
-    assert peer_holds == [(rel, peer_sid)]
-    assert abandoned_holds == []
-
-
-def test_session_abandoned_raising_keeps_the_live_hold(repo, monkeypatch):
-    peer_sid = "commit-v2-peer-claim-abandon-raises"
-    rel = "state/handoff-tracker.md"
-    _live_holder(repo, monkeypatch, peer_sid, rel)
-
-    def _boom(sid, cwd=None):
-        raise RuntimeError("simulated session_abandoned failure")
-
-    monkeypatch.setattr(commit_v2.session_liveness, "session_abandoned", _boom)
-
-    peer_holds: list = []
-    abandoned_holds: list = []
-    warnings = commit_v2._peer_claim_warnings(
-        repo, [rel], peer_holds, own_sid="someone-else", abandoned_holds=abandoned_holds
-    )
-    assert peer_holds == [(rel, peer_sid)]
-    assert abandoned_holds == []
-    assert any(peer_sid in w for w in warnings)

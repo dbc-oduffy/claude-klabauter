@@ -35,7 +35,7 @@ def test_literal_backtick_or_dollar_paren_passes(arg):
     [
         '--intent "a `date` b"',
         "--intent a`date`b",
-        '--intent "a $(whoami) b"',
+        '--intent "a $(date) b"',
         "--intent 'x' \"`date`\"",
     ],
     ids=["double-quoted-backtick", "bare-backtick", "double-quoted-dollar-paren", "after-single-quote"],

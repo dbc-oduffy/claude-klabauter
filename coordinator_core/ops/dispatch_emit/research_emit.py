@@ -12,8 +12,6 @@ only writes are ask.md and brief.md under the caller's repo-relative scratch dir
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -21,15 +19,12 @@ from typing import Mapping, Sequence
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "ask_digest", "run_id_for", "bind_context", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "bind_context", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
 _CONTEXT_HEADING = "## Context files"
 MAX_SLUG_LEN = 48
-DIGEST_LEN = 6
-SCRIPT_SUFFIX = ".workflow.mjs"
-SUBMISSION_FILE = "submission.json"
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _BARE_SLUG = "question"
 _ROSTER_LIST = "roster"
@@ -74,32 +69,6 @@ def corpus_default_lists(pipeline: str, questions: Sequence[str] = ()) -> dict[s
     if pipeline == "web" and questions:
         lists["topics"] = tuple("abcdefghijklmnopqrstuvwxyz"[: len(questions)])
     return lists
-
-
-def ask_digest(root: Path, parts: Mapping[str, object]) -> str:
-    """Six hex digits naming one research ask: the same `parts` under the same `root` digest alike."""
-    blob = json.dumps({"root": root.resolve().as_posix(), **parts}, sort_keys=True, default=str)
-    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:DIGEST_LEN]
-
-
-def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str) -> str:
-    """The run id for the ask `digest`: the newest unlaunched script already emitted for it, else a fresh id.
-
-    A re-emit of one ask reuses its script's run id, so it rewrites that script instead of
-    writing a sibling. A script whose run dir holds a `submission.json` has launched; reusing its
-    id would collide with the run's token, submission and briefs, so a fresh id is minted.
-    """
-    base = root / run_dir_root
-    found = sorted(base.glob(f"{prefix}*-{digest}{SCRIPT_SUFFIX}"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for script in found:
-        run_id = script.name[: -len(SCRIPT_SUFFIX)]
-        if not (base / run_id / SUBMISSION_FILE).exists():
-            return run_id
-    fresh, bump = f"{prefix}{now}-{digest}", 0
-    while (base / fresh).exists() or (base / f"{fresh}{SCRIPT_SUFFIX}").exists():
-        bump += 1
-        fresh = f"{prefix}{now}{bump}-{digest}"
-    return fresh
 
 
 def _slug(text: str) -> str:

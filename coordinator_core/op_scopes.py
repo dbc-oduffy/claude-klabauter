@@ -293,7 +293,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # ROOT-EXISTENCE leg), under main_worktree_root(common_dir). Without this
     # entry dispatch resolves repo_root=None and the handler refuses outright.
     "plan.prep_gate":                        "common_dir",
-    "plan.readiness_verdict":                "common_dir",
     "plan.stamp_prepped":                    "common_dir",
     "artifact.adopt":                        "common_dir",
     "plan.gated_criteria_met":               "common_dir",
@@ -551,8 +550,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.idle_report":                    "none",
     "groupem.standing":                       "none",
     "groupem.box_hold":                       "none",
-    "groupem.admission_post":                 "none",
-    "workstream_complete.stand_down_watchers": "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly
     # the case this table's own header comment names for "common_dir"
@@ -669,7 +666,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "install.detect_python3_appx_stub":        "none",
     "lessons.filter_undated_universal":        "none",
     "lessons.reject_orphan_strip_entries":     "common_dir",
-    "release.write_index":                     "common_dir",
+    "completion.stamp_releases":               "common_dir",
     "install.clone_idempotent":                "none",
     "coverage.halt_on_uncovered":              "show_top",
     "ceremony.init_anchor_injection_state":    "none",
@@ -708,7 +705,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "review.snapshot_diff_and_head":           "show_top",
     "review.freeze_diff":                      "show_top",
     "review.partition_slices":                 "show_top",
-    "review.prep":                             "show_top",
     "workday.stitch_sidecar_into_summary":     "common_dir",
     "repo_setup.validate_target_root":         "none",
     "research.verify_scout_inventory_completeness": "common_dir",

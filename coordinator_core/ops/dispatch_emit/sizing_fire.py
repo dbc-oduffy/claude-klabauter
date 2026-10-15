@@ -19,7 +19,6 @@ ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
 _PM_DECISION = "pm-decision"
 _ROADMAP_EXIT = "roadmap"
-XS_PHASES = ("execute", "review", "terminal-commit")
 
 _TSHIRT_ARM = {
     "XS": ARM_XS,

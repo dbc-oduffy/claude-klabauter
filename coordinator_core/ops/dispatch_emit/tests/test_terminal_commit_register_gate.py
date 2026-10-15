@@ -86,19 +86,6 @@ def test_failing_row_demotes_naming_row(repo, rows, fragment):
     assert review["criterion"]["reason"] == reason
 
 
-def test_claimed_row_the_ledger_judged_is_not_demoted_as_not_judged(repo):
-    review = _review([])
-    assert _register_gate(repo, _PLAN, review, ["r1"]) is None
-    assert review["criterion"]["status"] == "met"
-
-
-def test_claimed_row_absent_from_judge_and_ledger_still_demotes(repo):
-    review = _review([])
-    reason = _register_gate(repo, _PLAN, review, ["other"])
-    assert reason is not None and "r1" in reason and "not judged" in reason
-    assert review["criterion"]["status"] == "not_met"
-
-
 def test_no_rows_claimed_by_plan_is_untouched(repo):
     other = "docs/plans/nobody.md"
     (repo / other).write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")

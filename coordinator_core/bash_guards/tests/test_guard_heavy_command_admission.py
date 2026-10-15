@@ -661,29 +661,6 @@ class TestRunawayWorkerAdvisory:
         (line,) = _log_lines(tmp_path)
         assert line["kind"] == "worker-rss" and "300" in line["reason"] and "8800" in line["reason"]
 
-    def test_a_tree_of_small_children_over_the_ceiling_is_flagged_once_per_root(self, host, tmp_path):
-        root = ProcRow(pid=300, ppid=TOOL.pid, ctime=30, name="node.exe")
-        kids = [ProcRow(pid=400 + i, ppid=300, ctime=31 + i, name="chrome.exe") for i in range(21)]
-        host.rows = [CLAUDE, TOOL, CALLER, root] + kids
-        host.config[KEY_WORKER_RSS_CEILING_MB] = "4000"
-        host.working_sets = {300: 300, **{k.pid: 400 for k in kids}}
-        host.working_sets.pop(405)
-        assert guard.check(_payload("pnpm build")) is None
-        (line,) = _log_lines(tmp_path)
-        assert line["kind"] == "worker-rss"
-        assert "root pid 300" in line["reason"] and "21 processes" in line["reason"]
-        assert "8300 MB" in line["reason"] and "1 unreadable" in line["reason"]
-
-    def test_a_heavy_child_is_summed_once(self, host, tmp_path):
-        root = ProcRow(pid=300, ppid=TOOL.pid, ctime=30, name="node.exe")
-        child = ProcRow(pid=301, ppid=300, ctime=31, name="node.exe")
-        host.rows = [CLAUDE, TOOL, CALLER, root, child]
-        host.config[KEY_WORKER_RSS_CEILING_MB] = "1000"
-        host.working_sets = {300: 600, 301: 600}
-        assert guard.check(_payload("pnpm build")) is None
-        (line,) = _log_lines(tmp_path)
-        assert "2 processes" in line["reason"] and "1200 MB" in line["reason"]
-
     def test_no_ceiling_configured_flags_nothing(self, host, tmp_path):
         host.rows = TestSessionCapLeg()._heavy_rows(1)
         host.working_sets = {300: 8800}

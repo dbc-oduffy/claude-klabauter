@@ -218,7 +218,6 @@ def _workflow_stall_stop_op(params: dict, repo_root=None) -> dict:
     """Standalone Stop leg: params {"payload": {session_id, transcript_path,
     stop_hook_active, agent_id?}} (or the same keys flat); returns a deny
     envelope, an advisory envelope (chained Stop), or no_advisory()."""
-    params = payload_of(params)
     return _workflow_stall_stop_handler(params, repo_root)
 
 

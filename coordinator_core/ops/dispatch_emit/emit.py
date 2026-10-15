@@ -101,10 +101,8 @@ The v4 tier/stage review path (a derived ``review_tier`` routed through
 ``review_mint.roster.parse_stages``/``compose.compose``) is DELETED, not
 degraded into — see the now-superseded design note this replaced,
 ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md``.
-``derive_review_tier`` is defined here and ``review_mint.op`` imports it for its
-OWN, pre-execution mint; ``compose_script`` also calls it on the plan text it
-already holds and passes the tier to ``compose_execute_review`` so the execute
-wave scales by size (``None`` composes the full roster).
+``derive_review_tier`` stays defined (``review_mint.op`` imports it for its
+OWN, pre-execution mint), but nothing in this module calls it any more.
 
 A review wave composes ONLY when the caller supplies BOTH a
 ``review_roster_fragment`` that is ``schema_version 5`` AND
@@ -203,9 +201,9 @@ either/or:
    a plan that carries one already has a terminal verification with a
    recorded baseline and an ``expected_when_true``, which is a BETTER
    terminal phase than any unit suite for a migration a unit suite cannot
-   see (``_falsifier_agent_call_expr``). When a resolved scope AND a
-   falsifier both exist, the scoped test call is awaited first and the
-   falsifier judge after it, so the judge reads the post-fix check result.
+   see (``_falsifier_agent_call_expr``). AC14: when a resolved scope AND a
+   falsifier both exist, the two run together in ONE ``parallel([...])``
+   rather than either alone.
 3. Absent a falsifier too, emit with NO terminal test phase, but LOUD about
    it: a ``log()`` line naming the unmapped paths explicitly
    (``_no_test_target_narration``) — a degraded emit and a fully-tested one
@@ -343,7 +341,6 @@ from coordinator_core.ops.dispatch_emit.gate_owed import (
     GATE_OWED_JS_RE,
     GATE_OWED_VAR,
     KIND_GUARD_DENIED,
-    KIND_NEEDS_DEPENDENT,
     KIND_OUTSIDE_FOOTPRINT,
     report_line,
 )
@@ -369,11 +366,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     resolve_operative_criterion,
     compose_execute_review,
 )
-from coordinator_core.ops.review_mint.roster import (
-    RosterFragmentError,
-    parse_execute_review,
-    plan_required_reviewers,
-)
+from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
@@ -1882,9 +1875,6 @@ def _build_gate_clause(commands: list) -> str:
         "If a guard or hook refuses a gate command (it never ran), do not retry it or "
         "route around the guard: return PARTIAL with the report line "
         f"`{report_line(KIND_GUARD_DENIED, '<command> (<guard>)')}` and nothing else undone. "
-        "If the only thing undone is a live test that needs a later row of this plan to exist "
-        "first, return PARTIAL with the report line "
-        f"`{report_line(KIND_NEEDS_DEPENDENT, '<that row id> <why>')}`: only the named row starts. "
         "Either way, copy that `gate-blocker:` line verbatim as the second line of your "
         "reply, under the status line.\n"
         + lines
@@ -2969,7 +2959,8 @@ def _test_agent_call_expr(
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
-    assignment, alone or awaited ahead of a falsifier call). Carries a ``schema:`` (``test_result``) so the digest reads a
+    assignment, alone or inside a ``parallel([...])`` alongside a falsifier
+    call). Carries a ``schema:`` (``test_result``) so the digest reads a
     structured result rather than free text, and the prompt now REQUIRES
     ``sidecar_path`` (D1.MK1 -- the build/test carrier ``tests.sidecar``
     copies verbatim). ``typecheck`` (``typecheck_leg``) folds a ``tsc --noEmit``
@@ -3164,7 +3155,8 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
     ``agent(...)`` call EXPRESSION — never a full statement (see
     ``_test_agent_call_expr``'s docstring for why). Runs whenever the plan
     carries a falsifier: alone when no scoped test target resolved (rung
-    2), or awaited after the scoped test call when both exist. Composes a
+    2), or alongside the scoped test call inside ONE ``parallel([...])``
+    when both exist (§ Design D4/D1, AC14). Composes a
     ``coordinator:test-runner`` call the same shape ``_test_agent_call_expr``
     does — same Tier-T-only agent type, same phase — so this is not a
     lesser terminal phase, just a differently-sourced one; see module
@@ -3629,18 +3621,13 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    const by = [...new Set(ids.map((i) => _heldBy[i]))];\n"
         "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')';\n"
         "  }\n"
-        "  function _owedReleases(owed, id) {\n"
-        "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
-        "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
-        "  }\n"
-        "  function _depBlocker(deps, results, id) {\n"
+        "  function _depBlocker(deps, results) {\n"
         "    for (let i = 0; i < results.length; i++) {\n"
         "      const r = results[i];\n"
         "      const t = JSON.stringify(r ?? null);\n"
         "      const settled = typeof r === 'string' && "
         "(r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));\n"
-        "      const _o = r != null ? _gateOwedOf(t) : null;\n"
-        "      if (_o && _owedReleases(_o, id)) continue;\n"
+        "      if (r != null && _gateOwedOf(t)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t))) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
@@ -3671,7 +3658,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _routedOut.push(id);\n"
         "      return 'ROUTED-OUT: a dependency was routed out';\n"
         "    }\n"
-        "    const _blocker = _depBlocker(deps, _depResults, id);\n"
+        "    const _blocker = _depBlocker(deps, _depResults);\n"
         "    if (_blocker) {\n"
         "      _notStarted.push(id);\n"
         "      _blockedChunks.push(id);\n"
@@ -5012,12 +4999,11 @@ def compose_script(
                     chatty_nonce_var="_n",
                 ).replace("label: ", "label: 'continue:' + ", 1)
                 body_blocks.append(f"  _continue[{_js_string_literal(row.id)}] = (_n) => {cont_call};")
-            _continue_nonces = {row.id: _chatty.new_nonce() for row in flat_rows}
-            body_blocks.append(f"  const _continueNonces = {json.dumps(_continue_nonces)};")
             body_blocks.append(
                 "  await Promise.all(((_survey && _survey.continuations) || [])"
                 ".filter((c) => _continue[c.role])"
-                ".map((c) => _continue[c.role](_continueNonces[c.role])));"
+                ".map((c) => _continue[c.role](Array.from({ length: 16 }, "
+                "() => Math.floor(Math.random() * 16).toString(16)).join(''))));"
             )
             body_blocks.append(
                 "  await agent("
@@ -5106,9 +5092,7 @@ def compose_script(
             "review roster fragment is schema_version "
             f"{review_roster_fragment.get('schema_version')!r}, not 5"
         )
-    review = parse_execute_review(
-        review_roster_fragment, required_reviewers=plan_required_reviewers(plan_text)
-    )
+    review = parse_execute_review(review_roster_fragment)
     declared_paths = sorted(
         {path for paths in row_pathspecs.values() for path in paths} | set(prior_surface)
     )
@@ -5150,19 +5134,9 @@ def compose_script(
             "review_stamp._resolve_terminal_commit keys the terminal-"
             "commit lookup on this field."
         )
-    wave_tier = (
-        derive_review_tier(
-            plan_path,
-            repo_root=Path(repo_root) if repo_root is not None else _REPO_ROOT,
-            plan_text=plan_text,
-        )
-        if plan_path and plan_text
-        else None
-    )
     for title, block in compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
-        tier=wave_tier,
         plan_path=plan_path or "",
         run_base_sha=stage_base,
         slice_identity_sha=run_base_sha or "",
@@ -5311,14 +5285,15 @@ def compose_script(
                 guarded_blocks.append(criterion_block)
                 falsifier_var = _FALSIFIER_RESULT_VAR
         elif criterion_expr is not None:
-            # Serial, not parallel: the criterion judge must read the post-fix scoped test
-            # result, so it starts only after the test call (owed row build gates included) lands.
+            # AC14: both a resolved scope and the criterion leg run in ONE
+            # parallel([...]) after the integration stage.
             phase_titles.append(_TEST_PHASE_TITLE)
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
-                f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};\n"
-                f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
+                f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)},\n"
+                f"    () => {criterion_expr},\n"
+                "  ]);"
             )
             test_var = _TEST_RESULT_VAR
             falsifier_var = _FALSIFIER_RESULT_VAR
@@ -6185,7 +6160,7 @@ def emit_script(
     slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
-    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved, session_id=session_id)
+    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))

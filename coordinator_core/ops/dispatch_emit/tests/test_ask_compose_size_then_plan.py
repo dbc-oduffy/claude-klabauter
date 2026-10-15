@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
@@ -14,6 +19,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     STOP_AFTER_PLAN,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+_REPO = Path(__file__).resolve().parents[4]
 
 
 def _stub_wrap(text):
@@ -53,7 +60,7 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
 
 
 def test_sizing_path_prefix_is_emitted_verbatim():
-    assert "const _sizingPath = REPO_ROOT + '/' + 'state/sizings/' + " in _compose()
+    assert "const _sizingPath = 'state/sizings/' + " in _compose()
 
 
 def test_scout_jtbd_flags_reach_the_assemble_command():
@@ -104,7 +111,7 @@ def test_paraphrased_relay_with_exit_zero_still_reaches_the_sizing_path():
     and the only halt condition is the exit code, so the else branch assigns the sizing."""
     script = _compose()
     assert "if (_assembled.exit_code !== 0)" in script
-    assert "else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }" in script
+    assert "else { _sizingRel = _sizingPath; }" in script
     assert "!_decision" not in script
 
 
@@ -132,15 +139,28 @@ def test_stop_after_refuses_an_unknown_value():
         _compose(stop_after="execute")
 
 
-def test_stage_runs_inside_the_plan_agent_only_when_the_script_goes_on_to_stage():
-    full = _compose()
-    assert "const _authored = await agent(" in full and "_stagedManifest = _authored.manifest ?? null;" in full
-    assert "if (_stagedManifest) { _manifest = _stagedManifest; } else {" in full
-    assert full.index("const _authored") < full.index("if (_stagedManifest) { _manifest")
-    assert "label: 'stage'" in full
-    planned = _compose(stop_after=STOP_AFTER_PLAN)
-    assert "_stagedManifest" not in planned.replace("let _stagedManifest = null;", "")
-    assert "ask.stage" not in planned
+@pytest.mark.spawns_process
+def test_stop_after_none_matches_head_for_a_sizing_input(tmp_path, monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
+    head_src = subprocess.run(
+        ["git", "show", "HEAD:coordinator_core/ops/dispatch_emit/ask_compose.py"],
+        cwd=_REPO,
+        capture_output=True,
+        check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.decode("utf-8")
+    head_file = tmp_path / "ask_compose_head.py"
+    head_file.write_text(head_src, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("ask_compose_head", head_file)
+    head_mod = importlib.util.module_from_spec(spec)
+    sys.modules["ask_compose_head"] = head_mod
+    try:
+        spec.loader.exec_module(head_mod)
+        monkeypatch.setattr(head_mod, "_known_arm", lambda *_: "xs")
+        over = dict(prompt=None, sizing_rel="state/sizings/x.yaml")
+        assert _compose(stop_after=None, **over) == _compose(compose=head_mod.compose_ask_script, **over)
+    finally:
+        sys.modules.pop("ask_compose_head", None)
 
 
 def test_scout_prompt_names_the_pm_turn_log_and_the_em_brief():

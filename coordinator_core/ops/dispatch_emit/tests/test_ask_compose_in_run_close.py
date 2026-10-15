@@ -36,9 +36,7 @@ def test_closeable_predicate_gates_next_action_and_both_commit_stages(monkeypatc
     assert "!_halted" in pred and "_manifest.error" in pred
     assert "_deliveryVerdict.verdict === 'FAIL'" in pred
     assert "_closeable ? { kind: 'terminal_commit'" in script
-    assert script.count(_LIVE) == 1
-    assert ask_compose._DOCS_PRE_TAIL_GUARD in script
-    assert script.index(ask_compose._DOCS_PRE_TAIL_GUARD) < script.index("const _closeable = ")
+    assert script.count(_LIVE) == 2
     assert script.index("const _closeable") < script.index("_nextAction = _closeable")
 
 
@@ -47,12 +45,8 @@ def test_criterion_not_met_blocks_close_when_a_judge_runs(monkeypatch):
     script = _script(monkeypatch)
     var = ask_compose._emit._FALSIFIER_RESULT_VAR
     pred = script[script.index("const _closeable = ") :].split("\n", 1)[0]
-    assert "!_criterionOpen" in pred
-    assert f"const _criterionOpen = !!({var} && {var}.status === 'not_met');" in script
-    assert (
-        f"_criterionOpen ? (String({var}.reason ?? '').startsWith('not wired up: ') ? String({var}.reason).slice(0, 200) : "
-        f"'criterion not_met' + ({var}.reason ? ': ' + String({var}.reason).slice(0, 200) : ''))"
-    ) in script
+    assert f"!({var} && {var}.status === 'not_met')" in pred
+    assert f"({var} && {var}.status === 'not_met') ? 'criterion not_met'" in script
 
 
 def test_revise_and_refire_rides_beside_next_action(monkeypatch):

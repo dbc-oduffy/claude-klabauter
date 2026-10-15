@@ -2372,13 +2372,20 @@ class _ServerContext:
         that only actually saw one verdict. One tick must observe one
         consistent verdict.
 
-        Axis 1 only (one stat, no spawn). Axis 2 is request-driven
-        (`skew.ServerVersionState.is_skewed`, DR-315 section 4: "never
-        timer-adjudicated"): a bare source edit with no request arriving
-        retires nothing here; the next request does, and idle demotion
-        retires the server otherwise.
+        ALSO CHECKS `version_state.is_source_stale()` (axis 2), for the
+        same reason `_token_is_stale` (axis 1) is checked here rather than
+        only reactively: `skew.ServerVersionState.is_skewed` -- axis 2's
+        own home -- is reachable only from `_serve_line`, once per REQUEST,
+        so a bare source edit (no publish, no token rotation) is invisible
+        until the next caller happens to dial in. This watchdog already
+        polls on a fixed interval with no traffic required for axis 1; the
+        identical poll now asks axis 2 the identical question, at the
+        identical cost (`is_source_stale`'s own `refresh()` throttle -- one
+        `os.stat`, not a rehash, on most ticks). BV-20260927-06.
         """
-        stale = self._token_is_stale()
+        token_stale = self._token_is_stale()
+        source_stale = self.version_state.is_source_stale()
+        stale = token_stale or source_stale
         if idle.should_demote(
             served_count=self.telemetry.served_count,
             token_stale=lambda: stale,

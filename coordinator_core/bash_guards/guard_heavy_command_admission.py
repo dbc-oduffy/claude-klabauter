@@ -303,38 +303,18 @@ def _deny_reason(envelope: Mapping[str, Any]) -> str:
     return str(hso.get("permissionDecisionReason", "")) if isinstance(hso, dict) else ""
 
 
-def _flag_runaway_workers(config, payload, command, cls, anchor, census, rows) -> None:
-    """Advisory only: log each heavy command whose whole process tree holds more than the ceiling.
-
-    `rows` is the one process-table snapshot the session-cap leg took; each pid is read once
-    across all trees, and an unreadable member is counted in the reason, never summed as 0.
-    """
+def _flag_runaway_workers(config, payload, command, cls, anchor, census) -> None:
+    """Advisory only: log each session heavy process whose working set is over the ceiling."""
     ceiling = _positive_int(config, KEY_WORKER_RSS_CEILING_MB)
-    if ceiling is None or census is None or not rows:
+    if ceiling is None or census is None:
         return
-    from coordinator_core.bash_guards import _session_census as census_mod
-
-    anchor_pid = anchor.pid if anchor is not None else None
-    children = census_mod._children(rows)
-    seen: set = set()
-    for root in census_mod.heavy_roots(census.heavy, rows, anchor_pid):
-        total = members = unreadable = 0
-        for member in census_mod._subtree(root, children):
-            if member.pid in seen:
-                continue
-            seen.add(member.pid)
-            mb = _working_set_mb(member.pid)
-            if mb is None:
-                unreadable += 1
-                continue
-            members += 1
-            total += mb
-        if total > ceiling:
+    for row in census.heavy:
+        mb = _working_set_mb(row.pid)
+        if mb is not None and mb > ceiling:
             _append_log(
                 _record(
                     payload, command, cls, ADVISORY_WORKER_RSS,
-                    "root pid %d (%s) tree of %d processes holds %d MB, ceiling %d MB; %d unreadable"
-                    % (root.pid, root.name, members, total, ceiling, unreadable),
+                    "pid %d (%s) holds %d MB, ceiling %d MB" % (row.pid, row.name, mb, ceiling),
                     anchor, census,
                 )
             )
@@ -461,10 +441,8 @@ def _cap_leg(
     heavy: bool,
     background: bool,
     typecheck: bool = False,
-    snapshot_out: Optional[List[Any]] = None,
 ):
-    """Returns (deny_envelope_or_None, anchor_or_None, census_or_None, launch_ctime).
-    The one process-table snapshot is appended to `snapshot_out` for the worker-RSS advisory."""
+    """Returns (deny_envelope_or_None, anchor_or_None, census_or_None, launch_ctime)."""
     from coordinator_core.bash_guards import _session_census as census_mod
 
     heavy_cap = _positive_int(config, KEY_SESSION_HEAVY_CAP)
@@ -488,8 +466,6 @@ def _cap_leg(
             None,
             0,
         )
-    if snapshot_out is not None:
-        snapshot_out.append(rows)
     caller = _caller_pid(payload)
     anchor = census_mod.resolve_anchor({"pid": caller}, primitives, snapshot=rows)
     if anchor is None:
@@ -653,12 +629,10 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
     heavy = cls.heavy_class is not None
     heavy_name = cls.heavy_class.value if heavy else "background"
 
-    snapshot: List[Any] = []
-
     def denied(leg: str, envelope, anchor=None, census=None):
         _append_log(_record(payload, command, cls, leg, _deny_reason(envelope), anchor, census))
         if census is not None:
-            _flag_runaway_workers(config, payload, command, cls, anchor, census, snapshot[0] if snapshot else ())
+            _flag_runaway_workers(config, payload, command, cls, anchor, census)
         return envelope
 
     if heavy and not _bypassed(LEG_IDENTITY, payload, command):
@@ -687,13 +661,13 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
     if not _bypassed(LEG_SESSION_CAP, payload, command):
         envelope, anchor, census, launch = _cap_leg(
             config, payload, primitives, heavy=heavy, background=cls.background,
-            typecheck=cls.heavy_class is HeavyClass.TYPECHECK, snapshot_out=snapshot,
+            typecheck=cls.heavy_class is HeavyClass.TYPECHECK,
         )
         if envelope is not None:
             return denied(LEG_SESSION_CAP, envelope, anchor, census)
 
-    if heavy and snapshot:
-        _flag_runaway_workers(config, payload, command, cls, anchor, census, snapshot[0])
+    if heavy:
+        _flag_runaway_workers(config, payload, command, cls, anchor, census)
     if heavy and anchor is not None:
         _write_lease(heavy_name, anchor, launch)
     return None

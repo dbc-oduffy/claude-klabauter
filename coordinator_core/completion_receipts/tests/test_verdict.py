@@ -205,26 +205,3 @@ def test_baseline_equal_tests_do_not_block_the_mint():
 def test_a_caused_unverified_or_unattributed_failure_still_refuses(over):
     record = _baseline_record(**over)
     assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
-
-
-def _no_delivery() -> dict:
-    rec = _record()
-    rec["delivery"] = {}
-    return rec
-
-
-def test_absent_delivery_mints_when_the_tier_exempts_the_verifier():
-    rec = _no_delivery()
-    assert mint_refusal(rec, rec["prep"], rec["tests"], delivery_exempt=True) is None
-
-
-def test_absent_delivery_refuses_when_the_tier_does_not_exempt_it():
-    rec = _no_delivery()
-    assert "delivery verdict is None" in mint_refusal(rec, rec["prep"], rec["tests"], delivery_exempt=False)
-    assert "delivery verdict is None" in _refusal(rec)
-
-
-def test_a_present_fail_delivery_refuses_even_when_exempt():
-    rec = _record()
-    rec["delivery"] = {"verdict": "FAIL"}
-    assert "delivery verdict is 'FAIL'" in mint_refusal(rec, rec["prep"], rec["tests"], delivery_exempt=True)

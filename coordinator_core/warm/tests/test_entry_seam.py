@@ -253,7 +253,7 @@ def test_run_op_main_collection_opens_through_the_seam(tmp_path, monkeypatch):
     from coordinator_core import cli_entry
 
     recorded: list = []
-    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd, max_paths=None: recorded.append(list(declared)))
+    monkeypatch.setattr(cli_entry, "_record", lambda declared, cwd: recorded.append(list(declared)))
 
     module = type("FakeOpModule", (), {})()
 

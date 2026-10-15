@@ -40,9 +40,9 @@ def _research_errors(research: dict) -> list[dict]:
 
 
 def test_vendored_versions():
-    assert _version(_SIZING) == "1.39.0"
+    assert _version(_SIZING) == "1.38.0"
     assert _version(_HANDOFF) == "11.0.1"
-    assert _version(_PLAN_TASKS) == "3.17.0"
+    assert _version(_PLAN_TASKS) == "3.16.0"
 
 
 def _find_key(node, key):
@@ -77,10 +77,6 @@ def test_sizing_unrelated_turns_and_visual_surface():
 def test_research_block_accepts_repo_deep_target():
     research = {"value_class": "deep", "sources": ["repo"], "targets": [{"source": "repo", "ref": "claude-klabauter"}]}
     assert _research_errors(research) == []
-
-
-def test_research_block_accepts_spike_value_class():
-    assert _research_errors({"value_class": "spike"}) == []
 
 
 def test_research_block_rejects_unknown_value_class():

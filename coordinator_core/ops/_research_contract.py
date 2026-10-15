@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final, TypedDict
 
-VALUE_CLASSES: Final = ("scouts", "corpus", "deep", "spike")
+VALUE_CLASSES: Final = ("scouts", "corpus", "deep")
 APPETITES: Final = ("small", "medium", "large")
 SOURCES: Final = ("web", "repo", "structured", "notebooklm")
 DEPTHS: Final = ("standard", "deeper", "deepest")
@@ -24,9 +24,6 @@ TIER_TABLE: Final[dict[str, dict[str, str]]] = {
     "scouts": {"small": "scouts", "medium": "scouts", "large": "corpus"},
     "corpus": {"small": "scouts", "medium": "corpus", "large": "deep"},
     "deep": {"small": "corpus", "medium": "deep", "large": "deep"},
-    # spike is DoE's binary-verdict class (procedure: the spike skill, run by the EM); the engine
-    # has no spike pipeline, so it takes the corpus row.
-    "spike": {"small": "scouts", "medium": "corpus", "large": "deep"},
 }
 
 # A scouts result naming any of these is raised to corpus: the scouts manifest is web-only.

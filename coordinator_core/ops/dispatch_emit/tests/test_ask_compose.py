@@ -232,9 +232,7 @@ def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
     script = _compose(**_JUDGE_KW)
     assert "agentType: 'coordinator:criterion-judge'" in script
     assert "Criterion judge" in _titles(script)
-    assert "[_testResult, _falsifierResult] = await parallel([" not in script
-    test_at = script.index("_testResult = await agent(")
-    assert test_at < script.index("_falsifierResult = await (async () =>")
+    assert "[_testResult, _falsifierResult] = await parallel([" in script
     assert "let _falsifierResult = null;" in script
     assert "(_planRel ?? _sizingRel)" in script
     assert "PLAN_PATH_SLOT_X" not in script
@@ -244,20 +242,17 @@ def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
 
 def test_the_judge_leg_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
-    assert "(_gate.arm !== 'xs' || _reviewApplied > 0) && (_manifest.test_targets ?? []).length) { try { _testResult = await agent(" in script
-    assert "_falsifierResult = await" in script
+    assert "() => (_gate.arm !== 'xs' && (_manifest.test_targets ?? []).length) ? agent(" in script
 
 
-def test_a_review_fix_reruns_the_scoped_test_before_the_judge_even_on_xs():
-    """The re-run lives inside `_testLeg`, which the judge awaits; the phase-consolidation tail
-    (docs/plans/2026-10-15-engine-ask-phase-consolidation.md) must keep the judge after the last test call."""
-    script = _compose(**_JUDGE_KW)
-    assert "_reviewApplied = (Array.isArray(_reviewWave)" in script
-    assert script.index("const _reviewApplied") < script.index("const _testLeg")
-    judge_at = script.index("_falsifierResult = await")
-    assert script.index("await _testLeg;") < judge_at
-    assert "_testResult = await agent(" not in script[judge_at:]
-    assert script.count("_testResult = await agent(") == 1
+def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
+    script = _compose()
+    gate = "if (!_halted && _gate.arm !== 'xs') {\n  phase('review');"
+    assert script.count(gate) == 1
+    assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("phase('ledger-check')")
+    assert "if (!_halted && _gate.arm === 'xs') { _reviewWave = []; }" in script
+    assert script.index(gate) < script.index("_reviewWave = [];") < script.index("  _nextAction = _closeable")
+    assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 
 def test_a_roster_without_a_judge_leaves_the_criterion_unrun():

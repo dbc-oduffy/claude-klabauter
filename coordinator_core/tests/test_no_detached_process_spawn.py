@@ -32,11 +32,6 @@ rule, and flagging those would force the explanation to be deleted in order to
 satisfy the guard. Widen this to new spawn shapes; never narrow it to a single
 flag combination, which is the exact hole that let the no-op spelling ship.
 
-Sanctioned route, 2026-10-14: `git/run.py :: run_git` reaches `leaf_spawn_creationflags()`
-only through `_console_flags`, and only for an argv `_is_leaf_argv` accepts against the closed
-`_LEAF_CONSOLE_SUBCOMMANDS` list (subcommands that cannot spawn a descendant). It never spells
-the forbidden name; `test_run_git_reaches_the_leaf_route_only_behind_the_classifier` pins that.
-
 Measurement: `state/audits/2026-08-21-detached-process-console-window-storm.md`.
 """
 
@@ -244,28 +239,3 @@ def test_known_detached_spawn_sites_stay_windowless(module_relpath: str) -> None
         f"coordinator_core/{module_relpath} references DETACHED_PROCESS again -- "
         "this is the console-window storm regressing."
     )
-
-
-def test_run_git_reaches_the_leaf_route_only_behind_the_classifier() -> None:
-    """`leaf_spawn_creationflags` appears in run.py's code only inside `_console_flags`,
-    which must branch on `_is_leaf_argv`, itself keyed on the closed leaf list.
-
-    A second use of the primitive in run.py, or a classifier that stops reading the list, is
-    the unconditional switch the 2026-08-21 audit measured as a window storm.
-    """
-    path = _ENGINE_ROOT / "git" / "run.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-
-    def names_in(node: ast.AST) -> set[str]:
-        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-
-    users = {
-        name
-        for name, fn in funcs.items()
-        if "leaf_spawn_creationflags" in names_in(fn)
-    }
-    assert users == {"_console_flags"}, f"run.py uses the leaf primitive in {sorted(users)}"
-    assert "_is_leaf_argv" in names_in(funcs["_console_flags"])
-    assert "_LEAF_CONSOLE_SUBCOMMANDS" in names_in(funcs["_is_leaf_argv"])
-    assert not _code_references(path)

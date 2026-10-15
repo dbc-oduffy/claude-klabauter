@@ -109,7 +109,7 @@ import sys
 from typing import Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.telemetry import spawn_counter
-from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags
 
 LOCAL_PLUMBING_BUDGET_SECS: float = 2.0
 
@@ -244,110 +244,6 @@ def _charge_and_close_job(job) -> None:
             k32.CloseHandle(job)
     except Exception:
         pass
-
-
-#: Answers "can this git argv spawn a console-subsystem descendant?" A subcommand named here
-#: is leaf only when `_is_leaf_argv` also accepts its flags. CLOSED list: a class is leaf only
-#: if it cannot spawn, never because it usually does not. Config-driven spawns (log.showSignature,
-#: partial-clone lazy fetch) are an accepted residual. Measured in
-#: `docs/research/2026-10-14-run-git-console-flag-spike.md`; every other subcommand (commit,
-#: status, ls-files, diff, show, fetch, ...) can reach a hook, filter, textconv, fsmonitor or
-#: transport child and keeps CREATE_NO_WINDOW.
-_LEAF_CONSOLE_SUBCOMMANDS = frozenset({
-    "rev-parse", "rev-list", "merge-base", "symbolic-ref", "show-ref", "for-each-ref",
-    "ls-tree", "config", "cat-file", "log",
-})
-
-_CONFIG_READ_FLAGS = frozenset({"--get", "--get-all", "--get-regexp", "--list", "-l"})
-_CAT_FILE_MODES = frozenset({"-e", "-t", "-s", "-p"})
-_LOG_PLAIN_FLAGS = frozenset({
-    "--oneline", "-z", "--first-parent", "--no-merges", "--max-count", "-n", "--skip",
-})
-_LOG_VALUE_PREFIXES = ("--format=", "--pretty=", "--max-count=", "--skip=")
-
-
-def _is_leaf_argv(args: Sequence[str]) -> bool:
-    """True when the literal `args` provably cannot start a git descendant.
-
-    Skips leading `-C <path>` pairs and `--no-optional-locks`; any other global option (`-c`
-    can set core.fsmonitor, a pager or an alias) makes the argv non-leaf.
-    """
-    argv = list(args)
-    i = 0
-    while i < len(argv):
-        if argv[i] == "-C" and i + 1 < len(argv):
-            i += 2
-        elif argv[i] == "--no-optional-locks":
-            i += 1
-        else:
-            break
-    if i >= len(argv) or argv[i] not in _LEAF_CONSOLE_SUBCOMMANDS:
-        return False
-    sub, rest = argv[i], argv[i + 1:]
-    flags = []
-    positionals = []
-    for a in rest:
-        if a == "--":
-            break
-        if a.startswith("-"):
-            flags.append(a)
-        else:
-            positionals.append(a)
-    if sub == "symbolic-ref":
-        # The write forms fire the reference-transaction hook, a console-subsystem child.
-        return len(positionals) <= 1 and not any(f in ("-d", "--delete") for f in flags)
-    if sub == "config":
-        return any(f in _CONFIG_READ_FLAGS for f in flags) and not any(
-            f in ("--edit", "-e") for f in flags
-        )
-    if sub == "cat-file":
-        return len(flags) == 1 and flags[0] in _CAT_FILE_MODES
-    if sub == "log":
-        # `%G?` / `%GS` ... placeholders run gpg, a console-subsystem child.
-        if any("%G" in f for f in flags):
-            return False
-        return all(
-            f in _LOG_PLAIN_FLAGS
-            or f.startswith(_LOG_VALUE_PREFIXES)
-            or (f.startswith("-") and f[1:].isdigit())
-            or (f.startswith("-n") and f[2:].isdigit())
-            for f in flags
-        )
-    return True
-
-
-_GIT_EXE: Optional[str] = None
-
-
-def _git_exe() -> str:
-    """The git binary to spawn: on Windows the real one behind Git for Windows' `cmd/git.exe`.
-
-    That `cmd` redirector starts the real git as a child, so a bare `git` costs two extra
-    processes per call (measured 5.0 vs 3.0 job processes for `rev-parse HEAD`). Falls back to
-    `"git"` when no sibling real binary exists.
-    """
-    global _GIT_EXE
-    if _GIT_EXE is None:
-        found = "git"
-        if sys.platform == "win32":
-            import shutil
-
-            on_path = shutil.which("git")
-            if on_path:
-                found = on_path
-                root = os.path.dirname(os.path.dirname(on_path))
-                if os.path.basename(os.path.dirname(on_path)).lower() == "cmd":
-                    for sub in ("ucrt64", "mingw64", "clangarm64", "mingw32"):
-                        real = os.path.join(root, sub, "bin", "git.exe")
-                        if os.path.isfile(real):
-                            found = real
-                            break
-        _GIT_EXE = found
-    return _GIT_EXE
-
-
-def _console_flags(args: Sequence[str]) -> dict:
-    return leaf_spawn_creationflags() if _is_leaf_argv(args) else no_console_creationflags()
 
 
 class GitResult(NamedTuple):
@@ -626,13 +522,13 @@ def run_git(
         mode_kwargs["stdin"] = subprocess.PIPE
     wall = _wall_bound(timeout, remote)
     job = _open_charging_job()
-    spawn_flags = _console_flags(args)
+    spawn_flags = no_console_creationflags()
     if job is not None:
         spawn_flags = {"creationflags": spawn_flags.get("creationflags", 0) | _CREATE_SUSPENDED}
     try:
         try:
             with subprocess.Popen(
-                [_git_exe(), *args],
+                ["git", *args],
                 cwd=cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

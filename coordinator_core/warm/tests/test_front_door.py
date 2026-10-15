@@ -1494,20 +1494,28 @@ def test_skew_watchdog_tick_noop_when_not_stale(tmp_path: Path, monkeypatch: pyt
     assert stopped == []
 
 
-def test_skew_watchdog_tick_pins_axis_1_only(
+def test_skew_watchdog_tick_stops_on_source_staleness_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Axis 2 is request-driven (DR-315 section 4): the watchdog tick never
-    consults `version_state`, so a source-stale state cannot stop it."""
+    """BV-20260927-06: a bare source edit that never rotates the engine
+    token (axis 1 stays quiet) must still retire this watchdog -- no
+    request, no client, no `_token_is_stale` involvement at all."""
     ctx = _supervisor_ctx(_stamped(tmp_path))
     stopped = []
-
-    class _Boom:
-        def __getattr__(self, name):
-            raise AssertionError(f"watchdog tick touched version_state.{name}")
-
     monkeypatch.setattr(ctx, "_token_is_stale", lambda: False)
-    monkeypatch.setattr(ctx, "version_state", _Boom())
+    monkeypatch.setattr(ctx.version_state, "is_source_stale", lambda: True)
+    monkeypatch.setattr(ctx, "stop", lambda: stopped.append(True))
+    ctx._skew_watchdog_tick()
+    assert stopped == [True]
+
+
+def test_skew_watchdog_tick_noop_when_neither_axis_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    stopped = []
+    monkeypatch.setattr(ctx, "_token_is_stale", lambda: False)
+    monkeypatch.setattr(ctx.version_state, "is_source_stale", lambda: False)
     monkeypatch.setattr(ctx, "stop", lambda: stopped.append(True))
     ctx._skew_watchdog_tick()
     assert stopped == []

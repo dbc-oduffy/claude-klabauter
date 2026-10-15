@@ -195,7 +195,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.plan_seam_fix", 'registers "plan.seam_fix"'),
     ("coordinator_core.ops.seam_baton_mint", 'registers "seam.mint_batons"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
-    ("coordinator_core.ops.plan_readiness_verdict", 'registers "plan.readiness_verdict"'),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
     ("coordinator_core.ops.plan_gated_criteria_met", 'registers "plan.gated_criteria_met"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
@@ -382,8 +381,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "plan.append_session" (strang-10 B, DR-216)',
     ),
     (
-        "coordinator_core.ops.release_index",
-        'registers "release.write_index" (DR-216)',
+        "coordinator_core.ops.release_stamp",
+        'registers "completion.stamp_releases" (DR-216)',
     ),
     (
         "coordinator_core.ops.review_freeze_diff",
@@ -391,7 +390,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "review-diff-freeze-op-wanted.md)",
     ),
     ("coordinator_core.ops.review_partition_slices", 'registers "review.partition_slices"'),
-    ("coordinator_core.ops.review_prep", 'registers "review.prep"'),
     ("coordinator_core.ops.review_reachability", 'registers "review.reachability" (2026-10-08, wired-up gate entry-point and click-path reachability)'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
@@ -417,8 +415,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_idle_report", 'registers "groupem.idle_report"'),
     ("coordinator_core.ops.group_em_standing", 'registers "groupem.standing"'),
     ("coordinator_core.ops.group_em_box_hold", 'registers "groupem.box_hold"'),
-    ("coordinator_core.ops.group_em_admission_post", 'registers "groupem.admission_post"'),
-    ("coordinator_core.ops.watcher_stand_down", 'registers "workstream_complete.stand_down_watchers"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
     ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),
     ("coordinator_core.ops.session_incident_claim", 'registers "session.incident_claim", "session.incident_peers"'),

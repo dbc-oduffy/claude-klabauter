@@ -307,6 +307,16 @@ def _size_l(repo):
     _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8").replace("tshirt: S", "tshirt: L"))
 
 
+def test_an_xs_run_with_an_empty_review_wave_commits_without_a_review_verdict(repo):
+    xs_review = {
+        "integration_stem": "wave-bookkeeping-run1", "slices": 0, "fixes": 0, "prep_sidecar": None,
+        "plan_id": None, "wave_sidecar_paths": [], "prep": None, "delivery": None,
+    }
+    out = _call(repo, inline_review=xs_review)
+    assert out["committed"] is True, out
+    assert out.get("plan_status") != "implemented", out
+
+
 def test_the_ledger_closeout_stand_in_is_gone():
     assert not hasattr(terminal_commit, "_ledger_closeout")
 

@@ -233,7 +233,6 @@ import json
 from coordinator_core.atomic_replace import atomic_write_bytes
 import os
 import re
-import shlex
 import stat
 import sys
 import uuid
@@ -518,7 +517,7 @@ class FiredDriftError(ValueError):
     """
 
 
-def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
+def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> None:
     """Make the run ledger-bearing and, for a `--sizing` run, seed that sizing's
     requirement_register with its PM words and the ask now; a raw ask's sizing is minted in-run and
     its gate binds it (the ask itself, verbatim in ask.md or relayed-ask.md, joins then).
@@ -532,11 +531,10 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
         relayed = ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED
-        return ledger.bind(
+        ledger.bind(
             root, ask_ctx["run_id"], ask_ctx["sizing_rel"],
             ask_text=None if relayed else prompt, relayed_text=prompt if relayed else None,
         )
-    return None
 
 
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
@@ -762,7 +760,6 @@ _PARAM_FIELDS = (
     Field("ask_source", "str"),
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
-    Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
@@ -915,13 +912,11 @@ def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Pat
 
 
 def _em_mailbox(root: Path, scratch_rel: str) -> dict:
-    """Create the run's EM mailbox (empty) and name the background commands that watch it.
+    """Create the run's EM mailbox (empty) and name it, with the tails the EM's Monitor runs.
 
     Members append escalations there mid-run (`chatty.EM_MAILBOX`); nothing else reads it.
-    Each command blocks until one new line arrives, prints it and exits, so it runs as a
-    background Bash run (no Monitor timeout). `em_watch` reads from the first line;
-    `em_rewatch` starts at the current end, so a re-armed watch never re-delivers a line
-    it already saw.
+    `em_watch` reads from the first line; `em_rewatch` starts at the current end, so a
+    re-armed Monitor never re-delivers a line it already saw.
     """
     from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
 
@@ -930,8 +925,8 @@ def _em_mailbox(root: Path, scratch_rel: str) -> dict:
     path.touch(exist_ok=True)
     return {
         "em_mailbox": path.as_posix(),
-        "em_watch": f"python -m coordinator_core.workflow_watch.mailbox_line --from-start {shlex.quote(path.as_posix())}",
-        "em_rewatch": f"python -m coordinator_core.workflow_watch.mailbox_line {shlex.quote(path.as_posix())}",
+        "em_watch": f"tail -n +1 -F {path.as_posix()}",
+        "em_rewatch": f"tail -n 0 -F {path.as_posix()}",
     }
 
 
@@ -975,13 +970,7 @@ def _research_route_setup(
         research = {"value_class": "scouts", "appetite": "medium"}
         brief_rel = ""
     shape = research_shape.shape(research)
-    digest = research_emit.ask_digest(root, {
-        "brief": brief_rel or str(ask), "research": research, "lists": lists,
-        "flags": params.get("flags") or {}, "context": [str(c) for c in params.get("context") or ()],
-    })
-    run_id = research_emit.run_id_for(
-        root, RUN_DIR_ROOT, f"{RUN_ID_PREFIX}research-", digest, datetime.now().strftime("%Y%m%dT%H%M%S")
-    )
+    run_id = f"{RUN_ID_PREFIX}research-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
     local_root = _local_only_root(params, research)
     if local_root is None:
         scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
@@ -1046,10 +1035,7 @@ def _research_route_setup(
         "topic_slug": research_emit.topic_slug(
             str(ask or ""), brief_rel if from_sizing else ""
         ),
-        "value_class": str(research["value_class"]),
     }
-    if from_sizing:
-        close_params["sizing"] = brief_rel
     if local_root is not None:
         close_params["local_root"] = local_root.as_posix()
     if len(segments) > 1:
@@ -1356,7 +1342,6 @@ def _dispatch_emit(
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "ask_source": ask_source,
-            "required_reviewers": list(params.get("required_reviewers") or ()),
         }
         if ask_baton is not None:
             ask_ctx["baton"] = ask_baton
@@ -1704,7 +1689,6 @@ def _dispatch_emit(
             stop_after=params.get("stop_after"),
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
-            required_reviewers=ask_ctx["required_reviewers"],
         )
         if ask_ctx["prompt"]:
             # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
@@ -1712,12 +1696,7 @@ def _dispatch_emit(
             ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
             ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
-        bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
-        ask_ctx["revisions_inherited"] = [
-            {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip()}
-            for i in (bound.items if bound is not None else ())
-            if i.origin == "revision"
-        ]
+        _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
         receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
@@ -1896,7 +1875,6 @@ def _dispatch_emit(
                 "params": {
                     "scratch_dir": (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).as_posix(),
                     "tier": legacy_tier,
-                    "value_class": legacy_tier,
                     "run_id": pipeline_ctx["run_id"],
                     "topic_slug": research_emit.topic_slug("", pipeline_ctx["inputs"].brief),
                 },
@@ -1924,8 +1902,6 @@ def _dispatch_emit(
         if ask_ctx is not None and ask_ctx.get("run_token"):
             # The run's commit token rides the launch args only: never the script's bytes.
             reply.setdefault("fire_args", {})["runToken"] = ask_ctx["run_token"]
-        if ask_ctx is not None and ask_ctx.get("revisions_inherited"):
-            reply["revisions_inherited"] = list(ask_ctx["revisions_inherited"])
 
     return reply
 
@@ -2447,10 +2423,6 @@ def _gate_sizing_at_emit(
     )
     from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES, sizing_acceptance_skipped
 
-    if not writes:
-        from coordinator_core.ops.dispatch_emit.sizing_xs_mint import recorded_xs_writes
-
-        writes = recorded_xs_writes(Path(root), sizing_rel)
     try:
         check_cross_repo_writes(
             [SimpleNamespace(id="--writes", writes=list(writes), writes_under=())],

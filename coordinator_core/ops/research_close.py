@@ -1,23 +1,20 @@
 """
 coordinator_core.ops.research_close — JSON-RPC "research.close" op.
 
-Purpose: closes a research run by tier. Scouts first concatenates the run's ``digest-*.md``
-files into ``<scratch_dir>/digest.md`` and archives that as its only output. Every tier
-copies the run's declared final outputs into ``docs/research/<YYYY-MM-DD>-<topic_slug>/``
-and makes exactly one ``commit_paths`` call over the copied paths plus the trail record
-``docs/research/trail/<run_id>.yaml`` (built by ``_research_trail``).
+Purpose: closes a research run by tier. Scouts concatenates the run's ``digest-*.md``
+files into ``<scratch_dir>/digest.md`` and commits nothing. Corpus and deep copy the
+run's declared final outputs into ``docs/research/<YYYY-MM-DD>-<topic_slug>/`` and make
+exactly one ``commit_paths`` call over the copied paths.
 
 Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
-``topic_slug`` (both safe single path segments), ``value_class`` (optional, in
-``rc.VALUE_CLASSES``, default ``tier``), ``sizing`` (optional repo-relative path named in the
-record), ``outputs`` (optional list of
+``topic_slug`` (both safe single path segments), ``outputs`` (optional list of
 scratch-relative file paths; default is every regular file directly in scratch_dir and
 directly in each ``segment_dirs`` subdirectory), ``segment_dirs`` (optional safe single
 path segments: a multi-pipeline run writes every segment after the first under
 ``<scratch_dir>/<pipeline>/``, archived at the same relative path), ``local_root``
 (optional, absolute: a local-only run archives to ``<local_root>/<YYYY-MM-DD>-<topic_slug>/``
-outside every git checkout and commits only its trail record, which carries no paths and no
-content; the reply's ``claims_out`` is the ``claims-emit --out`` stem there).
+outside every git checkout and commits nothing; the reply's ``claims_out`` is the
+``claims-emit --out`` stem there).
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -26,17 +23,16 @@ since the run began and outside the destination are reported as ``strays``: a me
 wrote its output elsewhere left it uncommitted and unarchived.
 
 Idempotency: a re-run whose destination dir already holds byte-equal copies of every
-output and the identical trail record returns the sha of the commit that landed them (found
-by walking HEAD for the close subject); when no such commit is found, missing files are
-written and the commit is made. A destination file or trail record holding different bytes
-is refused, never overwritten; a re-close on a later day names a new destination dir, so
-its record differs and is refused.
+output returns the sha of the commit that landed them (found by walking HEAD for the
+close subject); when no such commit is found, missing copies are written and the commit
+is made. A destination file holding different bytes is refused, never overwritten.
 
 Negative-spec:
   - Never calls ``ceremony.scoped_git_commit`` or ``run_commit_pipeline``; one
     ``commit_paths`` call or none.
   - Zero spawns on the clean path; one (``hash_worktree_blobs_via_spawn``) only on a
     CRLF-pinned path.
+  - Scouts writes nothing outside ``scratch_dir``.
   - A missing output is a structured refusal before any copy or commit.
 """
 
@@ -66,7 +62,6 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import _research_contract as rc
-from coordinator_core.ops import _research_trail
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.fleet._common import main_worktree_root
 
@@ -99,14 +94,14 @@ def _err(error: str, **extra) -> dict:
     return out
 
 
-def _build_digest(scratch: Path) -> Optional[str]:
-    """Concatenate ``digest-*.md`` into ``scratch/digest.md``; an error string when none exist."""
+def _close_scouts(scratch: Path) -> dict:
     digests = sorted(p for p in scratch.glob("digest-*.md") if p.is_file())
     if not digests:
-        return f"no digest-*.md under {str(scratch)!r}"
+        return _err(f"no digest-*.md under {str(scratch)!r}")
     body = "\n\n".join(p.read_text(encoding="utf-8").rstrip("\n") for p in digests) + "\n"
-    (scratch / "digest.md").write_text(body, encoding="utf-8", newline="\n")
-    return None
+    target = scratch / "digest.md"
+    target.write_text(body, encoding="utf-8", newline="\n")
+    return {"exit_code": 0, "committed": False, "digest_path": target.as_posix()}
 
 
 def _resolve_outputs(
@@ -197,24 +192,7 @@ def _close_committed(
     topic_slug: str,
     outputs: Optional[list],
     segment_dirs: list[str],
-    meta: dict,
-    local_root_raw: Optional[str] = None,
 ) -> dict:
-    """Archive the outputs and commit the trail record: the one commit site of this op.
-
-    A repo run commits the copies and the record in one ``commit_paths`` call; a local-only
-    run archives under its ``local_root`` and commits only the record.
-    """
-    local = bool(local_root_raw)
-    if local:
-        from coordinator_core.ops import _research_local
-
-        try:
-            archive_root = _research_local.outside_checkouts(Path(local_root_raw), "local_root")
-        except _research_local.LocalRootError as exc:
-            return _err(str(exc))
-    else:
-        archive_root = worktree / _RESEARCH_DIR
     sources, problem = _resolve_outputs(scratch, outputs, segment_dirs)
     if problem:
         return _err(problem)
@@ -227,84 +205,101 @@ def _close_committed(
         )
     since = min(p.stat().st_mtime for p in sources)
 
-    dest_dir = archive_root / f"{datetime.date.today().isoformat()}-{topic_slug}"
-    if contained_path(dest_dir, [archive_root]) is None:
-        return _err(f"destination escapes {str(archive_root)!r}: {str(dest_dir)!r}")
+    research_root = worktree / _RESEARCH_DIR
+    dest_dir = research_root / f"{datetime.date.today().isoformat()}-{topic_slug}"
+    if contained_path(dest_dir, [research_root]) is None:
+        return _err(f"destination escapes docs/research: {str(dest_dir)!r}")
 
     pairs = [(src, dest_dir / src.relative_to(scratch)) for src in sources]
-    rel_paths = [] if local else [dst.relative_to(worktree).as_posix() for _, dst in pairs]
+    rel_paths = [dst.relative_to(worktree).as_posix() for _, dst in pairs]
+    subject = f"research({topic_slug}): close {run_id}"
+
+    if dest_dir.exists():
+        for src, dst in pairs:
+            if dst.exists() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
+                return _err(
+                    f"destination exists with different content, refusing to overwrite: {str(dst)!r}",
+                    dest=str(dest_dir),
+                )
+        if all(dst.is_file() for _, dst in pairs):
+            sha = _landed_sha(worktree, subject)
+            if sha is not None:
+                return _with_strays(
+                    {"exit_code": 0, "committed": True, "sha": sha, "paths": rel_paths},
+                    worktree, dest_dir, since,
+                )
+
+    for src, dst in pairs:
+        if dst.is_file():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+
+    message = apply_missing_trailers(subject + "\n", worktree, rel_paths)
     try:
-        trail_rel = _research_trail.trail_rel(run_id)
-        trail_text = _research_trail.render(
-            _research_trail.record(
-                run_id=run_id,
-                sizing=meta["sizing"],
-                value_class=meta["value_class"],
-                tier=meta["tier"],
-                destination="local-only" if local else "repo",
-                paths=rel_paths,
-                output_count=len(sources),
-            )
+        outcome = commit_paths(
+            worktree,
+            rel_paths,
+            message,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree),
         )
-    except ValueError as exc:
-        return _err(f"trail record refused: {exc}")
-    trail_path = worktree / trail_rel
-    trail_bytes = trail_text.encode("utf-8")
-    if trail_path.exists() and (not trail_path.is_file() or trail_path.read_bytes() != trail_bytes):
+        sha = outcome.sha
+    except IndexStaleAfterCommit as exc:
+        sha = getattr(getattr(exc, "outcome", None), "sha", None)
+    except NothingToCommit:
+        sha = head_sha(worktree)
+    except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+        return _err(f"commit refused: {exc}", paths=rel_paths)
+    return _with_strays(
+        {"exit_code": 0, "committed": True, "sha": sha or "", "paths": rel_paths}, worktree, dest_dir, since
+    )
+
+
+def _close_local(
+    scratch: Path,
+    run_id: str,
+    topic_slug: str,
+    outputs: Optional[list],
+    segment_dirs: list[str],
+    local_root_raw: str,
+) -> dict:
+    from coordinator_core.ops import _research_local
+
+    try:
+        root = _research_local.outside_checkouts(Path(local_root_raw), "local_root")
+    except _research_local.LocalRootError as exc:
+        return _err(str(exc))
+    sources, problem = _resolve_outputs(scratch, outputs, segment_dirs)
+    if problem:
+        return _err(problem)
+    hits = _secret_hits(sources, scratch)
+    if hits:
         return _err(
-            f"trail record exists with different content, refusing to overwrite: {trail_rel}",
-            dest=trail_rel,
+            "secret-shaped values in the run's outputs; redact them in scratch (record key names "
+            "only) and re-run research.close",
+            secret_hits=hits,
         )
+    dest_dir = root / f"{datetime.date.today().isoformat()}-{topic_slug}"
+    pairs = [(src, dest_dir / src.relative_to(scratch)) for src in sources]
     for src, dst in pairs:
         if dst.exists() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
             return _err(
                 f"destination exists with different content, refusing to overwrite: {str(dst)!r}",
                 dest=str(dest_dir),
             )
-    subject = f"research({topic_slug}): close {run_id}"
-
-    landed = trail_path.is_file() and all(dst.is_file() for _, dst in pairs)
-    sha = _landed_sha(worktree, subject) if landed else None
-    if sha is None:
-        for src, dst in pairs:
-            if not dst.is_file():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
-        trail_path.parent.mkdir(parents=True, exist_ok=True)
-        if not trail_path.is_file():
-            trail_path.write_bytes(trail_bytes)
-        commit_rel = [*rel_paths, trail_rel]
-        message = apply_missing_trailers(subject + "\n", worktree, commit_rel)
-        try:
-            outcome = commit_paths(
-                worktree,
-                commit_rel,
-                message,
-                blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree),
-            )
-            sha = outcome.sha
-        except IndexStaleAfterCommit as exc:
-            sha = getattr(getattr(exc, "outcome", None), "sha", None)
-        except NothingToCommit:
-            sha = head_sha(worktree)
-        except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
-            return _err(f"commit refused: {exc}", paths=commit_rel)
-    if local:
-        return {
-            "exit_code": 0,
-            "committed": True,
-            "sha": sha or "",
-            "local_only": True,
-            "destination": dest_dir.as_posix(),
-            "paths": [dst.as_posix() for _, dst in pairs],
-            "trail": trail_rel,
-            "claims_out": (dest_dir / topic_slug).as_posix(),
-            "run_id": run_id,
-        }
-    return _with_strays(
-        {"exit_code": 0, "committed": True, "sha": sha or "", "paths": rel_paths, "trail": trail_rel},
-        worktree, dest_dir, since,
-    )
+    for src, dst in pairs:
+        if not dst.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+    return {
+        "exit_code": 0,
+        "committed": False,
+        "local_only": True,
+        "destination": dest_dir.as_posix(),
+        "paths": [dst.as_posix() for _, dst in pairs],
+        "claims_out": (dest_dir / topic_slug).as_posix(),
+        "run_id": run_id,
+    }
 
 
 def _with_strays(result: dict, worktree: Path, dest_dir: Path, since: float) -> dict:
@@ -325,20 +320,16 @@ def _close_sync(worktree: Path, params: dict) -> dict:
     topic_slug = str(params.get("topic_slug") or "")
     scratch_raw = str(params.get("scratch_dir") or "")
     outputs = params.get("outputs")
-    value_class = str(params.get("value_class") or tier)
-    sizing = params.get("sizing")
 
     if tier not in rc.TIERS:
         return _err(f"tier must be one of {list(rc.TIERS)}: {tier!r}")
-    if value_class not in rc.VALUE_CLASSES:
-        return _err(f"value_class must be one of {list(rc.VALUE_CLASSES)}: {value_class!r}")
-    if sizing is not None and not isinstance(sizing, str):
-        return _err(f"sizing must be a repo-relative path string: {sizing!r}")
     if not scratch_raw:
         return _err("missing required param: scratch_dir")
     scratch = Path(scratch_raw)
     if not scratch.is_dir():
         return _err(f"scratch_dir is not a directory: {scratch_raw!r}")
+    if tier == "scouts":
+        return _close_scouts(scratch)
     for name, value in (("run_id", run_id), ("topic_slug", topic_slug)):
         if not value or not safe_id(value):
             return _err(f"{name} is not a safe path segment: {value!r}")
@@ -349,28 +340,22 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         isinstance(d, str) and safe_id(d) for d in segment_dirs
     ):
         return _err(f"segment_dirs must be a list of safe path segments: {segment_dirs!r}")
-    if tier == "scouts":
-        problem = _build_digest(scratch)
-        if problem:
-            return _err(problem)
-        outputs, segment_dirs = ["digest.md"], []
-    meta = {"tier": tier, "value_class": value_class, "sizing": sizing}
     local_root_raw = params.get("local_root")
-    return _close_committed(
-        worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta,
-        str(local_root_raw) if local_root_raw else None,
-    )
+    if local_root_raw:
+        return _close_local(scratch, run_id, topic_slug, outputs, segment_dirs, str(local_root_raw))
+    return _close_committed(worktree, scratch, run_id, topic_slug, outputs, segment_dirs)
 
 
 @register_op("research.close")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "research.close" handler.
 
-    Params: see the module docstring; ``run_id`` and ``topic_slug`` are required for every tier.
+    Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
+    ``topic_slug`` (both safe single path segments), ``outputs`` (optional list of
+    scratch-relative file paths; default every regular file directly in scratch_dir).
 
-    Returns (exit_code 0): ``{committed: true, sha, paths, trail}``; local-only adds
-    ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
-    ``{committed: false, error}``.
+    Returns (exit_code 0): scouts -> ``{committed: false, digest_path}``; corpus/deep ->
+    ``{committed: true, sha, paths}``. Returns (exit_code 1): ``{committed: false, error}``.
     """
     if repo_root is None:
         return _err("repo_root (engine common_dir) is required for research.close")

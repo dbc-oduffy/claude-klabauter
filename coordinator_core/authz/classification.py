@@ -1298,13 +1298,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"plan", "verdict", "withheld_rows", "classes", "message", "stamp"}.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
     "plan.prep_gate": OpClass.COMPUTE_ONLY,
-    # plan.readiness_verdict — COMPUTE_ONLY: runs the plan.prep_gate read over ONE plan and
-    # combines it with caller-supplied coverage and reviewer values into a verdict.
-    #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
-    #   3. Opens any file for write? No.  4. Shared mutable state? No.
-    #   5. Persistent state changes observable across processes? No.
-    # Spec: coordinator_core/contract/readiness-verdict-producer-contract.md
-    "plan.readiness_verdict": OpClass.COMPUTE_ONLY,
     # plan.cross_plan_gate — COMPUTE_ONLY: reads one plan plus the predecessor plans
     # its depends_on_plan edges name and RETURNS whether they are satisfied.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
@@ -2045,30 +2038,29 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md
     "changelog.upsert_reviewed": OpClass.MUTATING,
-    # release.write_index — MUTATING: writes one archive/releases/<tag>.yaml per version
-    # tag that lacks one (tag, sha, date, covered entry paths). One locked_rmw per index
-    # file; no entry file is opened. Also called in process by release.cut_tag and
-    # release.cut_tag_and_publish after a successful cut.
-    # DR-208 five-question affirmation (citing ops/release_index.py):
+    # completion.stamp_releases — MUTATING: stamps every pending-release entry under
+    # archive/completed/** with the earliest version tag whose tree held it. Per-entry
+    # locked read-modify-write (locked_rmw) + atomic replace. Also called in process by
+    # release.cut_tag and release.cut_tag_and_publish after a successful cut.
+    # DR-208 five-question affirmation (citing ops/release_stamp/):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      One new index file per unindexed tag.
+    #      writer.stamp_entry sets status and released_* on each pending entry.
     #   2. Writes into rag's relational store?                                 No.
     #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      locked_rmw writes a temp file and os.replace's it onto the index path.
+    #      locked_rmw writes a temp file and os.replace's it onto the entry.
     #   4. Mutates shared mutable state outside its own module?                YES.
-    #      archive/releases/ is read by query_completions and the release pipeline.
+    #      archive/completed/ entries are read by the EM and the release pipeline.
     #   5. Persistent state changes observable across process boundaries?     YES.
-    # DR-216 D2 six-bound affirmed (D1, 2026-10-14 amendment):
-    #   D2(i) per-record idempotent: an existing index is never rewritten; a retargeted
-    #         tag refuses the whole op before any write.
-    #   D2(ii) git-reversible: delete or revert one index file.
-    #   D2(iii) additive-create: one new file per tag; nothing else moves.
-    #   D2(iv) confined noun: archive/releases/**.
+    # DR-216 D2 five-bound affirmed (completion in-place-mutation sub-category):
+    #   D2(i) per-record idempotent: only status pending-release is written; a released
+    #         entry is never rewritten.
+    #   D2(ii) git-reversible: git checkout -- <entry> recovers.
+    #   D2(iii) content-additive in place: status replaced, released_* set; nothing else moves.
+    #   D2(iv) confined noun: archive/completed/**.
     #   D2(v) no git commit: files are written and declared; the caller commits.
-    #   D2(vi) each write is a locked_rmw.
     # Authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md
-    #            § D1 (2026-10-14 amendment) and § D2
-    "release.write_index": OpClass.MUTATING,
+    #            § D1 (2026-10-13 amendment) and § D2
+    "completion.stamp_releases": OpClass.MUTATING,
     # plan.append_session — MUTATING: in-place append of a session-tracking entry to the
     # agent_sessions: YAML list of a caller-supplied docs/plans/<plan>.md. Locked
     # read-modify-write (coordinator_core.locked_write.locked_rmw) + atomic os.replace,
@@ -2122,10 +2114,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (worktree mode), writing state/review-trail/diffs/<slice_id>.{diff,head.sha}. DR-208 answers
     # are those of review.freeze_diff above; it commits nothing and writes no other file.
     "review.partition_slices": OpClass.MUTATING,
-    # review.prep — MUTATING: freezes the whole diff and each slice through review_freeze_diff
-    # (state/review-trail/diffs/<slice_id>.{diff,head.sha}) and writes one prep sidecar under the
-    # session share dir. DR-208 answers are those of review.partition_slices above; it commits nothing.
-    "review.prep": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # Backfill: 3 ops registered by concurrent sessions (records.query / ceremony.*) without a
     # classification entry, leaving the drift-guard gate RED on HEAD.
@@ -2558,12 +2546,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.box_hold -- MUTATING: writes or removes
     # <settings-home>/state/group-em/box/hold.json.
     "groupem.box_hold": OpClass.MUTATING,
-    # groupem.admission_post -- MUTATING: appends a line to
-    # <settings-home>/state/group-em/box/admission.jsonl.
-    "groupem.admission_post": OpClass.MUTATING,
-    # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
-    # attributed watcher trees and removes the Group EM holder record.
-    "workstream_complete.stand_down_watchers": OpClass.MUTATING,
     # groupem.idle_report -- COMPUTE_ONLY: idle_report.build_report only
     # reads peer transcripts, the harness registry, and the Group-EM's own
     # offer log; it writes nothing.
@@ -4289,8 +4271,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   release.cut_tag / release.cut_tag_and_publish — ops/release_tagging.py:
     #     `_cut_tag` creates a git tag (write); `_cut_tag_and_publish` additionally
     #     calls `_publish_release` (`gh release create`), an external write.
-    #     Each also indexes the cut through release.write_index
-    #     (`_index_after_cut`).
+    #     Each also stamps archive/completed/** entries through
+    #     completion.stamp_releases's writer (`_stamp_after_cut`).
     #   repo.clone_and_register — ops/repo_bootstrap.py
     #     `clone_and_register_sibling_repo`: clones a repo to disk AND calls
     #     `_machine_local_set` (writes the machine-local registry) — two

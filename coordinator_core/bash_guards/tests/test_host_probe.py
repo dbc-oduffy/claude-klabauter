@@ -182,7 +182,6 @@ def test_darwin_argv_reads_this_process():
     assert argv and argv[0]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="ctypes.CDLL(None) (dlopen of the process image) has no Windows equivalent")
 def test_darwin_libc_handle_is_cached():
     assert hp._libc() is hp._libc()
 

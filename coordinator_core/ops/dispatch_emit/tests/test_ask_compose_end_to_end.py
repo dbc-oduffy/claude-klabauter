@@ -28,31 +28,10 @@ def test_s_plan_author_is_opus_pinned_type_at_low_effort():
     assert "model: 'opus'" in opts and "effort: 'low'" in opts
 
 
-def test_gate_runs_sonnet_at_low_effort():
-    opts = _agent_opts(_compose(), "gate")
+@pytest.mark.parametrize("label", ["gate", "stage"])
+def test_mechanical_stages_run_sonnet_at_low_effort(label):
+    opts = _agent_opts(_compose(), label)
     assert "model: 'sonnet'" in opts and "effort: 'low'" in opts
-
-
-def test_fallback_stage_agent_is_haiku_at_low_effort_with_one_engine_call():
-    script = _compose()
-    opts = _agent_opts(script, "stage")
-    assert "model: 'haiku'" in opts and "effort: 'low'" in opts
-    assert "agentType: 'coordinator:executor'" in opts
-    call = script[script.rindex("agent(", 0, script.index("label: 'stage'")) : script.index("label: 'stage'")]
-    assert call.count(ask_compose.OP_ASK_STAGE) == 1 and "coordinator-invoke" in call
-
-
-def test_review_prep_agent_is_haiku_with_one_review_prep_call():
-    import copy
-
-    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-
-    roster = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
-    roster["execute_review"]["stages"][0]["agents"][0]["model"] = "haiku"
-    script = _compose(review_roster_fragment=roster)
-    opts = _agent_opts(script, "review:coordinator:review-prep")
-    assert "model: 'haiku'" in opts
-    assert script.count("review.prep") == 1
 
 
 def test_no_record_agent_is_composed():
@@ -86,17 +65,17 @@ def test_every_composed_agent_call_is_modeled(em_brief):
 
 def test_no_in_run_commit_leaves_the_commit_to_the_em():
     script = _compose()
-    assert "phase('commit')" not in script and "label: 'docs'" not in script
+    assert "phase('commit')" not in script and "phase('docs')" not in script
 
 
-def test_in_run_commit_composes_docs_in_the_tail_then_commit_before_the_one_return():
+def test_in_run_commit_composes_docs_then_commit_before_the_one_return():
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     docs, commit, ret = (
-        script.index("label: 'docs'"),
+        script.index("phase('docs')"),
         script.index("phase('commit')"),
         script.rindex("  return { arm:"),
     )
-    assert docs < script.index("  _nextAction = ") < commit < ret
+    assert script.index("  _nextAction = ") < docs < commit < ret
     opts = _agent_opts(script, "commit")
     assert "agentType: 'coordinator:git-commit-agent'" in opts and "model: 'haiku'" in opts
     assert "a.runToken" in script and "_RUN_TOKEN = \"" not in script and "_RUN_TOKEN = '" not in script
@@ -107,75 +86,6 @@ def test_in_run_commit_composes_docs_in_the_tail_then_commit_before_the_one_retu
     assert "_nextAction = { kind: 'close_job', op: null," in script
     assert f"{ask_compose.DELIVERY_NOTE_DIR}/run-1.md" in script
     assert "_nextAction.kind === 'terminal_commit' && _RUN_TOKEN" in script
-
-
-def _tail(script: str) -> tuple[str, str]:
-    """(the test leg and the one parallel call's text, the script text after it)."""
-    start = script.rindex("const _testLeg")
-    end = script.index("\n    ]);", start) + len("\n    ]);")
-    return script[start:end], script[end:]
-
-
-def test_the_tail_is_one_parallel_of_tests_judge_with_ledger_and_docs():
-    script = _compose(in_run_commit=True, **_JUDGE_KW)
-    call, after = _tail(script)
-    assert script.index("phase('review')") < script.rindex("await parallel([") and "await parallel([" not in after
-    for marker in ("_testResult = await", "coordinator:criterion-judge", "label: 'docs'", "Ledger check, folded"):
-        assert marker in call, marker
-    assert "label: 'ledger-check'" not in script
-    assert "phase('ledger-check')" not in script and "phase('docs')" not in script
-    assert re.findall(r"label: '([^']+)'", after) == ["commit"]
-    assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
-
-
-def test_the_judge_awaits_the_scoped_test_leg_before_it_starts():
-    call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
-    judge = call[call.index("coordinator:criterion-judge") - 12000 :]
-    assert call.index("const _testLeg") < call.index("await parallel([")
-    assert "async () => { await _testLeg; try { _falsifierResult = await" in call
-    assert judge.count("_testLeg") >= 1
-
-
-def test_a_judged_run_projects_the_ledger_from_the_judge_result_and_fails_closed():
-    script = _compose(in_run_commit=True, **_JUDGE_KW)
-    _, after = _tail(script)
-    proj = after[after.index("    _ledger = ") :].split("\n", 1)[0]
-    assert "!_manifest.error && Array.isArray(_falsifierResult?.items)" in proj
-    assert proj.rstrip().endswith(": null;")
-    assert after.index("    _ledger = ") < after.index("for (const i of (_ledger?.items ?? []))")
-    assert "_ledger = await" not in script
-
-
-def test_an_unjudged_run_keeps_the_single_ledger_check_agent():
-    script = _compose(in_run_commit=True)
-    assert script.count("label: 'ledger-check'") == 1 and "_ledger = await" in script
-    assert "Ledger check, folded" not in script
-
-
-def test_the_tail_without_a_judge_or_commit_has_fewer_thunks():
-    call, _ = _tail(_compose())
-    assert "label: 'ledger-check'" in call and "label: 'docs'" not in call
-    assert "coordinator:criterion-judge" not in call
-
-
-def test_judge_and_ledger_check_prompts_name_the_docs_in_flight():
-    script = _compose(in_run_commit=True, **_JUDGE_KW)
-    call, _ = _tail(script)
-    judge = call[call.index("coordinator:criterion-judge") - 12000 : call.index("coordinator:criterion-judge")]
-    assert "JSON.stringify(_manifest?.doc_writes ?? [])" in judge
-    assert "name that path exactly as its own entry in remaining" in judge
-    assert "doc_writes" not in _tail(_compose(**_JUDGE_KW))[0]
-    unjudged, _ = _tail(_compose(in_run_commit=True))
-    ledger = unjudged[unjudged.index("phase: ledger-check") : unjudged.index("label: 'ledger-check'")]
-    assert "JSON.stringify(_manifest?.doc_writes ?? [])" in ledger
-
-
-def test_docs_thunk_sits_under_the_pre_tail_guard_and_carries_no_tail_result():
-    call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
-    thunk = call[call.index("async () => { if (" + ask_compose._DOCS_PRE_TAIL_GUARD) :]
-    assert "label: 'docs'" in thunk
-    docs_prompt = thunk[: thunk.index("label: 'docs'")]
-    assert "_ledger" not in docs_prompt and "_testResult" not in docs_prompt and "_falsifier" not in docs_prompt.lower()
 
 
 def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
@@ -235,8 +145,8 @@ def test_script_is_valid_and_parses(over, tmp_path):
 
 def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
     script = _compose(in_run_commit=True)
-    check = script.index("label: 'ledger-check'")
-    assert script.index("phase('review')") < check < script.index("label: 'docs'") < script.index("phase('commit')")
+    check = script.index("phase('ledger-check')")
+    assert script.index("phase('review')") < check < script.index("phase('docs')") < script.index("phase('commit')")
     assert "ask-fidelity" not in script
     opts = _agent_opts(script, "ledger-check")
     assert "agentType: 'coordinator:code-reviewer'" in opts and "model: 'sonnet'" in opts
@@ -244,7 +154,7 @@ def test_ledger_check_runs_at_every_size_and_gates_docs_and_commit():
     assert "_ledger.verdict" not in script
     assert '"verdict":' not in opts
     assert "_gate.arm !== 'xs'" not in script[check - 200 : check]
-    assert check < script.index("_nextAction.params.ledger_verdict = ")
+    assert script.index("phase('ledger-check')") < script.index("_nextAction.params.ledger_verdict = ")
     assert "ledger: _ledger, docs: _docs" in script
 
 
@@ -278,7 +188,7 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start():
 def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier():
     script = _compose(in_run_commit=True)
     assert "_ledgerCloses" not in script
-    wave = script[script.index("phase('review')"):script.rindex("await parallel([")]
+    wave = script[script.index("phase('review')"):script.index("phase('ledger-check')")]
     # Nothing in the review stage (delivery verifier, terminal judge, falsifier) reads the ledger:
     # the ledger check runs after it as one more gate, at every size.
     assert not re.search(r"_ledger\w*", wave)
@@ -322,53 +232,3 @@ def test_plan_rows_are_outcomes_not_code():
     script = _compose()
     plan = script[script.index("Author the plan for the sizing at") :]
     assert "Each row states an outcome" in plan and "never write the code, a diff" in plan
-
-
-def _tiered_roster() -> dict:
-    import copy
-
-    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-
-    roster = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
-    roster["execute_review"]["stages"][1]["agents"].append(
-        {
-            "agentType": "coordinator:delivery-verifier", "model": "opus", "effort": "low",
-            "per": "whole-diff", "schema": "wave", "tiers": ["standard", "full"],
-        }
-    )
-    return roster
-
-
-def test_the_execute_wave_is_tier_filtered_by_the_fire_time_size_from_the_one_map():
-    import json
-
-    from coordinator_core.ops.dispatch_emit import emit
-
-    script = _compose(review_roster_fragment=_tiered_roster())
-    expr = ask_compose._fire_tier_js()
-    assert json.dumps(emit._TSHIRT_TO_REVIEW_TIER, sort_keys=True) in expr and "_gate?.tshirt" in expr
-    assert f'["standard", "full"].includes({expr})' in script
-    # code-reviewer has no tiers field and so runs at every size
-    assert script.count(".includes(") >= 1 and "_deliveryVerdict = _reviewWave[" in script
-
-
-def test_a_roster_without_tiers_composes_an_ungated_wave():
-    assert '.includes((' not in _compose().split("phase('Review wave')")[1].split("phase('Review integration')")[0]
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.parametrize(
-    ("tshirt", "tier"),
-    [("XS", "lightweight"), ("S", "lightweight"), ("M", "standard"), ("L", "standard"), ("XL", "full"),
-     (None, "full"), ("bogus", "full")],
-)
-def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshirt, tier):
-    import json
-
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node not on PATH")
-    program = f"const _gate = {{ tshirt: {json.dumps(tshirt)} }}; console.log({ask_compose._fire_tier_js()});"
-    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30)
-    assert out.stdout.strip() == tier, out.stderr

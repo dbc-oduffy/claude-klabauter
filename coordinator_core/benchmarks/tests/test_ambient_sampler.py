@@ -46,24 +46,6 @@ def test_take_sample_shape():
     assert sample["ram_total_mb"] is None or isinstance(sample["ram_total_mb"], float)
 
 
-def test_take_sample_ram_comes_from_avail_mb(monkeypatch):
-    from coordinator_core.telemetry import host_sampler
-
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (1234, 5678))
-    sample = take_sample()
-    assert sample["ram_free_mb"] == 1234.0
-    assert sample["ram_total_mb"] == 5678.0
-
-
-def test_take_sample_ram_none_when_avail_mb_unreadable(monkeypatch):
-    from coordinator_core.telemetry import host_sampler
-
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (None, None))
-    sample = take_sample()
-    assert sample["ram_free_mb"] is None
-    assert sample["ram_total_mb"] is None
-
-
 def test_append_sample_writes_one_json_line(tmp_path):
     sink = tmp_path / "logs" / "ambient-load.jsonl"
     sample = {

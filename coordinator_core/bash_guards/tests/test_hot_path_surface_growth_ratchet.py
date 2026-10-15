@@ -79,7 +79,7 @@ _EAGER_IMPORT_CEILING = 21
 # 11321 -> 11332: consolidation merge of machine-a/2026-10-04to12 unions both branches' guards
 # (PM-directed fleet branch consolidation, 2026-10-13).
 _DISPATCH_CHECKS_LINE_CEILING = 11332
-_REGISTERED_ENTRY_CEILING = 72  # + trailing-background-ampersand, move-from-inside-cwd (example-game-repo-3b friction advisories); + block-home-root-bash-write; + guard-post-executor-verification (EM verification after an executor); + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
+_REGISTERED_ENTRY_CEILING = 70  # + block-home-root-bash-write; + guard-post-executor-verification (EM verification after an executor); + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
 
 
 def _count_module_scope_imports(source: str) -> int:

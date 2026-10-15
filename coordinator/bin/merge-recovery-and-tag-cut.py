@@ -50,17 +50,16 @@ Subcommands (argv[1] selects):
       commit). Refuses (exit 1) when origin already has TAG at another
       commit; never force-moves a tag.
       Prints `MERGE_SHA=<sha>` and either `TAG_CUT=<tag>` or
-      `TAG_SKIPPED=<tag>` to stdout. Then writes release indexes
-      (as `stamp-releases`, below), cut or skipped; an index refusal prints
-      `RELEASE_INDEX_FAILED=<reason>: ...` and still exits 0.
+      `TAG_SKIPPED=<tag>` to stdout. Then stamps pending completion entries
+      (as `stamp-releases`, below), cut or skipped; a stamp refusal prints
+      `RELEASE_STAMP_FAILED=<reason>: ...` and still exits 0.
 
   stamp-releases [--report] [--repo-root PATH]
-      Writes archive/releases/<tag>.yaml for every version tag (prefix from
-      coordinator.local.md) that lacks one, listing the entries its tree first
-      held. Prints `RELEASE_INDEXED=<path>` per index written. With --report,
-      which writes nothing, prints `<entry path>: released_in=<tag>` per entry
-      a missing index would cover, then `RELEASE_WOULD_INDEX=<n tags>`.
-      A refusal is one stderr line, exit 1.
+      Stamps every pending-release entry under archive/completed with the
+      earliest tag (prefix from coordinator.local.md) whose tree held it.
+      Prints `<path>: released_in=<tag>` per entry, then `RELEASE_STAMPED=<n>`
+      (`RELEASE_WOULD_STAMP=<n>` with --report, which writes nothing), then
+      `RELEASE_UNRELEASED=<n>`. A refusal is one stderr line, exit 1.
 
   publish-gh-release TAG --repo OWNER/REPO --notes-file PATH
       GH-release variant only (Mode B): un-drafts an existing release for
@@ -539,7 +538,7 @@ def cmd_cut_tag(args: argparse.Namespace) -> int:
     result = _stamp(repo_root, False)
     if "error" in result:
         print(
-            f"RELEASE_INDEX_FAILED={result['reason']}: "
+            f"RELEASE_STAMP_FAILED={result['reason']}: "
             "rerun merge-recovery-and-tag-cut stamp-releases"
         )
     else:
@@ -552,7 +551,7 @@ def cmd_cut_tag(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _stamp(repo_root: Path, report: bool) -> dict:
-    """Write (or, with `report`, list) release indexes for unindexed tags; never exits the process.
+    """Stamp (or, with `report`, list) pending completion entries; never exits the process.
 
     Returns the engine result, or `{"error", "reason"}` on a refusal.
     """
@@ -563,26 +562,22 @@ def _stamp(repo_root: Path, report: bool) -> dict:
         return {"error": "tag_prefix must be unquoted", "reason": "bad-params"}
     _require_engine_on_path()
     from coordinator_core.cli_entry import recording_declared_writes
-    from coordinator_core.ops import release_index
+    from coordinator_core.ops import release_stamp
+    from coordinator_core.ops.release_stamp.model import StampError
 
     try:
         with recording_declared_writes(cwd=str(repo_root)):
-            return release_index.write_release_index(repo_root, tag_prefix=prefix, report=report)
-    except release_index.ReleaseIndexError as exc:
+            return release_stamp.stamp_releases(repo_root, tag_prefix=prefix, report=report)
+    except StampError as exc:
         return {"error": exc.detail, "reason": exc.reason}
 
 
 def _print_stamp(result: dict) -> None:
-    if result["report"]:
-        for record in result["written"]:
-            for entry in record["entries"]:
-                print(f"{entry}: released_in={record['tag']}")
-        print(f"RELEASE_WOULD_INDEX={len(result['written'])}")
-        return
-    for record in result["written"]:
-        print(f"RELEASE_INDEXED={record['path']}")
-    for record in result["skipped"]:
-        print(f"RELEASE_INDEX_SKIPPED={record['tag']}: {record['reason']}")
+    for record in result["stamped"]:
+        print(f"{record['path']}: released_in={record['released_in']}")
+    key = "RELEASE_WOULD_STAMP" if result["report"] else "RELEASE_STAMPED"
+    print(f"{key}={len(result['stamped'])}")
+    print(f"RELEASE_UNRELEASED={result['unreleased']['count']}")
 
 
 def cmd_stamp_releases(args: argparse.Namespace) -> int:
@@ -760,7 +755,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_stamp = sub.add_parser(
         "stamp-releases",
-        help="write archive/releases/<tag>.yaml for every version tag lacking an index",
+        help="stamp pending-release completion entries with the tag that first held them",
     )
     p_stamp.add_argument("--report", action="store_true")
     p_stamp.add_argument("--repo-root", default=None)

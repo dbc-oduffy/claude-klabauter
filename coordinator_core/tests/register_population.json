@@ -4781,6 +4781,14 @@
       "_PM_OK"
     ],
     [
+      "coordinator_core/ops/release_stamp/tests/test_end_to_end.py",
+      "_DATES"
+    ],
+    [
+      "coordinator_core/ops/release_stamp/tests/test_tags_and_op.py",
+      "_DATES"
+    ],
+    [
       "coordinator_core/ops/review_mint/tests/test_execute_review.py",
       "_LANDED"
     ],

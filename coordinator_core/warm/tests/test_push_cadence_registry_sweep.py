@@ -99,12 +99,8 @@ def test_idle_tick_with_empty_served_set_pushes_registry_repo(tmp_path, monkeypa
     _registry(monkeypatch, {"reg": repo})
     assert _remote_head(repo) != _local_head(repo)
 
-    assert push_cadence.on_idle_tick(
-        served_repos=lambda: push_cadence.registry_sweep_repos([]), clock=lambda: 0.0
-    ) is False
     ran = push_cadence.on_idle_tick(
-        served_repos=lambda: push_cadence.registry_sweep_repos([]),
-        clock=lambda: push_cadence.PUSH_CADENCE_INTERVAL_SECS,
+        served_repos=lambda: push_cadence.registry_sweep_repos([]), clock=lambda: 0.0
     )
 
     assert ran is True

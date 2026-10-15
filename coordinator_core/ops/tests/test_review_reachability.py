@@ -123,35 +123,6 @@ def test_python_class_is_not_an_entry_point(tmp_path):
     assert _verdicts(res) == {"lib/census.py:trees": "unreachable"}
 
 
-def test_function_called_by_a_sibling_in_its_own_file_is_undecidable(tmp_path):
-    root = build("unwired", tmp_path / "s")
-    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
-    _write(root, "lib/census.py", "def helper():\n    return 1\n\n\ndef trees():\n    return helper()\n")
-    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["lib/census.py"]})
-    v = _verdicts(res)
-    assert v["lib/census.py:helper"] == "undecidable"
-    assert v["lib/census.py:trees"] == "unreachable"
-    assert res["cost"]["spawns"] == 1
-
-
-def test_diff_file_outside_declared_writes_contributes_no_entry(tmp_path):
-    root = build("unwired", tmp_path / "o")
-    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
-    _write(root, "lib/other_run.py", "def stranger():\n    return 1\n")
-    _git(root, "add", "-A")
-    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "plan": PLAN_REL})
-    assert "lib/other_run.py:stranger" not in _verdicts(res)
-    assert "lib/permissions.ts:grantPermission" in _verdicts(res)
-
-
-def test_no_plan_and_no_paths_keeps_every_diff_file(tmp_path):
-    root = build("unwired", tmp_path / "n")
-    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
-    _git(root, "add", "-A")
-    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True})
-    assert "lib/permissions.ts:grantPermission" in _verdicts(res)
-
-
 def test_tracked_declared_write_unchanged_in_range_adds_nothing(tmp_path):
     root = build("unwired", tmp_path / "u")
     _write(root, "lib/old.py", "def legacy():\n    return 1\n")

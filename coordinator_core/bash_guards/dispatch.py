@@ -2427,12 +2427,6 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_head_tail_rewrite import (
         check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
     )
-    from coordinator_core.bash_guards.guard_trailing_background_ampersand import (
-        check_trailing_background_ampersand as _check_trailing_background_ampersand,
-    )
-    from coordinator_core.bash_guards.guard_move_from_inside_cwd import (
-        check_move_from_inside_cwd as _check_move_from_inside_cwd,
-    )
     from coordinator_core.bash_guards.guard_grep_via_bash import (
         check as _check_grep_via_bash,
         MATCHERS as _matchers_grep_via_bash,
@@ -3242,10 +3236,6 @@ def _build_guard_chain(
         GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("heredoc-repo-write-advise", lambda: _dc.check_heredoc_repo_write_advise(cmd, session_id, payload, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        # Bash-only: PowerShell's `&` is the call operator, not job control
-        # (docs/reference/guard-tool-name-membership.md §8).
-        GuardEntry("trailing-background-ampersand", lambda: _check_trailing_background_ampersand(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        GuardEntry("move-from-inside-cwd", lambda: _check_move_from_inside_cwd(cmd, session_id, payload=payload, cwd=cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash", "PowerShell")),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
         # dispatch was sent to close (DoE docs/plans/2026-07-29-windows-

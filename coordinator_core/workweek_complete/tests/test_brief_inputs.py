@@ -59,6 +59,7 @@ def test_repo_root_is_the_fixture_root(repo):
 
 def test_fixture_exercises_the_nonempty_branches(repo):
     got = bi.compute_brief_inputs()
+    assert [e["path"] for e in got.stale_docs] == ["README.md"]
     reasons = {f["token"] for f in got.doc_verify_findings_by_doc["README.md"]}
     assert "nonexistent/missing_file.py" in reasons
 
@@ -103,37 +104,34 @@ def test_outside_a_repo_every_field_is_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(repo_root_mod, "git_common_dir", lambda cwd: None)
     got = bi.compute_brief_inputs()
     assert got.repo_root is None
+    assert got.stale_docs == []
     assert got.doc_verify_findings_by_doc == {}
+    assert not got.register_stall
     assert got.version_recommendation is None
 
 
-def test_compute_brief_inputs_never_runs_the_register_stall_scan(repo, monkeypatch):
-    from coordinator_core.ops import requirement_register
-
-    calls = []
-    monkeypatch.setattr(
-        requirement_register, "stall_report", lambda *a, **kw: calls.append(a)
-    )
-    bi.compute_brief_inputs()
-    assert calls == []
-
-
 def test_degraded_values_on_injected_failure(repo, monkeypatch, capsys):
-    from coordinator_core.ops import doc_content_verify
+    from coordinator_core.ops import doc_content_verify, doc_staleness, requirement_register
     from coordinator_core.workweek_complete.release import version_rule
 
     def boom(*a, **kw):
         raise RuntimeError("injected")
 
+    monkeypatch.setattr(doc_staleness, "build_doc_staleness_report", boom)
     monkeypatch.setattr(doc_content_verify, "verify_doc_on_disk", boom)
+    monkeypatch.setattr(requirement_register, "stall_report", boom)
     monkeypatch.setattr(version_rule, "recommend_level", boom)
 
     got = bi.compute_brief_inputs()
     err = capsys.readouterr().err
 
+    assert got.stale_docs == []
     assert got.doc_verify_findings_by_doc == {}
+    assert not got.register_stall
     assert got.version_recommendation is None
+    assert "doc-staleness report unavailable, degrading to zero stale docs: injected" in err
     assert "doc-verify findings unavailable, degrading to zero findings: injected" in err
+    assert "register stall scan unavailable: injected" in err
 
 
 def test_registry_failure_degrades_both_doc_signals(repo, monkeypatch, capsys):
@@ -144,46 +142,6 @@ def test_registry_failure_degrades_both_doc_signals(repo, monkeypatch, capsys):
 
     monkeypatch.setattr(doc_registry, "resolve_doc_registry_config", boom)
     got = bi.compute_brief_inputs()
+    assert got.stale_docs == []
     assert got.doc_verify_findings_by_doc == {}
     assert "registry down" in capsys.readouterr().err
-
-
-def test_brief_inputs_names_exactly_the_three_consumer_fields():
-    import dataclasses
-
-    assert {f.name for f in dataclasses.fields(bi.BriefInputs)} == {
-        "repo_root",
-        "doc_verify_findings_by_doc",
-        "version_recommendation",
-    }
-
-
-def test_compute_brief_inputs_imports_no_doc_staleness_and_spawns_nothing(repo):
-    import json
-    import os
-    import sys
-
-    probe = (
-        "import json, subprocess, sys\n"
-        "spawned = []\n"
-        "real = subprocess.Popen.__init__\n"
-        "def hook(self, args, *a, **kw):\n"
-        "    spawned.append(str(args))\n"
-        "    real(self, args, *a, **kw)\n"
-        "subprocess.Popen.__init__ = hook\n"
-        "from coordinator_core.workweek_complete import brief_inputs as bi\n"
-        "bi.compute_brief_inputs()\n"
-        "print(json.dumps({'spawned': spawned,"
-        " 'stale': 'coordinator_core.ops.doc_staleness' in sys.modules}))\n"
-    )
-    done = subprocess.run(
-        [sys.executable, "-c", probe],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONPATH": str(ENGINE_CHECKOUT_ROOT)},
-        **no_console_creationflags(),
-    )
-    out = json.loads(done.stdout.strip().splitlines()[-1])
-    assert out == {"spawned": [], "stale": False}

@@ -23,6 +23,7 @@
       {"id": "d_step4b_4k_competitor_positioning", "cli": "check-competitor-positioning-nudge", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step4b_4k_atlas_watch_drift", "cli": "check-atlas-watch-drift", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step4b_4k_arch_audit_staleness", "cli": "check-arch-audit-staleness", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
+      {"id": "d_step4b_4k_doc_staleness", "cli": "workweek-complete-doc-staleness", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step4b_4k_doc_verify", "cli": "workweek-complete-doc-verify", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step5_7_illegal_path_backstop", "cli": "check-no-illegal-paths", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step6_query_completions", "cli": "query-completions", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
@@ -69,11 +70,14 @@
       {"id": "d_step4b_4k_competitor_positioning", "cli": "check-competitor-positioning-nudge", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step4b_4k_atlas_watch_drift", "cli": "check-atlas-watch-drift", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step4b_4k_arch_audit_staleness", "cli": "check-arch-audit-staleness", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
+      {"id": "d_step4b_4k_doc_staleness", "cli": "workweek-complete-doc-staleness", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step4b_4k_doc_verify", "cli": "workweek-complete-doc-verify", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step5_7_illegal_path_backstop", "cli": "check-no-illegal-paths", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step6_query_completions", "cli": "query-completions", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step7_6_trail_scope", "cli": "workweek-trail-scope", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step13_archive_close", "cli": "workweek-complete-close", "args": [], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
+      {"id": "d_doc_staleness_ack_docs_guides_alpha_md", "cli": "workweek-complete-doc-staleness", "args": ["--doc", "docs/guides/alpha.md", "--ack"], "depends_on": "jp_doc_staleness_docs_guides_alpha_md", "already_satisfied": false, "hard_block": false, "best_effort": null},
+      {"id": "d_doc_staleness_ack_readme_md", "cli": "workweek-complete-doc-staleness", "args": ["--doc", "README.md", "--ack"], "depends_on": "jp_doc_staleness_readme_md", "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_doc_verify_ack_docs_guides_beta_md", "cli": "workweek-complete-doc-verify", "args": ["--doc", "docs/guides/beta.md", "--ack"], "depends_on": "jp_doc_verify_docs_guides_beta_md", "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step13_5_post_command_hook", "cli": "coordinator-ceremony-hook", "args": ["workweek-complete"], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": null},
       {"id": "d_step13_7_tier_u_grant_handback", "cli": "tier-u-grant-cli", "args": ["revoke", "--only-ceremony", "workweek-complete"], "depends_on": null, "already_satisfied": false, "hard_block": false, "best_effort": true}
@@ -89,8 +93,10 @@
       {"id": "jp_step1c_pm_recollection_match", "dispositions": [{"resolves": [], "value": "confirmed_match"}, {"resolves": [], "value": "flag_discrepancy"}], "reason": "pm-authority", "has_recommendation": false, "round_trip": "terminal", "reportable": null},
       {"id": "jp_step9_pm_release_notes_gate", "dispositions": [{"resolves": [], "value": "approved"}, {"resolves": [], "value": "revise"}], "reason": "pm-authority", "has_recommendation": false, "round_trip": "terminal", "reportable": null},
       {"id": "jp_step10_5_gh_release_publish", "dispositions": [{"resolves": [], "value": "publish"}, {"resolves": [], "value": "hold"}], "reason": "irreversible-external-action", "has_recommendation": false, "round_trip": "terminal", "reportable": null},
+      {"id": "jp_doc_staleness_docs_guides_alpha_md", "dispositions": [{"resolves": ["d_doc_staleness_ack_docs_guides_alpha_md"], "value": "reviewed_ok"}, {"resolves": ["d_doc_staleness_ack_docs_guides_alpha_md"], "value": "queued_for_update"}], "reason": "pm-scoped-tradeoff", "has_recommendation": false, "round_trip": "terminal", "reportable": null},
+      {"id": "jp_doc_staleness_readme_md", "dispositions": [{"resolves": ["d_doc_staleness_ack_readme_md"], "value": "reviewed_ok"}, {"resolves": ["d_doc_staleness_ack_readme_md"], "value": "queued_for_update"}], "reason": "pm-scoped-tradeoff", "has_recommendation": false, "round_trip": "terminal", "reportable": null},
       {"id": "jp_doc_verify_docs_guides_beta_md", "dispositions": [{"resolves": ["d_doc_verify_ack_docs_guides_beta_md"], "value": "fixed"}, {"resolves": ["d_doc_verify_ack_docs_guides_beta_md"], "value": "bug-filed"}, {"resolves": ["d_doc_verify_ack_docs_guides_beta_md"], "value": "resolves-cross-repo"}, {"resolves": ["d_doc_verify_ack_docs_guides_beta_md"], "value": "not-a-defect-with-reason"}], "reason": "pm-scoped-tradeoff", "has_recommendation": false, "round_trip": "terminal", "reportable": null}
     ],
-    "narration": "`scc`, `node run.js`, and `gh release` have no consumes-manifest project script and are NOT represented as directives[] entries — see this module's negative-spec."
+    "narration": "`scc`, `node run.js`, and `gh release` have no consumes-manifest project script and are NOT represented as directives[] entries — see this module's negative-spec. jp_requirement_register_stall reports (not asked -- gates no directive): 3 requirement-register stall(s) found. Route them? Recommendation rationale: stalled register work is named for the operator to route; the check never writes"
   }
 }

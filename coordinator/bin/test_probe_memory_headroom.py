@@ -108,29 +108,39 @@ def _load_subject_module():
     return mod
 
 
-def _run_main_with_helper(monkeypatch, capsys, helper_value):
-    from coordinator_core.telemetry import host_sampler
-
+def test_ram_from_windows_uses_psutil(monkeypatch) -> None:
     mod = _load_subject_module()
-    monkeypatch.setattr(mod, "_bootstrap_engine", lambda: None)
-    monkeypatch.setattr(mod, "_vram_from_nvidia", lambda: (None, None))
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: helper_value)
 
-    def _no_spawn(*args, **kwargs):
-        raise AssertionError(f"RAM leg spawned a process: {args!r}")
+    class _FakeVirtualMemory:
+        available = 4 * 1024 * 1024 * 1024
+        total = 16 * 1024 * 1024 * 1024
 
-    monkeypatch.setattr(mod.subprocess, "run", _no_spawn)
-    assert mod.main(["probe-memory-headroom.py"]) == 0
-    return capsys.readouterr().out
+    class _FakePsutil:
+        @staticmethod
+        def virtual_memory():
+            return _FakeVirtualMemory
 
-
-def test_ram_fields_come_from_avail_mb_without_spawns(monkeypatch, capsys) -> None:
-    out = _run_main_with_helper(monkeypatch, capsys, (1234, 5678))
-    assert _field(out, "ram_available_mb") == "1234", out
-    assert _field(out, "ram_total_mb") == "5678", out
+    monkeypatch.setitem(sys.modules, "psutil", _FakePsutil)
+    avail, total = mod._ram_from_windows()
+    assert avail == 4096, f"expected 4096 MB available, got={avail!r}"
+    assert total == 16384, f"expected 16384 MB total, got={total!r}"
 
 
-def test_unreadable_avail_mb_renders_unknown(monkeypatch, capsys) -> None:
-    out = _run_main_with_helper(monkeypatch, capsys, (None, None))
-    assert _field(out, "ram_available_mb") == "unknown", out
-    assert _field(out, "ram_total_mb") == "unknown", out
+def test_ram_from_windows_psutil_import_error_returns_none_none(monkeypatch) -> None:
+    mod = _load_subject_module()
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    avail, total = mod._ram_from_windows()
+    assert (avail, total) == (None, None)
+
+
+def test_ram_from_windows_psutil_exception_returns_none_none(monkeypatch) -> None:
+    mod = _load_subject_module()
+
+    class _RaisingPsutil:
+        @staticmethod
+        def virtual_memory():
+            raise RuntimeError("simulated psutil internals failure")
+
+    monkeypatch.setitem(sys.modules, "psutil", _RaisingPsutil)
+    avail, total = mod._ram_from_windows()
+    assert (avail, total) == (None, None)

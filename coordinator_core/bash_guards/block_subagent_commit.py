@@ -6819,8 +6819,7 @@ def _warp_run_token_admits(
     """A warp run's own terminal commit: exactly one bare `coordinator-invoke
     dispatch.terminal_commit <params>` segment whose params carry the run token the emit
     minted for `run_id` (`dispatch_emit.run_token`). Caller has already required the
-    harness-supplied `agent_type` to be `coordinator:git-commit-agent`. Checks only; the op
-    claims the token, so a command the op fails to parse leaves it usable.
+    harness-supplied `agent_type` to be `coordinator:git-commit-agent`.
 
     Trap: no wrapper, env prefix, `--repo` override, interpreter payload or second segment
     is admitted -- the token authorizes one op invocation, never a shell.

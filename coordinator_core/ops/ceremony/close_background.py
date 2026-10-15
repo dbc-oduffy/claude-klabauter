@@ -16,9 +16,7 @@ Negative-spec:
     recorded ``failed`` with that reason, never dropped.
   - ``sweep-terminal-sizings`` (638ms cold) is over the job's budget
     (docs/research/2026-10-13-run-close-ws1-headroom-spike.md) and is left out of ``baton-drain``.
-  - ``post-close`` runs an index launcher only when ``post_close_admission.admit`` admits it (peak +
-    reserve <= kernel-available); a deferral keeps the leg ``ran`` and is named in the detail, and
-    each admitted launch posts one Group EM START line. It then runs ``baton-chain-closure``'s ``chain_verdicts``
+  - ``post-close`` runs the index launchers, then ``baton-chain-closure``'s ``chain_verdicts``
     for the claimed batons; it is ``failed`` only when a launcher failed or that call raised.
   - The handoff sweep is scoped to the run's claimed batons (``plan_sweep(candidate_ids=...)``).
   - No leg detail carries an absolute or backslashed path; exception text is scrubbed first.
@@ -189,26 +187,15 @@ def _launch_close_review(ctx: JobContext) -> bool:
 def _post_close(ctx: JobContext) -> LegResult:
     """Fire the structural-index and scip launchers and the detached ``close.review`` job, then
     run ``baton-chain-closure`` for the claimed batons and record its outcome."""
-    from coordinator_core.ops.ceremony import post_close_admission as admission
-
     launched: list[str] = []
-    deferred: list[str] = []
     problems: list[str] = []
-    avail_mb, trusted = admission.read_available()
-    admitted_mb = 0
     for label, call in (
         ("structural-index", lambda: _bin_script("structural-index-refresh").refresh(ctx.root, _ENSURE_WAIT_SECS)),
         ("scip-rebuild", lambda: _bin_script("scip-rebuild-at-ceremony").run(_CEREMONY_NAME, ctx.root)),
     ):
-        verdict = admission.admit(label, avail_mb, trusted, admitted_mb)
-        if not verdict.admitted:
-            deferred.append(f"{label} ({verdict.reason})")
-            continue
         try:
             call()
             launched.append(label)
-            admitted_mb += admission.DECLARED_PEAK_MB[label]
-            admission.notice(verdict, ctx.run_id)
         except Exception as exc:  # one launcher's failure never stops the other
             problems.append(f"{label} {type(exc).__name__}")
     try:
@@ -220,10 +207,7 @@ def _post_close(ctx: JobContext) -> LegResult:
     except Exception as exc:  # the review leg then reads failed at the deadline
         problems.append(f"close.review {type(exc).__name__}")
     chain_note = _chain_closure_note(ctx, problems)
-    detail = f"launched: {', '.join(launched) or 'none'}"
-    if deferred:
-        detail += f"; deferred: {', '.join(deferred)}"
-    detail += f"; {chain_note}"
+    detail = f"{chain_note}; launched: {', '.join(launched) or 'none'}"
     if problems:
         detail += f"; failed: {', '.join(problems)}"
     return LegResult("failed" if problems else "ran", _scrub(detail))

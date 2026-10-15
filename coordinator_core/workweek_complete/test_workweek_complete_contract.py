@@ -56,16 +56,6 @@ def test_every_manifest_entry_is_named_by_at_least_one_directive() -> None:
         )
 
 
-def test_repo_root_delegate_keeps_native_str_path_form(monkeypatch) -> None:
-    from pathlib import Path
-
-    posix = "/some/repo/root"
-    monkeypatch.setattr(wwc_brief, "_resolve_repo_root", lambda start: posix)
-    assert wwc_brief._resolve_repo_root_for_doc_staleness() == str(Path(posix))
-    monkeypatch.setattr(wwc_brief, "_resolve_repo_root", lambda start: None)
-    assert wwc_brief._resolve_repo_root_for_doc_staleness() is None
-
-
 def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch) -> None:
     monkeypatch.setattr(
         wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: "/resolved/repo/root"

@@ -251,7 +251,6 @@ second stratum under it.
 from __future__ import annotations
 
 import ast
-import dataclasses
 import pathlib
 import sys
 import typing
@@ -472,14 +471,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "groupem.box_hold": (
         "coordinator_core/ops/group_em_box_hold.py",
         ("_groupem_box_hold",),
-    ),
-    "groupem.admission_post": (
-        "coordinator_core/ops/group_em_admission_post.py",
-        ("_groupem_admission_post",),
-    ),
-    "workstream_complete.stand_down_watchers": (
-        "coordinator_core/ops/watcher_stand_down.py",
-        ("_stand_down_watchers",),
     ),
     "groupem.stamp": (
         "coordinator_core/ops/group_em_stamp.py",
@@ -1112,10 +1103,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "sizing.mark_routed": (
         "coordinator_core/ops/sizing_mark_routed.py",
-        ("_handler",),
-    ),
-    "sizing.intake_mint": (
-        "coordinator_core/ops/sizing_intake.py",
         ("_handler",),
     ),
     "spec_backlink.resolve": (
@@ -2480,7 +2467,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "review.reachability": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
-    "release.write_index": (
+    "completion.stamp_releases": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "review.snapshot_diff_and_head": (
@@ -2545,7 +2532,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.partition_slices": ("coordinator_core/ops/review_partition_slices.py", "_handler"),
     "review.reachability": ("coordinator_core/ops/review_reachability.py", "_handler"),
-    "release.write_index": ("coordinator_core/ops/release_index.py", "_write_index_handler"),
+    "completion.stamp_releases": ("coordinator_core/ops/release_stamp/__init__.py", "_stamp_releases_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session_ledger.aggregate_chain_loe": (
@@ -2649,10 +2636,9 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # 59 -> 60 (2026-10-08): new op `research.close` reaches `git/run.py::run_git` (CRLF blob fallback): +1.
     # 60 -> 59 (2026-10-12): `orientation.regenerate_cache` no longer reaches `repo_root.py::_spawn_rev_parse`.
     # 59 -> 60 (2026-10-13): new op `completion.stamp_releases` reaches `git/run.py::run_git`: +1.
-    # 60 -> 60 (2026-10-14): `completion.stamp_releases` replaced by `release.write_index` (same run_git site): net 0.
     assert total_pairs == 60, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "60 measured 2026-10-14 (completion.stamp_releases -> release.write_index: run_git); 60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -3613,17 +3599,6 @@ def _reachable_functions(
     return seen
 
 
-#: `run_git` spawns `[_git_exe(), *args]`, which the analyzer reads as `<dynamic>`; `_git_exe()`
-#: only ever returns the resolved real git binary, so the site's argv0 is `git`.
-_RUN_GIT_SITE = ("coordinator_core/git/run.py", "run_git")
-
-
-def _resolve_git_exe_argv0(site):
-    if (site.path, site.enclosing) == _RUN_GIT_SITE and site.argv0 == "<dynamic>":
-        return dataclasses.replace(site, argv0="git")
-    return site
-
-
 def _on_path_spawn_sites(
     reached_funcs: set[tuple[str, str]],
     spawn_sites_by_file: dict[str, list],
@@ -3642,7 +3617,6 @@ def _on_path_spawn_sites(
             top_enclosing = site.enclosing.split(".")[0]
             if top_enclosing not in names:
                 continue
-            site = _resolve_git_exe_argv0(site)
             key = (relpath, site.enclosing, site.argv0, site.ordinal)
             if key in exempt:
                 continue
@@ -6884,7 +6858,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
     "commit.anchors": 2,
-    "release.write_index": 1,
+    "completion.stamp_releases": 1,
     "fleet.record_history": 2,
     "git_branch.compute_descendant_tip": 2,
     "git_branch.detect_unpushed_commits": 2,
@@ -7071,9 +7045,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #     git_native.status_porcelain -> _git._invoke
     #   memo.transition 3->4: _attach_surface_advisory -> surface_advisory._touched_paths -> run_git
     #   push.outstanding 5->6: _range_touches_lfs_paths -> _run_git -> run_git
-    # Enrolled 2026-10-15: new ops, pinned at their measured reachable counts (a ratchet, not execution evidence).
-    "plan.readiness_verdict": 1,
-    "review.prep": 3,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

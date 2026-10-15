@@ -5,14 +5,10 @@ from __future__ import annotations
 
 import inspect
 import os
-import sys
-
-import pytest
 
 from coordinator_core.warm import server
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot remove the process cwd")
 def test_pin_cwd_moves_off_a_deleted_spawner_dir(tmp_path, monkeypatch):
     engine_root = tmp_path / "engine"
     engine_root.mkdir()

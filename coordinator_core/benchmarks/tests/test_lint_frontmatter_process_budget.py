@@ -11,8 +11,6 @@ PM's exit criterion for this sweep. STATISTIC: the median of the samples, not th
 
 from __future__ import annotations
 
-import json
-import os
 import statistics
 import subprocess
 import sys
@@ -115,15 +113,9 @@ def _build_fixture(root: Path) -> dict:
 
 
 @pytest.fixture(scope="module")
-def lint_fixture(tmp_path_factory):
+def sweep_measurement(tmp_path_factory):
     root = tmp_path_factory.mktemp("lint_frontmatter_budget")
     scale = _build_fixture(root)
-    return root, scale
-
-
-@pytest.fixture(scope="module")
-def sweep_measurement(lint_fixture):
-    root, scale = lint_fixture
     argv = [sys.executable, str(_SHIM), "--root", str(root), "--json"]
 
     primed = subprocess.run(argv, capture_output=True, text=True, **no_console_creationflags())
@@ -155,67 +147,4 @@ def test_lint_frontmatter_sweep_is_under_the_500ms_bar(sweep_measurement):
 
 def test_lint_frontmatter_sweep_spawns_fewer_than_three_processes(sweep_measurement):
     m = sweep_measurement
-    assert m["procs"] < MAX_PROCS, f"procs_per_call not under {MAX_PROCS}: {m['detail']}"
-
-
-def _invalidated_copy(store_text: str) -> str:
-    """The store as a validator-module edit leaves it: every `code` stamp's size moved, so the
-    next run re-hashes the module, sees a different sha, and drops all stored verdicts."""
-    data = json.loads(store_text)
-    assert data["code"], "primed store carries no code stamps; the fingerprint field moved"
-    for stamp in data["code"].values():
-        stamp[0] = -1
-        stamp[2] = "0" * 40
-    return json.dumps(data, separators=(",", ":"))
-
-
-@pytest.fixture(scope="module")
-def invalidated_measurement(lint_fixture):
-    root, scale = lint_fixture
-    argv = [sys.executable, str(_SHIM), "--root", str(root), "--json"]
-    env = {**os.environ, "COORDINATOR_ENGINE_ROOT": str(_CLAUDE_KLABAUTER_ROOT)}
-
-    primed = subprocess.run(argv, capture_output=True, text=True, env=env, **no_console_creationflags())
-    assert primed.returncode == 1, f"prime run rc {primed.returncode}, expected 1 (planted violation): {primed.stderr[-500:]}"
-    assert "2026-10-01-planted.md" in primed.stdout, f"rc 1 not from the planted violation: {primed.stdout[-500:]}"
-    store = root / ".git" / "claude-klabauter-lint-tree.json"
-    assert store.is_file(), "prime run left no verdict store under the fixture git dir"
-    altered = _invalidated_copy(store.read_text(encoding="utf-8"))
-
-    samples = []
-    try:
-        for _ in range(SAMPLES):
-            store.write_text(altered, encoding="utf-8", newline="\n")
-            samples.append(batched_process_time_ms(argv, k=1, env=env))
-    except NotImplementedError as exc:
-        pytest.skip(f"process-time primitive unsupported here: {exc}")
-    for s in samples:
-        assert s["rc"] == 1, f"invalidated sweep exited {s['rc']}, expected 1 (planted violation): {s!r}"
-
-    median_ms = round(statistics.median(s["process_time_ms"] for s in samples), 3)
-    median_procs = statistics.median(s["procs_per_call"] for s in samples)
-    detail = (
-        f"lint-frontmatter invalidated-store sweep, median tree process time: {median_ms}ms, "
-        f"procs_per_call: {median_procs} (k=1, median of {SAMPLES}; fixture {scale})"
-    )
-    print(f"LINT-FRONTMATTER-INVALIDATED-BUDGET {detail}")
-    return {"ms": median_ms, "procs": median_procs, "detail": detail}
-
-
-@pytest.mark.pending_fix
-def test_lint_frontmatter_invalidated_sweep_is_under_the_500ms_bar(invalidated_measurement):
-    """The invalidated-store case governs the weekly step: a validator-module edit drops every
-    stored verdict and the step runs against that store most weeks. pending_fix while the
-    invalidated sweep sits over the bar: measured 1437.5ms / 4 procs (S1 spike, median of 5; the
-    LINT-FRONTMATTER-INVALIDATED-BUDGET line carries the live figure). The marker comes off once
-    a measured median sits under it."""
-    m = invalidated_measurement
-    assert m["ms"] > 0, f"sweep cost not observed: {m['detail']}"
-    assert m["ms"] <= BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"
-
-
-@pytest.mark.pending_fix
-def test_lint_frontmatter_invalidated_sweep_spawns_fewer_than_three_processes(invalidated_measurement):
-    """Same governing case and same pending_fix reason as the invalidated budget test above."""
-    m = invalidated_measurement
     assert m["procs"] < MAX_PROCS, f"procs_per_call not under {MAX_PROCS}: {m['detail']}"

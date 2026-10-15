@@ -245,8 +245,6 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     # Dev-install-only guard: the monkeypatch below supplies the sentinel and root.
     "guard_headless_claude_plugin_dir": lambda mod: "claude -p hi",
     "guard_piped_pytest_exit": lambda mod: "python -m pytest x | tail -3",
-    # Moving "." moves the directory the payload cwd is inside: advisory.
-    "guard_move_from_inside_cwd": lambda mod: "Move-Item . ../elsewhere",
 }
 
 

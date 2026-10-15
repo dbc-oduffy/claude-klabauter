@@ -53,17 +53,6 @@
       },
       "_rationale": "The COMPUTE_ONLY default (70ms) is wrong for this op, not generous. The bar runs the engine's own spine reader over the plan and `read_spine`'s YAML parse is the cost: measured over this repo's real docs/plans/ corpus (422 plans, process time, warm interpreter) one plan costs 1.4ms at the median and 171-182ms on the heaviest -- under DR-344's 500ms brightline and over the tier default. Target set from the measured worst case. The cost lives in a module this op consumes and does not own, so there is no local fix; the brightline itself is asserted by coordinator_core/roadmap/tests/test_prep_gate.py::test_every_real_plan_holds_the_brightline. plan.stamp_prepped carries its own override only for the spawn budget -- the same read plus one locked write, measured at ~175ms against the MUTATING default of 300ms. Census python targets are resolved by ONE batched `git ls-files` (census.py::tracked_targets via git/run.py::run_git), so the count does not grow with the number of census entries. Counted by coordinator_core/ops/tests/test_plan_prep_spawn_count.py with exact equality."
     },
-    "plan.readiness_verdict": {
-      "target_ms": 200,
-      "tolerance": {
-        "kind": "relative",
-        "value": 0.2
-      },
-      "spawn_count_budget": {
-        "census_python_target_tracking": 1
-      },
-      "_rationale": "Wraps plan.prep_gate's handler (same gate_plan bar, 1.4ms median and 171-182ms worst over the real plan corpus, process time) and adds a pure combine over a few small values, so it carries plan.prep_gate's target. The only spawn is the prep gate's ONE batched `git ls-files` for python census targets; a plan without such targets spawns nothing. Zero spawns on a plan without such targets is asserted by coordinator_core/ops/tests/test_plan_readiness_verdict.py; the one-spawn case is plan.prep_gate's, counted by test_plan_prep_spawn_count.py."
-    },
     "plan.seam_check": {
       "target_ms": 310,
       "tolerance": {"kind": "relative", "value": 0.2},

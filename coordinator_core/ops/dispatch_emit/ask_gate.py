@@ -182,52 +182,13 @@ def gate(
     deliverable_id = str(sizing.get("deliverable_id") or "").strip()
     if deliverable_id:
         minted["deliverableId"] = deliverable_id
-    spine, spine_refusal = (None, None) if resume else _spine_plan(repo_root, sizing, sizing_rel)
-    if spine_refusal:
-        return _halt(HALT_REFUSAL, spine_refusal)
     return GateVerdict(
         arm=arm,
         halt=None,
         baton=minted,
         acceptance=acceptance,
         resume_plan=resume,
-        spine_plan=spine,
     )
-
-
-def _spine_plan(repo_root: Path, sizing: dict, sizing_rel: str) -> tuple[Optional[str], Optional[str]]:
-    """`(repo-relative spine path, None)` minted from a concrete sizing, `(None, None)` when the
-    sizing is not concrete, or `(None, refusal)` when the spine cannot be minted.
-
-    A file already at the path is never overwritten: when its rows' writes or checks differ from
-    the sizing's, the refusal names the differing rows.
-    """
-    from coordinator_core.ops.dispatch_emit.inventory_mint import InventoryMintError
-    from coordinator_core.ops.dispatch_emit.sizing_m_mint import (
-        concrete_acceptance,
-        mint_m_spine,
-        spine_mismatch,
-    )
-
-    rows = concrete_acceptance(sizing)
-    if rows is None:
-        return None, None
-    try:
-        text, rel = mint_m_spine(sizing, sizing_rel=sizing_rel, rows=rows, repo_root=repo_root)
-    except (InventoryMintError, ValueError) as exc:
-        return None, f"spine-direct mint refused: {exc}"
-    target = repo_root / rel
-    if target.exists():
-        bad = spine_mismatch(target.read_text(encoding="utf-8"), text)
-        if bad:
-            return None, (
-                f"{rel.as_posix()} already exists and its rows differ from the sizing's acceptance_rows "
-                f"({', '.join(bad)}); delete it to re-mint, or edit the rows to match"
-            )
-        return rel.as_posix(), None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
-    return rel.as_posix(), None
 
 
 def _record_refusal(record: dict) -> Optional[str]:

@@ -3,15 +3,11 @@ carrying a live peer session's write claim."""
 
 from __future__ import annotations
 
-import json
-import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -19,7 +15,6 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 from coordinator_core.session import core as session_core
-from coordinator_core.session import liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -130,31 +125,6 @@ def test_a_live_peer_write_claim_refuses_the_commit(repo):
     assert out["peer_claims"] == [{"path": "a.py", "session": PEER}]
     assert "a.py" in out["error"] and PEER in out["error"] and "Wait for the peer" in out["error"]
     assert _git(["rev-parse", "HEAD"], repo) == head
-
-
-def test_an_abandoned_live_peer_claim_does_not_refuse_the_commit(repo, monkeypatch):
-    request = _two_chunks(repo)
-    session_core.init(PEER, cwd=str(repo))
-    session_scope.touch(PEER, "a.py", cwd=str(repo))
-    monkeypatch.setattr(
-        commit_v2.session_liveness, "session_live", lambda sid, cwd=None: True
-    )
-    sdir = Path(session_core.session_dir(PEER, str(repo)))
-    meta = sdir / "meta.json"
-    data = json.loads(meta.read_text(encoding="utf-8"))
-    data["last_activity"] = "2020-01-01T00:00:00Z"
-    meta.write_text(json.dumps(data), encoding="utf-8")
-    old = time.time() - 2 * liveness._ABANDONMENT_WINDOW_SEC
-    for f in sdir.iterdir():
-        if f.is_file():
-            os.utime(f, (old, old))
-
-    out = _run(repo, request)
-
-    assert out["committed"] is True, out
-    assert _committed(repo) == ["a.py", "b.py"]
-    body = _git(["log", "-1", "--format=%B"], repo)
-    assert f"Absorbed-Peer-Claim {PEER} a.py" in body, body
 
 
 def test_the_runs_own_session_claim_still_commits(repo):

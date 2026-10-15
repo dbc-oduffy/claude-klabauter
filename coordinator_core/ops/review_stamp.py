@@ -900,11 +900,7 @@ def _resolve_mint(
     if attestation_receipt:
         gate_integration["criterion"] = {**criterion, "status": "met"}
     gate_refusal = mint_refusal(
-        gate_integration,
-        prep_data,
-        build_test_data,
-        criterion_open_ok=criterion_open_ok,
-        delivery_exempt=delivery_verdict is None and _delivery_verifier_off_tier(plan_path, repo_root, text),
+        gate_integration, prep_data, build_test_data, criterion_open_ok=criterion_open_ok
     )
 
     if not landed_here:
@@ -938,29 +934,6 @@ def _resolve_mint(
         gate_refusal=gate_refusal,
         attestation_refusal=attestation_refusal,
     )
-
-
-def _delivery_verifier_off_tier(plan_path: Path, repo_root: Path, plan_text: str) -> bool:
-    """True when the plan's review tier is one the roster's `tiers` keep the delivery-verifier
-    off, by the same agent filter `compose_execute_review` applies. Unknown tier or unreadable
-    roster: False, so an absent verdict still refuses."""
-    from coordinator_core.ops.dispatch_emit.emit import derive_review_tier
-    from coordinator_core.ops.review_mint.execute_review import _DELIVERY_VERIFIER_AGENT_TYPE
-    from coordinator_core.ops.review_mint.op import load_fragment
-    from coordinator_core.ops.review_mint.roster import (
-        RosterFragmentError,
-        agent_excluded_at_tier,
-        parse_execute_review,
-    )
-
-    try:
-        tier = derive_review_tier(plan_path, repo_root=repo_root, plan_text=plan_text)
-        if tier is None:
-            return False
-        review = parse_execute_review(load_fragment(repo_root))
-    except (OSError, ValueError, RosterFragmentError):
-        return False
-    return agent_excluded_at_tier(review, _DELIVERY_VERIFIER_AGENT_TYPE, tier)
 
 
 def _stamp_of(r: _Resolved, superseding_record: Optional[Path]) -> Dict[str, Any]:

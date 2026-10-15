@@ -111,57 +111,6 @@ def test_raw_ask_becomes_the_fired_run(tmp_path):
     assert record["session_id"] == "sess-1" and record["sizing_rel"] is None
 
 
-def test_a_refire_echoes_the_revisions_it_carries(tmp_path):
-    root = _repo(tmp_path)
-
-    def emit(params, root_):
-        out = _Emit()(params, root_)
-        out["revisions_inherited"] = [
-            {"id": "R4", "first_line": "cover Windows"},
-            {"id": "R5", "first_line": "keep it XS"},
-        ]
-        return out
-
-    ctx = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=emit))["additionalContext"]
-    assert "Carries revisions: R4 (cover Windows); R5 (keep it XS)." in ctx
-
-    plain = _hso(mod.evaluate(_payload(root, {"ask": "b"}, tool_use_id="t2"), emit=_Emit()))["additionalContext"]
-    assert "Carries revisions" not in plain
-
-
-def test_a_research_sizing_takes_the_research_route(tmp_path):
-    root = _repo(tmp_path)
-    sizing = root / "state" / "sizings" / "x.yaml"
-    sizing.parent.mkdir(parents=True)
-    sizing.write_text("research:\n  question: q\n", encoding="utf-8")
-    (root / "ctx.md").write_text("c\n", encoding="utf-8")
-    emit = _Emit()
-    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/x.yaml", "context": ["ctx.md"]}), emit=emit)
-
-    assert _hso(out)["permissionDecision"] == "allow"
-    params, _ = emit.calls[0]
-    assert params["from_sizing"] == "state/sizings/x.yaml" and params["context"]
-    assert "ask" not in params and "sizing_path" not in params
-
-    refused = mod.evaluate(
-        _payload(root, {"sizing": "state/sizings/x.yaml", "brief": "b"}, tool_use_id="t2"), emit=_Emit()
-    )
-    assert _hso(refused)["permissionDecision"] == "deny"
-    assert "research sizing takes no brief" in _hso(refused)["permissionDecisionReason"]
-
-
-def test_an_empty_research_block_or_unreadable_sizing_keeps_the_plan_chain(tmp_path):
-    root = _repo(tmp_path)
-    sizing = root / "state" / "sizings" / "y.yaml"
-    sizing.parent.mkdir(parents=True)
-    sizing.write_text("research: {}\n", encoding="utf-8")
-    for rel in ("state/sizings/y.yaml", "state/sizings/missing.yaml"):
-        emit = _Emit()
-        mod.evaluate(_payload(root, {"sizing": rel}, tool_use_id=rel), emit=emit)
-        params, _ = emit.calls[0]
-        assert params["sizing_path"] == rel and "from_sizing" not in params
-
-
 def test_bare_string_args_is_the_ask(tmp_path):
     root = _repo(tmp_path)
     emit = _Emit()

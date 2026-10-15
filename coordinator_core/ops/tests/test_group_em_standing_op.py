@@ -62,11 +62,10 @@ def test_read_only_over_fixture_record_and_heartbeat(tmp_path, monkeypatch):
 def test_no_peer_uses_who(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(ges.nomination, "who", lambda root: seen.setdefault("who", root) and None)
-    monkeypatch.setattr(ges.nomination, "identify", lambda root: {"state": "vacant"})
     monkeypatch.setattr(ges.watch_heartbeat, "read_liveness", lambda root, now: {"verdict": "absent"})
     result = ges._groupem_standing({"repo_root": str(tmp_path)})
     assert seen["who"] == str(tmp_path)
-    assert result == {"nomination": None, "identity": {"state": "vacant"}, "watch_liveness": {"verdict": "absent"}}
+    assert result == {"nomination": None, "watch_liveness": {"verdict": "absent"}}
 
 
 def test_raising_legs_degrade_without_raising(tmp_path, monkeypatch):

@@ -169,3 +169,10 @@ def test_accept_op_refuses_suite_tier_and_accepts_replacement(tmp_path, statemen
         repo_root=tmp_path,
     )
     assert "suite tier" not in (r.get("error") or "")
+
+
+def test_tier_u_as_subject_is_not_a_suite_tier():
+    from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+    assert suite_tier_refusal("the Tier-U ask names each tier's command and cost") is None
+    assert suite_tier_refusal("tier_u arg reaches the tier-u-grant-cli") is None
+    assert suite_tier_refusal("Tier-U passes") is not None

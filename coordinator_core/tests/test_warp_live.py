@@ -57,11 +57,11 @@ def test_launch_record_under_the_managed_dir_is_found(repo, dirs, tmp_path):
 def test_launch_record_under_the_legacy_dir_is_found(repo, dirs, tmp_path):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
     _launch(dirs[1], "s1", "w1")
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=_transcript(tmp_path)) == "r1"
     ended = _transcript(
         tmp_path, "<task-notification><task-id>w1</task-id><status>completed</status></task-notification>\n"
     )
     assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=ended) is None
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=_transcript(tmp_path)) == "r1"
 
 
 def test_an_explicit_tmpdir_reads_that_directory_only(repo, dirs, tmp_path):
@@ -153,92 +153,6 @@ def test_not_unlaunched_when_the_submission_stored_no_tool_use_id(repo, dirs, tm
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
     _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")), tool_use_id=None)
     assert warp_live.unlaunched_run_for_sizing(repo, SIZING, "s1") is None
-
-
-def test_a_refused_call_token_is_not_live_for_sizing_or_session(repo, dirs, tmp_path):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1") is None
-    assert warp_live.live_run_for_session(repo, "s1") is None
-
-
-def test_another_sessions_refused_token_is_not_live(repo, dirs, tmp_path):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") is None
-    assert warp_live.live_run_for_sizing(repo, SIZING) is None
-
-
-def test_an_in_flight_call_token_stays_live(repo, dirs, tmp_path):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path, '{"type":"assistant","id":"tu1","name":"tool_use"}\n'))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") == "r1"
-    assert warp_live.live_run_for_session(repo, "s1") == "r1"
-
-
-def test_a_launched_run_stays_live_despite_a_result_line(repo, dirs, tmp_path):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1", launch=True)))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") == "r1"
-    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
-    _launch(dirs[0], "s1", "w1")
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") == "r1"
-
-
-def _terminal(task, result, status="completed"):
-    return (
-        f"<task-notification><task-id>{task}</task-id><status>{status}</status>"
-        f"<result>{result}</result></task-notification>\n"
-    )
-
-
-@pytest.mark.parametrize("shape", ["dependents_unstarted", "ledger-check", "plan pull"])
-def test_a_halted_return_spends_the_token_and_frees_the_sizing(repo, dirs, tmp_path, shape):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path), tool_use_id="tu1")
-    _launch(dirs[0], "s1", "w1")
-    ended = _transcript(tmp_path, _terminal("w1", f"halted: {shape}"))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=ended) is None
-    assert not run_token.is_live(repo, "r1")
-    assert list(run_token.live_records(repo)) == []
-    run_token.mint(repo, "r2", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    assert [r["run_id"] for r in run_token.live_records(repo)] == ["r2"]
-
-
-def test_a_run_whose_task_has_not_reported_terminal_stays_live_and_unspent(repo, dirs, tmp_path):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path))
-    _launch(dirs[0], "s1", "w1")
-    other = _transcript(tmp_path, _terminal("w2", "halted: ledger-check"))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=other) == "r1"
-    assert run_token.is_live(repo, "r1")
-
-
-def test_a_run_whose_commit_released_its_token_then_returned_terminal_leaves_no_token(repo, dirs, tmp_path):
-    token = run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    assert run_token.redeem(repo, "r1", token, SCRIPT)
-    assert run_token.release(repo, "r1", token, SCRIPT)
-    _submit(repo, "r1", _transcript(tmp_path))
-    _launch(dirs[0], "s1", "w1")
-    ended = _transcript(tmp_path, _terminal("w1", "halted: plan pull"))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=ended) is None
-    assert list(run_token.live_records(repo)) == []
-    assert not run_token.release(repo, "r1", token, SCRIPT)
-
-
-def test_a_grace_expired_unlaunched_token_reads_not_live_and_is_not_spent(repo, dirs, monkeypatch):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    real = warp_live.time.time()
-    monkeypatch.setattr(warp_live.time, "time", lambda: real + warp_live.UNLAUNCHED_GRACE_SECONDS + 60)
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1") is None
-    assert run_token.is_live(repo, "r1")
-
-
-def test_a_refused_call_spends_the_token(repo, dirs, tmp_path):
-    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    _submit(repo, "r1", _transcript(tmp_path, _result_line("tu1")))
-    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1") is None
-    assert not run_token.is_live(repo, "r1")
 
 
 def test_the_reader_names_no_system_tempdir():

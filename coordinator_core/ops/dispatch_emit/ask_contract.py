@@ -37,8 +37,7 @@ SIZING_ASSEMBLE_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-s
 SCOUT_RETURN_CLAUSE = (
     "Return its inputs: tshirt (XS|S|M|L|XL|XXL), intent (one sentence), "
     "name (a short kebab-case slug), premise_provenance (executed|read|not-applicable) with "
-    "premise_evidence, exit_criterion (one sentence stating what done means; never name a suite tier or a "
-    "test-runner command in it -- write 'tests covering touched files pass'), and as `writes` "
+    "premise_evidence, exit_criterion (one sentence stating what done means), and as `writes` "
     "the repo-relative files the ask will create, edit or delete -- every file the ask names, "
     "plus any you find it must touch. An XS with empty `writes` is refused at the gate. Set "
     "jtbd_unclear true when the job the ask serves is unclear (it routes the ask to shaping), "
@@ -162,9 +161,6 @@ class GateVerdict:
     acceptance: dict | None = None
     # Plan path of an accepted, unfired sizing: the script stages it instead of authoring one.
     resume_plan: str | None = None
-    # Plan path of the spine the gate minted at M+ from a sizing whose acceptance rows are all
-    # concrete: the script reviews it instead of planning.
-    spine_plan: str | None = None
     # Set only when the request carried `record`: {"ok": bool, "error"?: str}, the ruling's write.
     recorded: dict | None = None
 
@@ -176,8 +172,6 @@ class GateVerdict:
             out["acceptance"] = self.acceptance
         if self.resume_plan is not None:
             out["resume_plan"] = self.resume_plan
-        if self.spine_plan is not None:
-            out["spine_plan"] = self.spine_plan
         return out
 
 

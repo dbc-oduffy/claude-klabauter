@@ -723,10 +723,6 @@ def emit_reverify(
     record_file = Path(run_record)
     if not blank and not record_file.is_absolute():
         record_file = repo_root / record_file
-    if not blank and record_file.is_absolute() and _is_run_record(_frontmatter(record_file)):
-        owner = _repo_of_record(record_file)
-        if owner != repo_root.resolve():
-            repo_root = owner
     if blank or not _is_run_record(_frontmatter(record_file)):
         # Blank, or not a run record (a task .output or completion receipt): resolve from the plan.
         plan_id = _plan_id_of(plan_path)

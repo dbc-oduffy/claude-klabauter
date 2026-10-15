@@ -34,12 +34,11 @@ def _sized_by_default(monkeypatch):
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, False))
 
 
-def _is_deny(result) -> bool:
-    return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def _reason(result: dict) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+def _is_advisory(result) -> bool:
+    if result is None:
+        return False
+    out = result["hookSpecificOutput"]
+    return "permissionDecision" not in out and bool(out.get("additionalContext"))
 
 
 def test_whitespace_only_diff_true() -> None:
@@ -124,7 +123,7 @@ def test_edit_substantive_change_fires_and_brief_has_no_todo() -> None:
             "new_string": "def f():\n    return compute_something(x, y)",
         },
     }
-    assert _is_deny(op(payload))
+    assert _is_advisory(op(payload))
 
 
 def test_multiedit_all_bypass_suppresses_nudge() -> None:
@@ -156,7 +155,7 @@ def test_multiedit_one_substantive_entry_fires() -> None:
             ],
         },
     }
-    assert _is_deny(op(payload))
+    assert _is_advisory(op(payload))
 
 
 def test_multiedit_malformed_entry_does_not_bypass() -> None:
@@ -170,7 +169,7 @@ def test_multiedit_malformed_entry_does_not_bypass() -> None:
             ],
         },
     }
-    assert _is_deny(op(payload))
+    assert _is_advisory(op(payload))
 
 
 def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -> None:
@@ -199,7 +198,7 @@ def test_write_substantive_change_against_disk_content_fires(tmp_path, monkeypat
             "content": "def f():\n    return compute_something(x, y)\n",
         },
     }
-    assert _is_deny(op(payload))
+    assert _is_advisory(op(payload))
 
 
 def test_write_brand_new_file_never_bypasses(tmp_path, monkeypatch) -> None:
@@ -213,7 +212,7 @@ def test_write_brand_new_file_never_bypasses(tmp_path, monkeypatch) -> None:
             "content": "x = 1\n",
         },
     }
-    assert _is_deny(op(payload))
+    assert _is_advisory(op(payload))
 
 
 def test_op_is_registered() -> None:
@@ -239,30 +238,40 @@ def _unsized(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
 
 
-def test_unsized_deny(monkeypatch) -> None:
+def _advisory(result) -> str:
+    out = result["hookSpecificOutput"]
+    assert "permissionDecision" not in out
+    return out["additionalContext"]
+
+
+def test_unsized_advises_and_repeats(monkeypatch) -> None:
     _unsized(monkeypatch)
-    out = op(_payload())
-    assert _is_deny(out)
-    assert "No sizing" in _reason(out)
+    first = _advisory(op(_payload()))
+    second = _advisory(op(_payload()))
+    assert "No sizing" in first
+    assert first == second
 
 
-def test_sized_deny_even_xs(monkeypatch) -> None:
-    out = op(_payload())
-    assert _is_deny(out)
-    assert "route through the warp run" in _reason(out)
-    assert 'args: {"sizing": ' in _reason(out)
+def test_sized_advises_and_repeats(monkeypatch) -> None:
+    first = _advisory(op(_payload()))
+    second = _advisory(op(_payload()))
+    assert "route through the warp run" in first
+    assert 'args: {"sizing": ' in first
+    assert first == second
 
 
-def test_plan_routed_sizing_without_a_plan_names_the_one_fire(monkeypatch) -> None:
+def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, True))
-    reason = _reason(op(_payload()))
-    assert "routed to a plan" in reason and 'args: {"sizing": ' in reason
-    assert "coordinator:executor" not in reason
+    first = _advisory(op(_payload()))
+    second = _advisory(op(_payload()))
+    assert "routed to a plan" in first and 'args: {"sizing": ' in first
+    assert "coordinator:executor" not in first
+    assert first == second
 
 
-def test_unsized_deny_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:
+def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
-    reason = _reason(op(_payload()))
+    reason = _advisory(op(_payload()))
     assert 'name: "coordinator:engine-ask", args: {"ask": ' in reason and "express-lane" not in reason
 
 
@@ -278,14 +287,6 @@ def test_session_sizing_state_reads_the_route(monkeypatch, route, plans, pending
     monkeypatch.setattr(sizing, "_load_sizing_object", lambda r, rel: {"route": route})
     monkeypatch.setattr(sizing, "_session_touched_plan_files", lambda s, r: plans)
     assert _REAL_SIZING_STATE({"cwd": "/repo"}, "s") == (True, pending)
-
-
-@pytest.mark.parametrize("state", [(False, False), (True, True), (True, False)])
-def test_every_deny_branch_names_the_logged_sentinel_escape(monkeypatch, state) -> None:
-    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: state)
-    reason = _reason(op(_payload()))
-    assert str(_mod.dispatch_nudge_sentinel_path("sess-sizing-1")) in reason
-    assert "reason line" in reason and "logged" in reason
 
 
 def test_subagent_allowed(monkeypatch) -> None:
@@ -314,9 +315,9 @@ def test_autonomous_allowed(monkeypatch) -> None:
     assert op(_payload()) is None
 
 
-def test_empty_sentinel_still_denies(monkeypatch) -> None:
+def test_empty_sentinel_still_advises(monkeypatch) -> None:
     open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w").close()
-    assert _is_deny(op(_payload()))
+    assert _is_advisory(op(_payload()))
 
 
 def _repo_with_reason(tmp_path):
@@ -338,16 +339,16 @@ def _sidecar(repo, status: str, agent: str = "coordinator:executor") -> None:
         fh.write(f"---\nstatus: {status}\nagent_type: {agent}\n---\n")
 
 
-def test_reason_without_grant_or_failure_denies_and_keeps_sentinel(tmp_path) -> None:
+def test_reason_without_grant_or_failure_advises_and_keeps_sentinel(tmp_path) -> None:
     _repo, p = _repo_with_reason(tmp_path)
-    assert _is_deny(op(p))
+    assert _is_advisory(op(p))
     assert os.path.exists(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"))
 
 
-def test_non_failed_executor_with_reason_denies(tmp_path) -> None:
+def test_non_failed_executor_with_reason_advises(tmp_path) -> None:
     repo, p = _repo_with_reason(tmp_path)
     _sidecar(repo, "complete")
-    assert _is_deny(op(p))
+    assert _is_advisory(op(p))
     assert os.path.exists(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"))
 
 
@@ -360,16 +361,18 @@ def test_pm_grant_is_honoured(tmp_path) -> None:
     p = _payload()
     p["cwd"] = str(repo)
     assert op(p) is None
-    assert _is_deny(op(p))
+    assert _is_advisory(op(p))
 
 
 def test_reasoned_sentinel_allows_and_logs_one_line(monkeypatch, tmp_path) -> None:
     import json
 
+    from coordinator_core.hooks.dispatch_escape import ESCAPE_LOG_NAME
+
     repo, p = _repo_with_reason(tmp_path)
     _sidecar(repo, "blocked")
     assert op(p) is None
-    logs = list((repo / ".coordinator-local").rglob(_mod.ESCAPE_LOG_NAME))
+    logs = list((repo / ".coordinator-local").rglob(ESCAPE_LOG_NAME))
     assert len(logs) == 1
     lines = logs[0].read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1

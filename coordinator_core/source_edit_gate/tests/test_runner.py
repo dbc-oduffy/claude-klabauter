@@ -126,20 +126,6 @@ def test_run_selected_pytest_uses_xdist_when_importable(tmp_path, monkeypatch):
     assert argv[p_index + 1] == "no:cacheprovider"
 
 
-def test_usable_ram_gb_reads_avail_mb(monkeypatch):
-    from coordinator_core.telemetry import host_sampler
-
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (2048, 65536))
-    assert runner_module._usable_ram_gb() == 2.0
-
-
-def test_usable_ram_gb_unreadable_avail_is_conservative_not_total(monkeypatch):
-    from coordinator_core.telemetry import host_sampler
-
-    monkeypatch.setattr(host_sampler, "avail_mb", lambda: (None, 65536))
-    assert runner_module._usable_ram_gb() == 4.0
-
-
 def test_run_selected_pytest_skips_xdist_when_not_importable(tmp_path, monkeypatch):
     captured = {}
 
