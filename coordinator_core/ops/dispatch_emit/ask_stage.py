@@ -36,6 +36,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
     gated_rows,
+    own_gate_owners,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -323,12 +324,16 @@ def stage(
             named = ", ".join(f"{k} (line {v})" for k, v in sorted(unfilled.items()))
             raise AskStageError(f"PLAN-SCAFFOLD-UNFILLED: {plan_posix} still carries {named}")
     exclusions: list = []
-    rows = read_spine(plan_path, exclusions=exclusions)
     raw_by_id = {
         raw["id"]: raw
         for raw in load_rows(plan_text).rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
+    rows = read_spine(
+        plan_path,
+        exclusions=exclusions,
+        cleared_gate_owners=own_gate_owners(raw_by_id.values(), root),
+    )
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []

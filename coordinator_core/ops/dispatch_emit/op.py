@@ -233,6 +233,7 @@ import json
 from coordinator_core.atomic_replace import atomic_write_bytes
 import os
 import re
+import shlex
 import stat
 import sys
 import uuid
@@ -913,11 +914,13 @@ def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Pat
 
 
 def _em_mailbox(root: Path, scratch_rel: str) -> dict:
-    """Create the run's EM mailbox (empty) and name it, with the tails the EM's Monitor runs.
+    """Create the run's EM mailbox (empty) and name the background commands that watch it.
 
     Members append escalations there mid-run (`chatty.EM_MAILBOX`); nothing else reads it.
-    `em_watch` reads from the first line; `em_rewatch` starts at the current end, so a
-    re-armed Monitor never re-delivers a line it already saw.
+    Each command blocks until one new line arrives, prints it and exits, so it runs as a
+    background Bash run (no Monitor timeout). `em_watch` reads from the first line;
+    `em_rewatch` starts at the current end, so a re-armed watch never re-delivers a line
+    it already saw.
     """
     from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
 
@@ -926,8 +929,8 @@ def _em_mailbox(root: Path, scratch_rel: str) -> dict:
     path.touch(exist_ok=True)
     return {
         "em_mailbox": path.as_posix(),
-        "em_watch": f"tail -n +1 -F {path.as_posix()}",
-        "em_rewatch": f"tail -n 0 -F {path.as_posix()}",
+        "em_watch": f"python -m coordinator_core.workflow_watch.mailbox_line --from-start {shlex.quote(path.as_posix())}",
+        "em_rewatch": f"python -m coordinator_core.workflow_watch.mailbox_line {shlex.quote(path.as_posix())}",
     }
 
 

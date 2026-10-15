@@ -33,6 +33,7 @@ the rows land in ``StageManifest.gated``.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 from pathlib import Path
@@ -259,3 +260,29 @@ def gated_rows(
             )
         )
     return out
+
+
+def _same_root(a: str, b: object) -> bool:
+    if not a:
+        return False
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def own_gate_owners(raw_rows: Iterable[Mapping], root: Path) -> frozenset[str]:
+    """The ``owner_repo`` names in ``raw_rows``' ``external_gate`` entries whose registered root is
+    ``root``: the run's own repo, so a gate naming it withholds nothing. A third repo's gate, and an
+    unregistered owner, are not in the set. No process is spawned."""
+    owners = {
+        g.get("owner_repo")
+        for raw in raw_rows
+        if isinstance(raw, Mapping)
+        for g in (raw.get("external_gate") if isinstance(raw.get("external_gate"), list) else ())
+        if isinstance(g, Mapping) and isinstance(g.get("owner_repo"), str) and g["owner_repo"]
+    }
+    if not owners:
+        return frozenset()
+    from coordinator_core.machine_resolver import registry_get
+    from coordinator_core.ops.fleet._memo_resolver import receiver_em_to_repo_key
+
+    return frozenset(o for o in owners if _same_root(registry_get(receiver_em_to_repo_key(o)) or "", root))
+

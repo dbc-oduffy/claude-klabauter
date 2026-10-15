@@ -126,6 +126,12 @@ set process environment BEFORE the harness/hook process launches -- never
 by the dispatching agent this guard exists to bound, which could otherwise
 just append an override line to its own next prompt.
 
+BRIEF CLASSIFICATION. A findings-only restriction ("findings only", "review
+only", "do not edit") or a review of a named commit/sha/diff makes the brief
+review; a commit/apply directive voids the commit-review shield. The persona
+deny names the execution phrase it keyed on, never the grant mechanism
+(B6); free text in a brief is never a grant.
+
 DENY MESSAGE -- register per docs/wiki/guard-messaging.md § Register: one
 fact (which model this dispatch resolves to, and why no exemption
 applies), one terse alternative (pass `model: "sonnet"` or `"haiku"`, or
@@ -217,31 +223,61 @@ _PLAN_AUTHORING_PERSONAS = frozenset(
 )
 
 
-def _is_execution_brief(tool_input: Dict[str, Any]) -> bool:
-    """True when the brief carries execution/diagnosis vocabulary and neither the
-    description nor the prompt opens with a judgment verb (a judgment word later in
-    the text does not shield). No execution hit resolves to False."""
+_FINDINGS_ONLY_RE = re.compile(
+    r"\b(?:findings[- ]only|review[- ]only|read[- ]only|"
+    r"(?:write|return|report)\s+(?:your\s+)?findings\s+only|"
+    r"(?:do\s+not|don't|never|no)\s+(?:edit|edits|modify|change|write\s+code))\b",
+    re.IGNORECASE,
+)
+_COMMIT_REVIEW_RE = re.compile(
+    r"\b(?:review(?:ing)?|judge|assess|inspect|look at|go through|second opinion)\b[^.\n]{0,60}?\b(?:commit|sha|diff|[0-9a-f]{7,40})\b",
+    re.IGNORECASE,
+)
+_DIRECTIVE_RE = re.compile(
+    r"\b(?:commit\s+(?:and|your|the|it|them|with)|and\s+commit|apply\s+the|"
+    r"then\s+(?:fix|apply|patch|implement))\b",
+    re.IGNORECASE,
+)
+
+
+
+def _execution_phrase(tool_input: Dict[str, Any]) -> Optional[str]:
+    """The execution phrase that makes the brief execution work, else None. A brief
+    that opens with a judgment verb, restricts itself to findings (no edits), or
+    reviews a named commit/diff is review; a commit/apply directive overrides only
+    the commit-review shape."""
     fields = [
         v for v in (tool_input.get("description"), tool_input.get("prompt")) if isinstance(v, str)
     ]
     if not fields or any(_JUDGMENT_RE.match(v) for v in fields):
-        return False
-    return _EXECUTION_RE.search(" ".join(fields)) is not None
+        return None
+    text = " ".join(fields)
+    hit = _EXECUTION_RE.search(text)
+    if hit is None:
+        return None
+    if _FINDINGS_ONLY_RE.search(text):
+        return None
+    if _COMMIT_REVIEW_RE.search(text) and not _DIRECTIVE_RE.search(text):
+        return None
+    return hit.group(0)
 
 
-def _persona_execution_reason(subagent_type: str) -> str:
+def _is_execution_brief(tool_input: Dict[str, Any]) -> bool:
+    return _execution_phrase(tool_input) is not None
+
+
+def _persona_execution_reason(subagent_type: str, phrase: str) -> str:
     return (
-        f"AGENT DISPATCH BLOCKED: persona {subagent_type!r} is Opus; the brief is "
-        "execution/diagnosis work, not review or plan, and no PM grant applies. "
-        "Dispatch coordinator:executor."
+        f"AGENT DISPATCH BLOCKED: persona {subagent_type!r} is Opus; brief says "
+        f"{phrase!r} (execution, not review or plan). Dispatch coordinator:executor, "
+        "or state 'findings only, no edits'."
     )
 
 
-def _fork_execution_reason(parent_model: str) -> str:
+def _fork_execution_reason(parent_model: str, phrase: str) -> str:
     return (
-        f"AGENT DISPATCH BLOCKED: a fork runs on the parent's model ({parent_model!r}) and "
-        "ignores `model`; the brief is execution/diagnosis work. Dispatch "
-        "coordinator:executor with a self-contained brief."
+        f"AGENT DISPATCH BLOCKED: a fork runs on the parent's model ({parent_model!r}); "
+        f"brief says {phrase!r} (execution). Dispatch coordinator:executor."
     )
 
 
@@ -269,14 +305,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if subagent_type == _FORK_TYPE:
         # A fork cannot be re-modelled: it always runs on the parent's model. An
         # execution brief on a gated-tier parent is therefore denied, not rewritten.
-        if not _is_execution_brief(tool_input):
+        phrase = _execution_phrase(tool_input)
+        if phrase is None:
             return None
         parent_model = _clean_str(payload.get("model")) or resolve_last_assistant_model(
             payload.get("transcript_path")
         )
         if parent_model is not None and not _is_gated_tier(parent_model):
             return None
-        return deny("PreToolUse", _fork_execution_reason(parent_model or "<unresolved>"))
+        return deny("PreToolUse", _fork_execution_reason(parent_model or "<unresolved>", phrase))
 
     pins, _error_reason = resolve_model_pins()
     if pins is None:
@@ -287,8 +324,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if pin_model == "opus":
         # Named persona -- see module docstring "PERSONA EXEMPTION".
-        if subagent_type not in _PLAN_AUTHORING_PERSONAS and _is_execution_brief(tool_input):
-            return deny("PreToolUse", _persona_execution_reason(subagent_type))
+        if subagent_type not in _PLAN_AUTHORING_PERSONAS:
+            phrase = _execution_phrase(tool_input)
+            if phrase is not None:
+                return deny("PreToolUse", _persona_execution_reason(subagent_type, phrase))
         return None
 
     passed_model = _clean_str(tool_input.get("model"))

@@ -7,6 +7,9 @@ Run (from repo root):
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -237,6 +240,61 @@ def test_derive_register_reads_powershell_piped_scout_register(turns_repo, monke
     assert any(r["surface"] == "cli" and phrase in r["source_text"] for r in rows)
     unrelated = _register_of(turns_repo).get("unrelated_turns", [])
     assert [u["turn"] for u in unrelated] == [2]
+
+
+_TRAMPOLINE = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "sizing-assemble.py"
+
+
+def _run_cli(repo: Path, register_arg: str, stdin_text: str | None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(_TRAMPOLINE), "--register", register_arg, "--write", _REL],
+        cwd=repo,
+        input=stdin_text.encode("utf-8") if stdin_text is not None else None,
+        stdin=None if stdin_text is not None else subprocess.DEVNULL,
+        capture_output=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def _without_clock(raw: bytes) -> bytes:
+    import re
+
+    return re.sub(rb"computed_at: '[^']*'", b"computed_at: T", raw)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_register_dash_through_real_cli_matches_register_path(repo):
+    piped = _run_cli(repo, "-", _REGISTER)
+    assert piped.returncode == 0, piped.stderr.decode("utf-8", "replace")
+    via_stdin = (repo / _REL).read_bytes()
+    assert b"requirement_register" in via_stdin
+
+    (repo / _REL).write_text(_SIZING, encoding="utf-8")
+    by_path = _run_cli(repo, "reg.yaml", None)
+    assert by_path.returncode == 0, by_path.stderr.decode("utf-8", "replace")
+    assert _without_clock((repo / _REL).read_bytes()) == _without_clock(via_stdin)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(
+    sys.platform != "win32" or shutil.which("pwsh") is None,
+    reason="PowerShell launcher is Windows-only",
+)
+def test_register_dash_through_powershell_launcher_reads_the_pipe(repo):
+    launcher = _TRAMPOLINE.with_suffix(".ps1")
+    script = f"Get-Content reg.yaml -Raw | & '{launcher}' --register - --write {_REL}"
+    done = subprocess.run(
+        ["pwsh", "-NoProfile", "-Command", script],
+        cwd=repo,
+        capture_output=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert done.returncode == 0, (done.stdout + done.stderr).decode("utf-8", "replace")
+    assert b"requirement_register" in (repo / _REL).read_bytes()
 
 
 def test_derive_register_without_pm_words_is_refused(repo):

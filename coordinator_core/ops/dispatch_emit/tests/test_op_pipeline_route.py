@@ -174,5 +174,6 @@ def test_the_emit_creates_the_em_mailbox_and_names_its_tail(stubs, tmp_path):
     box = Path(reply["em_mailbox"])
     assert box == tmp_path / reply["scratch_dir"] / "mail" / "_em.jsonl"
     assert box.is_file() and box.read_bytes() == b""
-    assert reply["em_watch"].endswith(box.as_posix())
-    assert reply["em_rewatch"] == f"tail -n 0 -F {box.as_posix()}"
+    mod = "python -m coordinator_core.workflow_watch.mailbox_line"
+    assert reply["em_watch"] == f"{mod} --from-start {box.as_posix()}"
+    assert reply["em_rewatch"] == f"{mod} {box.as_posix()}"

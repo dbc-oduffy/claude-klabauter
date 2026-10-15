@@ -783,6 +783,7 @@ def compose_ask_script(
         stage_schemas=review_stage_schemas,
         plan_path=manifest_rel,
         run_base_sha=run_base_sha,
+        repo_root=repo_root,
         declared_paths_js="_manifest.review_declared_paths",
         prompt_head=review_head,
         run_key=run_id,
@@ -882,9 +883,12 @@ def compose_ask_script(
         )
         _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
         if intake is not None:
-            b.append(f"  const _sizingPath = {_lit(sizing_rel)};")
+            b.append(f"  const _sizingPath = REPO_ROOT + '/' + {_lit(sizing_rel)};")
         else:
-            b.append(f"  const _sizingPath = '{_sizings_prefix}' + {_lit(date.today().isoformat() + '-')} + _slug + '.yaml';")
+            b.append(
+                f"  const _sizingPath = REPO_ROOT + '/' + '{_sizings_prefix}' + "
+                f"{_lit(date.today().isoformat() + '-')} + _slug + '.yaml';"
+            )
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         deliverable = (
             f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
@@ -920,7 +924,7 @@ def compose_ask_script(
             "detail: [_assembled.stderr, _assembled.stdout].map((s) => String(s ?? '').trim())"
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
-        b.append("  else { _sizingRel = _sizingPath; }")
+        b.append("  else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }")
         b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")
 
     b.append("  phase('gate');")

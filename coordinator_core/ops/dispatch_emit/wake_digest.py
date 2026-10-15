@@ -78,7 +78,7 @@ CAP_HELPER_JS = (
 TERMINAL_COMMIT_CLI_HELPER_JS = (
     "function _terminalCommitCli(p) { "
     "if (!p) return null; "
-    "const s = JSON.stringify(p); "
+    + r"""const s = JSON.stringify(p).replace(/\\\\/g, '\\u005c'); """
     "const head = 'coordinator-invoke dispatch.terminal_commit'; "
     + r"""return head + " --params-file - <<'JSON'\n" + s + "\nJSON"; """
     "}"

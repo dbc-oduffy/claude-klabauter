@@ -343,6 +343,7 @@ from coordinator_core.ops.dispatch_emit.gate_owed import (
     GATE_OWED_JS_RE,
     GATE_OWED_VAR,
     KIND_GUARD_DENIED,
+    KIND_NEEDS_DEPENDENT,
     KIND_OUTSIDE_FOOTPRINT,
     report_line,
 )
@@ -1877,6 +1878,9 @@ def _build_gate_clause(commands: list) -> str:
         "If a guard or hook refuses a gate command (it never ran), do not retry it or "
         "route around the guard: return PARTIAL with the report line "
         f"`{report_line(KIND_GUARD_DENIED, '<command> (<guard>)')}` and nothing else undone. "
+        "If the only thing undone is a live test that needs a later row of this plan to exist "
+        "first, return PARTIAL with the report line "
+        f"`{report_line(KIND_NEEDS_DEPENDENT, '<that row id> <why>')}`: only the named row starts. "
         "Either way, copy that `gate-blocker:` line verbatim as the second line of your "
         "reply, under the status line.\n"
         + lines
@@ -3621,13 +3625,18 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    const by = [...new Set(ids.map((i) => _heldBy[i]))];\n"
         "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')';\n"
         "  }\n"
-        "  function _depBlocker(deps, results) {\n"
+        "  function _owedReleases(owed, id) {\n"
+        "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
+        "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
+        "  }\n"
+        "  function _depBlocker(deps, results, id) {\n"
         "    for (let i = 0; i < results.length; i++) {\n"
         "      const r = results[i];\n"
         "      const t = JSON.stringify(r ?? null);\n"
         "      const settled = typeof r === 'string' && "
         "(r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));\n"
-        "      if (r != null && _gateOwedOf(t)) continue;\n"
+        "      const _o = r != null ? _gateOwedOf(t) : null;\n"
+        "      if (_o && _owedReleases(_o, id)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t))) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
@@ -3658,7 +3667,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _routedOut.push(id);\n"
         "      return 'ROUTED-OUT: a dependency was routed out';\n"
         "    }\n"
-        "    const _blocker = _depBlocker(deps, _depResults);\n"
+        "    const _blocker = _depBlocker(deps, _depResults, id);\n"
         "    if (_blocker) {\n"
         "      _notStarted.push(id);\n"
         "      _blockedChunks.push(id);\n"
@@ -4999,11 +5008,12 @@ def compose_script(
                     chatty_nonce_var="_n",
                 ).replace("label: ", "label: 'continue:' + ", 1)
                 body_blocks.append(f"  _continue[{_js_string_literal(row.id)}] = (_n) => {cont_call};")
+            _continue_nonces = {row.id: _chatty.new_nonce() for row in flat_rows}
+            body_blocks.append(f"  const _continueNonces = {json.dumps(_continue_nonces)};")
             body_blocks.append(
                 "  await Promise.all(((_survey && _survey.continuations) || [])"
                 ".filter((c) => _continue[c.role])"
-                ".map((c) => _continue[c.role](Array.from({ length: 16 }, "
-                "() => Math.floor(Math.random() * 16).toString(16)).join(''))));"
+                ".map((c) => _continue[c.role](_continueNonces[c.role])));"
             )
             body_blocks.append(
                 "  await agent("

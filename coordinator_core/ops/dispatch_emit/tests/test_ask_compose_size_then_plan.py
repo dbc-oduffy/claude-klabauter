@@ -53,7 +53,7 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
 
 
 def test_sizing_path_prefix_is_emitted_verbatim():
-    assert "const _sizingPath = 'state/sizings/' + " in _compose()
+    assert "const _sizingPath = REPO_ROOT + '/' + 'state/sizings/' + " in _compose()
 
 
 def test_scout_jtbd_flags_reach_the_assemble_command():
@@ -104,7 +104,7 @@ def test_paraphrased_relay_with_exit_zero_still_reaches_the_sizing_path():
     and the only halt condition is the exit code, so the else branch assigns the sizing."""
     script = _compose()
     assert "if (_assembled.exit_code !== 0)" in script
-    assert "else { _sizingRel = _sizingPath; }" in script
+    assert "else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }" in script
     assert "!_decision" not in script
 
 

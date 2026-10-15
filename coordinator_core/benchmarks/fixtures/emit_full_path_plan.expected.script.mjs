@@ -123,7 +123,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
   const _DEP_NON_DONE_RE = /(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(?:PARTIAL|BLOCKED)\b|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/;
   const _DEP_ANY_STATUS_RE = /(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:DONE(?:_WITH_CONCERNS)?|PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:DONE|PARTIAL|BLOCKED)<\/exit-status>/;
   const _DEP_BLOCKED_RE = /(?:^"?|\n|\\n)\s*[*_`]{0,2}BLOCKED[*_`]{0,2}:|(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*BLOCKED\b|<exit-status>BLOCKED<\/exit-status>/;
-  const _GATE_OWED_RE = /(?:^"?|\n|\\n)(?:[ >#-]|\\t)*[*_`]{0,2}gate-blocker[*_`]{0,2}(?:[ ]|\\t)*:(?:[ ]|\\t)*[*_`]{0,2}(?:[ ]|\\t)*(outside\-footprint|guard\-denied)\b((?:[^"\\\n]|\\[^n])*)/i;
+  const _GATE_OWED_RE = /(?:^"?|\n|\\n)(?:[ >#-]|\\t)*[*_`]{0,2}gate-blocker[*_`]{0,2}(?:[ ]|\\t)*:(?:[ ]|\\t)*[*_`]{0,2}(?:[ ]|\\t)*(outside\-footprint|guard\-denied|needs\-dependent)\b((?:[^"\\\n]|\\[^n])*)/i;
   function _gateOwedOf(t) {
     if (_DEP_BLOCKED_RE.test(t)) return null;
     const m = _GATE_OWED_RE.exec(t);
@@ -135,12 +135,17 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     const by = [...new Set(ids.map((i) => _heldBy[i]))];
     return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')';
   }
-  function _depBlocker(deps, results) {
+  function _owedReleases(owed, id) {
+    const m = /^gate-blocker: needs-dependent: *([^ \\"]+)/.exec(owed);
+    return !m || m[1].replace(/[.,;]$/, '') === id;
+  }
+  function _depBlocker(deps, results, id) {
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       const t = JSON.stringify(r ?? null);
       const settled = typeof r === 'string' && (r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));
-      if (r != null && _gateOwedOf(t)) continue;
+      const _o = r != null ? _gateOwedOf(t) : null;
+      if (_o && _owedReleases(_o, id)) continue;
       if (r == null || _DEP_NON_DONE_RE.test(t) || (!settled && !_DEP_ANY_STATUS_RE.test(t))) {
         return _rowIdOf.get(deps[i]) || '?';
       }
@@ -168,7 +173,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
       _routedOut.push(id);
       return 'ROUTED-OUT: a dependency was routed out';
     }
-    const _blocker = _depBlocker(deps, _depResults);
+    const _blocker = _depBlocker(deps, _depResults, id);
     if (_blocker) {
       _notStarted.push(id);
       _blockedChunks.push(id);

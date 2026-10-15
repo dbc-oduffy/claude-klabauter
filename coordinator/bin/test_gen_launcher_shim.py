@@ -299,6 +299,15 @@ class BakedInterpreterExistenceGateTests(unittest.TestCase):
             body.index("& $_pybin $_entry @args"),
         )
 
+    def test_ps1_forwards_pipeline_input_only_when_the_launcher_has_some(self) -> None:
+        body = gls.render_ps1("queue-triage", python_bin_token=self.BAKED)
+        self.assertIn("$_piped = $MyInvocation.ExpectingInput", body)
+        calls = [ln.strip() for ln in body.splitlines() if "$_entry @args" in ln]
+        self.assertGreaterEqual(len(calls), 3)
+        for ln in calls:
+            self.assertTrue(ln.startswith("if ($_piped) { $input | & "), ln)
+            self.assertIn("} else { & ", ln)
+
     def test_ps1_still_falls_through_to_the_discovery_ladder(self) -> None:
         body = gls.render_ps1("queue-triage", python_bin_token=self.BAKED)
         self.assertIn("Get-Command python.exe", body)

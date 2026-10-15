@@ -29,6 +29,7 @@ _CONTEXT_HEADING = "## Context files"
 MAX_SLUG_LEN = 48
 DIGEST_LEN = 6
 SCRIPT_SUFFIX = ".workflow.mjs"
+SUBMISSION_FILE = "submission.json"
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _BARE_SLUG = "question"
 _ROSTER_LIST = "roster"
@@ -82,15 +83,23 @@ def ask_digest(root: Path, parts: Mapping[str, object]) -> str:
 
 
 def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str) -> str:
-    """The run id for the ask `digest`: the newest script already emitted for it, else a fresh id.
+    """The run id for the ask `digest`: the newest unlaunched script already emitted for it, else a fresh id.
 
     A re-emit of one ask reuses its script's run id, so it rewrites that script instead of
-    writing a sibling.
+    writing a sibling. A script whose run dir holds a `submission.json` has launched; reusing its
+    id would collide with the run's token, submission and briefs, so a fresh id is minted.
     """
-    found = sorted((root / run_dir_root).glob(f"{prefix}*-{digest}{SCRIPT_SUFFIX}"), key=lambda p: p.stat().st_mtime)
-    if found:
-        return found[-1].name[: -len(SCRIPT_SUFFIX)]
-    return f"{prefix}{now}-{digest}"
+    base = root / run_dir_root
+    found = sorted(base.glob(f"{prefix}*-{digest}{SCRIPT_SUFFIX}"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for script in found:
+        run_id = script.name[: -len(SCRIPT_SUFFIX)]
+        if not (base / run_id / SUBMISSION_FILE).exists():
+            return run_id
+    fresh, bump = f"{prefix}{now}-{digest}", 0
+    while (base / fresh).exists() or (base / f"{fresh}{SCRIPT_SUFFIX}").exists():
+        bump += 1
+        fresh = f"{prefix}{now}{bump}-{digest}"
+    return fresh
 
 
 def _slug(text: str) -> str:

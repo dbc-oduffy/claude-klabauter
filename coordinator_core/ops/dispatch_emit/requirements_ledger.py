@@ -729,14 +729,54 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "run_live": live,
     }
     if not live:
-        out.update(_refire(ledger.sizing_rel))
+        out.update(_refire(ledger.sizing_rel, root))
     return out
 
 
-def _refire(sizing_rel: Optional[str]) -> dict:
-    """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which will."""
+def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:
+    """`(plan_rel, register row ids the plan's register_claims omit)` for the sizing's `plan:` edge;
+    `(None, [])` when the sizing has no readable plan claiming it. File reads only."""
+    if not sizing_rel:
+        return None, []
+    import yaml
+
+    try:
+        sizing_text = _sizing_path(root, sizing_rel).read_text(encoding="utf-8")
+        sizing = yaml.safe_load(sizing_text)
+    except (LedgerRefused, OSError, yaml.YAMLError):
+        return None, []
+    edge = sizing.get("plan") if isinstance(sizing, dict) else None
+    if not (isinstance(edge, str) and edge.strip()):
+        return None, []
+    plan = contained_path(Path(root) / edge, [Path(root) / "docs" / "plans"])
+    if plan is None or not plan.is_file():
+        return None, []
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    claims = plan_frontmatter(plan.read_text(encoding="utf-8", errors="replace")).get("register_claims")
+    if not isinstance(claims, dict) or claims.get("sizing") != sizing_rel or not isinstance(claims.get("rows"), list):
+        return None, []
+    register = rr.read_register(sizing_text)
+    claimed = {str(r) for r in claims["rows"]}
+    missing = [str(r[rr.ROW_ID]) for r in register.rows if str(r[rr.ROW_ID]) not in claimed] if register else []
+    return (edge, missing) if missing else (None, [])
+
+
+def _refire(sizing_rel: Optional[str], root: Optional[Path] = None) -> dict:
+    """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
+    will. When the sizing's plan omits register rows, the refire would fire that stale plan: the
+    reply names the plan-revision step first and holds the fire call as `then`."""
     from coordinator_core.warp_fire import fire_command
 
+    plan_rel, missing = _unclaimed_rows(root, sizing_rel) if root is not None else (None, [])
+    if plan_rel:
+        return {
+            "next": {"kind": "revise-plan", "plan": plan_rel, "rows": missing, "then": fire_command(sizing_rel)},
+            "note": (
+                f"run finished: {plan_rel} omits register row(s) {', '.join(missing)} in register_claims.rows; "
+                "a refire would fire the stale plan. Revise the plan to claim them, then refire."
+            ),
+        }
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},
         "note": "run finished: nothing reads this revision until a refire.",

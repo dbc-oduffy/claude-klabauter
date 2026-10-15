@@ -527,8 +527,8 @@ def test_by_name_launch_record_takes_the_script_path_from_the_launch_result(tmp_
         encoding="utf-8",
     )
     assert warp_live.live_run_for_sizing(
-        repo, rel, session_id="s1", transcript_path=str(ended), tmpdir=str(tdir)
-    ) is None
-    assert warp_live.live_run_for_sizing(
         repo, rel, session_id="s1", transcript_path=str(transcript), tmpdir=str(tdir)
     ) == "r1"
+    assert warp_live.live_run_for_sizing(
+        repo, rel, session_id="s1", transcript_path=str(ended), tmpdir=str(tdir)
+    ) is None
