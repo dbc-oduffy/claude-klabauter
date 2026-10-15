@@ -238,26 +238,32 @@ def _record_live(
 
 
 def unsized_run(repo_root: Path, session_id: Optional[str]) -> Optional[str]:
-    """The run id of this session's live raw-ask run whose gate has not bound a sizing, else None.
+    """The run id of this session's live raw-ask run whose gate has not bound a sizing, when it is
+    the session's only live run, else None.
 
-    Such a run is in its size stage, where no product file is written."""
+    Such a run is in its size stage, where no product file is written. With a second live run in
+    the session a writer cannot be attributed to either, and a wrong answer halts the other run's
+    executors, so none is named."""
     if not session_id:
         return None
     root = Path(repo_root)
     dirs = _launch_dirs(None)
+    live: list[tuple[str, bool]] = []
     for record in _token_records(root):
-        if record.get("sizing_rel") is not None or record.get("session_id") != session_id:
+        if record.get("session_id") != session_id:
             continue
         run_id = record["run_id"]
         submission = _read_json(_submission_path(root, run_id)) or {}
-        if submission.get("sizing_rel"):
-            continue
         script = submission.get("script_path") or record.get("script_path")
         transcript = submission.get("transcript_path")
         if _run_ended(
             session_id, script, transcript, float(record["minted_at"]), dirs, submission.get("tool_use_id")
-        ) is None:
-            return run_id
+        ) is not None:
+            continue
+        unsized = record.get("sizing_rel") is None and not submission.get("sizing_rel")
+        live.append((run_id, unsized))
+    if len(live) == 1 and live[0][1]:
+        return live[0][0]
     return None
 
 

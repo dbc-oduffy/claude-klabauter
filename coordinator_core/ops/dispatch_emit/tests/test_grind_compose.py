@@ -189,32 +189,49 @@ def test_lock_invariant_acquire_all_or_nothing_release_precedes_reacquire():
     assert "if (keys.some((k) => _locked.has(k))) return false;" in script
 
 
-def test_commit_mutex_key_serialises_every_commit_call():
-    """The single `_commitCall(row)` INVOCATION sits inside a
-    `@commit`-keyed `withLock` --
-    the composed prompt DEFINITION itself (which also contains the words
-    "You are the committer for") is not a call site and is excluded from
-    this check."""
+def test_no_per_row_commit_remains_and_the_mutex_key_is_gone():
     script = _compose()
-    assert "await withLock(['@commit'], async () => _commitCall(row));" in script
-    # ledgers are swept, never committed: no ledger-only commit exists
+    assert "@commit" not in script
+    assert "_commitCall" not in script
+    assert script.count("coordinator-invoke dispatch.terminal_commit") == 1
     assert "lockKeys = ['@commit'].concat(" not in script
 
 
-def test_commit_composer_definitions_are_never_invoked_outside_a_commit_lock():
+def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block():
     script = _compose()
-    for m in re.finditer(r"=> _commitCall\(row\)", script):
-        preceding = script[: m.start()]
-        assert preceding.rfind("await withLock(['@commit']") != -1
+    assert script.count("coordinator-invoke dispatch.terminal_commit --params-file ' + (_paramsFile) + '") == 1
+    assert "_terminalCommitParamsBlock(params)" in script
+    assert "const RUN_TOKEN = args.run_token || null;" in script
+    assert gc.PARAMS_BLOCK_JS in script
+    assert "agentType: 'coordinator:git-commit-agent'" in script
+    assert "/scratch/warp/" in script and "terminal-commit-params.json" in script
 
 
-def test_ledger_settle_only_inside_the_commit_composer_after_its_commit():
+def test_terminal_commit_runs_in_a_finally_and_the_drain_sweep_follows_it():
+    script = _compose()
+    runner = "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }"
+    assert runner in script
+    assert script.index(runner) < script.index("await _drainSweep();")
+    assert "await _drainSweep();" not in script[: script.index(runner)]
+    assert script.count("await _terminalCommit()") == 1
+    reviewed = script.index("const _reviewPaths")
+    assert script.index("await _drainSweep();") < reviewed
+
+
+def test_terminal_commit_skips_when_nothing_queued_and_hands_back_without_a_token():
+    script = _compose()
+    fn = script[script.index("async function _terminalCommit()"):]
+    fn = fn[: fn.index("\n}\n")]
+    assert "if (_pendingCommit.length === 0) return;" in fn
+    assert "if (!RUN_TOKEN) { _failAll(" in fn
+    assert "halted: _halted" in fn
+    assert "'budget-exhausted'" in fn and "_grindErr" in fn
+
+
+def test_ledger_settle_verb_is_never_a_commit_step():
     script = _compose()
     assert "_ledgerPathFor" not in script
-    for m in re.finditer(r"grind-row settle", script):
-        window = script[max(0, m.start() - 2000) : m.start()]
-        assert "You are the committer" in window
-        assert "Once the commit lands" in script[m.start() - 200 : m.start()]
+    assert "grind-row settle " not in script.replace("grind-row settle-run", "")
 
 
 def test_drain_sweeps_the_full_queue_set_and_commits_nothing():
@@ -226,15 +243,16 @@ def test_drain_sweeps_the_full_queue_set_and_commits_nothing():
     assert "await _drainSweep();" in script
 
 
-def test_commit_failed_hand_back_names_the_runnable_sweep_command():
+def test_commit_failed_hand_back_names_the_runnable_settle_run_command():
     script = _compose()
-    assert "grind-row sweep; never commit" not in script
-    assert script.count("+ SWEEP_HINT") == 2
-    hint = script[script.index("const SWEEP_HINT"):]
+    assert "SWEEP_HINT" not in script
+    assert script.count("+ SETTLE_HINT") == 5
+    hint = script[script.index("const SETTLE_HINT"):]
     hint = hint[: hint.index("\n")]
-    assert "backlog-grind-assemble grind-row sweep --profile-dir " in hint
-    assert "+ _shq(PROFILE_DIR) +" in hint and "+ _shq(REPO_ROOT) +" in hint
-    assert "--profile fixture --queue state/bug-backlog --repo-root " in hint
+    assert "backlog-grind-assemble grind-row settle-run --profile-dir " in hint
+    assert "+ _shq(PROFILE_DIR) +" in hint and "+ _shq(REPO_ROOT) +" in hint and "+ _shq(RUN_ID)" in hint
+    assert "--profile fixture --run-id " in hint
+    assert " --queue state/bug-backlog --repo-root " in hint
 
 
 def test_no_git_mv_stash_add_dash_a():
@@ -275,7 +293,8 @@ def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
     assert "pipeline(" not in script
     assert "async function _fixCall(row) {" in script
     assert "async function _verifyCall(row) {" in script
-    assert "async function _commitCall(row) {" in script
+    assert "async function _terminalCommitCall(params) {" in script
+    assert "async function _commitCall" not in script
     assert "async function _undoCall(row) {" in script
     assert "async function _triageCall(batchId, batchKey, rowIds) {" in script
 
@@ -347,11 +366,14 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
     script = _compose()
     assert "(row.declaredFiles).join(', ')" in script
     assert "(row.touchedFiles).join(', ')" in script
-    assert "(row.removedFiles).join(', ')" in script
     # no literal manifest row path inside a "stage exactly"/"you hold the
     # lock on" clause -- those clauses interpolate a live expression now.
     for m in re.finditer(r"Stage exactly this touched list: \[", script):
-        assert script[m.end() : m.end() + 40].startswith(("' + ((row.touchedFiles", "' + ((_reviewPaths", "' + ((Array.from(new Set(row.touched"))
+        assert script[m.end() : m.end() + 40].startswith(("' + ((_reviewPaths", "' + ((Array.from(new Set(row.touched"))
+    # a finished row queues the paths a fix actually wrote, never the manifest path alone
+    queue_fn = script[script.index("function _queueCommit"): script.index("function _unsettle")]
+    assert "row.touchedFiles.concat(row.createdFiles || [])" in queue_fn
+    assert "row.removedFiles" in queue_fn
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +516,7 @@ def test_downstream_before_triage_and_window_bound():
         "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}, {"row": "r1", "new_path": "archive/r1.yaml"}], "refuted": []},
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "abc"},
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
     }
     result, _budget = _run(batches, script_by_kind, batch_size=2)
     call_log = result["call_log"]
@@ -504,14 +526,8 @@ def test_downstream_before_triage_and_window_bound():
     if len(triage_indices) >= 2 and downstream_indices:
         assert downstream_indices[0] < triage_indices[1]
 
-    in_flight_downstream = False
-    for kind, _uid in call_log:
-        if kind == "triage":
-            assert not in_flight_downstream
-        elif kind in ("fix", "verify", "refute-close"):
-            in_flight_downstream = True
-        elif kind == "commit":
-            in_flight_downstream = False
+    assert call_log[-1] == ("commit", "run")
+    assert [c for c in call_log if c[0] == "commit"] == [("commit", "run")]
 
 
 def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_budget_exhausted():
@@ -521,7 +537,7 @@ def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_b
         "triage": lambda bid: _triage_script(verdicts)(bid, [bid.replace("b", "r")]),
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, _budget = _run(batches, script_by_kind, batch_size=1, budget_tokens=1)
     handback_types = {h["type"] for h in result["handed_back"]}
@@ -537,7 +553,7 @@ def test_max_agent_calls_is_the_deterministic_secondary_bound():
         "triage": lambda bid: _triage_script(verdicts)(bid, [bid.replace("b", "r")]),
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, _budget = _run(batches, script_by_kind, batch_size=1, max_agent_calls=3)
     triage_calls = [c for c in result["call_log"] if c[0] == "triage"]
@@ -557,7 +573,7 @@ def test_budget_tokens_ceiling_halts_admission_independent_of_budget_total():
         "triage": lambda bid: _triage_script(verdicts)(bid, [bid.replace("b", "r")]),
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     routing, triage_node = _fixture_routing()
     budget = _StubBudgetSpender(total=None)
@@ -586,7 +602,7 @@ def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles(
     script_by_kind = {
         "triage": lambda bid: [{"row": "r0", "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""}],
         "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": []},
-        "commit": lambda rid: {"outcome": "committed", "sha": "deadbeef"},
+        "commit": lambda _unit: {"committed": True, "sha": "deadbeef"},
     }
     budget = _StubBudgetSpender()
     agent_fn = _agent_stub(script_by_kind, budget)
@@ -597,9 +613,10 @@ def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles(
         agent=agent_fn,
     )
     assert {"row": "r0", "outcome": "committed", "sha": "deadbeef"} in result["settled"]
-    assert ("commit", "r0") in result["call_log"]
+    assert ("commit", "run") in result["call_log"]
+    assert ("commit", "r0") not in result["call_log"]
     # applyRoute's own handback (the routed-to terminal type) still fires --
-    # the inline commit is additional, never a substitute for it.
+    # the queued commit is additional, never a substitute for it.
     assert any(h["row"] == "r0" and h["type"] == "settled-direct" for h in result["handed_back"])
 
 
@@ -628,7 +645,7 @@ def test_refuted_row_reaches_fix_and_by_refute_origin_counts_confirmed_and_refut
         "triage": lambda bid: triage(bid, ["r0", "r1"]),
         "refute-close": close_stub,
         "fix": fix_stub,
-        "commit": lambda rid: {"outcome": "committed", "sha": "abc"},
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
 
@@ -660,7 +677,7 @@ def test_by_refute_origin_keys_by_origin_not_batch_id():
     script_by_kind = {
         "triage": lambda bid: triage(bid, ["r0", "r1"]),
         "refute-close": close_stub,
-        "commit": lambda rid: {"outcome": "committed", "sha": "abc"},
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     # Both rows carry the same origin (`triage:not-reproduced`) though they
@@ -794,14 +811,15 @@ def test_each_stage_runs_exactly_once_per_row_in_call_log():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     counts = Counter(result["call_log"])
     for rid in ("r0", "r1"):
         assert counts[("fix", rid)] == 1
         assert counts[("verify", rid)] == 1
-        assert counts[("commit", rid)] == 1
+        assert counts[("commit", rid)] == 0
+    assert counts[("commit", "run")] == 1
 
 
 def test_refute_close_confirmed_routes_to_commit_refuted_revives_to_fix():
@@ -811,7 +829,7 @@ def test_refute_close_confirmed_routes_to_commit_refuted_revives_to_fix():
         "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": [{"row": "r1", "reason": "still broken"}]},
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     settled_rows = {s["row"] for s in result["settled"]}
@@ -837,7 +855,7 @@ def test_handback_spend_matches_stub_budget_delta_and_call_counts():
         "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": []},
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     spend = result["spend"]
@@ -902,7 +920,7 @@ def test_refute_close_stale_row_hands_back_manifest_stale():
         },
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     assert any(h["type"] == "manifest-stale" and h["row"] == "r0" for h in result["handed_back"])
@@ -1357,7 +1375,7 @@ def test_a_run_with_no_plan_weight_row_makes_no_size_call():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: {"outcome": "done"},
         "verify": lambda rid: {"outcome": "pass"},
-        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+        "commit": lambda _unit: {"committed": True, "sha": "x"},
     }
     result, _ = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     by_kind = result["spend"]["agent_calls_by_stage_kind"]
@@ -1497,7 +1515,7 @@ def test_fix_exit_out_of_root_path_hands_back_needs_judgment_without_verify_or_c
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: (seen.append("fix"), {"outcome": "done", "touched_files": ["/sib/repo/f.py"]})[1],
         "verify": lambda rid: (seen.append("verify"), {"outcome": "pass"})[1],
-        "commit": lambda rid: (seen.append("commit"), {"outcome": "committed"})[1],
+        "commit": lambda _unit: (seen.append("commit"), {"committed": True})[1],
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert seen == ["fix"]
@@ -1512,7 +1530,7 @@ def test_fix_exit_in_root_path_routes_unchanged():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: (seen.append("fix"), {"outcome": "done", "touched_files": ["a/f.py"]})[1],
         "verify": lambda rid: (seen.append("verify"), {"outcome": "pass"})[1],
-        "commit": lambda rid: (seen.append("commit"), {"outcome": "committed"})[1],
+        "commit": lambda _unit: (seen.append("commit"), {"committed": True})[1],
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert "verify" in seen
@@ -1543,7 +1561,7 @@ def test_targeted_runner_off_is_the_golden():
 
 
 def _forced_line(script: str) -> str:
-    verify = script[script.index("async function _verifyCall"): script.index("async function _commitCall")]
+    verify = script[script.index("async function _verifyCall"): script.index("async function _terminalCommitCall")]
     return next(ln for ln in verify.splitlines() if "const _forced" in ln)
 
 
@@ -1556,7 +1574,7 @@ def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes():
 
     bug = dataclasses.replace(_fixture_profile(), name="bug")
     script = _compose(targeted_runner=True, profile=bug)
-    verify = script[script.index("async function _verifyCall"): script.index("async function _commitCall")]
+    verify = script[script.index("async function _verifyCall"): script.index("async function _terminalCommitCall")]
     assert '["failed", "refused", "no-runner"]' in _forced_line(script)
     assert "outcome: 'fail'" in verify and "tests_failing_ids" in verify
     assert "reason: JSON.stringify(_result.output)" in verify
@@ -1567,3 +1585,203 @@ def test_targeted_runner_script_names_the_runner_and_no_suite_command():
     assert "targeted-test-run" in script
     for banned in ("fast_test_cmd", "full_test_cmd", "with-suite-mutex", "tier-u-grant-cli"):
         assert banned not in script
+
+
+# ---------------------------------------------------------------------------
+# One terminal commit: queue, overlap, halt, stamp
+# ---------------------------------------------------------------------------
+
+
+def _run_sink(batches, script_by_kind, *, max_agent_calls=None, **kw):
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender()
+    sink: list = []
+    agent_fn = _agent_stub(script_by_kind, budget)
+    try:
+        result = gc.run_admission(
+            batches, routing, triage_node, reserve=gc.batch_reserve(4), max_agent_calls=max_agent_calls,
+            budget=budget, agent=agent_fn, commit_params_sink=sink, **kw,
+        )
+    except Exception as err:
+        return err, sink
+    return result, sink
+
+
+def _fix_script(rows, *, fix=None, declared=None, commit=None):
+    declared = declared or {}
+    verdicts = {rid: {"verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""} for rid in rows}
+    return {
+        "triage": lambda bid: [
+            {"row": rid, **verdicts[rid], **({"declared_files": declared[rid]} if rid in declared else {})}
+            for rid in rows
+        ],
+        "fix": fix or (lambda rid: {"outcome": "done", "touched_files": [f"src/{rid}.py"]}),
+        "verify": lambda rid: {"outcome": "pass"},
+        "commit": commit or (lambda _unit: {"committed": True, "sha": "tip"}),
+    }
+
+
+def test_two_non_overlapping_rows_end_with_one_commit_call():
+    result, sink = _run_sink([("b0", ["r0", "r1"])], _fix_script(["r0", "r1"]))
+    assert [c for c in result["call_log"] if c[0] == "commit"] == [("commit", "run")]
+    assert len(sink) == 1
+    grind = sink[0]["grind"]
+    assert [r["row_id"] for r in grind["rows"]] == ["r0", "r1"]
+    assert grind["rows"][0]["paths"] == ["src/r0.py"]
+    assert grind["halted"] is None
+    assert {s["row"] for s in result["settled"]} == {"r0", "r1"}
+    assert all(s["sha"] == "tip" for s in result["settled"])
+
+
+def test_exhausted_run_still_records_the_commit_with_halted_budget_exhausted():
+    batches = [(f"b{i}", [f"r{i}"]) for i in range(4)]
+    rows = [f"r{i}" for i in range(4)]
+    script = _fix_script(rows)
+    script["triage"] = lambda bid: [
+        {"row": bid.replace("b", "r"), "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}
+    ]
+    result, sink = _run_sink(batches, script, max_agent_calls=3)
+    assert len(sink) == 1
+    assert sink[0]["grind"]["halted"] == "budget-exhausted"
+    assert [r["row_id"] for r in sink[0]["grind"]["rows"]] == ["r0"]
+    assert any(h["type"] == "budget-exhausted" for h in result["handed_back"])
+
+
+def test_a_stage_that_raises_after_one_row_finished_still_commits_that_row_with_the_error_as_halted():
+    def fix(rid):
+        if rid == "r1":
+            raise RuntimeError("stage blew up")
+        return {"outcome": "done", "touched_files": [f"src/{rid}.py"]}
+
+    err, sink = _run_sink([("b0", ["r0", "r1"])], _fix_script(["r0", "r1"], fix=fix))
+    assert isinstance(err, RuntimeError)
+    assert len(sink) == 1
+    assert sink[0]["grind"]["halted"] == "stage blew up"
+    assert [r["row_id"] for r in sink[0]["grind"]["rows"]] == ["r0"]
+
+
+def test_a_row_declaring_a_queued_rows_path_is_overlap_deferred_with_no_fix_call():
+    script = _fix_script(
+        ["r0", "r1"],
+        declared={"r0": ["shared.py"], "r1": ["shared.py"]},
+        fix=lambda rid: {"outcome": "done", "touched_files": ["shared.py"]},
+    )
+    result, sink = _run_sink([("b0", ["r0", "r1"])], script)
+    deferred = [h for h in result["handed_back"] if h["type"] == "overlap-deferred"]
+    assert [h["row"] for h in deferred] == ["r1"]
+    assert "shared.py" in deferred[0]["reason"]
+    assert ("fix", "r1") not in result["call_log"]
+    assert [r["row_id"] for r in sink[0]["grind"]["rows"]] == ["r0"]
+
+
+def test_a_post_fix_collision_hands_both_rows_back_entangled_with_no_undo_and_no_commit():
+    script = _fix_script(
+        ["r0", "r1"],
+        declared={"r0": ["a.py"], "r1": ["b.py"]},
+        fix=lambda rid: {"outcome": "done", "touched_files": ["shared.py"]},
+    )
+    result, sink = _run_sink([("b0", ["r0", "r1"])], script)
+    entangled = {h["row"]: h["reason"] for h in result["handed_back"] if h["type"] == "entangled"}
+    assert set(entangled) == {"r0", "r1"}
+    assert all("shared.py" in reason for reason in entangled.values())
+    assert not any(kind == "undo" for kind, _ in result["call_log"])
+    assert ("verify", "r1") not in result["call_log"]
+    assert result["settled"] == []
+    assert sink == [] and ("commit", "run") not in result["call_log"]
+
+
+def test_a_reply_with_one_row_only_in_dropped_hands_that_row_back_and_stamps_the_other():
+    dropped = [{"row_id": "r1", "path": "state/queue-grind/p/r1.done.md", "reason": "ledger-root"}]
+    reply = {
+        "committed": True, "sha": "tip",
+        "rows": [{"row_id": "r0", "outcome": "settled", "sha": "tip0"}],
+        "dropped": dropped,
+    }
+    result, _sink = _run_sink([("b0", ["r0", "r1"])], _fix_script(["r0", "r1"], commit=lambda _unit: reply))
+    assert result["settled"] == [{"row": "r0", "outcome": "committed", "sha": "tip0"}]
+    handed = [h for h in result["handed_back"] if h["row"] == "r1"]
+    assert [h["type"] for h in handed] == ["commit-failed"]
+    assert "state/queue-grind/p/r1.done.md (ledger-root)" in handed[0]["reason"]
+    assert result["terminal_commit_dropped"] == dropped
+
+
+def test_a_failed_terminal_commit_hands_every_queued_row_back_naming_the_settle_run_recovery():
+    reply = {"committed": False, "refused": "no readable pathspec"}
+    result, _sink = _run_sink([("b0", ["r0", "r1"])], _fix_script(["r0", "r1"], commit=lambda _unit: reply))
+    failed = [h for h in result["handed_back"] if h["type"] == "commit-failed"]
+    assert {h["row"] for h in failed} == {"r0", "r1"}
+    assert all("no readable pathspec" in h["reason"] and "settle-run" in h["reason"] for h in failed)
+    assert result["settled"] == []
+
+
+def test_no_run_token_hands_the_queue_back_without_calling_the_commit_agent():
+    result, sink = _run_sink([("b0", ["r0"])], _fix_script(["r0"]), has_run_token=False)
+    assert ("commit", "run") not in result["call_log"] and sink == []
+    assert [h["type"] for h in result["handed_back"]] == ["commit-failed"]
+    assert "settle-run" in result["handed_back"][0]["reason"]
+
+
+def test_a_200_row_params_block_renders_under_the_spawn_transcript_read_cap():
+    import json
+
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import (
+        READ_CAP_BYTES,
+        render_params_block,
+    )
+
+    def _params(n, *, sources):
+        rows = [
+            {
+                "row_id": f"2026-10-15-bug-row-{i:04d}-slug",
+                "outcome": "settled",
+                "paths": [
+                    *[f"coordinator_core/ops/mod_{i:04d}_{k}.py" for k in range(sources)],
+                    f"archive/2026-10/2026-10-15-bug-row-{i:04d}-slug.yaml",
+                ],
+                "deleted_paths": [f"state/bug-backlog/2026-10-15-bug-row-{i:04d}-slug.yaml"],
+            }
+            for i in range(n)
+        ]
+        return {
+            "script_path": "scratch/queue-grind/bug/queue-grind-20261015T180000Z.mjs",
+            "run_id": "20261015T180000Z",
+            "run_token": "0" * 32,
+            "grind": {"profile": "bug", "rows": rows, "halted": None},
+        }
+
+    params = _params(200, sources=1)
+    block = render_params_block(params)
+    assert len(block.encode("utf-8")) < READ_CAP_BYTES
+    assert len(json.dumps(block)) < gc.PARAMS_ESCAPED_BUDGET
+    assert json.loads(block.splitlines()[1]) == params
+    # Rows heavy enough to overflow are the case the emitted budget check hands back, never truncates.
+    assert len(json.dumps(render_params_block(_params(200, sources=4)))) > gc.PARAMS_ESCAPED_BUDGET
+
+
+def test_a_params_block_over_the_transcript_budget_hands_every_row_back_and_calls_no_commit_agent():
+    heavy = "x" * 40000
+    script = _fix_script(
+        ["r0", "r1"], fix=lambda rid: {"outcome": "done", "touched_files": [f"src/{heavy}/{rid}.py"]}
+    )
+    result, sink = _run_sink([("b0", ["r0", "r1"])], script)
+    assert ("commit", "run") not in result["call_log"] and sink == []
+    failed = [h for h in result["handed_back"] if h["type"] == "commit-failed"]
+    assert {h["row"] for h in failed} == {"r0", "r1"}
+    assert all("transcript can carry" in h["reason"] and "settle-run" in h["reason"] for h in failed)
+    script_text = _compose()
+    assert f"const PARAMS_BUDGET = {gc.PARAMS_ESCAPED_BUDGET};" in script_text
+    assert "if (_size > PARAMS_BUDGET) { _failAll(" in script_text
+
+
+def test_the_composer_and_stages_never_branch_on_the_profile_name():
+    here = Path(gc.__file__).parent
+    for name in ("grind_compose.py", "grind_stages.py"):
+        for lineno, line in enumerate((here / name).read_text(encoding="utf-8").splitlines(), 1):
+            if "profile.name ==" in line or "PROFILE_NAME ===" in line:
+                assert "RUNNER_FAIL_OUTCOMES" in line, f"{name}:{lineno} branches on the profile name: {line.strip()}"
+
+
+def test_the_script_has_one_terminal_stage_for_the_fixture_profile():
+    script = _compose()
+    assert script.count("async function _terminalCommit()") == 1
+    assert "@commit" not in script

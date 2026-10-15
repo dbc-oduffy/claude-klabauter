@@ -99,6 +99,14 @@ def test_live_run_for_session_answers_for_sizing_bound_and_raw_ask(repo, dirs):
     assert warp_live.live_run_for_session(repo, None) is None
 
 
+def test_unsized_run_names_only_a_sole_live_unsized_run(repo, dirs):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1")
+    assert warp_live.unsized_run(repo, "s1") == "r1"
+    assert warp_live.unsized_run(repo, "s2") is None
+    run_token.mint(repo, "r2", "scratch/warp/y.mjs", session_id="s1", sizing_rel=SIZING)
+    assert warp_live.unsized_run(repo, "s1") is None
+
+
 def test_a_consumed_token_is_not_live(repo, dirs):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
     run_token.consume(repo, "r1")

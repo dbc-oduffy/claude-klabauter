@@ -62,8 +62,17 @@ Negative-spec:
     ``state/warp/<run_id>/`` in one commit_v2 call, the halt in the message. It never consumes
     the run token (redeems, then releases) and is not a delivery: no receipt, sizing ship, plan
     stamp or close job.
-  - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
-    reports it, because widening the pathspec would hide a wrong spine.
+  - A call whose ``grind`` is a dict with a ``rows`` list is a grind's terminal commit
+    (``grind_terminal_commit``): one commit_v2 over the finished rows' declared paths, a
+    ``Grind-Row:`` trailer per landed row; it drops ledger-root paths and deletions git cannot
+    see, reports them, and carries no ``stranded``/``undeclared_dirty``. Carrying ``halted_by`` too is refused.
+  - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
+    reports it, because widening the pathspec would hide a wrong spine. A dirty file in a
+    declared directory that the run's session claims and no live peer contests is ``run_owned``
+    and rides the one commit_v2 call (ask route and plan-route DAG, the flows the end-of-run
+    inventory marked GO). ``plan_chain``, ``workflow_fire`` and the execute-review fix keep the
+    declared-only behaviour: a chain's claims split across child sessions, the other two have
+    no commit of their own.
   - Does NOT write a receipt when there is nothing to commit.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
@@ -1677,6 +1686,37 @@ def _undeclared_dirty(
     return out
 
 
+def _run_owned_dirt(
+    worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
+    session_id: Optional[str], all_paths: list, deleted_paths: list,
+) -> list:
+    """Existing dirty files beside the run's declared writes (``_in_scope``) that the run's
+    session claims and no live peer contests: they join the one commit_v2 call. Read from the
+    pre-commit snapshot, no spawn; empty with no snapshot or no session id.
+    ``own_path_claims`` is session-scoped, so the declared-directory test keeps a sibling run of
+    the same session out."""
+    if snapshot is None or not session_id:
+        return []
+    taken = set(all_paths) | set(deleted_paths)
+    candidates = sorted(
+        p for p in snapshot.changed
+        if p not in taken and _in_scope(p, request) and (worktree_root / p).is_file()
+    )
+    if not candidates:
+        return []
+    from coordinator_core.session import scope as session_scope
+
+    root_str = str(worktree_root)
+    owned = set(session_scope.own_path_claims(session_id, cwd=root_str))
+    candidates = [p for p in candidates if p in owned]
+    if not candidates:
+        return []
+    contested = session_scope.contested_by_live_peers(candidates, session_id, cwd=root_str)
+    if contested is None:
+        return []
+    return [p for p in candidates if p not in contested]
+
+
 def _commit_siblings(
     sibling_paths: dict, subject: str, home_sha: Optional[str], session_id: Optional[str]
 ) -> list:
@@ -2447,7 +2487,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     reply = _terminal_commit(
         params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx=close_ctx
     )
-    if _is_no_script_call(params) or _is_halted_record_call(params):
+    if _is_no_script_call(params) or _is_halted_record_call(params) or _is_grind_call(params):
         return reply
     if close_ctx:
         reply["close"] = _close_block(close_ctx, reply)
@@ -2458,6 +2498,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if regraded:
         reply["regraded"] = regraded
     if scope:
+        if scope.get("run_owned") is not None:
+            reply["run_owned"] = scope["run_owned"]
         reply.update(
             _undeclared_dirty(
                 scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ()))
@@ -2553,6 +2595,12 @@ def _is_halted_record_call(params: object) -> bool:
     return is_halted_record_call(params)
 
 
+def _is_grind_call(params: object) -> bool:
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import is_grind_call
+
+    return is_grind_call(params)
+
+
 def _is_no_script_call(params: object) -> bool:
     """True for a call that names a plan and a run and carries no ``script_path`` key of its own."""
     return (
@@ -2613,7 +2661,15 @@ def _terminal_commit_inner(
         from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
         from coordinator_core.ops.fleet._common import main_worktree_root
 
+        if _is_grind_call(params):
+            return _error("params carry both grind and halted_by", refused="mode-ambiguous")
         return commit_halted_record(main_worktree_root(repo_root), repo_root, params)
+
+    if _is_grind_call(params):
+        from coordinator_core.ops.dispatch_emit.grind_terminal_commit import commit_grind_rows
+        from coordinator_core.ops.fleet._common import main_worktree_root
+
+        return commit_grind_rows(main_worktree_root(repo_root), repo_root, params)
 
     if _is_no_script_call(params):
         from coordinator_core.ops.dispatch_emit import close_without_script
@@ -3094,6 +3150,10 @@ def _terminal_commit_inner(
         if close_ctx is not None:
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
+
+    run_owned = _run_owned_dirt(worktree_root, request, snapshot, session_id, all_paths, deleted_paths)
+    all_paths.extend(run_owned)
+    scope["run_owned"] = list(run_owned)
 
     scope_request = request
     if product_only and ask_note_rel is not None:

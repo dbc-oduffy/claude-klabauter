@@ -1,15 +1,17 @@
 """Pure grind admission arithmetic: how many selected rows a run's budget covers.
 
 Per-row cost constants come from the 15 run-cost records plus run 20261006T105900Z's
-memo, whose itemised 44-call stage tally over 14 attempted rows is 3.143 agent calls
-per row, rounded up to 3.15.
+memo, whose itemised stage tally over 14 attempted rows is triage 5, fix 15, verify 13,
+commit 11. The per-row commit call is gone, leaving 33 calls over 14 rows, 2.357 per row,
+rounded up to 2.36. The one terminal commit is reserved off the top as a fixed call.
 """
 
 from __future__ import annotations
 
 from typing import NamedTuple, Optional, Sequence
 
-ROW_AGENT_CALLS_CENTI = 315
+ROW_AGENT_CALLS_CENTI = 236
+RUN_FIXED_AGENT_CALLS = 1
 ROW_OUTPUT_TOKENS = 140076
 NOT_ADMITTED_EXTRA_KEY = "not_admitted"
 
@@ -34,7 +36,11 @@ def admit(
         if value is not None and value <= 0:
             raise ValueError(f"{name} must be positive, got {value}")
     rows = tuple(row_ids_in_run_order)
-    by_calls = None if max_agent_calls is None else (max_agent_calls * 100) // ROW_AGENT_CALLS_CENTI
+    by_calls = (
+        None
+        if max_agent_calls is None
+        else max(0, ((max_agent_calls - RUN_FIXED_AGENT_CALLS) * 100) // ROW_AGENT_CALLS_CENTI)
+    )
     by_tokens = None if budget_tokens is None else budget_tokens // ROW_OUTPUT_TOKENS
     count = len(rows)
     for bound in (by_calls, by_tokens):
@@ -47,6 +53,7 @@ def admit(
             "max_agent_calls": max_agent_calls,
             "budget_tokens": budget_tokens,
             "row_agent_calls_centi": ROW_AGENT_CALLS_CENTI,
+            "run_fixed_agent_calls": RUN_FIXED_AGENT_CALLS,
             "row_output_tokens": ROW_OUTPUT_TOKENS,
             "bound_by_calls": by_calls,
             "bound_by_tokens": by_tokens,

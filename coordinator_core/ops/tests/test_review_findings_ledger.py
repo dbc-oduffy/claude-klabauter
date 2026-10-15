@@ -445,3 +445,30 @@ def test_verify_refuses_a_plan_spine_with_consumes_and_reads_at_head_overlap(tmp
     assert not outcome.ok
     assert any("both" in f and "reads_at_head" in f for f in outcome.failures), outcome.failures
     assert calls == []
+
+
+def test_read_ledger_reports_missing_stamp_and_never_writes(tmp_path):
+    sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[{"id": "F1"}])
+    before = sidecar.read_bytes()
+    assert m.read_ledger(sidecar) == (False, [{"id": "F1"}])
+    assert sidecar.read_bytes() == before
+
+
+def test_read_ledger_reports_a_present_stamp(tmp_path):
+    sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[{"id": "F1"}])
+    sidecar.write_text(
+        sidecar.read_text(encoding="utf-8").replace(
+            "---\n# Review", "findings_ledger: {rows: 1}\n---\n# Review", 1
+        ),
+        encoding="utf-8",
+    )
+    assert m.read_ledger(sidecar) == (True, [{"id": "F1"}])
+
+
+def test_read_ledger_returns_none_when_unparseable_or_absent(tmp_path):
+    sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[])
+    sidecar.write_text(
+        sidecar.read_text(encoding="utf-8").replace("[]", "{not json"), encoding="utf-8"
+    )
+    assert m.read_ledger(sidecar) is None
+    assert m.read_ledger(tmp_path / "nope.md") is None

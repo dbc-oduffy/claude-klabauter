@@ -113,6 +113,27 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     _no_grant_records(repo)
 
 
+def test_rewritten_args_carry_a_run_token_that_admits(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    env = _call(repo, {"targets": "red-set"})
+    updated = env["hookSpecificOutput"]["updatedInput"]
+    token = updated["args"]["run_token"]
+    assert run_token.TOKEN_RE.match(token)
+    assert run_token.admits(repo, RUN_ID, token, updated["args"]["script_path"])
+
+
+def test_mint_failure_submits_without_a_token(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    def _boom(*_a, **_k):
+        raise OSError("no token store")
+
+    monkeypatch.setattr(run_token, "mint", _boom)
+    env = _call(repo, {"targets": "red-set"})
+    assert "run_token" not in env["hookSpecificOutput"]["updatedInput"]["args"]
+
+
 def test_emit_params_carry_run_tag_where_and_sweep_appetite(repo):
     seen: dict = {}
 

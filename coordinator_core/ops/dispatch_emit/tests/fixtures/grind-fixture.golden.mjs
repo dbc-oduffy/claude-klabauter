@@ -132,7 +132,15 @@ function _sizingPath(scouted, rowId) {
   return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + '-' + (_slug(scouted.name) || 'sizing') + '-' + (_slug(rowId) || 'row') + '.yaml';
 }
 
-const SWEEP_HINT = ' -- settle ledgers with `' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row sweep --profile-dir ' + _shq(PROFILE_DIR) + ' --profile fixture --queue state/bug-backlog --repo-root ' + _shq(REPO_ROOT) + '`; never commit them';
+function _terminalCommitParamsBlock(p) {
+  return "-----BEGIN TERMINAL-COMMIT PARAMS-----\n" + JSON.stringify(p) + "\n-----END TERMINAL-COMMIT PARAMS-----";
+}
+
+const RUN_TOKEN = args.run_token || null;
+
+const PARAMS_BUDGET = 61440;
+
+const SETTLE_HINT = ' -- land the finished rows from the run evidence with `' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row settle-run --profile-dir ' + _shq(PROFILE_DIR) + ' --profile fixture --run-id ' + _shq(RUN_ID) + ' --queue state/bug-backlog --repo-root ' + _shq(REPO_ROOT) + '`';
 
 const APPETITE_NAME = 'standard';
 
@@ -157,6 +165,11 @@ let _exhausted = false;
 const _handedBack = [];
 
 const _settled = [];
+
+const _pendingCommit = [];
+const _runDirty = new Set();
+let _grindErr = null;
+let _terminalCommitDropped = [];
 
 const _byRefuteOrigin = {};
 
@@ -186,7 +199,7 @@ async function _triageCall(batchId, batchKey, rowIds) {
     const e = QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === r);
     return { row_id: r, path: e.path, digest: e.digest };
   });
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the triage stage. Your rows (row_id/path/digest) are: ' + (JSON.stringify(rowsData)) + '. Run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row check --manifest ' + (_shq(SCRIPT_PATH)) + ' --batch ' + (batchId) + ' --repo-root ' + (_shq(REPO_ROOT)) + '` first, and list any row it reports as `stale` or `vanished` in `stale` rather than skipping it silently. Return `row` as each row\'s row_id exactly as given above -- never its path -- e.g. {"row": "row3", "verdict": ...}. A row\'s `pm_ruling` field is a binding ruling, not context: read it before the body, follow it, and quote it in that row\'s `evidence`. When the ruling says to skip, keep parked, or names what unblocks the row, and that condition still holds, the verdict follows the ruling and the evidence says so -- never re-derive a fresh verdict from the body alone. For every remaining row, decide a verdict from exactly this list, verbatim, and no other value: [\'confirmed-bug\', \'not-reproduced\']. Cite the evidence for it, size the row XS through XXL with the evidence for that size, and write a fix plan. Set `has_tradeoff` to true only when the fix genuinely carries a tradeoff, and describe it in `tradeoff`; otherwise set `has_tradeoff` to false and leave `tradeoff` empty. A row\'s `pm_ruling` field, when present, is a binding APM/PM ruling: read it before the row body, cite it in `evidence`, and never issue a fresh park or no-action verdict against it. If the ruled step cannot be done here, say so against the ruling. Name every file your triage declares the row touches. As you finish each row, run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row append --profile fixture --row-id <its row_id> --digest <its digest> --stage triage --verdict <its verdict> --outcome <its verdict> --evidence-file ' + 'state/queue-grind/fixture/evidence/' + (RUN_ID) + '/' + '<its row_id>' + '.verify.md' + '. Write that file before the command; if a stage already wrote it, append a section headed with your stage name and never truncate it. Then pass --run-stamp ' + (RUN_ID) + ' --repo-root ' + (_shq(REPO_ROOT)) + '` immediately (idempotent under a retried agent -- an identical line already appended is not re-appended) and write the per-batch triage record to state/queue-grind/fixture/run-1/records/' + (batchId) + '.json. Triage depth for this batch is \'' + (TRIAGE_DEPTH_BY_KEY[batchKey]) + '\'. If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'triage', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'medium', schema: {"properties": {"rows": {"items": {"properties": {"declared_files": {"items": {"type": "string"}, "type": "array"}, "evidence": {"type": "string"}, "fix_plan": {"type": "string"}, "has_tradeoff": {"type": "boolean"}, "row": {"description": "the row_id exactly as given in this batch's rows, never the row's path", "type": "string"}, "sizing_evidence": {"type": "string"}, "tradeoff": {"type": "string"}, "tshirt_size": {"enum": ["L", "M", "S", "XL", "XS", "XXL"], "type": "string"}, "verdict": {"enum": ["confirmed-bug", "not-reproduced"], "type": "string"}}, "required": ["row", "verdict", "evidence", "tshirt_size", "sizing_evidence", "tradeoff", "declared_files", "fix_plan", "has_tradeoff"], "type": "object"}, "type": "array"}, "stale": {"items": {"type": "string"}, "type": "array"}}, "required": ["rows"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the triage stage. Your rows (row_id/path/digest) are: ' + (JSON.stringify(rowsData)) + '. Run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row check --manifest ' + (_shq(SCRIPT_PATH)) + ' --batch ' + (batchId) + ' --repo-root ' + (_shq(REPO_ROOT)) + '` first, and list any row it reports as `stale` or `vanished` in `stale` rather than skipping it silently. Return `row` as each row\'s row_id exactly as given above -- never its path -- e.g. {"row": "row3", "verdict": ...}. A row\'s `pm_ruling` field is a binding ruling, not context: read it before the body, follow it, and quote it in that row\'s `evidence`. When the ruling says to skip, keep parked, or names what unblocks the row, and that condition still holds, the verdict follows the ruling and the evidence says so -- never re-derive a fresh verdict from the body alone. For every remaining row, decide a verdict from exactly this list, verbatim, and no other value: [\'confirmed-bug\', \'not-reproduced\']. Cite the evidence for it, size the row XS through XXL with the evidence for that size, and write a fix plan. Set `has_tradeoff` to true only when the fix genuinely carries a tradeoff, and describe it in `tradeoff`; otherwise set `has_tradeoff` to false and leave `tradeoff` empty. A row\'s `pm_ruling` field, when present, is a binding APM/PM ruling: read it before the row body, cite it in `evidence`, and never issue a fresh park or no-action verdict against it. If the ruled step cannot be done here, say so against the ruling. Name every file your triage declares the row touches. As you finish each row, run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row append --profile fixture --row-id <its row_id> --digest <its digest> --stage triage --verdict <its verdict> --outcome <its verdict> --evidence-file ' + 'state/queue-grind/fixture/evidence/' + (RUN_ID) + '/' + '<its row_id>' + '.verify.md' + '. Write that file before the command; if a stage already wrote it, append a section headed with your stage name and never truncate it. Then pass --run-stamp ' + (RUN_ID) + ' --repo-root ' + (_shq(REPO_ROOT)) + '` immediately (idempotent under a retried agent -- an identical line already appended is not re-appended) and write the per-batch triage record to state/queue-grind/fixture/run-1/records/' + (batchId) + '.json. Triage depth for this batch is \'' + (TRIAGE_DEPTH_BY_KEY[batchKey]) + '\'. If `git status --porcelain -- <path>` shows a file you are judging as modified, judge its `git show HEAD:<path>` content instead, because peers share this checkout. You do not stage or commit anything. Only the committer stage does that.', { label: 'triage', phase: 'Grind', agentType: 'general-purpose', model: 'haiku', effort: 'medium', schema: {"properties": {"rows": {"items": {"properties": {"declared_files": {"items": {"type": "string"}, "type": "array"}, "evidence": {"type": "string"}, "fix_plan": {"type": "string"}, "has_tradeoff": {"type": "boolean"}, "row": {"description": "the row_id exactly as given in this batch's rows, never the row's path", "type": "string"}, "sizing_evidence": {"type": "string"}, "tradeoff": {"type": "string"}, "tshirt_size": {"enum": ["L", "M", "S", "XL", "XS", "XXL"], "type": "string"}, "verdict": {"enum": ["confirmed-bug", "not-reproduced"], "type": "string"}}, "required": ["row", "verdict", "evidence", "tshirt_size", "sizing_evidence", "tradeoff", "declared_files", "fix_plan", "has_tradeoff"], "type": "object"}, "type": "array"}, "stale": {"items": {"type": "string"}, "type": "array"}}, "required": ["rows"], "type": "object"} })) || {};
     _recordCall('triage');
     return { rows: _result.rows || [], stale: _result.stale || [] };
 }
@@ -229,8 +242,9 @@ async function _verifyCall(row) {
     return _result;
 }
 
-async function _commitCall(row) {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'You are the committer for row ' + (row.rowId) + '. You are the only stage that stages or commits anything. Stage exactly this touched list: [' + ((Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.closeResult ? [row.closeResult.new] : [])))).join(', ')) + ']. Never name a state/queue-grind/ path in either commit path list: the row\'s ledger is landed by the drain\'s run-record, not by this committer.' + ' Record every one of these removed paths as a declared deletion (`deleted_paths` on `ceremony.commit_v2`): [' + ((row.removedFiles).join(', ')) + '].' + ' Use commit subject `grind(fixture): ' + (row.rowId) + ' ' + (row.lastOutcome || 'settled') + ', backlog row removed to archive' + '` and a commit body naming this row.' + ' Then commit via `"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" ceremony.commit_v2 --repo ' + (_shq(REPO_ROOT)) + ' \'{"paths":[...],"deleted_paths":[...],"message":"<subject>","drop_ignored":true}\'` -- the only committer route. Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. `drop_ignored` drops gitignored scratch paths from the list and commits the rest; put any `dropped_ignored` paths the result names in `reason`. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind. On commit-failed, put the verbatim refusal or the divergence you found in `reason`.' + ' Once the commit lands, settle the ledger with `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row settle --profile fixture --row-id ' + (row.rowId) + ' --repo-root ' + (_shq(REPO_ROOT)) + '` (it takes only those three flags); never stage what it removes.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "reason": {"type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+async function _terminalCommitCall(params) {
+  const _paramsFile = REPO_ROOT.replace(/\/+$/, '') + '/scratch/warp/' + RUN_ID + '/terminal-commit-params.json';
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This is a queue grind\'s one terminal commit stage. Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the grind\'s finished rows, so no `paths` array is owed.\n\ncoordinator-invoke dispatch.terminal_commit --params-file ' + (_paramsFile) + '\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n' + (_terminalCommitParamsBlock(params)) + '\n\nReturn from its JSON reply committed, sha, rows, dropped, error and refused, verbatim (null where absent). Run nothing else.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"committed": {"type": "boolean"}, "dropped": {"items": {"properties": {"path": {"type": "string"}, "reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": "array"}, "error": {"type": ["string", "null"]}, "refused": {"type": ["string", "null"]}, "rows": {"items": {"properties": {"outcome": {"type": "string"}, "row_id": {"type": "string"}, "sha": {"type": ["string", "null"]}}, "type": "object"}, "type": "array"}, "sha": {"type": ["string", "null"]}}, "required": ["committed"], "type": "object"} })) || {};
     _recordCall('commit');
     return _result;
 }
@@ -252,7 +266,7 @@ function _spend() {
   return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };
 }
 function _runCostRecord() {
-  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };
+  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), terminal_commit_dropped: _terminalCommitDropped };
 }
 
 const _rows = {};
@@ -261,6 +275,78 @@ for (const b of BATCHES) {
     const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);
     const _path = _entry.path;
     _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', origin: '', refuteNote: '', widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
+  }
+}
+
+function _queueCommit(rowId) {
+  const row = _rows[rowId];
+  const paths = Array.from(new Set(row.touchedFiles.concat(row.createdFiles || []).concat(row.closeResult ? [row.closeResult.new] : [])));
+  const deleted = Array.from(new Set(row.removedFiles));
+  _pendingCommit.push({ row_id: rowId, outcome: row.lastOutcome || 'settled', paths, deleted_paths: deleted });
+  paths.concat(deleted).forEach((p) => _runDirty.add(p));
+  _settled.push({ row: rowId, outcome: 'committed', sha: '' });
+}
+function _unsettle(rowId) {
+  const j = _settled.findIndex((s) => s.row === rowId && s.outcome === 'committed');
+  if (j >= 0) { _settled.splice(j, 1); }
+}
+function _entangle(rowId, written) {
+  const hit = new Set(written.filter((p) => _runDirty.has(p)));
+  if (hit.size === 0) return false;
+  _rows[rowId].done = true;
+  const shared = Array.from(hit).join(', ');
+  const collided = _pendingCommit.filter((q) => q.paths.concat(q.deleted_paths).some((p) => hit.has(p)));
+  for (const q of collided) {
+    _pendingCommit.splice(_pendingCommit.indexOf(q), 1);
+    _unsettle(q.row_id);
+    _handBack(q.row_id, 'entangled', 'a later fix wrote paths this row queued for the terminal commit: ' + shared + '; left on disk, no undo');
+  }
+  _runDirty.clear();
+  for (const q of _pendingCommit) { q.paths.concat(q.deleted_paths).forEach((p) => _runDirty.add(p)); }
+  _handBack(rowId, 'entangled', 'this fix wrote paths already queued for the terminal commit: ' + shared + '; left on disk, no undo');
+  return true;
+}
+function _terminalReason(reply) {
+  const why = reply && (reply.refused || reply.error);
+  return why ? `: ${why}` : '';
+}
+async function _terminalCommit() {
+  if (_pendingCommit.length === 0) return;
+  const queued = _pendingCommit.splice(0, _pendingCommit.length);
+  _runDirty.clear();
+  const _failAll = (reason) => {
+    for (const q of queued) { _unsettle(q.row_id); _handBack(q.row_id, 'commit-failed', reason); }
+  };
+  if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }
+  const _halted = _exhausted ? 'budget-exhausted'
+    : (_grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null);
+  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, grind: { profile: PROFILE_NAME, rows: queued, halted: _halted } };
+  const _size = JSON.stringify(JSON.stringify(_params)).length;
+  if (_size > PARAMS_BUDGET) { _failAll(`terminal commit params are ${_size} bytes escaped, over the ${PARAMS_BUDGET} the spawn transcript can carry; the rows stay on disk` + SETTLE_HINT); return; }
+  let reply;
+  try {
+    reply = await _terminalCommitCall(_params);
+  } catch (err) {
+    _failAll('terminal commit call threw: ' + (err && err.message ? err.message : String(err)) + SETTLE_HINT);
+    return;
+  }
+  if (!reply || reply.committed !== true) { _failAll('terminal commit did not land' + _terminalReason(reply) + SETTLE_HINT); return; }
+  _terminalCommitDropped = reply.dropped || [];
+  const _landed = {};
+  const _hasRows = Array.isArray(reply.rows);
+  for (const r of (_hasRows ? reply.rows : [])) { _landed[r.row_id] = r; }
+  for (const q of queued) {
+    const hit = _hasRows ? _landed[q.row_id] : { sha: reply.sha };
+    if (!hit) {
+      const drops = _terminalCommitDropped.filter((d) => d.row_id === q.row_id).map((d) => d.path + ' (' + d.reason + ')');
+      _unsettle(q.row_id);
+      _handBack(q.row_id, 'commit-failed', 'every path of this row was dropped from the terminal commit' + (drops.length ? ': ' + drops.join(', ') : '') + SETTLE_HINT);
+      continue;
+    }
+    const sha = hit.sha || reply.sha || '';
+    _rows[q.row_id].sha = sha;
+    const s = _settled.find((x) => x.row === q.row_id && x.outcome === 'committed');
+    if (s) { s.sha = sha; }
   }
 }
 
@@ -358,11 +444,7 @@ async function _closeBatch(batchState) {
     row.lastOutcome = 'confirmed';
     const route = followEdge(row.node, 'confirmed', row);
     applyRoute(row, itemRow, route, 'refute-close confirmed');
-    if (route.kind === 'handback') {
-      const _cresult = await withLock(['@commit'], async () => _commitCall(row));
-      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', "close's archive-move commit did not land" + _commitReason(_cresult) + SWEEP_HINT); }
-      else { row.sha = _cresult.sha || ''; _settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }
-    }
+    if (route.kind === 'handback') { _queueCommit(itemRow); }
   }
   for (const entry of (result.refuted || [])) {
     const entryRow = _normalizeRowRef(proposals, entry.row);
@@ -390,6 +472,8 @@ async function _closeBatch(batchState) {
 
 async function _fixStage(rowId) {
   const row = _rows[rowId];
+  const _overlap = row.declaredFiles.filter((p) => _runDirty.has(p));
+  if (_overlap.length) { row.done = true; _handBack(rowId, 'overlap-deferred', 'declared files overlap rows queued for the terminal commit: ' + _overlap.join(', ') + '; its ledger is left for the next grind'); return; }
   const lockKeys = _lockKeysFor(row, rowId);
   const _priorNode = row.node;
   const result = await withLock(lockKeys, async () => _fixCall(row));
@@ -415,6 +499,7 @@ async function _fixStage(rowId) {
   }
   const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));
   if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }
+  if (_entangle(rowId, (result.touched_files || []).concat(result.created_files || []))) return;
   if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }
   row.fixNode = _priorNode;
   applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);
@@ -440,11 +525,8 @@ async function _verifyStage(rowId) {
 }
 
 async function _commitStage(rowId) {
-  const row = _rows[rowId];
-  const result = await withLock(['@commit'], async () => _commitCall(row));
-  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land' + _commitReason(result) + SWEEP_HINT); return; }
-  row.done = true; row.sha = result.sha || '';
-  _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });
+  _rows[rowId].done = true;
+  _queueCommit(rowId);
 }
 
 async function _dispatchRow(rowId, batchState) {
@@ -529,9 +611,9 @@ async function runGrind() {
       else { _handBack(p.rid, 'baton', p.intent + ' (size step failed: exit ' + (r ? r.exit_code : 'missing') + ')'); }
     }
   }
-  await _drainSweep();
 }
-await runGrind();
+try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }
+await _drainSweep();
 
 const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed').flatMap((s) => (_rows[s.row] || {}).touchedFiles || [])));
 if (_reviewPaths.length === 0) {

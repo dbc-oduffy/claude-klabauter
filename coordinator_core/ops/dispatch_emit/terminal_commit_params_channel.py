@@ -78,6 +78,31 @@ def _is_workflow_spawn_path(transcript_path: str) -> bool:
     return any(a == "subagents" and b == "workflows" for a, b in zip(parts, parts[1:]))
 
 
+def spawn_transcript_path(payload: dict) -> Optional[str]:
+    """The workflow spawn's own transcript for a subagent hook payload, or None.
+
+    A subagent's PreToolUse payload hands over the parent session's transcript, whose
+    sibling `<session>/subagents/workflows/<wf>/agent-<agent_id>.jsonl` is the spawn's own;
+    `agent_transcript_path` and a transcript already under `subagents/workflows/` are taken as is.
+    One bounded glob of that directory, keyed on the harness-supplied agent id.
+    """
+    for key in ("agent_transcript_path", "transcript_path"):
+        value = payload.get(key)
+        if isinstance(value, str) and _is_workflow_spawn_path(value):
+            return value
+    session = payload.get("transcript_path")
+    agent_id = payload.get("agent_id")
+    if not (isinstance(session, str) and session.endswith(".jsonl")):
+        return None
+    if not (isinstance(agent_id, str) and agent_id.isalnum()):
+        return None
+    try:
+        hits = sorted(Path(session[: -len(".jsonl")]).glob(f"subagents/workflows/*/agent-{agent_id}.jsonl"))
+    except OSError:
+        return None
+    return str(hits[0]) if len(hits) == 1 else None
+
+
 def read_spawn_prompt(transcript_path: object) -> Optional[str]:
     """The spawn prompt from the transcript's first record, or None. Never raises.
 

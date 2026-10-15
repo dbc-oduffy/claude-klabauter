@@ -119,10 +119,14 @@ def test_scout_and_assemble_schema_required_fields():
 
 def test_scout_schema_carries_the_closing_act_fields_as_optional():
     props = c.ASK_SCOUT_SCHEMA["properties"]
-    for field in ("exit_code", "stdout", "arm", "halt", "baton", "resume_plan", "spine_plan", "tshirt", "route"):
+    for field in (
+        "exit_code", "stdout", "arm", "halt", "baton", "resume_plan", "spine_plan", "tshirt", "route",
+        "manifest", "falsifier",
+    ):
         assert field in props, field
     assert c.ASK_SCOUT_SCHEMA["required"] == c.SCOUT_SCHEMA["required"]
     assert "exit_code" not in c.SCOUT_SCHEMA["properties"]
+    assert not {"manifest", "falsifier"} & set(c.SCOUT_SCHEMA["properties"])
 
 
 def test_shim_commands_name_settings_home():

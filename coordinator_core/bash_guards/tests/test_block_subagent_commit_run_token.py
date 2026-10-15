@@ -116,10 +116,10 @@ def test_expired_token_no_longer_admits(repo, monkeypatch):
     assert _check(_cmd(_params(token))) is not None
 
 
-def _spawn(tmp_path, params: dict, name: str = "agent-a.jsonl") -> str:
+def _spawn(tmp_path, params: dict, name: str = "agent-a.jsonl", root=None) -> str:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
-    d = tmp_path / "proj" / "subagents" / "workflows" / "wf_x"
+    d = (root or tmp_path / "proj") / "subagents" / "workflows" / "wf_x"
     d.mkdir(parents=True, exist_ok=True)
     block = chan.render_params_block(params)
     prompt = "\n".join("  " + ln for ln in ["Commit.", *block.split("\n")])
@@ -196,6 +196,49 @@ def test_params_file_shape_denials(repo, case):
     elif case == "other_agent":
         agent = "coordinator:executor"
     assert _check_t(cmd, tp, agent_type=agent) is not None
+
+
+def _session_payload_spawn(repo, params: dict, agent_id: str = "deadbeef0123") -> str:
+    """Parent-session transcript path as a subagent hook payload carries it; the spawn's own
+    transcript sits beside it under `<session>/subagents/workflows/`."""
+    session = repo / "proj" / "sess.jsonl"
+    session.parent.mkdir(parents=True, exist_ok=True)
+    session.write_text("{}\n", encoding="utf-8")
+    _spawn(repo, params, name=f"agent-{agent_id}.jsonl", root=repo / "proj" / "sess")
+    return str(session)
+
+
+def test_parent_session_transcript_resolves_to_the_spawns_own(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    halted = {"halted": "ledger-check", "items": [{"id": "T1", "remaining": ["x" * 3000]}]}
+    session = _session_payload_spawn(repo, {**_params(token), "halted_by": halted})
+    assert _check_t(_file_cmd(repo), session) is None
+
+
+def test_parent_session_transcript_of_another_agent_is_denied(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    session = _session_payload_spawn(repo, _params(token), agent_id="cafe00000001")
+    assert _check_t(_file_cmd(repo), session) is not None
+
+
+def test_planted_params_file_without_a_prompt_block_is_denied(repo):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    path = chan.params_path(repo, "ask-1")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(_params(token)), encoding="utf-8")
+    tp = _spawn(repo, _params(token), name="x.jsonl")
+    Path(tp).write_text(json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n", encoding="utf-8")
+    assert _check_t(_file_cmd(repo), tp) is not None
+
+
+def test_token_leg_denial_names_the_token_leg_not_the_pathspec(repo):
+    run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _spawn(repo, _params("f" * 32))
+    verdict = _check_t(_file_cmd(repo), tp)
+    reason = verdict["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "params not admitted" in reason and "pathspec" not in reason
 
 
 def test_record_stores_no_plain_token_and_lives_in_the_git_dir(repo):

@@ -536,7 +536,7 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
             with open(os.path.join(mirror_lib, name), "w", encoding="utf-8") as fh:
                 fh.write(source)
 
-        for name in ("coordinator-ensure-hooks-fleet", "gate-validate-invocable"):
+        for name in ("coordinator-ensure-hooks-fleet.py", "gate-validate-invocable"):
             with open(os.path.join(real_bin_dir, name), encoding="utf-8") as fh:
                 source = fh.read()
             with open(os.path.join(mirror_bin, name), "w", encoding="utf-8") as fh:
@@ -546,7 +546,7 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
         env.pop("PYTHONPATH", None)
         env["COORDINATOR_ENGINE_ROOT"] = real_claude_klabauter_root
 
-        fleet_script = os.path.join(mirror_bin, "coordinator-ensure-hooks-fleet")
+        fleet_script = os.path.join(mirror_bin, "coordinator-ensure-hooks-fleet.py")
         fleet_probe = (
             "import importlib.util, sys\n"
             "from importlib.machinery import SourceFileLoader\n"
@@ -621,7 +621,7 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
 
         env_own_tree = dict(os.environ)
         env_own_tree.pop("PYTHONPATH", None)
-        own_fleet_script = os.path.join(real_bin_dir, "coordinator-ensure-hooks-fleet")
+        own_fleet_script = os.path.join(real_bin_dir, "coordinator-ensure-hooks-fleet.py")
         own_fleet_probe = (
             "import importlib.util, sys\n"
             "from importlib.machinery import SourceFileLoader\n"
@@ -827,13 +827,13 @@ _RESOLVER_FAMILY_BY_FILE = {
     "workday-complete-step1-validate.py": frozenset({"self_location"}),
     "workday-start-advisory-counters.py": frozenset({"self_location"}),
     "workday-start-day-branch-resolve.py": frozenset({"self_location"}),
-    "workday-start-handoff-triage.py": frozenset({"self_location"}),
     "workweek-complete-brief.py": frozenset({"self_location"}),
     "workweek-complete-doc-staleness.py": frozenset({"self_location"}),
     "workweek-complete-doc-verify.py": frozenset({"self_location"}),
     "wsc-session-disposition.py": frozenset({"env_first"}),
     "coordinator-current-branch.py": frozenset({"env_first"}),
     "doc-index.py": frozenset({"self_location"}),
+    "scip-rebuild-at-ceremony.py": frozenset({"env_first"}),
     "generate-doctrine-surface-split.py": frozenset({"env_first"}),
     "generate-doctrine-surfaces.py": frozenset({"env_first"}),
     "goal-close-day.py": frozenset({"env_first"}),

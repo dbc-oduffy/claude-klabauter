@@ -57,7 +57,8 @@ from pathlib import Path
 
 _THIS = Path(__file__).resolve()
 _REPO_ROOT = _THIS.parent.parent.parent
-_LIB_DIR = _REPO_ROOT / "coordinator" / "lib"
+#: Sibling lib/: coordinator/lib in this tree, lib/ in the published plugin layout.
+_LIB_DIR = _THIS.parent.parent / "lib"
 
 
 def no_console_creationflags() -> dict:

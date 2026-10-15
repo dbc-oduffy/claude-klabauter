@@ -233,19 +233,23 @@ def evaluate(
     except OSError as exc:
         return _refuse(f"decisions.json not written: {exc}")
 
-    new_input = {
-        "scriptPath": str(script),
-        "args": {
-            "run_stamp": stamp,
-            "script_path": str(script),
-            "profile_dir": params["profile_dir"],
-            "repo_root": root.as_posix(),
-        },
+    fire_args = {
+        "run_stamp": stamp,
+        "script_path": str(script),
+        "profile_dir": params["profile_dir"],
+        "repo_root": root.as_posix(),
     }
+    try:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        fire_args["run_token"] = run_token.mint(root, stamp, str(script), session_id=session_id or None)
+    except (OSError, ValueError):
+        pass  # fail-open by design: tokenless, the grind hands finished rows back uncommitted (pinned by test_mint_failure_submits_without_a_token)
+    new_input = {"scriptPath": str(script), "args": fire_args}
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"Submitted to the engine as run {stamp}. It runs to its commits in the background; its "
+        f"Submitted to the engine as run {stamp}. It runs to one terminal commit in the background; its "
         "completion notification is your one wake. End the turn: no polling, dispatch or "
         "verification meanwhile.",
     )

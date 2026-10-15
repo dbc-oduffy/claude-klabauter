@@ -2623,7 +2623,7 @@ def install_hooks_fleet(report: Report) -> None:
     just registered, and ASSERT the install landed — never trust the
     installer's own rc.
 
-    Vehicle: `<klabauter clone>/coordinator/bin/coordinator-ensure-hooks-fleet`.
+    Vehicle: `<klabauter clone>/coordinator/bin/coordinator-ensure-hooks-fleet.py`.
     That path is a LITERAL join, not routed through a content-root resolver —
     the published mirror carries both `coordinator/bin` and a flat `bin/` as
     two distinct percolate namespaces and has no `.claude-plugin/plugin.json`,
@@ -2672,7 +2672,7 @@ def install_hooks_fleet(report: Report) -> None:
     here.
     """
     engine_root = Path(CLONES["klabauter"]["dest"])
-    vehicle = engine_root / "coordinator" / "bin" / "coordinator-ensure-hooks-fleet"
+    vehicle = engine_root / "coordinator" / "bin" / "coordinator-ensure-hooks-fleet.py"
     if not vehicle.is_file():
         raise FileNotFoundError(
             f"hooks-fleet vehicle not found at {vehicle} — the klabauter clone "

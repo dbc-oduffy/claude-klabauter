@@ -712,12 +712,21 @@ def _print_workflow_invocation(
         return
     if is_queue_route:
         run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        token_arg = ""
+        if repo_root is not None:
+            from coordinator_core.ops.dispatch_emit import run_token
+
+            try:
+                token = run_token.mint(repo_root, run_stamp, str(script_path))
+                token_arg = f", run_token: '{token}'"
+            except (OSError, ValueError):
+                pass  # no token: the grind hands its finished rows back uncommitted
         print(
             "\n  Workflow({ scriptPath: "
             f"{json.dumps(script_path)}, args: {{ run_stamp: '{run_stamp}', "
             f"script_path: {json.dumps(script_path)}, profile_dir: "
             f"{json.dumps(profile_dir)}, repo_root: "
-            f"{json.dumps(repo_root.as_posix() if repo_root else None)} }} }})",
+            f"{json.dumps(repo_root.as_posix() if repo_root else None)}{token_arg} }} }})",
             file=sys.stderr,
         )
     else:

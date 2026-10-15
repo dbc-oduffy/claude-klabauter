@@ -449,3 +449,34 @@ def test_both_deny_halves_name_the_measurement_route(repo) -> None:
         assert "coordinator_core.benchmarks.measure -- <argv>" in reason
         assert "test-runner" in reason
         assert "No self-escape" in reason and "honoured once." in reason
+
+
+_SUITE = "with-suite-mutex -- python3 -m pytest coordinator/tests coordinator/bin/tests setup"
+
+
+def _grant(monkeypatch, granted: bool) -> None:
+    from coordinator_core.session import grant
+
+    monkeypatch.setattr(grant, "check_tier_u_grant", lambda cwd=None, *, session_id=None: (granted, None))
+
+
+def test_mutex_suite_under_live_grant_never_denied(repo, monkeypatch) -> None:
+    _executor_ran(repo)
+    _grant(monkeypatch, True)
+    for _ in range(3):
+        assert g.check(_bash(repo, _SUITE)) is None
+
+
+def test_mutex_suite_without_grant_still_denied(repo, monkeypatch) -> None:
+    _executor_ran(repo)
+    _grant(monkeypatch, False)
+    assert g.check(_bash(repo, _SUITE)) is None
+    assert _denied(g.check(_bash(repo, _SUITE)))
+
+
+def test_grant_does_not_exempt_a_bare_suite_beside_a_mutex_one(repo, monkeypatch) -> None:
+    _executor_ran(repo)
+    _grant(monkeypatch, True)
+    cmd = f"{_SUITE}; python3 -m pytest coordinator/tests"
+    assert g.check(_bash(repo, cmd)) is None
+    assert _denied(g.check(_bash(repo, cmd)))

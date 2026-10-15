@@ -249,16 +249,22 @@ def runs_verification(cmd: str, repo_root: str, cwd: Optional[str] = None) -> bo
 def _runs(cmd: str, repo_root: Optional[str], cwd: Optional[str], needle: str) -> bool:
     if needle not in cmd and "pytest" not in cmd:
         return False
+    return bool(_pytest_segments(cmd, repo_root, cwd))
+
+
+def _pytest_segments(cmd: str, repo_root: Optional[str] = None, cwd: Optional[str] = None) -> List[List[str]]:
+    """Working tokens of each verification segment; empty when none or untokenizable."""
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
-        return False
+        return []
     stdin_code = _heredoc_code(cmd) if repo_root and "<<" in cmd else ""
+    found = []
     for seg_tokens, _pipe_before in _segments_from_tokens(tokens):
         # The env stripper eats `n=$(python3` as an assignment; peeling handles `$(` itself.
         working = seg_tokens if seg_tokens and "$(" in seg_tokens[0] else _strip_leading_subshell_and_env(seg_tokens) if seg_tokens else []
         if working and _is_pytest_segment(working, repo_root, cwd, stdin_code):
-            return True
-    return False
+            found.append(working)
+    return found
 
 
 _PYTEST_OPTS_WITH_ARG = frozenset({
@@ -330,20 +336,11 @@ def _is_scoped_target(target: str, repo_root: str, cwd: str) -> bool:
 def is_scoped_pytest(cmd: str, repo_root: str, cwd: str) -> bool:
     """True iff every verification segment is a direct pytest whose every positional
     target is an explicit in-repo test path or node id, with at least one target."""
-    tokens = _tokenize_full_command(cmd)
-    if tokens is None:
-        return False
-    stdin_code = _heredoc_code(cmd) if "<<" in cmd else ""
-    seen = False
-    for seg_tokens, _pipe_before in _segments_from_tokens(tokens):
-        working = seg_tokens if seg_tokens and "$(" in seg_tokens[0] else _strip_leading_subshell_and_env(seg_tokens) if seg_tokens else []
-        if not working or not _is_pytest_segment(working, repo_root, cwd, stdin_code):
-            continue
-        targets = _pytest_targets(working)
-        if not targets or not all(_is_scoped_target(t, repo_root, cwd) for t in targets):
-            return False
-        seen = True
-    return seen
+    segments = _pytest_segments(cmd, repo_root, cwd)
+    return bool(segments) and all(
+        (targets := _pytest_targets(working)) and all(_is_scoped_target(t, repo_root, cwd) for t in targets)
+        for working in segments
+    )
 
 
 def execute_plan_session(session_id: str, repo_root: str) -> bool:
@@ -447,6 +444,25 @@ def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
     return _deny(str(sentinel_path(session_id)))
 
 
+_SUITE_MUTEX = "with-suite-mutex"
+
+
+def _granted_suite_run(cmd: str, session_id: object, cwd: Optional[str]) -> bool:
+    """Every pytest segment runs under ``with-suite-mutex`` and the session holds a live Tier-U
+    grant: the EM's own broad suite, which test-runner may never run, so denying it leaves no route."""
+    if _SUITE_MUTEX not in cmd or not isinstance(session_id, str) or not session_id:
+        return False
+    segments = _pytest_segments(cmd)
+    if not segments or any(_normalize_executable_basename(w[0]) != _SUITE_MUTEX for w in segments):
+        return False
+    from coordinator_core.session.grant import check_tier_u_grant
+
+    try:
+        return check_tier_u_grant(cwd, session_id=session_id)[0]
+    except Exception:
+        return False
+
+
 def _bump_counter(repo_root: str, session_id: str, armed_since: float = 0.0) -> int:
     """Return runs already counted since the newest arming row, then record one more."""
     from coordinator_core.session.machinery_paths import share_dir
@@ -483,6 +499,9 @@ def check(payload: dict) -> Optional[dict]:
     clean = cmd.replace("\r", "")
     cwd = payload.get("cwd") or repo_root
     if verdict != "deny" or not runs_verification(clean, repo_root, cwd):
+        return None
+    if _granted_suite_run(clean, payload.get("session_id"), cwd):
+        record_silent(GUARD_NAME, "suite under with-suite-mutex and a live Tier-U grant: exempt")
         return None
     if is_scoped_pytest(clean, repo_root, cwd):
         if execute_plan_session(session_id, repo_root):

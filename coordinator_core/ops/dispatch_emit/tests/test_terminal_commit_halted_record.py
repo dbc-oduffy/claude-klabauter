@@ -153,3 +153,94 @@ def test_token_stays_live_after_landed_record_commit_and_wrong_token_refuses(rep
     assert out["committed"] is True
     assert run_token.is_live(repo, RUN)
     assert run_token.admits(repo, RUN, token, "run.mjs")
+
+
+def _marker_script(root: Path, chunks, report_texts=None) -> None:
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+
+    reports = report_texts or {}
+    built = []
+    for cid, paths in chunks:
+        report = f"reports/{cid}.md"
+        if cid in reports:
+            (root / "reports").mkdir(exist_ok=True)
+            (root / report).write_text(reports[cid], encoding="utf-8")
+        built.append(ChunkCommit(id=cid, title=cid, paths=tuple(paths), report=report))
+    marker = render_marker(CommitRequest(chunks=tuple(built), session_id=None, repo_root=None, plan_path=None))
+    (root / "run.mjs").write_text(f"{marker}\n", encoding="utf-8")
+
+
+def test_halted_run_lands_done_chunk_not_unfinished_one(repo):
+    _write_record(repo, RUN)
+    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
+    (repo / "half.py").write_text("h = 1\n", encoding="utf-8")
+    _marker_script(
+        repo, [("C1", ["done.py"]), ("C2", ["half.py"])],
+        {"C1": "DONE: C1\n", "C2": "PARTIAL: C2\n"},
+    )
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert out["landed_chunks"] == ["C1"]
+    names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    assert "done.py" in names and "half.py" not in names
+    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert _status(repo)["half.py"] == "??"
+
+
+def test_incomplete_chunks_param_overrides_report_evidence(repo):
+    _write_record(repo, RUN)
+    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
+    _marker_script(repo, [("C1", ["done.py"])], {"C1": "DONE: C1\n"})
+
+    out = _call(repo, incomplete_chunks=["C1"])
+
+    assert "landed_chunks" not in out
+    assert "done.py" not in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+
+
+def test_peer_held_done_path_is_withheld_and_named(repo, monkeypatch):
+    _write_record(repo, RUN)
+    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
+    (repo / "other.py").write_text("o = 1\n", encoding="utf-8")
+    _marker_script(repo, [("C1", ["done.py", "other.py"])], {"C1": "DONE: C1\n"})
+    monkeypatch.setattr(terminal_commit, "_peer_held", lambda root, sid, paths: {"other.py"} & set(paths))
+
+    out = _call(repo)
+
+    assert out["withheld"] == {"other.py": "peer-held"}
+    names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    assert "done.py" in names and "other.py" not in names
+
+
+def test_done_tracked_deletion_is_declared_and_never_tracked_path_is_not_staged(repo):
+    _write_record(repo, RUN)
+    (repo / "product.py").unlink()
+    _marker_script(repo, [("C1", ["product.py", "never-tracked.yaml"])], {"C1": "DONE: C1\n"})
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert "D\tproduct.py" in _git(["show", "--name-status", "--format=", "HEAD"], repo).splitlines()
+    assert out.get("dropped", []) == []
+
+
+def test_no_done_chunk_keeps_record_only_message(repo):
+    _write_record(repo, RUN)
+    plain = _call(repo)
+    plain_message = _git(["log", "-1", "--format=%B"], repo)
+    assert "Lands-Chunks" not in plain_message
+    assert "landed_chunks" not in plain
+
+
+def test_token_live_after_halt_landing_done_chunk(repo):
+    _write_record(repo, RUN)
+    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
+    _marker_script(repo, [("C1", ["done.py"])], {"C1": "DONE: C1\n"})
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    out = _call(repo, run_token=token)
+
+    assert out["landed_chunks"] == ["C1"]
+    assert run_token.admits(repo, RUN, token, "run.mjs")

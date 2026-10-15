@@ -2,8 +2,9 @@
 
 Each invocation builds a fresh repo under a caller-given directory: an untracked
 `state/warp/<run>/` holding the five record files a staged run writes, beside other dirty paths
-(a modified tracked file, an untracked sizing, a second run's record dir). It then calls
-`dispatch.terminal_commit`'s handler with `halted_by` params (no plan, no incomplete_chunks).
+(a modified tracked file a finished chunk declares, an untracked sizing, a second run's record
+dir). It then calls `dispatch.terminal_commit`'s handler with `halted_by` params (no plan, no
+incomplete_chunks); the run script's marker supplies the finished chunk.
 `--setup-only` does everything except that call, so the cost of the call is `full - setup-only`.
 
     python -m coordinator_core.benchmarks.halted_record_commit_full_path <dir> [--setup-only]
@@ -34,6 +35,7 @@ def _git(repo: Path, *args: str) -> str:
 def build_fixture(parent: Path) -> Path:
     """A fresh repo with an untracked record dir plus other dirty paths; returns the repo root."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 
     repo = parent / uuid.uuid4().hex[:12]
     repo.mkdir(parents=True)
@@ -51,6 +53,11 @@ def build_fixture(parent: Path) -> Path:
     record.mkdir(parents=True)
     for name in RECORD_FILES:
         (record / name).write_text(f"{name}\n", encoding="utf-8")
+    (repo / "reports").mkdir()
+    (repo / "reports" / "C1.md").write_text("DONE: C1\n", encoding="utf-8")
+    chunk = ChunkCommit(id="C1", title="C1", paths=("product.py",), report="reports/C1.md")
+    marker = render_marker(CommitRequest(chunks=(chunk,), session_id=None, repo_root=None, plan_path=None))
+    (repo / "run.mjs").write_text(f"{marker}\n", encoding="utf-8")
     other = repo / RECORD_DIR_ROOT / OTHER_RUN_ID
     other.mkdir(parents=True)
     (other / "ask.md").write_text("other\n", encoding="utf-8")
@@ -76,7 +83,7 @@ def main(argv: list[str]) -> int:
         },
         repo_root=repo / ".git",
     )
-    if out.get("committed") is not True or len(out.get("paths") or []) != len(RECORD_FILES):
+    if out.get("committed") is not True or len(out.get("paths") or []) != len(RECORD_FILES) + 1:
         print(f"halted-record commit did not complete: {out!r}", file=sys.stderr)
         return 1
     return 0

@@ -53,19 +53,21 @@ batch size -- no ``verdict_mix`` parameter; the reserve stays sound over a
 partial map.
 
 **Runtime-interpolated prompts, not a static approximation.**
-``grind_stages.py``'s ``compose_fix_call``/``compose_commit_call``/
-``compose_undo_call``/``compose_commit_ledger_only_call`` each take an
+``grind_stages.py``'s ``compose_fix_call``/``compose_undo_call``/
+``compose_ledger_sweep_call`` each take an
 optional ``*_js`` parameter naming a JS runtime expression; when supplied,
 the composed prompt is built as static, escaped literal pieces
 concatenated (via ``+``) with that live expression, never a static
 per-row manifest-path stand-in. This module always supplies the live
 expression: a fix's lock-key/"files you hold" clause reads the row's
-runtime ``declaredFiles``; a commit's "stage exactly this touched list"
-and declared-deletion clauses read the row's runtime
-``touchedFiles``/``removedFiles``; an undo runs one ``grind-row undo`` verb
-call over the union of the live touched and created paths; the
-ledger-only commits (batch-end and drain) read the live
-``unsettled``/``RUN_ID`` in scope at commit time. The mutex lock keys
+runtime ``declaredFiles``; an undo runs one ``grind-row undo`` verb
+call over the union of the live touched and created paths; the drain's
+ledger sweep reads the live ``RUN_ID`` in scope. A finished row never
+commits on its own: it queues on ``_pendingCommit`` with its runtime
+``touchedFiles``/``createdFiles``/``removedFiles``, and ONE terminal
+``dispatch.terminal_commit`` call lands every queued row after the grind
+(in a ``finally``, so a halted or throwing run still lands what finished).
+The mutex lock keys
 `withLock` acquires are computed from these SAME live values, so the
 actual lock scope and the prompt's own description of it never diverge.
 
@@ -88,6 +90,12 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.dispatch_emit import pm_adjudication
+from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import (
+    PARAMS_BLOCK_JS,
+    PARAMS_FILE_NAME,
+    READ_CAP_BYTES,
+)
 from coordinator_core.ops.dispatch_emit.emit import (
     NoReviewStageError,
     _AGENT_TYPE_HOST_DEGRADED,
@@ -224,20 +232,13 @@ def _sizing_path(run_id: str, scouted: Mapping[str, Any], row_id: str) -> str:
     return f"state/sizings/{d[:4]}-{d[4:6]}-{d[6:8]}-{_slug(scouted.get('name')) or 'sizing'}-{_slug(row_id) or 'row'}.yaml"
 
 
-#: Substring of `grind_rows.cmd_close`'s own stderr line ("grind-row close:
-#: schema validation failed: {result}") -- the committer's `reason` carries
-#: the verbatim refusal per `compose_commit_call`'s docstring, so a commit
-#: that failed because the close it was staging was schema-refused (a
-#: judgment call: is the row's frontmatter wrong, or the schema?) is
-#: distinguishable from an ordinary git-commit failure without a new
-#: outcome value on the closed `STAGE_OUTCOMES["commit"]` vocabulary
-#: (item 17.6, IBMDT-C22).
-_SCHEMA_REFUSAL_MARKER = "schema validation failed"
+#: The params block rides the spawn transcript's first record, which `read_spawn_prompt` caps at
+#: `READ_CAP_BYTES`. The transcript stores the prompt JSON-escaped, so the budget is measured on the
+#: twice-encoded params, less room for the prompt's own text. Over it, the rows are handed back, never
+#: truncated.
+PARAMS_ESCAPED_BUDGET = READ_CAP_BYTES - 4096
 
-def _commit_result_is_schema_refused(commit_result: Mapping[str, Any]) -> bool:
-    reason = commit_result.get("reason") or ""
-    return _SCHEMA_REFUSAL_MARKER in str(reason)
-
+_SETTLE_HINT_TWIN =" -- land the finished rows with `grind-row settle-run`"
 
 _UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits may remain in the tree"
 _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
@@ -275,6 +276,7 @@ class Row:
     touched_files: list = field(default_factory=list)
     removed_files: list = field(default_factory=list)
     created_files: list = field(default_factory=list)
+    declared_files: list = field(default_factory=list)
     widened: bool = False
     verify_retried: bool = False
     on_fail_used: bool = False
@@ -308,6 +310,9 @@ def run_admission(
     budget: Any,
     agent: Callable[[str, str], Any],
     run_id: str = "20260101T000000Z",
+    profile: str = "profile",
+    has_run_token: bool = True,
+    commit_params_sink: Optional[list] = None,
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
@@ -331,9 +336,16 @@ def run_admission(
     For ``triage`` the stub returns a list of
     ``{"row": id, "verdict": v, "tshirt_size": s, "tradeoff": t}``. For
     ``refute-close`` it returns ``{"confirmed": [...], "refuted": [{"row":
-    id, "reason": r}, ...]}``. For ``fix``/``verify``/``commit`` it returns
+    id, "reason": r}, ...]}``. For ``fix``/``verify`` it returns
     a dict carrying at least ``"outcome"`` (and ``"tradeoff"``/
-    ``"extra_files"``/``"sha"`` where relevant). For ``size`` it returns the
+    ``"extra_files"`` where relevant). A triage record may carry
+    ``"declared_files"``. No row commits on its own: a finished row queues, and
+    one ``agent("commit", "run")`` call at the end lands the queue, replying
+    ``{"committed": bool, "sha", "rows": [{"row_id", "outcome", "sha"}],
+    "dropped": [{"row_id", "path", "reason"}], "error", "refused"}``. The params
+    that call carries are appended to ``commit_params_sink`` when one is given,
+    and a stage that raises still lands the rows finished so far before the
+    error propagates. For ``size`` it returns the
     scout's ``{tshirt, intent, name, ...}`` (or ``{}`` for a refusal); for
     ``size-assemble`` it returns ``{"results": [{row, exit_code, stdout}]}``.
 
@@ -355,7 +367,7 @@ def run_admission(
         batch_objs[batch_id] = _Batch(batch_id=batch_id, row_ids=list(row_ids))
         queue.append(batch_id)
         for rid in row_ids:
-            rows[rid] = Row(row_id=rid, path=rid, batch_id=batch_id)
+            rows[rid] = Row(row_id=rid, path=rid, batch_id=batch_id, declared_files=[rid])
             order.append(rid)
 
     call_log: list[tuple[str, str]] = []
@@ -364,6 +376,10 @@ def run_admission(
     settled: list[dict] = []
     admitted: dict[str, _Batch] = {}
     exhausted = False
+    pending_commit: list[dict] = []
+    run_dirty: set[str] = set()
+    terminal_commit_dropped: list[dict] = []
+    terminal_params: Optional[dict] = None
     by_refute_origin: dict[str, dict[str, int]] = {}
     by_triage_check: dict[str, int] = {k: 0 for k in _SIZE_CHECK_KEYS}
     fix_verdict = triage_fix_verdict(routing, triage_node_id)
@@ -395,6 +411,96 @@ def run_admission(
         else:
             row.node = value
 
+    def _queue_commit(row: Row) -> None:
+        row.done = True
+        paths = list(dict.fromkeys([*row.touched_files, *row.created_files]))
+        deleted = list(dict.fromkeys(row.removed_files))
+        pending_commit.append({"row_id": row.row_id, "outcome": "settled", "paths": paths, "deleted_paths": deleted})
+        run_dirty.update(paths, deleted)
+        settled.append({"row": row.row_id, "outcome": "committed", "sha": ""})
+
+    def _unsettle(row_id: str) -> None:
+        for i, entry in enumerate(settled):
+            if entry["row"] == row_id and entry["outcome"] == "committed":
+                del settled[i]
+                return
+
+    def _entangle(row: Row, written: Sequence[str]) -> bool:
+        hit = {p for p in written if p in run_dirty}
+        if not hit:
+            return False
+        row.done = True
+        shared = ", ".join(sorted(hit))
+        collided = [q for q in pending_commit if hit & {*q["paths"], *q["deleted_paths"]}]
+        for q in collided:
+            pending_commit.remove(q)
+            _unsettle(q["row_id"])
+            _handback(
+                rows[q["row_id"]], "entangled",
+                f"a later fix wrote paths this row queued for the terminal commit: {shared}; left on disk, no undo",
+            )
+        run_dirty.clear()
+        for q in pending_commit:
+            run_dirty.update(q["paths"], q["deleted_paths"])
+        _handback(
+            row, "entangled",
+            f"this fix wrote paths already queued for the terminal commit: {shared}; left on disk, no undo",
+        )
+        return True
+
+    def _terminal_commit(grind_err: Optional[BaseException]) -> None:
+        nonlocal terminal_params, terminal_commit_dropped
+        if not pending_commit:
+            return
+        queued = list(pending_commit)
+        pending_commit.clear()
+        run_dirty.clear()
+
+        def _fail_all(reason: str) -> None:
+            for q in queued:
+                _unsettle(q["row_id"])
+                _handback(rows[q["row_id"]], "commit-failed", reason)
+
+        if not has_run_token:
+            _fail_all("no run token in the fire args: the terminal commit cannot run" + _SETTLE_HINT_TWIN)
+            return
+        halted = "budget-exhausted" if exhausted else (str(grind_err) or "error") if grind_err else None
+        terminal_params = {"profile": profile, "rows": queued, "halted": halted}
+        full_params = {"run_id": run_id, "grind": terminal_params}
+        size = len(json.dumps(json.dumps(full_params, separators=(",", ":"))))
+        if size > PARAMS_ESCAPED_BUDGET:
+            _fail_all(
+                f"terminal commit params are {size} bytes escaped, over the {PARAMS_ESCAPED_BUDGET} "
+                "the spawn transcript can carry; the rows stay on disk" + _SETTLE_HINT_TWIN
+            )
+            return
+        if commit_params_sink is not None:
+            commit_params_sink.append(full_params)
+        reply = _record_call("commit", "run") or {}
+        if reply.get("committed") is not True:
+            why = reply.get("refused") or reply.get("error")
+            _fail_all("terminal commit did not land" + (f": {why}" if why else "") + _SETTLE_HINT_TWIN)
+            return
+        terminal_commit_dropped = list(reply.get("dropped") or [])
+        has_rows = isinstance(reply.get("rows"), list)
+        landed = {r["row_id"]: r for r in reply["rows"]} if has_rows else {}
+        for q in queued:
+            hit = landed.get(q["row_id"]) if has_rows else {"sha": reply.get("sha")}
+            row = rows[q["row_id"]]
+            if hit is None:
+                drops = [f"{d['path']} ({d['reason']})" for d in terminal_commit_dropped if d["row_id"] == q["row_id"]]
+                _unsettle(q["row_id"])
+                _handback(
+                    row, "commit-failed",
+                    "every path of this row was dropped from the terminal commit"
+                    + (": " + ", ".join(drops) if drops else "") + _SETTLE_HINT_TWIN,
+                )
+                continue
+            row.sha = hit.get("sha") or reply.get("sha") or ""
+            for entry in settled:
+                if entry["row"] == q["row_id"] and entry["outcome"] == "committed":
+                    entry["sha"] = row.sha
+
     def _pending_row(batch: _Batch) -> Optional[Row]:
         for rid in batch.row_ids:
             row = rows[rid]
@@ -416,6 +522,8 @@ def run_admission(
             row = rows[rec["row"]]
             seen.add(rec["row"])
             by_triage_check["triaged"] += 1
+            if rec.get("declared_files"):
+                row.declared_files = list(rec["declared_files"])
             row.origin = f"triage:{rec['verdict']}"
             tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
             action = route_after_triage(
@@ -467,21 +575,11 @@ def run_admission(
             row.touched_files = list(row.touched_files) + [item.get("new_path", "")]
             action = follow_edge(routing, row.node, "confirmed", row)
             _apply_route(row, action, "refute-close confirmed")
-            # Parity with the rendered
-            # `.mjs`'s inline archive-move-commit branch: a confirmed-close
-            # row whose route is a direct handback (no explicit `commit`
-            # node between it and its terminal type) is committed here,
-            # inline, and its successful commit is recorded in `settled` --
-            # never silently dropped from `HANDBACK.settled`/`_counts`.
+            # Parity with the rendered `.mjs`: a confirmed-close row whose
+            # route is a direct handback (no explicit `commit` node) queues its
+            # archive-move for the terminal commit.
             if action[0] == "handback":
-                commit_result = _record_call("commit", row.row_id) or {}
-                if commit_result.get("outcome") == "committed":
-                    row.sha = commit_result.get("sha", "")
-                    settled.append({"row": row.row_id, "outcome": "committed", "sha": row.sha})
-                elif _commit_result_is_schema_refused(commit_result):
-                    _handback(row, "needs-judgment", "close's archive-move commit did not land: schema refused the close")
-                else:
-                    _handback(row, "commit-failed", "close's archive-move commit did not land")
+                _queue_commit(row)
         for entry in result.get("refuted", []):
             row = rows[entry["row"]]
             if row.node is None or row.done:
@@ -501,6 +599,14 @@ def run_admission(
                 _handback(row, "stage-dead", "refute-close left this proposal unresolved (absent from confirmed/refuted/stale)")
 
     def _fix_row(row: Row) -> None:
+        overlap = [p for p in row.declared_files if p in run_dirty]
+        if overlap:
+            _handback(
+                row, "overlap-deferred",
+                "declared files overlap rows queued for the terminal commit: "
+                + ", ".join(overlap) + "; its ledger is left for the next grind",
+            )
+            return
         prior_node = row.node
         result = _record_call("fix", row.row_id) or {}
         tradeoff = result.get("tradeoff", "") if result.get("has_tradeoff") else ""
@@ -541,6 +647,8 @@ def run_admission(
                 + ", ".join(escaped),
             )
             return
+        if _entangle(row, [*(result.get("touched_files") or []), *(result.get("created_files") or [])]):
+            return
         if outcome == "NOT_REPRODUCED":
             by_triage_check["fix_not_reproduced"] += 1
         row.fix_node = prior_node
@@ -564,16 +672,7 @@ def run_admission(
         _apply_route(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
 
     def _commit_row(row: Row) -> None:
-        result = _record_call("commit", row.row_id) or {}
-        if result.get("outcome") != "committed":
-            if _commit_result_is_schema_refused(result):
-                _handback(row, "needs-judgment", "commit did not land: schema refused the close")
-            else:
-                _handback(row, "commit-failed", "commit did not land")
-            return
-        row.done = True
-        row.sha = result.get("sha", "")
-        settled.append({"row": row.row_id, "outcome": "committed", "sha": row.sha})
+        _queue_commit(row)
 
     def _dispatch_row(row: Row, batch: _Batch) -> None:
         kind = routing[row.node]["kind"]
@@ -594,70 +693,83 @@ def run_admission(
     def _finish_batch(batch: _Batch) -> None:
         del admitted[batch.batch_id]
 
-    while True:
-        finished = [bid for bid, b in admitted.items() if _batch_done(b)]
-        if finished:
-            _finish_batch(admitted[finished[0]])
-            continue
+    def _run_grind() -> None:
+        nonlocal exhausted
+        while True:
+            finished = [bid for bid, b in admitted.items() if _batch_done(b)]
+            if finished:
+                _finish_batch(admitted[finished[0]])
+                continue
 
-        acted = False
-        for batch in list(admitted.values()):
-            pending = _pending_row(batch)
-            if pending is not None:
-                _dispatch_row(pending, batch)
-                acted = True
+            acted = False
+            for batch in list(admitted.values()):
+                pending = _pending_row(batch)
+                if pending is not None:
+                    _dispatch_row(pending, batch)
+                    acted = True
+                    break
+            if acted:
+                continue
+
+            untriaged = next((b for b in admitted.values() if not b.triaged), None)
+            if untriaged is not None:
+                _triage_batch(untriaged)
+                continue
+
+            if not queue and not admitted:
                 break
-        if acted:
-            continue
+            if not queue:
+                break
 
-        untriaged = next((b for b in admitted.values() if not b.triaged), None)
-        if untriaged is not None:
-            _triage_batch(untriaged)
-            continue
+            if max_agent_calls is not None and len(call_log) >= max_agent_calls:
+                exhausted = True
+                break
+            # Parity with the rendered `.mjs`'s
+            # BUDGET_TOKENS ceiling (a caller-supplied hard cap, distinct from
+            # budget.total/remaining() below): halts admission once the next
+            # batch's reserve would carry cumulative spend past it.
+            if budget_tokens is not None and (budget.spent() - start_spent) + reserve > budget_tokens:
+                exhausted = True
+                break
+            if budget.total is not None and (budget.remaining() or 0) <= reserve:
+                exhausted = True
+                break
 
-        if not queue and not admitted:
-            break
-        if not queue:
-            break
+            next_bid = queue.pop(0)
+            admitted[next_bid] = batch_objs[next_bid]
 
-        if max_agent_calls is not None and len(call_log) >= max_agent_calls:
-            exhausted = True
-            break
-        # Parity with the rendered `.mjs`'s
-        # BUDGET_TOKENS ceiling (a caller-supplied hard cap, distinct from
-        # budget.total/remaining() below): halts admission once the next
-        # batch's reserve would carry cumulative spend past it.
-        if budget_tokens is not None and (budget.spent() - start_spent) + reserve > budget_tokens:
-            exhausted = True
-            break
-        if budget.total is not None and (budget.remaining() or 0) <= reserve:
-            exhausted = True
-            break
+        if exhausted:
+            for bid in queue:
+                for rid in batch_objs[bid].row_ids:
+                    handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
 
-        next_bid = queue.pop(0)
-        admitted[next_bid] = batch_objs[next_bid]
+        if size_pending:
+            assembled = _record_call("size-assemble", "run") or {}
+            by_row = {r.get("row"): r for r in assembled.get("results", [])}
+            for rid, path, intent in size_pending:
+                res = by_row.get(rid)
+                code = res.get("exit_code") if res else "missing"
+                if code == 0:
+                    handed_back.append({"row": rid, "type": "baton", "reason": f"sized at {path}: {intent}"})
+                else:
+                    handed_back.append({"row": rid, "type": "baton", "reason": f"{intent} (size step failed: exit {code})"})
 
-    if exhausted:
-        for bid in queue:
-            for rid in batch_objs[bid].row_ids:
-                handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
-
-    if size_pending:
-        assembled = _record_call("size-assemble", "run") or {}
-        by_row = {r.get("row"): r for r in assembled.get("results", [])}
-        for rid, path, intent in size_pending:
-            res = by_row.get(rid)
-            code = res.get("exit_code") if res else "missing"
-            if code == 0:
-                handed_back.append({"row": rid, "type": "baton", "reason": f"sized at {path}: {intent}"})
-            else:
-                handed_back.append({"row": rid, "type": "baton", "reason": f"{intent} (size step failed: exit {code})"})
+    grind_err: Optional[BaseException] = None
+    try:
+        _run_grind()
+    except BaseException as err:
+        grind_err = err
+        raise
+    finally:
+        _terminal_commit(grind_err)
 
     end_spent = budget.spent()
     return {
         "call_log": call_log,
         "handed_back": handed_back,
         "settled": settled,
+        "terminal_commit": terminal_params,
+        "terminal_commit_dropped": terminal_commit_dropped,
         "by_refute_origin": by_refute_origin,
         "by_triage_check": by_triage_check,
         "spend": {
@@ -778,6 +890,88 @@ _ROUTING_HELPERS = (
     "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
     "function _commitReason(result) { return result && result.reason ? `: ${result.reason}` : ''; }"
 )
+
+#: The queue-and-land half of the run: finished rows queue on `_pendingCommit`, one
+#: `_terminalCommit` lands them after the grind. `_runDirty` is the union of queued rows'
+#: paths; a fix that collides with it never gets an undo, because undo restores HEAD and
+#: would revert the earlier queued row. Twin: `run_admission`'s `_queue_commit` /
+#: `_entangle` / `_terminal_commit`.
+_TERMINAL_COMMIT_JS = (
+    "function _queueCommit(rowId) {\n"
+    "  const row = _rows[rowId];\n"
+    "  const paths = Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
+    ".concat(row.closeResult ? [row.closeResult.new] : [])));\n"
+    "  const deleted = Array.from(new Set(row.removedFiles));\n"
+    "  _pendingCommit.push({ row_id: rowId, outcome: row.lastOutcome || 'settled', paths, deleted_paths: deleted });\n"
+    "  paths.concat(deleted).forEach((p) => _runDirty.add(p));\n"
+    "  _settled.push({ row: rowId, outcome: 'committed', sha: '' });\n"
+    "}\n"
+    "function _unsettle(rowId) {\n"
+    "  const j = _settled.findIndex((s) => s.row === rowId && s.outcome === 'committed');\n"
+    "  if (j >= 0) { _settled.splice(j, 1); }\n"
+    "}\n"
+    "function _entangle(rowId, written) {\n"
+    "  const hit = new Set(written.filter((p) => _runDirty.has(p)));\n"
+    "  if (hit.size === 0) return false;\n"
+    "  _rows[rowId].done = true;\n"
+    "  const shared = Array.from(hit).join(', ');\n"
+    "  const collided = _pendingCommit.filter((q) => q.paths.concat(q.deleted_paths).some((p) => hit.has(p)));\n"
+    "  for (const q of collided) {\n"
+    "    _pendingCommit.splice(_pendingCommit.indexOf(q), 1);\n"
+    "    _unsettle(q.row_id);\n"
+    "    _handBack(q.row_id, 'entangled', 'a later fix wrote paths this row queued for the terminal commit: ' + shared + '; left on disk, no undo');\n"
+    "  }\n"
+    "  _runDirty.clear();\n"
+    "  for (const q of _pendingCommit) { q.paths.concat(q.deleted_paths).forEach((p) => _runDirty.add(p)); }\n"
+    "  _handBack(rowId, 'entangled', 'this fix wrote paths already queued for the terminal commit: ' + shared + '; left on disk, no undo');\n"
+    "  return true;\n"
+    "}\n"
+    "function _terminalReason(reply) {\n"
+    "  const why = reply && (reply.refused || reply.error);\n"
+    "  return why ? `: ${why}` : '';\n"
+    "}\n"
+    "async function _terminalCommit() {\n"
+    "  if (_pendingCommit.length === 0) return;\n"
+    "  const queued = _pendingCommit.splice(0, _pendingCommit.length);\n"
+    "  _runDirty.clear();\n"
+    "  const _failAll = (reason) => {\n"
+    "    for (const q of queued) { _unsettle(q.row_id); _handBack(q.row_id, 'commit-failed', reason); }\n"
+    "  };\n"
+    "  if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }\n"
+    "  const _halted = _exhausted ? 'budget-exhausted'\n"
+    "    : (_grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null);\n"
+    "  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, "
+    "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted } };\n"
+    "  const _size = JSON.stringify(JSON.stringify(_params)).length;\n"
+    "  if (_size > PARAMS_BUDGET) { _failAll(`terminal commit params are ${_size} bytes escaped, over the ${PARAMS_BUDGET} the spawn transcript can carry; the rows stay on disk` + SETTLE_HINT); return; }\n"
+    "  let reply;\n"
+    "  try {\n"
+    "    reply = await _terminalCommitCall(_params);\n"
+    "  } catch (err) {\n"
+    "    _failAll('terminal commit call threw: ' + (err && err.message ? err.message : String(err)) + SETTLE_HINT);\n"
+    "    return;\n"
+    "  }\n"
+    "  if (!reply || reply.committed !== true) { _failAll('terminal commit did not land' + _terminalReason(reply) + SETTLE_HINT); return; }\n"
+    "  _terminalCommitDropped = reply.dropped || [];\n"
+    "  const _landed = {};\n"
+    "  const _hasRows = Array.isArray(reply.rows);\n"
+    "  for (const r of (_hasRows ? reply.rows : [])) { _landed[r.row_id] = r; }\n"
+    "  for (const q of queued) {\n"
+    "    const hit = _hasRows ? _landed[q.row_id] : { sha: reply.sha };\n"
+    "    if (!hit) {\n"
+    "      const drops = _terminalCommitDropped.filter((d) => d.row_id === q.row_id).map((d) => d.path + ' (' + d.reason + ')');\n"
+    "      _unsettle(q.row_id);\n"
+    "      _handBack(q.row_id, 'commit-failed', 'every path of this row was dropped from the terminal commit' + (drops.length ? ': ' + drops.join(', ') : '') + SETTLE_HINT);\n"
+    "      continue;\n"
+    "    }\n"
+    "    const sha = hit.sha || reply.sha || '';\n"
+    "    _rows[q.row_id].sha = sha;\n"
+    "    const s = _settled.find((x) => x.row === q.row_id && x.outcome === 'committed');\n"
+    "    if (s) { s.sha = sha; }\n"
+    "  }\n"
+    "}"
+)
+
 
 def _manifest_const(manifest: Manifest) -> str:
     entries = [
@@ -922,7 +1116,9 @@ def compose_grind_script(
     queue left out as closed and settles its live rows' ledgers.
 
     ``commit_trailers`` are host-required trailer lines passed verbatim to
-    the commit stage's prompt; empty leaves the prompt unchanged.
+    the review-fix commit's prompt; empty leaves the prompt unchanged. The
+    terminal commit takes none: ``dispatch.terminal_commit`` writes each
+    row's own ``Grind-Row`` trailer.
 
     ``review_roster_fragment`` / ``review_stage_schemas`` carry the execute_review
     wave inputs; either being None, or a fragment not at schema_version 5,
@@ -1039,17 +1235,18 @@ def compose_grind_script(
     lines.append("const REPO_ROOT = args.repo_root;")
     lines.append(stages.SIZE_ASSEMBLE_JS)
     lines.append(_SIZE_PATH_JS)
-    # The commit-failed hand-back names the runnable sweep spelling, not the
+    # The commit-failed hand-back names the runnable settle-run spelling, not the
     # bare verb: the verb is not a binary and takes required flags.
-    if queue_dirs:
-        _sweep_flags = " ".join(f"--queue {q}" for q in queue_dirs)
-        lines.append(
-            f"const SWEEP_HINT = ' -- settle ledgers with `' + {_js_string_literal(stages.ASSEMBLE_CMD + ' grind-row sweep --profile-dir ')}"
-            f" + _shq(PROFILE_DIR) + {_js_string_literal(f' --profile {profile.name} {_sweep_flags} --repo-root ')}"
-            " + _shq(REPO_ROOT) + '`; never commit them';"
-        )
-    else:
-        lines.append("const SWEEP_HINT = ' -- never commit ledgers';")
+    _settle_flags = "".join(f" --queue {q}" for q in queue_dirs)
+    lines.append(PARAMS_BLOCK_JS)
+    lines.append("const RUN_TOKEN = args.run_token || null;")
+    lines.append(f"const PARAMS_BUDGET = {PARAMS_ESCAPED_BUDGET};")
+    lines.append(
+        f"const SETTLE_HINT = ' -- land the finished rows from the run evidence with `' + {_js_string_literal(stages.ASSEMBLE_CMD + ' grind-row settle-run --profile-dir ')}"
+        f" + _shq(PROFILE_DIR) + {_js_string_literal(f' --profile {profile.name} --run-id ')} + _shq(RUN_ID)"
+        f" + {_js_string_literal(f'{_settle_flags} --repo-root ')}"
+        " + _shq(REPO_ROOT) + '`';"
+    )
     preamble_expr: Optional[str] = None
     if preamble:
         lines.append(f"const PREAMBLE = {_js_string_literal(preamble)};")
@@ -1076,6 +1273,12 @@ def compose_grind_script(
     lines.append("let _exhausted = false;")
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
+    lines.append(
+        "const _pendingCommit = [];\n"
+        "const _runDirty = new Set();\n"
+        "let _grindErr = null;\n"
+        "let _terminalCommitDropped = [];"
+    )
     lines.append("const _byRefuteOrigin = {};")
     lines.append(
         "const _byTriageCheck = { "
@@ -1229,20 +1432,19 @@ def compose_grind_script(
         + "\n}"
     )
 
-    commit_raw = stages.compose_commit_call(
+    commit_raw = stages.compose_grind_terminal_commit_call(
         models=stage_models,
-        label="commit", phase_title="Grind", profile=profile.name, row_id_js="row.rowId",
-        outcome_js="row.lastOutcome || 'settled'",
-        # Created files and the archive destination are staged too: a fixer reports new files
-        # under created_files, and a re-fix overwrites touchedFiles, dropping the archive copy.
-        touched_files_js=(
-            "Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
-            ".concat(row.closeResult ? [row.closeResult.new] : [])))"
-        ),
-        removed_files_js="row.removedFiles",
-        agent_type_host=agent_type_host, trailers=commit_trailers,
+        label="commit", phase_title="Grind",
+        params_file_js="_paramsFile", params_js="params",
+        agent_type_host=agent_type_host,
     )
-    lines.append("async function _commitCall(row) {\n" + _indent_block(_capture(commit_raw, "commit"), "  ") + "\n}")
+    lines.append(
+        "async function _terminalCommitCall(params) {\n"
+        f"  const _paramsFile = REPO_ROOT.replace(/\\/+$/, '') + {_js_string_literal('/' + RUN_DIR_ROOT + '/')}"
+        f" + RUN_ID + {_js_string_literal('/' + PARAMS_FILE_NAME)};\n"
+        + _indent_block(_capture(commit_raw, "commit"), "  ")
+        + "\n}"
+    )
 
     undo_raw = stages.compose_undo_call(
         models=stage_models,
@@ -1256,7 +1458,7 @@ def compose_grind_script(
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
 
     lines.append(
-        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };\n}"
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), terminal_commit_dropped: _terminalCommitDropped };\n}"
     )
     lines.append(
         "const _rows = {};\n"
@@ -1272,6 +1474,8 @@ def compose_grind_script(
         "  }\n"
         "}"
     )
+
+    lines.append(_TERMINAL_COMMIT_JS)
 
     lines.append(
         "function _pendingRow(batch) {\n"
@@ -1373,12 +1577,7 @@ def compose_grind_script(
         "    row.lastOutcome = 'confirmed';\n"
         "    const route = followEdge(row.node, 'confirmed', row);\n"
         "    applyRoute(row, itemRow, route, 'refute-close confirmed');\n"
-        "    if (route.kind === 'handback') {\n"
-        "      const _cresult = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\" + _commitReason(_cresult) + SWEEP_HINT); }\n"
-        "      else { row.sha = _cresult.sha || ''; "
-        "_settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }\n"
-        "    }\n"
+        "    if (route.kind === 'handback') { _queueCommit(itemRow); }\n"
         "  }\n"
         "  for (const entry of (result.refuted || [])) {\n"
         "    const entryRow = _normalizeRowRef(proposals, entry.row);\n"
@@ -1408,6 +1607,8 @@ def compose_grind_script(
     lines.append(
         "async function _fixStage(rowId) {\n"
         "  const row = _rows[rowId];\n"
+        "  const _overlap = row.declaredFiles.filter((p) => _runDirty.has(p));\n"
+        "  if (_overlap.length) { row.done = true; _handBack(rowId, 'overlap-deferred', 'declared files overlap rows queued for the terminal commit: ' + _overlap.join(', ') + '; its ledger is left for the next grind'); return; }\n"
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const _priorNode = row.node;\n"
         "  const result = await withLock(lockKeys, async () => _fixCall(row));\n"
@@ -1433,6 +1634,7 @@ def compose_grind_script(
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
         "  if (_escaped.length) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
+        "  if (_entangle(rowId, (result.touched_files || []).concat(result.created_files || []))) return;\n"
         "  if (outcome === 'NOT_REPRODUCED') { _byTriageCheck.fix_not_reproduced += 1; }\n"
         "  row.fixNode = _priorNode;\n"
         "  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
@@ -1462,11 +1664,8 @@ def compose_grind_script(
 
     lines.append(
         "async function _commitStage(rowId) {\n"
-        "  const row = _rows[rowId];\n"
-        "  const result = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land' + _commitReason(result) + SWEEP_HINT); return; }\n"
-        "  row.done = true; row.sha = result.sha || '';\n"
-        "  _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });\n"
+        "  _rows[rowId].done = true;\n"
+        "  _queueCommit(rowId);\n"
         "}"
     )
 
@@ -1552,9 +1751,9 @@ def compose_grind_script(
         "      else { _handBack(p.rid, 'baton', p.intent + ' (size step failed: exit ' + (r ? r.exit_code : 'missing') + ')'); }\n"
         "    }\n"
         "  }\n"
-        "  await _drainSweep();\n"
         "}\n"
-        "await runGrind();"
+        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); }\n"
+        "await _drainSweep();"
     )
 
     review_fix_raw = stages.compose_review_fix_commit_call(

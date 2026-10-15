@@ -89,6 +89,8 @@ ASK_SCOUT_SCHEMA = {
         "resume_plan": {"type": ["string", "null"]},
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
+        "manifest": {"type": ["object", "null"]},
+        "falsifier": {"type": ["object", "null"]},
     },
 }
 ASSEMBLE_SCHEMA = {

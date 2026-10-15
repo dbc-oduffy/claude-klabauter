@@ -5,12 +5,11 @@ Purpose: pins C5's three named assertions (plan
 docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md, Tasks § C5) over
 `grind_stages.py`'s composers:
 
-  1. Only the commit composers (`compose_commit_call`,
-     `compose_ledger_sweep_call`'s absence of it) mention `grind-row settle` or
-     staging -- every other composer's call text stays clear of both.
-  2. The commit prompt (`compose_commit_call`) names every removed path it
-     is handed as a declared deletion (`deleted_paths`), never as a
-     `settle` flag.
+  1. Only the review-fix committer mentions staging, and no composer mentions
+     `grind-row settle` -- every other composer's call text stays clear of both.
+  2. The grind's terminal commit prompt (`compose_grind_terminal_commit_call`) runs one
+     bare `coordinator-invoke dispatch.terminal_commit --params-file <path>` segment and
+     carries the fenced params block, never JSON typed by the agent.
   3. The op-runner verify composer's `agentType` equals
      `grind_vocab.OP_RUNNER_AGENT_TYPE`.
 
@@ -26,6 +25,22 @@ import pytest
 
 from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit import grind_stages
+
+
+def _terminal_call(**kw) -> str:
+    kw.setdefault("label", "commit")
+    kw.setdefault("phase_title", "Grind")
+    kw.setdefault("params_file_js", "_paramsFile")
+    kw.setdefault("params_js", "params")
+    return grind_stages.compose_grind_terminal_commit_call(**kw)
+
+
+def _review_fix_call(**kw) -> str:
+    kw.setdefault("label", "commit:review")
+    kw.setdefault("phase_title", "Review fixes")
+    kw.setdefault("touched_files_js", "TOUCHED")
+    kw.setdefault("profile", "p1")
+    return grind_stages.compose_review_fix_commit_call(**kw)
 
 
 def _all_non_commit_calls() -> dict:
@@ -81,15 +96,10 @@ def test_only_commit_composers_mention_settle_or_staging():
             )
         assert "you do not stage" in lowered
 
-    commit_call = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        row_id="row1",
-        touched_files=["a.py"],
-        removed_files=["old.py"],
-    )
-    assert "grind-row settle" in commit_call
-    assert "stage exactly" in commit_call.lower()
+    review_fix_call = _review_fix_call()
+    assert "grind-row settle" not in review_fix_call
+    assert "stage exactly" in review_fix_call.lower()
+    assert "grind-row settle" not in _terminal_call()
 
     sweep_call = _sweep_call()
     assert "stage exactly" not in sweep_call.lower()
@@ -105,20 +115,13 @@ def _sweep_call(**kw):
     )
 
 
-def test_commit_prompt_never_names_a_ledger_in_its_path_lists():
+def test_review_fix_commit_prompt_never_names_a_ledger_in_its_path_lists():
     """A ledger is usually untracked (commit_v2 refuses it as a declared
     deletion absent from HEAD) and, when tracked, its removal reads as a
     staged rollback -- it is settled out of band, never committed."""
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", profile="p1", row_id="row1",
-        touched_files=["a.py"], removed_files=["state/bug-backlog/row1.yaml"],
-    )
+    call_text = _review_fix_call()
     assert ".jsonl" not in call_text
-    assert "never committed" not in call_text
-    assert "landed by the drain\\'s run-record, not by this committer" in call_text
     assert "Never name a state/queue-grind/ path in either commit path list" in call_text
-    # settle runs only after the commit lands
-    assert call_text.index("ceremony.commit_v2") < call_text.index("grind-row settle")
 
 
 def test_ledger_sweep_names_every_queue_and_never_commits():
@@ -219,28 +222,31 @@ def test_ledger_sweep_without_queue_dirs_omits_the_sweep():
     assert "grind-row run-record" in call_text
 
 
-def test_commit_prompt_names_declared_revert_per_removed_path():
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        row_id="row1",
-        touched_files=["a.py"],
-        removed_files=["old1.py", "old2.py"],
-    )
-    assert "`deleted_paths`" in call_text
-    assert "old1.py" in call_text
-    assert "old2.py" in call_text
+def test_terminal_commit_prompt_is_one_bare_invoke_segment_plus_the_params_block():
+    call_text = _terminal_call(params_file_js="P", params_js="PARAMS")
+    assert call_text.count("coordinator-invoke") == 1
+    assert "coordinator-invoke dispatch.terminal_commit --params-file ' + (P) + '" in call_text
+    assert "_terminalCommitParamsBlock(PARAMS)" in call_text
+    assert "Do not copy, edit or pass it" in call_text
+    assert "no `cd &&`, no wrapper, no env prefix" in call_text
+    assert "ceremony.commit_v2" not in call_text
+    assert "settle" not in call_text.lower()
 
 
-def test_commit_prompt_omits_declared_revert_clause_with_no_removed_paths():
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        row_id="row1",
-        touched_files=["a.py"],
-        removed_files=[],
-    )
-    assert "`deleted_paths`" not in call_text
+def test_terminal_commit_call_is_the_haiku_committer_and_returns_the_reply_shape():
+    call_text = _terminal_call()
+    assert "agentType: 'coordinator:git-commit-agent'" in call_text
+    assert "model: 'haiku'" in call_text
+    for key in ('"committed"', '"rows"', '"dropped"', '"refused"', '"error"', '"sha"'):
+        assert key in call_text
+    assert "verbatim" in call_text
+
+
+def test_terminal_commit_prompt_passes_no_trailer_or_path_list():
+    call_text = _terminal_call()
+    assert "trailer" not in call_text
+    assert "deleted_paths" not in call_text.replace("no `paths` array is owed", "")
+    assert "stage exactly" not in call_text.lower()
 
 
 def test_op_runner_agent_type_equals_vocab_constant():
@@ -270,9 +276,7 @@ def _calls_by_stage(**kw) -> dict:
         "verify-op": grind_stages.compose_verify_op_call(
             label="vo", phase_title="Verify", op="x.y", run_dir="r", batch_id="b1", **kw
         ),
-        "commit": grind_stages.compose_commit_call(
-            label="c", phase_title="Commit", row_id="row1", touched_files=["a.py"], **kw
-        ),
+        "commit": _terminal_call(label="c", phase_title="Commit", **kw),
         "ledger-sweep": grind_stages.compose_ledger_sweep_call(
             label="ls", phase_title="Sweep", profile="p", run_id="r", **kw
         ),
@@ -363,6 +367,12 @@ def test_every_composer_carries_its_stage_model():
         assert f"model: '{grind_stages.STAGE_MODELS[stage]}'" in call_text
 
 
+def test_triage_stage_model_is_haiku():
+    assert grind_stages.STAGE_MODELS["triage"] == "haiku"
+    triage_call = grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
+    assert "model: 'haiku'" in triage_call
+
+
 def test_models_override_changes_only_its_stage():
     calls = _calls_by_stage(models={"triage": "opus"})
     for key, call_text in calls.items():
@@ -394,13 +404,8 @@ def test_fix_prompt_precheck_peer_dirty_before_work():
     assert peer_dirty_index < fix_index
 
 
-def test_commit_reconciles_before_retry():
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        row_id="row1",
-        touched_files=["a.py"],
-    )
+def test_review_fix_commit_reconciles_before_retry():
+    call_text = _review_fix_call()
     assert "git log" in call_text
     assert "git status" in call_text
     assert "retry blind" in call_text
@@ -433,57 +438,9 @@ def test_fix_static_locked_files_still_works():
     assert ".join(" not in call_text
 
 
-def test_commit_prompt_interpolates_touched_and_removed_js_expressions():
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        row_id="row1",
-        touched_files_js="fixResult.touched_files",
-        removed_files_js="closedPaths",
-    )
+def test_review_fix_commit_prompt_interpolates_the_touched_js_expression():
+    call_text = _review_fix_call(touched_files_js="fixResult.touched_files")
     assert "(fixResult.touched_files).join(', ')" in call_text
-    assert "(closedPaths).join(', ')" in call_text
-    assert "`deleted_paths`" in call_text
-
-
-def test_commit_prompt_gives_full_settle_invocation():
-    # The ledger-deletion clause must
-    # name every flag `grind_rows.cmd_settle` requires, not a bare
-    # underspecified subcommand mention. The row-id is its own JS piece
-    # (shared with every other row_id_part use in this composed call)
-    # rather than baked into the settle literal, so it is asserted
-    # separately from the surrounding literal fragments.
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        profile="p1",
-        row_id="row1",
-        touched_files=["a.py"],
-        repo_root_js="R",
-    )
-    assert "backlog-grind-assemble grind-row settle --profile p1 --row-id " in call_text
-    assert "' --repo-root ' + (_shq(R)) + '` (it takes only those three flags" in call_text
-    assert "'row1'" in call_text
-
-
-def test_commit_prompt_never_attaches_a_flag_to_settle():
-    # `settle` rejects any flag beyond --profile/--row-id/--repo-root; a
-    # removed-path clause glued to the settle command sent committers to
-    # pass it there and stop on the usage error. `--declared-revert` is
-    # never a settle flag.
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1",
-        phase_title="Commit",
-        profile="p1",
-        row_id="row1",
-        touched_files=["a.py"],
-        removed_files=["old1.py"],
-    )
-    settle_clause_start = call_text.index("backlog-grind-assemble grind-row settle")
-    settle_clause_end = call_text.index("it takes only those three flags") + len(
-        "it takes only those three flags"
-    )
-    assert "--declared-revert" not in call_text[settle_clause_start:settle_clause_end]
 
 
 def _assert_commit_route_bound_to_repo_root(call_text):
@@ -495,16 +452,14 @@ def _assert_commit_route_bound_to_repo_root(call_text):
     assert call_text.lstrip().startswith("await agent('Your repo is `' + (REPO_ROOT) + '`")
 
 
-def test_commit_call_default_trailers_is_byte_identical_and_names_none():
-    kw = dict(label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"])
-    base = grind_stages.compose_commit_call(**kw)
-    assert grind_stages.compose_commit_call(**kw, trailers=()) == base
+def test_review_fix_call_default_trailers_is_byte_identical_and_names_none():
+    base = _review_fix_call()
+    assert _review_fix_call(trailers=()) == base
     assert "trailer" not in base
 
 
-def test_commit_call_trailers_are_json_quoted_and_precede_the_route():
-    kw = dict(label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"])
-    text = grind_stages.compose_commit_call(**kw, trailers=['X: a"b`c', "Y: 2"])
+def test_review_fix_call_trailers_are_json_quoted_and_precede_the_route():
+    text = _review_fix_call(trailers=['X: a"b`c', "Y: 2"])
     assert "trailer lines" in text
     assert json.dumps(['X: a"b`c', "Y: 2"]) in text.replace("\\\\", "\\") or "Y: 2" in text
     assert text.index("trailer lines") < text.index("ceremony.commit_v2")
@@ -516,12 +471,10 @@ def test_fix_prompt_asks_for_repo_relative_paths_inside_and_absolute_outside():
     assert "by its absolute path" in text
 
 
-def test_commit_prompt_names_commit_v2_as_the_route_bound_to_repo_root():
+def test_review_fix_commit_prompt_names_commit_v2_as_the_route_bound_to_repo_root():
     # Bug e11733fb3a90: an agent left to improvise `git commit` was refused
     # by block-subagent-commit, stranding a settled/archived/staged row.
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"]
-    )
+    call_text = _review_fix_call()
     _assert_commit_route_bound_to_repo_root(call_text)
     assert "block-subagent-commit guard" in call_text
     assert "is NOT a route" in call_text
@@ -531,10 +484,8 @@ def test_commit_prompt_names_commit_v2_as_the_route_bound_to_repo_root():
     assert " Then commit. " not in call_text
 
 
-def test_commit_schema_carries_a_failure_reason():
-    call_text = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"]
-    )
+def test_review_fix_commit_schema_carries_a_failure_reason():
+    call_text = _review_fix_call()
     assert '"reason": {"type": "string"}' in call_text
     assert "verbatim refusal or the divergence you found in `reason`" in call_text
 
@@ -647,15 +598,13 @@ def test_fix_and_triage_schemas_gate_tradeoff_on_a_boolean():
     assert '"enum": ["confirmed-bug", "not-reproduced"]' in triage_call
 
 
-def test_commit_prompts_carry_an_explicit_subject_and_body():
+def test_review_fix_commit_prompt_carries_an_explicit_subject_and_body():
     """Live-run defect 1: `coordinator:git-commit-agent` refuses a brief with
-    no subject. Every commit prompt now composes one at runtime."""
-    commit_call = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", profile="p1", row_id="row1",
-        touched_files=["a.py"],
-    )
-    assert "Use commit subject `grind(p1): " in commit_call
-    assert "commit body naming this row" in commit_call
+    no subject. The review-fix committer composes one at runtime; the terminal
+    commit's subject and body come from `dispatch.terminal_commit`."""
+    commit_call = _review_fix_call()
+    assert "Use commit subject `grind(p1): review fixes`" in commit_call
+    assert "commit body naming the reviewed work" in commit_call
 
 
 # ---------------------------------------------------------------------------
@@ -717,10 +666,7 @@ def test_grind_row_verb_always_run_through_backlog_grind_assemble():
     import re
 
     calls = dict(_all_non_commit_calls())
-    calls["commit"] = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", profile="p1", row_id="row1",
-        touched_files=["a.py"],
-    )
+    calls["commit"] = _terminal_call()
     calls["ledger-sweep"] = _sweep_call()
     for kind, call_text in calls.items():
         for m in re.finditer(r"grind-row", call_text):
@@ -736,10 +682,7 @@ def test_every_stage_binds_the_fire_time_repo_root_never_cwd():
     repo B ran every committer in B. Each prompt must anchor to `REPO_ROOT`,
     and no `grind-row` invocation may fall back to `--repo-root .`."""
     calls = dict(_all_non_commit_calls())
-    calls["commit"] = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", profile="p1", row_id="row1",
-        touched_files=["a.py"],
-    )
+    calls["commit"] = _terminal_call()
     calls["ledger-sweep"] = _sweep_call()
     for kind, call_text in calls.items():
         if "agent(" not in call_text or kind.startswith("verify-op"):
@@ -780,16 +723,10 @@ def test_triage_brief_binds_a_rows_pm_ruling():
     assert "never re-derive a fresh verdict from the body alone" in call_text
 
 
-def test_commit_prompt_passes_drop_ignored_and_reports_the_dropped_paths():
-    text = grind_stages.compose_commit_call(
-        label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"]
-    )
+def test_review_fix_commit_prompt_passes_drop_ignored_and_reports_the_dropped_paths():
+    text = _review_fix_call()
     assert "drop_ignored" in text
     assert "dropped_ignored" in text
-    review = grind_stages.compose_review_fix_commit_call(
-        label="commit:rv", phase_title="Commit", touched_files_js="TOUCHED"
-    )
-    assert "drop_ignored" in review
 
 
 def test_fix_prompt_fences_the_published_mirror():

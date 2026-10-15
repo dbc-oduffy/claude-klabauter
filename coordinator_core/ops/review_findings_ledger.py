@@ -27,6 +27,9 @@ finding in its own sidecar under a `## Findings Ledger` heading (a fenced
     `--agent-key <agent id|provision key>` writes `review-targets.<key>.txt`
     instead: that dispatch is then confined to its own set alone.
 
+`read_ledger(path)` is the public read-only view (stamp presence + rows) for
+callers that must not stamp, such as `plan.readiness_verdict`.
+
 Zero git spawns. All comparisons are in-process and CRLF-normalized.
 
 Negative-spec:
@@ -450,6 +453,22 @@ def _check_sidecar_scope(sidecar_path: Path, repo_root: Path, text: str) -> None
 
 def _row_status(row: Dict[str, Any]) -> str:
     return row.get("status") or _STATUS_APPLIED
+
+
+def read_ledger(sidecar_path: Path) -> Optional[Tuple[bool, List[Dict[str, Any]]]]:
+    """Read-only view of a sidecar's ledger: `(stamped, rows)`, or None when the
+    file is unreadable or carries no parseable ledger. `stamped` is True iff
+    frontmatter carries a non-empty `findings_ledger:` key. Never writes."""
+    try:
+        text = _normalize_crlf(Path(sidecar_path).read_text(encoding="utf-8"))
+        rows = _parse_ledger_rows(text)
+    except (OSError, UnicodeDecodeError, LedgerError):
+        return None
+    if rows is None:
+        return None
+    bounds = _frontmatter_bounds(text)
+    stamp = _extract_frontmatter_key(text[: bounds[1]], "findings_ledger") if bounds else None
+    return bool(stamp), rows
 
 
 class VerifyOutcome:

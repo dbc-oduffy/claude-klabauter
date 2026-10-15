@@ -16,7 +16,26 @@
 ## 2. Params
 
 `{plan, coverage?, reviews?}`. `coverage` is `{verdict, mechanicalFindings, judgmentFindings}`;
-`reviews` is `[{reviewer, verdict}]`. Both are the structured values plan-blitz already holds.
+`reviews` is `[{reviewer, verdict, ledger?}]`. Both are the structured values plan-blitz already
+holds. No other top-level param exists.
+
+**Clear vocabulary.** A coverage or review verdict reads as clear (case-insensitive) when it is one
+of `approve`, `approved`, `pass`, `passed`, `clear`, `clean`, `ready`, `ok`, `accept`, `accepted`,
+or `complete`. `COMPLETE` is the coverage check's own clear verdict; `INCOMPLETE` without findings
+stays `judgment`. PIVOT, REJECTED, FAILED and any unknown verdict stay `judgment` (fail-closed).
+
+**`reviews[].ledger` (optional).** A repo-relative or absolute path to that reviewer's
+findings-ledger sidecar. The op reads it in-process and never stamps or writes it.
+
+- A `WARN` or `BLOCKED` review reads as clear only when its `ledger` names a sidecar that carries a
+  `findings_ledger:` frontmatter stamp, every row is `verified: true`, and every row's `status` is
+  absent or `applied`. `verify` stamps em-rejected and suspended rows `verified: true` too, so an
+  em-rejected or suspended row leaves the review at `judgment`.
+- An absent, unreadable, unstamped or partially verified ledger leaves the review at `judgment`.
+- `OK`-class verdicts need no ledger. An unknown key inside a review entry other than `ledger`
+  changes nothing.
+- **Producer of `ledger`:** DoE `readinessStep` in `plan-blitz.mjs`, once the X1 memo lands. Until
+  then no caller passes it, and a `WARN`/`BLOCKED` review stays `judgment`.
 
 ## 3. Reply
 
@@ -32,7 +51,8 @@
 - `ready` with empty `mechanical_repairs`: no prep-gate or readiness agent is owed.
 - `pulled` + `mechanical`: apply the repairs in one revise; re-run the op, not the review round.
 - `pulled` + `substantive`, or a post-revise verdict that is not `ready`: the full `_reblitz` path.
-- `judgment`: a reviewer verdict or a judgment finding needs an agent.
+- `judgment`: a reviewer verdict or a judgment finding needs an agent, including a `WARN`/`BLOCKED`
+  review without a fully verified `ledger`.
 
 ## 4. Roster `tiers`
 

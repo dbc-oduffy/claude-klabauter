@@ -53,6 +53,11 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   commit's run-cost record is written through this verb instead of being
   hand-written, and the write is declared like every other row mutation.
 
+- `settle-run --profile-dir D --profile P --run-id T --queue Q [--queue Q ...]
+  --repo-root R [--run-dir RD] [--rows-file F] [--dry-run]`: implemented in
+  `grind_settle_run.py`; lands an already-ended run's finished rows through the
+  grind terminal commit, re-running no other stage.
+
 - `undo --paths-urlenc E --repo-root R`: implemented in `grind_undo.py` (the
   one verb here that spawns git): puts each named path back to HEAD when this
   session declared it and no live peer holds it.
@@ -908,6 +913,12 @@ def cmd_run_record(rest: list[str]) -> int:
 # main
 # ---------------------------------------------------------------------------
 
+def _cmd_settle_run(rest: list[str]) -> int:
+    from coordinator_core.backlog_grind_assemble.grind_settle_run import cmd_settle_run
+
+    return cmd_settle_run(rest)
+
+
 _VERBS = {
     "check": cmd_check,
     "append": cmd_append,
@@ -916,12 +927,13 @@ _VERBS = {
     "sweep": cmd_sweep,
     "run-record": cmd_run_record,
     "undo": cmd_undo,
+    "settle-run": _cmd_settle_run,
 }
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo [...]")
+        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo|settle-run [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

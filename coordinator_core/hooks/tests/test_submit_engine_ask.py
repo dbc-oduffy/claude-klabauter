@@ -201,6 +201,28 @@ def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
     assert write("pkg/mod.py") is None
 
 
+def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path, monkeypatch):
+    from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
+
+    monkeypatch.setattr(dispatch, "_is_scratch_or_tmp", lambda _p: False)
+    root = _repo(tmp_path)
+    run_a, run_b = "ask-20261013T000000-aaaaaa", "ask-20261013T000001-bbbbbb"
+    for run_id in (run_a, run_b):
+        script = root / "scratch" / f"{run_id}.mjs"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("export const meta = {}\n", encoding="utf-8")
+        run_token.mint(root, run_id, str(script), session_id="sess-1")
+
+    def write():
+        return dispatch.op({"tool_name": "Edit", "agent_id": "a1", "session_id": "sess-1", "cwd": str(root),
+                            "tool_input": {"file_path": str(root / "pkg/mod.py"), "old_string": "a",
+                                           "new_string": "b"}})
+
+    run_token.bind_sizing(root, run_b, "state/sizings/b.yaml")
+    assert write() is None
+    assert warp_live.unsized_run(root, "sess-1") is None
+
+
 def test_remote_venue_carries_the_cross_repo_approval(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     root = _repo(tmp_path)

@@ -7,17 +7,29 @@ from coordinator_core.ops.dispatch_emit.grind_admission import admit, receipt_bl
 IDS = tuple(f"r{i}" for i in range(21))
 
 
-def test_calls_bound_admits_first_12_of_21():
+def test_calls_bound_admits_first_16_of_21():
     a = admit(IDS, max_agent_calls=40, budget_tokens=None)
-    assert a.admitted == IDS[:12]
-    assert a.not_admitted == IDS[12:]
-    assert len(a.not_admitted) == 9
+    assert a.admitted == IDS[:16]
+    assert a.not_admitted == IDS[16:]
+    assert len(a.not_admitted) == 5
 
 
-def test_calls_boundary_67_all_66_twenty():
-    a = admit(IDS, max_agent_calls=67, budget_tokens=None)
+def test_calls_boundary_51_all_50_twenty():
+    a = admit(IDS, max_agent_calls=51, budget_tokens=None)
     assert a.admitted == IDS and a.not_admitted == ()
-    assert len(admit(IDS, max_agent_calls=66, budget_tokens=None).admitted) == 20
+    assert len(admit(IDS, max_agent_calls=50, budget_tokens=None).admitted) == 20
+
+
+def test_terminal_commit_call_is_reserved():
+    a = admit(IDS, max_agent_calls=40, budget_tokens=None)
+    assert a.arithmetic["run_fixed_agent_calls"] == 1
+    assert a.arithmetic["bound_by_calls"] == (39 * 100) // 236 == 16
+
+
+def test_calls_of_one_admits_no_rows():
+    a = admit(IDS, max_agent_calls=1, budget_tokens=None)
+    assert a.admitted == () and a.not_admitted == IDS
+    assert a.arithmetic["bound_by_calls"] == 0
 
 
 def test_both_none_admits_all():
@@ -50,5 +62,5 @@ def test_non_positive_refused(kw):
 
 def test_receipt_block():
     b = receipt_block(admit(IDS, max_agent_calls=40, budget_tokens=None))
-    assert b["count"] == 9 and b["row_ids"] == list(IDS[12:])
-    assert b["arithmetic"]["admitted_count"] == 12
+    assert b["count"] == 5 and b["row_ids"] == list(IDS[16:])
+    assert b["arithmetic"]["admitted_count"] == 16

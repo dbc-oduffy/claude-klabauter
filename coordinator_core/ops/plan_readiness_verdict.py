@@ -11,13 +11,18 @@ Wire params:
     plan     (str, required) — repo-relative or absolute plan path (alias ``plan_path``).
     coverage (object, optional) — {verdict, mechanicalFindings, judgmentFindings}; a findings
                                   value is a list or a non-negative count.
-    reviews  (list, optional) — [{reviewer, verdict}].
+    reviews  (list, optional) — [{reviewer, verdict, ledger?}]; ``ledger`` is a repo-relative or
+                                absolute path to that reviewer's findings sidecar. A WARN or
+                                BLOCKED review is clear only when that sidecar carries a
+                                ``findings_ledger:`` stamp and every row is ``verified: true``
+                                with status absent or ``applied``.
 
 Reply: see coordinator_core/contract/readiness-verdict.schema.json (the schema wins).
 
 Negative-spec:
   - Takes no skip, force or override parameter; any key outside the four above is refused.
-  - Does NOT write, stamp or mutate anything, and does NOT sweep the corpus.
+  - Does NOT write, stamp or mutate anything, and does NOT sweep the corpus. It reads a review's
+    ledger sidecar through ``review_findings_ledger.read_ledger`` and never calls ``verify``.
   - Spawns nothing of its own; the prep gate's one batched ``git ls-files`` for python census
     targets is the only process it can cost, and only for a plan that declares such targets.
   - An unrecognised reviewer or coverage verdict reads as blocking: the verdict fails closed to
@@ -33,19 +38,47 @@ from typing import Any, List, Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import _handler as _prep_gate_handler
+from coordinator_core.ops.review_findings_ledger import read_ledger
 
 GENERATES: list = []
 
 _KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews"})
 _CLEAR_VERDICTS = frozenset(
-    {"approve", "approved", "pass", "passed", "clear", "clean", "ready", "ok", "accept", "accepted"}
+    {
+        "approve", "approved", "pass", "passed", "clear", "clean", "ready", "ok", "accept",
+        "accepted", "complete",
+    }
 )
+_LEDGER_VERDICTS = frozenset({"warn", "blocked"})
 _PREP_VERDICTS_COMPUTED = frozenset({"PREPPED", "NOT-PREPPED"})
 _INSTRUCTION_MAX = 1000
 
 
 def _clear(verdict: Any) -> bool:
     return isinstance(verdict, str) and verdict.strip().lower() in _CLEAR_VERDICTS
+
+
+def _ledger_clear(review: dict, repo_root: Optional[Path]) -> bool:
+    """A WARN/BLOCKED review is clear only on a stamped sidecar whose rows are all applied+verified."""
+    verdict = review.get("verdict")
+    ledger = review.get("ledger")
+    if not (isinstance(verdict, str) and verdict.strip().lower() in _LEDGER_VERDICTS):
+        return False
+    if not isinstance(ledger, str) or not ledger.strip():
+        return False
+    path = Path(ledger.strip())
+    if not path.is_absolute():
+        if repo_root is None:
+            return False
+        path = repo_root / path
+    read = read_ledger(path)
+    if read is None:
+        return False
+    stamped, rows = read
+    return stamped and bool(rows) and all(
+        row.get("verified") is True and (row.get("status") or "applied") == "applied"
+        for row in rows
+    )
 
 
 def _findings(value: Any, label: str) -> List[Any]:
@@ -95,8 +128,14 @@ def _check_params(params: dict) -> tuple:
     return raw_plan.strip(), coverage, reviews or []
 
 
-def readiness_verdict(prep_gate: dict, coverage: Optional[dict], reviews: List[dict]) -> dict:
-    """Pure verdict over a prep-gate reply plus coverage and reviewer values."""
+def readiness_verdict(
+    prep_gate: dict,
+    coverage: Optional[dict],
+    reviews: List[dict],
+    repo_root: Optional[Path] = None,
+) -> dict:
+    """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
+    them is a review's ledger sidecar, resolved against ``repo_root``."""
     repairs: List[dict] = []
     substantive: List[str] = []
     judgment: List[str] = []
@@ -128,7 +167,7 @@ def readiness_verdict(prep_gate: dict, coverage: Optional[dict], reviews: List[d
         if not _clear(coverage.get("verdict")) and not mechanical and not judged:
             judgment.append(f"coverage verdict {coverage.get('verdict')!r} carries no findings")
     for review in reviews:
-        if not _clear(review.get("verdict")):
+        if not _clear(review.get("verdict")) and not _ledger_clear(review, repo_root):
             judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
 
     if substantive:
@@ -158,5 +197,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews = _check_params(params)
     prep_gate = _prep_gate_handler({"plan": raw_plan}, repo_root)
-    out = readiness_verdict(prep_gate, coverage, reviews)
+    out = readiness_verdict(prep_gate, coverage, reviews, repo_root)
     return {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}

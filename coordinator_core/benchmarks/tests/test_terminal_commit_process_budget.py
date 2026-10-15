@@ -89,6 +89,14 @@ def halted_record_measurement(tmp_path_factory):
     )
 
 
+@pytest.fixture(scope="module")
+def grind_measurement(tmp_path_factory):
+    return _measure(
+        tmp_path_factory.mktemp("terminal_commit_budget_grind"),
+        driver="coordinator_core.benchmarks.grind_terminal_commit_full_path",
+    )
+
+
 def _assert_under_bar(m: dict) -> None:
     # Positive net is necessary, not sufficient: completion is the driver's rc==0
     # (last of k runs only, see batched_process_time_ms).
@@ -107,6 +115,11 @@ def test_terminal_commit_mise_full_path_is_under_the_500ms_bar(mise_full_path_me
 def test_terminal_commit_halted_record_is_under_the_500ms_bar(halted_record_measurement):
     _assert_under_bar(halted_record_measurement)
     print(f"TERMINAL-COMMIT-HALTED {halted_record_measurement['detail']}")
+
+
+def test_terminal_commit_grind_mode_is_under_the_500ms_bar(grind_measurement):
+    _assert_under_bar(grind_measurement)
+    print(f"TERMINAL-COMMIT-GRIND {grind_measurement['detail']}")
 
 
 def test_terminal_commit_ask_full_path_cost_is_observed(ask_full_path_measurement):

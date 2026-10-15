@@ -6510,6 +6510,9 @@ _LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 #: has nothing to resolve candidates against without one.
 _LEG_UNRESOLVABLE_GIT_ROOT = "leg:unresolvable-git-root"
 
+#: A `dispatch.terminal_commit --params-file <path>` the run-token leg refused.
+_LEG_RUN_TOKEN_PARAMS = "leg:run-token-params"
+
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
 #: pathspec-scope check is what denied. Prose stays inside
@@ -6539,6 +6542,11 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "BLOCKED: git-commit-agent got an ABSOLUTE pathspec element that "
         "resolves outside this repo -- no scope check can clear one. Name "
         "each file relative to the repo root; path scope was never checked."
+    ),
+    _LEG_RUN_TOKEN_PARAMS: (
+        "BLOCKED: terminal_commit params not admitted -- the spawn prompt "
+        "holds no params block, the path is not the run's own, or the run "
+        "token is spent or expired. Report it; do not edit the command."
     ),
     _LEG_UNRESOLVABLE_GIT_ROOT: (
         "BLOCKED: git-commit-agent: no repo root at this cwd; pathspec "
@@ -6850,6 +6858,30 @@ def _prompt_sourced_params_admit(
     return chan.materialize(canonical, params)
 
 
+def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
+    """True for one bare `coordinator-invoke dispatch.terminal_commit --params-file <path>` segment."""
+    tokens = _tokenize_full_command(cmd_for_scan)
+    if tokens is None:
+        return False
+    segments = [seg for seg in _segments_from_tokens(tokens) if seg]
+    if len(segments) != 1 or not _token_matches_binary(segments[0][0], _COORDINATOR_INVOKE_BINARY):
+        return False
+    seg = segments[0]
+    op_idx = _first_positional_after_invoke_module(seg, 1)
+    return (
+        op_idx is not None
+        and seg[op_idx] == _RUN_TOKEN_OP
+        and _bare_params_file_value(seg[op_idx + 1:]) is not None
+    )
+
+
+def _spawn_transcript(payload: Dict[str, Any]) -> Any:
+    """The spawn's own transcript path (see `chan.spawn_transcript_path`), else the raw payload value."""
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    return chan.spawn_transcript_path(payload) or payload.get("transcript_path")
+
+
 def _warp_run_token_admits(
     raw_cmd: str,
     cmd_for_scan: str,
@@ -7051,9 +7083,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             git_root,
             payload_legs,
             heredoc_stdin_import_hit,
-            transcript_path=payload.get("transcript_path"),
+            transcript_path=_spawn_transcript(payload),
         ):
             return None
+        if _is_terminal_commit_params_file_cmd(cmd_for_scan):
+            ownership_reason = _LEG_RUN_TOKEN_PARAMS
 
     kind_unresolved = not effective_type
 

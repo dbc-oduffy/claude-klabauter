@@ -108,6 +108,61 @@ def test_cli_tokens_prints_table_exit_zero(tmp_path, capsys):
     assert "stage" in out and "TOTAL" in out and "7" in out
 
 
+def _tool_rec(msg_id, out, tools):
+    return {"type": "assistant", "message": {
+        "id": msg_id,
+        "content": [{"type": "tool_use", "id": t_id, "name": name} for t_id, name in tools],
+        "usage": {"output_tokens": out}}}
+
+
+def _census_run(root, run, events, transcripts):
+    d = root / "proj" / "sess" / "subagents" / "workflows" / run
+    d.mkdir(parents=True)
+    (d / "journal.jsonl").write_text(
+        "garbage\n" + "\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    for agent_id, records in transcripts.items():
+        (d / f"agent-{agent_id}.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+
+def test_census_folds_by_normalised_label_across_journals(tmp_path):
+    _census_run(tmp_path, "w1", [
+        {"agentId": "a1", "type": "started", "label": "stage:x1"},
+        {"agentId": "a2", "type": "started", "label": "stage:y2"},
+    ], {
+        "a1": [_tool_rec("m1", 10, [("t1", "Bash")]),
+               _tool_rec("m1", 10, [("t1", "Bash")])],
+        "a2": [_tool_rec("m2", 30, [("t2", "Bash"), ("t3", "Read")])],
+    })
+    _census_run(tmp_path, "w2", [
+        {"agentId": "a3", "type": "started", "label": "plan"},
+    ], {"a3": [_tool_rec("m3", 5, [])]})
+
+    labels = wj.census(tmp_path)
+    assert labels["stage"]["runs"] == 2
+    assert labels["stage"]["fresh"] == 40
+    assert labels["stage"]["tool_calls"] == 3
+    assert dict(labels["stage"]["tools"]) == {"Bash": 2, "Read": 1}
+    assert labels["plan"]["runs"] == 1 and labels["plan"]["tool_calls"] == 0
+
+
+def test_cli_census_prints_one_line_per_label(tmp_path, capsys):
+    _census_run(tmp_path, "w1", [{"agentId": "a1", "type": "started", "label": "stage:x"}],
+                {"a1": [_tool_rec("m1", 8, [("t1", "Bash")])]})
+    assert wj.main(["workflow-journal", "--census", "--root", str(tmp_path), "--since", "30"]) == wj.EXIT_OK
+    out = capsys.readouterr().out
+    assert "stage  runs=1  avg_tokens=8  avg_tool_calls=1.0  tools: Bash=1" in out
+
+
+def test_census_since_skips_old_journals(tmp_path):
+    import os
+    _census_run(tmp_path, "w1", [{"agentId": "a1", "type": "started", "label": "old"}],
+                {"a1": [_tool_rec("m1", 1, [])]})
+    journal = next(tmp_path.glob("*/*/subagents/workflows/*/journal.jsonl"))
+    os.utime(journal, (1, 1))
+    assert wj.census(tmp_path, since_days=30) == {}
+
+
 def test_cli_label_filter_and_missing_label_exit_code(tmp_path, capsys):
     events = [
         {"agentId": "a1", "type": "started", "label": "executor-C1"},

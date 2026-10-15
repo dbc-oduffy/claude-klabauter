@@ -176,6 +176,11 @@ _GATE_SCHEMA = _obj(
         "spine_plan": {"type": ["string", "null"]},
     },
 )
+#: The pre-sized gate agent's return: the gate reply plus the stage it runs as its closing act.
+_GATE_STAGED_SCHEMA = {
+    **_GATE_SCHEMA,
+    "properties": {**_GATE_SCHEMA["properties"], "manifest": {"type": ["object", "null"]}},
+}
 _RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
 
 
@@ -452,9 +457,20 @@ _FALSIFIER_SCHEMA = _obj(
     {"how": _STR, "baseline_output": _STR, "expected_when_true": _STR},
 )
 _FALSIFIER_AGENT_TYPE = "coordinator:exit-criterion-falsifier"
+#: The scout's folded falsifier act. Trap: the scout assembled the criterion, so the probe must hit
+#: the criterion's observable outcome and never the scout's own premise evidence.
+_FALSIFIER_ACT = (
+    "The observation runs through the production entry point the criterion names -- the command, "
+    "import path or call site a user reaches -- and probes the criterion's observable outcome, never "
+    "your premise evidence and never a unit test of one helper. Run it now against the unchanged tree "
+    "and record what it prints as baseline_output: it must show the criterion FALSE today. Write no "
+    "repo file. Return how (one runnable observation, verbatim), baseline_output and "
+    "expected_when_true (what the same observation shows once the criterion holds)."
+)
 #: Rides the judge prompt at run time; XS authors none, so `_falsifierSpec` may be null.
 _FALSIFIER_SUFFIX_JS = (
-    "(_falsifierSpec ? '\\n\\nrecorded falsifier (authored before any change; run its how verbatim at HEAD, "
+    "(_falsifierSpec ? '\\n\\nrecorded falsifier (authored before any change by ' + (_falsifierSpec.authored_by ?? 'unknown') "
+    "+ '; run its how verbatim at HEAD, "
     "compare to expected_when_true and baseline_output, and rule not_met when it still shows the baseline): ' "
     "+ JSON.stringify(_falsifierSpec) : '')"
 )
@@ -902,7 +918,32 @@ def compose_ask_script(
             + " })"
         )
 
-    def _gate_agent_call(label: str, phase_title: str) -> str:
+    fold_stage = not stop_after
+    fold_falsifier = judge_expr is not None and not stop_after
+    def _stage_act_parts(base: str, sizing: str, gated: str) -> tuple[str, ...]:
+        """The closing act of the agent that just ran the gate: stage the arms with no plan agent to fold into.
+
+        ``base`` is the params object text carrying run_id, writes, cross_repo_approved and session_id;
+        ``sizing`` and ``gated`` are the values the XS params add. Each of the three is a literal or a
+        ``js:`` expression.
+        """
+        return (
+            " As your very last act, stage the run, but only when the gate reply's halt is null: when its arm "
+            f"is XS, run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being the JSON object ",
+            base,
+            " with sizing_path ",
+            sizing,
+            " and gated ",
+            gated,
+            f" added; when its arm is S and its resume_plan is non-null, run `{_INVOKE} "
+            f"{OP_ASK_STAGE} '<params>'` once, <params> being the same JSON object with plan_path set to that "
+            "resume_plan and commit_sizing_path ",
+            sizing,
+            " added (and no gated). Return the JSON reply verbatim as manifest, or null when it replies "
+            "{\"error\": ...}. On any other arm run no stage command and return no manifest.",
+        )
+
+    def _gate_agent_call(label: str, phase_title: str, stage_act: bool = False) -> str:
         gate_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
@@ -912,10 +953,22 @@ def compose_ask_script(
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
             " and return its estimate.tshirt as tshirt and its route as route.",
+            *(
+                _stage_act_parts(
+                    "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
+                    "_crossRepoApproved, session_id: _SESSION_ID })",
+                    "js:JSON.stringify(_sizingRel)",
+                    "js:JSON.stringify(_gated)",
+                )
+                if stage_act and fold_stage
+                else ()
+            ),
         )
         return _agent(
             gate_prompt, label=label, phase=phase_title, agent_type=_MECHANICAL_AGENT_TYPE,
-            agent_model=_MECHANICAL_MODEL, schema=_GATE_SCHEMA, effort=_MECHANICAL_EFFORT,
+            agent_model=_MECHANICAL_MODEL,
+            schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
+            effort=_MECHANICAL_EFFORT,
         )
 
     if sized_in_run:
@@ -961,6 +1014,19 @@ def compose_ask_script(
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
+        if fold_falsifier:
+            scout_closing += (
+                " (3) Only when the gate reply's halt is null and its arm is neither null nor XS, author the "
+                "baseline falsifier for the exit_criterion you assembled. " + _FALSIFIER_ACT
+                + " Return it as falsifier. On any other arm, or a halt, author none and return no falsifier."
+            )
+        if fold_stage:
+            _scout_base = json.dumps(
+                {"run_id": run_id, "cross_repo_approved": bool(cross_repo_approved), "session_id": session_id or ""}
+            )[:-1] + ', "writes": <your writes array>}'
+            scout_closing += "".join(
+                _stage_act_parts(_scout_base, json.dumps(sizing_write_rel), "<your gated array>")
+            )
         scout_prompt = prompt_of(
             "Size this ask afresh, never reusing or editing an existing sizing, by following the "
             "sizing skill (`coordinator:sizing`). Judge first; write no file except through your "
@@ -982,6 +1048,9 @@ def compose_ask_script(
         b.append(
             f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=ASK_SCOUT_SCHEMA)};"
         )
+        # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
+        # valid only for the criterion and sizing the scout's own gate reply judged.
+        b.append("  const _scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
         b.append("  _writes = _scouted.writes ?? [];")
         b.append("  _gated = _scouted.gated ?? [];")
         b.append(
@@ -1076,9 +1145,27 @@ def compose_ask_script(
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
             "spine_plan: _scouted.spine_plan ?? null };"
         )
+        if fold_falsifier:
+            b.append("  let _scoutFalsifier = null;")
+            b.append(
+                f"  if (_scoutClean && _gate.arm !== {_lit(ARM_XS)} && _scouted.falsifier && "
+                "[_scouted.falsifier.how, _scouted.falsifier.baseline_output, "
+                "_scouted.falsifier.expected_when_true].every((s) => typeof s === 'string' && s.trim())) "
+                "{ _scoutFalsifier = { how: _scouted.falsifier.how, baseline_output: _scouted.falsifier.baseline_output, "
+                "expected_when_true: _scouted.falsifier.expected_when_true, authored_by: 'sizing-scout' }; }"
+            )
     else:
         # An existing sizing has no scout to close for it.
-        b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate')};")
+        b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate', stage_act=True)};")
+    if fold_stage:
+        # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
+        clean_js = "_scoutClean" if sized_in_run else "!_gate.halt"
+        reply_js = "_scouted" if sized_in_run else "_gate"
+        b.append(
+            f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan)) "
+            f"&& Array.isArray({reply_js}.manifest?.rows) && !{reply_js}.manifest.error) "
+            f"{{ _stagedManifest = {reply_js}.manifest; }}"
+        )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
         """The ruling agent's own record call; the engine refuses a gated ruling before it writes."""
@@ -1457,10 +1544,17 @@ def compose_ask_script(
         )
         b.append("  let _falsifierSpec = null;")
         b.append(f"  if (!_halted && !_viaRoadmap && _gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{")
-        b.append("    phase('falsifier');")
-        b.append(
-            f"    _falsifierSpec = await {_agent(falsifier_prompt, label='falsifier', phase='falsifier', agent_type=_FALSIFIER_AGENT_TYPE, schema=_FALSIFIER_SCHEMA, agent_model=_emit._AGENT_MODELS[_FALSIFIER_AGENT_TYPE], effort=_MECHANICAL_EFFORT)};"
+        standalone = (
+            "    phase('falsifier');\n"
+            f"    _falsifierSpec = {{ ...(await {_agent(falsifier_prompt, label='falsifier', phase='falsifier', agent_type=_FALSIFIER_AGENT_TYPE, schema=_FALSIFIER_SCHEMA, agent_model=_emit._AGENT_MODELS[_FALSIFIER_AGENT_TYPE], effort=_MECHANICAL_EFFORT)}), "
+            "authored_by: 'exit-criterion-falsifier' };"
         )
+        if fold_falsifier and sized_in_run:
+            b.append("    if (_scoutFalsifier) { _falsifierSpec = _scoutFalsifier; } else {")
+            b.append(standalone)
+            b.append("    }")
+        else:
+            b.append(standalone)
         b.append("  }")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")

@@ -361,3 +361,85 @@ def test_stage_is_folded_into_the_plan_agent_s_last_act():
     plan_end = script.index("label: 'plan'")
     plan_prompt = script[script.rindex("agent(", 0, plan_end) : plan_end]
     assert OP_ASK_STAGE in plan_prompt and "as `manifest`" in plan_prompt
+
+
+def _scout_prompt(script):
+    return next(ln for ln in script.splitlines() if "const _scouted" in ln)
+
+
+def _gate_prompt(script):
+    end = script.index("label: 'gate'")
+    return script[script.rindex("agent(", 0, end) : end]
+
+
+def _presized(monkeypatch, arm="xs", **over):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
+    return _compose(prompt=None, sizing_rel="state/sizings/x.yaml", **over)
+
+
+def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_and_a_resumed_plan():
+    scout = _scout_prompt(_compose())
+    assert OP_ASK_STAGE in scout and "resume_plan is non-null" in scout
+    assert scout.index(OP_ASK_GATE) < scout.index(OP_ASK_STAGE)
+    assert scout.rindex(OP_ASK_STAGE) > scout.index("sizing-assemble")
+    assert "manifest" in ask_compose.ASK_SCOUT_SCHEMA["properties"]
+
+
+def test_the_presized_gate_agent_runs_ask_stage_after_the_gate_op(monkeypatch):
+    gate = _gate_prompt(_presized(monkeypatch))
+    assert gate.index(OP_ASK_GATE) < gate.index(OP_ASK_STAGE)
+    assert "resume_plan is non-null" in gate
+
+
+def test_a_stop_after_script_carries_no_stage_or_falsifier_act(monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
+
+    scout = _scout_prompt(_compose(stop_after=STOP_AFTER_PLAN, **_JUDGE_KW))
+    assert OP_ASK_STAGE not in scout and "baseline falsifier" not in scout
+    assert OP_ASK_STAGE not in _gate_prompt(_presized(monkeypatch, stop_after=STOP_AFTER_PLAN))
+
+
+def test_folded_manifest_is_adopted_behind_the_rows_guard_and_the_fallback_stays():
+    script = _compose()
+    assert (
+        "Array.isArray(_scouted.manifest?.rows) && !_scouted.manifest.error) { _stagedManifest = _scouted.manifest; }"
+        in script
+    )
+    assert "_scoutClean" in script.split("Array.isArray(_scouted.manifest?.rows)", 1)[0].splitlines()[-1]
+    assert script.count("phase('stage')") == 1 and script.count("label: 'stage'") == 1
+    assert "if (_stagedManifest) { _manifest = _stagedManifest; } else {" in script
+
+
+def test_every_non_stop_after_arm_reaches_one_ask_stage_site_folded_or_fallback():
+    scout, script = _scout_prompt(_compose()), _compose()
+    assert OP_ASK_STAGE in scout
+    fallback = script.split("if (_stagedManifest) { _manifest = _stagedManifest; } else {", 1)[1]
+    assert OP_ASK_STAGE in fallback.split("label: 'stage'", 1)[0]
+
+
+def test_a_sized_in_run_non_xs_scout_authors_the_falsifier_behind_the_adopted_spec_guard():
+    script = _compose(**_JUDGE_KW)
+    scout = _scout_prompt(script)
+    assert "baseline falsifier" in scout and "never your premise evidence" in scout
+    assert "falsifier" in ask_compose.ASK_SCOUT_SCHEMA["properties"]
+    assert "authored_by: 'sizing-scout'" in script
+    assert "if (_scoutFalsifier) { _falsifierSpec = _scoutFalsifier; } else {" in script
+    assert script.count("phase('falsifier')") == 1 and script.count("label: 'falsifier'") == 1
+    assert script.index("_scoutClean") < script.index("_scoutFalsifier")
+    assert "authored_by: 'exit-criterion-falsifier'" in script
+    assert "_falsifierSpec.authored_by" in script
+
+
+def test_a_roster_without_a_judge_folds_no_falsifier_act():
+    assert "baseline falsifier" not in _scout_prompt(_compose())
+
+
+def test_a_presized_script_composes_the_standalone_falsifier_unconditionally(monkeypatch):
+    script = _presized(monkeypatch, arm="s", **_JUDGE_KW)
+    assert "_scoutFalsifier" not in script and "baseline falsifier" not in _gate_prompt(script)
+    assert script.count("phase('falsifier')") == 1
+
+
+def test_folded_scripts_validate_with_zero_errors(monkeypatch):
+    for script in (_compose(**_JUDGE_KW), _presized(monkeypatch, **_JUDGE_KW)):
+        assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []

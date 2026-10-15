@@ -16,10 +16,11 @@ This module owns the trap text every stage-kind prompt must carry:
 - trap 2: only the committer stages -- every non-commit composer states the
   positive rule ("you do not stage; only the committer does") and never
   names the forbidden git verbs;
-- trap 3: the commit composer's prompt names every removed path as a
-  declared deletion (``deleted_paths``), never as a ``settle`` flag, and
-  never names a ``state/queue-grind/`` ledger in either list;
-- trap 4: the commit composer's prompt reconciles an indeterminate outcome
+- trap 3: the grind's terminal commit composer carries one bare
+  ``coordinator-invoke dispatch.terminal_commit --params-file`` segment and the
+  params block, never JSON typed by the agent; the review-fix committer never
+  names a ``state/queue-grind/`` ledger in either path list;
+- trap 4: the review-fix committer's prompt reconciles an indeterminate outcome
   against ``git log``/``git status`` before any retry, never retrying blind;
 - trap 5: the fix composer's prompt pre-checks its locked files for peer
   dirt (``PEER_DIRTY``) before doing any work;
@@ -102,7 +103,7 @@ STAGE_AGENT_TYPES: dict[str, str] = {
 #: ``models`` mapping overrides it); every other stage reads the engine's
 #: agent-type table.
 STAGE_MODELS: dict[str, str] = {
-    "triage": "sonnet",
+    "triage": "haiku",
     "refute-close": "sonnet",
     "fix": "sonnet",
     **{stage: _AGENT_MODELS[t] for stage, t in STAGE_AGENT_TYPES.items()},
@@ -258,7 +259,7 @@ def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
     static text segments. Each part is ``("lit", text)`` (escaped through
     ``_js_string_literal``, the existing escaper) or ``("expr", js_expr)``
     (emitted verbatim, parenthesised). Runtime interpolation support for
-    ``compose_fix_call``/``compose_commit_call``/``compose_undo_call``/
+    ``compose_fix_call``/``compose_undo_call``/
     ``compose_ledger_sweep_call`` -- fixes the break-class defect
     where a static per-row manifest path stood in for the live triage-
     declared/fixer-touched file list a real committer/undoer needs."""
@@ -1015,6 +1016,7 @@ def _compose_commit_agent_call(
     phase_title: str,
     agent_type_host: Optional[str],
     models: Optional[Mapping[str, str]] = None,
+    schema: Optional[dict] = None,
 ) -> str:
     return _agent_call(
         _join_prompt_parts(parts),
@@ -1025,103 +1027,88 @@ def _compose_commit_agent_call(
         agent_type=COMMIT_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="low",
-        schema=_COMMIT_SCHEMA,
+        schema=schema or _COMMIT_SCHEMA,
         is_expr=True,
     )
 
 
-def compose_commit_call(
+_TERMINAL_COMMIT_SCHEMA = {
+    "type": "object",
+    "required": ["committed"],
+    "properties": {
+        "committed": {"type": "boolean"},
+        "sha": {"type": ["string", "null"]},
+        "rows": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "row_id": {"type": "string"},
+                    "outcome": {"type": "string"},
+                    "sha": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "dropped": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "row_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+        "error": {"type": ["string", "null"]},
+        "refused": {"type": ["string", "null"]},
+    },
+}
+
+
+def compose_grind_terminal_commit_call(
     *,
     models: Optional[Mapping[str, str]] = None,
     label: str,
     phase_title: str,
-    profile: str = "",
-    row_id: str = "",
-    row_id_js: Optional[str] = None,
-    outcome_js: Optional[str] = None,
-    touched_files: Sequence[str] = (),
-    touched_files_js: Optional[str] = None,
-    removed_files: Sequence[str] = (),
-    removed_files_js: Optional[str] = None,
-    regenerate_op: Optional[str] = None,
-    repo_root_js: str = "REPO_ROOT",
+    params_file_js: str,
+    params_js: str,
     agent_type_host: Optional[str] = None,
-    trailers: Sequence[str] = (),
 ) -> str:
-    """`commit` (`coordinator:git-commit-agent`, haiku, low). Stages the
-    worker's touched list, runs the profile's index-regenerate op when one
-    is named, commits, and only then settles the row's ledger via the full
-    `backlog-grind-assemble grind-row settle --profile P --row-id R
-    --repo-root <REPO_ROOT>` invocation. The ledger never enters `paths` or
-    `deleted_paths`: it is usually untracked (absent from HEAD, which
-    `ceremony.commit_v2` refuses as a declared deletion) and, when tracked,
-    its removal reads as a staged rollback.
-    Names every removed path as a declared deletion in the committer's own
-    shapes (`deleted_paths` on `ceremony.commit_v2`, or the scoped-commit
-    pathspec) -- never as a `settle` flag, which takes only `--profile`,
-    `--row-id` and `--repo-root` (trap 3). On `commit-failed` the committer
-    returns the verbatim refusal or divergence in `reason`, so a hand-back
-    carries its cause. An
-    indeterminate outcome is reconciled against `git log` and `git status`
-    before any retry, and never retried blind (trap 4).
+    """The grind's one terminal `commit` (`coordinator:git-commit-agent`, haiku, low): runs
+    `dispatch.terminal_commit --params-file <path>` and returns its reply verbatim.
 
-    ``touched_files_js``/``removed_files_js``/``row_id_js`` name JS
-    expressions (e.g. the fixer's own returned touched-files list, the row
-    paths a `close` moved to archive, and the row's own id) to interpolate
-    at RUN time instead of the static values -- letting ONE composed call
-    site serve every row, with the committer staging what the worker
-    ACTUALLY touched, never a static per-row approximation.
-
-    ``trailers`` are host-required commit trailer lines; when non-empty the
-    committer ends the message with them verbatim, in order. Empty renders
-    byte-identically to a call without the kwarg."""
-    row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
-    outcome_part: tuple[str, str] = ("expr", outcome_js) if outcome_js else ("lit", "settled")
+    Trap: the command stays one bare `coordinator-invoke` segment, which is all the
+    `block_subagent_commit` run-token leg admits. The params ride in the prompt's fenced block,
+    which that leg reads back from the spawn transcript and writes to the file; the agent types
+    only the forward-slash file path, never JSON. ``params_file_js`` and ``params_js`` name JS
+    expressions evaluated at RUN time."""
     parts: list[tuple[str, str]] = [
         *_REPO_ANCHOR_PARTS,
-        ("lit", "You are the committer for row "),
-        row_id_part,
-        ("lit", ". You are the only stage that stages or commits anything. Stage exactly this touched list: ["),
-    ]
-    parts.extend(_list_parts(touched_files, touched_files_js))
-    parts.append(
         (
             "lit",
-            "]. Never name a state/queue-grind/ path in either commit path list: the row's "
-            "ledger is landed by the drain's run-record, not by this committer.",
-        )
-    )
-    if regenerate_op:
-        parts.append(("lit", f" Before staging, run the index-regenerate op `{regenerate_op}`."))
-    if removed_files or removed_files_js:
-        parts.append(("lit", " Record every one of these removed paths as a declared deletion (`deleted_paths` on `ceremony.commit_v2`): ["))
-        parts.extend(_list_parts(removed_files, removed_files_js))
-        parts.append(("lit", "]."))
-    parts.append(("lit", f" Use commit subject `grind({profile}): "))
-    parts.append(row_id_part)
-    parts.append(("lit", " "))
-    parts.append(outcome_part)
-    # Trap: commit_v2 refuses a staged deletion whose message names no removal
-    # verb, and the committer may not invent a body; the subject must carry it.
-    if removed_files or removed_files_js:
-        parts.append(("lit", ", backlog row removed to archive"))
-    parts.append(("lit", "` and a commit body naming this row."))
-    if trailers:
-        parts.append(
-            (
-                "lit",
-                " End the commit message with exactly these trailer lines, verbatim and in order "
-                "(JSON-quoted list): " + json.dumps(list(trailers)) + ".",
-            )
-        )
-    parts.extend(_COMMIT_TAIL_PARTS)
-    parts.append(("lit", f" Once the commit lands, settle the ledger with `{ASSEMBLE_CMD} grind-row settle --profile {profile} --row-id "))
-    parts.append(row_id_part)
-    parts.append(("lit", " --repo-root "))
-    parts.append(_shq_part(repo_root_js))
-    parts.append(("lit", "` (it takes only those three flags); never stage what it removes."))
+            "This is a queue grind's one terminal commit stage. Run exactly this one command as its "
+            "own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. "
+            "`dispatch.terminal_commit` derives the paths from the grind's finished rows, so no "
+            "`paths` array is owed.\n\n"
+            "coordinator-invoke dispatch.terminal_commit --params-file ",
+        ),
+        ("expr", params_file_js),
+        ("lit", "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n"),
+        ("expr", f"_terminalCommitParamsBlock({params_js})"),
+        (
+            "lit",
+            "\n\nReturn from its JSON reply committed, sha, rows, dropped, error and refused, "
+            "verbatim (null where absent). Run nothing else.",
+        ),
+    ]
     return _compose_commit_agent_call(
-        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host, models=models
+        parts,
+        label=label,
+        phase_title=phase_title,
+        agent_type_host=agent_type_host,
+        models=models,
+        schema=_TERMINAL_COMMIT_SCHEMA,
     )
 
 

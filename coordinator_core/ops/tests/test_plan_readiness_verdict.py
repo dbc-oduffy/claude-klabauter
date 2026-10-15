@@ -146,6 +146,92 @@ def test_handler_reply_validates_and_spawns_nothing_under_the_bar(tmp_path, monk
     _validate(reply)
 
 
+def _ledger(root: Path, rows: list, *, stamped: bool = True, name: str = "rev.md") -> str:
+    stamp = "findings_ledger: {rows: 1}\n" if stamped else ""
+    (root / name).write_text(
+        f"---\nagent_type: coordinator:code-reviewer\n{stamp}---\n# R\n\n## Findings Ledger\n\n"
+        f"```json\n{json.dumps(rows)}\n```\n",
+        encoding="utf-8",
+    )
+    return name
+
+
+def _review(verdict: str, ledger=None, **extra) -> list:
+    entry = {"reviewer": "patrik", "verdict": verdict, **extra}
+    if ledger is not None:
+        entry["ledger"] = ledger
+    return [entry]
+
+
+def _verdict_for(root: Path, reviews: list) -> str:
+    return op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, reviews, root)["verdict"]
+
+
+def test_complete_coverage_without_findings_is_ready():
+    cov = {"verdict": "COMPLETE", "mechanicalFindings": [], "judgmentFindings": []}
+    assert op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])["verdict"] == "ready"
+
+
+def test_incomplete_coverage_without_findings_stays_judgment():
+    cov = {"verdict": "INCOMPLETE", "mechanicalFindings": [], "judgmentFindings": []}
+    assert op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])["verdict"] == "judgment"
+
+
+@pytest.mark.parametrize("verdict", ["WARN", "BLOCKED"])
+def test_verified_ledger_makes_warn_and_blocked_ready(tmp_path, verdict):
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True}])
+    assert _verdict_for(tmp_path, _review(verdict, ledger)) == "ready"
+
+
+def test_warn_without_ledger_unstamped_or_unverified_stays_judgment(tmp_path):
+    assert _verdict_for(tmp_path, _review("WARN")) == "judgment"
+    assert _verdict_for(tmp_path, _review("WARN", "missing.md")) == "judgment"
+    unstamped = _ledger(tmp_path, [{"id": "F1", "verified": True}], stamped=False, name="u.md")
+    assert _verdict_for(tmp_path, _review("WARN", unstamped)) == "judgment"
+    mixed = _ledger(
+        tmp_path, [{"id": "F1", "verified": True}, {"id": "F2"}], name="m.md"
+    )
+    assert _verdict_for(tmp_path, _review("WARN", mixed)) == "judgment"
+
+
+def test_stamped_ledger_with_no_rows_leaves_review_at_judgment(tmp_path):
+    ledger = _ledger(tmp_path, [])
+    assert _verdict_for(tmp_path, _review("BLOCKED", ledger)) == "judgment"
+
+
+@pytest.mark.parametrize("status", ["em-rejected", "suspended"])
+def test_non_applied_row_leaves_review_at_judgment(tmp_path, status):
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True, "status": status}])
+    assert _verdict_for(tmp_path, _review("BLOCKED", ledger)) == "judgment"
+
+
+def test_applied_status_row_is_clear(tmp_path):
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True, "status": "applied"}])
+    assert _verdict_for(tmp_path, _review("WARN", ledger)) == "ready"
+
+
+@pytest.mark.parametrize("verdict", ["PIVOT", "REJECTED", "FAILED", "mystery"])
+def test_ledger_never_clears_other_verdicts(tmp_path, verdict):
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True}])
+    assert _verdict_for(tmp_path, _review(verdict, ledger)) == "judgment"
+
+
+def test_unknown_key_in_a_review_entry_changes_nothing(tmp_path):
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True}])
+    assert _verdict_for(tmp_path, _review("WARN", ledger, extra_key="x")) == "ready"
+    assert _verdict_for(tmp_path, _review("WARN", extra_key="x")) == "judgment"
+
+
+def test_handler_reads_the_ledger_and_never_writes_it(tmp_path):
+    common = _plan(tmp_path)
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True}])
+    absolute = str(tmp_path / ledger)
+    before = (tmp_path / ledger).read_bytes()
+    reply = op._handler({"plan": REL, "reviews": _review("WARN", absolute)}, common)
+    assert (tmp_path / ledger).read_bytes() == before
+    assert "needs an agent" not in reply["reason"]
+
+
 def test_handler_reply_for_a_suite_tier_statement_validates(tmp_path):
     common = _plan(tmp_path, statement="the fast tier is green")
     reply = op._handler({"plan": REL}, common)
