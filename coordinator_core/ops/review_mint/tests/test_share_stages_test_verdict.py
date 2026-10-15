@@ -5,12 +5,18 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from coordinator_core.ops.review_mint import share_stages
 from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, ShareStagesMissing, assemble_from_share
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN = "pln-x-123456"
 JUDGE = {"status": "met", "observation": "holds"}
+
+
+@pytest.fixture(autouse=True)
+def _rostered_delivery_verifier(monkeypatch):
+    monkeypatch.setattr(share_stages, "_delivery_verifier_rostered", lambda _root: True)
 
 
 def _sc(share, name, **fm):
@@ -149,3 +155,13 @@ def test_prep_with_run_base_sha_and_product_files_only_in_the_body_is_assembled(
     )
     res = _assemble(tmp_path)
     assert res["used"]["prep"] == [".coordinator-local/subagent-share/sess-1/coordinator-test-runner.p1.md"]
+
+
+def test_an_unrostered_delivery_verifier_is_no_missing_stage(tmp_path, monkeypatch):
+    monkeypatch.setattr(share_stages, "_delivery_verifier_rostered", lambda _root: False)
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
+    _share(tmp_path, status="complete", test_verdict="pass", run=1, failed=0)
+    (share / "coordinator-delivery-verifier.d1.md").unlink()
+    res = _assemble(tmp_path)
+    assert res["stage_returns"]["delivery"] is None
+    assert res["used"]["delivery"] == []

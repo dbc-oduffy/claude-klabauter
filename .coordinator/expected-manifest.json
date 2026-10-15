@@ -2070,8 +2070,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "5b9fc7ad326d10cb1518752d9d53eb5528e346eb",
-    "coordinator_core/_engine_stamp": "94179237ab3e1b0d3e040c169fb0f55f61f62ffa",
+    "coordinator_core/_engine_published_at": "69431bd18e34bcbccf0ce90afdfedd2ed6184766",
+    "coordinator_core/_engine_stamp": "048fc67983b5043c0127a3a1fcf3b5db510447a2",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4265,7 +4265,7 @@
     "coordinator_core/ops/dispatch_emit/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/dispatch_emit/admission.py": "0d1a88cd69598bd2ded7870f3f28cfbbdc44a93e",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "cf2be379e4f266cf49a5e5287ae4fe3ee6ee8a5c",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "e9715997950b9b3ed7f5c229dc2cc4e76bb7e843",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "e8719408a677a237b0680119fb5f4c5ea5729298",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "585c4d2b039379608a8d4fc2c49976d189bcb1a4",
     "coordinator_core/ops/dispatch_emit/ask_gate.py": "b90a29b91efff704164ee38d243283ee1e2b28d2",
     "coordinator_core/ops/dispatch_emit/ask_plan_blitz.py": "91eaf4b35c10a607c0ea089948236c874ba7e282",
@@ -5270,7 +5270,7 @@
     "coordinator_core/ops/review_mint/execute_review.py": "4928767ba6692d511b642f8a130aa805731fd80d",
     "coordinator_core/ops/review_mint/op.py": "eeda44ffd4def5a879f80493805907cbe41e0148",
     "coordinator_core/ops/review_mint/roster.py": "8b3b1456920d590ab1e1bd94792459dbd1daab12",
-    "coordinator_core/ops/review_mint/share_stages.py": "7ddaedf521d4a609be6f7b177f444819cd6403de",
+    "coordinator_core/ops/review_mint/share_stages.py": "35a7b41966cb279e84bda3b9775cc85862826356",
     "coordinator_core/ops/review_mint/supersede.py": "386822274b0947fe46b99e8c7fb41286f9e002ee",
     "coordinator_core/ops/review_mint/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/review_mint/tests/test_compose.py": "7bd284327792b80978db8aae4349b524e34c7610",
@@ -5281,7 +5281,7 @@
     "coordinator_core/ops/review_mint/tests/test_required_reviewers.py": "2ddd24f5bd44361ee1a4ae5c88c24f9f8785e0bd",
     "coordinator_core/ops/review_mint/tests/test_review_capacity_ratchet.py": "ca05f45abcf5b3cd6f702d3e3e7512136f77f5af",
     "coordinator_core/ops/review_mint/tests/test_roster.py": "a292d319d2a814c7aabb5273f99ca733e4227871",
-    "coordinator_core/ops/review_mint/tests/test_share_stages_test_verdict.py": "6cbfdf0469c06f18e705a86785441a059de1fd17",
+    "coordinator_core/ops/review_mint/tests/test_share_stages_test_verdict.py": "759962160a57384f87afe7536a416ca8b12dca70",
     "coordinator_core/ops/review_mint/tests/test_supersede.py": "fe4fee03d42b65b2ad31886a489dbf1b156276f0",
     "coordinator_core/ops/review_mint/tests/test_supersede_json_arg.py": "05079b8c6638099e3f23eeb93aee612aadd4a79d",
     "coordinator_core/ops/review_mint/tests/test_supersede_owned_commits.py": "ae6472cfdb2a73de57fb20cc5f5de14e6991889e",
@@ -7797,5 +7797,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "ffc1bedb5979ee78dfed5643206d307763543822"
+  "source_head": "eaa9e79485a8e2469516491751d7995bdb9985c6"
 }

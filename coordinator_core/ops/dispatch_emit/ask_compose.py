@@ -316,7 +316,7 @@ _RELAYED_LEDGER_CLAUSE = _LEDGER_CLAUSE.replace(
     "and each revision the EM sent",
 )
 _MANIFEST_SCHEMA = _obj(
-    ["run_dir", "rows", "review_declared_paths", "marker_path"],
+    ["run_dir", "plan_id", "rows", "review_declared_paths", "marker_path"],
     {
         "run_dir": _STR,
         "plan_id": {"type": ["string", "null"]},

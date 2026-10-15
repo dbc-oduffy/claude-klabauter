@@ -182,6 +182,20 @@ def _newest(items: List[Tuple[Path, Any]]) -> Optional[Tuple[Path, Any]]:
     return max(items, key=lambda it: (it[0].stat().st_mtime, it[0].name)) if items else None
 
 
+def _delivery_verifier_rostered(repo_root: Path) -> bool:
+    """True unless the roster's review wave names no delivery-verifier; an unreadable roster
+    counts as rostered, so a missing verdict still refuses."""
+    from coordinator_core.ops.review_mint.execute_review import _DELIVERY_VERIFIER_AGENT_TYPE
+    from coordinator_core.ops.review_mint.op import load_fragment
+    from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
+
+    try:
+        review = parse_execute_review(load_fragment(repo_root))
+    except (OSError, ValueError, RosterFragmentError):
+        return True
+    return any(a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE for a in review.review_wave)
+
+
 def assemble_from_share(
     *,
     repo_root: Path,
@@ -300,7 +314,7 @@ def assemble_from_share(
     if delivery is None:
         delivery = _bookkeeping_delivery(share, plan_id, plan_stem)
     problems: List[ShareStageMissing] = []
-    if delivery is None:
+    if delivery is None and _delivery_verifier_rostered(repo_root):
         problems.append(missing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict"))
 
     tests = _newest([
@@ -324,12 +338,15 @@ def assemble_from_share(
     if problems:
         raise ShareStagesMissing(problems)
 
-    d_path, d_fm = delivery
-    delivery_ret: Dict[str, Any] = {"verdict": d_fm["verdict"], "sidecar": _rel(d_path, repo_root)}
-    if _int_or_none(d_fm.get("product_files")) is not None:
-        delivery_ret["product_files"] = d_fm["product_files"]
-    if isinstance(d_fm.get("claims_unbacked"), list):
-        delivery_ret["unbacked"] = d_fm["claims_unbacked"]
+    # A roster without a delivery-verifier yields no delivery stage; the stamp exempts it.
+    delivery_ret: Optional[Dict[str, Any]] = None
+    if delivery is not None:
+        d_path, d_fm = delivery
+        delivery_ret = {"verdict": d_fm["verdict"], "sidecar": _rel(d_path, repo_root)}
+        if _int_or_none(d_fm.get("product_files")) is not None:
+            delivery_ret["product_files"] = d_fm["product_files"]
+        if isinstance(d_fm.get("claims_unbacked"), list):
+            delivery_ret["unbacked"] = d_fm["claims_unbacked"]
     t_path, t_fm = tests
     tests_ret: Dict[str, Any] = {"status": test_verdict_of(t_fm), "sidecar": _rel(t_path, repo_root)}
     for key in ("run", "failed"):
@@ -351,7 +368,7 @@ def assemble_from_share(
         "used": {
             "prep": [_rel(prep[0], repo_root)],
             "reviewer": [_rel(p, repo_root) for p in waves],
-            "delivery": [_rel(d_path, repo_root)],
+            "delivery": [delivery_ret["sidecar"]] if delivery_ret else [],
             "tests": [_rel(t_path, repo_root)],
             "criterion": [_rel(judge_path, repo_root)] if judge_path else ["(judge result JSON)"],
         },
