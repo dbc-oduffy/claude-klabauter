@@ -271,3 +271,12 @@ def test_the_stamp_has_exactly_one_definition():
     # Until then the stamp has TWO definitions and
     # `test_round_leg_stamps_the_same_shape` above is the only thing keeping
     # them agreeing.
+
+
+def test_stamp_names_the_committing_roots_source_not_the_engine(monkeypatch):
+    """A DoE-sourced root must stamp DoE's pin: the engine key names claude-klabauter."""
+    claude_klabauter, doe = "a" * 40, "b" * 40
+    monkeypatch.setattr(publish, "_engine_toplevel_key", lambda: "/claude-klabauter")
+    pins = {"/claude-klabauter": claude_klabauter, "/doe": doe}
+    assert publish._source_sha_suffix(pins, source_head=doe) == f" [source-head {doe[:12]}]"
+    assert publish._source_sha_suffix(pins) == f" [source-head {claude_klabauter[:12]}]"

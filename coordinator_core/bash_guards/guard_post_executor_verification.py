@@ -6,8 +6,10 @@ verification runs are capped at one (the falsifier run); a second routes through
 ``coordinator:test-runner``. A verification run is pytest, ``python -c`` or
 heredoc-fed (``python -``) code that imports a top-level package of the repo under
 test or loads one of its ``.py`` files by quoted path, or ``python <x>.py`` whose
-script sits outside the repo under a temp or scratch(pad) dir (a probe; installed
-tools outside the repo are not). ``python -m
+script sits outside the repo under a temp or scratch(pad) dir and whose source
+(read once, size-capped, unreadable fails open) imports such a package or loads
+such a file (a probe; a stdlib-only script and installed tools outside the repo
+are not). ``python -m
 coordinator_core.benchmarks.measure [opts] -- <argv>`` is a verification run only when
 ``<argv>`` is itself a pytest run (the same scoped exemption applies); any other measured
 argv is neither counted nor denied. A ``-c`` importing
@@ -155,9 +157,13 @@ def _heredoc_code(cmd: str) -> str:
     return "\n".join(m.group(3) for m in _HEREDOC_RE.finditer(cmd))
 
 
+_PROBE_READ_CAP = 65536
+
+
 def _is_probe_script(path: str, repo_root: str, cwd: str) -> bool:
-    """A throwaway script: outside the repo AND under a temp or scratch(pad) dir.
-    Installed tools outside the repo (engine scripts, plugin bin) are not probes."""
+    """A throwaway script outside the repo under a temp or scratch(pad) dir whose
+    source imports a repo package or loads a repo ``.py`` by quoted path. Installed
+    tools outside the repo are not probes; an unreadable script fails open (not one)."""
     if "$" in path:
         return True
     full = os.path.normpath(os.path.join(cwd, os.path.expanduser(path)))
@@ -166,7 +172,14 @@ def _is_probe_script(path: str, repo_root: str, cwd: str) -> bool:
         return False
     tmp = os.path.normpath(tempfile.gettempdir())
     parts = full.split(os.sep)
-    return full.startswith(tmp + os.sep) or "scratchpad" in parts or "scratch" in parts
+    if not (full.startswith(tmp + os.sep) or "scratchpad" in parts or "scratch" in parts):
+        return False
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as fh:
+            source = fh.read(_PROBE_READ_CAP)
+    except OSError:
+        return False
+    return _code_imports_repo(source, repo_root)
 
 
 _MEASURE_MODULE = "coordinator_core.benchmarks.measure"

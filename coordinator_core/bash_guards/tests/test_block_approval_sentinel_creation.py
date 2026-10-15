@@ -1203,6 +1203,54 @@ class TestPythonOptionValueIsNotTheScript:
         _reason(guard.check(_payload("python3 -W ignore nope.py", cwd=str(tmp_path))))
 
 
+class TestIsolatedModePythonIsReadAsAScript:
+    """`python3 -I <literal path>` (and the other value-less flags) names a
+    script exactly as `python3 <path>` does, so the guard reads and judges it;
+    the DR-260 one-shot reason line in front of it is not a sentinel write."""
+
+    @staticmethod
+    def _nudge_path():
+        import tempfile
+
+        return "%s/coordinator/_fleet/coordinator-dispatch-nudge-ok-sess1" % (
+            tempfile.gettempdir().replace(os.sep, "/")
+        )
+
+    @pytest.mark.parametrize("flags", ["-I", "-E", "-s", "-S", "-B", "-u", "-O", "-P", "-I -B -u"])
+    def test_clean_script_with_value_less_flags_allows(self, tmp_path, flags):
+        script = tmp_path / "legs.py"
+        script.write_text("import json\nprint(json.dumps({}))\n", encoding="utf-8")
+        cmd = "python3 %s %s" % (flags, script.as_posix())
+        assert guard.check(_payload(cmd, cwd="/repo")) is None
+
+    def test_reason_line_then_isolated_literal_script_allows(self, tmp_path):
+        script = tmp_path / "legs.py"
+        script.write_text("print('transcript token audit')\n", encoding="utf-8")
+        cmd = 'echo "read-only audit" > %s && python3 -I %s' % (
+            self._nudge_path(),
+            script.as_posix(),
+        )
+        assert guard.check(_payload(cmd, cwd="/repo")) is None
+
+    def test_isolated_script_that_writes_the_sentinel_denies(self, tmp_path):
+        script = tmp_path / "bad.py"
+        script.write_text("open(%r, 'w').close()\n" % SENTINEL, encoding="utf-8")
+        _reason(guard.check(_payload("python3 -I %s" % script.as_posix(), cwd="/repo")))
+        cmd = 'echo "r" > %s && python3 -I %s' % (self._nudge_path(), script.as_posix())
+        _reason(guard.check(_payload(cmd, cwd="/repo")))
+
+    def test_isolated_dash_c_payload_writing_the_sentinel_denies(self):
+        cmd = "python3 -I -c \"open('%s', 'w')\"" % SENTINEL
+        _reason(guard.check(_payload(cmd, cwd="/repo")))
+
+    def test_isolated_unreadable_script_still_denies(self, tmp_path):
+        _reason(guard.check(_payload("python3 -I %s/nope.py" % tmp_path.as_posix(), cwd="/repo")))
+
+    def test_reason_line_alone_stays_reachable(self):
+        cmd = 'echo "a documented one-shot reason" > %s' % self._nudge_path()
+        assert guard.check(_payload(cmd, cwd="/repo")) is None
+
+
 class TestReadOnlyPythonProbeMentioningSentinel:
     """A `python3 <script>` whose text only inspects the sentinel is not a
     creation; one carrying any write/spawn/dynamic-exec token still denies."""

@@ -357,6 +357,9 @@ def _install_sibling_cli_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
 
         class _StubModule:
             main = staticmethod(_main)
+            # The round's up-front field-7 gate; its own tests own the red case.
+            _round_pin_source_sha = staticmethod(lambda root, pins: None)
+            _field7_declaration_check = staticmethod(lambda pinned: (True, "", None))
 
         return _StubModule
 

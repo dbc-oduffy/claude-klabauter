@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.bash_guards import guard_post_executor_verification as g
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
+from coordinator_core.hooks.dispatch_escape import ESCAPE_LOG_NAME
 
 SID = "sess-verify-1"
 
@@ -152,7 +153,7 @@ def test_reasoned_sentinel_allows_and_logs(repo) -> None:
         fh.write("need a wider run\n")
     _sidecar(repo, "blocked")
     assert g.check(_bash(repo, "pytest a.py")) is None
-    logs = list((repo / ".coordinator-local").rglob(nd.ESCAPE_LOG_NAME))
+    logs = list((repo / ".coordinator-local").rglob(ESCAPE_LOG_NAME))
     assert len(logs) == 1
     assert json.loads(logs[0].read_text().splitlines()[0])["reason"] == "need a wider run"
     assert not os.path.exists(nd.dispatch_nudge_sentinel_path(SID))
@@ -181,7 +182,7 @@ def test_scratch_py_sentinel_allows_and_logs(repo) -> None:
         fh.write("one-off probe\n")
     _sidecar(repo, "blocked")
     assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"))) is None
-    assert len(list((repo / ".coordinator-local").rglob(nd.ESCAPE_LOG_NAME))) == 1
+    assert len(list((repo / ".coordinator-local").rglob(ESCAPE_LOG_NAME))) == 1
     assert _denied(nd.op(_write(repo, str(repo / "scratch" / "probe.py"))))
 
 
@@ -219,8 +220,6 @@ def test_wrapped_non_pytest_not_counted(cmd) -> None:
     "python3 -c 'import os, pkg'",
     "timeout 60 python3 -c 'import pkg.x as m; m.run()'",
     "n=$(python3 -c 'from pkg import a' | wc -l)",
-    "python3 -I /elsewhere/scratchpad/census.py",
-    "python3 -I ../scratch/probe.py",
     "bash -c 'python3 -c \"import pkg\"'",
     "ls scratch && python3 - <<'PY'\nimport importlib.util\nm = load(\"pkg/mod.py\", \"a\")\nPY",
     "python3 <<PY\nfrom pkg import a\nPY",
@@ -228,6 +227,49 @@ def test_wrapped_non_pytest_not_counted(cmd) -> None:
 ])
 def test_probe_forms_counted(repo, cmd) -> None:
     assert g.runs_verification(cmd, str(repo), str(repo))
+
+
+def _script(tmp_path, rel: str, source: str) -> str:
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    return str(path)
+
+
+@pytest.mark.parametrize("rel,source", [
+    ("scratchpad/census.py", "from pkg.mod import f\nf()\n"),
+    ("scratch/probe.py", "import os, pkg\n"),
+    ("tmp/probe.py", "spec_from_file_location('m', './pkg/mod.py')\n"),
+])
+def test_scratch_script_importing_repo_counted(repo, tmp_path, rel, source) -> None:
+    path = _script(tmp_path, rel, source)
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+
+
+def test_scratch_script_relative_path_counted(repo, tmp_path) -> None:
+    _script(tmp_path, "scratch/probe.py", "import pkg\n")
+    assert g.runs_verification("python3 -I ../scratch/probe.py", str(repo), str(repo))
+
+
+@pytest.mark.parametrize("rel,source", [
+    ("scratchpad/legs.py", "import json, os\nprint(json.dumps({}))\n"),
+    ("tmp/audit.py", "import numpy\n"),
+])
+def test_stdlib_only_scratch_script_not_counted(repo, tmp_path, rel, source) -> None:
+    path = _script(tmp_path, rel, source)
+    assert not g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+
+
+def test_unreadable_scratch_script_fails_open(repo, tmp_path) -> None:
+    assert not g.runs_verification(
+        f"python3 {tmp_path / 'scratchpad' / 'missing.py'}", str(repo), str(repo)
+    )
+    assert not g.runs_verification(f"python3 {tmp_path / 'scratchpad'}.py", str(repo), str(repo))
+
+
+def test_probe_read_is_size_capped(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/big.py", "#" * (g._PROBE_READ_CAP + 10) + "\nimport pkg\n")
+    assert not g.runs_verification(f"python3 {path}", str(repo), str(repo))
 
 
 @pytest.mark.parametrize("cmd", [
@@ -331,11 +373,19 @@ def test_probe_shares_pytest_counter(repo) -> None:
     assert "honoured once." in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_probe_first_free_then_probe_denied(repo) -> None:
+def test_probe_first_free_then_probe_denied(repo, tmp_path) -> None:
     _executor_ran(repo)
+    path = _script(tmp_path, "scratchpad/census.py", "import pkg\n")
     assert g.check(_bash(repo, "python3 -c 'import os'")) is None
-    assert g.check(_bash(repo, "python3 /elsewhere/scratchpad/census.py")) is None
-    assert _denied(g.check(_bash(repo, "python3 /elsewhere/scratchpad/census.py")))
+    assert g.check(_bash(repo, f"python3 {path}")) is None
+    assert _denied(g.check(_bash(repo, f"python3 {path}")))
+
+
+def test_stdlib_scratch_audit_never_denied_after_executor(repo, tmp_path) -> None:
+    _executor_ran(repo)
+    path = _script(tmp_path, "scratchpad/legs.py", "import json\n")
+    for _ in range(3):
+        assert g.check(_bash(repo, f"python3 -I {path}")) is None
 
 
 def test_no_executor_record_python_script_then_directory_pytest_never_denied(repo, tmp_path) -> None:
