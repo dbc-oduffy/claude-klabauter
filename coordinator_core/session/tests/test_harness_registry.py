@@ -653,7 +653,7 @@ class TestLinuxBootTicksProcStart:
     def _ticks_for(self, epoch):
         btime = next(
             int(line.split()[1])
-            for line in open("/proc/stat")
+            for line in open("/proc/stat", encoding="utf-8")
             if line.startswith("btime ")
         )
         return int(round((epoch - btime) * os.sysconf("SC_CLK_TCK")))

@@ -1536,7 +1536,7 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
             if stalled is None:
                 continue
             if transcript_path and _task_gone_in_tail(transcript_path, task_id):
-                with open(marker, "a"):
+                with open(marker, "a", encoding="utf-8"):
                     pass
                 return (
                     f"Workflow run {run_id} abandoned: task {task_id} no longer exists "

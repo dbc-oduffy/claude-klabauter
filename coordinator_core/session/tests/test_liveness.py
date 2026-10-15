@@ -3202,7 +3202,7 @@ class TestCloudResumedSessionStaleRepoMeta:
         registry_dir.mkdir(parents=True, exist_ok=True)
         btime = next(
             int(line.split()[1])
-            for line in open("/proc/stat")
+            for line in open("/proc/stat", encoding="utf-8")
             if line.startswith("btime ")
         )
         ticks = int(round((epoch - btime) * os.sysconf("SC_CLK_TCK")))

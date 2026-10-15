@@ -65,7 +65,7 @@ def _write_stopped_marker(payload: dict) -> None:
     tool_input = payload.get("tool_input")
     task_id = tool_input.get("task_id") if isinstance(tool_input, dict) else None
     path = stopped_marker_path(str(managed_tempdir()), payload.get("session_id"), task_id)
-    with open(path, "a"):
+    with open(path, "a", encoding="utf-8"):
         pass
 
 

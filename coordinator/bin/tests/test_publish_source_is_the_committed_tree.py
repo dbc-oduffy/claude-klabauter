@@ -108,11 +108,11 @@ def test_source_ref_override_pins_the_named_commit(repo, monkeypatch):
     pins: dict = {}
 
     monkeypatch.setattr(publish, "_source_ref_override", "")
-    assert publish._round_pin_source_sha(root, pins, out=open(os.devnull, "w")) == second
+    assert publish._round_pin_source_sha(root, pins, out=open(os.devnull, "w", encoding="utf-8")) == second
 
     pins.clear()
     monkeypatch.setattr(publish, "_source_ref_override", first)
-    pinned = publish._round_pin_source_sha(root, pins, out=open(os.devnull, "w"))
+    pinned = publish._round_pin_source_sha(root, pins, out=open(os.devnull, "w", encoding="utf-8"))
     assert pinned == first
 
     shadow = publish._git_materialize_ref(root, ref=pinned)
@@ -124,4 +124,4 @@ def test_unresolvable_source_ref_refuses_rather_than_falling_back(repo, monkeypa
     root, _first, _second = repo
     monkeypatch.setattr(publish, "_source_ref_override", "no-such-ref")
     with pytest.raises(publish.GitMaterializeError):
-        publish._round_pin_source_sha(root, {}, out=open(os.devnull, "w"))
+        publish._round_pin_source_sha(root, {}, out=open(os.devnull, "w", encoding="utf-8"))

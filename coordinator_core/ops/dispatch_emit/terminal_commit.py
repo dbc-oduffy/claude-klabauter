@@ -1358,6 +1358,40 @@ def _own_prefix_files(worktree_root: Path, chunk, report_cache: dict) -> Optiona
     ]
 
 
+def _expanded_prefix_files(
+    worktree_root: Path, chunk, snapshot: Optional["_Snapshot"], session_id: Optional[str]
+) -> list:
+    """Existing changed files under ``chunk``'s own ``writes_under`` prefixes that the run's
+    session claims and no live peer contests, read from the pre-commit ``snapshot`` (no git
+    spawn). Empty with no snapshot, no session id or no prefixes."""
+    if snapshot is None or not session_id or not chunk.prefixes:
+        return []
+    found = sorted(
+        p for p in snapshot.changed_among(list(chunk.prefixes)) if (worktree_root / p).is_file()
+    )
+    if not found:
+        return []
+    from coordinator_core.session import scope as session_scope
+
+    root_str = str(worktree_root)
+    owned = set(session_scope.own_path_claims(session_id, cwd=root_str))
+    found = [p for p in found if p in owned]
+    if not found:
+        return []
+    contested = session_scope.contested_by_live_peers(found, session_id, cwd=root_str)
+    if contested is None:
+        return []
+    return [p for p in found if p not in contested]
+
+
+def _with_expansion(claimed: Optional[list], expanded: list) -> Optional[list]:
+    """The report's claimed prefix files joined with the snapshot expansion; ``None`` (the
+    no-claim-list refusal) only when the report has no claim list and the expansion is empty."""
+    if claimed is None:
+        return list(expanded) or None
+    return claimed + [p for p in expanded if p not in claimed]
+
+
 def _stage_returns(inline_review: dict) -> Optional[dict]:
     """The run record's stage-return fields out of the digest's
     ``inline_review``, or ``None`` when the digest predates them (no ``prep``
@@ -1457,9 +1491,14 @@ def _write_note_verdicts(note_abs: Path, ledger_verdict: object, inline_review: 
         return
 
 
+def _awaiting_operator(open_rows: Sequence[dict]) -> list:
+    """``[{id, row, command}]`` for each open ledger row classified ``awaiting_operator``."""
+    return [{"id": r["id"], "row": r["row"], "command": r["command"]} for r in open_rows if "command" in r]
+
+
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
-    gated: Optional[Sequence[str]] = None,
+    gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -1481,7 +1520,7 @@ def _ledger_gate(
             refused="ledger-unjudged",
         ), ledger, []
     result = requirements_ledger.judge(
-        ledger, verdict, _routed_from_manifest(manifest_path), gated=gated
+        ledger, verdict, _routed_from_manifest(manifest_path), gated=gated, operator=operator
     )
     if result["pass"]:
         return None, ledger, result.get("open") or []
@@ -1492,6 +1531,7 @@ def _ledger_gate(
         ledger_failures=result["failures"],
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
+        awaiting_operator=_awaiting_operator(result["open"]),
     ), ledger, []
 
 
@@ -2890,6 +2930,7 @@ def _terminal_commit_inner(
         unmet, ledger, open_rows = _ledger_gate(
             worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated],
+            {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
         )
         if unmet is not None:
             return unmet
@@ -3107,7 +3148,10 @@ def _terminal_commit_inner(
     prefix_files: list = []
 
     for chunk in done_chunks:
-        own_prefix_files = _own_prefix_files(worktree_root, chunk, report_cache)
+        own_prefix_files = _with_expansion(
+            _own_prefix_files(worktree_root, chunk, report_cache),
+            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id),
+        )
         if own_prefix_files is None:
             return _error(
                 f"chunk {chunk.id!r} declares prefixes {list(chunk.prefixes)} but its "
@@ -3121,7 +3165,10 @@ def _terminal_commit_inner(
     if withheld_partial and blockers is not None:
         blockers.update(withheld_partial)
     for chunk in partial_chunks:
-        own_prefix_files = _own_prefix_files(worktree_root, chunk, report_cache) or []
+        own_prefix_files = _with_expansion(
+            _own_prefix_files(worktree_root, chunk, report_cache),
+            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id),
+        ) or []
         all_paths.extend(list(chunk.paths) + own_prefix_files)
         prefix_files.extend(own_prefix_files)
 
@@ -3449,6 +3496,9 @@ def _terminal_commit_inner(
         )
         register_sizing = writeback.pop("register_sizing", None)
         reply.update(writeback)
+        pending_operator = _awaiting_operator(open_rows)
+        if pending_operator:
+            reply["awaiting_operator"] = pending_operator
         if (
             record_abs is not None and record is not None and not anchor_only
             and source_rows and request.plan_path not in source_rows

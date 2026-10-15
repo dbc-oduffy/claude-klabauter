@@ -358,7 +358,21 @@ def _deny(reason: str) -> Dict[str, Any]:
     }
 
 
-_EVICT_ORDER = "stale fact, then doctrine dup, then oldest"
+def _advisory(display: str, new_size: int, cap: int) -> Dict[str, Any]:
+    """Allow with context: an over-cap file that this edit did not grow."""
+    over = max(new_size - cap, 0)
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                f"[memory cap] {display}: {new_size}B, cap {cap}B, {over}B over. "
+                "Edit landed (file not grown). Edit down toward the cap; growth denies."
+            ),
+        }
+    }
+
+
+_EVICT_ORDER ="stale fact, then doctrine dup, then oldest"
 
 _ROUTING = "memory is force-read as TRUE every boot; a lesson is found when reached for"
 
@@ -608,17 +622,27 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if new_size < old_size:
             return None
 
+        cap = MAX_MEMORY_MD_BYTES if is_index else MAX_BODY_FILE_BYTES
+        try:
+            with open(resolved, "r", encoding="utf-8") as f:
+                current = f.read()
+        except OSError:
+            current = ""
         if is_index:
             refusal = _check_memory_md(new_content, new_size, display)
-            if refusal is None:
-                return None
-            try:
-                with open(resolved, "r", encoding="utf-8") as f:
-                    current = f.read()
-            except OSError:
-                current = ""
-            return refuse(refusal, added_lines(current, new_content) or new_content)
-        refusal = _check_body_file(new_size, display)
-        return refuse(refusal, new_content) if refusal else None
+        else:
+            refusal = _check_body_file(new_size, display)
+        if refusal is None:
+            return None
+        if new_size == old_size and current:
+            was_over = (
+                _check_memory_md(current, old_size, display)
+                if is_index
+                else _check_body_file(old_size, display)
+            )
+            if was_over is not None:
+                return _advisory(display, new_size, cap)
+        rerouted = (added_lines(current, new_content) or new_content) if is_index else new_content
+        return refuse(refusal, rerouted)
     except Exception:
         return None

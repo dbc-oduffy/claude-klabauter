@@ -3490,7 +3490,7 @@ def _invoke_op_token_indices(tokens: list) -> "Iterator[int]":
 #: derived from) -- split by whether the flag consumes a SEPARATE following
 #: token as its value. ``--repo`` and ``--params-file`` do; ``--dump-op-
 #: timeouts``, ``--bare``, and argparse's own ``-h``/``--help`` do not.
-_INVOKE_FLAGS_WITH_VALUE = frozenset({"--repo", "--params-file"})
+_INVOKE_FLAGS_WITH_VALUE = frozenset({"--repo", "--params-file", "--from-task-output"})
 _INVOKE_FLAGS_NO_VALUE = frozenset(
     {"--dump-op-timeouts", "--bare", "-h", "--help", "--allow-unstamped-dispatch", "--list", "--describe"}
 )

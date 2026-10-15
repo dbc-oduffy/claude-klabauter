@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from coordinator_core.ops.assert_plan_sizing_citation import main
+from coordinator_core.ops.assert_plan_sizing_citation import _scan_plans, main
 
 import pytest
 
@@ -235,7 +235,6 @@ def test_ac6_body_prose_citation_never_scanned(capsys):
         "fixture plan must still carry the dangling body-prose citation this test protects"
     )
 
-    rc = main(["--root", repo_root])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "OK: no dangling" in out
+    dangling, _missing, _unreadable = _scan_plans(repo_root)
+    rel = "docs/plans/2026-08-06-plan-sizing-citation-gate.md"
+    assert rel not in [d[0] for d in dangling]

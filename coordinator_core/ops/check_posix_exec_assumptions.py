@@ -1291,7 +1291,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             # `#!/bin/sh` script sourced by a bash cold-shell probe,
             # exec-bit-dependent, POSIX-only end to end, same shape as
             # `_REASON_CHMOD_EXEC_FOR_SH`'s sites elsewhere in this dict.
-            "coordinator_core/install/sandbox_check.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/orientation/regenerate_cache.py": _REASON_HASATTR_FCHMOD_FEATURE_GUARD,
             "coordinator_core/orientation/test_regenerate_cache.py": _REASON_CHMOD_RELATIVE_INVARIANT,
             "coordinator_core/warm/election.py": _REASON_POSIX_ONLY_MODULE_CROSS_FUNCTION_GAP,

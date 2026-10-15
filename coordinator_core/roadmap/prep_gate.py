@@ -113,6 +113,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -1711,6 +1712,50 @@ def _prime_exit(
     return _pass("declared")
 
 
+def _em_owned_exit_warnings(
+    plan_path: Path, text: str, fm: Dict[str, Any]
+) -> List[str]:
+    """Non-verdict warning when every row delivering the prime exit criterion is EM-owned.
+
+    Delivering rows are the open rows the criterion's statement or falsifier cites by id, else
+    every open row. A hands-off run performs none of ``EM_OWNED_REASONS``, so it would stop
+    after the dispatchable rows with the criterion untouched. Never raises, never changes a verdict."""
+    try:
+        from coordinator_core.ops.dispatch_emit.spine_read import (
+            EM_OWNED_REASONS,
+            _is_memo_send_row,
+            _is_operator_row,
+            read_spine,
+        )
+
+        raw = [r for r in raw_spine_rows(text) if isinstance(r, dict)]
+        # Cheap precheck: a spine with no EM-owned shape skips the second spine read.
+        if not any(
+            r.get("performer") == "em" or _is_operator_row(r) or _is_memo_send_row(r) for r in raw
+        ):
+            return []
+        exclusions: List[Dict[str, Any]] = []
+        rows = read_spine(plan_path, exclusions=exclusions)
+        skipped = {
+            e["id"]: e.get("reason") for e in exclusions if e.get("reason") != "disposition"
+        }
+        open_ids = [r.id for r in rows] + list(skipped)
+        criterion = fm.get("prime_exit_criterion")
+        blob = json.dumps(criterion, default=str) if isinstance(criterion, dict) else ""
+        cited = [
+            i for i in open_ids if re.search(rf"(?<![\w-]){re.escape(str(i))}(?![\w-])", blob)
+        ]
+        delivering = cited or open_ids
+        if delivering and all(skipped.get(i) in EM_OWNED_REASONS for i in delivering):
+            return [
+                "prime exit criterion rests only on EM-owned rows "
+                f"({', '.join(delivering)}); a hands-off run does not perform them"
+            ]
+    except Exception:  # noqa: BLE001 - a warning leg never fails the gate
+        return []
+    return []
+
+
 #: The plan schema this gate validates against, resolved off this module's own
 #: location for the reason `_UPGRADE_SCRIPT` is: it names the tree that actually
 #: answered, not whichever tree a caller's cwd happens to sit in.
@@ -2063,6 +2108,7 @@ def evaluate_plan(
 
         edge_root = repo_root if repo_root is not None else _repo_root_of(plan_path)
         prime_exit = _prime_exit(fm, repo_root, text)
+        prime_exit["warnings"] = _em_owned_exit_warnings(plan_path, text, fm)
         classes = {
             "SPINE": _spine(plan_path, text, repo_root),
             "CENSUS": _census(fm, edge_root),

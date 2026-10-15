@@ -1070,6 +1070,8 @@ _CEREMONY_PACKAGE_ALIASES = frozenset({
     # Ceremony-invoked outside the `ceremony.` prefix.
     "orientation.regenerate_cache",
     "review.snapshot_diff_and_head",
+    "close.background",
+    "close.review",
 })
 
 

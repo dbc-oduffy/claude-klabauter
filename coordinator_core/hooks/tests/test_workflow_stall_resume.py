@@ -75,7 +75,7 @@ def test_fresh_transcript_yields_nothing(tmp_path, tdir):
 
 def test_stopped_marker_yields_nothing(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"))
-    open(stall.stopped_marker_path(str(tdir), SID, "t1"), "w").close()
+    open(stall.stopped_marker_path(str(tdir), SID, "t1"), "w", encoding="utf-8").close()
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
@@ -118,7 +118,7 @@ def test_newest_record_per_run_wins(tmp_path, tdir):
     run_dir = _run(tmp_path, "r1")
     _record(tdir, run_dir, task="old", fired_at=NOW - 5000)
     _record(tdir, run_dir, task="new", fired_at=NOW - 4000)
-    open(stall.stopped_marker_path(str(tdir), SID, "old"), "w").close()
+    open(stall.stopped_marker_path(str(tdir), SID, "old"), "w", encoding="utf-8").close()
     text = mod.workflow_stall_resume_text(SID, "", NOW)
     assert 'TaskStop({"task_id": "new"})' in text
 

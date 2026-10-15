@@ -453,6 +453,35 @@ class TestOverCapStoreCanShrink:
         assert result is not None
 
 
+class TestOverCapNonGrowingEditLandsWithAdvisory:
+    def test_same_size_edit_of_overcap_body_lands_with_advisory(self, memory_dir):
+        target = memory_dir / "fat.md"
+        target.write_text("y" * 1000, encoding="utf-8")
+        result = guard.check(_edit_payload(str(target), old="y" * 10, new="z" * 10))
+        out = result["hookSpecificOutput"]
+        assert "permissionDecision" not in out
+        ctx = out["additionalContext"]
+        assert "1000B" in ctx and "800B" in ctx and "200B over" in ctx
+
+    def test_same_size_edit_of_overcap_index_lands_with_advisory(self, memory_dir):
+        target = memory_dir / "MEMORY.md"
+        target.write_bytes(("# Memory Index\n\n" + _rows(8)).encode("utf-8"))
+        size = target.stat().st_size
+        result = guard.check(_edit_payload(str(target), old="short", new="SHORT", replace_all=True))
+        out = result["hookSpecificOutput"]
+        assert "permissionDecision" not in out
+        assert f"{size}B" in out["additionalContext"] and "1000B" in out["additionalContext"]
+
+    def test_growing_overcap_body_still_denies_with_reroute(self, memory_dir, monkeypatch):
+        monkeypatch.setenv(_LEVEL_ENV, "strict")
+        target = memory_dir / "fat.md"
+        target.write_text("y" * 1000, encoding="utf-8")
+        result = guard.check(_edit_payload(str(target), old="y" * 10, new="y" * 11))
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "Saved as a lesson" in out["permissionDecisionReason"]
+
+
 class TestOverCapWriteReroutesToLesson:
     """At strict the refused content lands in state/lessons/ and the deny names it."""
 

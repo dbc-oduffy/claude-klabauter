@@ -100,7 +100,7 @@ def test_head_on_work_branch_is_head_mode(repo):
 def test_head_on_configured_day_branch_is_head_mode(repo):
     _set_ref(repo, "refs/heads/feature/x", _ref(repo, "refs/heads/main"))
     _set_head(repo, "ref: refs/heads/feature/x")
-    with open(repo / ".git" / "config", "a") as fh:
+    with open(repo / ".git" / "config", "a", encoding="utf-8") as fh:
         fh.write("[coordinator]\n\tdayBranch = feature/x\n")
     assert RL.resolve_receiver_landing(repo).mode == RL.MODE_HEAD
 

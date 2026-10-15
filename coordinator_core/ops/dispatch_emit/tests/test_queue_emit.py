@@ -188,14 +188,14 @@ def test_receipt_claimed_block_is_empty_without_claims(tmp_path):
     assert emission.receipt_extras["claimed"] == {"count": 0, "rows": []}
 
 
-def test_21_row_emit_at_standard_ceiling_admits_12_and_names_9(tmp_path):
+def test_21_row_emit_at_standard_ceiling_admits_16_and_names_5(tmp_path):
     emission = _emit(tmp_path, n_rows=21)
     not_admitted = emission.receipt_extras["not_admitted"]
     run_order = sorted(f"row{i}" for i in range(21))
-    assert not_admitted["count"] == 9
-    assert not_admitted["row_ids"] == run_order[12:]
-    assert not_admitted["arithmetic"]["admitted_count"] == 12
-    assert _batched_row_ids(emission.script) == run_order[:12]
+    assert not_admitted["count"] == 5
+    assert not_admitted["row_ids"] == run_order[16:]
+    assert not_admitted["arithmetic"]["admitted_count"] == 16
+    assert _batched_row_ids(emission.script) == run_order[:16]
 
 
 def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path):
@@ -366,7 +366,7 @@ def _run_900_row_perf(tmp_path, monkeypatch, profile_dir):
 
 def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeypatch):
     emission = _run_900_row_perf(tmp_path, monkeypatch, _FIXTURE_PROFILE_DIR)
-    assert emission.receipt_extras["not_admitted"]["count"] == 888
+    assert emission.receipt_extras["not_admitted"]["count"] == 884
 
 
 def test_synthetic_900_row_queue_fully_admitted_composes_all_rows_zero_spawn(tmp_path, monkeypatch):
@@ -574,17 +574,17 @@ def test_cli_where_without_queue_route_is_exit_usage(tmp_path):
 
 
 def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path):
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
+    for name in "abc":
+        (tmp_path / name).mkdir()
     plain = _emit(tmp_path / "a")
     haiku = _emit(tmp_path / "b", stage_models={"triage": "haiku"})
-    # verify-agent (test-runner), commit and review-fix-commit (git-commit-agent)
-    # are agent types pinned to haiku, so the override adds exactly the triage call.
+    sonnet = _emit(tmp_path / "c", stage_models={"triage": "sonnet"})
     pinned = plain.script.count("model: 'haiku'")
-    assert pinned == 3
-    assert haiku.script.count("model: 'haiku'") == pinned + 1
-    assert re.search(r"label: 'triage'[^\n]*?model: 'haiku'", haiku.script)
-    assert re.search(r"label: 'triage'[^\n]*?model: 'sonnet'", plain.script)
+    assert pinned == 7
+    assert haiku.script.count("model: 'haiku'") == pinned
+    assert sonnet.script.count("model: 'haiku'") == pinned - 1
+    assert re.search(r"label: 'triage'[^\n]*?model: 'haiku'", plain.script)
+    assert re.search(r"label: 'triage'[^\n]*?model: 'sonnet'", sonnet.script)
     argv = haiku.receipt_extras["reemit"]
     assert argv[argv.index("--stage-model") + 1] == "triage=haiku"
     assert "--stage-model" not in plain.receipt_extras["reemit"]

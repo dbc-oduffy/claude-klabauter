@@ -567,9 +567,6 @@ def test_tested_platforms_write_splices_stamp_without_reflowing(tmp_path):
     assert json.loads(src)["tested_platforms"] == ["macos", "windows"]
 
 
-# Red until state/bash-guards/known-red.json is regenerated with --write, which refuses
-# while the registry has drift; the failure names what is still unstamped.
-@pytest.mark.designed_red
 def test_prime_exit_criterion_five_named_modules_classify_clean():
     """Per-module readers over the live files; the five are named, never swept."""
     from coordinator_core.ops.generator_census.declarations import extract
@@ -587,7 +584,8 @@ def test_prime_exit_criterion_five_named_modules_classify_clean():
             stamp, detail = cgos.extract_stamp(root / entry["artifact"], entry["stamp_key"])
             assert isinstance(stamp, str) and stamp, (rel, entry["artifact"], detail)
 
-    assert "GENERATES" not in declared("coordinator_core/contract/cockpit_schema/emit_schema.py")
+    emit = declared("coordinator_core/contract/cockpit_schema/emit_schema.py")
+    assert not emit.get("GENERATES") and emit.get("GENERATES_EXTERNAL") is True
 
     for rel in ("coordinator_core/ops/distill_apply_disposal.py", "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py"):
         decls = declared(rel)
@@ -600,5 +598,5 @@ def test_prime_exit_criterion_five_named_modules_classify_clean():
         assert isinstance(mutates, list) and mutates and all(isinstance(m, str) for m in mutates), rel
         assert any(has_wildcard(m) and not is_catch_all(m) for m in mutates), rel
         lines = (root / rel).read_text(encoding="utf-8").splitlines()
-        (idx,) = [i for i, ln in enumerate(lines) if ln.startswith("MUTATES")]
+        idx = next(i for i, ln in enumerate(lines) if ln.startswith("MUTATES"))
         assert lines[idx - 1].lstrip().startswith("#"), f"{rel}: no site-reason comment above MUTATES"

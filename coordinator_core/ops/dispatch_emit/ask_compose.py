@@ -1626,7 +1626,8 @@ def compose_ask_script(
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
         "((_manifest.owed ?? []).length || (_manifest.gated ?? []).length "
         "? 'resume staged no dispatchable rows; its owed and withheld rows ride the returned owed and withheld lists' "
-        ": 'stage staged no rows'), sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
+        ": 'stage staged no rows'), sizing: _sizingRel, plan: _planRel, run_id: _runId, "
+        f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : {{}}) }}; }}"
     )
     b.append("  }")
 
@@ -1873,6 +1874,7 @@ def compose_ask_script(
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
         "owed: ((_manifest && !_manifest.error) ? (_manifest.owed ?? []) : []).map((o) => ({ id: o.id, reason: o.reason ?? '', detail: o.detail ?? '' })), "
+        f"owed_next_action: {_owed_handback_js(sizing_rel)} || null, "
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
@@ -1922,6 +1924,16 @@ def _refire_js(sizing_rel: Optional[str]) -> str:
     head, tail = fire_command(marker).split(json.dumps(marker))
     return (
         f"(_sizingRel ? {_lit(head)} + JSON.stringify(_sizingRel) + {_lit(tail)} : {_lit(fire_command(None))})"
+    )
+
+
+def _owed_handback_js(sizing_rel: Optional[str]) -> str:
+    """JS expression: names the EM-owned rows a hands-off run cannot perform and the refire that
+    resumes them, or '' when none are owed."""
+    return (
+        "(((_manifest && !_manifest.error ? _manifest.owed : null) ?? []).length "
+        "? 'Owed to the EM, not run: ' + _manifest.owed.map((o) => o.id).join(', ') "
+        f"+ '. Perform them, then refire: ' + {_refire_js(sizing_rel)} : '')"
     )
 
 

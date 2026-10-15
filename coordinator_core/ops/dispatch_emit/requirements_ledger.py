@@ -614,12 +614,17 @@ def _misrouted(row: Mapping, owed: str) -> Optional[str]:
 
 def judge(
     ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
-    gated: Optional[Iterable[str]] = None,
+    gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
     "post_commit_acts"?, "remaining"?, "root_read"?}]}`, read through `normalize_verdict`) against
     the live register. `open` lists every `not_met` row let through (never passed as met).
+
+    `operator` maps the manifest's `execution_mode: operator` plan-row ids to the command a person
+    runs. A `not_met` row whose `withheld_by` is one of them classifies `awaiting_operator`: it
+    passes, is listed open as `awaiting_operator <id>` with `row` and `command` keys.
+    A verdict id naming an operator plan row is ignored, like a gated one.
 
     `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
     nothing. A verdict id naming a gated chunk is a plan row, not a requirement: it is ignored,
@@ -642,8 +647,12 @@ def judge(
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
-        return {"pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}], "open": []}
+        return {
+            "pass": False, "failures": [{"id": None, "reason": "verdict carries no items list"}],
+            "open": [],
+        }
     gated_ids = set(gated or ())
+    operator = dict(operator or {})
     by_id: dict[str, Mapping] = {}
     failures: list[dict] = []
     open_rows: list[dict] = []
@@ -687,6 +696,11 @@ def judge(
             if isinstance(withheld, str) and withheld:
                 if withheld in gated_ids:
                     open_rows.append({"id": item.id, "reason": f"withheld_by {withheld}"})
+                elif withheld in operator:
+                    open_rows.append({
+                        "id": item.id, "reason": f"awaiting_operator {withheld}",
+                        "row": withheld, "command": operator[withheld],
+                    })
                 else:
                     failures.append({
                         "id": item.id,
@@ -700,7 +714,7 @@ def judge(
             else:
                 open_rows.append({"id": item.id, "reason": "non-essential"})
     withheld_ids = {w["id"] for w in ledger.withheld}
-    unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids)
+    unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator))
     failures.extend({"id": rid, "reason": "names no requirement row"} for rid in unknown)
     open_rows.extend(dict(w) for w in ledger.withheld)
     return {"pass": not failures, "failures": failures, "open": open_rows}

@@ -1088,14 +1088,19 @@ def _no_live_state_corpus_writes(request):
 
 
 @_pytest.fixture(autouse=True)
-def _redirect_live_session_hub(monkeypatch, tmp_path_factory):
-    """While a non-UUID `COORDINATOR_SESSION_ID` is ambient, any
-    `session.core.sessions_dir` resolution that lands on the REAL repo's hub is answered with a per-test tmp hub instead, so an ambient
-    `COORDINATOR_SESSION_ID` plus a cwd-derived root cannot mint live entries.
+def _redirect_live_session_hub(request, monkeypatch, tmp_path_factory):
+    """Any `session.core.sessions_dir` resolution that lands on the REAL repo's hub
+    is answered with a per-test tmp hub instead, so a cwd-derived root cannot mint
+    or append live entries whatever session id the test carries. A test marked
+    `real_home` is a read-only oracle against the live tree and keeps the real hub.
 
     Negative-spec: covers in-process `sessions_dir()` consumers only; code that
     composes `<root>/.git/coordinator-sessions` itself, and child processes,
     still reach the live hub and stay with `_no_new_live_session_hub_entries`."""
+    if request.node.get_closest_marker("real_home"):
+        yield
+        return
+
     from coordinator_core.session import core as _core
 
     original = _core._sessions_dir_resolve
@@ -1104,13 +1109,7 @@ def _redirect_live_session_hub(monkeypatch, tmp_path_factory):
 
     def _resolve(cwd):
         result = original(cwd)
-        sid = os.environ.get("COORDINATOR_SESSION_ID", "")
-        if (
-            result
-            and sid
-            and not _looks_like_a_harness_session_id(sid)
-            and os.path.normcase(os.path.abspath(result)) == live
-        ):
+        if result and os.path.normcase(os.path.abspath(result)) == live:
             if "hub" not in holder:
                 holder["hub"] = str(
                     tmp_path_factory.mktemp("redirected-live-hub") / "coordinator-sessions"
@@ -1144,6 +1143,56 @@ def _op_latency_never_appends_to_live_hub(monkeypatch):
 
     monkeypatch.setattr(_op_latency, "_append_line", _guarded)
     yield
+
+
+@_pytest.fixture(autouse=True)
+def _redirect_live_hub_from_common_dir_resolver(request, tmp_path_factory):
+    """Answer `claim_state._sessions_dir(<real repo .git>)` with a per-test tmp hub, and
+    fail the test when it wrote anything there.
+
+    `_redirect_live_session_hub` covers `session.core.sessions_dir`; this covers the
+    explicit-common-dir resolver (`reap`, `fleet._common`, `record_pickup` re-export it),
+    which a test handing it the live repo's `.git` would otherwise mint residue
+    (`s1`, `probe-*`, `sess-*`) into. Patches every already-imported namespace holding
+    the original function, not just its home module. `real_home` oracles keep the real hub."""
+    if request.node.get_closest_marker("real_home"):
+        yield
+        return
+
+    from coordinator_core import claim_state
+
+    original = claim_state._sessions_dir
+    live = os.path.normcase(os.path.abspath(_LIVE_HUB))
+    holder: dict = {}
+
+    def _resolve(common_dir):
+        result = original(common_dir)
+        if os.path.normcase(os.path.abspath(result)) == live:
+            if "hub" not in holder:
+                holder["hub"] = (
+                    tmp_path_factory.mktemp("redirected-common-dir-hub") / "coordinator-sessions"
+                )
+            return holder["hub"]
+        return result
+
+    patched = []
+    for mod_name, mod in list(sys.modules.items()):
+        if mod_name.startswith("coordinator_core") and getattr(mod, "_sessions_dir", None) is original:
+            mod._sessions_dir = _resolve
+            patched.append(mod)
+    try:
+        yield
+    finally:
+        for mod in patched:
+            mod._sessions_dir = original
+    hub = holder.get("hub")
+    if hub is not None and hub.is_dir():
+        entries = sorted(p.name for p in hub.iterdir())
+        _pytest.fail(
+            f"test wrote {entries!r} under the REAL session hub {_LIVE_HUB} via the "
+            "common-dir resolver. Point the code under test at a tmp_path repo.",
+            pytrace=False,
+        )
 
 
 _HUB_WRITE_EVENTS = ("os.remove", "os.rename", "os.link", "os.symlink", "shutil.copyfile")

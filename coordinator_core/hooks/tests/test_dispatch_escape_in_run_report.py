@@ -49,7 +49,7 @@ def _run(repo, session: str, first_line: str = "status: BLOCKED", report_age: fl
 
 
 def _reason() -> None:
-    with open(nd.dispatch_nudge_sentinel_path(SID), "w") as fh:
+    with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("conflicted merge\n")
 
 

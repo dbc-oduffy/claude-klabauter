@@ -330,3 +330,14 @@ class TestPurgeTestResidue:
 
         assert result["purged_test_residue"] == ["probe-y"]
         assert not (hub / "probe-y").exists()
+
+
+class TestLiveHubIsNeverResolvedByTests:
+
+    def test_common_dir_resolver_redirects_the_real_repo_hub(self):
+        real_git = Path(__file__).resolve().parents[4] / ".git"
+
+        resolved = Path(reap._sessions_dir(real_git))
+
+        assert resolved.parent != real_git
+        assert not resolved.exists()

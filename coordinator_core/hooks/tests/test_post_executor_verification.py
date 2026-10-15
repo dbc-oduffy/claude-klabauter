@@ -111,14 +111,14 @@ def _sidecar(repo, status: str) -> None:
 
     d = share_dir(str(repo), SID)
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "coordinator-executor.a1.md"), "w") as fh:
+    with open(os.path.join(d, "coordinator-executor.a1.md"), "w", encoding="utf-8") as fh:
         fh.write(f"---\nstatus: {status}\nagent_type: coordinator:executor\n---\n")
 
 
 def _armed_with_reason(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest a.py")) is None
-    with open(nd.dispatch_nudge_sentinel_path(SID), "w") as fh:
+    with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("need a wider run\n")
 
 
@@ -149,7 +149,7 @@ def test_reasoned_sentinel_allows_and_logs(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest a.py")) is None
     assert _denied(g.check(_bash(repo, "pytest a.py")))
-    with open(nd.dispatch_nudge_sentinel_path(SID), "w") as fh:
+    with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("need a wider run\n")
     _sidecar(repo, "blocked")
     assert g.check(_bash(repo, "pytest a.py")) is None
@@ -178,7 +178,7 @@ def test_scratch_md_write_allowed_after_executor(repo) -> None:
 
 def test_scratch_py_sentinel_allows_and_logs(repo) -> None:
     _executor_ran(repo)
-    with open(nd.dispatch_nudge_sentinel_path(SID), "w") as fh:
+    with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("one-off probe\n")
     _sidecar(repo, "blocked")
     assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"))) is None
@@ -188,7 +188,7 @@ def test_scratch_py_sentinel_allows_and_logs(repo) -> None:
 
 def test_free_first_run_does_not_spend_the_sentinel(repo) -> None:
     _executor_ran(repo)
-    with open(nd.dispatch_nudge_sentinel_path(SID), "w") as fh:
+    with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("saved for later\n")
     assert g.check(_bash(repo, "pytest a.py")) is None
     assert os.path.exists(nd.dispatch_nudge_sentinel_path(SID))

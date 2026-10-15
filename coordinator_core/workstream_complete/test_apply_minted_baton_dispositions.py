@@ -80,3 +80,27 @@ def test_close_tail_claims_minted_batons_before_resolving(tmp_path, monkeypatch)
     _apply._run_close_commit_tail(tmp_path, decisions, "sid-1")
 
     assert seen and all(s == ["mine.md"] for s in seen)
+
+
+def test_real_store_claim_is_visible_to_the_held_read_and_not_reclaimed(tmp_path, monkeypatch):
+    from coordinator_core.pickup_assemble.tests._git_harness import init_repo
+
+    init_repo(tmp_path)
+    _baton(tmp_path, "mine.md", "sid-1")
+    cdir = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims" / "mine.md"
+    cdir.mkdir(parents=True)
+    (cdir / "session_id").write_text("sid-1\n", encoding="utf-8")
+    calls: list = []
+    monkeypatch.setattr(claims, "claim_handoff", lambda *a, **k: calls.append(a) or True)
+    decisions = {"handoff_dispositions": {"mine.md": {"disposition": "shipped", "shipped_in": "deadbeef"}}}
+
+    assert directives_commit_tail._held_handoff_basenames(tmp_path, "sid-1") == ["mine.md"]
+    assert _apply._claim_minted_batons(tmp_path, "sid-1", decisions) == []
+    assert calls == []
+
+
+def test_reapply_after_ship_stamp_drops_the_shipped_disposition():
+    """A re-apply after the ship stamp landed does not re-stamp or refuse."""
+    decisions = {"handoff_dispositions": {"mine.md": {"disposition": "shipped"}, "o.md": {"disposition": "closed"}}}
+    out = _apply._undischarged_ship_dispositions(decisions, {"d-ship-consumed-handoff:mine.md": "x"})
+    assert list(out["handoff_dispositions"]) == ["o.md"]

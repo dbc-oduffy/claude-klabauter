@@ -26,7 +26,7 @@ def _base(repo):
 def _mkarchive(repo, date, content="x"):
     d = os.path.join(_base(repo), ".archive", f"{SID}-{date}")
     os.makedirs(d)
-    with open(os.path.join(d, "marker.txt"), "w") as fh:
+    with open(os.path.join(d, "marker.txt"), "w", encoding="utf-8") as fh:
         fh.write(content)
     return d
 
@@ -46,20 +46,20 @@ def test_picks_latest_of_multiple(repo):
     _mkarchive(repo, "2026-09-30", "old")
     _mkarchive(repo, "2026-10-02", "new")
     assert scope.unarchive_on_resume(SID, str(repo))
-    with open(os.path.join(_live(repo), "marker.txt")) as fh:
+    with open(os.path.join(_live(repo), "marker.txt"), encoding="utf-8") as fh:
         assert fh.read() == "new"
     assert os.listdir(os.path.join(_base(repo), ".archive")) == [f"{SID}-2026-09-30"]
 
 
 def test_merges_into_live_dir_live_wins(repo):
     arch = _mkarchive(repo, "2026-10-01", "archived")
-    with open(os.path.join(arch, "dispatched-agents.txt"), "w") as fh:
+    with open(os.path.join(arch, "dispatched-agents.txt"), "w", encoding="utf-8") as fh:
         fh.write("ledger")
     os.makedirs(_live(repo))
-    with open(os.path.join(_live(repo), "marker.txt"), "w") as fh:
+    with open(os.path.join(_live(repo), "marker.txt"), "w", encoding="utf-8") as fh:
         fh.write("live")
     assert scope.unarchive_on_resume(SID, str(repo)) is True
-    with open(os.path.join(_live(repo), "marker.txt")) as fh:
+    with open(os.path.join(_live(repo), "marker.txt"), encoding="utf-8") as fh:
         assert fh.read() == "live"
     assert os.path.isfile(os.path.join(_live(repo), "dispatched-agents.txt"))
     assert os.listdir(arch) == ["marker.txt"]
@@ -105,7 +105,7 @@ def test_end_to_end_guard_rearms(repo, monkeypatch):
         lambda sid: None,
     )
     os.makedirs(_live(repo))
-    with open(os.path.join(_live(repo), "dispatched-agents.txt"), "w") as fh:
+    with open(os.path.join(_live(repo), "dispatched-agents.txt"), "w", encoding="utf-8") as fh:
         fh.write("a1\tt\tcoordinator:executor\n")
     assert g.executor_reported({}, SID, str(repo)) is True
     assert scope.archive(SID, str(repo)) is True

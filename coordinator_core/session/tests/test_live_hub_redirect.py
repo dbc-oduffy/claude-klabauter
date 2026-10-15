@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from coordinator_core import conftest as _cc
 from coordinator_core.session import core
 
@@ -24,7 +26,27 @@ def test_env_session_id_with_live_cwd_writes_under_tmp(monkeypatch, tmp_path):
     assert entry.is_dir()
 
 
+@pytest.mark.real_home
+def test_real_home_marked_test_keeps_the_real_live_hub(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    live_root = Path(_cc._LIVE_HUB).parent.parent
+    core.reset_sessions_dir_cache()
+    hub = core.sessions_dir(str(live_root))
+    assert os.path.normcase(os.path.abspath(hub)) == os.path.normcase(
+        os.path.abspath(_cc._LIVE_HUB)
+    )
+
+
 def test_non_live_repo_resolution_is_untouched(tmp_path):
     (tmp_path / ".git").mkdir()
     core.reset_sessions_dir_cache()
     assert Path(core.sessions_dir(str(tmp_path))) == tmp_path / ".git" / "coordinator-sessions"
+
+
+def test_live_resolution_is_redirected_without_an_ambient_session_id(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    live_root = Path(_cc._LIVE_HUB).parent.parent
+    hub = core.sessions_dir(str(live_root))
+    assert os.path.normcase(os.path.abspath(hub)) != os.path.normcase(
+        os.path.abspath(_cc._LIVE_HUB)
+    )

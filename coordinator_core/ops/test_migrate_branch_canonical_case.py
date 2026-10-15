@@ -119,7 +119,7 @@ def test_mixed_case_branch_with_existing_canonical_sibling_is_skipped_not_delete
     _git(repo, "pack-refs", "--all")
     sha = _git(repo, "rev-parse", "work/dup").stdout.strip()
     packed_refs = repo / ".git" / "packed-refs"
-    with packed_refs.open("a", newline="") as f:
+    with packed_refs.open("a", newline="", encoding="utf-8") as f:
         f.write(f"{sha} refs/heads/work/DUP\n")
 
     rc, out, err = _run(repo, [], monkeypatch, capsys)
@@ -351,7 +351,7 @@ def _remote_cleanup_spawns(monkeypatch, n):
 
     monkeypatch.setattr(mbcc, "_git", fake_git)
     pairs = [(f"work/B{i}", f"work/b{i}") for i in range(n)]
-    mbcc._remote_cleanup(".", pairs, open(os.devnull, "w"))
+    mbcc._remote_cleanup(".", pairs, open(os.devnull, "w", encoding="utf-8"))
     return len(calls)
 
 

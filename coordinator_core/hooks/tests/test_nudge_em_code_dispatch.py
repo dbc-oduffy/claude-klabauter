@@ -316,14 +316,14 @@ def test_autonomous_allowed(monkeypatch) -> None:
 
 
 def test_empty_sentinel_still_advises(monkeypatch) -> None:
-    open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w").close()
+    open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w", encoding="utf-8").close()
     assert _is_advisory(op(_payload()))
 
 
 def _repo_with_reason(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
-    with open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w") as fh:
+    with open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w", encoding="utf-8") as fh:
         fh.write("hotfix, executor unavailable\n")
     p = _payload()
     p["cwd"] = str(repo)
@@ -335,7 +335,7 @@ def _sidecar(repo, status: str, agent: str = "coordinator:executor") -> None:
 
     d = share_dir(str(repo), "sess-sizing-1")
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "coordinator-executor.a1.md"), "w") as fh:
+    with open(os.path.join(d, "coordinator-executor.a1.md"), "w", encoding="utf-8") as fh:
         fh.write(f"---\nstatus: {status}\nagent_type: {agent}\n---\n")
 
 
