@@ -12,8 +12,8 @@ bar and its own refusal surface; hanging it off `percolate-push` would put
 the act that protects consumers on the same code path as the routine that
 runs every round.
 
-REFUSAL BAR — promotion refuses, naming which predicate failed, unless ALL
-five hold:
+REFUSAL BAR — a PM-invoked promotion refuses, naming which predicate
+failed, unless predicates 1-4 hold. The PM's invocation is the only trigger.
   1. The mirror dest status is readable and its branch has an upstream
      (`percolate-push.py::_check_dest_state`; uncommitted files never
      refuse, DR-390).
@@ -25,17 +25,7 @@ five hold:
      option (docs/reference/klabauter-release-channels.md § "One-clone
      topology") depends on `main` never diverging from what `candidate`
      already contains.
-  4. The cross-machine observation predicate (C6). C6 investigated and
-     found no existing record of true cross-machine observation on this
-     box (see `_check_cross_machine_observed`'s docstring for the
-     candidates evaluated and why each did not qualify). It implements
-     the weakest honest fallback instead — an elapsed-soak-time floor
-     since the candidate ref's tip commit — and this half of the bar is
-     declared UNENFORCED in
-     docs/reference/klabauter-release-channels.md § "Promotion evidence
-     bar". It does not invent an operator-assertion predicate and does
-     not pass vacuously.
-  5. The candidate tip's `[source-head <hex>]` stamp names a source commit
+  4. The candidate tip's `[source-head <hex>]` stamp names a source commit
      whose subject does not start with `WIP`. A committed-fact check at
      promotion (DR-390 keeps publish itself from refusing on source state);
      an unparseable stamp or unresolvable sha fails CLOSED.
@@ -48,18 +38,12 @@ uses for a sibling hyphenated entrypoint) rather than copied.
 
 The CLI stays dry-run by default. A bare invocation (`klabauter-promote
 <target>` with no `--confirm`) evaluates every predicate against the
-`candidate` tip (6h soak floor), reports pass/fail for each, and pushes
+`candidate` tip, reports pass/fail for each, and pushes
 nothing — promotion moves bits onto a PUBLIC remote and is not reversible
 for anyone who has already fetched. Only `--confirm` performs the
 fast-forward push of `main`.
 
-`promote_candidate(confirm=True, unattended=True)` is the unattended
-caller's entry (percolate-round; DR-314 as amended by the PM ruling of
-2026-10-13). It promotes the newest commit `origin/candidate` pointed at
->= 72h ago, read off the tracking ref's reflog, never the tip. Predicates
-1, 2 are dest-/target-wide; 3 and 5 and the 72h soak (predicate 4) are
-evaluated on the chosen commit. The function prints nothing; callers
-render `PromotionOutcome`.
+`promote_candidate` prints nothing; callers render `PromotionOutcome`.
 
 Negative-spec (do not restore any of this as a "fix"):
   - Does NOT merge, rebase, or otherwise synthesize a new commit onto
@@ -68,29 +52,25 @@ Negative-spec (do not restore any of this as a "fix"):
   - Does NOT invoke `gh` — promotion is a plain `git push` of a
     fast-forward ref update, not a PR workflow; `percolate-push.py`'s PR
     leg is unrelated to this module.
-  - Does NOT treat an absent/unparseable cross-machine record as "not yet
-    observed, so allow" — predicate 4 fails CLOSED, same as predicates 1
-    and 2 fail closed in `percolate-push.py`.
+  - Does NOT gate on elapsed time - promotion timing is the PM's call
+    (DR-314, PM ruling 2026-10-15); do not restore a soak floor as a fix.
 
 Usage:
     klabauter-promote.py <target> [--percolate-root <path>] [--confirm]
 
 Exit codes:
-    0 — dry-run: predicates 1-3 and 5 enforced and predicate 4's soak-floor
-        proxy (cross-machine half UNENFORCED) all passed (nothing pushed),
+    0 — dry-run: predicates 1-4 all passed (nothing pushed),
         or `--confirm`: the fast-forward push of `main` succeeded.
     1 — `--confirm` and the push failed (forwarded git exit code), or the
         default-branch resolution needed to name `main` failed.
     2 — usage error (bad argv, target not resolvable), or refused because
-        one or more of the five predicates failed.
+        one or more of predicates 1-4 failed.
 """
 import argparse
 import importlib.util
 import re
 import sys
-import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -198,139 +178,25 @@ def _check_fast_forward(dest: str, candidate_branch: str, main_branch: str) -> O
     )
 
 
-_CROSS_MACHINE_SOAK_FLOOR_SECONDS = 6 * 60 * 60
-# PM ruling 2026-10-13 (sizing pm_resolution.unattended_promotion): automatic
-# promotion may run after 72h of soak on origin/candidate.
-_UNATTENDED_SOAK_FLOOR_SECONDS = 72 * 60 * 60
-_UNATTENDED_GIT_TIMEOUT_SECONDS = 30.0
-_UNATTENDED_PUSH_TIMEOUT_SECONDS = 120.0
-
-
-def _check_cross_machine_observed(dest: str, target: str) -> Optional[str]:
-    """Predicate 4 (C6) — the candidate ref has been observed by at least
-    one machine other than the publishing one.
-
-    INVESTIGATION VERDICT (C6, 2026-08-15): no suitable existing record
-    was found. Candidates evaluated, Tier 1-3 only:
-
-      - `coordinator/bin/percolate-liveops-preflight.py`
-        (`_run` in that module) — the strongest candidate per the C6 row
-        and eng-director finding 6. Read and run live: it enumerates
-        `repos.*` from THIS machine's own machine-local registry and
-        discriminates sessions that resolve the published engine from
-        engine-working sessions, all on the invoking box. It is a live,
-        unpersisted, single-machine census — it has no notion of another
-        machine at all, let alone whether a given git ref has been
-        fetched or checked out there. Repo-diversity on one box (example-retrieval-repo,
-        example-cockpit-repo, etc., all consuming the published engine here) is
-        NOT machine-diversity, and this function does not relabel it as
-        such.
-      - A health ledger (`coordinator_core/ops/*health_ledger*`) — tracks
-        goal/KR status, not git-ref observation.
-      - A machine-local provenance stamp (`coordinator/bin/lib/provenance.py`)
-        — stamps generator/record provenance (who/what produced a document),
-        not "which machine has this ref".
-      - `coordinator_core.machine_resolver.compute_machine()` — resolves
-        THIS machine's own identity for local use; there is no registry
-        anywhere that records "machine X has observed ref Y".
-      - The engine's own resolution banner
-        (`_resolve_published_engine`/session-boot banner) — reports what a
-        session resolved locally; nothing publishes or aggregates that
-        cross-machine.
-
-    So: no record of true cross-machine observation exists on this box.
-    Per the C6 row's fallback instruction, this implements the WEAKEST
-    HONEST predicate instead — an elapsed-soak-time floor since the
-    candidate ref's tip commit was made
-    (`_CROSS_MACHINE_SOAK_FLOOR_SECONDS`, 6h, an EM first-guess in the
-    same "lick your finger" register as C14's thresholds) — and this half
-    of the evidence bar is documented as UNENFORCED in
-    docs/reference/klabauter-release-channels.md § "Promotion evidence
-    bar", which restates AC4 as three enforced predicates plus one
-    declared-unenforced rather than reading stronger than it binds. A
-    dated `state/bug-backlog/` entry names what a real implementation
-    would need (a registry that records, per candidate ref sha, which
-    machines have fetched/checked it out).
-
-    NEGATIVE SPEC: accepts no operator assertion (only a cited PM ruling, at
-    the caller, waives it), and fails
-    CLOSED (refuses) on any git error rather than guessing the age.
-    """
-    _bootstrap_engine()
-    result = _run(
-        ["git", "-C", dest, "log", "-1", "--format=%cI", _CANDIDATE_BRANCH]
-    )
-    if result.returncode != 0:
-        return (
-            "klabauter-promote: predicate 4 (cross-machine observation, "
-            "soak-floor proxy — UNENFORCED cross-machine half, see "
-            "docs/reference/klabauter-release-channels.md § 'Promotion "
-            "evidence bar') could not be evaluated — `git -C "
-            f"{dest} log -1 --format=%cI {_CANDIDATE_BRANCH}` exited "
-            f"{result.returncode} rather than 0. Refusing rather than "
-            "guessing the candidate ref's age.\n" + (result.stderr or "").strip()
-        )
-
-    committer_date_raw = (result.stdout or "").strip()
-    try:
-        committer_date = datetime.fromisoformat(committer_date_raw)
-    except ValueError:
-        return (
-            "klabauter-promote: predicate 4 (cross-machine observation, "
-            "soak-floor proxy — UNENFORCED cross-machine half) could not "
-            f"parse the candidate ref's committer date {committer_date_raw!r}. "
-            "Refusing rather than guessing the candidate ref's age."
-        )
-
-    now = datetime.now(committer_date.tzinfo) if committer_date.tzinfo else datetime.utcnow()
-    elapsed_seconds = (now - committer_date).total_seconds()
-    if elapsed_seconds >= _CROSS_MACHINE_SOAK_FLOOR_SECONDS:
-        return None
-
-    floor_hours = _CROSS_MACHINE_SOAK_FLOOR_SECONDS / 3600
-    elapsed_hours = elapsed_seconds / 3600
-    return (
-        "klabauter-promote: predicate 4 (cross-machine observation) FAILED "
-        "— no record of true cross-machine observation exists (C6 "
-        "investigation found none; see docs/reference/"
-        "klabauter-release-channels.md § 'Promotion evidence bar', item 4, "
-        "declared UNENFORCED). Checking the weakest honest proxy instead: "
-        f"an elapsed-soak-time floor of {floor_hours:g}h since the "
-        f"candidate ref's tip commit ({committer_date_raw}). Only "
-        f"{elapsed_hours:.2f}h have elapsed — refusing."
-    )
-
-
 _SOURCE_HEAD_STAMP_RE = re.compile(r"\[source-head ([0-9a-f]{7,40})\]\s*$")
 
 
 def _check_source_head_not_wip(dest: str, percolate_root: str) -> Optional[str]:
-    """Predicate 5 — the source commit the candidate was cut from is not a
+    """Predicate 4 — the source commit the candidate was cut from is not a
     WIP commit. Reads the `[source-head <hex>]` stamp off the candidate tip
     subject and resolves it in the percolate root. Fails CLOSED on an
     unparseable stamp or an unresolvable sha.
     """
     _bootstrap_engine()
+    prefix = "klabauter-promote: predicate 4 (source-head not WIP)"
     tip = _run(["git", "-C", dest, "log", "-1", "--format=%s", _CANDIDATE_BRANCH])
     if tip.returncode != 0:
         return (
-            f"{_PREDICATE_5_PREFIX} could not be evaluated — reading the candidate tip "
+            f"{prefix} could not be evaluated — reading the candidate tip "
             f"subject in {dest} exited {tip.returncode}. Refusing.\n"
             + (tip.stderr or "").strip()
         )
-    return _source_head_refusal((tip.stdout or "").strip(), percolate_root)
-
-
-_PREDICATE_5_PREFIX = "klabauter-promote: predicate 5 (source-head not WIP)"
-
-
-def _source_head_refusal(
-    subject: str, percolate_root: str, *, timeout: Optional[float] = None,
-) -> Optional[str]:
-    """Predicate 5 on a candidate commit subject: parse the stamp, resolve it
-    in the percolate root, refuse a WIP source. Fails CLOSED."""
-    _bootstrap_engine()
-    prefix = _PREDICATE_5_PREFIX
+    subject = (tip.stdout or "").strip()
     match = _SOURCE_HEAD_STAMP_RE.search(subject)
     if match is None:
         return (
@@ -339,13 +205,7 @@ def _source_head_refusal(
             "Refusing."
         )
     sha = match.group(1)
-    try:
-        src = _run(
-            ["git", "-C", percolate_root, "log", "-1", "--format=%s", f"{sha}^{{commit}}"],
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return f"{prefix} could not be evaluated — resolving source-head {sha} timed out. Refusing."
+    src = _run(["git", "-C", percolate_root, "log", "-1", "--format=%s", f"{sha}^{{commit}}"])
     if src.returncode != 0:
         return (
             f"{prefix} could not be evaluated — source-head {sha} does not "
@@ -388,13 +248,9 @@ def _wrong_channel_refusal(dest: str, branch_head: Optional[str], candidate_bran
 
 def _evaluate_bar(
     dest: str, target: str, percolate_root: str, candidate_branch: str, main_branch: str,
-    pm_soak_override: str = "",
-    soak_waived_by: str = "",
-) -> Tuple[List[str], str]:
-    """Returns (refusals, waiver_notice); the notice is empty unless
-    predicate 4 yielded to a PM ruling. Prints nothing."""
+) -> List[str]:
+    """Returns the refusals (predicates 1-4). Prints nothing."""
     _bootstrap_engine()
-    waiver_notice = ""
 
     refusals, dest_ok, branch_head = _dest_and_marker_refusals(dest, target, percolate_root)
 
@@ -406,315 +262,69 @@ def _evaluate_bar(
             if ff_refusal:
                 refusals.append(ff_refusal)
 
-    cross_machine_refusal = _check_cross_machine_observed(dest, target)
-    if cross_machine_refusal and pm_soak_override:
-        # Predicate 4 is the one declared UNENFORCED (a soak-time proxy); only it
-        # yields to a PM ruling, and the ruling's words are printed, never implied. A waiver a
-        # delegate grants names the delegate, so the PM is never credited with a call they did not make.
-        if soak_waived_by:
-            waiver_notice = (
-                f"klabauter-promote: predicate 4 waived by {soak_waived_by} under the PM's delegation: "
-                f"{pm_soak_override!r}"
-            )
-        else:
-            waiver_notice = f"klabauter-promote: predicate 4 waived by PM ruling: {pm_soak_override!r}"
-        cross_machine_refusal = None
-    if cross_machine_refusal:
-        refusals.append(f"klabauter-promote: predicate 4 (cross-machine observation) FAILED —\n{cross_machine_refusal}")
-
     wip_refusal = _check_source_head_not_wip(dest, percolate_root)
     if wip_refusal:
         refusals.append(wip_refusal)
 
-    return refusals, waiver_notice
+    return refusals
 
 
 @dataclass(frozen=True)
 class PromotionOutcome:
     """Result of `promote_candidate`. `message` is the line the CLI prints
-    for this outcome (stdout on a pass, stderr otherwise). `waiver_notice`
-    and `followup_warning` are separate stderr lines the CLI also prints."""
+    for this outcome (stdout on a pass, stderr otherwise). `followup_warning`
+    is a separate stderr line the CLI also prints."""
 
     promoted: bool
     refusals: Tuple[str, ...]
-    nothing_to_promote: bool
     push_failed: bool
     main_branch: Optional[str]
     promoted_sha: Optional[str]
     message: str
-    waiver_notice: str = ""
     followup_warning: str = ""
 
 
-@dataclass(frozen=True)
-class SoakedCommit:
-    sha: str
-    seen_at: str
-    subject: str
-
-
-def _predicate_4_unattended(detail: str) -> str:
-    return f"klabauter-promote: predicate 4 (cross-machine observation, 72h soak) FAILED — {detail}"
-
-
-def _select_soaked_candidate(
-    dest: str, *, floor_seconds: int,
-) -> Tuple[Optional[SoakedCommit], Optional[str]]:
-    """The newest state `origin/candidate` pointed at >= floor_seconds ago,
-    judged by the tracking ref's reflog entry time (not the commit date).
-    One git spawn; fails CLOSED as a predicate-4 refusal."""
-    _bootstrap_engine()
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=floor_seconds)).replace(microsecond=0)
-    floor_hours = floor_seconds / 3600
-    try:
-        result = _run(
-            [
-                "git", "-C", dest, "log", "-g", "-n", "1",
-                f"--until={cutoff.isoformat()}", "--date=iso-strict",
-                "--format=%H%x00%gd%x00%s", f"refs/remotes/origin/{_CANDIDATE_BRANCH}",
-            ],
-            timeout=_UNATTENDED_GIT_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return None, _predicate_4_unattended(
-            f"the reflog read of origin/{_CANDIDATE_BRANCH} in {dest} timed out. Refusing."
-        )
-    if result.returncode != 0:
-        return None, _predicate_4_unattended(
-            f"reading the origin/{_CANDIDATE_BRANCH} reflog in {dest} exited "
-            f"{result.returncode}. Refusing.\n" + (result.stderr or "").strip()
-        )
-    line = (result.stdout or "").strip("\r\n")
-    if not line.strip():
-        return None, _predicate_4_unattended(
-            f"this clone's origin/{_CANDIDATE_BRANCH} reflog holds no entry "
-            f"{floor_hours:g}h old or older, so no candidate state has soaked "
-            f"for the {floor_hours:g}h floor. Refusing."
-        )
-    parts = line.split("\0", 2)
-    if len(parts) != 3 or not re.fullmatch(r"[0-9a-f]{40,64}", parts[0]):
-        return None, _predicate_4_unattended(
-            f"could not parse the origin/{_CANDIDATE_BRANCH} reflog line {line!r}. Refusing."
-        )
-    return SoakedCommit(sha=parts[0], seen_at=parts[1], subject=parts[2].strip()), None
-
-
-def _unpromoted_span(
-    dest: str, main_branch: str, sha: str,
-) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
-    _bootstrap_engine()
-    prefix = "klabauter-promote: predicate 3 (fast-forward)"
-    try:
-        result = _run(
-            [
-                "git", "-C", dest, "rev-list", "--left-right", "--count",
-                f"refs/remotes/origin/{main_branch}...{sha}",
-            ],
-            timeout=_UNATTENDED_GIT_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return None, f"{prefix} could not be evaluated — `git rev-list` in {dest} timed out. Refusing."
-    if result.returncode != 0:
-        return None, (
-            f"{prefix} could not be evaluated — `git rev-list --left-right --count` in {dest} "
-            f"exited {result.returncode}. Refusing.\n" + (result.stderr or "").strip()
-        )
-    fields = (result.stdout or "").split()
-    if len(fields) != 2 or not all(f.isdigit() for f in fields):
-        return None, (
-            f"{prefix} could not be evaluated — unparseable rev-list count "
-            f"{(result.stdout or '').strip()!r} in {dest}. Refusing."
-        )
-    return (int(fields[0]), int(fields[1])), None
-
-
-def _check_still_on_candidate(dest: str, sha: str) -> Optional[str]:
-    _bootstrap_engine()
-    prefix = "klabauter-promote: predicate 3 (fast-forward)"
-    try:
-        result = _run(
-            ["git", "-C", dest, "merge-base", "--is-ancestor", sha, "HEAD"],
-            timeout=_UNATTENDED_GIT_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return f"{prefix} could not be evaluated — `git merge-base --is-ancestor` in {dest} timed out. Refusing."
-    if result.returncode == 0:
-        return None
-    if result.returncode == 1:
-        return (
-            f"{prefix} FAILED — soaked commit {sha[:12]} is no longer an ancestor of "
-            f"'{_CANDIDATE_BRANCH}' in {dest} (candidate was rewritten). Refusing: "
-            "promoting it would put 'main' outside 'candidate'."
-        )
-    return (
-        f"{prefix} could not be evaluated — `git merge-base --is-ancestor {sha[:12]} HEAD` in "
-        f"{dest} exited {result.returncode}. Refusing.\n" + (result.stderr or "").strip()
-    )
-
-
 def _refused(
-    refusals: List[str], target: str, main_branch: Optional[str], waiver_notice: str = "",
+    refusals: List[str], target: str, main_branch: Optional[str],
 ) -> PromotionOutcome:
     return PromotionOutcome(
-        promoted=False, refusals=tuple(refusals), nothing_to_promote=False, push_failed=False,
+        promoted=False, refusals=tuple(refusals), push_failed=False,
         main_branch=main_branch, promoted_sha=None,
         message=(
             f"klabauter-promote: refusing to promote '{target}' — "
-            f"{len(refusals)} of 5 evidence-bar predicate(s) failed."
+            f"{len(refusals)} of 4 evidence-bar predicate(s) failed."
         ),
-        waiver_notice=waiver_notice,
     )
 
 
-def _promote_unattended(
-    dest: str, target: str, percolate_root: str, main_branch: str, confirm: bool,
+def promote_candidate(
+    dest: str, target: str, percolate_root: str, *, confirm: bool,
 ) -> PromotionOutcome:
-    soaked, select_refusal = _select_soaked_candidate(
-        dest, floor_seconds=_UNATTENDED_SOAK_FLOOR_SECONDS,
-    )
-    if soaked is None:
-        return _refused([select_refusal or ""], target, main_branch)
+    """Evaluate predicates 1-4 on the `candidate` tip and, with `confirm`,
+    fast-forward `main`. Prints nothing."""
+    _bootstrap_engine()
 
-    span, span_refusal = _unpromoted_span(dest, main_branch, soaked.sha)
-    if span is not None and span[1] == 0:
+    main_branch, default_branch_refusal = _resolve_default_branch(dest)
+    if default_branch_refusal:
         return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=True, push_failed=False,
-            main_branch=main_branch, promoted_sha=None,
-            message=(
-                f"klabauter-promote: nothing to promote for '{target}' — the {_UNATTENDED_SOAK_FLOOR_SECONDS // 3600}h-soaked "
-                f"state {soaked.sha[:12]} is already on '{main_branch}'."
-            ),
+            promoted=False, refusals=(), push_failed=False,
+            main_branch=None, promoted_sha=None, message=default_branch_refusal,
         )
 
-    refusals, dest_ok, branch_head = _dest_and_marker_refusals(dest, target, percolate_root)
-
-    if span_refusal:
-        refusals.append(span_refusal)
-    if dest_ok:
-        if branch_head != _CANDIDATE_BRANCH:
-            refusals.append(_wrong_channel_refusal(dest, branch_head, _CANDIDATE_BRANCH))
-        else:
-            if span is not None and span[0] != 0:
-                refusals.append(
-                    f"klabauter-promote: predicate 3 (fast-forward) FAILED — '{main_branch}' holds "
-                    f"{span[0]} commit(s) the soaked commit {soaked.sha[:12]} lacks. Refusing: a "
-                    "non-fast-forward promotion would need a merge commit, which is never performed here."
-                )
-            still_refusal = _check_still_on_candidate(dest, soaked.sha)
-            if still_refusal:
-                refusals.append(still_refusal)
-
-    wip_refusal = _source_head_refusal(
-        soaked.subject, percolate_root, timeout=_UNATTENDED_GIT_TIMEOUT_SECONDS,
-    )
-    if wip_refusal:
-        refusals.append(wip_refusal)
+    refusals = _evaluate_bar(dest, target, percolate_root, _CANDIDATE_BRANCH, main_branch)
     if refusals:
         return _refused(refusals, target, main_branch)
 
     if not confirm:
         return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=False, push_failed=False,
-            main_branch=main_branch, promoted_sha=soaked.sha,
-            message=(
-                f"klabauter-promote: DRY RUN — the evidence bar held for '{target}' at soaked commit "
-                f"{soaked.sha[:12]} (seen {soaked.seen_at}). Nothing was pushed."
-            ),
-        )
-
-    try:
-        push = _run(
-            [
-                "git", "-C", dest, "-c", "credential.interactive=never",
-                "push", "origin", f"{soaked.sha}:refs/heads/{main_branch}",
-            ],
-            timeout=_UNATTENDED_PUSH_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=False, push_failed=True,
-            main_branch=main_branch, promoted_sha=None,
-            message=f"klabauter-promote: push of {soaked.sha[:12]} to '{main_branch}' timed out.",
-        )
-    if push.returncode != 0:
-        return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=False, push_failed=True,
-            main_branch=main_branch, promoted_sha=None,
-            message=(push.stderr or push.stdout or "").strip() or "klabauter-promote: push failed.",
-        )
-
-    warning = ""
-    try:
-        local = _run(
-            ["git", "-C", dest, "fetch", ".", f"refs/remotes/origin/{main_branch}:refs/heads/{main_branch}"],
-            timeout=_UNATTENDED_GIT_TIMEOUT_SECONDS,
-        )
-        if local.returncode != 0:
-            warning = (local.stderr or local.stdout or "").strip() or f"exited {local.returncode}"
-    except subprocess.TimeoutExpired:
-        warning = "timed out"
-    if warning:
-        warning = (
-            f"klabauter-promote: remote '{main_branch}' promoted; local '{main_branch}' not "
-            f"fast-forwarded: {warning}"
-        )
-    return PromotionOutcome(
-        promoted=True, refusals=(), nothing_to_promote=False, push_failed=False,
-        main_branch=main_branch, promoted_sha=soaked.sha,
-        message=(
-            f"klabauter-promote: promoted {soaked.sha[:12]} (candidate state seen {soaked.seen_at}) onto "
-            f"'{main_branch}' for target '{target}' (fast-forward push)."
-        ),
-        followup_warning=warning,
-    )
-
-
-def promote_candidate(
-    dest: str, target: str, percolate_root: str, *,
-    confirm: bool,
-    unattended: bool = False,
-    pm_soak_override: str = "",
-    soak_waived_by: str = "",
-) -> PromotionOutcome:
-    """Evaluate the five-predicate bar and, with `confirm`, fast-forward
-    `main`. Manual (`unattended=False`): promotes the `candidate` tip behind
-    the 6h soak floor. Unattended: promotes the newest 72h-soaked
-    `origin/candidate` state; `pm_soak_override` is refused with ValueError.
-    Prints nothing."""
-    _bootstrap_engine()
-    if unattended and (pm_soak_override or soak_waived_by):
-        raise ValueError("a soak waiver cannot be combined with unattended promotion")
-
-    main_branch, default_branch_refusal = _resolve_default_branch(dest)
-    if default_branch_refusal:
-        return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=False, push_failed=False,
-            main_branch=None, promoted_sha=None, message=default_branch_refusal,
-        )
-
-    if unattended:
-        return _promote_unattended(dest, target, percolate_root, main_branch, confirm)
-
-    refusals, waiver_notice = _evaluate_bar(
-        dest, target, percolate_root, _CANDIDATE_BRANCH, main_branch,
-        pm_soak_override=pm_soak_override, soak_waived_by=soak_waived_by,
-    )
-    if refusals:
-        return _refused(refusals, target, main_branch, waiver_notice)
-
-    if not confirm:
-        return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=False, push_failed=False,
+            promoted=False, refusals=(), push_failed=False,
             main_branch=main_branch, promoted_sha=None,
             message=(
-                f"klabauter-promote: DRY RUN — predicates 1-3 and 5 enforced and "
-                "predicate 4's soak-floor proxy (cross-machine half UNENFORCED, "
-                "see docs/reference/klabauter-release-channels.md § 'Promotion "
-                f"evidence bar') all passed for '{target}'. Nothing was pushed. "
+                f"klabauter-promote: DRY RUN — predicates 1-4 passed for '{target}'. "
+                "Nothing was pushed. "
                 "Re-run with --confirm to push '" + _CANDIDATE_BRANCH + "' onto '" + main_branch
                 + "' (fast-forward only)."
             ),
-            waiver_notice=waiver_notice,
         )
 
     push_refspec = f"{_CANDIDATE_BRANCH}:{main_branch}"
@@ -725,10 +335,9 @@ def promote_candidate(
     )
     if result.returncode != 0:
         return PromotionOutcome(
-            promoted=False, refusals=(), nothing_to_promote=False, push_failed=True,
+            promoted=False, refusals=(), push_failed=True,
             main_branch=main_branch, promoted_sha=None,
             message=(result.stderr or result.stdout or "").strip(),
-            waiver_notice=waiver_notice,
         )
     # The push moves only the remote ref; a local main left behind reads as an unpromoted
     # tree to anyone checking `git log main` in the mirror. Fast-forward-only, so it never rewrites.
@@ -740,17 +349,13 @@ def promote_candidate(
             f"fast-forwarded: {(local.stderr or local.stdout or '').strip()}"
         )
     return PromotionOutcome(
-        promoted=True, refusals=(), nothing_to_promote=False, push_failed=False,
+        promoted=True, refusals=(), push_failed=False,
         main_branch=main_branch, promoted_sha=None,
         message=(
             f"klabauter-promote: promoted '{_CANDIDATE_BRANCH}' onto "
             f"'{main_branch}' for target '{target}' (fast-forward push, "
-            f"refspec {push_refspec!r}). Predicate 4's cross-machine half "
-            "remained UNENFORCED (soak-floor proxy only) — see "
-            "docs/reference/klabauter-release-channels.md § 'Promotion "
-            "evidence bar'."
+            f"refspec {push_refspec!r})."
         ),
-        waiver_notice=waiver_notice,
         followup_warning=warning,
     )
 
@@ -767,14 +372,7 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     if dest is None:
         return _EXIT_USAGE
 
-    outcome = promote_candidate(
-        dest, target, percolate_root,
-        confirm=bool(args.confirm),
-        pm_soak_override=(args.pm_soak_override or "").strip(),
-        soak_waived_by=(args.soak_waived_by or "").strip(),
-    )
-    if outcome.waiver_notice:
-        print(outcome.waiver_notice, file=sys.stderr)
+    outcome = promote_candidate(dest, target, percolate_root, confirm=bool(args.confirm))
     if outcome.main_branch is None:
         print(outcome.message, file=sys.stderr)
         return _EXIT_FAIL
@@ -812,18 +410,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Actually push the fast-forward promotion. Omit for a dry-run.",
-    )
-    parser.add_argument(
-        "--pm-soak-override",
-        metavar="PM_WORDS",
-        default="",
-        help="Waive predicate 4's soak floor only, citing the PM's verbatim ruling.",
-    )
-    parser.add_argument(
-        "--soak-waived-by",
-        metavar="AUTHORITY",
-        default="",
-        help="The delegate who granted the waiver under the PM's delegation; omit when the PM ruled directly.",
     )
     parser.set_defaults(func=_cmd_promote)
     return parser
