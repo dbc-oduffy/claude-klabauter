@@ -135,13 +135,21 @@ def effective_test_verdict(build_test: dict) -> Any:
 
 
 def mint_refusal(
-    integration: dict, prep: dict, build_test: dict, *, criterion_open_ok: bool = False
+    integration: dict,
+    prep: dict,
+    build_test: dict,
+    *,
+    criterion_open_ok: bool = False,
+    delivery_exempt: bool = False,
 ) -> str | None:
     """The first mint refusal message that applies to this record, else `None`.
 
     ``criterion_open_ok`` lets a ``not_met``/``indeterminate`` criterion through: the stamp
     attests review and delivery and carries the criterion status, so the plan's close stays
-    a separate act. A build/test verdict of ``not_run`` is then accepted under any criterion."""
+    a separate act. A build/test verdict of ``not_run`` is then accepted under any criterion.
+
+    ``delivery_exempt`` accepts an ABSENT delivery verdict (the roster's tiers keep the verifier
+    off this run's tier); a present non-PASS verdict still refuses."""
     footprint = prep.get("slice_files")
     foreign_claims = [
         c for c in prep.get("foreign_claims") or []
@@ -157,7 +165,7 @@ def mint_refusal(
     criterion = integration.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 
-    if delivery_verdict != "PASS":
+    if delivery_verdict != "PASS" and not (delivery_exempt and delivery_verdict is None):
         return (
             f"review-stamp: refusing to mint: delivery verdict is {delivery_verdict!r}, not PASS"
             + _unbacked_suffix(delivery)

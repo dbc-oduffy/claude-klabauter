@@ -630,7 +630,7 @@ def compose_execute_review(
         return f"{json.dumps(list(agent.tiers))}.includes({tier_js})"
 
     def _runs_at_compile_tier(agent: ReviewAgent) -> bool:
-        return tier is None or agent.tiers is None or tier in agent.tiers
+        return agent.runs_at(tier)
 
     all_whole_diff_agents = [a for a in review.review_wave if a.per != "slice"]
     slice_agents = [a for a in review.review_wave if a.per == "slice" and _runs_at_compile_tier(a)]

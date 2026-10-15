@@ -57,6 +57,16 @@ class ReviewAgent:
     #: Review tiers this agent runs at; ``None`` runs at every tier.
     tiers: Optional[Tuple[str, ...]] = None
 
+    def runs_at(self, tier: Optional[str]) -> bool:
+        """True when this agent runs at ``tier``; an untiered agent or an unknown tier always runs."""
+        return tier is None or self.tiers is None or tier in self.tiers
+
+
+def agent_excluded_at_tier(review: "ExecuteReview", agent_type: str, tier: Optional[str]) -> bool:
+    """True when the review wave names ``agent_type`` and its roster ``tiers`` exclude ``tier``."""
+    agents = [a for a in review.review_wave if a.agent_type == agent_type]
+    return bool(agents) and not any(a.runs_at(tier) for a in agents)
+
 
 @dataclass(frozen=True)
 class ExecuteReview:
