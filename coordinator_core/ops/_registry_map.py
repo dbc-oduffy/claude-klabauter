@@ -302,6 +302,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "groupem.idle_report":                    "coordinator_core.ops.group_em_idle_report",
     "groupem.standing":                       "coordinator_core.ops.group_em_standing",
     "groupem.box_hold":                       "coordinator_core.ops.group_em_box_hold",
+    "groupem.admission_post":                 "coordinator_core.ops.group_em_admission_post",
     "workstream_complete.stand_down_watchers": "coordinator_core.ops.watcher_stand_down",
     "session.work_state":                     "coordinator_core.ops.session_work_state",
     "session.artifact_owner":                 "coordinator_core.ops.session_artifact_owner",

@@ -2558,6 +2558,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.box_hold -- MUTATING: writes or removes
     # <settings-home>/state/group-em/box/hold.json.
     "groupem.box_hold": OpClass.MUTATING,
+    # groupem.admission_post -- MUTATING: appends a line to
+    # <settings-home>/state/group-em/box/admission.jsonl.
+    "groupem.admission_post": OpClass.MUTATING,
     # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
     # attributed watcher trees and removes the Group EM holder record.
     "workstream_complete.stand_down_watchers": OpClass.MUTATING,

@@ -551,6 +551,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.idle_report":                    "none",
     "groupem.standing":                       "none",
     "groupem.box_hold":                       "none",
+    "groupem.admission_post":                 "none",
     "workstream_complete.stand_down_watchers": "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly

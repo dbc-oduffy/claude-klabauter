@@ -417,6 +417,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_idle_report", 'registers "groupem.idle_report"'),
     ("coordinator_core.ops.group_em_standing", 'registers "groupem.standing"'),
     ("coordinator_core.ops.group_em_box_hold", 'registers "groupem.box_hold"'),
+    ("coordinator_core.ops.group_em_admission_post", 'registers "groupem.admission_post"'),
     ("coordinator_core.ops.watcher_stand_down", 'registers "workstream_complete.stand_down_watchers"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
     ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),

@@ -473,6 +473,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_box_hold.py",
         ("_groupem_box_hold",),
     ),
+    "groupem.admission_post": (
+        "coordinator_core/ops/group_em_admission_post.py",
+        ("_groupem_admission_post",),
+    ),
     "workstream_complete.stand_down_watchers": (
         "coordinator_core/ops/watcher_stand_down.py",
         ("_stand_down_watchers",),
