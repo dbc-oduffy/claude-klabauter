@@ -104,6 +104,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -902,7 +903,7 @@ def _scratch_size_banner(out: List[str], repo_root: Optional[str]) -> None:
         return
     params = json.dumps({"repo_root": str(repo_root), "cadence": "workday_complete", "apply": True})
     remedy = (
-        f"{settings_home() / 'bin' / 'coordinator-invoke'} fleet.scratch_hygiene '{params}' "
+        f"{shlex.quote(str(settings_home() / 'bin' / 'coordinator-invoke'))} fleet.scratch_hygiene '{params}' "
         f"(rerun until it deletes nothing more; to keep something, move it to "
         f"{Path(repo_root) / 'scratch-hold'}/)"
     )

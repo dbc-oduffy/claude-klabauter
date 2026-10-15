@@ -385,9 +385,12 @@ def _register_gate(
         for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
         if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
     }
+    ledger_ids = {str(i) for i in ledger_judged}
     for row in claimed:
         rid, surface = row.get(rr.ROW_ID), row.get(rr.ROW_SURFACE)
         got = judged.get(str(rid))
+        if got is None and str(rid) in ledger_ids:
+            continue
         if got is None:
             why = "not judged"
         elif got.get(rr.ROW_STATUS) != rr.STATUS_MET:

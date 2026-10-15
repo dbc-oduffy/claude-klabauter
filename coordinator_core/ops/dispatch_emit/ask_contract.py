@@ -162,6 +162,9 @@ class GateVerdict:
     acceptance: dict | None = None
     # Plan path of an accepted, unfired sizing: the script stages it instead of authoring one.
     resume_plan: str | None = None
+    # Plan path of the spine the gate minted at M+ from a sizing whose acceptance rows are all
+    # concrete: the script reviews it instead of planning.
+    spine_plan: str | None = None
     # Set only when the request carried `record`: {"ok": bool, "error"?: str}, the ruling's write.
     recorded: dict | None = None
 
@@ -173,6 +176,8 @@ class GateVerdict:
             out["acceptance"] = self.acceptance
         if self.resume_plan is not None:
             out["resume_plan"] = self.resume_plan
+        if self.spine_plan is not None:
+            out["spine_plan"] = self.spine_plan
         return out
 
 

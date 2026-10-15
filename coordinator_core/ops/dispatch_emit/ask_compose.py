@@ -129,9 +129,13 @@ _MECHANICAL_EFFORT = "low"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
 _PLAN_AUTHOR_MODEL, _PLAN_AUTHOR_EFFORT = "opus", "low"
 _XL_EXIT_MODEL, _XL_EXIT_EFFORT = "opus", "low"
+_PLAN_REVIEW_AGENT_TYPE = "coordinator:staff-eng"
+_PLAN_REVIEW_MODEL, _PLAN_REVIEW_EFFORT = "opus", "low"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 #: The git-commit-agent definition pins haiku; one fixed command needs nothing more.
 _COMMIT_MODEL = "haiku"
+#: The fallback stage agent only runs `ask.stage` and returns its reply (APM ruling B).
+_STAGE_MODEL = "haiku"
 _DOCS_MODEL = "sonnet"
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
@@ -156,6 +160,7 @@ _GATE_SCHEMA = _obj(
         "tshirt": _STR,
         "route": _STR,
         "resume_plan": {"type": ["string", "null"]},
+        "spine_plan": {"type": ["string", "null"]},
     },
 )
 _RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
@@ -942,7 +947,7 @@ def compose_ask_script(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_GATE} '",
         _gate_payload(),
-        "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan. "
+        "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan and spine_plan. "
         "Also read the sizing at ",
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
@@ -960,7 +965,7 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan and spine_plan, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
@@ -1012,7 +1017,7 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), agent_model=_XL_EXIT_MODEL, effort=_XL_EXIT_EFFORT,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, spine_plan: %s.spine_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
@@ -1026,7 +1031,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 4)}\n"
+            f"      {take_gate % (('_apm',) * 5)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
@@ -1041,7 +1046,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 4)}\n"
+            f"      {take_gate % (('_xl',) * 5)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (!_progressed && _xl) {{\n"
@@ -1137,6 +1142,48 @@ def compose_ask_script(
         b.append("    phase('plan');")
         # gateReportPath binds from the runtime `_sizingRel`: a raw ask's sizing is minted in-run.
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
+        review_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "The ask gate minted a dispatch spine from the sizing's concrete acceptance rows at ",
+            "js:_gate.spine_plan",
+            ". Review it as the plan reviewer: every row's writes are real, bounded paths, its done "
+            "condition is a runnable check, and together the rows serve the sizing's exit criterion. "
+            "Apply every finding IN PLACE with Edit -- never scaffold a new plan, never change its "
+            "path -- then return its repo-relative path as plan_rel. Then run the "
+            "`plan.readiness_verdict` op on the reviewed plan and return that reply's pull_class and "
+            "verdict alongside plan_rel."
+            + ledger_clause,
+            " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+            *(
+                stage_fold(" When the final verdict is `ready`, also stage the plan:")
+                + (" Otherwise leave `manifest` null.",)
+                if fold_stage
+                else ()
+            ),
+        )
+        review_call = _agent(
+            review_prompt, label="plan-review", phase="plan", agent_type=_PLAN_REVIEW_AGENT_TYPE,
+            schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
+            agent_model=_PLAN_REVIEW_MODEL, effort=_PLAN_REVIEW_EFFORT,
+        )
+        b.append("    let _spineFallback = null;")
+        b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
+        b.append(f"      const _spineReview = await {review_call};")
+        b.append("      _spineFallback = _spineReview?.plan_rel || _gate.spine_plan;")
+        b.append("      if (_spineReview?.verdict === 'ready') {")
+        b.append("        _planRel = _spineFallback;")
+        if fold_stage:
+            b.append("        if (Array.isArray(_spineReview.manifest?.rows)) { _stagedManifest = _spineReview.manifest; }")
+        b.append("      } else {")
+        b.append(
+            "        _halted = { halted: " + _lit(HALT_REFUSAL) + ", reason: 'spine plan review verdict ' + "
+            "String(_spineReview?.verdict ?? 'none') + ' (not ready)', review: _spineReview ?? null, "
+            "sizing: _sizingRel, run_id: _runId };"
+        )
+        b.append("      }")
+        b.append("    }")
+        b.append("    if (!_planRel && !_halted) {")
+
         def _blitz_call(plan_path_js: str) -> str:
             return (
                 f"await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
@@ -1146,7 +1193,7 @@ def compose_ask_script(
                 f"planPath: {plan_path_js}, executionOpen: true }}] }});"
             )
 
-        b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? null')}")
+        b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? _spineFallback ?? null')}")
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
@@ -1205,6 +1252,7 @@ def compose_ask_script(
             f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
         )
+        b.append("    }")
         b.append("  }")
     else:
         b.append(
@@ -1256,7 +1304,7 @@ def compose_ask_script(
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; } else {")
     b.append("  phase('stage');")
     b.append(
-        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT)};"
+        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA, agent_model=_STAGE_MODEL, effort=_MECHANICAL_EFFORT)};"
     )
     b.append("  }")
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")

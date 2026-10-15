@@ -28,10 +28,31 @@ def test_s_plan_author_is_opus_pinned_type_at_low_effort():
     assert "model: 'opus'" in opts and "effort: 'low'" in opts
 
 
-@pytest.mark.parametrize("label", ["gate", "stage"])
-def test_mechanical_stages_run_sonnet_at_low_effort(label):
-    opts = _agent_opts(_compose(), label)
+def test_gate_runs_sonnet_at_low_effort():
+    opts = _agent_opts(_compose(), "gate")
     assert "model: 'sonnet'" in opts and "effort: 'low'" in opts
+
+
+def test_fallback_stage_agent_is_haiku_at_low_effort_with_one_engine_call():
+    script = _compose()
+    opts = _agent_opts(script, "stage")
+    assert "model: 'haiku'" in opts and "effort: 'low'" in opts
+    assert "agentType: 'coordinator:executor'" in opts
+    call = script[script.rindex("agent(", 0, script.index("label: 'stage'")) : script.index("label: 'stage'")]
+    assert call.count(ask_compose.OP_ASK_STAGE) == 1 and "coordinator-invoke" in call
+
+
+def test_review_prep_agent_is_haiku_with_one_review_prep_call():
+    import copy
+
+    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+    roster = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
+    roster["execute_review"]["stages"][0]["agents"][0]["model"] = "haiku"
+    script = _compose(review_roster_fragment=roster)
+    opts = _agent_opts(script, "review:coordinator:review-prep")
+    assert "model: 'haiku'" in opts
+    assert script.count("review.prep") == 1
 
 
 def test_no_record_agent_is_composed():
