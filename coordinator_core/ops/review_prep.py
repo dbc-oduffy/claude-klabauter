@@ -206,6 +206,7 @@ def stored_reply_for_run(
     *,
     run_key: Optional[str] = None,
     within: Sequence[str] = (),
+    covering: bool = False,
 ) -> Optional[dict]:
     """The reply ``review.prep`` stored for one run, found without its slice prefix, or ``None``.
 
@@ -213,6 +214,9 @@ def stored_reply_for_run(
     ``execute_review.prep_slice_id_for``, not imported: that module is heavy). A file is kept when
     its name contains ``run_key`` (if given), its ``agent_type`` is ``engine:prep-freeze``, its
     ``run_base_sha`` is ``base`` and, when ``within`` is non-empty, every ``paths`` entry is in it.
+    ``covering=True`` (keyword-only, default off) flips that check: a file is kept when every
+    ``within`` entry is in its ``paths``, so a review that read extra paths is still found. It has
+    no effect when ``within`` is empty.
     Exactly one kept file returns; none, several or an unreadable one return ``None``.
 
     ``base`` may be ``None`` only together with ``run_key``: the glob is then
@@ -241,8 +245,14 @@ def stored_reply_for_run(
         if fm.get("agent_type") != "engine:prep-freeze" or (base and fm["run_base_sha"] != base):
             continue
         paths = fm.get("paths")
-        if allowed and not (isinstance(paths, list) and all(p in allowed for p in paths)):
-            continue
+        if allowed:
+            if not isinstance(paths, list):
+                continue
+            if covering:
+                if not allowed.issubset(paths):
+                    continue
+            elif not all(p in allowed for p in paths):
+                continue
         entry = {**{k: fm[k] for k in _STORED_KEYS}, "error": None, "sidecar_path": _rel(sidecar, repo_root)}
         for optional in ("reviewed_sha256", "recorded_at"):
             if optional in fm:

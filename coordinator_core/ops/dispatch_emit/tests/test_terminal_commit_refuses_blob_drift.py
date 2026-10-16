@@ -5,6 +5,7 @@ post-write bytes) and refuses a path a peer rewrote after that."""
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,11 +198,20 @@ def test_a_rewrite_after_the_review_still_refuses_with_the_reviewed_hash(repo, m
 
 def test_a_session_write_after_the_review_wins(repo, monkeypatch):
     (repo / "a.py").write_text("B\n", encoding="utf-8")
+    os.utime(repo / "a.py", (2500.0, 2500.0))
     _record_at(repo, "a.py", _sha("A\n"), 3000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
     assert out["refused"] == "blob-drift"
     assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}
+    assert "workflow.revise" in out["error"] and "run_id=run-1" in out["error"]
+    assert "Re-review the current bytes" not in out["error"]
+
+
+def test_the_remedy_names_a_registered_op():
+    from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+    assert "workflow.revise" in OP_MODULE_MAP
 
 
 def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):

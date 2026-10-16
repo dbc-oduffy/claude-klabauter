@@ -85,7 +85,8 @@ Negative-spec:
   - Does NOT write a receipt when there is nothing to commit.
   - Declares ``expected_content_sha256`` per committed path from the newer of the run session's
     last recorded write and the run's newest ``review.prep`` reply (``reviewed_sha256`` at
-    ``recorded_at``; a tie goes to the session write), never the receipts, allowlist or
+    ``recorded_at``; a tie goes to the session write; a refire's newest review supplies it; a path
+    the run session wrote after that review is declared at its current bytes), never the receipts, allowlist or
     bookkeeping record this call writes. The delivery note is declared at the sha256 of the bytes
     this call just left after its ``## Verdicts`` append. A drift refuses the run's commit with
     ``blob_drift``, never drops paths.
@@ -1122,8 +1123,12 @@ def _recorded_fingerprints(
     (``fixes_integrated_at``: epoch the wave's integration was recorded), a reviewed path whose
     bytes were last written no later than that moment, after the newest session write, is declared
     at those bytes; a later change keeps the older expectation and refuses. A path the wave's own
-    record lists (``wave_paths``) counts as reviewed when no stored hash names it. A hashless newest
-    session event, or an unrecorded path outside the review, carries no entry."""
+    record lists (``wave_paths``) counts as reviewed when no stored hash names it. A path whose
+    newest session event postdates the review (``fixes_integrated_at`` when set, else
+    ``reviewed_at``) and whose file mtime is no earlier than that event is declared at its current
+    bytes: the run left them after review; a peer rewrite after that write is not detected. Candidates are DONE-chunk and run-owned paths; a live
+    peer's claim on either already refused the call upstream, so no contest check runs here.
+    A hashless newest session event, or an unrecorded path outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
     committed = set(all_paths) - set(deleted_paths)
@@ -1145,6 +1150,17 @@ def _recorded_fingerprints(
             post_fix = touch_record.compute_content_hash(target) if settled else None
             if post_fix:
                 out[p] = post_fix
+                continue
+        anchor = fixes_integrated_at if fixes_integrated_at is not None else reviewed_at
+        if event is not None and anchor is not None and event[1] > anchor:
+            target = worktree_root / p
+            try:
+                written_after = target.stat().st_mtime >= event[1]
+            except OSError:
+                written_after = False
+            current = touch_record.compute_content_hash(target) if written_after else None
+            if current:
+                out[p] = current
                 continue
         if review_hash and (event is None or reviewed_at > event[1]):
             out[p] = review_hash
@@ -1219,6 +1235,21 @@ def _epoch_of(stamp: object) -> Optional[float]:
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
 
 
+_GENERIC_DRIFT_REMEDY = "Re-review the current bytes and pass their blob, or leave the path out."
+
+
+def _blob_drift_remedy(error: str, run_id: str) -> str:
+    """``error`` with commit_v2's generic trailing remedy replaced by the op that re-reviews:
+    ``workflow.revise`` (a ``note`` is required), then the refire call its reply returns."""
+    remedy = (
+        f"Real drift: call workflow.revise run_id={run_id} with a note, then make the refire call "
+        "its reply's next.call returns; the refire's review re-reads the current bytes."
+    )
+    if _GENERIC_DRIFT_REMEDY in error:
+        return error.replace(_GENERIC_DRIFT_REMEDY, remedy)
+    return f"{error} {remedy}"
+
+
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _RESOLUTION_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 
@@ -1263,7 +1294,7 @@ def _reconcile_prep(
 
     reply = review_prep.stored_reply_for_run(
         worktree_root, session_id, base, run_key=run_id,
-        within=[p for c in request.chunks for p in c.paths],
+        within=[p for c in request.chunks for p in c.paths], covering=True,
     )
     if reply is None:
         return none
@@ -3893,6 +3924,10 @@ def _terminal_commit_inner(
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     reply = dict(reply)
+    if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
+        reply["error"] = _blob_drift_remedy(
+            reply["error"], _run_id_of(params, ask_run_dir, script_path_raw)
+        )
     if reply.get("committed"):
         token_state["landed"] = True
     if not reply.get("committed"):

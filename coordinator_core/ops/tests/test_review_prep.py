@@ -359,6 +359,19 @@ def test_stored_reply_for_run_ignores_paths_outside_within(repo):
     assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"]) is not None
 
 
+def test_covering_keeps_a_reply_that_names_extra_paths_and_default_drops_it(repo):
+    _write(repo, ["a/b/one.py", "a/b/two.py"], 3)
+    made = _stored(repo, ["a/b/one.py", "a/b/two.py"])
+    base = made["run_base_sha"]
+    assert rp.stored_reply_for_run(repo, SESSION, base, run_key="run1", within=["a/b/one.py"]) is None
+    got = rp.stored_reply_for_run(repo, SESSION, base, run_key="run1", within=["a/b/one.py"], covering=True)
+    assert got is not None and got["sidecar_path"] == made["sidecar_path"]
+    assert rp.stored_reply_for_run(
+        repo, SESSION, base, run_key="run1", within=["a/b/one.py", "a/b/zzz.py"], covering=True
+    ) is None
+    assert rp.stored_reply_for_run(repo, SESSION, base, run_key="run1", covering=True) is not None
+
+
 def test_stored_reply_for_run_returns_none_on_two_matches(repo):
     _write(repo, ["a/b/one.py"], 3)
     made = _stored(repo, ["a/b/one.py"], run="run1")
