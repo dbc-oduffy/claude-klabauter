@@ -235,9 +235,18 @@ def test_script_is_valid_and_parses(over, tmp_path):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
+    # Trap: `node --check` on this wrapper exits 0 even with unbalanced parens, so it can never
+    # go red. The AsyncFunction constructor parses the body the way the Workflow runner does.
     path = tmp_path / "s.js"
-    path.write_text("(async () => {\n" + script + "\n})();", encoding="utf-8")
-    assert subprocess.run([node, "--check", str(path)], capture_output=True).returncode == 0
+    path.write_text(script, encoding="utf-8")
+    program = (
+        "const src = require('fs').readFileSync(process.argv[1], 'utf8')"
+        ".replace(/^export const meta/m, 'const meta');"
+        "new (Object.getPrototypeOf(async function () {}).constructor)("
+        "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
+    )
+    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
 
 
 def test_the_verify_leg_rules_the_ledger_at_every_size_and_gates_the_commit():

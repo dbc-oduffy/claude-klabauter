@@ -204,14 +204,34 @@ def _kira_is_run_owned(filename: str, meta: dict) -> bool:
 
 
 def _kira_session_authored_diff(repo_root: str, session_id: str) -> bool:
-    """True when a code commit in the recent walk carries this session's
-    `Session-Id` trailer (doc-only and bookkeeping commits are not a diff to
-    review). One `git log` spawn; any git failure reads False (a guard that
-    cannot prove a diff must not block on it)."""
-    from coordinator_core.hooks.guard_terminal_review import _session_commits
+    """True when this session's own touch record holds a TOUCH of a code file
+    that was not positively a read (doc-only and bookkeeping paths are not a
+    diff to review). Spawn-free: raw events are scanned, not the
+    last-verb-wins projection, because a commit RELEASES the claim and a
+    committed diff must still count. Any read failure reads False (a guard
+    that cannot prove a diff must not block on it)."""
+    from coordinator_core.hooks.guard_terminal_review import _is_code_path
+    from coordinator_core.session import touch_record
+    from coordinator_core.session.core import session_dir
 
     try:
-        return any(c.is_code for c in _session_commits(repo_root, session_id))
+        sdir = session_dir(session_id, repo_root)
+        if not sdir:
+            return False
+        for member in touch_record.discover_family(touch_record.sink_path(sdir)):
+            raw = member.read_bytes()
+            for line in touch_record.iter_complete_lines(raw):
+                try:
+                    event = touch_record.decode_line(line)
+                except touch_record.MalformedRecordLine:
+                    continue
+                if (
+                    event.verb == touch_record.VERB_TOUCH
+                    and touch_record.kind_blocks_a_peer_commit(event.kind)
+                    and _is_code_path(event.path)
+                ):
+                    return True
+        return False
     except Exception:
         return False
 

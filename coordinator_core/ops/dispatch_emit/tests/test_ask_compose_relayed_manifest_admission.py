@@ -55,7 +55,7 @@ def test_the_c268bb_row_shape_is_refused():
 @pytest.mark.parametrize(
     ("patch", "field"),
     [
-        ({"error": "x"}, "error"),
+        ({"error": "x"}, "error: x"),
         ({"gated": [{"reason": "r"}]}, "gated[0].id"),
         ({"owed": [{"id": ""}]}, "owed[0].id"),
         ({"rows": [{**_ROW, "wave": "0"}]}, "rows[0].wave"),

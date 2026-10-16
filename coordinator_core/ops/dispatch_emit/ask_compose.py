@@ -425,7 +425,7 @@ _ADMIT_MANIFEST_JS = (
     "  const _wholeManifestGap = (m) => {\n"
     "    const ne = (v) => typeof v === 'string' && v.trim() !== '';\n"
     "    if (!m || typeof m !== 'object' || Array.isArray(m)) return 'manifest';\n"
-    "    if (m.error) return 'error';\n"
+    "    if (m.error) return 'error: ' + String(m.error);\n"
     "    for (const k of ['rows', 'review_declared_paths', 'test_targets']) { if (!Array.isArray(m[k])) return k; }\n"
     "    for (let i = 0; i < m.rows.length; i++) {\n"
     "      const r = m.rows[i];\n"
@@ -442,10 +442,10 @@ _ADMIT_MANIFEST_JS = (
     "    return null;\n"
     "  };\n"
     "  const _adoptManifest = (m) => {\n"
-    "    if (m === null || m === undefined) return false;\n"
+    "    if (m === null || m === undefined) return;\n"
     "    const gap = _wholeManifestGap(m);\n"
-    "    if (gap) { if (!_refusedField) _refusedField = gap; return false; }\n"
-    "    _stagedManifest = m; return true;\n"
+    "    if (gap) { if (!_refusedField) _refusedField = gap; return; }\n"
+    "    _stagedManifest = m;\n"
     "  };"
 )
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -1511,7 +1511,7 @@ def compose_ask_script(
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
         reply_js = "_scouted" if sized_in_run else "_gate"
         b.append(
-            f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan)) "
+            f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan))) "
             f"{{ _adoptManifest({reply_js}.manifest); }}"
         )
 

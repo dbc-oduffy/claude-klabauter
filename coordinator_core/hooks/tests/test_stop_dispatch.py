@@ -254,23 +254,96 @@ def _write_run_owned_review_sidecars(share_dir: str) -> None:
         _write_sidecar(share_dir, name, lines)
 
 
-@pytest.mark.spawns_process
+def _touch_record_repo(tmp_path, session_id: str, events: list) -> str:
+    """A bare fixture repo whose `session_id` touch record holds `events`
+    as (verb, path, kind) triples."""
+    from coordinator_core.session import touch_record
+    from coordinator_core.session.core import session_dir
+
+    repo_root = _make_repo(tmp_path)
+    sink = touch_record.sink_path(session_dir(session_id, repo_root))
+    for verb, path, kind in events:
+        touch_record.append_event(
+            sink, session_id=session_id, agent_id=None, verb=verb, path=path, kind=kind
+        )
+    return repo_root
+
+
+_CODE_WRITE = [("T", "coordinator_core/x.py", "w")]
+
+
+def test_session_authored_diff_reads_touch_record_without_spawning(tmp_path, monkeypatch) -> None:
+    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
+
+    def _boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    repo_root = _touch_record_repo(tmp_path, "s1", _CODE_WRITE)
+    assert _kira_session_authored_diff(repo_root, "s1") is True
+
+
+def test_session_authored_diff_counts_a_released_code_write(tmp_path) -> None:
+    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
+
+    repo_root = _touch_record_repo(
+        tmp_path, "s1", _CODE_WRITE + [("R", "coordinator_core/x.py", None)]
+    )
+    assert _kira_session_authored_diff(repo_root, "s1") is True
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [],
+        [("T", "docs/plans/p.md", "w"), ("T", "notes.yaml", "w")],
+        [("T", ".coordinator-local/subagent-share/x.py", "w")],
+        [("T", "coordinator_core/x.py", "r")],
+    ],
+)
+def test_session_authored_diff_false_for_non_code_or_read_or_empty(tmp_path, events) -> None:
+    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
+
+    repo_root = _touch_record_repo(tmp_path, "s1", events)
+    assert _kira_session_authored_diff(repo_root, "s1") is False
+
+
+def test_session_authored_diff_ignores_other_sessions_record(tmp_path) -> None:
+    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
+
+    repo_root = _touch_record_repo(tmp_path, "other", _CODE_WRITE)
+    assert _kira_session_authored_diff(repo_root, "s1") is False
+
+
+def test_session_authored_diff_unreadable_record_reads_false(tmp_path, monkeypatch) -> None:
+    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
+    from coordinator_core.session import touch_record
+
+    repo_root = _touch_record_repo(tmp_path, "s1", _CODE_WRITE)
+
+    def _bad(*a, **k):
+        raise OSError("denied")
+
+    monkeypatch.setattr(touch_record, "discover_family", _bad)
+    assert _kira_session_authored_diff(repo_root, "s1") is False
+
+
 def test_guard_kira_verdict_routed_allows_run_owned_review_without_authored_diff(tmp_path) -> None:
     from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
 
     session_id = "sess-no-diff"
-    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, "some-other-session")
+    repo_root = _touch_record_repo(tmp_path, "some-other-session", _CODE_WRITE)
     _write_run_owned_review_sidecars(_share_dir(repo_root, session_id))
 
     assert _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id}) == {}
 
 
-@pytest.mark.spawns_process
 def test_guard_kira_verdict_routed_still_blocks_session_review_with_authored_diff(tmp_path) -> None:
     from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
 
     session_id = "sess-with-diff"
-    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, session_id)
+    repo_root = _touch_record_repo(tmp_path, session_id, _CODE_WRITE)
     _write_sidecar(
         _share_dir(repo_root, session_id),
         "coordinatorcode-reviewer.abc.md",
@@ -282,12 +355,11 @@ def test_guard_kira_verdict_routed_still_blocks_session_review_with_authored_dif
     assert "unrouted Kira" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-@pytest.mark.spawns_process
 def test_guard_kira_verdict_routed_run_owned_sidecars_do_not_mask_diff_session_review(tmp_path) -> None:
     from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
 
     session_id = "sess-mixed"
-    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, session_id)
+    repo_root = _touch_record_repo(tmp_path, session_id, _CODE_WRITE)
     share_dir = _share_dir(repo_root, session_id)
     _write_run_owned_review_sidecars(share_dir)
     _write_sidecar(
@@ -300,12 +372,11 @@ def test_guard_kira_verdict_routed_run_owned_sidecars_do_not_mask_diff_session_r
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-@pytest.mark.spawns_process
 def test_guard_kira_verdict_routed_allows_run_owned_kira_findings_without_authored_diff(tmp_path) -> None:
     from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
 
     session_id = "sess-run-kira"
-    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, "some-other-session")
+    repo_root = _touch_record_repo(tmp_path, "some-other-session", _CODE_WRITE)
     _write_sidecar(
         _share_dir(repo_root, session_id),
         "manifest-ask-x-prep.kira.md",
