@@ -167,5 +167,8 @@ def record_test_verdict(
     for key, src in (("run", "tests_run"), ("failed", "tests_failed")):
         if key not in fm and result.get(src) is not None:
             new_fm += f"{key}: {result[src]}\n"
+    for key in ("baseline_method", "baseline"):
+        if result.get(key) is not None and key not in fm:
+            new_fm += yaml.safe_dump({key: result[key]}, default_flow_style=False, sort_keys=False)
     _store(path, norm, crlf, split, new_fm)
     return path.resolve()

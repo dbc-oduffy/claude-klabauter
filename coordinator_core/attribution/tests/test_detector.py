@@ -155,3 +155,54 @@ def test_strip_review_annotations_leaves_mixed_content_line_alone():
     # itself the whole-line annotation shape and must be left alone.
     text = "value = 1  # not a Review: annotation on its own line\n"
     assert strip_review_annotations(text) == text
+
+
+_T = "coordinator_core/ops/tests/test_x.py"
+_FIXTURE = 'X = """\n### Finding 3\n"""\n'
+
+
+def test_fixture_string_in_test_file_not_flagged():
+    from coordinator_core.attribution import scan_added_lines
+
+    assert scan_text(_FIXTURE, _T) == []
+    assert scan_added_lines(_FIXTURE, None, _T) == []
+
+
+def test_fixture_string_in_non_test_file_still_flagged():
+    assert scan_text(_FIXTURE, "coordinator_core/ops/x.py")
+
+
+def test_comment_in_test_file_flagged():
+    assert scan_text("# Finding 3\nX = 1\n", _T)
+
+
+def test_docstring_in_test_file_flagged():
+    assert scan_text('def t():\n    """Finding 3"""\n', _T)
+
+
+def test_comment_after_string_flagged():
+    assert scan_text('x = "a"  # per review F3\n', _T)
+
+
+def test_unparseable_test_file_flagged():
+    assert scan_text('X = """\n### Finding 3\n"""\ndef (:\n', _T)
+
+
+def test_single_line_literal_not_flagged():
+    assert scan_text('x = "### Finding 2"\n', _T) == []
+
+
+def test_repeated_line_in_docstring_not_hidden_by_fixture_copy():
+    from coordinator_core.attribution import scan_added_lines
+
+    old = _FIXTURE
+    new = _FIXTURE + 'def t():\n    """\n### Finding 3\n    """\n'
+    assert scan_added_lines(new, old, _T)
+
+
+def test_form_feed_in_fixture_string_not_flagged():
+    from coordinator_core.attribution import scan_added_lines
+
+    text = 'X = """\x0c\n### Finding 3\n"""\n'
+    assert scan_text(text, _T) == []
+    assert scan_added_lines(text, None, _T) == []

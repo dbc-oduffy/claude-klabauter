@@ -56,3 +56,4 @@ def test_recorded_fail_refusal_names_the_rerun_route(tmp_path):
     assert "build/test verdict is 'fail'" in str(exc.value)
     assert "re-run the plan's tests with the test-runner" in str(exc.value)
     assert "--build-test <test-runner sidecar>" in str(exc.value)
+    assert "--result-json <runner result> --plan <plan>), then re-mint" in str(exc.value)

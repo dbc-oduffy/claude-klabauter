@@ -103,3 +103,46 @@ def test_bind_sidecar(tmp_path):
     assert "target_plan: docs/plans/x.md" in t and "status: complete" in t
     assert bind_sidecar(tmp_path, "sc.md", plan_path="docs/plans/y.md") is False
     assert bind_sidecar(tmp_path, "missing.md", plan_path="z") is False
+
+
+def _effective(p):
+    import yaml
+    from coordinator_core.completion_receipts import verdict
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    fm = yaml.safe_load(split_frontmatter(p.read_text()).fm_text)
+    return fm, verdict.effective_test_verdict(fm)
+
+
+def _failres(method, caused=()):
+    return _res(
+        status="fail", tests_failed=2, baseline_method=method,
+        baseline={"pre_existing": ["a::t1", "a::t2"], "caused": list(caused), "unverified": []},
+    )
+
+
+def test_baseline_export_all_pre_existing_is_pass(tmp_path):
+    p = _write(tmp_path)
+    record_test_verdict(tmp_path, _failres("export"))
+    fm, eff = _effective(p)
+    assert fm["test_verdict"] == "fail" and fm["baseline_method"] == "export"
+    assert fm["baseline"]["pre_existing"] == ["a::t1", "a::t2"]
+    assert eff == "pass"
+
+
+def test_baseline_with_caused_stays_fail(tmp_path):
+    p = _write(tmp_path)
+    record_test_verdict(tmp_path, _failres("export", caused=["a::t3"]))
+    assert _effective(p)[1] == "fail"
+
+
+def test_baseline_heuristic_stays_fail(tmp_path):
+    p = _write(tmp_path)
+    record_test_verdict(tmp_path, _failres("heuristic"))
+    assert _effective(p)[1] == "fail"
+
+
+def test_no_baseline_keys_absent(tmp_path):
+    p = _write(tmp_path)
+    record_test_verdict(tmp_path, _res(baseline=None, baseline_method=None))
+    t = p.read_text()
+    assert "baseline" not in t

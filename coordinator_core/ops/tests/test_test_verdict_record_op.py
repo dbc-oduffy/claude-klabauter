@@ -28,10 +28,39 @@ def test_handler_records_verdict(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(op, "main_worktree_root", lambda r: Path(r))
     sc = _sidecar(tmp_path)
     out = op._record_handler({"result": _result()}, repo_root=tmp_path)
-    assert out == {"status": "recorded", "sidecar": SIDECAR_REL, "test_verdict": "pass"}
+    assert out == {"status": "recorded", "sidecar": SIDECAR_REL, "test_verdict": "pass", "tests_record": None}
+    assert not (tmp_path / "state").exists()
     text = sc.read_text(encoding="utf-8")
     assert "test_verdict: pass" in text and "run: 124" in text and "failed: 0" in text
     assert "status: open" in text
+
+
+def test_handler_with_plan_writes_tests_record(tmp_path: Path, monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.verdict_supersession import latest_tests_record
+
+    monkeypatch.setattr(op, "main_worktree_root", lambda r: Path(r))
+    _sidecar(tmp_path)
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nplan_id: 'plan-xyz'\n---\n\n# P\n", encoding="utf-8")
+    out = op._record_handler({"result": _result(), "plan": "docs/plans/p.md"}, repo_root=tmp_path)
+    rec = out["tests_record"]
+    assert rec.startswith("state/delivery-verdicts/") and ".tests." in rec
+    found = latest_tests_record(tmp_path, "plan-xyz", datetime(2000, 1, 1, tzinfo=timezone.utc))
+    assert found["record_path"] == rec
+    assert found["tests"]["status"] == "pass" and found["tests"]["sidecar"] == SIDECAR_REL
+
+
+def test_handler_plan_without_plan_id_records_nothing_extra(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(op, "main_worktree_root", lambda r: Path(r))
+    _sidecar(tmp_path)
+    plan = tmp_path / "p.md"
+    plan.write_text("---\ntitle: x\n---\n", encoding="utf-8")
+    out = op._record_handler({"result": _result(), "plan": "p.md"}, repo_root=tmp_path)
+    assert out["tests_record"] is None
+    assert not (tmp_path / "state").exists()
 
 
 def test_handler_refusal_propagates(tmp_path: Path, monkeypatch) -> None:

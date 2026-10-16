@@ -15,8 +15,10 @@ from coordinator_core.completion_receipts.test_verdict import (
     derive_verdict,
     record_test_verdict,
 )
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.ops.dispatch_emit.verdict_supersession import record_tests_supersession
 
 
 def _rel(root: Path, path: Path) -> str:
@@ -26,12 +28,42 @@ def _rel(root: Path, path: Path) -> str:
         return str(path)
 
 
+def _plan_id(root: Path, plan: str) -> Optional[str]:
+    """The plan's frontmatter `plan_id`; None when the file, frontmatter or field is absent."""
+    plan_file = Path(plan)
+    if not plan_file.is_absolute():
+        plan_file = root / plan_file
+    try:
+        split = split_frontmatter(plan_file.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
+    return read_fm_field_unquoted(split.fm_text, "plan_id") or None if split else None
+
+
 def _record(root: Path, result: dict, plan: Optional[str]) -> dict:
     path = record_test_verdict(root, result, plan_path=plan)
+    verdict = derive_verdict(result)
+    sidecar = _rel(root, path)
+    tests_record = None
+    plan_id = _plan_id(root, plan) if plan else None
+    if plan_id:
+        tests_record = record_tests_supersession(
+            repo_root=root,
+            plan_id=plan_id,
+            tests={
+                "status": verdict,
+                "run": result.get("tests_run"),
+                "failed": result.get("tests_failed"),
+                "sidecar": sidecar,
+                "baseline_method": result.get("baseline_method"),
+                "baseline": result.get("baseline"),
+            },
+        )
     return {
         "status": "recorded",
-        "sidecar": _rel(root, path),
-        "test_verdict": derive_verdict(result),
+        "sidecar": sidecar,
+        "test_verdict": verdict,
+        "tests_record": tests_record,
     }
 
 

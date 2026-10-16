@@ -92,3 +92,44 @@ def test_a_pass_with_skips_records_pass_and_keeps_the_skip(tmp_path):
     )
     tests = rd._frontmatter(repo / rel)["tests"]
     assert tests["status"] == "pass" and tests["skipped"] is True
+
+
+def test_the_emitted_tests_field_names_both_baseline_keys():
+    import inspect
+
+    source = inspect.getsource(rd)
+    assert "baseline_method: _tests.baseline_method ?? null" in source
+    assert "baseline: _tests.baseline ?? null" in source
+
+
+def _baseline_tests(unverified):
+    return {
+        "status": "fail", "run": 5, "failed": 2, "sidecar": None, "baseline_method": "export",
+        "baseline": {"pre_existing": ["t::a", "t::b"], "caused": [], "unverified": unverified},
+    }
+
+
+def test_a_superseding_fail_with_an_all_pre_existing_baseline_mints(tmp_path):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    record = _record(repo, head, delivery=_PASS, tests={"status": "fail", "run": 5, "failed": 2, "sidecar": None})
+    with pytest.raises(m.MintRefusal):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    rd.record_delivery_verdict(
+        repo_root=repo, supersedes=record.relative_to(repo).as_posix(), plan_id=None, head_sha=head,
+        verdict="PASS", unbacked=[], tests=_baseline_tests([]),
+    )
+    stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    assert stamp["terminal_commit_sha"] == head
+
+
+def test_a_superseding_fail_with_unverified_failures_still_refuses(tmp_path):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    record = _record(repo, head, delivery=_PASS, tests={"status": "fail", "run": 5, "failed": 2, "sidecar": None})
+    rd.record_delivery_verdict(
+        repo_root=repo, supersedes=record.relative_to(repo).as_posix(), plan_id=None, head_sha=head,
+        verdict="PASS", unbacked=[], tests=_baseline_tests(["t::c"]),
+    )
+    with pytest.raises(m.MintRefusal):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)

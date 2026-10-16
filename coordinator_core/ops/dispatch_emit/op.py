@@ -544,9 +544,24 @@ def _halted(status: Path) -> bool:
         return False
 
 
+def _run_base_rel(run_id: str) -> str:
+    """Write-once file holding a reserved run's base sha, beside its status file."""
+    return f"scratch/warp/{run_id}/run-base"
+
+
+def _recorded_run_base(root: Path, run_id: str) -> Optional[str]:
+    """What was this run's base before any of its rows committed: the sha its first bind recorded,
+    None when no bind has."""
+    try:
+        return (root / _run_base_rel(run_id)).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
     """Copy the parent record into the run's own record dir, then mark the run `running`; the
-    exclusive status create is the bind, so a second bind of one id is refused."""
+    exclusive status create is the bind, so a second bind of one id is refused. The first bind
+    also records HEAD as the run base, write-once, so a rebind keeps it."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
         STATUS_RUNNING, parent_record_rel, run_parent_copy_rel, status_rel,
     )
@@ -567,6 +582,12 @@ def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
     copy = root / run_parent_copy_rel(run_id)
     copy.parent.mkdir(parents=True, exist_ok=True)
     claimed_write.replace_text(copy, parent.read_text(encoding="utf-8"))
+    if _recorded_run_base(root, run_id) is None:
+        from coordinator_core.git.git_state import head_sha
+
+        base = head_sha(root.as_posix())
+        if base:
+            claimed_write.replace_text(root / _run_base_rel(run_id), base + "\n")
 
 
 def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
@@ -1773,6 +1794,7 @@ def _dispatch_emit(
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
             required_reviewers=ask_ctx["required_reviewers"],
+            run_base_sha=_recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"]) if ask_ctx.get("reserved_parent") else None,
         )
         if ask_ctx["prompt"]:
             # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.

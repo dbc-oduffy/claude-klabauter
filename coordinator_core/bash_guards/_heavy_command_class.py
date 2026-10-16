@@ -291,7 +291,7 @@ def _is_noemit_pm_typecheck(argv: Sequence[str], cwd: Optional[str]) -> bool:
     """
     if _suite._base(argv[0]).lower() not in _PM_BASES or _pm_script(argv[1:]) != "typecheck":
         return False
-    if any(a.lower() in _RECURSIVE_FLAGS for a in argv[1:]):
+    if any(a.lower() in _RECURSIVE_FLAGS | _WATCH_FLAGS for a in argv[1:]):
         return False
     script = _package_script(cwd, "typecheck")
     if not script:

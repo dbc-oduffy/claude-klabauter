@@ -456,6 +456,9 @@ _USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|rese
 HALT_USAGE_LIMIT = "usage_limit"
 HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
 HALT_REVIEW_BLOCKED = "review_blocked"
+HALT_CRITERION_NOT_MET = "criterion_not_met"
+HALT_DELIVERY_FAIL = "delivery_fail"
+HALT_NOT_CLOSEABLE = "not_closeable"
 
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
@@ -506,6 +509,9 @@ def _usage_limit_helper_js() -> str:
 
 _PLAN_SLOT = "PLAN_PATH_SLOT_X"
 _RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
+_EVIDENCE_SLOT = "EVIDENCE_PATH_SLOT_X"
+#: `<plan-stem>.evidence.yaml` beside the run's plan, which is unknown until run time.
+_RUNTIME_EVIDENCE_PATH_JS = "((_planRel ?? _sizingRel).replace(/\\.[^./]+$/, '') + '.evidence.yaml')"
 _JUDGE_PATH_CLAUSE = (
     "\n\nThe plan_path below is the plan, or on the XS route (no plan is authored) the sizing: "
     "then its exit_criterion is the spec and there is no Verification section."
@@ -551,13 +557,17 @@ def _criterion_judge_brief(
         run_base_sha=run_base_sha,
         prompt_head=intent + _JUDGE_PATH_CLAUSE,
         ledger_charter=ledger_charter,
+        evidence_path=_EVIDENCE_SLOT,
     )
     if brief is None:
         return None
     prompt, schema = brief
     if prompt.count(_PLAN_SLOT) != 2:
         raise AskComposeRefused("criterion judge prompt no longer names its plan path exactly twice")
+    if prompt.count(_EVIDENCE_SLOT) != 1:
+        raise AskComposeRefused("criterion judge prompt no longer names the evidence sidecar exactly once")
     marker = _emit._SHARED_PATH_MARKER_DELIM
+    prompt = prompt.replace(_EVIDENCE_SLOT, f"{marker}{_RUNTIME_EVIDENCE_PATH_JS}{marker}")
     return prompt.replace(_PLAN_SLOT, f"{marker}{_RUNTIME_PLAN_PATH_JS}{marker}"), schema
 
 
@@ -857,8 +867,12 @@ def compose_ask_script(
     in_run_commit: bool = False,
     ask_source: str = "pm",
     required_reviewers: Sequence[str] = (),
+    run_base_sha: Optional[str] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
+
+    `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
+    the test instruction; absent, the base is HEAD at compose time.
 
     A `sizing_rel` that is an intake mint (`is_intake`) is sized in-run like a raw ask, into that
     same file: its placeholder route never picks the arm and its minted `pm_verbatims` are kept.
@@ -1000,7 +1014,7 @@ def compose_ask_script(
         )
     ) + ledger_clause
     review_head = head + intent_clause + session_tail
-    run_base_sha = head_sha(repo_root) or ""
+    run_base_sha = run_base_sha or head_sha(repo_root) or ""
     review_blocks = compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
@@ -1776,6 +1790,7 @@ def compose_ask_script(
     )
     if judged:
         b.append("  let _falsifierSpec = null;")
+    b.append("  let _allLanded = false;")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     # Stage is folded into the plan agent's last act (stage_fold) wherever a plan agent runs. This
@@ -1827,12 +1842,17 @@ def compose_ask_script(
         ".map((g) => ({ id: g.id, owner_repo: g.owner_repo, owner_root: g.owner_root ?? '', "
         "closure_key: g.closure_key ?? null })).concat(_manifest.engine_rows ?? []); }"
     )
+    # Is anything left to dispatch, or only to judge and commit: a resume whose rows all landed
+    # stages no rows, only owed/gated ones, and joins the verify-and-commit tail.
     b.append(
-        "  if (_manifest.error || !(_manifest.rows ?? []).length) { _halted = { halted: "
-        f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
-        "((_manifest.owed ?? []).length || (_manifest.gated ?? []).length "
-        "? 'resume staged no dispatchable rows; its owed and withheld rows ride the returned owed and withheld lists' "
-        ": 'stage staged no rows'), sizing: _sizingRel, plan: _planRel, run_id: _runId, "
+        "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows) "
+        "&& ((_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
+        f"{{ _allLanded = true; _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
+    )
+    b.append(
+        "  if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded)) { _halted = { halted: "
+        f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
+        "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : {{}}) }}; }}"
     )
     b.append("  }")
@@ -2088,6 +2108,16 @@ def compose_ask_script(
         f": {stopped_na};"
     )
     b.append("  let _reviseAndRefire = _closeable ? null : _mkRevise();")
+    # An end that is not closeable and carries no halt would return with neither a commit nor a
+    # halted_by; it halts here so the halt-record commit lands the run record.
+    unclosable_kind = (
+        f"_criterionOpen ? {_lit(HALT_CRITERION_NOT_MET)} : " if judged else ""
+    ) + f"(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL') ? {_lit(HALT_DELIVERY_FAIL)} : {_lit(HALT_NOT_CLOSEABLE)}"
+    b.append(
+        "  if (!_closeable && !_halted && !(_commit && _commit.committed === true)) { "
+        f"_halted = {{ halted: {unclosable_kind}, reason: _reviseAndRefire.reason, "
+        "sizing: _sizingRel, run_id: _runId }; }"
+    )
     b.append(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "

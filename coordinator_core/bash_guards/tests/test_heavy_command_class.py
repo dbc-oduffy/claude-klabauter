@@ -256,6 +256,29 @@ def test_an_opaque_or_heavier_package_typecheck_is_not_noemit(tmp_path, cmd, scr
     assert c.heavy_class is not None and not c.noemit_tsc
 
 
+@pytest.mark.parametrize("cmd", ["pnpm run typecheck", "pnpm typecheck", "npm run typecheck"])
+def test_an_executor_admissible_package_typecheck_run_forms_are_noemit(tmp_path, cmd):
+    c = classify(cmd, None, _pkg(tmp_path, "tsc --noEmit"), 4)
+    assert c.heavy_class is H.TYPECHECK and c.noemit_tsc
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "pnpm run typecheck --watch",
+        "pnpm typecheck -w",
+        "pnpm run typecheck -- --watch",
+        "pnpm -r run typecheck",
+        "pnpm run typecheck --recursive",
+        "npm run typecheck --workspaces",
+        "pnpm run typecheck --watchAll",
+    ],
+)
+def test_watch_and_recursive_package_typecheck_forms_are_not_noemit(tmp_path, cmd):
+    c = classify(cmd, None, _pkg(tmp_path, "tsc --noEmit"), 4)
+    assert c.heavy_class is not None and not c.noemit_tsc
+
+
 def test_a_package_typecheck_without_a_package_json_is_not_noemit(tmp_path):
     (tmp_path / ".git").mkdir()
     c = classify("pnpm typecheck", None, str(tmp_path), 4)

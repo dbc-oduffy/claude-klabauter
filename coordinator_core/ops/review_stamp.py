@@ -103,7 +103,6 @@ from coordinator_core.completion_receipts.verdict import (
     effective_test_verdict,
     mint_refusal,
     superseding_delivery,
-    test_verdict_of,
 )
 from coordinator_core.session.claimed_write import replace_text
 
@@ -873,6 +872,20 @@ def _resolve_mint(
         if not isinstance(build_test_data, dict):
             raise MintRefusal("review-stamp: refusing to mint: no build/test record (--build-test required)")
         build_test_sidecar = build_test_data.get("sidecar")
+        if effective_test_verdict(build_test_data) != "pass" and integration_path is not None:
+            from datetime import timezone
+
+            from coordinator_core.ops.dispatch_emit.verdict_supersession import _instant, latest_tests_record
+
+            floor = _instant(integration_data.get("recorded_at"))
+            cured = (
+                latest_tests_record(repo_root, plan_id, floor.replace(tzinfo=floor.tzinfo or timezone.utc))
+                if floor is not None
+                else None
+            )
+            if cured and effective_test_verdict(cured["tests"]) == "pass":
+                build_test_data = {**cured["tests"], "sidecar": cured["record_path"]}
+                build_test_sidecar = build_test_data["sidecar"]
     tests_status = effective_test_verdict(build_test_data)
     criterion = integration_data.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
@@ -1070,8 +1083,8 @@ def _gate_refusal_with_hints(r: _Resolved) -> str:
 
         refusal += (
             "; re-run the plan's tests with the test-runner, record its verdict "
-            f"({RECORD_VERB} --result-json <runner result>), then re-mint with "
-            "--build-test <test-runner sidecar>"
+            f"({RECORD_VERB} --result-json <runner result> --plan <plan>), then re-mint "
+            "(or re-mint with --build-test <test-runner sidecar>)"
         )
     return refusal + _accept_hint(plan_path, repo_root)
 
@@ -1287,7 +1300,7 @@ def mint_receipt(
     build_test_data = integration_data.get("tests")
     if not isinstance(build_test_data, dict):
         raise MintRefusal("review-stamp: refusing to mint a receipt: no build/test record on the run record")
-    tests_status = test_verdict_of(build_test_data)
+    tests_status = effective_test_verdict(build_test_data)
     refusal = mint_refusal(
         {**integration_data, "delivery": delivery_data}, prep_data, build_test_data, criterion_open_ok=True
     )

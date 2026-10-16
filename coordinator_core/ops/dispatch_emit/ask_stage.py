@@ -53,6 +53,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
 )
 from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_model,
+    _EXECUTOR_AGENT_TYPE,
     _dispatch_report_path,
     _plan_deliverable_id,
     _dedupe_preserve_order,
@@ -350,6 +351,62 @@ def _only_rows(rows: list, exclusions: list, keep: frozenset) -> tuple[list, lis
     return kept, [e for e in exclusions if e.get("id") in keep]
 
 
+def _memo_draft_steps(
+    root: Path,
+    run_dir: Path,
+    owed: Sequence[OwedRow],
+    raw_by_id: Mapping[str, Mapping],
+    intent: str,
+) -> tuple[list[OwedRow], list[ManifestRow]]:
+    """Does the outbox hold the draft each owed `memo-send` row's send needs? One dispatched draft
+    step per row whose draft is absent and whose receiver is named; the row stays owed for the EM's
+    send either way, its detail saying why no step was staged. No subagent sends."""
+    from coordinator_core.ops.dispatch_emit.spine_read import memo_draft_fields
+    from coordinator_core.session.machinery_paths import LEGACY_MEMO_OUTBOX_RELDIR, MEMO_OUTBOX_RELDIR
+
+    out_owed: list[OwedRow] = []
+    steps: list[ManifestRow] = []
+    for o in owed:
+        if o.reason != "memo-send":
+            out_owed.append(o)
+            continue
+        raw = raw_by_id.get(o.id) or {}
+        fields, why = memo_draft_fields(dict(raw))
+        if fields is None:
+            out_owed.append(replace(o, detail=f"{o.detail} (no draft step staged: {why})"))
+            continue
+        slug = fields["slug"]
+        draft_rel = f"{MEMO_OUTBOX_RELDIR}/{slug}.md"
+        if (root / draft_rel).is_file() or (root / LEGACY_MEMO_OUTBOX_RELDIR / f"{slug}.md").is_file():
+            out_owed.append(o)
+            continue
+        step_id = f"{o.id}-memo-draft"
+        brief = run_dir / "briefs" / f"{step_id}.md"
+        body = raw.get("brief") or raw.get("body") or ""
+        text = (
+            f"Stage the outbox draft for memo-send row {o.id}. Run, from the repo root:\n\n"
+            f"    cross-repo-memo draft {slug} --to {fields['to']} --kind {fields['kind']} "
+            f"--title {json.dumps(fields['title'])}\n\n"
+            f"Then Edit the memo body in {draft_rel} to carry the row's content below. Never run "
+            "`cross-repo-memo send`: the EM sends. Touch no other file.\n\n"
+            f"Row body:\n\n{body}\n"
+        )
+        _write(brief, (intent + "\n" + text) if intent else text)
+        agent_type = _EXECUTOR_AGENT_TYPE
+        steps.append(
+            ManifestRow(
+                id=step_id,
+                agent_type=agent_type,
+                model=resolve_agent_model(agent_type, None),
+                brief_path=_rel(root, brief),
+                writes=(draft_rel,),
+                wave=0,
+            )
+        )
+        out_owed.append(o)
+    return out_owed, steps
+
+
 def stage(
     repo_root: Path,
     *,
@@ -509,6 +566,9 @@ def stage(
                     report=_dispatch_report_path(plan_posix, row.id),
                 )
             )
+
+    owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent)
+    manifest_rows.extend(draft_rows)
 
     docs = doc_writes(run_id, run_sizing)
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.

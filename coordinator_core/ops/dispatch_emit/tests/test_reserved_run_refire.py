@@ -25,6 +25,21 @@ def test_a_raw_ask_cannot_take_a_reserved_run(tmp_path):
         op._reserved_run(tmp_path, "r1", None, None)
 
 
+def test_a_rebind_keeps_the_first_binds_run_base(tmp_path, monkeypatch):
+    import coordinator_core.git.git_state as git_state
+
+    parent = tmp_path / parent_record_rel("p1")
+    parent.parent.mkdir(parents=True)
+    parent.write_text("{}", encoding="utf-8")
+    heads = iter(["a" * 40, "b" * 40])
+    monkeypatch.setattr(git_state, "head_sha", lambda *_a, **_k: next(heads))
+    assert op._recorded_run_base(tmp_path, "r1") is None
+    op._bind_reserved_run(tmp_path, "r1", "p1")
+    _status(tmp_path, "halted")
+    op._bind_reserved_run(tmp_path, "r1", "p1")
+    assert op._recorded_run_base(tmp_path, "r1") == "a" * 40
+
+
 def test_a_halted_slice_rebinds_and_a_running_one_is_refused(tmp_path):
     parent = tmp_path / parent_record_rel("p1")
     parent.parent.mkdir(parents=True)

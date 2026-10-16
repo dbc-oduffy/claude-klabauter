@@ -398,7 +398,8 @@ def compose_reverify_script(
         )
         tests_field = (
             ", tests: _tests ? { status: _tests.status ?? null, run: _tests.tests_run ?? null, "
-            "failed: _tests.tests_failed ?? null, sidecar: _tests.sidecar_path ?? null } : null"
+            "failed: _tests.tests_failed ?? null, sidecar: _tests.sidecar_path ?? null, "
+            "baseline_method: _tests.baseline_method ?? null, baseline: _tests.baseline ?? null } : null"
         )
     judge_lines = ""
     criterion_field = ""
@@ -493,6 +494,9 @@ def record_delivery_verdict(
             "failed": tests.get("failed"),
             "sidecar": tests.get("sidecar"),
         }
+        for key in ("baseline_method", "baseline"):
+            if tests.get(key) is not None:
+                fm["tests"][key] = tests[key]
         if skipped:
             fm["tests"]["skipped"] = True
     if foreign_claims is not None:
@@ -524,6 +528,9 @@ def settle_tests_sidecar(
         "tests_failed": tests.get("failed"),
         "sidecar_path": str(tests["sidecar"]),
     }
+    for key in ("baseline_method", "baseline"):
+        if tests.get(key) is not None:
+            result[key] = tests[key]
     try:
         record_test_verdict(repo_root, result, plan_path=plan_path, agent_type=agent_type)
     except TestVerdictRefused:

@@ -1,5 +1,6 @@
 """coordinator_core.ops.dispatch_emit.verdict_supersession -- read side of the append-only
-delivery-verdict records under `state/delivery-verdicts/`.
+delivery-verdict records under `state/delivery-verdicts/`, plus the `tests-reverify` record
+writer.
 
 An import-light leaf: `review_stamp.mint` reads the newest superseding verdict here, and the
 heavy writer (`reverify_delivery`, which composes review stages and reaches `dispatch_emit.op`)
@@ -8,6 +9,7 @@ stays out of every minter's import closure.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.session.declared_writes import declare_write
 
 VERDICT_DIR = Path("state") / "delivery-verdicts"
 RECORD_KIND = "delivery-verdict"
@@ -162,6 +165,65 @@ def latest_criterion_record(repo_root: Path, plan_id: str, newer_than: datetime)
         criterion = fm.get("criterion")
         at = _instant(fm.get("recorded_at"))
         if not (isinstance(criterion, dict) and criterion.get("status") and at and at > newer_than):
+            continue
+        key = (at, path.name)
+        if best is None or key > best[0]:
+            best = (key, {**fm, "record_path": path.relative_to(repo_root).as_posix()})
+    return best[1] if best else None
+
+
+TESTS_RECORD_KIND = "tests-reverify"
+
+
+def record_tests_supersession(
+    *, repo_root: Path, plan_id: str, tests: dict, session_id: str = ""
+) -> str:
+    """Exclusive-create a `tests-reverify` record binding `tests` (`status`, `run`, `failed`,
+    `sidecar`, `baseline_method`, `baseline`) to `plan_id`; returns its repo-relative posix path.
+    Raises ValueError without a plan_id or a `tests.status`. Carries no delivery block, so
+    delivery supersession never reads it."""
+    if not plan_id or not isinstance(tests, dict) or not tests.get("status"):
+        raise ValueError("tests supersession: needs a plan_id and a tests block with a status")
+    now = datetime.now(timezone.utc)
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "-", plan_id)
+    rel = VERDICT_DIR / now.strftime("%Y-%m") / f"{stem}.tests.{now.strftime('%Y%m%dT%H%M%S%fZ')}.md"
+    fm = {
+        "kind": TESTS_RECORD_KIND,
+        "plan_id": plan_id,
+        "recorded_at": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "session_id": session_id,
+        "tests": {
+            key: tests.get(key)
+            for key in ("status", "run", "failed", "sidecar", "baseline_method", "baseline")
+        },
+    }
+    target = repo_root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "x", encoding="utf-8", newline="\n") as fh:
+        fh.write("---\n" + yaml.safe_dump(fm, default_flow_style=False, sort_keys=False) + "---\n")
+    declare_write(str(target))
+    return rel.as_posix()
+
+
+def latest_tests_record(repo_root: Path, plan_id: str, newer_than: datetime) -> Optional[dict]:
+    """The newest engine-written record under `VERDICT_DIR` bound to `plan_id` that carries a
+    `tests` status and was recorded strictly after `newer_than`: a `tests-reverify` record or a
+    delivery-verdict record that re-ran the tests. `None` when there is none; ValueError for an
+    empty `plan_id`."""
+    if not plan_id:
+        raise ValueError("latest_tests_record: plan_id is required")
+    base = repo_root / VERDICT_DIR
+    if not base.is_dir():
+        return None
+    floor = _aware(newer_than)
+    best: Optional[tuple] = None
+    for path in base.glob("*/*.md"):
+        fm = _frontmatter(path)
+        if not fm or fm.get("kind") not in (RECORD_KIND, TESTS_RECORD_KIND) or str(fm.get("plan_id")) != plan_id:
+            continue
+        tests = fm.get("tests")
+        at = _aware(_instant(fm.get("recorded_at")))
+        if not (isinstance(tests, dict) and tests.get("status") and at and at > floor):
             continue
         key = (at, path.name)
         if best is None or key > best[0]:

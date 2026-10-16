@@ -64,6 +64,21 @@ def test_pass_run_writes_the_receipt_onto_the_inventory_record(tmp_path):
     assert "run_id: run-1" in inv.read_text(encoding="utf-8")
 
 
+def test_a_baseline_cleared_fail_is_stamped_as_pass(tmp_path):
+    repo, inv, sidecar = _repo(tmp_path)
+    record = _record()
+    record["tests"] = {
+        "status": "fail",
+        "run": 5,
+        "failed": 2,
+        "sidecar": "t.md",
+        "baseline_method": "export",
+        "baseline": {"pre_existing": ["a", "b"], "caused": [], "unverified": []},
+    }
+    stamp = m.mint_receipt(inv, repo, resolved=(SHA, sidecar, record), terminal_tree_sha=TREE)
+    assert stamp["build_test"]["verdict"] == "pass"
+
+
 def test_a_record_without_run_id_is_refused_and_unchanged(tmp_path):
     repo, inv, sidecar = _repo(tmp_path, run_id=False)
     before = inv.read_text(encoding="utf-8")

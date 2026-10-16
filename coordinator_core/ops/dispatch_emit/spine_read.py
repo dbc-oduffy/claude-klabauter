@@ -464,6 +464,28 @@ def memo_row_slug(raw: dict) -> Optional[str]:
     return None
 
 
+MEMO_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice", "friction")
+MEMO_DEFAULT_KIND = "ask"
+
+
+def memo_draft_fields(raw: dict) -> tuple[Optional[dict], str]:
+    """Does this memo-send row name what `cross-repo-memo draft` needs? `({slug, to, title, kind},
+    "")` when it does; `(None, reason)` when the slug or the receiver (`memo_to:`) is absent, never
+    a guessed recipient. `kind` is `memo_kind:` (one of `MEMO_KINDS`), else `MEMO_DEFAULT_KIND`."""
+    slug = memo_row_slug(raw)
+    if slug is None:
+        return None, "the row names no memo slug"
+    to = raw.get("memo_to")
+    if not isinstance(to, str) or not to.strip():
+        return None, "the row names no receiver (memo_to:)"
+    kind = raw.get("memo_kind") or MEMO_DEFAULT_KIND
+    if kind not in MEMO_KINDS:
+        return None, f"memo_kind {kind!r} is not one of {', '.join(MEMO_KINDS)}"
+    title = raw.get("title")
+    title = title.strip() if isinstance(title, str) and title.strip() else slug
+    return {"slug": slug, "to": to.strip(), "title": title, "kind": kind}, ""
+
+
 def memo_receipt_exists(repo_root: Optional[Path], slug: str) -> bool:
     """True when the sender-side receipt ``memo-outbox/sent/<slug>.md`` exists under ``repo_root``."""
     if repo_root is None:

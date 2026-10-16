@@ -1067,6 +1067,17 @@ _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _RESOLUTION_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 
 
+def _run_id_of(params: dict, ask_run_dir: Optional[Path], script_path_raw: str) -> str:
+    """Which run this commit is for: ``params.run_id``, else the ask run dir's name, else the
+    script stem (a non-ask script's stem is its run id; an ask script's is ``<run_id>.workflow``)."""
+    rid = params.get("run_id")
+    if isinstance(rid, str) and rid:
+        return rid
+    if ask_run_dir is not None:
+        return ask_run_dir.name
+    return PurePosixPath(script_path_raw.replace("\\", "/")).stem
+
+
 def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: str) -> dict:
     """Write ``resolution: {sha, run_id}`` beside the sizing's ``status: shipped``, in place and
     schema-checked. ``{}`` on a write, ``{"resolution_error": reason}`` otherwise; never raises --
@@ -2610,6 +2621,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return reply
     if close_ctx:
         reply["close"] = _close_block(close_ctx, reply)
+        if "siblings" in reply["close"]:
+            reply["siblings"] = reply["close"]["siblings"]
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS:
         reply["stranded"] = stranded
     if blockers:
@@ -2939,7 +2952,7 @@ def _terminal_commit_inner(
         presets = kind_presets(kind, plan_governs=plan_governs)
         close_ctx.update(
             root=worktree_root,
-            run_id=PurePosixPath(script_path_raw.replace("\\", "/")).stem,
+            run_id=_run_id_of(params, ask_run_dir, script_path_raw),
             applies=applies,
             plan_rel=request.plan_path,
             inline_review=inline_review if isinstance(inline_review, dict) else {},
@@ -3585,10 +3598,8 @@ def _terminal_commit_inner(
             shipped_sizing = shipped.pop("sizing_shipped", None)
             reply.update(shipped)
             if shipped_sizing:
-                run_id = params.get("run_id") or (
-                    ask_run_dir.name if ask_run_dir is not None else PurePosixPath(script_path_raw).stem
-                )
-                reply.update(_write_resolution(worktree_root, shipped_sizing, str(reply["sha"]), str(run_id)))
+                run_id = _run_id_of(params, ask_run_dir, script_path_raw)
+                reply.update(_write_resolution(worktree_root, shipped_sizing, str(reply["sha"]), run_id))
         also_commit = tuple(
             p for p in (
                 request.plan_path if reply.get("review_stamp") == "minted" else None,
