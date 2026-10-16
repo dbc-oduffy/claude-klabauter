@@ -85,14 +85,16 @@ def test_unresolved_pm_decision_still_refuses_as_room(repo):
     assert halt["kind"] == "room" and halt["route"] == "pm-decision"
 
 
-def test_composed_script_chains_four_stages_in_order(repo):
+def test_composed_script_chains_gate_roadmap_plan_and_one_commit_in_order(repo):
     _put(repo)
     script = _compose(repo)
-    marks = ["roadmapBlitz({", "planBlitz({", "phase('execute')", "phase('workstream-complete')"]
+    marks = ["roadmapBlitz({", "planBlitz({", "_nextAction = { kind: 'terminal_commit'", "phase('commit')"]
     pos = [script.index(m, script.index("phase('gate')")) for m in marks]
     assert pos == sorted(pos)
     assert "gateReportPath: _rb.gate_report_path" in script and "batons: w.batons" in script
-    assert "if (!_halted) {\n  phase('workstream-complete')" in script
+    assert "_rb?.stage?.waves" in script
+    for gone in ("label: 'waves'", "label: 'execute'", "label: 'workstream-complete'", "phase('execute')"):
+        assert gone not in script
     assert not any(f.severity is Severity.ERROR for f in run_checks(script))
 
 

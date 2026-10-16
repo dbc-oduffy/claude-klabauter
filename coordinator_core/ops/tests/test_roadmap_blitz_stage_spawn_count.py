@@ -30,7 +30,8 @@ def _budget() -> dict:
     return load_manifest()["overrides"]["roadmap.blitz_stage"]["spawn_count_budget"]
 
 
-def test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns(tmp_path, monkeypatch):
+@pytest.mark.parametrize("approved", [False, True])
+def test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns(tmp_path, monkeypatch, approved):
     _git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "f").write_text("1")
     _git(tmp_path, "add", "f")
@@ -39,10 +40,15 @@ def test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns(tmp
     run.mkdir(parents=True)
     (run / "clusters.md").write_text(CLUSTERS, encoding="utf-8")
     (run / "reconciliation.md").write_text(RECON, encoding="utf-8")
+    (run / "OVERVIEW.md").write_text("---\nroadmap_id: rm-test\n---\n# o\n", encoding="utf-8")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "00000000-0000-4000-8000-000000000000")
+    params = {"roadmap": str(run)}
+    if approved:
+        params["approval"] = {"verdict": "approved", "approver": "pm", "utterance": "ship it"}
+        params["trail_dir"] = "scratch/warp/run-1/trail"
 
     with _count_spawns_attributed(monkeypatch) as spawns:
-        out = roadmap_blitz_stage._handler({"roadmap": str(run)}, repo_root=tmp_path / ".git")
+        out = roadmap_blitz_stage._handler(params, repo_root=tmp_path / ".git")
 
     assert out["commit_error"] is None and len(out["commits"]) == 2, out
     assert out["gate_report_state"] == "frozen-now"

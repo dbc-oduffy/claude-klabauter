@@ -11,6 +11,9 @@ Two arms:
             (R1..Rn) per ask, each slice claims its own.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
+  - sizings: {sizings: [{sizing, label?, writes?}], confirm_split?} -- existing planned sizings
+            (each with a `plan:` edge); mints no sizing, runs no partition, only stamps each
+            sizing's `em_analysis.ask_parent`.
 
 Negative spec:
   - Refuses before writing anything: shape, partition and PM-turn checks run first.
@@ -174,11 +177,91 @@ def fanout(params: dict, root: Path) -> dict:
         return _err(str(exc))
 
 
+def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, ...]]]]:
+    """The sizings arm items as (sizing path, label, writes)."""
+    raw = params.get("sizings")
+    if not isinstance(raw, list) or not raw:
+        raise _Refused("sizings must be a non-empty list")
+    out = []
+    for i, item in enumerate(raw):
+        where = f"sizings[{i}]"
+        if not isinstance(item, Mapping):
+            raise _Refused(f"{where}: must be an object")
+        rel = item.get("sizing")
+        if not isinstance(rel, str) or not rel.strip():
+            raise _Refused(f"{where}: sizing must be a non-empty path string")
+        label = item.get("label")
+        if label is not None and not isinstance(label, str):
+            raise _Refused(f"{where}: label must be a string")
+        out.append((rel.strip(), (label or "").strip() or f"sizing-{i + 1}", _writes(item.get("writes"), where)))
+    return out
+
+
+def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
+    """The sizings arm: sibling runs over existing planned sizings, each stamped with its marker."""
+    items = _read_sizings(params)
+    slices = [contract.AskSlice(label, rel, (), writes) for rel, label, writes in items]
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    parent_id = f"ask-parent-{stamp}-{uuid.uuid4().hex[:6]}"
+    run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in items]
+    edges = contract.after_edges(slices)
+
+    stamped: list[tuple[Path, str]] = []
+    for i, (rel, label, _w) in enumerate(items):
+        doc = _load_parent(worktree, rel)
+        edge = doc.get("plan")
+        if not isinstance(edge, str) or not edge.strip():
+            raise _Refused(f"sizings[{i}] {rel!r} has no plan edge")
+        analysis = doc.get("em_analysis")
+        if analysis is None:
+            analysis = doc["em_analysis"] = {}
+        if not isinstance(analysis, dict):
+            raise _Refused(f"sizings[{i}] {rel!r}: em_analysis is not a mapping")
+        held = analysis.get(ASK_PARENT_KEY)
+        if held:
+            raise _Refused(f"sizings[{i}] {rel!r} already carries ask_parent {held!r}")
+        analysis[ASK_PARENT_KEY] = contract.ask_parent_marker(parent_id, run_ids[i])
+        errors = validate_frontmatter(doc, _SIZING_SCHEMA_PATH)
+        if errors:
+            raise _Refused(f"sizings[{i}] {rel!r} failed schema validation: {format_validation_errors(errors)}")
+        stamped.append((worktree / rel, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)))
+
+    runs = tuple(
+        contract.SiblingRun(
+            run_id=run_ids[i],
+            label=label,
+            after=tuple(run_ids[j] for j in edges[i]),
+            slice_sizing=rel,
+            status=contract.STATUS_AFTER if edges[i] else contract.STATUS_READY,
+        )
+        for i, (rel, label, _w) in enumerate(items)
+    )
+    runs = contract.admit(runs, contract.concurrent_run_budget())
+    for path, text in stamped:
+        claimed_write.replace_text(path, text)
+    parent_path = worktree / contract.parent_record_rel(parent_id)
+    parent_path.parent.mkdir(parents=True, exist_ok=True)
+    record_json = contract.ParentRecord(parent_id, runs, confirm).to_json()
+    claimed_write.create_exclusive(parent_path, json.dumps(record_json, indent=2) + "\n")
+    ready = [r for r in runs if r.status == contract.STATUS_READY]
+    return {
+        "exit_code": 0,
+        "applied": True,
+        **contract.FanoutReply(parent_id, runs).to_json(),
+        "ready": [{"run_id": r.run_id, "sizing": r.slice_sizing} for r in ready],
+        "fire": [fire_command(r.slice_sizing) for r in ready],
+    }
+
+
 def _fanout(params: Mapping, root: Path) -> dict:
-    slices, parent_rel = _read_slices(params)
     confirm = params.get("confirm_split", False)
     if not isinstance(confirm, bool):
         raise _Refused("confirm_split must be a boolean")
+    if params.get("sizings") is not None:
+        if params.get("asks") is not None or params.get("slices") is not None:
+            raise _Refused("pass exactly one of asks, slices or sizings")
+        return _fanout_sizings(params, main_worktree_root(root), confirm)
+    slices, parent_rel = _read_slices(params)
     cwd = str(root)
     worktree = main_worktree_root(root)
 

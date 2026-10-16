@@ -209,7 +209,8 @@ def test_raw_ask_embeds_the_roadmap_arm_and_skips_the_row_phases_on_it():
     assert "async function roadmapBlitz(" in script
     branch = script.index("_gate.arm === 'roadmap'")
     assert branch < script.index("_viaRoadmap = true;") < script.index("phase('roadmap-blitz')")
-    assert script.index("phase('workstream-complete')") < script.index("  if (!_viaRoadmap) {") < script.index("phase('stage')")
+    assert script.index("_nextAction = { kind: 'terminal_commit'") < script.index("  if (!_viaRoadmap) {") < script.index("phase('stage')")
+    assert "phase('workstream-complete')" not in script and "phase('execute')" not in script.split("_viaRoadmap = true;")[1].split("  if (!_viaRoadmap) {")[0]
 
 
 def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path):

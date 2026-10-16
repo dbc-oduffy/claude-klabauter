@@ -45,12 +45,13 @@ Negative-spec:
 from __future__ import annotations
 
 import functools
+import hashlib
 import importlib.util
 import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -203,19 +204,34 @@ def _has_staged(repo_root: Path, prefix: str, roadmap_id: str) -> bool:
 def _patch_frontmatter(
     content: str,
     *,
-    sprint: int,
-    wave: int,
-    loe: Optional[str],
-    blocked_by: List[str],
+    sprint: Optional[int] = None,
+    wave: Optional[int] = None,
+    loe: Optional[str] = None,
+    blocked_by: Optional[List[str]] = None,
     fold_flag: Optional[str] = None,
+    set_fields: Optional[Dict[str, str]] = None,
 ) -> str:
+    """Stub mode (``sprint`` given) rewrites the scaffold's sprint/wave/loe/blocked_by lines.
+    ``set_fields`` replaces each named top-level key's line, or adds it before the closing
+    fence; values are written as JSON-quoted scalars."""
+    stub_mode = sprint is not None
+    blocked_by = blocked_by or []
     out: List[str] = []
     fences = 0
+    pending = dict(set_fields or {})
     for line in content.split("\n"):
         if line == "---":
             fences += 1
+            if fences == 2:
+                out.extend(f"{k}: {json.dumps(v)}" for k, v in pending.items())
+                pending = {}
         if fences == 1:
-            if line.startswith("sprint:"):
+            key = line.split(":", 1)[0] if ":" in line and not line.startswith((" ", "-")) else None
+            if key in pending:
+                line = f"{key}: {json.dumps(pending.pop(key))}"
+            if not stub_mode:
+                pass
+            elif line.startswith("sprint:"):
                 line = f"sprint: {sprint}"
             elif line.startswith("wave:"):
                 line = f"wave: {wave}"
@@ -432,7 +448,11 @@ def _freeze_gate_report(
     rel = Path(record_homes.record_path("", "plan-blitz", f"{roadmap_id}/{GATE_REPORT_NAME}")).as_posix()
     target = repo_root / rel
     if target.is_file():
-        return {"gate_report_path": rel, "gate_report_state": "already-frozen"}
+        return {
+            "gate_report_path": rel,
+            "gate_report_state": "already-frozen",
+            "_report": json.loads(target.read_text(encoding="utf-8")),
+        }
     if not audit_passed:
         return {"gate_report_path": None, "gate_report_state": "deferred-audit-failed"}
     from coordinator_core.ops.roadmap_plan_gate import _handler as plan_gate_op, bare_text
@@ -451,7 +471,58 @@ def _freeze_gate_report(
     target.parent.mkdir(parents=True, exist_ok=True)
     create_exclusive(target, bare_text(report))
     os.chmod(target, 0o444)
-    return {"gate_report_path": rel, "gate_report_state": "frozen-now"}
+    return {"gate_report_path": rel, "gate_report_state": "frozen-now", "_report": report}
+
+
+_WAVE_BATON_KEYS = ("id", "path", "title", "sized", "planPath", "executionOpen", "tshirt", "route", "sizingObject")
+
+
+def _waves_of(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The report's own waves, in order, each baton id resolved to its report row; none when the
+    report was deferred."""
+    if not report:
+        return []
+    rows = {b.get("id"): b for b in report.get("batons") or []}
+    return [
+        {
+            "index": i,
+            "batons": [{k: rows.get(bid, {}).get(k) for k in _WAVE_BATON_KEYS} | {"id": bid} for bid in wave],
+        }
+        for i, wave in enumerate(report.get("waves") or [])
+    ]
+
+
+def _record_approval(repo_root: Path, approval: Dict[str, Any], trail_dir: str) -> Dict[str, str]:
+    """Write ``<trail_dir>/approval.json`` once; a resume finds and returns the first record."""
+    rel = f"{trail_dir.rstrip('/')}/approval.json"
+    target = repo_root / rel
+    if target.is_file():
+        first = json.loads(target.read_text(encoding="utf-8"))
+        return {"path": rel, "recorded_at": first["recorded_at"]}
+    recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    create_exclusive(target, json.dumps({**approval, "recorded_at": recorded_at}, indent=2) + "\n")
+    return {"path": rel, "recorded_at": recorded_at}
+
+
+def _changed_since_index(repo_root: Path, rels: List[str]) -> List[str]:
+    """``rels`` minus tracked paths whose blob already equals the index's; an unreadable index
+    filters nothing. Reads the index in process."""
+    from coordinator_core.git.git_state import IndexParseError, read_index
+
+    try:
+        snapshot = read_index(repo_root)
+    except (IndexParseError, OSError):
+        return rels
+    kept = []
+    for rel in rels:
+        entry = snapshot.get(rel)
+        if entry is not None:
+            data = (repo_root / rel).read_bytes()
+            if hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() == entry.sha:
+                continue
+        kept.append(rel)
+    return kept
 
 
 def stage_roadmap(
@@ -461,9 +532,13 @@ def stage_roadmap(
     edges_path: Optional[str] = None,
     branch: str = "main",
     commit: bool = True,
+    approval: Optional[Dict[str, Any]] = None,
+    trail_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Stage the roadmap at ``roadmap`` (its directory or any file in it).
-    Returns ``{gate_report_path, stubs, numbering, folds, audit, commits, ...}``."""
+    Returns ``{gate_report_path, stubs, numbering, folds, audit, commits, waves, ...}``.
+    With ``approval`` the verdict is recorded under ``trail_dir`` first; a declined verdict stages
+    nothing, an approved one stamps OVERVIEW.md and commits the roadmap directory with the stubs."""
     repo_root = Path(repo_root)
     roadmap_path = Path(roadmap)
     if not roadmap_path.is_absolute():
@@ -471,6 +546,25 @@ def stage_roadmap(
     if not roadmap_path.exists():
         raise BlitzStageRefused(f"roadmap path does not exist: {roadmap}")
     run_dir, roadmap_id = _resolve_run_dir(roadmap_path)
+    approval_record: Optional[Dict[str, str]] = None
+    approved = approval is not None and approval.get("verdict") == "approved"
+    if approval is not None:
+        if not trail_dir:
+            raise BlitzStageRefused("approval needs a trail_dir")
+        if approved and not (run_dir / "OVERVIEW.md").is_file():
+            raise BlitzStageRefused(f"no OVERVIEW.md under {run_dir} to stamp")
+        approval_record = _record_approval(repo_root, approval, trail_dir)
+        if not approved:
+            return {
+                "roadmap_id": roadmap_id,
+                "approval_record": approval_record,
+                "overview_stamped": False,
+                "declined": True,
+                "stubs": [],
+                "commits": [],
+                "commit_error": None,
+                "waves": [],
+            }
     clusters_file = run_dir / "clusters.md"
     if not clusters_file.is_file():
         raise BlitzStageRefused(f"no clusters.md under {run_dir}")
@@ -616,6 +710,23 @@ def stage_roadmap(
     commits: List[Dict[str, Any]] = []
     commit_error: Optional[str] = None
     new_paths = [p for s in stubs if s["created"] for p in (s["path"], s.get("sizing_object")) if p]
+    overview_stamped = False
+    if approved:
+        overview = run_dir / "OVERVIEW.md"
+        stamped = _patch_frontmatter(
+            overview.read_text(encoding="utf-8"),
+            set_fields={
+                "status": "final-approved",
+                "approver": approval["approver"],
+                "approval_utterance": approval.get("utterance") or approval.get("ruling"),
+            },
+        )
+        overview.write_text(stamped, encoding="utf-8")
+        overview_stamped = True
+        roadmap_files = sorted(
+            Path(d, f).relative_to(repo_root).as_posix() for d, _, fs in os.walk(run_dir) for f in fs
+        )
+        new_paths += [p for p in _changed_since_index(repo_root, roadmap_files) if p not in new_paths]
     if commit and new_paths:
         sha, commit_error = _commit(
             repo_root, new_paths, f"roadmap-blitz-stage: scaffold {len(new_paths)} stub(s) for {roadmap_id}"
@@ -635,10 +746,18 @@ def stage_roadmap(
         if sha:
             commits.append({"sha": sha, "paths": [frozen["gate_report_path"]]})
         commit_error = commit_error or err
+    gate_report = frozen.pop("_report", None)
+    approval_fields: Dict[str, Any] = (
+        {"approval_record": approval_record, "overview_stamped": overview_stamped, "declined": False}
+        if approval is not None
+        else {}
+    )
     return {
         "roadmap_id": roadmap_id,
         "edge_source": edge_source,
         **frozen,
+        **approval_fields,
+        "waves": _waves_of(gate_report),
         "stubs": stubs,
         "numbering": numbering,
         "cluster_numbering": cluster_numbering,

@@ -8,7 +8,7 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.warp_fire import fire_command
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
-_LIVE = "if (_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN) {"
+_LIVE = "if (_closeable && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN) {"
 
 
 def _script(monkeypatch, **kw) -> str:

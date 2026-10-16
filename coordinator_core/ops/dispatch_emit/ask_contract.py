@@ -165,7 +165,10 @@ RUN_RECORD_FILES = (
 #: `dispatch.terminal_commit` params key whose dict value (a non-empty str `halted`) selects the
 #: halted-run record-only mode.
 HALTED_RECORD_PARAM = "halted_by"
-HALT_REASON_FIELDS = ("reason", "detail", "refused", "error")
+#: `dispatch.terminal_commit` params key for the roadmap fan-out record:
+#: `{plans: [repo-relative plan path, ...]}`.
+FANOUT_RECORD_PARAM = "fanout"
+HALT_REASON_FIELDS =("reason", "detail", "refused", "error")
 HALT_REASON_MAX_CHARS = 300
 
 

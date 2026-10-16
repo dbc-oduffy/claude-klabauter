@@ -1164,6 +1164,20 @@ _DEFAULT_RULESET_TYPE_OVERRIDES: Dict[str, Dict[str, Any]] = {
 }
 
 
+#: The one engine op a review-wave agent is emitted to run itself: it partitions the frozen diff
+#: into the slices that agent reviews. Matched as the exact op token, never a prefix.
+_REVIEW_PREP_OP = "review.prep"
+
+
+def _is_review_prep_invoke(cmd: str) -> bool:
+    tokens = peel_env_assignment_prefix(_tokenize_segment(cmd))
+    return (
+        len(tokens) >= 2
+        and _token_matches_binary(tokens[0], "coordinator-invoke")
+        and tokens[1] == _REVIEW_PREP_OP
+    )
+
+
 def _default_ruleset(effective_type: str = "") -> Dict[str, Any]:
     """(Divergence 7) The prior hardcoded enforcement, expressed in the same
     shape ``_validate_ruleset`` returns for a policy-supplied entry. This is
@@ -3052,6 +3066,8 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         elif _is_readonly_fs_command(cmd_for_check, ruleset):
             return None
         elif _evaluate_findings_ledger_tier(cmd_for_check):
+            return None
+        elif _is_review_prep_invoke(cmd_for_check):
             return None
         elif dialect is Dialect.POWERSHELL and _is_readonly_powershell_command(cmd_for_check):
             return None

@@ -89,8 +89,6 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "plan", "authors the plan"),
     _earns("ask", "plan-review", "reviews the plan"),
     _earns("ask", "plan-revise", "revises the plan against its review"),
-    _earns("ask", "waves", "maps the plan's rows into waves"),
-    _earns("ask", "execute", "executes the rows"),
     _earns("ask", "work:", "executes one row"),
     _earns("ask", "verify:", "runs a row's scoped tests and reports"),
     _earns(
@@ -98,7 +96,6 @@ REGISTER: tuple[LegDecl, ...] = (
         "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "
         "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs",
     ),
-    _earns("ask", "workstream-complete", "closes the workstream's records"),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "stage", "fallback only when no fold staged a manifest (stop_after, failed fold); no preceding agent"),
     _floor("ask", "commit", _COMMIT_FLOOR),

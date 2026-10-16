@@ -1,9 +1,10 @@
-"""warp --ask roadmap arm: roadmap-blitz, plan-blitz waves, execute per plan, workstream-complete.
+"""warp --ask roadmap arm: roadmap-blitz, plan-blitz waves, one record commit that fans the plans out.
 
 Composed in place of the single-plan arms when the sizing resolves to route `roadmap`. DoE's
 workflows/roadmap-blitz.mjs is wrapped like plan-blitz into `async function roadmapBlitz(args)`;
-waves come from the frozen gate report's engine-computed `waves`, never from agent judgment.
-Pure composition: no spawn.
+waves come from the stage reply's engine-computed `waves`, never from agent judgment. The run
+executes nothing: its one commit lands the planning record and fires each ready plan as a sibling
+run. Pure composition: no spawn.
 """
 
 from __future__ import annotations
@@ -13,7 +14,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.ops.dispatch_emit import emit as _emit
-from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REFUSAL, OP_ASK_GATE, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    FANOUT_RECORD_PARAM,
+    HALT_REFUSAL,
+    OP_ASK_GATE,
+    RUN_DIR_ROOT,
+)
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import (
     AskPlanBlitzRefused,
     _meta_span,
@@ -54,62 +60,32 @@ def approver_for(interaction_mode: object) -> str:
     return _PM_APPROVER if interaction_mode == "hands-on" else _APM_APPROVER
 
 
-ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _executed = [];", "  let _complete = null;")
+ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];")
+
+#: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
+ROADMAP_NEXT_ACTION_JS = (
+    "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
+    f"params: {{ {FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath) }} }} }}"
+)
 
 
 def roadmap_stage_lines(
     *, repo_root: str, run_id: str, interaction_mode: object, plan_blitz_args: Optional[dict]
 ) -> list[str]:
-    """roadmap-blitz, plan-blitz waves, execute per plan, workstream-complete: each block under
-    `if (!_halted)`. Reads `REPO_ROOT`, `_sizingRel`, `_runId`, `_halted` and the
-    `ROADMAP_DECLS` bindings; the caller embeds both stage functions."""
+    """roadmap-blitz, then plan-blitz per wave, each block under `if (!_halted)`; the last sets
+    `_nextAction` to the fan-out commit. Waves come from the stage reply, never an agent. Reads
+    `REPO_ROOT`, `_sizingRel`, `_runId`, `_halted`, `_nextAction` and the `ROADMAP_DECLS` bindings;
+    the caller embeds both stage functions and fires the commit."""
     from coordinator_core.ops.dispatch_emit import ask_compose as ac
 
-    lit, agent, cat = ac._lit, ac._agent, ac._cat
+    lit = ac._lit
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
-    anchor = ac._ANCHOR_CLAUSE.format(root=repo_root)
-    head = _emit._BRIEF_PRECEDENCE_CLAUSE
-    agent_type = _emit._EXECUTOR_AGENT_TYPE
     approver = approver_for(interaction_mode)
     spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
     halt = lambda reason: (  # noqa: E731
         f"_halted = {{ halted: {lit(HALT_REFUSAL)}, reason: {reason}, sizing: _sizingRel, run_id: _runId }};"
     )
 
-    def prompt_of(*parts: str) -> str:
-        return cat(f"{head}\n\n{anchor}\n\n", *parts)
-
-    waves_prompt = prompt_of(
-        "Read the frozen gate report at ",
-        "js:_rb.gate_report_path",
-        ". Its `waves` field is lists of baton ids, in order. Return one entry per wave: `index` is the "
-        "wave's 0-based position in `waves`, and `batons` is that wave's ids each resolved against the "
-        "report's `batons` array as {id, path, title, sized, planPath (the baton's plan.path, else null), "
-        "executionOpen (its execution_gate.open)}. The waves are engine-computed from file overlap: "
-        "copy, never regroup, reorder or merge.",
-    )
-    exec_prompt = prompt_of(
-        "Execute the approved plan at ",
-        "js:planPath",
-        " by following the execute-plan skill (`coordinator:execute-plan`) to completion, then return "
-        "its terminal status as status.",
-    )
-    done_prompt = prompt_of(
-        "Every approved plan of this roadmap has executed. Follow the workstream-complete skill "
-        "(`coordinator:workstream-complete`) for the sizing at ",
-        "js:_sizingRel",
-        " and return its terminal status as status.",
-    )
-    exec_schema = ac._obj(["status"], {"status": ac._STR})
-    waves_schema = ac._obj(
-        ["waves"],
-        {
-            "waves": {
-                "type": "array",
-                "items": ac._obj(["index", "batons"], {"index": {"type": "integer"}, "batons": {"type": "array", "items": {"type": "object"}}}),
-            }
-        },
-    )
     return [
         "  if (!_halted) {",
         "  phase('roadmap-blitz');",
@@ -119,10 +95,8 @@ def roadmap_stage_lines(
         f"  if (!_rb || !_rb.gate_report_path) {{ {halt(chr(39) + 'roadmap-blitz returned no gate_report_path' + chr(39))} }}",
         "  }",
         "  if (!_halted) {",
-        "  phase('plan');",
-        f"  const _wm = await {agent(waves_prompt, label='waves', phase='plan', agent_type=agent_type, schema=waves_schema)};",
-        "  const _waves = [...(_wm.waves ?? [])].sort((a, c) => a.index - c.index);",
-        "  if (!_waves.length) { " + halt("'gate report carries no waves'") + " }",
+        "  const _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);",
+        "  if (!_waves.length) { " + halt("'roadmap-blitz stage reply carries no waves'") + " }",
         "  for (const w of _waves) {",
         "    if (_halted) break;",
         f"    const _pb = await {_plan_blitz_call(spread, run_dir)};",
@@ -132,19 +106,7 @@ def roadmap_stage_lines(
         "  }",
         "  if (!_halted && !_ready.length) { " + halt("'plan-blitz reported no ready plan'") + " }",
         "  }",
-        "  if (!_halted) {",
-        "  phase('execute');",
-        "  const _byWave = [...new Set(_ready.map((x) => x.wave))].sort((a, c) => a - c);",
-        "  for (const wi of _byWave) {",
-        "    const _res = await Promise.all(_ready.filter((x) => x.wave === wi).map(async ({ planPath }) => ({ planPath, "
-        f"...(await {agent(exec_prompt, label='execute', phase='execute', agent_type=agent_type, schema=exec_schema)}) }})));",
-        "    _executed.push(..._res);",
-        "  }",
-        "  }",
-        "  if (!_halted) {",
-        "  phase('workstream-complete');",
-        f"  _complete = await {agent(done_prompt, label='workstream-complete', phase='workstream-complete', agent_type=agent_type, schema=exec_schema)};",
-        "  }",
+        f"  if (!_halted) {{ _nextAction = {ROADMAP_NEXT_ACTION_JS}; }}",
     ]
 
 
@@ -188,6 +150,7 @@ def compose_roadmap_script(
         f"  let _sizingRel = {lit(sizing_rel)};",
         "  let _halted = null;",
         *ROADMAP_DECLS,
+        *ac.roadmap_commit_decls(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id),
         rb_fn,
         plan_blitz_fn,
         "  phase('gate');",
@@ -198,13 +161,14 @@ def compose_roadmap_script(
         *roadmap_stage_lines(
             repo_root=repo_root, run_id=run_id, interaction_mode=interaction_mode, plan_blitz_args=plan_blitz_args
         ),
+        *ac.roadmap_commit_lines(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id),
         "  return { arm: 'roadmap', sizing: _sizingRel, run_id: _runId, roadmap: _rb, ready: _ready, "
-        "executed: _executed, workstream_complete: _complete, halted_by: _halted };",
+        "commit: _commit, fanout: _commit?.fanout ?? null, next_action: _nextAction, halted_by: _halted };",
     ]
     titles = roadmap_phase_titles(rb_phases, plan_blitz_phases)
     meta = _emit._meta_block(
         "warp-ask-roadmap",
-        "One in-session run from a roadmap sizing: roadmap-blitz, plan-blitz waves, execute, workstream-complete.",
+        "One in-session run from a roadmap sizing: roadmap-blitz, plan-blitz waves, one record commit that fans the plans out.",
         titles,
     )
     script = f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n" + "\n".join(b) + "\n"
@@ -216,7 +180,7 @@ def compose_roadmap_script(
 
 
 def roadmap_phase_titles(rb_phases: list[str], plan_blitz_phases: list[str]) -> list[str]:
-    titles = ["gate", "roadmap-blitz", *rb_phases, "plan", *plan_blitz_phases, "execute", "workstream-complete"]
+    titles = ["gate", "roadmap-blitz", *rb_phases, *plan_blitz_phases, "commit"]
     seen: list[str] = []
     return [t for t in titles if not (t in seen or seen.append(t))]
 

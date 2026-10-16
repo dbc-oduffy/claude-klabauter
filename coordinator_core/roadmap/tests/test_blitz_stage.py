@@ -506,3 +506,66 @@ def test_blocker_free_stub_is_born_ready_to_fire_with_no_placeholder_notes(tmp_p
     assert "blocking_notes" not in free
     gated = _fm(tmp_path / by_cluster["C2"]["path"])
     assert "deployment_state: awaiting_gate" in gated and "blocking_notes" not in gated
+
+
+APPROVED = {"verdict": "approved", "approver": "pm", "utterance": "ship it"}
+TRAIL = "scratch/warp/run-1/trail"
+
+
+def test_no_approval_reply_differs_from_today_only_by_waves(tmp_path, roadmap):
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert not {"approval_record", "overview_stamped", "declined"} & set(reply)
+    assert [w["index"] for w in reply["waves"]] == list(range(len(reply["waves"])))
+    frozen = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
+    assert [[b["id"] for b in w["batons"]] for w in reply["waves"]] == frozen["waves"]
+    assert "_report" not in reply
+
+
+def test_approved_records_stamps_and_commits_roadmap_artifacts_with_the_stubs(tmp_path, roadmap, commit_calls):
+    reply = bs.stage_roadmap(tmp_path, str(roadmap), approval=APPROVED, trail_dir=TRAIL)
+    record = json.loads((tmp_path / TRAIL / "approval.json").read_text(encoding="utf-8"))
+    assert record["verdict"] == "approved" and record["recorded_at"].endswith("Z")
+    assert reply["approval_record"] == {"path": f"{TRAIL}/approval.json", "recorded_at": record["recorded_at"]}
+    assert reply["overview_stamped"] is True and reply["declined"] is False
+    fm = _fm(roadmap / "OVERVIEW.md")
+    assert 'status: "final-approved"' in fm and 'approver: "pm"' in fm
+    assert 'approval_utterance: "ship it"' in fm and "roadmap_id: rm-test" in fm
+    rel = roadmap.relative_to(tmp_path).as_posix()
+    assert {f"{rel}/OVERVIEW.md", f"{rel}/clusters.md", f"{rel}/reconciliation.md"} <= set(commit_calls[0]["paths"])
+    assert reply["waves"]
+
+
+def test_approval_by_ruling_stamps_the_ruling(tmp_path, roadmap):
+    bs.stage_roadmap(
+        tmp_path, str(roadmap), approval={"verdict": "approved", "approver": "apm", "ruling": "R7"}, trail_dir=TRAIL
+    )
+    assert 'approval_utterance: "R7"' in _fm(roadmap / "OVERVIEW.md")
+
+
+def test_declined_records_and_stages_nothing(tmp_path, roadmap, commit_calls):
+    reply = bs.stage_roadmap(
+        tmp_path, str(roadmap), approval={**APPROVED, "verdict": "declined"}, trail_dir=TRAIL
+    )
+    assert reply["declined"] is True and reply["stubs"] == [] and reply["commits"] == []
+    assert (tmp_path / TRAIL / "approval.json").is_file()
+    assert commit_calls == [] and not (tmp_path / "state" / "handoffs").exists()
+    assert "final-approved" not in (roadmap / "OVERVIEW.md").read_text(encoding="utf-8")
+
+
+def test_approved_rerun_keeps_the_first_record(tmp_path, roadmap):
+    first = bs.stage_roadmap(tmp_path, str(roadmap), approval=APPROVED, trail_dir=TRAIL)
+    again = bs.stage_roadmap(tmp_path, str(roadmap), approval=APPROVED, trail_dir=TRAIL)
+    assert again["approval_record"] == first["approval_record"]
+
+
+def test_changed_since_index_drops_a_tracked_unchanged_path(tmp_path, monkeypatch):
+    import hashlib
+
+    from coordinator_core.git import git_state
+
+    (tmp_path / "a.md").write_text("same", encoding="utf-8")
+    (tmp_path / "b.md").write_text("new", encoding="utf-8")
+    blob = hashlib.sha1(b"blob 4\0same").hexdigest()
+    entry = type("E", (), {"sha": blob})()
+    monkeypatch.setattr(git_state, "read_index", lambda root: {"a.md": entry, "b.md": type("E", (), {"sha": "0"})()})
+    assert bs._changed_since_index(tmp_path, ["a.md", "b.md", "c.md"]) == ["b.md", "c.md"]

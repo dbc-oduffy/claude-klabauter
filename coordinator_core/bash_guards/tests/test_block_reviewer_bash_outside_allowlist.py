@@ -1650,3 +1650,18 @@ def test_peel_helper_is_identity_for_unprefixed_tokens():
     tokens = ["python3", "-m", "pytest", "-q"]
     assert guard.peel_env_assignment_prefix(tokens) == tokens
     assert guard.peel_env_assignment_prefix([]) == []
+
+
+_EMITTED_PREP = (
+    '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" '
+    'review.prep \'{"mode":"manifest","base":"abc1234","slice_prefix":"p-1","paths":["a.py"],'
+    '"plan_path":"docs/plans/x.md"}\' --repo \'/r\''
+)
+
+
+def test_the_emitted_review_prep_call_allows(monkeypatch):
+    _allow(_EMITTED_PREP, monkeypatch)
+
+
+def test_another_engine_op_still_denies(monkeypatch):
+    _deny(_EMITTED_PREP.replace("review.prep", "review.stamp"), monkeypatch)

@@ -270,6 +270,8 @@ _COMMIT_SCHEMA = _obj(
         "refused": {"type": ["string", "null"]},
         "sizing_shipped": {"type": ["object", "null"]},
         "close": {"type": ["object", "null"]},
+        "fanout": {"type": ["object", "null"]},
+        "siblings": {"type": ["object", "array", "null"]},
     },
 )
 _LEDGER_CHECK_SCHEMA = _obj(
@@ -1989,9 +1991,14 @@ def compose_ask_script(
     criterion_open = " && !_criterionOpen" if judged else ""
     if judged:
         b.append(f"  const _criterionOpen = !!({_fv} && {_fv}.status === 'not_met');")
+    roadmap_fan = bool(rb_fn and in_run_commit)
+    if roadmap_fan:
+        b.append(
+            "  const _roadmapFan = !!(_viaRoadmap && !_halted && _nextAction && _nextAction.kind === 'terminal_commit');"
+        )
     b.append(
-        "  const _closeable = !!(!_halted && _manifest && !_manifest.error"
-        f"{criterion_open} && !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL'));"
+        f"  const _closeable = !!({'_roadmapFan || (' if roadmap_fan else '('}!_halted && _manifest && !_manifest.error"
+        f"{criterion_open} && !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL')));"
     )
     b.append(
         "  const _mkRevise = () => ({ run_id: _runId, sizing: _sizingRel, "
@@ -2012,7 +2019,7 @@ def compose_ask_script(
         else "{ kind: 'none', op: null, params: null }"
     )
     b.append(
-        "  _nextAction = _closeable "
+        f"  _nextAction = {'_roadmapFan ? _nextAction : ' if roadmap_fan else ''}_closeable "
         f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
         f": {stopped_na};"
     )
@@ -2052,7 +2059,8 @@ def compose_ask_script(
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
         + (
-            "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, executed: _executed, workstream_complete: _complete } : null, "
+            "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, fanout: _commit?.fanout ?? null } : null, "
+            "fanout: _commit?.fanout ?? null, "
             if rb_fn else ""
         )
         + "ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, revise_and_refire: _reviseAndRefire, "
@@ -2079,7 +2087,7 @@ def compose_ask_script(
             extra=[
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["split"] if xl_possible else []),
-                *(["roadmap-blitz", *rb_phases, "workstream-complete"] if rb_fn else []),
+                *(["roadmap-blitz", *rb_phases] if rb_fn else []),
                 ASK_VERIFY_PHASE,
                 *(["commit"] if in_run_commit else []),
             ],
@@ -2180,28 +2188,8 @@ def _append_docs_and_commit(
     fenced block, which the leg reads back from the spawn transcript; the agent types only the
     forward-slash file path, never JSON.
     """
-    live = "_closeable && !_viaRoadmap && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
-    params_file = params_path(repo_root, run_id)
-    if params_file is None:
-        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
-    commit_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
-        "stage). Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env "
-        "prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the run's commit "
-        "request, so no `paths` array is owed.\n\n",
-        f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
-        "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
-        "js:_terminalCommitParamsBlock({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
-        "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped and close, verbatim "
-        "(null where absent). Run nothing else.",
-    )
-    # Stays its own agent: a commit is denied to every agent but git-commit-agent
-    # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
-    commit_call = _agent(
-        commit_prompt, label="commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
-        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
-    )
+    live = "_closeable && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
+    commit_call = _commit_stage_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
     b.append(f"  if ({live}) {{")
     b.append("    phase('commit');")
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
@@ -2216,6 +2204,59 @@ def _append_docs_and_commit(
         "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); }"
     )
     b.append("  }")
+
+
+def roadmap_commit_decls(*, head: str, anchor: str, repo_root: str, run_id: str) -> list[str]:
+    """Bindings the standalone roadmap script needs for its commit leg; the run-embedded roadmap
+    arm already declares every one of them."""
+    if params_path(repo_root, run_id) is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    return [
+        "  let _nextAction = null;",
+        "  let _commit = null;",
+        _RUN_TOKEN_DECL_JS,
+        f"  {PARAMS_BLOCK_JS}",
+        _usage_limit_helper_js(),
+    ]
+
+
+def roadmap_commit_lines(*, head: str, anchor: str, repo_root: str, run_id: str) -> list[str]:
+    """The standalone roadmap script's commit leg: the same `commit` agent the run-embedded
+    commit stage fires, under a live fan-out `_nextAction`. A refusal halts by name."""
+    call = _commit_stage_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
+    return [
+        "  if (!_halted && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN) {",
+        "    phase('commit');",
+        f"    try {{ _commit = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}",
+        "    if (!_halted && !(_commit && _commit.committed === true)) { _halted = { halted: 'commit', "
+        "refused: _commit?.refused ?? null, error: _commit?.error ?? null, sizing: _sizingRel, run_id: _runId }; }",
+        "  }",
+    ]
+
+
+def _commit_stage_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
+    """The `commit` agent call (git-commit-agent, haiku) running `dispatch.terminal_commit`."""
+    params_file = params_path(repo_root, run_id)
+    if params_file is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    commit_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
+        "stage). Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env "
+        "prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the run's commit "
+        "request, so no `paths` array is owed.\n\n",
+        f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
+        "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
+        "js:_terminalCommitParamsBlock({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
+        "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped, close, fanout and "
+        "siblings, verbatim (null where absent). Run nothing else.",
+    )
+    # Stays its own agent: a commit is denied to every agent but git-commit-agent
+    # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
+    return _agent(
+        commit_prompt, label="commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
+        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
+    )
 
 
 def _halt_record_commit_fn(

@@ -62,6 +62,10 @@ Negative-spec:
     ``state/warp/<run_id>/`` in one commit_v2 call, the halt in the message. It never consumes
     the run token (redeems, then releases) and is not a delivery: no receipt, sizing ship, plan
     stamp or close job.
+  - A call whose ``fanout`` is ``{plans: [...]}`` is a roadmap run's record commit
+    (``roadmap_fanout_commit``): one commit_v2 over the record files and each plan's sizing and
+    baton, then ``ask_fanout`` over the plans' sizings. It consumes the token on a landed commit.
+    Carrying ``halted_by`` too is refused.
   - A call whose ``grind`` is a dict with a ``rows`` list is a grind's terminal commit
     (``grind_terminal_commit``): one commit_v2 over the finished rows' declared paths, a
     ``Grind-Row:`` trailer per landed row; it drops ledger-root paths and deletions git cannot
@@ -2586,7 +2590,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     reply = _terminal_commit(
         params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx=close_ctx
     )
-    if _is_no_script_call(params) or _is_halted_record_call(params) or _is_grind_call(params):
+    if (
+        _is_no_script_call(params) or _is_halted_record_call(params) or _is_grind_call(params)
+        or _is_fanout_record_call(params)
+    ):
         return reply
     if close_ctx:
         reply["close"] = _close_block(close_ctx, reply)
@@ -2694,6 +2701,12 @@ def _is_halted_record_call(params: object) -> bool:
     return is_halted_record_call(params)
 
 
+def _is_fanout_record_call(params: object) -> bool:
+    from coordinator_core.ops.dispatch_emit.roadmap_fanout_commit import is_fanout_record_call
+
+    return is_fanout_record_call(params)
+
+
 def _is_grind_call(params: object) -> bool:
     from coordinator_core.ops.dispatch_emit.grind_commit_contract import is_grind_call
 
@@ -2755,6 +2768,14 @@ def _terminal_commit_inner(
             "dispatch.terminal_commit requires a common_dir-keyed dispatch; "
             "repo_root (git common dir) was not supplied"
         )
+
+    if _is_fanout_record_call(params):
+        from coordinator_core.ops.dispatch_emit.roadmap_fanout_commit import commit_fanout_record
+        from coordinator_core.ops.fleet._common import main_worktree_root
+
+        if _is_halted_record_call(params):
+            return _error("params carry both halted_by and fanout", refused="mode-ambiguous")
+        return commit_fanout_record(main_worktree_root(repo_root), repo_root, params)
 
     if _is_halted_record_call(params):
         from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
