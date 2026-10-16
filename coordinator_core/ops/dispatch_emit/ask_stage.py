@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional, Sequence
@@ -385,19 +386,18 @@ def _memo_draft_steps(
         body = raw.get("brief") or raw.get("body") or ""
         text = (
             f"Stage the outbox draft for memo-send row {o.id}. Run, from the repo root:\n\n"
-            f"    cross-repo-memo draft {slug} --to {fields['to']} --kind {fields['kind']} "
-            f"--title {json.dumps(fields['title'])}\n\n"
+            f"    cross-repo-memo draft {slug} --to {shlex.quote(fields['to'])} --kind {fields['kind']} "
+            f"--title {shlex.quote(fields['title'])}\n\n"
             f"Then Edit the memo body in {draft_rel} to carry the row's content below. Never run "
             "`cross-repo-memo send`: the EM sends. Touch no other file.\n\n"
             f"Row body:\n\n{body}\n"
         )
         _write(brief, (intent + "\n" + text) if intent else text)
-        agent_type = _EXECUTOR_AGENT_TYPE
         steps.append(
             ManifestRow(
                 id=step_id,
-                agent_type=agent_type,
-                model=resolve_agent_model(agent_type, None),
+                agent_type=_EXECUTOR_AGENT_TYPE,
+                model=resolve_agent_model(_EXECUTOR_AGENT_TYPE, None),
                 brief_path=_rel(root, brief),
                 writes=(draft_rel,),
                 wave=0,

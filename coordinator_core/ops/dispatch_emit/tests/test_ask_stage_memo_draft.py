@@ -84,3 +84,5 @@ def test_draft_fields_refuse_a_bad_kind_and_a_missing_slug():
     assert ok == {"slug": "t", "to": "x", "title": "T", "kind": "ask"}
     assert memo_draft_fields({"surface": f"{OUTBOX}/t.md", "memo_to": "x", "memo_kind": "zzz"})[0] is None
     assert memo_draft_fields({"surface": "pkg/a.py", "memo_to": "x"})[0] is None
+    assert memo_draft_fields({"receipt": "../x", "memo_to": "x"})[0] is None
+    assert memo_draft_fields({"receipt": "a b.md", "memo_to": "x"})[0] is None

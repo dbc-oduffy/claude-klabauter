@@ -1794,7 +1794,11 @@ def _dispatch_emit(
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
             required_reviewers=ask_ctx["required_reviewers"],
-            run_base_sha=_recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"]) if ask_ctx.get("reserved_parent") else None,
+            run_base_sha=(
+                _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
+                if ask_ctx.get("reserved_parent")
+                else None
+            ),
         )
         if ask_ctx["prompt"]:
             # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.

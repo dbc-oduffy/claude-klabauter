@@ -466,15 +466,22 @@ def memo_row_slug(raw: dict) -> Optional[str]:
 
 MEMO_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice", "friction")
 MEMO_DEFAULT_KIND = "ask"
+#: A slug becomes a filename under the outbox and a shell argument: no separators, no leading dot.
+_MEMO_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}")
 
 
 def memo_draft_fields(raw: dict) -> tuple[Optional[dict], str]:
     """Does this memo-send row name what `cross-repo-memo draft` needs? `({slug, to, title, kind},
     "")` when it does; `(None, reason)` when the slug or the receiver (`memo_to:`) is absent, never
     a guessed recipient. `kind` is `memo_kind:` (one of `MEMO_KINDS`), else `MEMO_DEFAULT_KIND`."""
+    receipt = raw.get("receipt")
+    if isinstance(receipt, str) and ".." in receipt.replace("\\", "/").split("/"):
+        return None, f"memo receipt {receipt!r} climbs out of the outbox"
     slug = memo_row_slug(raw)
     if slug is None:
         return None, "the row names no memo slug"
+    if not _MEMO_SLUG_RE.fullmatch(slug):
+        return None, f"memo slug {slug!r} is not a plain file stem"
     to = raw.get("memo_to")
     if not isinstance(to, str) or not to.strip():
         return None, "the row names no receiver (memo_to:)"
