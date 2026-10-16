@@ -1331,7 +1331,9 @@ def read_spine(
                 _reason = (
                     "operator",
                     "execution_mode: operator — a human must run this row; it "
-                    "was NOT dispatched and has NOT been done",
+                    "was NOT dispatched and has NOT been done; once it is run, "
+                    "release it with `coordinator-invoke plan.tasks.mutate` "
+                    "(verb resolve, plan_path, id, disposition coded, disposition_ref <sha>)",
                 )
             elif plan_hold is not None:
                 _reason = ("depends_on_plan", plan_hold)

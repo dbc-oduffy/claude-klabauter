@@ -9,6 +9,9 @@ The task is found through the submission record this module writes beside the ru
 the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) capture
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
+An ownerless token (no session id, or no script path, on its record or submission) has no launch to
+join and no transcript to read, so it reads ended on the unlaunched grace alone and is never spent.
+
 A run whose submitting call was refused (no launch record and a lone non-launch `tool_result`
 for the stored `tool_use_id`) has ended too, for every reader and every session.
 
@@ -170,8 +173,10 @@ def _run_ended(
     """Why the run is over, else None while it is live: `_EVIDENCE` once the harness reported the
     run's task terminal (halted returns included) or the submitting call was refused; `_TIMER`
     once the unlaunched grace has passed, which is not evidence and never spends the token."""
-    if not isinstance(session_id, str) or not isinstance(script_path, str):
-        return None
+    if not (isinstance(session_id, str) and session_id) or not isinstance(script_path, str):
+        # An ownerless token is the unlaunched state with no owner to read: it ages out on the
+        # same bound and is never spent.
+        return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
     task_ids = _launched_task_ids(session_id, script_path, dirs)
     has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
     tail = _tail(transcript_path) if has_transcript else ""

@@ -136,6 +136,65 @@ def test_landable_splits_deletions(graph, monkeypatch):
     assert out.deleted == (SLICE,) and SLICE not in out.present
 
 
+@pytest.fixture
+def mapped(graph):
+    _w(graph, SIZING, f"baton: state/handoffs/h.md\nplan: '{PLAN}'\n")
+    _w(graph, PLAN, f"---\nsizing_object: {SIZING}\n---\n")
+    _w(graph, "state/handoffs/2026-10-16-x.md", f"sizing_object: {SIZING}\n")
+    return graph
+
+
+def test_runs_of_artifacts_maps_each_class(mapped):
+    paths = [PLAN, "docs/plans/2026-10-16-x.evidence.yaml", "docs/plans/2026-10-16-x.seam.yaml",
+             "state/handoffs/2026-10-16-x.md", f"docs/delivery/{RUN}.md", SLICE, SIZING]
+    got = ra.runs_of_artifacts(mapped, [p.replace("/", "\\") for p in paths])
+    assert got == {p: RUN for p in paths}
+
+
+def test_runs_of_artifacts_handoff_falls_back_to_plan(mapped):
+    _w(mapped, "state/handoffs/2026-10-16-x.md", "no frontmatter\n")
+    assert ra.runs_of_artifacts(mapped, ["state/handoffs/2026-10-16-x.md"]) == {
+        "state/handoffs/2026-10-16-x.md": RUN
+    }
+
+
+def test_runs_of_artifacts_latest_stamp_wins(mapped):
+    newer = "ask-20261016T130000-eeeeee"
+    _w(mapped, f"state/warp/{newer}/run.json", json.dumps({"sizing_rel": SIZING}))
+    _w(mapped, "state/warp/ask-20261016T090000-ffffff/run.json", json.dumps({"sizing_rel": SIZING}))
+    assert ra.runs_of_artifacts(mapped, [PLAN]) == {PLAN: newer}
+
+
+def test_runs_of_artifacts_unmapped_paths_absent(mapped):
+    _w(mapped, "docs/plans/nosizing.md", "no key\n")
+    _w(mapped, "docs/delivery/ask-20261016T150000-999999.md")
+    _w(mapped, "state/sizings/unbound.yaml")
+    _w(mapped, "docs/plans/orphan.md", "sizing_object: state/sizings/unbound.yaml\n")
+    got = ra.runs_of_artifacts(
+        mapped,
+        ["docs/plans/nosizing.md", "docs/delivery/ask-20261016T150000-999999.md", "state/sizings/unbound.yaml",
+         "docs/plans/orphan.md", f"state/warp/{RUN}/run.json", "src/a.py"],
+    )
+    assert got == {}
+
+
+def test_runs_of_artifacts_no_reads_for_unrelated(mapped, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("read")
+
+    monkeypatch.setattr(ra, "_read_text", boom)
+    monkeypatch.setattr(ra, "_read_json", boom)
+    assert ra.runs_of_artifacts(mapped, ["src/a.py", f"state/warp/{RUN}/ask.md"]) == {}
+
+
+def test_runs_of_artifacts_round_trip_filter(mapped, monkeypatch):
+    monkeypatch.setattr(
+        ra, "candidate_paths",
+        lambda root, rid, **k: ra.RunArtifacts(rid, {"plan": (PLAN,)}, (), root),
+    )
+    assert ra.runs_of_artifacts(mapped, [PLAN, SIZING]) == {PLAN: RUN}
+
+
 def test_residue_empty_when_all_landed(graph):
     a = ra.candidate_paths(graph, RUN)
     assert ra.residue(a, a.paths(), a.paths(), {}) == {}

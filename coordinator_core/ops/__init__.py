@@ -175,6 +175,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.ask_fanout", 'registers "dispatch.ask_fanout"'),
     ("coordinator_core.ops.dispatch_emit.abandoned_runs", 'registers "dispatch.reap_abandoned_runs"'),
     ("coordinator_core.ops.dispatch_emit.halted_rows_commit", 'registers "dispatch.commit_halted_rows"'),
+    ("coordinator_core.ops.dispatch_emit.release_run_token", 'registers "dispatch.release_run_token"'),
     ("coordinator_core.ops.dispatch_emit.requirements_ledger", 'registers "workflow.revise"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),

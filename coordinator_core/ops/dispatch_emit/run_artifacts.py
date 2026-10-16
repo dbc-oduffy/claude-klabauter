@@ -277,6 +277,104 @@ def superseded_runs(
     return tuple(out)
 
 
+_SIDECAR_SUFFIXES = (".evidence.yaml", ".seam.yaml")
+
+
+def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
+    """The sizing a dirty run artifact traces to, from the artifact's own frontmatter or its
+    name. ``None`` for a path of no mapped class."""
+    pure = PurePosixPath(rel)
+    parent, name = pure.parent.as_posix(), pure.name
+    if parent == "state/sizings" and name.endswith(".yaml"):
+        stem = name[: -len(".yaml")]
+        head, sep, tail = stem.rpartition("-slice-")
+        if sep and tail.isdigit() and head:
+            return f"state/sizings/{head}.yaml"
+        return rel
+    if parent == "docs/plans":
+        plan_name = name
+        for suffix in _SIDECAR_SUFFIXES:
+            if name.endswith(suffix):
+                plan_name = name[: -len(suffix)] + ".md"
+                break
+        if plan_name.endswith(".md"):
+            return _norm_rel(_scalar(_read_text(root, f"docs/plans/{plan_name}"), "sizing_object"))
+        return None
+    if parent == "state/handoffs" and name.endswith(".md"):
+        own = _norm_rel(_scalar(_read_text(root, rel), "sizing_object"))
+        if own:
+            return own
+        return _norm_rel(_scalar(_read_text(root, f"docs/plans/{pure.stem}.md"), "sizing_object"))
+    return None
+
+
+def runs_of_artifacts(worktree_root: Path, changed: Iterable[str]) -> dict[str, str]:
+    """``{repo-relative artifact path: run_id}`` for each changed path of class plan,
+    evidence-sidecar, seam-sidecar, handoff, delivery-note, sizing or slice-sizing whose owning
+    run has a record dir under ``state/warp/``. Zero spawns, never raises; a path that maps to no
+    record dir is absent. A sizing bound by several record dirs maps to the latest stamp; only
+    paths ``candidate_paths`` would return for the mapped run are kept."""
+    root = Path(worktree_root)
+    wanted: list[str] = []
+    for raw in changed:
+        rel = _norm_rel(str(raw))
+        if rel is None or rel == _RECORD_ROOT or rel.startswith(_RECORD_ROOT + "/"):
+            continue
+        if rel.startswith(("docs/delivery/", "docs/plans/", "state/handoffs/", "state/sizings/")):
+            wanted.append(rel)
+    if not wanted:
+        return {}
+
+    names: Optional[list[str]] = None
+    run_sizing: dict[str, Optional[str]] = {}
+    latest: dict[str, Optional[str]] = {}
+    out: dict[str, str] = {}
+    candidates: dict[str, set[str]] = {}
+
+    def record_dirs() -> list[str]:
+        nonlocal names
+        if names is None:
+            try:
+                with os.scandir(root / _RECORD_ROOT) as it:
+                    names = sorted(e.name for e in it if e.is_dir())
+            except OSError:
+                names = []
+        return names
+
+    def run_of_sizing(sizing: str) -> Optional[str]:
+        if sizing in latest:
+            return latest[sizing]
+        prefix = f"warp-{PurePosixPath(sizing).stem}-"
+        best: Optional[tuple[str, str]] = None
+        for name in record_dirs():
+            tail = _STAMP_TAIL.search(name)
+            if tail is None or not (name.startswith(prefix) or name.startswith("ask-")):
+                continue
+            if name not in run_sizing:
+                data = _read_json(root, f"{_RECORD_ROOT}/{name}/{_RUN_FILE}") or {}
+                run_sizing[name] = _norm_rel(data.get("sizing_rel"))
+            if run_sizing[name] == sizing and (best is None or tail.group(0) > best[0]):
+                best = (tail.group(0), name)
+        latest[sizing] = best[1] if best else None
+        return latest[sizing]
+
+    for rel in wanted:
+        if rel.startswith("docs/delivery/") and rel.endswith(".md") and rel.count("/") == 2:
+            run_id: Optional[str] = rel[len("docs/delivery/"): -len(".md")]
+            if not (_safe_run_id(run_id) and (root / _RECORD_ROOT / run_id).is_dir()):
+                continue
+        else:
+            sizing = _sizing_of_artifact(root, rel)
+            run_id = run_of_sizing(sizing) if sizing else None
+            if run_id is None:
+                continue
+        if run_id not in candidates:
+            candidates[run_id] = set(candidate_paths(root, run_id).paths())
+        if rel in candidates[run_id]:
+            out[rel] = run_id
+    return out
+
+
 def landable(
     worktree_root: Path,
     artifacts: RunArtifacts,

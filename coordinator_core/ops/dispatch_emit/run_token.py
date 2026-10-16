@@ -225,6 +225,20 @@ def consume(repo_root: Path, run_id: str) -> None:
             path.unlink(missing_ok=True)
 
 
+def discard(repo_root: Path, run_id: str) -> Optional[dict]:
+    """Peer-facing release: remove the run's unclaimed record only and return what it held (None
+    when absent or the id is malformed). The claimed path is never touched, so a terminal commit
+    in flight keeps its claim. No liveness check: discarding a genuinely running run's record
+    leaves its later terminal commit nothing to redeem. Not atomic against a concurrent `redeem`:
+    a record claimed between the read and the unlink is still reported."""
+    path = _record_path(repo_root, run_id)
+    if path is None:
+        return None
+    record = _read(path)
+    path.unlink(missing_ok=True)
+    return record
+
+
 def bind_sizing(repo_root: Path, run_id: str, sizing_rel: str) -> bool:
     """Record the sizing a raw ask's run minted on its live record (the gate calls this once the
     sizing exists). A record already naming a sizing is left as it is. True on a write."""

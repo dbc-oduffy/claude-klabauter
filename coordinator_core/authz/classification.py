@@ -2312,6 +2312,19 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commits.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.commit_halted_rows": OpClass.MUTATING,
+    # dispatch.release_run_token — MUTATING: deletes one warp run's unclaimed token record
+    # (ops/dispatch_emit/release_run_token.py).
+    # DR-208 five-question affirmation (citing dispatch.release_run_token handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Deletes one token record under the git common dir.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The shared token dir every liveness reader consults.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The record's absence.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.release_run_token": OpClass.MUTATING,
     # workflow.revise — MUTATING: appends a PM verbatim row to the run's sizing requirement_register (or
     # queues it in the record dir's inbox until the sizing exists) and rewrites the record dir's
     # (state/warp/<run_id>/) requirements view (ops/dispatch_emit/requirements_ledger.py); nothing else.

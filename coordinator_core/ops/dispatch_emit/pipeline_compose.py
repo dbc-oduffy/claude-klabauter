@@ -15,7 +15,7 @@ stage runs per subject and `{{scratch_dir}}` is that subject's own directory.
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
@@ -43,7 +43,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
 )
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
-__all__ = ["compose_pipeline_script", "compose_chain_script"]
+__all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
 
 _FAN_TRAILER = (
     "const fanTrailer = (item, i, n, out) => "
@@ -601,11 +601,56 @@ def compose_chain_script(
             m.pipeline: len("\n".join(data + body).encode("utf-8")) for m, _, (data, body, _) in parts
         }
         largest = max(sizes, key=sizes.__getitem__)
-        raise PipelineEmitRefused([
+        raise _ScriptCapRefused([
             f"the script is {size} bytes, over the Workflow cap of {WORKFLOW_SCRIPT_CAP_BYTES}; "
             f"largest segment: {largest} ({sizes[largest]} bytes)"
         ])
     return text
+
+
+class _ScriptCapRefused(PipelineEmitRefused):
+    """The composed script exceeds the Workflow cap; the only refusal a per-pipeline split can cure."""
+
+
+@dataclass(frozen=True)
+class ChainPart:
+    """One Workflow script of a research emit and the pipelines it runs, in chain order."""
+
+    pipelines: tuple[str, ...]
+    script: str
+
+
+def compose_chain_parts(
+    segments: Sequence[Segment],
+    *,
+    run_id: str,
+    agent_type_host: str | None,
+    next_action: Mapping | None = None,
+) -> tuple[ChainPart, ...]:
+    """The chain as one script when it fits the cap, else one script per segment in chain order.
+
+    A split segment after the first keeps the `<scratch>/<pipeline>` layout the chained script uses;
+    only the last part carries `next_action`. A segment still over the cap raises PipelineEmitRefused.
+    """
+    try:
+        script = compose_chain_script(
+            segments, run_id=run_id, agent_type_host=agent_type_host, next_action=next_action,
+        )
+    except _ScriptCapRefused:
+        if len(segments) < 2:
+            raise
+    else:
+        return (ChainPart(tuple(m.pipeline for m, _, _ in segments), script),)
+    last = len(segments) - 1
+    parts = []
+    for index, (manifest, inputs, schedule) in enumerate(segments):
+        if index > 0:
+            inputs = replace(inputs, scratch_dir=f"{inputs.scratch_dir.rstrip('/')}/{manifest.pipeline}")
+        parts.append(ChainPart((manifest.pipeline,), compose_chain_script(
+            [(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host,
+            next_action=next_action if index == last else None,
+        )))
+    return tuple(parts)
 
 
 def compose_pipeline_script(

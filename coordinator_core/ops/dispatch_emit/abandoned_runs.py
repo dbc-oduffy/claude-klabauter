@@ -1,11 +1,13 @@
 """Abandoned-run contract: ``dispatch.reap_abandoned_runs`` lands the ``state/warp/<run_id>/``
-record dirs of ask runs that died before any terminal or halted commit.
+record dirs of ask runs that died before any terminal or halted commit, and the stranded plan,
+handoff, sidecar, delivery note or sizing of a run whose record dir already landed.
 
 Params: ``{}`` or ``{"dry_run": bool}``.
 Reply: ``{ok, reaped: [run_id], sizings: [rel], artifacts: {run_id: [rel]}, committed_sha | null,
 skipped: [{run_id, reason, path?}]}``.
 
-A run is ended when it has changed top-level record files, no live or claimed run token, and
+A run is ended when it has changed top-level record files or a dirty artifact that
+``run_artifacts.runs_of_artifacts`` maps to it (newest mtime then comes from those artifacts), no live or claimed run token, and
 either its newest record file is older than ``TOKENLESS_QUIET_SECONDS`` (``run_token.TTL_SECONDS``
 is the outer bound), or older than ``QUIET_SECONDS`` and the run is superseded by a later record dir binding the
 same sizing, halt-marked, or carries a tracked top-level file modified after its commit. Each
@@ -49,17 +51,20 @@ def abandoned_run_ids(
     later_stamp_of: Optional[Mapping[str, str]] = None,
     halted: Optional[set[str]] = None,
     late_written: Optional[set[str]] = None,
+    artifact_runs: Optional[set[str]] = None,
 ) -> list[str]:
-    """Sorted run ids with a changed file directly under ``<record_root>/<run_id>/``, absent from
-    ``live_run_ids`` (live AND claimed tokens), and ended: newest mtime older than the token TTL,
-    or older than ``QUIET_SECONDS`` when the run is superseded (a key of ``later_stamp_of``),
+    """Sorted run ids with a changed file directly under ``<record_root>/<run_id>/`` or named in
+    ``artifact_runs`` (runs owning a dirty plan, handoff, sidecar, delivery note or sizing), absent
+    from ``live_run_ids`` (live AND claimed tokens), and ended: newest mtime older than the token
+    TTL, or older than ``QUIET_SECONDS`` when the run is superseded (a key of ``later_stamp_of``),
     halt-marked (in ``halted``) or has a tracked top-level file modified after its commit (in
-    ``late_written``). A run id with no ``newest_mtime`` entry is not abandoned. Pure."""
+    ``late_written``). Both discovery routes share one ``ended`` rule. A run id with no
+    ``newest_mtime`` entry is not abandoned. Pure."""
     prefix = record_root.rstrip("/") + "/"
     superseded = later_stamp_of or {}
     halted = halted or set()
     late_written = late_written or set()
-    candidates: set[str] = set()
+    candidates: set[str] = set(artifact_runs or ())
     for rel in changed:
         if not rel.startswith(prefix):
             continue
@@ -246,11 +251,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     files: dict[str, list[str]] = {}
     deleted: list[str] = []
     newest: dict[str, float] = {}
-    run_ids = {
+    record_runs = {
         rel[len(RECORD_DIR_ROOT) + 1:].split("/", 1)[0]
         for rel in snapshot.changed
         if rel.startswith(RECORD_DIR_ROOT + "/")
     }
+    artifact_of = run_artifacts.runs_of_artifacts(root, snapshot.changed)
+    artifact_runs = set(artifact_of.values())
+    run_ids = record_runs | artifact_runs
     for run_id in sorted(run_ids):
         present, gone = record_dir_changes(root, f"{RECORD_DIR_ROOT}/{run_id}", snapshot.changed)
         files[run_id] = present
@@ -261,6 +269,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 mtimes.append((root / rel).stat().st_mtime)
             except OSError:
                 pass
+        if not mtimes:
+            for rel, owner in artifact_of.items():
+                if owner == run_id:
+                    try:
+                        mtimes.append((root / rel).stat().st_mtime)
+                    except OSError:
+                        pass
         if mtimes:
             newest[run_id] = max(mtimes)
 
@@ -289,6 +304,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         ),
         halted=halted,
         late_written=late_written,
+        artifact_runs=artifact_runs,
     )
     base["skipped"] = [{"run_id": r, "reason": "live-or-recent"} for r in sorted(run_ids) if r not in reaped]
     if not reaped:

@@ -14,6 +14,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import abandoned_runs, run_artifacts, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
+    HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
@@ -34,7 +35,11 @@ EVIDENCE = "docs/plans/2026-10-16-x.evidence.yaml"
 SLICE = "state/sizings/2026-10-16-x-slice-2.yaml"
 DOC = "docs/reference/r.md"
 SESSION = "11111111-2222-3333-4444-555555555555"
-MODES = ("completed", "halted", "refired", "abandoned")
+DS_PLAN = "docs/plans/2026-10-16-y.md"
+DS_EVIDENCE = "docs/plans/2026-10-16-y.evidence.yaml"
+DS_HANDOFF = "state/handoffs/2026-10-16-y.md"
+DS_DELIVERY = f"docs/delivery/{RUN}.md"
+MODES = ("completed", "halted", "refired", "abandoned", "halted-docs-stage")
 
 
 def _git(args, cwd: Path) -> str:
@@ -61,6 +66,7 @@ def repo(tmp_path, monkeypatch):
     _write(root, PLAN, f"---\nsizing_object: {SIZING}\n---\nbody\n")
     _write(root, DOC, "seed\n")
     _write(root, "run.mjs", "// script\n")
+    _write(root, ".gitignore", ".coordinator-local/\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     monkeypatch.setattr(terminal_commit, "_ship_cited_sizing", lambda *a, **k: {})
@@ -72,17 +78,30 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _author_graph(root: Path, run_id: str, *, docs: bool) -> None:
+def _author_graph(root: Path, run_id: str, *, docs: bool, evidence: bool = True) -> None:
     """Everything one run writes: record files, sizing naming baton and plan, sidecar, slice, doc edit."""
     _write(root, SIZING, f"status: routed\nbaton: {BATON}\nplan: {PLAN}\n")
     _write(root, BATON, "---\ncarried_items: []\n---\nbaton\n")
-    _write(root, EVIDENCE, "rows: []\n")
+    if evidence:
+        _write(root, EVIDENCE, "rows: []\n")
     _write(root, SLICE, "status: draft\n")
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/run.json", json.dumps({"sizing_rel": SIZING}))
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/ask.md", "ask\n")
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/parent.json", json.dumps({"runs": [{"slice_sizing": SLICE}]}))
     if docs:
         _write(root, DOC, "edited by the docs stage\n")
+
+
+def _author_docs_stage_graph(root: Path, run_id: str) -> None:
+    """What a ledger-check halt sees: the sizing names a baton but no plan; the plan, its handoff,
+    evidence sidecar and delivery note were written by the docs stage and reach the halt only through
+    ``halted["plan"]`` and ``doc_paths``."""
+    _author_graph(root, run_id, docs=True, evidence=False)
+    _write(root, SIZING, f"status: routed\nbaton: {BATON}\n")
+    _write(root, DS_PLAN, f"---\nsizing_object: {SIZING}\n---\nplan\n")
+    _write(root, DS_HANDOFF, "---\ncarried_items: []\n---\nhandoff\n")
+    _write(root, DS_EVIDENCE, "rows: []\n")
+    _write(root, DS_DELIVERY, "delivery\n")
 
 
 def _write_predecessor(root: Path) -> None:
@@ -119,6 +138,18 @@ def _land_halted(root: Path) -> dict:
     )
 
 
+def _land_halted_docs_stage(root: Path) -> dict:
+    """The params ``_halt_record_commit_fn`` composes: script, run id, token, the ledger-check halt
+    carrying the plan, and the docs stage's doc_paths."""
+    token = run_token.mint(root, RUN, "run.mjs", session_id=SESSION)
+    return terminal_commit._handler(
+        {"script_path": "run.mjs", "run_id": RUN, "run_token": token, "session_id": SESSION,
+         HALTED_RECORD_PARAM: {"halted": "ledger-check", HALT_PLAN_FIELD: DS_PLAN, "items": []},
+         "doc_paths": [DOC]},
+        repo_root=root / ".git",
+    )
+
+
 def _land_abandoned(root: Path) -> dict:
     return abandoned_runs._handler({"session_id": SESSION}, repo_root=root / ".git")
 
@@ -133,7 +164,10 @@ def _setup(mode: str, root: Path) -> tuple[Callable[[Path], dict], bool, tuple[s
     """Author the mode's graph; return its landing call, whether the docs stage ran, and the
     record dirs the run owns (own plus any superseded one)."""
     docs = mode != "abandoned"
-    _author_graph(root, RUN, docs=docs)
+    if mode == "halted-docs-stage":
+        _author_docs_stage_graph(root, RUN)
+    else:
+        _author_graph(root, RUN, docs=docs)
     dirs = (f"{RECORD_DIR_ROOT}/{RUN}",)
     if mode == "refired":
         _write_predecessor(root)
@@ -143,6 +177,7 @@ def _setup(mode: str, root: Path) -> tuple[Callable[[Path], dict], bool, tuple[s
     return {
         "completed": _land_completed, "halted": _land_halted,
         "refired": _land_completed, "abandoned": _land_abandoned,
+        "halted-docs-stage": _land_halted_docs_stage,
     }[mode], docs, dirs
 
 
@@ -150,7 +185,10 @@ def _expected(root: Path, mode: str, docs: bool, dirs: tuple[str, ...]) -> run_a
     """The run's candidate set read from the record graph before any landing runs."""
     if mode in ("completed", "refired"):
         _prepare_ask_commit(root)
-    artifacts = run_artifacts.candidate_paths(root, RUN, doc_paths=[DOC] if docs else ())
+    artifacts = run_artifacts.candidate_paths(
+        root, RUN, plan_rel=DS_PLAN if mode == "halted-docs-stage" else None,
+        doc_paths=[DOC] if docs else (),
+    )
     if mode == "refired":
         artifacts = artifacts.with_superseded([OLD_RUN], RECORD_DIR_ROOT)
     return artifacts
@@ -198,3 +236,36 @@ def test_the_oracle_goes_red_when_a_landing_site_ignores_run_artifacts(repo, mon
 
     left = _leftovers(repo, artifacts, dirs)
     assert any(f"[{cls}]" in item for item in left for cls in ("evidence-sidecar", "baton")), left
+
+
+def test_a_docs_stage_halt_lands_plan_handoff_and_delivery_note_and_leaves_the_tree_clean(repo):
+    reply, left, artifacts = _run_mode("halted-docs-stage", repo)
+
+    assert reply.get("committed") is True, reply
+    assert "run_artifact_residue" not in reply, reply
+    assert not left, left
+    seed = _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
+    body = _git(["log", f"{seed}..HEAD", "--format=%B"], repo)
+    assert "Lands-Artifacts:" in body, body
+    landed = set(_git(["log", f"{seed}..HEAD", "--name-only", "--format="], repo).split())
+    assert {DS_PLAN, DS_HANDOFF, DS_DELIVERY, DS_EVIDENCE, DOC} <= landed, landed
+    assert artifacts.class_of(DS_HANDOFF) == "handoff" and artifacts.class_of(DS_DELIVERY) == "delivery-note"
+    assert DS_HANDOFF != BATON
+    assert _git(["status", "--porcelain", "--untracked-files=all"], repo).strip() == ""
+
+
+def test_the_composed_halt_call_still_carries_the_plan_and_doc_paths(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+    blitz = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    script = ask_compose.compose_ask_script(
+        repo_root="REPO", prompt=None, sizing_rel=SIZING, run_id="run-1", session_id=None,
+        wrap_stage=lambda _t: (blitz, ["Size", "Plan"]), plan_blitz_text="stub",
+        script_path="scratch/warp/x.mjs", in_run_commit=True, **REVIEW_KW,
+    )
+
+    assert f"{HALT_PLAN_FIELD}: _planRel" in script
+    fn = script[script.index("async function _commitHaltRecord()"):].split("\n", 1)[0]
+    assert f"{HALTED_RECORD_PARAM}: _halted" in fn and "doc_paths:" in fn

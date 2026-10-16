@@ -394,6 +394,97 @@ def test_token_activity_window_decides_whether_a_token_is_live():
     assert ar._token_active(Path("."), stale, {FOO_NEW: now - 60}, now) is True
 
 
+def test_artifact_runs_are_candidates_without_a_record_change():
+    old = NOW - ar.TOKENLESS_QUIET_SECONDS - 10
+    assert ar.abandoned_run_ids(set(), set(), ROOT, {"a": old}, NOW, artifact_runs={"a"}) == ["a"]
+    assert ar.abandoned_run_ids(set(), set(), ROOT, {"a": old}, NOW) == []
+
+
+def test_artifact_run_follows_the_same_ended_rule():
+    changed: set[str] = set()
+    kw = {"artifact_runs": {"a"}}
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_OLD}, NOW, halted={"a"}, **kw) == ["a"]
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_YOUNG}, NOW, halted={"a"}, **kw) == []
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_OLD}, NOW, **kw) == []
+    old = NOW - ar.TOKENLESS_QUIET_SECONDS - 10
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": old}, NOW, **kw) == ["a"]
+    assert ar.abandoned_run_ids(changed, {"a"}, ROOT, {"a": old}, NOW, **kw) == []
+
+
+FOO_HANDOFF = "state/handoffs/foo.md"
+FOO_SLICE = "state/sizings/foo-slice-1.yaml"
+FOO_DELIVERY = f"docs/delivery/{FOO_OLD}.md"
+FOO_ARTIFACTS = {FOO_PLAN, FOO_HANDOFF, FOO_EVIDENCE, FOO_DELIVERY, FOO_SLICE}
+
+
+def _stranded_artifacts(root: Path, *, age: float) -> None:
+    """A halted run whose record dir, sizing and baton landed, with the docs-stage output dirty."""
+    _write(root, FOO_SIZING, f"baton: {FOO_BATON}\nplan: {FOO_PLAN}\n")
+    _write(root, FOO_BATON, "baton\n")
+    _record(root, FOO_OLD, age=age, sizing=FOO_SIZING)
+    marker = root / "state" / "warp" / FOO_OLD / "halted.json"
+    marker.write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "halt"], root)
+    stamp = f"sizing_object: {FOO_SIZING}\n"
+    for rel in FOO_ARTIFACTS:
+        _write(root, rel, f"---\n{stamp}---\nbody\n")
+        os.utime(root / rel, (time.time() - age,) * 2)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_dirty_artifacts_of_a_clean_record_dir_are_reaped_in_one_commit(bare):
+    _stranded_artifacts(bare, age=MID_AGE)
+    head = _git(["rev-parse", "HEAD"], bare).strip()
+
+    out = _reap(bare)
+
+    assert out["ok"] is True, out.get("error")
+    assert out["reaped"] == [FOO_OLD]
+    assert set(out["artifacts"][FOO_OLD]) == FOO_ARTIFACTS
+    landed = set(_git(["diff", "--name-only", f"{head}..HEAD"], bare).split())
+    assert landed == FOO_ARTIFACTS
+    assert out["committed_sha"]
+    assert _porcelain(bare) == set()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_dirty_artifacts_of_a_live_run_stay_dirty(bare):
+    _stranded_artifacts(bare, age=MID_AGE)
+    run_token.mint(bare, FOO_OLD, SCRIPT, session_id="s")
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [] and out["committed_sha"] is None
+    assert {"run_id": FOO_OLD, "reason": "live-or-recent"} in out["skipped"]
+    assert FOO_ARTIFACTS <= _porcelain(bare)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_dry_run_reports_artifact_only_run(bare):
+    _stranded_artifacts(bare, age=MID_AGE)
+
+    out = _reap(bare, dry_run=True)
+
+    assert out["reaped"] == [FOO_OLD] and out["committed_sha"] is None
+    assert set(out["artifacts"][FOO_OLD]) == FOO_ARTIFACTS
+    assert FOO_ARTIFACTS <= _porcelain(bare)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_unmarked_artifact_run_waits_out_the_tokenless_hour(bare):
+    _stranded_artifacts(bare, age=MID_AGE)
+    (bare / "state" / "warp" / FOO_OLD / "halted.json").unlink()
+    _git(["add", "-A"], bare)
+    _git(["commit", "-q", "-m", "unmark"], bare)
+
+    assert _reap(bare)["reaped"] == []
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_dead_token_does_not_hold_the_sizing(bare):

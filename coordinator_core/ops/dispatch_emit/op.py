@@ -240,7 +240,7 @@ import uuid
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.cartography._guard import PathEscapeError
@@ -1189,6 +1189,69 @@ def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
         )
 
 
+def _emit_script_file(
+    path: Path,
+    script: str,
+    *,
+    receipt_plan_path: Optional[str],
+    params: dict,
+    receipt_extras: Optional[dict],
+    plan_findings: list,
+    session_id: str,
+    agent_type_host: Optional[str],
+    before_write: Callable[[], None],
+) -> dict:
+    """Check, write and receipt one emitted script; returns its path, sha256, receipt and findings."""
+    check_agent_types_resolve(
+        script,
+        claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
+        agent_type_host=agent_type_host,
+    )
+    findings = [*run_checks(script), *plan_findings]
+    # newline="" suppresses the platform line-ending translation: a CRLF-carrying .mjs is
+    # rejected by the Workflow surface that fires it.
+    if not params.get("force"):
+        _refuse_foreign_emission(path, script, session_id)
+    before_write()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(script, encoding="utf-8", newline="")
+    # Best-effort like the receipt: a failed digest degrades sha256 to None, never fails the emit.
+    try:
+        script_sha256 = _script_sha256(path)
+    except OSError as exc:
+        print(
+            f"dispatch.emit: wrote {path} but could not digest it "
+            f"({exc}). The script stands; its reply carries no sha256, and "
+            "a --fire/workflow.fire caller cannot drift-guard this emission.",
+            file=sys.stderr,
+        )
+        script_sha256 = None
+    finding_dicts = [
+        {
+            "severity": f.severity.value,
+            "code": f.code,
+            "message": f.message,
+            **({"line": f.line} if f.line is not None else {}),
+        }
+        for f in findings
+    ]
+    receipt = _write_emission_receipt(
+        path,
+        receipt_plan_path,
+        params,
+        extras={**(receipt_extras or {}), "findings": finding_dicts},
+        sha256=script_sha256,
+    )
+    return {
+        "path": path,
+        "sha256": script_sha256,
+        "receipt": receipt,
+        "findings": finding_dicts,
+        "error_count": sum(1 for f in findings if f.severity is Severity.ERROR),
+        "warn_count": sum(1 for f in findings if f.severity is Severity.WARN),
+    }
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,
@@ -1726,14 +1789,15 @@ def _dispatch_emit(
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
         receipt_plan_path = None
     elif research_ctx is not None:
-        from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_script
+        from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_parts
 
-        script = compose_chain_script(
+        chain_parts = compose_chain_parts(
             research_ctx["segments"],
             run_id=research_ctx["run_id"],
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
         )
+        script = chain_parts[0].script
         receipt_extras = {
             **(receipt_extras or {}),
             "run_id": research_ctx["run_id"],
@@ -1898,89 +1962,81 @@ def _dispatch_emit(
                 },
             }
 
-    check_agent_types_resolve(
-        script,
-        claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
-        agent_type_host=agent_type_host,
-    )
-
-    findings = [*run_checks(script), *plan_findings]
-    error_count = sum(1 for f in findings if f.severity is Severity.ERROR)
-    warn_count = sum(1 for f in findings if f.severity is Severity.WARN)
-
-    # newline="" suppresses the platform line-ending translation Python's text
-    # mode applies by default: on Windows that rewrites every "\n" to "\r\n",
-    # and a CRLF-carrying .mjs is rejected by the harness Workflow surface that
-    # fires it (control characters in the approval payload), making an emitted
-    # script unfireable on the platform this repo treats as first-class.
-    if not params.get("force"):
-        _refuse_foreign_emission(guarded_path, script, emitting_session_id)
-
-    if pipeline_ctx is not None:
+    def _declare_output_root() -> None:
+        nonlocal pipeline_output_root
+        if pipeline_ctx is None:
+            return
         from coordinator_core.bash_guards._write_bump_applicability import declare_run_output_root
 
         pipeline_output_root = (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).resolve()
         declare_run_output_root(pipeline_ctx["run_id"], str(pipeline_output_root))
 
-    guarded_path.parent.mkdir(parents=True, exist_ok=True)
-    guarded_path.write_text(script, encoding="utf-8", newline="")
-
-    # Digested once, reused for both the reply and the receipt -- never a
-    # second `read_bytes()` of the file this call just wrote. Computed
-    # best-effort, same as the receipt write below: a caller reading the
-    # bytes right back off disk failing is exactly as unlikely as the
-    # receipt write failing, and this must not turn into a NEW way for an
-    # otherwise-successful emit to raise (`_write_emission_receipt`'s own
-    # "never fails the emit" contract, which this reuses rather than
-    # narrows). `None` here degrades `reply["sha256"]` to `None` too -- a
-    # `--fire`/`workflow.fire` caller holding a `None` digest cannot use
-    # the fired-drift guard, the same "lost the evidence, not the
-    # emission" tradeoff the receipt already makes.
-    try:
-        script_sha256 = _script_sha256(guarded_path)
-    except OSError as exc:
-        print(
-            f"dispatch.emit: wrote {guarded_path} but could not digest it "
-            f"({exc}). The script stands; its reply carries no sha256, and "
-            "a --fire/workflow.fire caller cannot drift-guard this emission.",
-            file=sys.stderr,
+    pipeline_output_root = None
+    split_parts = len(chain_parts) > 1 if research_ctx is not None else False
+    if split_parts:
+        stem = str(guarded_path)
+        stem = stem[: -len(".workflow.mjs")] if stem.endswith(".workflow.mjs") else guarded_path.with_suffix("").as_posix()
+        emitted = []
+        for index, part in enumerate(chain_parts, start=1):
+            label = "+".join(part.pipelines)
+            emitted.append((part, _emit_script_file(
+                Path(f"{stem}-{label}.workflow.mjs"),
+                part.script,
+                receipt_plan_path=receipt_plan_path,
+                params=params,
+                receipt_extras={
+                    **(receipt_extras or {}),
+                    "part": f"{index}/{len(chain_parts)}",
+                    "pipelines": list(part.pipelines),
+                },
+                plan_findings=plan_findings,
+                session_id=emitting_session_id,
+                agent_type_host=agent_type_host,
+                before_write=_declare_output_root,
+            )))
+        first = emitted[0][1]
+        written = first
+        error_count = sum(e["error_count"] for _, e in emitted)
+        warn_count = sum(e["warn_count"] for _, e in emitted)
+        finding_dicts = [f for _, e in emitted for f in e["findings"]]
+    else:
+        written = _emit_script_file(
+            guarded_path,
+            script,
+            receipt_plan_path=receipt_plan_path,
+            params=params,
+            receipt_extras=receipt_extras,
+            plan_findings=plan_findings,
+            session_id=emitting_session_id,
+            agent_type_host=agent_type_host,
+            before_write=_declare_output_root,
         )
-        script_sha256 = None
-
-    finding_dicts = [
-        {
-            "severity": f.severity.value,
-            "code": f.code,
-            "message": f.message,
-            **({"line": f.line} if f.line is not None else {}),
-        }
-        for f in findings
-    ]
-    # The receipt outlives stdout: a later reader (a resumed EM, a peer)
-    # sees the emit-time findings only if they are recorded here.
-    receipt = _write_emission_receipt(
-        guarded_path,
-        receipt_plan_path,
-        params,
-        extras={**(receipt_extras or {}), "findings": finding_dicts},
-        sha256=script_sha256,
-    )
+        error_count = written["error_count"]
+        warn_count = written["warn_count"]
+        finding_dicts = written["findings"]
 
     reply = {
-        "path": str(guarded_path),
-        "receipt": receipt,
-        # The bytes-on-disk digest, same value the receipt's own "sha256"
-        # key carries when the receipt wrote successfully. A `--fire`
-        # caller (or `workflow.fire`'s `expected` param) compares THIS
-        # against the script it is about to fire, never the receipt file,
-        # which is best-effort and may be `None`
-        # (`_write_emission_receipt`'s own negative-spec).
-        "sha256": script_sha256,
+        "path": str(written["path"]),
+        "receipt": written["receipt"],
+        # The bytes-on-disk digest; a `--fire` caller compares THIS against the
+        # script it is about to fire, never the receipt file (best-effort, may be None).
+        "sha256": written["sha256"],
         "ok": error_count == 0,
         "findings": finding_dicts,
         "error_count": error_count,
         "warn_count": warn_count,
     }
+    if split_parts:
+        reply["parts"] = [
+            {
+                "pipeline": "+".join(part.pipelines),
+                "path": str(e["path"]),
+                "sha256": e["sha256"],
+                "receipt": e["receipt"],
+                "part": f"{i}/{len(emitted)}",
+            }
+            for i, (part, e) in enumerate(emitted, start=1)
+        ]
 
     if receipt_extras and NOT_ADMITTED_EXTRA_KEY in receipt_extras:
         reply[NOT_ADMITTED_EXTRA_KEY] = receipt_extras[NOT_ADMITTED_EXTRA_KEY]

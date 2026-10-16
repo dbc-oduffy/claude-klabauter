@@ -737,6 +737,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.ask_fanout":                      "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
+    "dispatch.release_run_token":               "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
     # review_stamp.mint / review_stamp.check — MUTATING (mint only): both read
