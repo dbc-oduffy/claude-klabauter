@@ -399,22 +399,26 @@ def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_g
     script = _compose()
     assert "readyOp:" in script
     for entry in ("_ready", "_reready"):
-        adopt = f"Array.isArray({entry}.readyOpReply?.rows)) {{ _stagedManifest = {entry}.readyOpReply; }}"
-        assert adopt in script and f"!{entry}.readyOpReply?.error" in script
+        assert f"_adoptManifest({entry}.readyOpReply)" in script
     assert _NO_FOLD in script and "label: 'stage'" not in script
 
 
 def _fold_guard(script: str) -> str:
-    line = next(ln for ln in script.splitlines() if ln.strip().startswith("if (_stagedManifest) { const _thin"))
-    return line
+    return next(ln for ln in script.splitlines() if ln.strip().startswith("if (_stagedManifest) { _manifest = _stagedManifest; }"))
+
+
+_WHOLE_ROW = {
+    "id": "C1", "brief_path": "b/C1.md", "agent_type": "executor", "model": "opus",
+    "wave": 0, "writes": ["a.py"], "deps": [],
+}
 
 
 @pytest.mark.parametrize(
     "rows, error",
     [
-        ([{"id": "C1", "brief_path": "b/C1.md"}], None),
+        ([_WHOLE_ROW], None),
         # plan-blitz's relay returned rows as {id, wave, deps}: every executor got "undefined".
-        ([{"id": "C1", "wave": 0}, {"id": "C2", "brief_path": "b/C2.md"}], "rows C1 carry no brief_path"),
+        ([{"id": "C1", "wave": 0}], "relayed stage manifest is not whole: rows[0].brief_path"),
     ],
 )
 def test_a_folded_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
@@ -423,14 +427,21 @@ def test_a_folded_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
+    reply = {"rows": rows, "review_declared_paths": [], "test_targets": []}
+    script = _compose()
+    halt = next(ln for ln in script.splitlines() if ln.strip().startswith("if (!_stagedManifest && _refusedField)"))
     js = (
-        f"let _manifest = null; let _stagedManifest = {json.dumps({'rows': rows})};\n"
-        + _fold_guard(_compose())
+        "let _manifest = null; let _stagedManifest = null;\n"
+        + ask_compose._ADMIT_MANIFEST_JS
+        + f"\n_adoptManifest({json.dumps(reply)});\n"
+        + _fold_guard(script)
+        + "\n"
+        + halt
         + "\nprocess.stdout.write(JSON.stringify(_manifest));\n"
     )
     out = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
     if error is None:
-        assert out == {"rows": rows}
+        assert out == reply
     else:
         assert error in out["error"]
 

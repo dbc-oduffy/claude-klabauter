@@ -624,7 +624,7 @@ def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted():
     )
     assert "'review delivery verdict FAIL; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them'" in script
     assert len("review delivery verdict FAIL; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them") <= 300
-    assert "next_action: { kind: 'terminal_commit'" in script
+    assert "? 'none' : 'terminal_commit')" in script
 
 
 def _criterion_status_regex(script: str):

@@ -36,7 +36,7 @@ def _script(monkeypatch) -> str:
 def test_binding_is_declared_then_set_from_gated_rows_after_stage(monkeypatch):
     script = _script(monkeypatch)
     decl = script.index("let _crossRepoRows = [];")
-    stage = script.index("if (_stagedManifest) { const _thin")
+    stage = script.index("if (_stagedManifest) { _manifest = _stagedManifest; }")
     assign = script.index("_crossRepoRows = (_manifest.gated ?? [])")
     assert decl < stage < assign
     assert "owner_root: g.owner_root ?? ''" in script

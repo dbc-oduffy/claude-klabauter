@@ -191,13 +191,14 @@ def test_stop_after_refuses_an_unknown_value():
 
 def test_stage_runs_inside_the_plan_agent_only_when_the_script_goes_on_to_stage():
     full = _compose()
-    assert "const _authored = await agent(" in full and "_stagedManifest = _authored.manifest ?? null;" in full
-    assert "if (_stagedManifest) { const _thin" in full
+    assert "const _authored = await agent(" in full and "_adoptManifest(_authored.manifest);" in full
+    assert "if (_stagedManifest) { _manifest = _stagedManifest; }" in full
     assert "if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest" in full
-    assert full.index("const _authored") < full.index("if (_stagedManifest) { const _thin")
+    assert full.index("const _authored") < full.index("if (_stagedManifest) { _manifest = _stagedManifest; }")
     assert "label: 'stage'" not in full
     planned = _compose(stop_after=STOP_AFTER_PLAN)
-    assert "_stagedManifest" not in planned.replace("let _stagedManifest = null;", "")
+    stripped = planned.replace("let _stagedManifest = null;", "").replace(ask_compose._ADMIT_MANIFEST_JS, "")
+    assert "_stagedManifest" not in stripped
     assert "ask.stage" not in planned
 
 

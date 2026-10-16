@@ -281,6 +281,20 @@ def _judge_fields_js(judge_var: str, schema: dict) -> tuple:
     return summary, lessons
 
 
+def incomplete_ids_js(predispatch: bool) -> str:
+    """JS source for the de-duplicated id list terminal_commit receives as `incomplete_chunks`."""
+    spread = ", ..." + RUNTIME_VARS[8] if predispatch else ""
+    return "[...new Set([..." + RUNTIME_VARS[0] + ", ..." + RUNTIME_VARS[3] + spread + "])]"
+
+
+def bad_incomplete_ids_js(predispatch: bool) -> str:
+    """JS boolean source: true when any id headed for `incomplete_chunks` is not a non-empty string."""
+    return "(" + incomplete_ids_js(predispatch) + ".some((x) => typeof x !== 'string' || !x))"
+
+
+BAD_CHUNK_ID_REASON = "refusal: incomplete_chunks carries a non-string chunk id"
+
+
 def next_action_parts(
     *,
     has_commit_request: bool,
@@ -453,12 +467,9 @@ def next_action_parts(
         # takes verbatim; either is omitted, never emitted null, when unknown.
         # A row a halt kept from starting never landed either: terminal_commit
         # stamps every row NOT named here as coded.
-        routed_out_spread = (
-            ", ..." + RUNTIME_VARS[8] if predispatch else ""
-        )
         params_expr = (
-            "{ incomplete_chunks: [...new Set([..." + RUNTIME_VARS[0]
-            + ", ..." + RUNTIME_VARS[3] + routed_out_spread + "])], "
+            "{ incomplete_chunks: " + incomplete_ids_js(predispatch)
+            + ", "
             + (f"script_path: {_js_lit(script_path)}, " if script_path else "")
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
@@ -478,6 +489,12 @@ def next_action_parts(
         )
         if anchor_only:
             params_expr = f"({anchor_cond} ? {params_expr} : null)"
+        # A non-string id is refused, never filtered: dropping it would let
+        # terminal_commit stamp the unrun row coded. The reason rides decision_required.
+        bad_ids = bad_incomplete_ids_js(predispatch)
+        next_action_kind = f"({bad_ids} ? 'none' : {next_action_kind})"
+        next_action_op = f"({bad_ids} ? null : {next_action_op})"
+        params_expr = f"({bad_ids} ? null : {params_expr})"
     else:
         params_expr = "null"
     return next_action_kind, next_action_op, params_expr
@@ -584,6 +601,11 @@ def completion_return_js(
     )
     decision_required_expr = (
         f"({RUNTIME_VARS[4]} ? {RUNTIME_VARS[4]} : "
+        + (
+            f"({bad_incomplete_ids_js(predispatch is not None)} ? {_js_lit(BAD_CHUNK_ID_REASON)} : "
+            if has_commit_request or anchor_plan_path
+            else "("
+        )
         + seam_drift_expr
         + (
             f"({delivery_var} && {delivery_var}.verdict === 'FAIL' ? 'review delivery verdict FAIL"
@@ -606,7 +628,7 @@ def completion_return_js(
         + f"({RUNTIME_VARS[0]}.length ? 'incomplete chunks' : "
         + f"({owed_unverified_js} ? 'owed build gate unverified: ' + {owed_ids_js}.join(', ') : "
         + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null)))"
-        + ")))))))"
+        + "))))))))"
         + (")" if seam else "")
     )
 

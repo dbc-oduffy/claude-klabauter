@@ -186,7 +186,8 @@ def test_size_agent_must_return_a_footprint():
 def test_return_carries_the_plan_routes_terminal_commit_next_action():
     script = _compose(script_path="scratch/warp/ask.workflow.mjs", session_id="d7b9dc1a-1455-43e8-922f-87e734b5634e")
     ret = script[script.index("  _nextAction = "):]
-    assert "? { kind: 'terminal_commit', op: 'dispatch.terminal_commit'" in ret
+    assert "_closeable ? { kind: (" in ret
+    assert "? null : 'dispatch.terminal_commit'), params: " in ret
     assert "next_action: _nextAction" in ret[ret.rindex("  return { arm:"):]
     assert 'script_path: "scratch/warp/ask.workflow.mjs"' in ret
     assert 'session_id: "d7b9dc1a-1455-43e8-922f-87e734b5634e"' in ret
@@ -422,13 +423,10 @@ def test_a_stop_after_script_carries_no_stage_or_falsifier_act(monkeypatch):
 
 def test_folded_manifest_is_adopted_behind_the_rows_guard_and_the_fallback_stays():
     script = _compose()
-    assert (
-        "Array.isArray(_scouted.manifest?.rows) && !_scouted.manifest.error) { _stagedManifest = _scouted.manifest; }"
-        in script
-    )
-    assert "_scoutClean" in script.split("Array.isArray(_scouted.manifest?.rows)", 1)[0].splitlines()[-1]
+    assert "{ _adoptManifest(_scouted.manifest); }" in script
+    assert "_scoutClean" in script.split("_adoptManifest(_scouted.manifest)", 1)[0].splitlines()[-1]
     assert "phase('stage')" not in script and "label: 'stage'" not in script
-    assert "if (_stagedManifest) { const _thin" in script
+    assert "if (_stagedManifest) { _manifest = _stagedManifest; }" in script
     assert _NO_FOLD in script
 
 

@@ -317,6 +317,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/canvas_harvest.py",
         ("_handler",),
     ),
+    # Spawn-free on landing (empty function-granular reachable set), 2026-10-16.
+    "design.registry.lookup": (
+        "coordinator_core/ops/design_registry_lookup.py",
+        ("_handler",),
+    ),
+    "dispatch.release_run_token": (
+        "coordinator_core/ops/dispatch_emit/release_run_token.py",
+        ("_handler",),
+    ),
     "workflow.revise": (
         "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
         ("_handler",),

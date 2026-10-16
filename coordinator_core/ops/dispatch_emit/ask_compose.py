@@ -418,6 +418,36 @@ _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
 #: JS expression: the gate's design brief ahead of an agent's task text; '' when the gate carried none.
 _DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KEY}) + '\\n\\n' : '')"
 
+#: Adopts a relayed stage manifest into `_stagedManifest` only when `_wholeManifestGap` finds no
+#: gap; a refusal records the first failing field in `_refusedField` for the halt below.
+_ADMIT_MANIFEST_JS = (
+    "  let _refusedField = null;\n"
+    "  const _wholeManifestGap = (m) => {\n"
+    "    const ne = (v) => typeof v === 'string' && v.trim() !== '';\n"
+    "    if (!m || typeof m !== 'object' || Array.isArray(m)) return 'manifest';\n"
+    "    if (m.error) return 'error';\n"
+    "    for (const k of ['rows', 'review_declared_paths', 'test_targets']) { if (!Array.isArray(m[k])) return k; }\n"
+    "    for (let i = 0; i < m.rows.length; i++) {\n"
+    "      const r = m.rows[i];\n"
+    "      if (!r || typeof r !== 'object') return 'rows[' + i + ']';\n"
+    "      for (const k of ['id', 'brief_path', 'agent_type', 'model']) { if (!ne(r[k])) return 'rows[' + i + '].' + k; }\n"
+    "      if (!Number.isInteger(r.wave)) return 'rows[' + i + '].wave';\n"
+    "      for (const k of ['writes', 'deps']) { if (!Array.isArray(r[k])) return 'rows[' + i + '].' + k; }\n"
+    "    }\n"
+    "    for (const k of ['gated', 'owed']) {\n"
+    "      if (m[k] === undefined || m[k] === null) continue;\n"
+    "      if (!Array.isArray(m[k])) return k;\n"
+    "      for (let i = 0; i < m[k].length; i++) { if (!m[k][i] || !ne(m[k][i].id)) return k + '[' + i + '].id'; }\n"
+    "    }\n"
+    "    return null;\n"
+    "  };\n"
+    "  const _adoptManifest = (m) => {\n"
+    "    if (m === null || m === undefined) return false;\n"
+    "    const gap = _wholeManifestGap(m);\n"
+    "    if (gap) { if (!_refusedField) _refusedField = gap; return false; }\n"
+    "    _stagedManifest = m; return true;\n"
+    "  };"
+)
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
 #: script's bytes never hold it (any agent or peer can read the script).
 _RUN_TOKEN_DECL_JS = (
@@ -1152,6 +1182,7 @@ def compose_ask_script(
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
+    b.append(_ADMIT_MANIFEST_JS)
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append("  let _splitExit = null;")
@@ -1481,8 +1512,7 @@ def compose_ask_script(
         reply_js = "_scouted" if sized_in_run else "_gate"
         b.append(
             f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan)) "
-            f"&& Array.isArray({reply_js}.manifest?.rows) && !{reply_js}.manifest.error) "
-            f"{{ _stagedManifest = {reply_js}.manifest; }}"
+            f"{{ _adoptManifest({reply_js}.manifest); }}"
         )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
@@ -1689,7 +1719,7 @@ def compose_ask_script(
     if fold_stage:
         b.append(f"    const _authored = await {plan_call};")
         b.append("    _planRel = _authored.plan_rel;")
-        b.append("    _stagedManifest = _authored.manifest ?? null;")
+        b.append("    _adoptManifest(_authored.manifest);")
         if fold_falsifier:
             b.append("    _planFalsifier = _asPlanFalsifier(_authored.falsifier);")
     else:
@@ -1748,7 +1778,7 @@ def compose_ask_script(
         b.append("      if (_spineReview?.verdict === 'ready') {")
         b.append("        _planRel = _spineFallback;")
         if fold_stage:
-            b.append("        if (Array.isArray(_spineReview.manifest?.rows)) { _stagedManifest = _spineReview.manifest; }")
+            b.append("        _adoptManifest(_spineReview.manifest);")
         b.append("      } else {")
         b.append(
             "        _halted = { halted: " + _lit(HALT_REFUSAL) + ", reason: 'spine plan review verdict ' + "
@@ -1784,8 +1814,7 @@ def compose_ask_script(
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
-                "    if (_ready && typeof _ready === 'object' && !_stagedManifest && !_ready.readyOpReply?.error "
-                "&& Array.isArray(_ready.readyOpReply?.rows)) { _stagedManifest = _ready.readyOpReply; }"
+                "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { _adoptManifest(_ready.readyOpReply); }"
             )
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
@@ -1827,8 +1856,7 @@ def compose_ask_script(
             "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
             "{ _planRel = _revised.plan_rel || _pulledEntry.planPath;"
             + (
-                " if (_planRel === _revised.plan_rel && Array.isArray(_revised.manifest?.rows)) "
-                "{ _stagedManifest = _revised.manifest; }"
+                " if (_planRel === _revised.plan_rel) { _adoptManifest(_revised.manifest); }"
                 if fold_stage
                 else ""
             )
@@ -1838,8 +1866,7 @@ def compose_ask_script(
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
-                "      if (_reready && typeof _reready === 'object' && !_stagedManifest && !_reready.readyOpReply?.error "
-                "&& Array.isArray(_reready.readyOpReply?.rows)) { _stagedManifest = _reready.readyOpReply; }"
+                "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { _adoptManifest(_reready.readyOpReply); }"
             )
         b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
@@ -1904,21 +1931,19 @@ def compose_ask_script(
     b.append("  if (!_halted) {")
     # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
     # path; there is no standalone stage leg. A fold is an agent's relay of dispatch.ask_stage, and a
-    # relay can drop row fields (plan-blitz's readyOpReply did: rows came back {id, wave, deps}), so
-    # a row with no brief_path halts the run rather than briefing an executor with `undefined`.
+    # relay can drop row fields, so _adoptManifest admits a reply only when whole; a refused reply
+    # leaves _stagedManifest null and the halt below names the first failing field.
     # The falsifier is authored by the scout or the plan legs, never a leg of its own.
-    b.append(
-        "  if (_stagedManifest) { const _thin = (_stagedManifest.rows ?? [])"
-        ".filter((r) => !(r && typeof r.brief_path === 'string' && r.brief_path)).map((r) => String(r?.id ?? '?')); "
-        "_manifest = _thin.length ? { error: 'folded stage manifest rows ' + _thin.join(', ') + ' carry no brief_path: "
-        "the relay dropped fields; the run record manifest.json holds them' } : _stagedManifest; }"
-    )
+    b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
         b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{ _falsifierSpec = {spec_js}; }}")
     b.append(
         "  if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest: the agent that closes the "
         "gate, plan or plan-blitz ready path returned none' }; }"
+    )
+    b.append(
+        "  if (!_stagedManifest && _refusedField) { _manifest = { error: 'relayed stage manifest is not whole: ' + _refusedField }; }"
     )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
