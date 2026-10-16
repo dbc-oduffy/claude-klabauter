@@ -519,7 +519,14 @@ GENERATES_EXTERNAL = True
 # `ops/emit/tests/test_vendor_pin_version_consistency.py`, and any emit path reaching
 # `validate.assert_version_consistency`, until DoE regenerates the bundle and claude-klabauter
 # re-vendors.
-CONTRACT_VERSION = "4.12.0"
+#
+# MINOR bump 4.12.0 -> 4.13.0: CrossRepoMemoSummary.status widens from a closed enum to
+# `anyOf: [enum(open|in_progress|actioned), string]`, the same shape `kind` took in 4.12.0.
+# Readers built against the closed enum reject rows of any other status. Expected red
+# window: `ops/emit/tests/test_vendor_pin_version_consistency.py`, and any emit path
+# reaching `validate.assert_version_consistency`, until DoE regenerates the bundle and
+# claude-klabauter re-vendors.
+CONTRACT_VERSION = "4.13.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

@@ -90,12 +90,15 @@ class CrossRepoMemoSummary(BaseModel):
     The memo's authored destination endpoint — the coordinator root identity
     of the receiving repo (frontmatter `to:` field).
     """
-    status: Literal["open", "in_progress", "actioned"]
+    status: Literal["open", "in_progress", "actioned"] | _NonEmptyStr
     """
-    Primary memo lifecycle state. Only the three live values are modeled
-    here. The grandfathered back-compat values (reviewed, action_taken,
-    closed, superseded) are NOT modeled — connectors MUST normalise them
-    to one of these three before emitting a CrossRepoMemoSummary.
+    Primary memo lifecycle state (frontmatter `status:` field).
+
+    MINOR bump 4.12.0 -> 4.13.0: the three live values stay named and any other
+    non-empty string is accepted (`anyOf: [enum, string]`), as `kind` since 4.12.0, so a
+    memo is never dropped for its status. Existing memos carry values
+    (superseded, draft, closed, consumed, sent, resolved, ...) that cannot be
+    normalised retroactively; consumers treat an unnamed value as opaque.
     """
     created: IsoDate
     """ISO calendar date when the memo was created."""
