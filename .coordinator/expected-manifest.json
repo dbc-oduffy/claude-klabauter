@@ -2087,8 +2087,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "637385fc1bc40c1894beb06e1eac8192be440a6e",
-    "coordinator_core/_engine_stamp": "84dd3b12b06001ed0de976333a0ae2de8a7eb568",
+    "coordinator_core/_engine_published_at": "34c9760965a33155c4ce387bf5dc881b6190b543",
+    "coordinator_core/_engine_stamp": "9cecca300ce444025952e53f21ed30ea06368dad",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4331,7 +4331,7 @@
     "coordinator_core/ops/dispatch_emit/abandoned_runs.py": "15f98bd10c4734550f8d5a15e3160933d1017508",
     "coordinator_core/ops/dispatch_emit/admission.py": "dc4befd7cba86b544eceea0beb3068de435d281b",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "cf2be379e4f266cf49a5e5287ae4fe3ee6ee8a5c",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "95ac1b27ec1ceb2d2ab4495e34ba60eb402ee90c",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "0967fb68dfbbf5d9b929accb46cc0637cfe3c233",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "d09d4132ea52a8450728804e901ae18802a3dd2d",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "3a0cb61aa388b7484640d42bc38f263c19307a94",
     "coordinator_core/ops/dispatch_emit/ask_fanout_contract.py": "779619f73156ce795abc3f0875e1e5c311748118",
@@ -4485,6 +4485,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_mechanical_revise.py": "5cb8d1d52262583cbdf0b700e49788afd9a4dbed",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_no_silent_end.py": "56f1ceaec5681ee4d048e17ee6fbe5b91ccf12a2",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_plan_blitz_args.py": "4497e024c0d075ca1111ca32681199f9ef7898c2",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_plan_blitz_ready_restage.py": "939efa53616f3c03c811566035d58cd1b8180e17",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_relayed_manifest_admission.py": "4873ff9520057e2d9e62d11eea16201f0b6f77aa",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_research_classification.py": "b46a151bcb9a226eb0d06178a941d076134a41d0",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_research_fire.py": "69b5fce72273de5a37d89cd2b4e2913c16b196b3",
@@ -8048,5 +8049,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "f360390d586a0180f7a3501d5510dfa3a2a0b27c"
+  "source_head": "94d179faee3bffd76b69101d666c462f611a7411"
 }

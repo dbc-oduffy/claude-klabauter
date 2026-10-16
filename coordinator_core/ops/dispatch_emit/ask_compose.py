@@ -1701,11 +1701,21 @@ def compose_ask_script(
             "'` and return its JSON reply verbatim as `manifest`. If it replies `{\"error\": ...}`, "
             "return that reply as `manifest` unchanged. Stage and commit nothing else.",
         )
-        b.append(
-            "  if (_resumeLedger && !_stagedManifest) { "
-            f"const _restaged = await {_agent(restage_prompt, label='ledger-restage', phase='plan', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_obj(['manifest'], {'manifest': {'type': ['object', 'null']}}), effort=_MECHANICAL_EFFORT)}; "
-            "_adoptManifest(_restaged?.manifest); }"
-        )
+
+        def restage_leg(label: str) -> str:
+            call = _agent(restage_prompt, label=label, phase='plan', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_obj(['manifest'], {'manifest': {'type': ['object', 'null']}}), effort=_MECHANICAL_EFFORT)
+            return f"const _restaged = await {call}; _adoptManifest(_restaged?.manifest);"
+
+        b.append(f"  if (_resumeLedger && !_stagedManifest) {{ {restage_leg('ledger-restage')} }}")
+
+        def ready_restage(entry: str, indent: str) -> str:
+            """Stage a ready entry on which readyOp never ran: no reply and no error (older plan-blitz),
+            or plan-blitz's own 'did not run' error (DoE 27260ef09a). An error from the op itself halts."""
+            return (
+                f"{indent}if ({entry} && typeof {entry} === 'object' && _planRel && !_stagedManifest && !_stageRefusal "
+                f"&& {entry}.readyOpReply == null && ({entry}.readyOpError == null "
+                f"|| /did not run/.test(String({entry}.readyOpError)))) {{ {restage_leg('ready-restage')} }}"
+            )
 
     if xl_possible:
         _append_split_stage(b)
@@ -1865,6 +1875,8 @@ def compose_ask_script(
                 "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { _adoptManifest(_ready.readyOpReply); }"
             )
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
+        if fold_stage:
+            b.append(ready_restage("_ready", "    "))
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
         b.append("    if (!_planRel && _pulledEntry) {")
         revise_prompt = _cat(
@@ -1917,6 +1929,8 @@ def compose_ask_script(
                 "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { _adoptManifest(_reready.readyOpReply); }"
             )
         b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
+        if fold_stage:
+            b.append(ready_restage("_reready", "      "))
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
         b.append("      }")
         b.append("    }")
