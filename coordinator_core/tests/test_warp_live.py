@@ -32,10 +32,11 @@ def dirs(tmp_path, monkeypatch):
     return managed, legacy
 
 
-def _launch(directory, session, task, script=SCRIPT):
-    (directory / f"workflow-run-{session}-{task}.json").write_text(
-        json.dumps({"scriptPath": script, "fired_at": 1.0}), encoding="utf-8"
-    )
+def _launch(directory, session, task, script=SCRIPT, transcript_dir=None):
+    record = {"scriptPath": script, "fired_at": 1.0}
+    if transcript_dir is not None:
+        record["transcript_dir"] = str(transcript_dir)
+    (directory / f"workflow-run-{session}-{task}.json").write_text(json.dumps(record), encoding="utf-8")
 
 
 def _transcript(tmp_path, body=""):
@@ -99,12 +100,55 @@ def test_live_run_for_session_answers_for_sizing_bound_and_raw_ask(repo, dirs):
     assert warp_live.live_run_for_session(repo, None) is None
 
 
-def test_unsized_run_names_only_a_sole_live_unsized_run(repo, dirs):
+def test_size_stage_run_names_the_run_whose_launch_dir_holds_the_spawn(repo, dirs, tmp_path):
+    wf = tmp_path / "s1" / "subagents" / "workflows" / "wf_a"
     run_token.mint(repo, "r1", SCRIPT, session_id="s1")
-    assert warp_live.unsized_run(repo, "s1") == "r1"
-    assert warp_live.unsized_run(repo, "s2") is None
-    run_token.mint(repo, "r2", "scratch/warp/y.mjs", session_id="s1", sizing_rel=SIZING)
-    assert warp_live.unsized_run(repo, "s1") is None
+    _launch(dirs[0], "s1", "w1", transcript_dir=wf)
+    assert warp_live.size_stage_run(repo, "s1", str(wf)) == "r1"
+    assert warp_live.size_stage_run(repo, "s1", str(wf.parent / "wf_other")) is None
+    assert warp_live.size_stage_run(repo, "s2", str(wf)) is None
+    assert warp_live.size_stage_run(repo, "s1", None) is None
+    assert warp_live.size_stage_run(repo, None, str(wf)) is None
+
+
+def test_size_stage_run_is_none_once_a_sizing_is_bound(repo, dirs, tmp_path):
+    wf = tmp_path / "wf_a"
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1")
+    _launch(dirs[0], "s1", "w1", transcript_dir=wf)
+    assert warp_live.size_stage_run(repo, "s1", str(wf)) == "r1"
+    run_token.bind_sizing(repo, "r1", SIZING)
+    assert warp_live.size_stage_run(repo, "s1", str(wf)) is None
+
+
+def test_size_stage_run_attributes_each_of_two_live_runs(repo, dirs, tmp_path):
+    wf_a, wf_b = tmp_path / "wf_a", tmp_path / "wf_b"
+    other = "scratch/warp/y.mjs"
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1")
+    run_token.mint(repo, "r2", other, session_id="s1")
+    _launch(dirs[0], "s1", "w1", transcript_dir=wf_a)
+    _launch(dirs[0], "s1", "w2", script=other, transcript_dir=wf_b)
+    assert warp_live.size_stage_run(repo, "s1", str(wf_a)) == "r1"
+    assert warp_live.size_stage_run(repo, "s1", str(wf_b)) == "r2"
+
+
+def test_size_stage_run_recovers_the_dir_from_the_launch_result(repo, dirs, tmp_path):
+    wf = tmp_path / "wf_a"
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1")
+    _launch(dirs[0], "s1", "w1")
+    body = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tu1"}]},
+            "toolUseResult": {"status": "async_launched", "taskId": "w1", "transcriptDir": str(wf)}}
+    transcript = _transcript(tmp_path, json.dumps(body) + "\n")
+    warp_live.record_submission(
+        repo, "r1", session_id="s1", transcript_path=transcript, script_path=SCRIPT,
+        sizing_rel=None, tool_use_id="tu1",
+    )
+    assert warp_live.size_stage_run(repo, "s1", str(wf)) == "r1"
+
+
+def test_size_stage_run_is_none_when_the_dir_is_unrecoverable(repo, dirs, tmp_path):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1")
+    _launch(dirs[0], "s1", "w1")
+    assert warp_live.size_stage_run(repo, "s1", str(tmp_path / "wf_a")) is None
 
 
 def test_a_consumed_token_is_not_live(repo, dirs):

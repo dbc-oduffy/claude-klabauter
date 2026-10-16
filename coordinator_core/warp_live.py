@@ -123,10 +123,15 @@ def _launch_dirs(tmpdir: Optional[str]) -> list[str]:
 
 def _launched_task_ids(session_id: str, script_path: str, dirs: list[str]) -> list[str]:
     """Harness task ids this session launched `script_path` under, newest record last."""
+    return [task_id for task_id, _ in _launch_records(session_id, script_path, dirs)]
+
+
+def _launch_records(session_id: str, script_path: str, dirs: list[str]) -> list[tuple[str, dict]]:
+    """(task id, launch record) pairs for `script_path` in this session, newest record last."""
     if not _SAFE_ID_RE.match(session_id or ""):
         return []
     prefix = f"workflow-run-{session_id}-"
-    found: dict[str, float] = {}
+    found: dict[str, tuple[float, dict]] = {}
     for tmpdir in dirs:
         try:
             names = os.listdir(tmpdir)
@@ -141,8 +146,9 @@ def _launched_task_ids(session_id: str, script_path: str, dirs: list[str]) -> li
             record = _read_json(Path(tmpdir) / name)
             if record and _same_path(record.get("scriptPath"), script_path):
                 fired = record.get("fired_at")
-                found[task_id] = fired if isinstance(fired, (int, float)) else 0.0
-    return [task_id for task_id, _ in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
+                found[task_id] = (fired if isinstance(fired, (int, float)) else 0.0, record)
+    ordered = sorted(found.items(), key=lambda kv: (kv[1][0], kv[0]))
+    return [(task_id, rec) for task_id, (_, rec) in ordered]
 
 
 def _tail(path: str) -> str:
@@ -245,6 +251,13 @@ def _task_gone(transcript_tail: str, task_id: str) -> bool:
 def _launch_task_id(transcript_tail: str, tool_use_id: str) -> Optional[str]:
     """The harness task id of the lone `async_launched` result for `tool_use_id` in the tail, for
     a run whose `workflow-run-*` launch record temp cleanup removed."""
+    launch = _launch_result(transcript_tail, tool_use_id)
+    task_id = launch.get("taskId") if launch else None
+    return task_id if isinstance(task_id, str) and _SAFE_ID_RE.match(task_id) else None
+
+
+def _launch_result(transcript_tail: str, tool_use_id: str) -> Optional[dict]:
+    """The `toolUseResult` dict of the lone `async_launched` tool_result for `tool_use_id`."""
     if tool_use_id not in transcript_tail:
         return None
     for line in transcript_tail.split("\n"):
@@ -263,10 +276,65 @@ def _launch_task_id(transcript_tail: str, tool_use_id: str) -> Optional[str]:
             continue
         launch = obj.get("toolUseResult")
         if isinstance(launch, dict) and launch.get("status") == "async_launched":
-            task_id = launch.get("taskId")
-            if isinstance(task_id, str) and _SAFE_ID_RE.match(task_id):
-                return task_id
+            return launch
         return None
+    return None
+
+
+def _run_transcript_dir(
+    session_id: str,
+    script_path: object,
+    transcript_path: object,
+    tool_use_id: object,
+    dirs: list[str],
+) -> Optional[str]:
+    """Where this run's workflow writes its agents' transcripts: the newest launch record's
+    `transcript_dir`, else the submitting call's launch result `transcriptDir`; None when neither
+    is recoverable (unknown attribution), never raises."""
+    try:
+        if isinstance(script_path, str) and script_path:
+            for _, record in reversed(_launch_records(session_id, script_path, dirs)):
+                found = record.get("transcript_dir")
+                if isinstance(found, str) and found:
+                    return found
+        if isinstance(transcript_path, str) and transcript_path and isinstance(tool_use_id, str) and tool_use_id:
+            tail = _tail(transcript_path)
+            seen = tail if tool_use_id in tail else _earlier_lines(transcript_path, tool_use_id) + "\n" + tail
+            launch = _launch_result(seen, tool_use_id)
+            found = launch.get("transcriptDir") if launch else None
+            if isinstance(found, str) and found:
+                return found
+    except Exception:
+        return None
+    return None
+
+
+def size_stage_run(
+    repo_root: Path, session_id: Optional[str], spawn_dir: Optional[str]
+) -> Optional[str]:
+    """The run id of a live raw-ask run of this session that has bound no sizing and whose launch
+    `transcript_dir` is `spawn_dir`: the writer is one of that run's own spawns, in its size stage.
+
+    Unknown attribution (no session, no spawn dir, no recoverable transcript dir) answers None,
+    so an agent outside the run is never named."""
+    if not session_id or not spawn_dir:
+        return None
+    root = Path(repo_root)
+    dirs = _launch_dirs(None)
+    for record in _token_records(root):
+        if record.get("session_id") != session_id:
+            continue
+        run_id = record["run_id"]
+        submission = _read_json(_submission_path(root, run_id)) or {}
+        if record.get("sizing_rel") is not None or submission.get("sizing_rel"):
+            continue
+        script = submission.get("script_path") or record.get("script_path")
+        transcript = submission.get("transcript_path")
+        tool_use_id = submission.get("tool_use_id")
+        if _run_ended(session_id, script, transcript, float(record["minted_at"]), dirs, tool_use_id) is not None:
+            continue
+        if _same_path(_run_transcript_dir(session_id, script, transcript, tool_use_id, dirs), spawn_dir):
+            return run_id
     return None
 
 
@@ -286,36 +354,6 @@ def _record_live(
     if ended == _EVIDENCE:
         _run_token.consume(root, run_id)
     return ended is None
-
-
-def unsized_run(repo_root: Path, session_id: Optional[str]) -> Optional[str]:
-    """The run id of this session's live raw-ask run whose gate has not bound a sizing, when it is
-    the session's only live run, else None.
-
-    Such a run is in its size stage, where no product file is written. With a second live run in
-    the session a writer cannot be attributed to either, and a wrong answer halts the other run's
-    executors, so none is named."""
-    if not session_id:
-        return None
-    root = Path(repo_root)
-    dirs = _launch_dirs(None)
-    live: list[tuple[str, bool]] = []
-    for record in _token_records(root):
-        if record.get("session_id") != session_id:
-            continue
-        run_id = record["run_id"]
-        submission = _read_json(_submission_path(root, run_id)) or {}
-        script = submission.get("script_path") or record.get("script_path")
-        transcript = submission.get("transcript_path")
-        if _run_ended(
-            session_id, script, transcript, float(record["minted_at"]), dirs, submission.get("tool_use_id")
-        ) is not None:
-            continue
-        unsized = record.get("sizing_rel") is None and not submission.get("sizing_rel")
-        live.append((run_id, unsized))
-    if len(live) == 1 and live[0][1]:
-        return live[0][0]
-    return None
 
 
 def live_run_for_sizing(

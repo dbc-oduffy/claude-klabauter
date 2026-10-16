@@ -16,18 +16,22 @@ CLASS/MATCHERS/PRIORITY convention per docs/wiki/write-guard-priority-bands.md
 (the real SSOT -- the prior citation, state/plan-sidecars/2026-07-29-hook-
 fan-in-write-path.priority-map.md, named a file that was never written).
 
-CLASS is advisory (matches the source: this guard offers a better path via
-`additionalContext`, never denies). MATCHERS is `Write|Edit|MultiEdit` only —
+CLASS is advisory: for the main EM this guard offers a better path via
+`additionalContext` and does not deny it. MATCHERS is `Write|Edit|MultiEdit` only —
 NOT `NotebookEdit` — taken from the live `hooks.json` registration for
 `nudge-em-code-dispatch.py` (idx 3), not from INTERFACE.md's illustrative
 four-matcher example. PRIORITY is 105 per the wave map's assigned slot
 (just below the lowest pre-existing advisory, reflecting this guard's
 pre-fold position as the earliest-running advisory process).
 
-Main-agent-only behaviour is preserved unchanged: `op()` itself returns
-`None` unconditionally whenever `agent_id` is present in the payload (a
-subagent write) — this module does not re-implement or duplicate that
-check, it is inherited by delegating to `op()` directly.
+Subagent writes (payload carries `agent_id`) are never advised. They are
+denied in exactly one case: the subagent is a spawn of a live warp run that
+has bound no sizing (its size stage), attributed by its spawn transcript dir,
+and the write is a product file
+(`coordinator_core.hooks.nudge_em_code_dispatch._size_stage_write_deny`).
+Every other subagent, including a hand-dispatched executor in the same
+session, passes. This module re-implements none of that; it delegates to
+`op()`.
 
 Fail-open: `op()` is called inside a bare try/except that returns `None` on
 any failure, matching the retired shim's own graceful-degradation contract

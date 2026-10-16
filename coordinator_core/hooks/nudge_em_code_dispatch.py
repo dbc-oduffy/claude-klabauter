@@ -3,11 +3,12 @@ coordinator_core.hooks.nudge_em_code_dispatch — PreToolUse op.
 
 Purpose: Routes the EM's (main-agent) inline code writes to executor dispatch.
 The async `_handler` below stays advisory; `op()` advises in every
-session (unsized, sized, plan-routed) and never denies product-code Edits.
+session (unsized, sized, plan-routed) and never denies the EM's product-code Edits.
 
 Suppression conditions (no_advisory):
   1. agent_id present — subagent writes are allowed; executors write code. The one exception is
-       a product write while this session's raw-ask run has bound no sizing (the size stage).
+       a product write by a spawn of a live raw-ask run that has bound no sizing (the size stage),
+       attributed by `_size_stage_write_deny`; any other subagent passes.
   2. file_path absent or extension in DOC_DATA_EXTENSIONS denylist.
   3. Session sentinel present, platform-temp-dir-rooted, resolved via
        coordinator_core.session.dispatch_nudge_sentinel.sentinel_path.
@@ -544,8 +545,9 @@ _SIZE_STAGE_DENY = (
 
 
 def _size_stage_write_deny(payload: dict) -> dict | None:
-    """A subagent's product write while this session's raw-ask run has bound no sizing: only the
-    size stage runs then, and a fix it writes ships unreviewed."""
+    """A product write by a spawn of a live raw-ask run that has bound no sizing: only the size
+    stage runs then, and a fix it writes ships unreviewed. The writer is attributed by its spawn
+    transcript's workflow dir; any other subagent, or one that cannot be attributed, passes."""
     tool_input = payload.get("tool_input") or {}
     file_path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
     if not isinstance(file_path, str) or not file_path:
@@ -556,13 +558,20 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
         return None
     from coordinator_core import warp_live
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel
 
+    try:
+        spawn = terminal_commit_params_channel.spawn_transcript_path(payload)
+    except Exception:
+        return None
+    if spawn is None:
+        return None
     root = _repo_root(payload)
     session_id = payload.get("session_id")
     if root is None or not isinstance(session_id, str):
         return None
     try:
-        run = warp_live.unsized_run(root, session_id)
+        run = warp_live.size_stage_run(root, session_id, os.path.dirname(spawn))
     except Exception:
         return None
     if run is None:
@@ -571,8 +580,9 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
 
 
 def op(payload: dict) -> dict | None:
-    """Advise on the main EM's product-code write; never deny. The advisory
-    repeats on every Edit and names the step for the session's sizing state.
+    """Advise on the main EM's product-code write; never deny the EM. The advisory
+    repeats on every Edit and names the step for the session's sizing state. A subagent
+    (`agent_id` present) is denied only as a size-stage run spawn (`_size_stage_write_deny`).
 
     Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass
     diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason

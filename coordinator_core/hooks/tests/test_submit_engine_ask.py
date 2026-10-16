@@ -185,16 +185,42 @@ def test_sizing_submission_carries_its_writes(tmp_path):
     assert emit.calls[0][0]["writes"] == ["tests/t.py"]
 
 
+def _spawn(tmp_path: Path, name: str, agent_id: str) -> Path:
+    """A workflow spawn's transcript under <session>/subagents/workflows/<name>."""
+    path = tmp_path / "sess-1" / "subagents" / "workflows" / name / f"agent-{agent_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+    return path
+
+
+def _launch_record(tmp_path: Path, monkeypatch, script: str, wf_dir: Path, task: str) -> None:
+    launches = tmp_path / "launches"
+    launches.mkdir(exist_ok=True)
+    monkeypatch.setattr(warp_live, "managed_tempdir", lambda: launches)
+    monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda _name="": launches)
+    (launches / f"workflow-run-sess-1-{task}.json").write_text(
+        json.dumps({"scriptPath": script, "transcript_dir": str(wf_dir), "fired_at": 1.0}), encoding="utf-8"
+    )
+
+
+def _agent_write(dispatch, root: Path, tmp_path: Path, agent_id: str, path: str = "pkg/mod.py"):
+    return dispatch.op({"tool_name": "Edit", "agent_id": agent_id, "session_id": "sess-1", "cwd": str(root),
+                        "transcript_path": str(tmp_path / "sess-1.jsonl"),
+                        "tool_input": {"file_path": str(root / path), "old_string": "a", "new_string": "b"}})
+
+
 def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
     from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 
     monkeypatch.setattr(dispatch, "_is_scratch_or_tmp", lambda _p: False)  # tmp_path is under the temp dir
     root = _repo(tmp_path)
-    mod.evaluate(_payload(root, {"ask": "fix detect()"}), emit=_Emit())
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"ask": "fix detect()"}), emit=emit)
+    spawn = _spawn(tmp_path, "wf_run", "a1")
+    _launch_record(tmp_path, monkeypatch, emit.script, spawn.parent, "t1")
 
     def write(path):
-        return dispatch.op({"tool_name": "Edit", "agent_id": "a1", "session_id": "sess-1", "cwd": str(root),
-                            "tool_input": {"file_path": str(root / path), "old_string": "a", "new_string": "b"}})
+        return _agent_write(dispatch, root, tmp_path, "a1", path)
 
     assert write("pkg/mod.py")["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert write("DELIVERY.md") is None
@@ -208,20 +234,21 @@ def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path, mon
     monkeypatch.setattr(dispatch, "_is_scratch_or_tmp", lambda _p: False)
     root = _repo(tmp_path)
     run_a, run_b = "ask-20261013T000000-aaaaaa", "ask-20261013T000001-bbbbbb"
-    for run_id in (run_a, run_b):
+    agent_a, agent_b = "a1", "b1"
+    for run_id, agent_id, wf in ((run_a, agent_a, "wf_a"), (run_b, agent_b, "wf_b")):
         script = root / "scratch" / f"{run_id}.mjs"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text("export const meta = {}\n", encoding="utf-8")
         run_token.mint(root, run_id, str(script), session_id="sess-1")
+        spawn = _spawn(tmp_path, wf, agent_id)
+        _launch_record(tmp_path, monkeypatch, str(script), spawn.parent, run_id[-6:])
 
-    def write():
-        return dispatch.op({"tool_name": "Edit", "agent_id": "a1", "session_id": "sess-1", "cwd": str(root),
-                            "tool_input": {"file_path": str(root / "pkg/mod.py"), "old_string": "a",
-                                           "new_string": "b"}})
+    def write(agent_id):
+        return _agent_write(dispatch, root, tmp_path, agent_id)
 
     run_token.bind_sizing(root, run_b, "state/sizings/b.yaml")
-    assert write() is None
-    assert warp_live.unsized_run(root, "sess-1") is None
+    assert write(agent_b) is None
+    assert write(agent_a)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_remote_venue_carries_the_cross_repo_approval(tmp_path, monkeypatch):
