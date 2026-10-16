@@ -3289,12 +3289,28 @@ def own_path_claims(sid: str, cwd: Optional[str] = None) -> List[str]:
     agent fan-out) currently ``T``-claims, sorted -- the read twin of
     :func:`release_own_path_claims`'s full-release set, so a holder can
     enumerate what it would release. A degraded sink contributes nothing."""
+    return _own_path_claims(sid, cwd, lambda raw: normalize_touch_path(raw, cwd, root=cwd))
+
+
+def own_path_claims_in_process(sid: str, cwd: Optional[str] = None) -> List[str]:
+    """:func:`own_path_claims` for a spawn-budgeted caller: entries are read as the repo-relative
+    lines the writers store, never re-normalized through git. An entry stored absolute is dropped,
+    where :func:`own_path_claims` would relativize it, so a baseline built from it can under-report.
+    The normalizer lives in ``ops.session`` and is imported lazily (cycle)."""
+    from coordinator_core.ops.session.safe_commit_offer import (  # noqa: PLC0415 -- import cycle
+        _normalize_agent_touched_entry,
+    )
+
+    return _own_path_claims(sid, cwd, _normalize_agent_touched_entry)
+
+
+def _own_path_claims(
+    sid: str, cwd: Optional[str], main_normalize: Callable[[str], Optional[str]]
+) -> List[str]:
     sinks: List[Tuple[str, Callable[[str], Optional[str]]]] = []
     sdir = core.session_dir(sid, cwd)
     if sdir:
-        sinks.append(
-            (os.path.join(sdir, _TOUCH_RECORD_FILENAME), lambda raw: normalize_touch_path(raw, cwd, root=cwd))
-        )
+        sinks.append((os.path.join(sdir, _TOUCH_RECORD_FILENAME), main_normalize))
     base = core.sessions_dir(cwd)
     agents_base = os.path.join(base, ".agents") if base else None
     if agents_base and os.path.isdir(agents_base):

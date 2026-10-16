@@ -228,11 +228,26 @@ def test_premise_unknown_row_verdict_is_refused(tmp_path):
         op._handler({"plan": REL, "premise": {"rows": _rows("MAYBE")}}, common)
 
 
-def test_premise_with_premise_check_review_is_refused(tmp_path):
+def test_premise_with_premise_check_review_drops_the_review_entry(tmp_path):
     common = _plan(tmp_path)
     reviews = [{"reviewer": "premise-check", "verdict": "BLOCKED"}]
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        op._handler({"plan": REL, "premise": {"rows": _rows("RESOLVES")}, "reviews": reviews}, common)
+    reply = op._handler({"plan": REL, "premise": {"rows": _rows("RESOLVES")}, "reviews": reviews}, common)
+    assert "premise-check" not in reply["reason"]
+
+
+def test_c5bf35_inputs_return_a_usable_reply_not_an_error(tmp_path):
+    """Run c5bf35 passed premise-check=OK among reviews plus UNCHECKABLE premise rows."""
+    common = _plan(tmp_path)
+    reviews = [
+        {"reviewer": "premise-check", "verdict": "OK"},
+        {"reviewer": "coordinator:staff-eng", "verdict": "WARN"},
+        {"reviewer": "coordinator:apm", "verdict": "WARN"},
+    ]
+    reply = op._handler(
+        {"plan": REL, "premise": {"rows": _rows("UNCHECKABLE", "UNCHECKABLE")}, "reviews": reviews}, common
+    )
+    assert reply["verdict"] == "judgment"
+    assert "premise-check" not in reply["reason"]
 
 
 def test_premise_reaches_the_op_through_the_handler(tmp_path):

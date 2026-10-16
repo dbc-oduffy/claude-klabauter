@@ -84,6 +84,8 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import (
     NO_SLICES_HALT,
+    PREP_BUSY_HALT,
+    REVIEW_MISSING_HALT,
     compose_execute_review,
     criterion_judge_brief,
     owner_repo_clause_js,
@@ -251,11 +253,6 @@ _XL_SCHEMA = _obj(
         "pmOnly": {"type": "boolean"},
         "pmOnlyGround": _STR,
         "ruling": _STR,
-    },
-)
-_SPLIT_SCHEMA = _obj(
-    ["parent_id", "runs", "fire", "error"],
-    {
         "parent_id": _STR,
         "runs": {"type": "array", "items": {"type": "object"}},
         "fire": {"type": "array", "items": _STR},
@@ -567,7 +564,8 @@ def _criterion_judge_brief(
 _VERIFY_INTRO = (
     f"phase: {ASK_VERIFY_PHASE}\n\nYou are the run's one closing agent: it replaces the separate scoped-test, "
     "docs and criterion-judge agents. The run's change is on disk, uncommitted. Do these three steps in "
-    "order. Your write set is exactly step 2's declared doc writes and its delivery note; in steps 1 and 3 "
+    "order. Your write set is exactly step 2's declared doc writes and its delivery note (and any verdict "
+    "report step 2 names); in steps 1 and 3 "
     "you edit, stage and commit nothing, and you never change a file to make a requirement true.\n\n"
 )
 _VERIFY_NO_TESTS = "Run no tests: this run has no scoped test target to run. Omit `test`."
@@ -601,6 +599,8 @@ def _verify_call(
         f"js:(_testWanted ? ({test_js}) : {_lit(_VERIFY_NO_TESTS)})",
         "\n\n(2) DOCS. ",
         docs_js,
+        "js:(_verdictReports.length ? ' Also write each of these files with the Write tool (create its directory "
+        "if missing), holding exactly its text and nothing else: ' + JSON.stringify(_verdictReports) : '')",
         "\n\n(3) VERDICT. Once the test result is in, read it before you rule: a failing or degraded "
         "result is evidence for the verdict, never the verdict itself. ",
         *verdict_parts,
@@ -760,6 +760,8 @@ def _phase_titles(
 
 _REVIEW_NOOP_EXIT = "return { halted: 'no-op',"
 _REVIEW_NOOP_TAIL = "wave: null, integration: null }; }"
+_REVIEW_MISSING_GUARD = "  if (_waveRaw.some(r => r && r.prep && !r.prep.error"
+_REVIEW_PREP_BIND = "  _reviewPrep = (() => {\n"
 _REVIEW_SLICES_GUARD = "  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {"
 
 
@@ -772,6 +774,19 @@ def _single_exit_review(blocks: list[str]) -> str:
     prep = blocks[0]
     if prep.count(_REVIEW_NOOP_EXIT) != 1 or _REVIEW_NOOP_TAIL not in prep or _REVIEW_SLICES_GUARD not in prep:
         raise AskComposeRefused("review prep block no longer has the no-op exit shape single-exit composition rewrites")
+    busy_exit = f"return {{ halted: '{PREP_BUSY_HALT}'"
+    missing_exit = f"return {{ halted: '{REVIEW_MISSING_HALT}'"
+    if (
+        prep.count(busy_exit) != 1
+        or prep.count(missing_exit) != 1
+        or prep.count(_REVIEW_MISSING_GUARD) != 1
+        or prep.count(_REVIEW_PREP_BIND) != 1
+    ):
+        raise AskComposeRefused("review prep block no longer has the prep-busy and review-missing exit shape single-exit composition rewrites")
+    prep = prep.replace(busy_exit, busy_exit.replace("return ", "_halted = ", 1))
+    prep = prep.replace(missing_exit, missing_exit.replace("return ", "_halted = ", 1))
+    prep = prep.replace(_REVIEW_MISSING_GUARD, _REVIEW_MISSING_GUARD.replace("if (", "if (!_halted && ", 1), 1)
+    prep = prep.replace(_REVIEW_PREP_BIND, "  if (!_halted) _reviewPrep = (() => {\n", 1)
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
     prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))) {", 1)
     prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)
@@ -782,34 +797,25 @@ def _single_exit_review(blocks: list[str]) -> str:
 def _reviewer_row_js(anchor: str, label_prefix: str) -> list[str]:
     """The execute-loop branch for a blinded falsifier-integrity reviewer row: the agent is given
     only the repo anchor and its brief path (no preamble, no ledger clause -- the brief is the
-    phase's own spec prompt), its structured verdict is written as JSON to the row's dispatch
-    report path by a mechanical writer. `_runRow` reads the returned `DONE:` line.
-    Trap: the writer agent, not the read-only reviewer, holds the Write."""
+    phase's own spec prompt); its structured verdict is queued in `_verdictReports` as JSON for
+    the row's dispatch report path, and the closing verify agent writes it. `_runRow` reads the
+    returned `DONE:` line.
+    Trap: the read-only reviewer never holds the Write; the verify agent does."""
     prompt = _cat(f"{anchor}\n\n", "Your brief is the file ", "js:r.brief_path", " -- read it completely, then execute it as written.")
     report = (
         f"{_lit(_emit._DISPATCH_REPORT_DIR + '/')} + {_RUNTIME_PLAN_PATH_JS}.split('/').pop().slice(0, -3)"
         " + '/' + r.id + '.md'"
     )
-    writer = _cat(
-        "Write the file `", f"js:({report})",
-        "` with the Write tool (create its directory if missing) holding exactly this text and nothing else: ",
-        "js:JSON.stringify(_v)",
-        ". Return the path you wrote.",
-    )
     reviewer = (
         f"agent({prompt}, {{ label: {label_prefix} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
         f"agentType: r.agent_type, model: r.model, schema: {_emit.stage_schema_literal('falsifier_integrity_result')} }})"
-    )
-    write_call = _agent(
-        writer, label="verdict-write", phase=_emit._EXECUTE_PHASE_TITLE, agent_type=_MECHANICAL_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_obj(["path"], {"path": _STR}), effort=_MECHANICAL_EFFORT,
     )
     return [
         f"      if (r.agent_type === {_lit(REVIEWER_AGENT_TYPE)}) _rows[r.id] = _runRow(r.id, "
         "(r.deps ?? []).map((d) => _rows[d]), null, async () => {",
         f"        const _v = await {reviewer};",
         "        if (!_v || !_v.verdict) { return 'BLOCKED: the reviewer returned no verdict'; }",
-        f"        await {write_call};",
+        f"        _verdictReports.push({{ path: {report}, text: JSON.stringify(_v) }});",
         "        return 'DONE: ' + r.id + ' verdict ' + _v.verdict;",
         "      });",
     ]
@@ -969,6 +975,7 @@ def compose_ask_script(
 
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
     record_dir = f"{RECORD_DIR_ROOT}/{run_id}"
+    parent_copy = run_parent_copy_rel(run_id)
     manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
     brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
@@ -1420,8 +1427,22 @@ def compose_ask_script(
             "pick for one initiative spanning workstreams. Return verdict 'ruled', the "
             "pick, and your one-paragraph reasoning verbatim as ruling. Return verdict 'pm-only' with "
             "pmOnly true and pmOnlyGround ONLY when the job-to-be-done itself is unstated, or the work "
-            "needs a merge, publish, push to main or cross-repo commit. Being unsure is not a ground. "
-            "You stage and commit nothing." + _KEEP_THE_ASK.format(record_dir=record_dir) + ledger_clause,
+            "needs a merge, publish, push to main or cross-repo commit. Being unsure is not a ground. ",
+            "js:((typeof args !== 'undefined' && !!args && args.confirm_split === true) ? '' : "
+            + _lit(
+                f"When you pick 'split' with slices, also run `{_INVOKE} {FANOUT_OP} '"
+                "{\"slices\": <your slices, as JSON>, \"parent_sizing\": \""
+            )
+            + " + _sizingRel + "
+            + _lit(
+                "\"}'` (a single quote inside the JSON is written '\\''), and return its JSON reply as parent_id, "
+                "runs and fire (error empty on success; if it replies `{\"error\": ...}`, return that message as "
+                "`error`, with parent_id empty and runs and fire empty). On success, read "
+                f"scratch/warp/<parent_id>/parent.json and write its content verbatim to {parent_copy} "
+                "(create the directory first). "
+            )
+            + ")",
+            "You stage and commit nothing, apart from that write." + _KEEP_THE_ASK.format(record_dir=record_dir) + ledger_clause,
             *_record_clause(
                 "{ kind: 'xl_exit', ruling_ref: _runId }",
                 "`xl_exit` (your pick) and `apm_ruling` (your ruling, verbatim)",
@@ -1435,6 +1456,7 @@ def compose_ask_script(
         take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, spine_plan: %s.spine_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
+        b.append("  let _splitFan = null;")
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
             # owe both the exit pick and the exit-criterion acceptance. No progress ends the loop.
@@ -1463,7 +1485,7 @@ def compose_ask_script(
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
             f"      {take_gate % (('_xl',) * 6)}\n"
-            "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) _splitSlices = _xl.slices;\n"
+            "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (!_progressed && _xl) {{\n"
@@ -1495,7 +1517,7 @@ def compose_ask_script(
     )
 
     if xl_possible:
-        _append_split_stage(b, head=head, anchor=anchor, run_id=run_id)
+        _append_split_stage(b)
 
     stage_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
@@ -1815,6 +1837,7 @@ def compose_ask_script(
     )
     b.append("  }")
 
+    b.append("  const _verdictReports = [];")
     b.append("  if (!_halted && !_resumeLedger) {")
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
@@ -2127,7 +2150,6 @@ def compose_ask_script(
             review_titles=review_titles,
             extra=[
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
-                *(["split"] if xl_possible else []),
                 *(["roadmap-blitz", *rb_phases] if rb_fn else []),
                 ASK_VERIFY_PHASE,
                 *(["commit"] if in_run_commit else []),
@@ -2338,38 +2360,21 @@ def _halt_record_commit_fn(
     return f"  async function _commitHaltRecord() {{ return await {call}; }}"
 
 
-def _append_split_stage(b: list[str], *, head: str, anchor: str, run_id: str) -> None:
-    """The in-run split exit: a `split` halt fans out to sibling runs, or stays a halt for the EM.
+def _append_split_stage(b: list[str]) -> None:
+    """The in-run split exit: a `split` halt carries the fanout the xl-exit agent already ran, or stays a halt for the EM.
 
     With `args.confirm_split === true`, or no proposed slices, the halt keeps kind `split` and
-    carries the proposed slices. Otherwise one mechanical agent runs `dispatch.ask_fanout` over the
-    slices and the parent sizing and copies the parent record into this run's own record dir, and
-    `_splitExit` is the script's single exit. A refusal keeps the halt: the roadmap arm is never
-    reached from a split.
+    carries the proposed slices. Otherwise the xl-exit agent's own reply (`_splitFan`) holds the
+    `dispatch.ask_fanout` result and `_splitExit` is the script's single exit. A refusal keeps the
+    halt: the roadmap arm is never reached from a split.
     """
-    parent_copy = run_parent_copy_rel(run_id)
-    prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        f"phase: split\n\nRun `{_INVOKE} {FANOUT_OP} '",
-        "js:JSON.stringify({ slices: _splitSlices, parent_sizing: _sizingRel }).split(\"'\").join(\"'\\\\''\")",
-        "'` and return its JSON reply verbatim as parent_id, runs and fire (error empty on success). "
-        "If it replies `{\"error\": ...}`, return that message as `error` with parent_id empty and runs "
-        f"and fire empty. On success, read the file at scratch/warp/<parent_id>/parent.json and write "
-        f"its content verbatim to {parent_copy} (create the directory first). Run nothing else.",
-    )
-    call = _agent(
-        prompt, label="split", phase="split", agent_type=_MECHANICAL_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_SPLIT_SCHEMA, effort=_MECHANICAL_EFFORT,
-    )
     b.append(
         f"  if (_halted && _halted.halted === {_lit(HALT_SPLIT)}) {{\n"
         "    const _confirmSplit = typeof args !== 'undefined' && !!args && args.confirm_split === true;\n"
         "    const _proposed = Array.isArray(_splitSlices) ? _splitSlices : [];\n"
         "    _halted = { ..._halted, slices: _proposed, confirm_split: _confirmSplit };\n"
         "    if (!_confirmSplit && _proposed.length) {\n"
-        "      phase('split');\n"
-        "      let _fan = null;\n"
-        f"      try {{ _fan = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}\n"
+        "      const _fan = _splitFan;\n"
         "      if (_fan && !_fan.error && _fan.parent_id && Array.isArray(_fan.runs)) {\n"
         "        _splitExit = { split: { parent_id: _fan.parent_id, runs: _fan.runs }, "
         "fire: _fan.fire ?? [], sizing: _sizingRel, run_id: _runId };\n"

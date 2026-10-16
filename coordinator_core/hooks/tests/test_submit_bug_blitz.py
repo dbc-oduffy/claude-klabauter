@@ -210,7 +210,7 @@ def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
         seen_sid.append(sid)
         return claims
 
-    monkeypatch.setattr(scope, "own_path_claims", fake_claims)
+    monkeypatch.setattr(scope, "own_path_claims_in_process", fake_claims)
     env = _call(repo, {"targets": "red-set"})
     script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
     decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))

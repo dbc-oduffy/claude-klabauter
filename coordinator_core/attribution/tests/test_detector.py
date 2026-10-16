@@ -105,6 +105,11 @@ def test_review_colon_namespaced_form_detected():
     assert scan_text(text, "a.py")
 
 
+def test_quoted_review_leg_label_is_not_attribution():
+    assert not scan_text("label: 'review:coordinator:code-reviewer'", "emit.py")
+    assert not scan_text('_earns("emit", "review:coordinator:test-runner", "x")', "a.py")
+
+
 def test_review_colon_paren_finding_trailer_detected():
     text = "Review: code-reviewer (Finding 3)"
     assert scan_text(text, "a.py")

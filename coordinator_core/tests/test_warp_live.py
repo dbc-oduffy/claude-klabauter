@@ -249,6 +249,50 @@ def test_a_refused_call_spends_the_token(repo, dirs, tmp_path):
     assert not run_token.is_live(repo, "r1")
 
 
+def _padded(body, tmp_path, monkeypatch):
+    monkeypatch.setattr(warp_live, "_TRANSCRIPT_TAIL_BYTES", 256)
+    return _transcript(tmp_path, body + ('{"type":"assistant","text":"later turn"}\n' * 40))
+
+
+def test_a_run_that_ended_before_the_transcript_tail_spends_its_token(repo, dirs, tmp_path, monkeypatch):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path))
+    _launch(dirs[0], "s1", "w1")
+    ended = _padded(_terminal("w1", "halted: plan pull"), tmp_path, monkeypatch)
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=ended) is None
+    assert not run_token.is_live(repo, "r1")
+
+
+def test_a_pre_tail_run_without_a_launch_record_spends_its_token(repo, dirs, tmp_path, monkeypatch):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    launch = json.loads(_result_line("tu1", launch=True))
+    launch["toolUseResult"]["taskId"] = "w1"
+    body = json.dumps(launch) + "\n" + _terminal("w1", "done")
+    transcript = _padded(body, tmp_path, monkeypatch)
+    _submit(repo, "r1", transcript)
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s2") is None
+    assert not run_token.is_live(repo, "r1")
+
+
+def test_a_pre_tail_run_with_no_terminal_notification_stays_live(repo, dirs, tmp_path, monkeypatch):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path))
+    _launch(dirs[0], "s1", "w1")
+    other = _padded(_terminal("w2", "done"), tmp_path, monkeypatch)
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=other) == "r1"
+    assert run_token.is_live(repo, "r1")
+
+
+def test_a_terminal_notification_beyond_the_head_window_leaves_the_run_live(repo, dirs, tmp_path, monkeypatch):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", _transcript(tmp_path))
+    _launch(dirs[0], "s1", "w1")
+    ended = _padded(_terminal("w1", "done"), tmp_path, monkeypatch)
+    monkeypatch.setattr(warp_live, "_TRANSCRIPT_HEAD_BYTES", 16)
+    assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1", transcript_path=ended) == "r1"
+    assert run_token.is_live(repo, "r1")
+
+
 def test_the_reader_names_no_system_tempdir():
     text = Path(warp_live.__file__).read_text(encoding="utf-8")
     assert "gettempdir" not in text and "sizing_mtime" not in text

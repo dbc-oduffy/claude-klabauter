@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from pathlib import PurePath
 
+import pytest
+
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.ask_compose import _REVIEW_SLICES_GUARD, compose_ask_script
+from coordinator_core.ops.review_mint.execute_review import PREP_BUSY_HALT, REVIEW_MISSING_HALT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session.record_homes import record_path
 
@@ -115,6 +118,23 @@ def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritt
     assert "freeze-review-diff" not in script
     assert "return { halted: 'no-op'," not in script
     assert "_halted = { halted: 'no-op'," in script
+
+
+def test_prep_busy_and_review_missing_exits_assign_halted_and_skip_the_prep_bind(monkeypatch):
+    script = _m_plus_script(monkeypatch)
+    assert "return { halted:" not in script
+    for halt in (PREP_BUSY_HALT, REVIEW_MISSING_HALT):
+        assert f"_halted = {{ halted: '{halt}'" in script
+    assert "if (!_halted) _reviewPrep = (() => {" in script
+    assert "if (!_halted && _waveRaw.some(" in script
+
+
+def test_drifted_prep_busy_exit_refuses_composition():
+    blocks = [
+        "return { halted: 'no-op', wave: null, integration: null }; }\n" + _REVIEW_SLICES_GUARD
+    ]
+    with pytest.raises(ask_compose.AskComposeRefused):
+        ask_compose._single_exit_review(blocks)
 
 
 def test_m_plus_script_validates_with_zero_errors(monkeypatch):

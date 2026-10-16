@@ -144,11 +144,11 @@ def _baseline_dirty(root: Path, session_id: str) -> list[str]:
     Read in-process from the session's own claim list."""
     if not session_id:
         return []
-    from coordinator_core.session.scope import own_path_claims
+    from coordinator_core.session.scope import own_path_claims_in_process
 
     roots = run_write_roots(PROFILE, [QUEUE_DIR])
     try:
-        claims = own_path_claims(session_id, cwd=str(root))
+        claims = own_path_claims_in_process(session_id, cwd=str(root))
     except Exception:  # advisory baseline: an unreadable claim list must not refuse an emitted run
         return []
     return [p for p in claims if under_roots(p, roots)]

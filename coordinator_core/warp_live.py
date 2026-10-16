@@ -47,6 +47,10 @@ UNLAUNCHED_GRACE_SECONDS = 15 * 60
 #: the launch, so the tail holds it unless the session has run long past the run's end).
 _TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
 
+#: Transcript bytes before the tail window searched, by the run's task id, when the tail holds no
+#: terminal notification: bounds the read of a session that ran long past the run's end.
+_TRANSCRIPT_HEAD_BYTES = 64 * 1024 * 1024
+
 _EVIDENCE = "evidence"
 _TIMER = "timer"
 
@@ -170,9 +174,10 @@ def _run_ended(
     tail = _tail(transcript_path) if has_transcript else ""
     if not task_ids:
         if tail and isinstance(tool_use_id, str) and tool_use_id:
-            if _call_refused(tail, tool_use_id):
+            seen = tail if tool_use_id in tail else _earlier_lines(transcript_path, tool_use_id) + "\n" + tail
+            if _call_refused(seen, tool_use_id):
                 return _EVIDENCE
-            recovered = _launch_task_id(tail, tool_use_id)
+            recovered = _launch_task_id(seen, tool_use_id)
             if recovered:
                 task_ids = [recovered]
         if not task_ids:
@@ -180,7 +185,37 @@ def _run_ended(
     if not tail:
         return None
     task_id = task_ids[-1]
-    return _EVIDENCE if _task_ended(tail, task_id) or _task_gone(tail, task_id) else None
+    if _task_ended(tail, task_id) or _task_gone(tail, task_id):
+        return _EVIDENCE
+    earlier = _earlier_lines(transcript_path, task_id)
+    return _EVIDENCE if earlier and (_task_ended(earlier, task_id) or _task_gone(earlier, task_id)) else None
+
+
+def _earlier_lines(path: str, needle: str) -> str:
+    """The lines holding `needle` in the `_TRANSCRIPT_HEAD_BYTES` before the tail window: a run
+    that ended in a session that kept going has its launch and terminal notification there.
+    Reads and holds up to `_TRANSCRIPT_HEAD_BYTES` per call (unmeasured against the 500ms bar); a
+    line straddling the tail boundary is split across both windows and matches neither."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            stop = max(0, handle.tell() - _TRANSCRIPT_TAIL_BYTES)
+            start = max(0, stop - _TRANSCRIPT_HEAD_BYTES)
+            handle.seek(start)
+            data = handle.read(stop - start)
+    except OSError:
+        return ""
+    key = needle.encode("utf-8")
+    lines: list[bytes] = []
+    pos = data.find(key)
+    while pos != -1:
+        begin = data.rfind(b"\n", 0, pos) + 1
+        end = data.find(b"\n", pos)
+        if end == -1:
+            end = len(data)
+        lines.append(data[begin:end])
+        pos = data.find(key, end)
+    return b"\n".join(lines).decode("utf-8", errors="replace")
 
 
 def _task_gone(transcript_tail: str, task_id: str) -> bool:

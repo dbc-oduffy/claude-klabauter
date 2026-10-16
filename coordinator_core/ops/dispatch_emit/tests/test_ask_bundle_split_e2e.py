@@ -46,15 +46,21 @@ def test_xl_exit_offers_split_with_slices_and_full_partition():
     assert "_splitSlices = _xl.slices" in script
 
 
-def test_auto_fire_branch_runs_fanout_and_exits_with_the_reply():
-    stage = _split_stage(_script())
-    assert FANOUT_OP in stage
-    assert "parent_sizing: _sizingRel" in stage and "slices: _splitSlices" in stage
+def test_auto_fire_branch_exits_with_the_xl_exit_agents_fanout_reply():
+    script = _script()
+    stage = _split_stage(script)
     assert "if (!_confirmSplit && _proposed.length)" in stage
+    assert "const _fan = _splitFan;" in stage
     assert "_splitExit = { split: { parent_id: _fan.parent_id, runs: _fan.runs }, fire: _fan.fire ?? [], sizing: _sizingRel, run_id: _runId }" in stage
-    assert run_parent_copy_rel(_RUN_ID) in stage
-    assert stage.count("await agent(") == 1
-    assert "agentType: 'general-purpose'" in stage and "model: 'haiku'" in stage
+    assert "await agent(" not in stage
+    assert 'label: "split"' not in script and "label: 'split'" not in script
+    prompt = script[script.index("phase: xl-exit") :]
+    prompt = prompt[: prompt.index("recorded")].replace("\\'", "'")
+    assert FANOUT_OP in prompt and "args.confirm_split === true" in prompt
+    assert run_parent_copy_rel(_RUN_ID) in prompt
+    assert "_splitFan = _xl" in script
+    props = _XL_SCHEMA["properties"]
+    assert {"parent_id", "runs", "fire", "error"} <= set(props)
 
 
 def test_confirm_split_halts_with_the_proposed_slices_without_fanout():
@@ -62,7 +68,7 @@ def test_confirm_split_halts_with_the_proposed_slices_without_fanout():
     assert "args.confirm_split === true" in stage
     assert "_halted = { ..._halted, slices: _proposed, confirm_split: _confirmSplit };" in stage
     guard = stage.index("if (!_confirmSplit && _proposed.length)")
-    assert stage.index("await agent(") > guard
+    assert "_fan = _splitFan" in stage[guard:]
 
 
 def test_partition_refusal_stays_a_split_halt_with_the_refusal_text():
@@ -87,5 +93,5 @@ def test_split_never_reaches_roadmap_stage_or_execute():
 def test_script_lints_clean_and_declares_the_split_phase():
     script = _script()
     assert not [f for f in run_checks(script) if f.severity == Severity.ERROR]
-    assert "'split'" in script.split("phases: [", 1)[1].split("]", 1)[0]
+    assert "'split'" not in script.split("phases: [", 1)[1].split("]", 1)[0]
     json.dumps(_XL_SCHEMA)

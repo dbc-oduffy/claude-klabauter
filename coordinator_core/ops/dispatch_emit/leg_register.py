@@ -85,7 +85,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "size-reword", "rewords a refused exit criterion; absorbed the gate op and sizing-assemble that ran after it"),
     _earns("ask", "falsifier", "authors the baseline falsifier for the exit criterion"),
     _earns("ask", "accept", "the APM rules on the exit criterion"),
-    _earns("ask", "xl-exit", "the APM picks the XL exit"),
+    _earns("ask", "xl-exit", "the APM picks the XL exit; absorbed the split fanout op"),
     _earns("ask", "plan", "authors the plan"),
     _earns("ask", "plan-review", "reviews the plan"),
     _earns("ask", "plan-revise", "revises the plan against its review"),
@@ -94,7 +94,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns(
         "ask", "verify",
         "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "
-        "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs",
+        "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs and the reviewer rows' verdict-write",
     ),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "stage", "fallback only when no fold staged a manifest (stop_after, failed fold); no preceding agent"),

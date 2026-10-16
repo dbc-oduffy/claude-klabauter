@@ -161,6 +161,7 @@ from coordinator_core.bash_guards._dialect import (
     tokenize_command,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._merge_incoming import merge_incoming_paths
 from coordinator_core.bash_guards.block_subagent_commit import (
     _literal_pathspec_inner_path as literal_pathspec_inner_path,
     _bracket_candidate_exists_literally as bracket_candidate_exists_literally,
@@ -8199,6 +8200,7 @@ def check_validate_commit(
                 # thousand-path index.
                 _deny_entries: List[Dict[str, str]] = []
 
+                _merge_incoming_cache: List[Set[str]] = []  # one probe per command
                 # A path this session was already told about, that this commit's own
                 # pathspec leaves staged, is told once: the log below is the record.
                 _already_warned: Set[str] = set()
@@ -8272,6 +8274,13 @@ def check_validate_commit(
                                     staged_file
                                 )
                                 if _agent_hash is not None and _agent_hash == _current_hash:
+                                    continue
+                                # A merge conclusion stages the merge's own rewrite of this path.
+                                if not _merge_incoming_cache:
+                                    _merge_incoming_cache.append(merge_incoming_paths(
+                                        _bt_git_sequencer_in_progress, _run_git,
+                                        _commit_seg_tokens or [], payload, _cwd))
+                                if staged_file in _merge_incoming_cache[0]:
                                     continue
                                 _fh_note = operator_override_note(
                                     "COORDINATOR_SCOPE_STRICT_OFF",

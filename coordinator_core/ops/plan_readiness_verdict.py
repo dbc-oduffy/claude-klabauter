@@ -19,7 +19,9 @@ Wire params:
     premise  (object, optional) — {rows: [{verdict, citation, ...}]}; verdict is RESOLVES |
                                   UNRESOLVED | CONTRADICTED | UNCHECKABLE. Only UNRESOLVED and
                                   CONTRADICTED rows pull; UNCHECKABLE is a note on a ready reply.
-                                  Refused together with a ``premise-check`` reviews entry.
+                                  When passed, a ``premise-check`` reviews entry is dropped: the
+                                  rows carry that verdict, and refusing the pair would hand the
+                                  caller an unusable reply.
 
 A coverage verdict that is not clear but carries zero findings gives the plan nothing to fix:
 it is a note on a ready reply, never a pull.
@@ -149,10 +151,7 @@ def _check_params(params: dict) -> tuple:
             if not isinstance(row.get("citation"), str):
                 raise ValueError(f"premise.rows[{i}].citation must be a string")
         rows = premise["rows"]
-        if any(r.get("reviewer") == _PREMISE_REVIEWER for r in reviews or []):
-            raise ValueError(
-                f"premise and a {_PREMISE_REVIEWER!r} reviews entry are mutually exclusive; pass the rows once"
-            )
+        reviews = [r for r in reviews or [] if r.get("reviewer") != _PREMISE_REVIEWER]
     return raw_plan.strip(), coverage, reviews or [], rows
 
 
