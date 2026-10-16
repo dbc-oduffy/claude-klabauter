@@ -301,7 +301,41 @@ def _open_blocking_chunk_ids(spine_rows: list[Any]) -> list[str]:
     return ids
 
 
+def _memo_route_notes(
+    missing: list[str], rows: Optional[list[Any]], root: Path
+) -> tuple[list[str], list[str]]:
+    """Split `missing` into memo-send rows and the rest.
 
+    Returns ``(notes, code_missing)``: one remedy note per open memo-send row
+    (naming the closing route; saying so when its receipt is not yet on disk),
+    and the ids that keep the ``--coded <sha>`` remedy. One stat per memo row,
+    no git spawn.
+    """
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        _is_memo_send_row,
+        memo_close_route,
+        memo_receipt_exists,
+        memo_row_slug,
+    )
+
+    by_id = {
+        str(r.get("id")): r for r in (rows or []) if isinstance(r, dict) and r.get("id")
+    }
+    notes: list[str] = []
+    code_missing: list[str] = []
+    for chunk_id in missing:
+        row = by_id.get(chunk_id)
+        if row is None or not _is_memo_send_row(row):
+            code_missing.append(chunk_id)
+            continue
+        slug = memo_row_slug(row)
+        unsent = (
+            f" (memo not yet sent: no receipt for {slug})"
+            if slug is not None and not memo_receipt_exists(root, slug)
+            else ""
+        )
+        notes.append(f"{chunk_id}{unsent}: {memo_close_route(chunk_id, slug)}")
+    return notes, code_missing
 
 
 def _plan_execution_authorized_sha(plan_text: str) -> Optional[str]:
@@ -3403,13 +3437,20 @@ def close_out_and_stamp(
             f"({review_stamp_gate['reason']})"
         )
     else:
+        memo_notes, code_missing = _memo_route_notes(missing, rows, root)
         message = (
             f"{plan_path_rel}: {len(missing)} chunk(s) still uncommitted, "
-            "committed partial state -- if delivered, resolve the row's own "
-            "disposition_ref to the covering commit sha (`plan-tasks-resolve "
-            "--coded <sha>` per row, verified against HEAD ancestry), then "
-            "re-run close-out-and-stamp"
+            "committed partial state"
         )
+        if code_missing or not memo_notes:
+            message += (
+                " -- if delivered, resolve the row's own "
+                "disposition_ref to the covering commit sha (`plan-tasks-resolve "
+                "--coded <sha>` per row, verified against HEAD ancestry), then "
+                "re-run close-out-and-stamp"
+            )
+        for note in memo_notes:
+            message += f" -- memo row {note}"
         if disposition_ref_rejections:
             # Points at a SPECIFIC still-missing row's own disposition_ref
             # and why it did not count (see `_disposition_ref_evidence`'s

@@ -435,6 +435,8 @@ def _is_memo_send_row(raw: dict) -> bool:
             posix = p.replace("\\", "/").rstrip("/")
             if any(posix == d or posix.startswith(d + "/") for d in (MEMO_OUTBOX_RELDIR, LEGACY_MEMO_OUTBOX_RELDIR)):
                 return True
+    if _is_receiver_inbox_surface(raw):
+        return True
     if any(isinstance(p, str) and "outbox" in p for p in paths):
         from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
 
@@ -444,11 +446,61 @@ def _is_memo_send_row(raw: dict) -> bool:
     return isinstance(brief, str) and _MEMO_SEND_BRIEF_RE.search(brief) is not None
 
 
+_RECEIVER_INBOX_SEGMENT = "/state/cross-repo/inbox/"
+
+
+def _is_receiver_inbox_surface(raw: dict) -> bool:
+    """True when ``surface`` or a ``writes_under`` entry has the path segment
+    ``state/cross-repo/inbox``, with or without a repo prefix or trailing slash."""
+    for p in (raw.get("surface"), *(raw.get("writes_under") or ())):
+        if isinstance(p, str) and _RECEIVER_INBOX_SEGMENT in "/" + p.replace("\\", "/").strip("/") + "/":
+            return True
+    return False
+
+
+def memo_receipt_slug(ref: object) -> Optional[str]:
+    """The topic when ``ref`` (either separator) is exactly
+    ``<outbox>/sent/<slug>.md`` under the canonical or legacy outbox and ``<slug>``
+    is a valid topic slug; ``None`` otherwise. A pure string parse, no I/O."""
+    if not isinstance(ref, str):
+        return None
+    from coordinator_core.ops.fleet._memo_compose import _TOPIC_SLUG_RE
+    from coordinator_core.session.machinery_paths import LEGACY_MEMO_OUTBOX_RELDIR, MEMO_OUTBOX_RELDIR
+
+    posix = ref.strip().replace("\\", "/")
+    for root in (MEMO_OUTBOX_RELDIR, LEGACY_MEMO_OUTBOX_RELDIR):
+        prefix = root + "/sent/"
+        if posix.startswith(prefix):
+            leaf = posix[len(prefix):]
+            if "/" in leaf or not leaf.endswith(".md"):
+                return None
+            topic = leaf[: -len(".md")]
+            return topic if _TOPIC_SLUG_RE.match(topic) else None
+    return None
+
+
+def memo_close_route(row_id: str, slug: Optional[str]) -> str:
+    """The one-line register text naming the act that closes a sent memo-send row."""
+    from coordinator_core.session.machinery_paths import MEMO_OUTBOX_RELDIR
+
+    if slug is None:
+        return (
+            f"once sent, close it: `plan.tasks.mutate` verb resolve, id {row_id}, disposition "
+            f"delivered_elsewhere, delivered_via memo, disposition_ref {MEMO_OUTBOX_RELDIR}/sent/<slug>.md "
+            "(declare receipt: on the row so the receipt names the slug)"
+        )
+    return (
+        f"once sent, close it: `plan.tasks.mutate` verb resolve, id {row_id}, disposition "
+        f"delivered_elsewhere, delivered_via memo, disposition_ref {MEMO_OUTBOX_RELDIR}/sent/{slug}.md"
+    )
+
+
 def memo_row_slug(raw: dict) -> Optional[str]:
     """The memo topic a memo-send row is keyed on, or ``None``.
 
-    ``receipt:`` (a ``.../sent/<slug>.md`` path or a bare slug) wins; else the
-    topic of a staged ``memo-outbox/<topic>.md`` draft on ``surface:``/``writes:``.
+    ``receipt:`` (a ``.../sent/<slug>.md`` path or a bare slug) wins; then a
+    ``disposition_ref`` that is a sent receipt; else the topic of a staged
+    ``memo-outbox/<topic>.md`` draft on ``surface:``/``writes:``.
     """
     from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
 
@@ -456,6 +508,9 @@ def memo_row_slug(raw: dict) -> Optional[str]:
     if isinstance(receipt, str) and receipt.strip():
         leaf = receipt.strip().replace("\\", "/").rsplit("/", 1)[-1]
         return leaf[:-3] if leaf.endswith(".md") else leaf
+    resolved = memo_receipt_slug(raw.get("disposition_ref"))
+    if resolved:
+        return resolved
     for path in (raw.get("surface"), *(raw.get("writes") or ())):
         if isinstance(path, str):
             topic = memo_outbox_topic(path)
@@ -1242,22 +1297,25 @@ def read_spine(
         em_performed = raw.get("performer") == "em" or _is_memo_send_row(raw)
         memo_slug = None
         memo_delivered = False
+        memo_owed = False
         if (
-            raw.get("performer") != "em"
-            and _is_memo_send_row(raw)
+            _is_memo_send_row(raw)
             and disposition not in NON_DISPATCHABLE_DISPOSITIONS
             and deferred is not True
         ):
             slug = memo_row_slug(raw)
-            if slug is None:
+            if slug is None and (raw.get("performer") == "em" or _is_receiver_inbox_surface(raw)):
+                memo_owed = True
+            elif slug is None:
                 raise MemoRowNoReceiptError(
                     f"row {raw.get('id')!r} is a memo-send row but names no memo "
                     "topic: stage the draft at .coordinator-local/memo-outbox/<slug>.md "
                     "on surface:/writes:, or declare receipt: "
                     ".coordinator-local/memo-outbox/sent/<slug>.md"
                 )
-            memo_slug = slug
-            memo_delivered = memo_receipt_exists(_repo_root_of(plan_path), slug)
+            else:
+                memo_slug = slug
+                memo_delivered = memo_receipt_exists(_repo_root_of(plan_path), slug)
         em_discharged = None
         if (
             raw.get("performer") == "em"
@@ -1318,8 +1376,15 @@ def read_spine(
                 _reason = (
                     "memo-send",
                     "EM: send %s -- run `cross-repo-memo send %s`; the row closes "
-                    "on .coordinator-local/memo-outbox/sent/%s.md, not on a claim"
-                    % (memo_slug, memo_slug, memo_slug),
+                    "on .coordinator-local/memo-outbox/sent/%s.md, not on a claim; %s"
+                    % (memo_slug, memo_slug, memo_slug, memo_close_route(str(raw.get("id")), memo_slug)),
+                )
+            elif memo_owed:
+                _reason = (
+                    "memo-send",
+                    "EM: this memo-send row names no memo slug and was NOT sent; declare "
+                    "receipt: .coordinator-local/memo-outbox/sent/<slug>.md, send it, then %s"
+                    % memo_close_route(str(raw.get("id")), None),
                 )
             elif _is_operator_row(raw):
                 _reason = (

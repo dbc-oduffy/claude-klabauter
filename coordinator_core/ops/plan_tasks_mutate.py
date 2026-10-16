@@ -1094,7 +1094,12 @@ def _em_discharge(
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
     if _is_memo_send_row(row):
-        return _err(f"em-discharge: row {row_id!r} is a memo-send row; it discharges on its sent-receipt")
+        from coordinator_core.ops.dispatch_emit.spine_read import memo_close_route, memo_row_slug
+
+        return _err(
+            f"em-discharge: row {row_id!r} is a memo-send row; "
+            f"{memo_close_route(row_id, memo_row_slug(row))}"
+        )
     if _is_operator_row(row):
         return _err(f"em-discharge: row {row_id!r} is execution_mode: operator; the operator releases it")
     if (row.get("disposition") or "open") != "open":
@@ -1704,6 +1709,53 @@ def _coded_sha_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> O
     return None
 
 
+def _memo_receipt_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> dict:
+    """`{row id: receipt path}` for every delivered_elsewhere resolution of a memo-send row,
+    each verified: delivered_via memo, a sent-receipt ref, the row's declared slug, and the
+    receipt committed at HEAD (ONE `git ls-tree` for the batch; a timed-out probe refuses).
+    Raises MutateAbort naming `memo_close_route` otherwise."""
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        _is_memo_send_row,
+        memo_close_route,
+        memo_receipt_slug,
+        memo_row_slug,
+    )
+
+    checked: dict = {}
+    for r in resolutions:
+        row = rows_by_id[r["id"]]
+        if r["disposition"] != _DELIVERED_ELSEWHERE or not _is_memo_send_row(row):
+            continue
+        tid = r["id"]
+        ref = str(r.get("disposition_ref") or "").strip().replace("\\", "/")
+        declared = memo_row_slug(row)
+        route = memo_close_route(tid, declared)
+        slug = memo_receipt_slug(ref)
+        if r.get("delivered_via") != "memo" or slug is None:
+            raise MutateAbort(
+                f"resolve: row {tid}: a memo-send row closes on a sent receipt with delivered_via memo; {route}"
+            )
+        if declared is not None and declared != slug:
+            raise MutateAbort(f"resolve: row {tid}: receipt names {slug!r}, row declares {declared!r}; {route}")
+        checked[tid] = ref
+    if not checked:
+        return {}
+    from coordinator_core.git.run import run_git
+
+    paths = sorted(set(checked.values()))
+    shown = run_git(["ls-tree", "--name-only", "HEAD", "--", *paths], cwd=str(worktree))
+    if shown.timed_out or shown.returncode != 0:
+        raise MutateAbort("resolve: memo receipt commit check was indeterminate; retry")
+    present = {ln.strip() for ln in shown.stdout.splitlines()}
+    for tid, ref in checked.items():
+        if ref not in present:
+            raise MutateAbort(
+                f"resolve: row {tid}: receipt {ref} is not committed at HEAD; "
+                f"{memo_close_route(tid, memo_receipt_slug(ref))}"
+            )
+    return checked
+
+
 def _gate_blocks_execution(g: object) -> bool:
     """Mirror of `spine_read._has_uncleared_execution_gate`'s per-entry test: a non-mapping
     entry always blocks; a mapping blocks unless `cleared: true` or `blocks: ac-closure`."""
@@ -1732,6 +1784,21 @@ def _frontmatter_row_gate_hits(old_text: str) -> tuple:
     return split, fm_lines, hits
 
 
+def _clear_own_gates(row: dict, evidence: str) -> None:
+    """Mark the row's own uncleared execution-blocking `external_gate` entries cleared,
+    naming `evidence`. A string-form entry is rewritten as a cleared mapping."""
+    gates = row.get("external_gate")
+    if not isinstance(gates, list):
+        return
+    for i, g in enumerate(gates):
+        if not _gate_blocks_execution(g):
+            continue
+        if not isinstance(g, dict):
+            g = gates[i] = {"owner_repo": "unspecified", "condition": str(g)}
+        g["cleared"] = True
+        g["closure_evidence"] = evidence
+
+
 def _clear_own_gates_for_coded_ref(
     row: dict, ref: Optional[str], worktree: Path, fm_open_rows: frozenset = frozenset()
 ) -> Optional[str]:
@@ -1752,27 +1819,23 @@ def _clear_own_gates_for_coded_ref(
     sha, _ = _verify_disposition_ref(worktree, ref)
     if sha is None:
         return None
-    for i in open_idx:
-        g = gates[i]
-        if not isinstance(g, dict):
-            g = gates[i] = {"owner_repo": "unspecified", "condition": str(g)}
-        g["cleared"] = True
-        g["closure_evidence"] = f"row resolved coded with verified ref {sha}"
+    _clear_own_gates(row, f"row resolved coded with verified ref {sha}")
     return sha
 
 
-def _clear_frontmatter_gates(old_text: str, sha_by_row: dict) -> str:
+def _clear_frontmatter_gates(old_text: str, evidence_by_row: dict) -> str:
     """`old_text` with every execution-blocking frontmatter `external_gate` item bound to a row
-    in `sha_by_row` marked cleared; plan-wide items and other rows' items are untouched."""
+    in `evidence_by_row` marked cleared with that row's evidence string; plan-wide items and
+    other rows' items are untouched."""
     from coordinator_core.frontmatter.primitives import rebuild
 
     split, fm_lines, hits = _frontmatter_row_gate_hits(old_text)
-    targets = [h for h in hits if h[0] in sha_by_row and _gate_blocks_execution(h[4])]
+    targets = [h for h in hits if h[0] in evidence_by_row and _gate_blocks_execution(h[4])]
     if not targets:
         return old_text
     for row_id, start, end, indent, item in reversed(targets):
         item["cleared"] = True
-        item["closure_evidence"] = f"row resolved coded with verified ref {sha_by_row[row_id]}"
+        item["closure_evidence"] = evidence_by_row[row_id]
         dumped = yaml.safe_dump([item], sort_keys=False, allow_unicode=True, width=10_000).splitlines(keepends=True)
         fm_lines[start:end] = [" " * indent + ln for ln in dumped]
     return rebuild(split, "".join(fm_lines))
@@ -2139,6 +2202,8 @@ def _resolve(
                     f"resolve: row {tid}: delivered_via must be one of {sorted(_DELIVERED_VIA)}"
                 )
 
+        memo_receipts = _memo_receipt_refusal(resolutions, rows_by_id, worktree)
+
         for r in resolutions:
             if r["disposition"] == _VOIDED and not str(r.get("reason") or "").strip():
                 raise MutateAbort(
@@ -2171,7 +2236,7 @@ def _resolve(
             )
 
         resolved_ids: list = []
-        fm_sha_by_row: dict = {}
+        evidence_by_row: dict = {}
         fm_open_rows = frozenset(
             h[0] for h in _frontmatter_row_gate_hits(old_text)[2] if _gate_blocks_execution(h[4])
         )
@@ -2199,12 +2264,18 @@ def _resolve(
             if disposition == "coded":
                 fm_sha = _clear_own_gates_for_coded_ref(row, effective_ref, worktree, fm_open_rows)
                 if fm_sha is not None:
-                    fm_sha_by_row[task_id] = fm_sha
+                    evidence_by_row[task_id] = f"row resolved coded with verified ref {fm_sha}"
             if disposition == _DELIVERED_ELSEWHERE:
                 row["delivered_via"] = r["delivered_via"]
-                delivered_warnings.append(
-                    f"completion asserted, not commit-proven: {disposition_ref} via {r['delivered_via']}"
-                )
+                if task_id in memo_receipts:
+                    evidence = f"memo sent: {memo_receipts[task_id]} committed at HEAD"
+                    _clear_own_gates(row, evidence)
+                    evidence_by_row[task_id] = evidence
+                    delivered_warnings.append(f"memo receipt verified: {evidence}")
+                else:
+                    delivered_warnings.append(
+                        f"completion asserted, not commit-proven: {disposition_ref} via {r['delivered_via']}"
+                    )
             resolved_ids.append(task_id)
 
         try:
@@ -2217,7 +2288,7 @@ def _resolve(
 
         body_yaml = _patch_body(result.body, original_rows, rows)
         start, end = result.span
-        new_text = _clear_frontmatter_gates(old_text[:start] + body_yaml + old_text[end:], fm_sha_by_row)
+        new_text = _clear_frontmatter_gates(old_text[:start] + body_yaml + old_text[end:], evidence_by_row)
 
         _state["all_resolved"] = all(
             _plan_tasks_row_disposition(row) != "open"

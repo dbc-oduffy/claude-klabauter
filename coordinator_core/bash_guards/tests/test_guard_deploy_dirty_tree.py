@@ -119,5 +119,62 @@ def test_unrelated_or_mentioned_command_passes_without_git(no_git, cmd):
     assert g.check(_payload(cmd, "/nonexistent")) is None
 
 
+def _declare(repo, body):
+    (repo / "coordinator.local.md").write_text(f"---\n{body}\n---\n")
+    (repo / "peer.txt").write_text("x")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'deploy_ships_head: ["deploy:hosted"]',
+        "deploy_ships_head: [deploy:hosted, deploy]  # c",
+        "deploy_ships_head:\n  - deploy:hosted",
+    ],
+)
+@pytest.mark.parametrize("cmd", ["pnpm run deploy:hosted", "npm run deploy:hosted"])
+def test_declared_ships_head_script_passes_dirty(repo, body, cmd):
+    _declare(repo, body)
+    assert g.check(_payload(cmd, repo)) is None
+
+
+def test_declared_script_passes_without_git(repo, monkeypatch):
+    _declare(repo, 'deploy_ships_head: ["deploy:hosted"]')
+    monkeypatch.setattr(g, "_dirty_paths", lambda _c: (_ for _ in ()).throw(AssertionError("git")))
+    assert g.check(_payload("pnpm run deploy:hosted", repo)) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    ["pnpm run deploy:prod", "npm run deploy", "firebase deploy", "vercel deploy", "wrangler deploy"],
+)
+def test_unlisted_or_non_script_deploy_still_denies(repo, cmd):
+    _declare(repo, 'deploy_ships_head: ["deploy:hosted"]')
+    assert g.check(_payload(cmd, repo))["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "pnpm run deploy:hosted && firebase deploy",
+        "firebase deploy; pnpm run deploy:hosted",
+        "pnpm run deploy:hosted && pnpm run deploy:prod",
+    ],
+)
+def test_compound_with_non_exempt_deploy_still_denies(repo, cmd):
+    _declare(repo, 'deploy_ships_head: ["deploy:hosted"]')
+    assert g.check(_payload(cmd, repo))["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_declaration_for_other_key_or_absent_denies(repo):
+    _declare(repo, 'other: ["deploy:hosted"]')
+    assert g.check(_payload("pnpm run deploy:hosted", repo))
+
+
+def test_no_config_file_denies(repo):
+    (repo / "peer.txt").write_text("x")
+    assert g.check(_payload("pnpm run deploy:hosted", repo))
+
+
 def test_other_tool_name_passes(no_git):
     assert g.check(_payload("firebase deploy", "/x", tool="Read")) is None

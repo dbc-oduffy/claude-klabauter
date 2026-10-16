@@ -711,11 +711,17 @@ def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: lis
     return found
 
 
+_MEMO_NO_SLUG = "no slug: declare receipt:"
+
+
 def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
     """``{row id: slug}`` of the plan's open memo-send rows whose sender-side receipt is absent.
 
     A memo row is an EM act, never dispatched; it closes on
-    ``memo-outbox/sent/<slug>.md`` existing. Unreadable plan or spine: empty.
+    ``memo-outbox/sent/<slug>.md`` existing, by resolving the row ``delivered_elsewhere``
+    with ``disposition_ref`` naming that receipt (a non-open row is not reported).
+    An open row naming no slug maps to ``"no slug: declare receipt:"``, never dropped.
+    Unreadable plan or spine: empty.
     """
     if not request.plan_path:
         return {}
@@ -745,7 +751,9 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
         if (row.get("disposition") or "open") != "open" or not _is_memo_send_row(row):
             continue
         slug = memo_row_slug(row)
-        if slug is not None and not memo_receipt_exists(worktree_root, slug):
+        if slug is None:
+            out[str(row["id"])] = _MEMO_NO_SLUG
+        elif not memo_receipt_exists(worktree_root, slug):
             out[str(row["id"])] = slug
     return out
 
