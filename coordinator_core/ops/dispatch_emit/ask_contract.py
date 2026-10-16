@@ -29,6 +29,7 @@ from typing import Any, NamedTuple
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
+from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
 
@@ -54,6 +55,8 @@ OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
 HALT_SPLIT = "split"
 HALT_RESEARCH = "research"
+#: An unapproved canvas design route; only the PM's recorded design_approval clears it.
+HALT_DESIGN_REVIEW = "design-review"
 STOP_AFTER_PLAN = "plan"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
@@ -489,7 +492,8 @@ class ResumePlan(NamedTuple):
 class GateVerdict:
     """dispatch.ask_gate reply: an arm to run, or a halt dict
     {"kind": HALT_*, "reason": str, "touchpoint"?: str, "route"?: str,
-    "fire"?: list[str]} (a research halt's one ready Workflow call); baton is the
+    "fire"?: list[str]} (a research halt's one ready Workflow call; a HALT_DESIGN_REVIEW halt
+    carries "design_route" and the approval "touchpoint"); baton is the
     minted {"id", "path"} at an M+ arm."""
 
     arm: str | None
@@ -512,11 +516,16 @@ class GateVerdict:
     # The design-registry brief the plan author owes (design_conformance.brief_text); emitted
     # under DESIGN_BRIEF_KEY only when non-empty.
     design_brief: str = ""
+    # The sizing's design_route payload (design_route.read); emitted under DESIGN_ROUTE_KEY
+    # only when not None.
+    design_route: dict | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
         if self.design_brief:
             out["design_brief"] = self.design_brief
+        if self.design_route is not None:
+            out[DESIGN_ROUTE_KEY] = self.design_route
         if self.resume_ledger is not None:
             out[RESUME_LEDGER_KEY] = self.resume_ledger
         if self.recorded is not None:

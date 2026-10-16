@@ -2,6 +2,11 @@
 
 Reads the sizing; at M+ with no halt it mints the baton record in-process (a write). An unfired
 plan on disk with rows still to run rides the verdict as `resume_plan` and `resume_rows`.
+
+Every verdict carries the sizing's `design_route` payload when one is recorded. A canvas route with
+no recorded approval halts `design-review` at every arm, before any baton mint: unlike a touchpoint
+halt, the in-run accept loop and the emit-time gate never lift it, so only the PM's recorded
+design approval clears it.
 """
 
 from __future__ import annotations
@@ -16,7 +21,9 @@ from typing import Optional, Sequence
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
+from coordinator_core.ops.dispatch_emit import design_route
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    HALT_DESIGN_REVIEW,
     HALT_REFUSAL,
     HALT_RESEARCH,
     HALT_ROOM,
@@ -111,8 +118,11 @@ def gate(
     from coordinator_core.ops.dispatch_emit import design_conformance as dc
 
     root = Path(repo_root)
+    route_payload = None
     try:
-        scope = _design_scope(load_sizing(root, sizing_rel), writes)
+        sizing = load_sizing(root, sizing_rel)
+        scope = _design_scope(sizing, writes)
+        route_payload, _ = design_route.read(sizing, sizing_rel)
     except SizingFireRefused:
         scope = []
     hits, error = dr.lookup(root, scope) if scope else ([], None)
@@ -122,8 +132,10 @@ def gate(
     except ValueError:
         shown = None
     if error:
-        return _halt(HALT_REFUSAL, f"{error}: repair {shown or registry}")
+        return replace(_halt(HALT_REFUSAL, f"{error}: repair {shown or registry}"), design_route=route_payload)
     verdict = _arm_verdict(root, sizing_rel, writes=writes, baton=baton)
+    if route_payload is not None and verdict.design_route is None:
+        verdict = replace(verdict, design_route=route_payload)
     if verdict.halt is not None or not scope:
         return verdict
     registry_rel = shown if registry.is_file() else None
@@ -189,6 +201,9 @@ def _arm_verdict(
         sizing, sizing_rel=sizing_rel, arm=arm, writes=writes, repo_root=repo_root,
         resume_sink=resume_sink,
     )
+    route_payload, route_bad = design_route.read(sizing, sizing_rel)
+    if route_bad:
+        refusals.append(route_bad)
     accepted_null = lacks_human_acceptance((sizing.get("exit_criterion") or {}).get("accepted"))
     mode = sizing.get("interaction_mode")
     tshirt = sizing["estimate"]["tshirt"]
@@ -238,6 +253,17 @@ def _arm_verdict(
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
+    if route_payload is not None and route_payload["route"] == "canvas" and not route_payload["approved"]:
+        board = route_payload["board"]
+        reason = (
+            f"canvas route (authority {route_payload['authority']['by']}): the PM reviews the board "
+            f"{board['source']} (harvest {board['harvest']}) before any code row; "
+            "recipe coordinator/snippets/design-canvas-recipe.md"
+        )
+        return _halt(
+            HALT_DESIGN_REVIEW, reason, design_route=route_payload,
+            touchpoint=design_route.approval_touchpoint(sizing_rel),
+        )
     resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root) if resume else None
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
@@ -246,7 +272,7 @@ def _arm_verdict(
         # roadmap mints no baton: roadmap-blitz stubs are the batons
         return GateVerdict(
             arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows,
-            resume_ledger=resume_ledger,
+            resume_ledger=resume_ledger, design_route=route_payload,
         )
 
     doc_new = _load_doc_new()
@@ -272,6 +298,7 @@ def _arm_verdict(
         resume_rows=resume_rows,
         spine_plan=spine,
         resume_ledger=resume_ledger,
+        design_route=route_payload,
     )
 
 

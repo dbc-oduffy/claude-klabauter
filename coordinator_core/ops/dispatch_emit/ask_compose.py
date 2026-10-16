@@ -62,6 +62,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     scout_assemble_flags_js,
 )
 from coordinator_core.ops.dispatch_emit.design_conformance import DEFAULT_MET_BY_CLAUSE, DESIGN_BRIEF_KEY
+from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
@@ -208,6 +209,7 @@ _GATE_SCHEMA = _obj(
         "spine_plan": {"type": ["string", "null"]},
         RESUME_LEDGER_KEY: {"type": ["object", "null"]},
         DESIGN_BRIEF_KEY: {"type": ["string", "null"]},
+        DESIGN_ROUTE_KEY: {"type": ["object", "null"]},
     },
 )
 _ONLY_ROWS_JS = (
@@ -1338,7 +1340,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and spine_plan, plus design_brief when present; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and spine_plan, plus design_brief and design_route when present; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -1401,7 +1403,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, "
-            f"resume_rows, resume_ledger and spine_plan, plus design_brief when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1484,7 +1486,7 @@ def compose_ask_script(
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
             "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, "
-            "spine_plan and design_brief; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
+            "spine_plan, design_brief and design_route; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -1539,6 +1541,7 @@ def compose_ask_script(
             "baton: _reworded.baton ?? null, tshirt: _reworded.tshirt, route: _reworded.route, "
             "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
+            f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
             "manifest: _reworded.manifest ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
@@ -1590,7 +1593,8 @@ def compose_ask_script(
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
             "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null, "
-            f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null }};"
+            f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
+            f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null }};"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -1694,7 +1698,7 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, spine_plan: %s.spine_plan ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
@@ -1710,7 +1714,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 7)}\n"
+            f"      {take_gate % (('_apm',) * 8)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
@@ -1725,7 +1729,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 7)}\n"
+            f"      {take_gate % (('_xl',) * 8)}\n"
             "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
@@ -2070,9 +2074,10 @@ def compose_ask_script(
         if in_run_commit:
             _append_halt_record_commit(b)
         b.append(
-            "  return _halted ? { halted_by: _halted, halt_commit: _haltCommit, sizing: _sizingRel, run_id: _runId } : "
-            f"(_gate.arm === {_lit(ARM_XS)} ? {{ route: 'dispatch', sizing: _sizingRel }} : "
-            "{ planned: [_planRel], sizing: _sizingRel, run_id: _runId });"
+            "  return _halted ? { halted_by: _halted, halt_commit: _haltCommit, sizing: _sizingRel, run_id: _runId, "
+            f"{DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }} : "
+            f"(_gate.arm === {_lit(ARM_XS)} ? {{ route: 'dispatch', sizing: _sizingRel, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }} : "
+            f"{{ planned: [_planRel], sizing: _sizingRel, run_id: _runId, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }});"
         )
         return _finish_script(
             b,
@@ -2476,7 +2481,7 @@ def compose_ask_script(
         )
         _append_halt_record_commit(b)
     b.append(
-        "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
+        f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : "
         f"(_halted && _halted.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) ? _halted.fire : "
         "(_commit?.close?.siblings?.released ?? [])), "
