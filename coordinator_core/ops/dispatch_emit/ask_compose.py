@@ -842,6 +842,26 @@ def _row_runner_js() -> str:
     )
 
 
+_SIZING_SKILL_SOURCE = ("skills", "sizing", "SKILL.md")
+
+
+def _sizing_procedure_pointer() -> str:
+    """` by Reading <sizing SKILL.md> and following it`, or "" when the plugin root or the file
+    does not resolve. Agents hold no Skill tool, so the procedure is named as a file, never a skill."""
+    try:
+        from coordinator_core.warm.caller_context import resolve_caller_context
+
+        root = resolve_caller_context().plugin_root
+    except Exception:  # fail open: an unresolvable plugin root drops the pointer, never the ask
+        return ""
+    if not root:
+        return ""
+    source = Path(root).joinpath(*_SIZING_SKILL_SOURCE)
+    if not source.is_file():
+        return ""
+    return f", by Reading `{source}` and following it"
+
+
 def compose_ask_script(
     *,
     repo_root: str,
@@ -1223,8 +1243,9 @@ def compose_ask_script(
                 _stage_act_parts(_scout_base, json.dumps(sizing_write_rel), "<your gated array>")
             )
         scout_prompt = prompt_of(
-            "Size this ask afresh, never reusing or editing an existing sizing, by following the "
-            "sizing skill (`coordinator:sizing`). Judge first; write no file except through your "
+            "Size this ask afresh, never reusing or editing an existing sizing"
+            + _sizing_procedure_pointer()
+            + ". Judge first; write no file except through your "
             "closing `sizing-assemble`. "
             + SCOUT_RETURN_CLAUSE
             + EXIT_CRITERION_RULES_CLAUSE

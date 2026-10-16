@@ -16,7 +16,8 @@ Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
     ``**blocked_by:**`` / ``**blocks:**`` lines are the cluster dependency edges.
     An optional ``**loe:** <XS|S|M|L|XL|XXL>`` line is the cluster's declared size.
     An optional ``Stub slug prefix: `<x>``` line names the stub-id prefix;
-      a date-led roadmap id with no such line is refused (the default prefix would be the year).
+      without it a date-led id derives a letters-only prefix from the id after its date head
+      (an id with no letter refuses), and any derived prefix already staged by another roadmap refuses.
   - ``reconciliation.md``: the KEEP verdict table; absent -> every cluster is KEEP.
 
 Gate report contract: the BARE ``roadmap.plan_gate`` result for the roadmap, serialized by
@@ -86,7 +87,17 @@ _FM_ROADMAP_ID_RE = re.compile(r"^roadmap_id:\s*['\"]?([a-z0-9][a-z0-9-]*)", re.
 GATE_REPORT_NAME = "wave-1.gate-report.json"
 
 
-_DATE_LED_RE = re.compile(r"\d{4}(?:-\d{2}){0,2}(?:-|$)")
+_DATE_HEAD_RE = re.compile(r"\d{4}(?:-\d{2}){0,2}(?:-|$)")
+
+
+def _derive_date_led_prefix(roadmap_id: str) -> Optional[str]:
+    """Letters-only stub prefix of a date-led id: the first remaining token's letters, else the
+    initials of the tokens that have letters; None when no letter is left."""
+    tokens = [t for t in _DATE_HEAD_RE.sub("", roadmap_id, count=1).split("-") if t]
+    letters = ["".join(ch for ch in t.lower() if "a" <= ch <= "z") for t in tokens]
+    if not any(letters):
+        return None
+    return letters[0] or "".join(t[0] for t in letters if t)
 
 
 class BlitzStageRefused(ValueError):
@@ -187,6 +198,21 @@ def _find_staged(repo_root: Path, stub_id: str) -> Optional[Path]:
             for hit in sorted(base.rglob(f"*{tail}")):
                 if hit.name == tail or hit.name.endswith("_" + tail):
                     return hit
+    return None
+
+
+def _staged_other_roadmap(repo_root: Path, prefix: str, roadmap_id: str) -> Optional[str]:
+    """The roadmap_id of a staged ``roadmap-<prefix>-NN.md`` baton owned by a different roadmap.
+    Scans the same homes as ``_has_staged``; one pass could answer both."""
+    for base in (Path(record_homes.home_dir(str(repo_root), "handoffs")), repo_root / "archive" / "handoffs"):
+        if base.is_dir():
+            for hit in sorted(base.rglob(f"*roadmap-{prefix}-[0-9]*.md")):
+                head = hit.read_text(encoding="utf-8", errors="replace")[:2000]
+                found = _FM_ROADMAP_ID_RE.search(head)
+                owner = found.group(1) if found else None
+                if owner == roadmap_id or (owner is None and roadmap_id in head):
+                    continue
+                return owner or hit.name
     return None
 
 
@@ -611,13 +637,22 @@ def stage_roadmap(
     prefix_match = _PREFIX_RE.search(clusters_text)
     if prefix_match:
         prefix = prefix_match.group(1)
-    elif _DATE_LED_RE.match(roadmap_id):
-        raise BlitzStageRefused(
-            f"roadmap id {roadmap_id!r} is date-led and clusters.md has no `Stub slug prefix: `<x>`` line; "
-            "the default prefix would be the year and collide with every other date-led roadmap's stub ids"
-        )
     else:
-        prefix = roadmap_id.split("-")[0]
+        if _DATE_HEAD_RE.match(roadmap_id):
+            prefix = _derive_date_led_prefix(roadmap_id)
+            if prefix is None:
+                raise BlitzStageRefused(
+                    f"roadmap id {roadmap_id!r} is date-led and clusters.md has no `Stub slug prefix: `<x>`` line; "
+                    "the default prefix would be the year and collide with every other date-led roadmap's stub ids"
+                )
+        else:
+            prefix = roadmap_id.split("-")[0]
+        other = _staged_other_roadmap(repo_root, prefix, roadmap_id)
+        if other:
+            raise BlitzStageRefused(
+                f"stub prefix {prefix!r} is already staged by roadmap {other!r} "
+                f"(roadmap-{prefix}-NN.md); add a `Stub slug prefix: `<x>`` line to clusters.md"
+            )
     first_staging = not _has_staged(repo_root, prefix, roadmap_id)
     fold = fold_units(
         cluster_order, {c: by_id[c]["loe"] for c in cluster_order}, edges, tie_break=first_staging

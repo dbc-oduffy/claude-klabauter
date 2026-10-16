@@ -65,7 +65,8 @@ ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];")
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
 ROADMAP_NEXT_ACTION_JS = (
     "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
-    f"params: {{ {FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath) }} }} }}"
+    f"params: {{ {FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
+    "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])) } } }"
 )
 
 

@@ -45,6 +45,23 @@ def _plan_writes(worktree_root: Path, plan_rel: str) -> Optional[list]:
     return out or None
 
 
+def _plan_waves(spec: dict) -> tuple[dict, Optional[dict]]:
+    """``({plan: wave}, None)`` from the optional ``waves`` mapping, or ``({}, refusal)``."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _error
+
+    waves = spec.get("waves")
+    if waves is None:
+        return {}, None
+    if not isinstance(waves, dict):
+        return {}, _error("fanout waves must map plan path to wave", refused="fanout-waves")
+    for plan, wave in waves.items():
+        if plan not in spec["plans"]:
+            return {}, _error(f"fanout waves names {plan!r}, not in plans", refused="fanout-waves")
+        if isinstance(wave, bool) or not isinstance(wave, int) or wave < 0:
+            return {}, _error(f"fanout wave for {plan!r} must be an integer >= 0", refused="fanout-waves")
+    return waves, None
+
+
 def _resolve_plans(worktree_root: Path, plans: list) -> tuple[Optional[list], Optional[dict]]:
     """``[(plan, sizing, baton, writes)]`` per plan, or ``(None, refusal)`` naming the first bad one."""
     from coordinator_core.ops.dispatch_emit.terminal_commit import _cited_baton, _cited_sizing, _error
@@ -103,7 +120,11 @@ def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id
 
     record_dir_rel = f"{RECORD_DIR_ROOT}/{run_id}"
     base = {"record_dir": record_dir_rel}
-    resolved, refusal = _resolve_plans(worktree_root, params[FANOUT_RECORD_PARAM]["plans"])
+    spec = params[FANOUT_RECORD_PARAM]
+    waves, refusal = _plan_waves(spec)
+    if refusal is not None:
+        return refusal
+    resolved, refusal = _resolve_plans(worktree_root, spec["plans"])
     if refusal is not None:
         return refusal
     session_id = params.get("session_id")
@@ -152,8 +173,10 @@ def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id
         return out
 
     items = []
-    for plan, sizing, _baton, writes in resolved:
+    for given, (plan, sizing, _baton, writes) in zip(spec["plans"], resolved):
         item: dict = {"sizing": sizing, "label": PurePosixPath(plan).stem}
+        if given in waves:
+            item["wave"] = waves[given]
         if writes is not None:
             item["writes"] = writes
         items.append(item)

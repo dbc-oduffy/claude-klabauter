@@ -53,6 +53,25 @@ def test_empty_writes_hint_overlaps_nothing():
     assert c.after_edges([_slice("a", writes=()), _slice("b", writes=("x",))])[1] == ()
 
 
+def _waved(label, wave, writes=()):
+    return c.AskSlice(label=label, ask=label, writes=writes, wave=wave)
+
+
+def test_cross_wave_pair_with_disjoint_writes_gets_edge():
+    edges = c.after_edges([_waved("a", 0, ("a.py",)), _waved("b", 1, ("b.py",))])
+    assert edges == {0: (), 1: (0,)}
+
+
+def test_same_wave_pair_with_disjoint_writes_gets_no_edge():
+    edges = c.after_edges([_waved("a", 1, ("a.py",)), _waved("b", 1, ("b.py",))])
+    assert edges == {0: (), 1: ()}
+
+
+def test_no_wave_slices_keep_overlap_rule():
+    assert c.after_edges([_slice("a", writes=("a.py",)), _slice("b", writes=("b.py",))])[1] == ()
+    assert c.after_edges([_waved("a", 0, ("a.py",)), _slice("b", writes=("b.py",))])[1] == ()
+
+
 @pytest.mark.parametrize("cores,expected", [(1, 1), (3, 1), (4, 1), (24, 6)])
 def test_budget_from_cores(cores, expected):
     assert c.concurrent_run_budget(cores) == expected

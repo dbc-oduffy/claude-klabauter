@@ -74,6 +74,34 @@ def test_overlapping_writes_chain_with_after(repo):
     assert [r["sizing"] for r in out["ready"]] == [a]
 
 
+def test_two_wave_fanout_orders_wave_one_after_wave_zero(repo):
+    a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
+    out = mod.fanout({"sizings": [
+        {"sizing": a, "writes": ["pkg/a.py"], "wave": 0},
+        {"sizing": b, "writes": ["pkg/b.py"], "wave": 1},
+    ]}, repo)
+    assert out["exit_code"] == 0, out
+    assert out["runs"][1]["after"] == [out["runs"][0]["run_id"]]
+    assert [r["sizing"] for r in out["ready"]] == [a]
+
+
+@pytest.mark.parametrize("bad", [True, "1", 1.5, -1])
+def test_bad_wave_refuses_by_name_and_writes_nothing(repo, bad):
+    a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
+    before = _snapshot(repo)
+    out = mod.fanout({"sizings": [{"sizing": a, "wave": 0}, {"sizing": b, "wave": bad}]}, repo)
+    assert out["exit_code"] == 1 and "sizings[1]: wave must be" in out["error"]
+    assert _snapshot(repo) == before
+
+
+def test_decreasing_waves_refuse_and_write_nothing(repo):
+    a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
+    before = _snapshot(repo)
+    out = mod.fanout({"sizings": [{"sizing": a, "wave": 1}, {"sizing": b, "wave": 0}]}, repo)
+    assert out["exit_code"] == 1 and "sizings[1]: wave 0 is lower" in out["error"]
+    assert _snapshot(repo) == before
+
+
 def test_sizing_without_plan_edge_refuses_and_writes_nothing(repo):
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", plan=None)
     before = _snapshot(repo)

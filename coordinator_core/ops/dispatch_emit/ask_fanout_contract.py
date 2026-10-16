@@ -43,6 +43,7 @@ class AskSlice:
     ask: str
     rows: tuple[str, ...] = ()
     writes: Optional[tuple[str, ...]] = None
+    wave: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -194,16 +195,23 @@ def _writes_overlap(a: Optional[Sequence[str]], b: Optional[Sequence[str]]) -> b
     return False
 
 
+def _earlier_wave(earlier: AskSlice, later: AskSlice) -> bool:
+    return earlier.wave is not None and later.wave is not None and earlier.wave < later.wave
+
+
 def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
     """Map slice index to the earlier indices it must follow.
 
     j follows earlier i when their writes overlap (exact path, or one a directory prefix of the other)
-    or either carries no hint. An empty ``writes`` list is a hint: it overlaps nothing.
+    or either carries no hint, or when both carry a ``wave`` and i's is lower. An empty ``writes``
+    list is a hint: it overlaps nothing.
     """
     edges: dict[int, tuple[int, ...]] = {}
     for j, later in enumerate(slices):
         edges[j] = tuple(
-            i for i in range(j) if _writes_overlap(slices[i].writes, later.writes)
+            i
+            for i in range(j)
+            if _writes_overlap(slices[i].writes, later.writes) or _earlier_wave(slices[i], later)
         )
     return edges
 

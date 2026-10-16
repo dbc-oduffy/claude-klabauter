@@ -177,12 +177,13 @@ def fanout(params: dict, root: Path) -> dict:
         return _err(str(exc))
 
 
-def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, ...]]]]:
-    """The sizings arm items as (sizing path, label, writes)."""
+def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, ...]], Optional[int]]]:
+    """The sizings arm items as (sizing path, label, writes, wave); waves must not decrease."""
     raw = params.get("sizings")
     if not isinstance(raw, list) or not raw:
         raise _Refused("sizings must be a non-empty list")
     out = []
+    top_wave: Optional[int] = None
     for i, item in enumerate(raw):
         where = f"sizings[{i}]"
         if not isinstance(item, Mapping):
@@ -193,21 +194,28 @@ def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, .
         label = item.get("label")
         if label is not None and not isinstance(label, str):
             raise _Refused(f"{where}: label must be a string")
-        out.append((rel.strip(), (label or "").strip() or f"sizing-{i + 1}", _writes(item.get("writes"), where)))
+        wave = item.get("wave")
+        if wave is not None:
+            if isinstance(wave, bool) or not isinstance(wave, int) or wave < 0:
+                raise _Refused(f"{where}: wave must be an integer >= 0")
+            if top_wave is not None and wave < top_wave:
+                raise _Refused(f"{where}: wave {wave} is lower than an earlier item's wave {top_wave}; order items by wave")
+            top_wave = wave
+        out.append((rel.strip(), (label or "").strip() or f"sizing-{i + 1}", _writes(item.get("writes"), where), wave))
     return out
 
 
 def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
     """The sizings arm: sibling runs over existing planned sizings, each stamped with its marker."""
     items = _read_sizings(params)
-    slices = [contract.AskSlice(label, rel, (), writes) for rel, label, writes in items]
+    slices = [contract.AskSlice(label, rel, (), writes, wave) for rel, label, writes, wave in items]
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_id = f"ask-parent-{stamp}-{uuid.uuid4().hex[:6]}"
     run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in items]
     edges = contract.after_edges(slices)
 
     stamped: list[tuple[Path, str]] = []
-    for i, (rel, label, _w) in enumerate(items):
+    for i, (rel, label, _w, _wv) in enumerate(items):
         doc = _load_parent(worktree, rel)
         edge = doc.get("plan")
         if not isinstance(edge, str) or not edge.strip():
@@ -234,7 +242,7 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
             slice_sizing=rel,
             status=contract.STATUS_AFTER if edges[i] else contract.STATUS_READY,
         )
-        for i, (rel, label, _w) in enumerate(items)
+        for i, (rel, label, _w, _wv) in enumerate(items)
     )
     runs = contract.admit(runs, contract.concurrent_run_budget())
     for path, text in stamped:

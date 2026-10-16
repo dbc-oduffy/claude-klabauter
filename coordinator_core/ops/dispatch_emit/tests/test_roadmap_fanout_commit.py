@@ -78,8 +78,9 @@ def _record(root: Path) -> None:
         (rec / name).write_text(f"{name}\n", encoding="utf-8")
 
 
-def _call(root: Path, plans, **extra) -> dict:
-    params = {"script_path": "run.mjs", "run_id": RUN, FANOUT_RECORD_PARAM: {"plans": plans}, **extra}
+def _call(root: Path, plans, waves=None, **extra) -> dict:
+    spec = {"plans": plans, **({"waves": waves} if waves is not None else {})}
+    params = {"script_path": "run.mjs", "run_id": RUN, FANOUT_RECORD_PARAM: spec, **extra}
     return terminal_commit._handler(params, repo_root=root / ".git")
 
 
@@ -108,6 +109,44 @@ def test_lands_record_plans_sizings_batons_then_fans_out(repo):
     assert len(fan["fire"]) == 2
     assert not run_token.is_live(repo, RUN)
     assert not run_token.redeem(repo, RUN, token, "run.mjs")
+
+
+def _parent_runs(repo, out) -> list:
+    fan = out["fanout"]
+    assert fan["exit_code"] == 0, fan
+    parent = json.loads((repo / c.parent_record_rel(fan["parent_id"])).read_text(encoding="utf-8"))
+    return parent["runs"]
+
+
+def test_two_wave_record_orders_the_later_run_after_the_earlier(repo):
+    _make_plan(repo, "a")
+    _make_plan(repo, "b")
+    _record(repo)
+    out = _call(repo, [PLANS["a"], PLANS["b"]], waves={PLANS["a"]: 0, PLANS["b"]: 1})
+    assert out["committed"] is True, out
+    by = {r["slice_sizing"]: r for r in _parent_runs(repo, out)}
+    first, second = by["state/sizings/2026-10-16-a.yaml"], by["state/sizings/2026-10-16-b.yaml"]
+    assert second["status"] == "after" and first["run_id"] in str(second)
+    assert first["status"] != "after"
+
+
+def test_record_without_waves_fans_out_unordered(repo):
+    _make_plan(repo, "a")
+    _make_plan(repo, "b")
+    _record(repo)
+    out = _call(repo, [PLANS["a"], PLANS["b"]])
+    assert out["committed"] is True, out
+    assert all(r["status"] != "after" for r in _parent_runs(repo, out))
+
+
+@pytest.mark.parametrize("waves", [{"docs/plans/zzz.md": 0}, {PLANS["a"]: "1"}, {PLANS["a"]: True}, {PLANS["a"]: -1}, ["x"]])
+def test_bad_waves_refuse_before_the_commit(repo, waves):
+    _make_plan(repo, "a")
+    _record(repo)
+    head = _git(["rev-parse", "HEAD"], repo)
+    out = _call(repo, [PLANS["a"]], waves=waves)
+    assert out["committed"] is False and out["refused"] == "fanout-waves"
+    assert _git(["rev-parse", "HEAD"], repo) == head
 
 
 def test_plan_without_sizing_refuses_before_any_write(repo):

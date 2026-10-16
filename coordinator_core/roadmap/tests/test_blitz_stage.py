@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -90,11 +91,43 @@ def test_stubs_scaffolded_and_numbered_from_cluster_edges(tmp_path, roadmap):
     assert reply["numbering"]["C3"]["wave"] > reply["numbering"]["C2"]["wave"] > reply["numbering"]["C1"]["wave"]
 
 
-def test_date_led_roadmap_id_without_prefix_line_is_refused(tmp_path):
-    run = _make_roadmap(tmp_path, "2026-10-06-alpha", CLUSTERS.replace("> Stub slug prefix: `rmt`.\n", ""))
+NO_PREFIX = CLUSTERS.replace("> Stub slug prefix: `rmt`.\n", "")
+
+
+def test_date_led_roadmap_id_without_prefix_line_stages_with_derived_prefix(tmp_path):
+    run = _make_roadmap(tmp_path, "2026-10-06-alpha", NO_PREFIX)
+    reply = bs.stage_roadmap(tmp_path, str(run / "OVERVIEW.md"))
+    ids = {s["stub_id"] for s in reply["stubs"]}
+    assert ids and all(re.fullmatch(r"[a-z]+-[0-9]+", i) for i in ids)
+    assert all(i.startswith("alpha-") for i in ids)
+
+
+def test_derived_prefix_taken_by_another_roadmap_refuses(tmp_path):
+    first = _make_roadmap(tmp_path, "2026-10-06-alpha", NO_PREFIX)
+    bs.stage_roadmap(tmp_path, str(first / "OVERVIEW.md"))
+    second = _make_roadmap(tmp_path, "2026-11-01-alpha", NO_PREFIX)
+    with pytest.raises(bs.BlitzStageRefused, match="Stub slug prefix"):
+        bs.stage_roadmap(tmp_path, str(second / "OVERVIEW.md"))
+
+
+def test_derived_prefix_taken_by_longer_id_roadmap_refuses(tmp_path):
+    first = _make_roadmap(tmp_path, "2026-10-06-alpha-two", NO_PREFIX)
+    bs.stage_roadmap(tmp_path, str(first / "OVERVIEW.md"))
+    second = _make_roadmap(tmp_path, "2026-10-06-alpha", NO_PREFIX)
+    with pytest.raises(bs.BlitzStageRefused, match="Stub slug prefix"):
+        bs.stage_roadmap(tmp_path, str(second / "OVERVIEW.md"))
+
+
+def test_all_date_roadmap_id_without_prefix_line_is_refused(tmp_path):
+    run = _make_roadmap(tmp_path, "2026-10-06", NO_PREFIX)
     with pytest.raises(bs.BlitzStageRefused, match="date-led"):
         bs.stage_roadmap(tmp_path, str(run / "OVERVIEW.md"))
     assert not (tmp_path / "state" / "handoffs").exists()
+
+
+def test_derive_prefix_uses_initials_when_first_token_has_no_letters():
+    assert bs._derive_date_led_prefix("2026-10-06-9-foo-bar") == "fb"
+    assert bs._derive_date_led_prefix("2026-10-06-alpha-beta") == "alpha"
 
 
 def test_date_led_roadmap_id_with_prefix_line_stages(tmp_path):
