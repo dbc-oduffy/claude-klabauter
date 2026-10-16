@@ -287,9 +287,10 @@ def test_replace_preserves_an_existing_targets_mode(tmp_path):
     target = tmp_path / "modeful.txt"
     target.write_text("v1")
     os.chmod(target, 0o644)
+    mode_before = os.stat(target).st_mode
     with collecting():
         claimed_write.replace_text(target, "v2")
-    assert (os.stat(target).st_mode & 0o777) == 0o644
+    assert os.stat(target).st_mode == mode_before
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mkstemp mode is not meaningful on Windows")

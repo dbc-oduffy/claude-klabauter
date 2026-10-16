@@ -1807,32 +1807,44 @@ def _undeclared_dirty(
 def _run_owned_dirt(
     worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
     session_id: Optional[str], all_paths: list, deleted_paths: list,
-) -> list:
-    """Existing dirty files beside the run's declared writes (``_in_scope``) that the run's
-    session claims and no live peer contests: they join the one commit_v2 call. Read from the
-    pre-commit snapshot, no spawn; empty with no snapshot or no session id.
+) -> tuple:
+    """``(files, deletions)`` beside the run's declared writes (``_in_scope``) that join the one
+    commit_v2 call, read from the pre-commit snapshot; both empty with no snapshot or session id.
+    Files exist on disk, are claimed by the run's session and uncontested by a live peer.
+    Deletions are changed paths absent on disk and tracked at HEAD that any request chunk
+    (stranded included) declares or the session claims, likewise uncontested; the HEAD
+    classification is one zero-spawn ``partition_declared_deletions`` and an unreadable tree
+    yields none (these are not declared deletions, so unknown never means tracked).
     ``own_path_claims`` is session-scoped, so the declared-directory test keeps a sibling run of
     the same session out."""
     if snapshot is None or not session_id:
-        return []
+        return [], []
     taken = set(all_paths) | set(deleted_paths)
-    candidates = sorted(
-        p for p in snapshot.changed
-        if p not in taken and _in_scope(p, request) and (worktree_root / p).is_file()
-    )
-    if not candidates:
-        return []
+    in_scope = sorted(p for p in snapshot.changed if p not in taken and _in_scope(p, request))
+    present = [p for p in in_scope if (worktree_root / p).is_file()]
+    gone = [p for p in in_scope if not (worktree_root / p).exists()]
+    if not present and not gone:
+        return [], []
     from coordinator_core.session import scope as session_scope
 
     root_str = str(worktree_root)
     owned = set(session_scope.own_path_claims(session_id, cwd=root_str))
-    candidates = [p for p in candidates if p in owned]
+    declared = {p for c in request.chunks for p in c.paths}
+    candidates = [p for p in present if p in owned] + [p for p in gone if p in owned or p in declared]
     if not candidates:
-        return []
+        return [], []
     contested = session_scope.contested_by_live_peers(candidates, session_id, cwd=root_str)
     if contested is None:
-        return []
-    return [p for p in candidates if p not in contested]
+        return [], []
+    files = [p for p in present if p in owned and p not in contested]
+    gone_ok = [p for p in gone if (p in owned or p in declared) and p not in contested]
+    deletions: list = []
+    if gone_ok:
+        from coordinator_core.git.commit import partition_declared_deletions
+
+        split = partition_declared_deletions(worktree_root, gone_ok)
+        deletions = [] if split is None else sorted(split[0])
+    return files, deletions
 
 
 def _commit_siblings(
@@ -2253,18 +2265,15 @@ def _regenerate_landing_allowlist(worktree_root: Path, paths: list) -> Optional[
 CLOSE_JOB_SCRIPT: Optional[str] = None
 _CLOSE_JOB_WINDOW_MINUTES = 5
 _BACKGROUND_LEGS = ("review", "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
-_PATH_WITHHELD = "detail withheld: names a non-repo-relative path"
 _NOT_LANDED = "coded-stamp commit did not land"
 
 
-def _leg(status: str, detail: str = ""):
-    """A ``LegResult``; a detail naming a non-repo-relative path is replaced, never raised."""
-    from coordinator_core.ops.dispatch_emit.run_close import LegResult
+def _leg(status: str, detail: str = "", root=None):
+    """A ``LegResult`` whose detail is path-normalised: a path under *root* reads repo-relative,
+    any other path-shaped token reads ``<path>``, and the rest of the text survives."""
+    from coordinator_core.ops.dispatch_emit.run_close import LegResult, scrub_detail
 
-    try:
-        return LegResult(status, detail)
-    except ValueError:
-        return LegResult(status, _PATH_WITHHELD)
+    return LegResult(status, scrub_detail(detail, root))
 
 
 def _plan_source_memo(worktree_root: Path, plan_rel: Optional[str]) -> Optional[str]:
@@ -2455,7 +2464,9 @@ def _close_block(ctx: dict, reply: dict) -> dict:
         stamp = reply.get("review_stamp")
         if "review" not in legs:
             if stamp == "refused":
-                legs["review"] = _leg("failed", str(reply.get("review_stamp_refusal") or "review stamp refused")[:200])
+                legs["review"] = _leg(
+                    "failed", str(reply.get("review_stamp_refusal") or "review stamp refused"), ctx["root"]
+                )
             else:
                 legs["review"] = _leg("failed", f"no review stamp: {why}")
         status = reply.get("plan_status")
@@ -2471,7 +2482,9 @@ def _close_block(ctx: dict, reply: dict) -> dict:
         elif "plan-reconciliation" in ctx["presets"]:
             pass  # the preset is applied below
         elif status:
-            legs["plan-reconciliation"] = _leg("failed", str(reply.get("plan_status_reason") or status)[:200])
+            legs["plan-reconciliation"] = _leg(
+                "failed", str(reply.get("plan_status_reason") or status), ctx["root"]
+            )
         else:
             legs["plan-reconciliation"] = _leg("failed", f"plan not reconciled: {why}")
         for leg in RUN_BOUND_LEGS:
@@ -2482,7 +2495,7 @@ def _close_block(ctx: dict, reply: dict) -> dict:
     if ctx["applies"] and reply.get("committed") is True and isinstance(sha, str) and sha:
         from coordinator_core.ops.dispatch_emit.run_close import sibling_release
 
-        siblings = sibling_release(Path(ctx["root"]), ctx["run_id"], sha)
+        siblings = sibling_release(Path(ctx["root"]), ctx.get("sibling_run_id") or ctx["run_id"], sha)
         if siblings is not None:
             block["siblings"] = siblings
     return block
@@ -2952,7 +2965,10 @@ def _terminal_commit_inner(
         presets = kind_presets(kind, plan_governs=plan_governs)
         close_ctx.update(
             root=worktree_root,
-            run_id=_run_id_of(params, ask_run_dir, script_path_raw),
+            # run_id is the close-job record key every reader uses (the script stem);
+            # sibling_run_id is the ask run's own id, which names its sibling-status file.
+            run_id=PurePosixPath(script_path_raw.replace("\\", "/")).stem,
+            sibling_run_id=_run_id_of(params, ask_run_dir, script_path_raw),
             applies=applies,
             plan_rel=request.plan_path,
             inline_review=inline_review if isinstance(inline_review, dict) else {},
@@ -3328,8 +3344,11 @@ def _terminal_commit_inner(
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    run_owned = _run_owned_dirt(worktree_root, request, snapshot, session_id, all_paths, deleted_paths)
+    run_owned, owned_deletions = _run_owned_dirt(
+        worktree_root, request, snapshot, session_id, all_paths, deleted_paths
+    )
     all_paths.extend(run_owned)
+    deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
 
     scope_request = request

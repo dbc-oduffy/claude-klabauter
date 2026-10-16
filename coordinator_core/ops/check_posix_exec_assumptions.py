@@ -799,6 +799,66 @@ _PLAN_TASKS_RESOLVE_REASON = (
     "its shape is among this directory's other ~60 same-shaped entrypoints."
 )
 
+_GEN_SHIM_TWIN_REASON = (
+    "Two-leg-pair admission test. Extensionless POSIX bareword entrypoint; "
+    "its Windows leg is the tracked sibling coordinator/bin/<name>.cmd "
+    "(also <name>.ps1), generator-owned by coordinator/bin/gen-launcher-shim.py, "
+    "which runs this exact file python-direct. Same shape as "
+    "_PLAN_TASKS_RESOLVE_REASON. Dropping the bit or shebang would kill the "
+    "POSIX bareword path (fleet floor is macOS)."
+)
+
+_REASON_PMB_PUBLISH = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side, "
+    "platform semantic gap. (a) _check_identity_file reads st_mode & 0o022 "
+    "behind an `if not hasattr(os, 'geteuid')` early return, a Windows test "
+    "this detector does not recognise; it warns visibly and declines to "
+    "verify on Windows. (b) The index-to-disk exec-bit converge loop: "
+    "os.chmod cannot set or clear an exec bit on NTFS, and the loop "
+    "re-stats and skips when nothing converged."
+)
+
+_REASON_PMB_CHMOD_NOOP = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side, "
+    "platform semantic gap. os.chmod(..., exec bits) is an action, not a "
+    "decision input: its job is the POSIX consumer's exec bit, NTFS has "
+    "none, and the call is a harmless no-op there (OSError is suppressed "
+    "around it). A guard would add a branch that does nothing."
+)
+
+_REASON_PMB_RMTREE_ONERROR = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side. "
+    "_clear_readonly_and_retry is the shutil.rmtree onerror idiom: S_IWRITE "
+    "is the Windows leg (clears read-only); S_IEXEC/S_IREAD make a POSIX "
+    "directory traversable so it can be removed. The mask is not a decision "
+    "on a bit Windows lies about."
+)
+
+_REASON_PMB_FIXTURE_CHMOD = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side. "
+    "The os.chmod is test arrangement that makes a planted shim executable "
+    "on POSIX; on NTFS it is a no-op and the same test already branches on "
+    "os.name or asserts a mode captured from the platform, so the assertion "
+    "is portable."
+)
+
+_GEN_SHIM_TWIN_PATHS = (
+    "coordinator/bin/chunk-commits",
+    "coordinator/bin/claim-neighbours",
+    "coordinator/bin/coordinator-postsync-marker-resync-check",
+    "coordinator/bin/coordinator-precommit-foreign-platform-check",
+    "coordinator/bin/coordinator-precommit-settings-tracking-check",
+    "coordinator/bin/gate-validate-invocable",
+    "coordinator/bin/spawn-census",
+    "coordinator/bin/static-check",
+    "coordinator/bin/with-suite-mutex",
+    "coordinator/bin/with-tier-t-slot",
+)
+
 _M8_REVIEW_TRAIL_SNAPSHOT_REASON = (
     "FROZEN REVIEW-EVIDENCE SNAPSHOT, not live code. Everything under this "
     "prefix is a verbatim point-in-time copy of the claude-klabauter engine's own "
@@ -1176,6 +1236,23 @@ REPO_CONTENT_ROOT = "content_root"
 REPO_EXAMPLE_GAME_WORKBENCH_REPO = "example_game_workbench_repo"
 
 
+_REASON_BYTE_COPIED_POSIX_TARGET = (
+    "Admission test: byte-copied POSIX exec target. coordinator/bin/claude-author.py "
+    "is installed by byte copy as an extensionless exec target "
+    "(substrate.BYTE_COPIED_BIN_SOURCES); the shebang + exec bit ARE the POSIX "
+    "invocation mechanism, guarded by "
+    "coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py. "
+    "Dropping either breaks the POSIX leg. Two-leg pair: the Windows leg is "
+    "coordinator/bin/claude-author.cmd (and claude-author.ps1)."
+)
+
+_REASON_SETUP_DIRECT_EXEC = (
+    "Admission test: directly-executable installer. scripts/setup.py is invoked "
+    "as ./scripts/setup.py on POSIX; shebang + exec bit are pinned by "
+    "scripts/test_setup.py::test_setup_is_directly_executable. Two-leg pair: "
+    "the Windows leg is scripts/setup.cmd."
+)
+
 EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "env_shebang": {
         REPO_EXAMPLE_GAME_WORKBENCH_REPO: {
@@ -1183,6 +1260,9 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
+            "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
+            "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
+            **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
     "extensionless_exec": {
@@ -1191,6 +1271,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
+            **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
     "mode_100755": {
@@ -1199,6 +1280,8 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
+            "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
+            **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
     "path_separator": {
@@ -1231,7 +1314,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/bash_guards/tests/test_write_bump_session_start.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,
             "coordinator_core/bash_guards/tests/test_write_bump_marker.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,
-            "coordinator_core/tests/test_verify_templates_bin_sync.py": _REASON_CHMOD_MODE_PRESERVATION,
             "coordinator/bin/refresh-plugin-live-install.py": _REASON_CHMOD_RMTREE_UNBLOCK,
             # C7-install (2026-08-13): shape (c), the one place an
             # EXEMPTIONS entry is the FIRST choice -- a pytest.mark.skipif
@@ -1278,9 +1360,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             # real FIX in this batch, `_settings_home.py`'s
             # `resolve_machine_local_cli`, was ported in this same change
             # rather than exempted -- see its `os.name != "nt"` guard.
-            "coordinator_core/install/tests/test_bin_family_refresh.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_credential_directory_is_hardened.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
-            "coordinator_core/warm/tests/test_door_credential.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_door_read_deadline_posix.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/warm/tests/test_election_posix.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             # `_write_claude_author_argv_stub`'s only caller is guarded by an
@@ -1294,6 +1374,15 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/orientation/regenerate_cache.py": _REASON_HASATTR_FCHMOD_FEATURE_GUARD,
             "coordinator_core/orientation/test_regenerate_cache.py": _REASON_CHMOD_RELATIVE_INVARIANT,
             "coordinator_core/warm/election.py": _REASON_POSIX_ONLY_MODULE_CROSS_FUNCTION_GAP,
+            "coordinator/bin/publish.py": _REASON_PMB_PUBLISH,
+            "coordinator_core/git/hook_dispositions.py": _REASON_PMB_CHMOD_NOOP,
+            "setup/dist/publish-repo-setup/install.py": _REASON_PMB_CHMOD_NOOP,
+            "coordinator_core/workweek_complete/release/gates.py": _REASON_PMB_RMTREE_ONERROR,
+            "coordinator/tests/test_dest_exec_bits_converge_both_ways.py": _REASON_PMB_FIXTURE_CHMOD,
+            "coordinator_core/backlog_grind_assemble/tests/test_grind_undo.py": _REASON_PMB_FIXTURE_CHMOD,
+            "coordinator/bin/tests/test_settings_home_first_read_rungs.py": _REASON_PMB_FIXTURE_CHMOD,
+            "coordinator/bin/tests/test_workday_complete_step1_validate.py": _REASON_PMB_FIXTURE_CHMOD,
+            "coordinator_core/hooks/support/tests/test_support_state.py": _REASON_PMB_FIXTURE_CHMOD,
         },
     },
     "unresolved_cross_path": {},
@@ -1973,6 +2062,18 @@ def _is_windows_guarded(node: ast.AST, parents: Dict[int, ast.AST]) -> bool:
                 for earlier in parent.values[:idx]:
                     if _branch_windows_status(earlier) == "posix":
                         return True
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            cur is b for b in parent.body
+        ):
+            for deco in parent.decorator_list:
+                if (
+                    isinstance(deco, ast.Call)
+                    and isinstance(deco.func, ast.Attribute)
+                    and deco.func.attr == "skipif"
+                    and deco.args
+                    and _branch_windows_status(deco.args[0]) == "windows"
+                ):
+                    return True
         if _bare_exit_guard_precedes(cur, parent):
             return True
         cur = parent

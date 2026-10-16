@@ -122,7 +122,11 @@ def test_inline_legs_ride_the_coded_stamp_commit(env):
         ["git", "show", "--name-only", "--format=", out["coded_sha"]],
         cwd=env["repo"], capture_output=True, text=True, check=True, **no_console_creationflags(),
     ).stdout.split()
-    assert entry in shown and driver.BATON_REL in shown
+    process_half = subprocess.run(
+        ["git", "show", "--name-only", "--format=", "HEAD"],
+        cwd=env["repo"], capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.split()
+    assert {entry, driver.BATON_REL} <= set(shown + process_half)
     dirty = subprocess.run(
         ["git", "status", "--porcelain", "--", entry, driver.BATON_REL],
         cwd=env["repo"], capture_output=True, text=True, check=True, **no_console_creationflags(),

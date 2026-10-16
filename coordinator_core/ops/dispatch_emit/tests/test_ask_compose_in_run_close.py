@@ -121,3 +121,15 @@ def test_token_less_composition_keeps_the_commit_hand_off(monkeypatch):
     assert "revise_and_refire', op" not in script
     assert "{ kind: 'none', op: null, params: null };" in script
     assert "get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }" in script
+
+
+def test_landed_close_job_carries_released_sibling_fire_calls(monkeypatch):
+    script = _script(monkeypatch)
+    tail = script[script.index("_commit = await") :]
+    landed = tail[tail.index("_nextAction = { kind: 'close_job'") :].split("\n", 1)[0]
+    assert "fire: _commit.close?.siblings?.released ?? []" in landed
+
+
+def test_return_fire_falls_back_to_commit_released_list(monkeypatch):
+    script = _script(monkeypatch)
+    assert "fire: _splitExit ? _splitExit.fire : (_commit?.close?.siblings?.released ?? [])," in script

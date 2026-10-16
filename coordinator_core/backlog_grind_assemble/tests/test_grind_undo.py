@@ -43,6 +43,7 @@ def repo(tmp_path, monkeypatch):
     (r / "d").mkdir()
     (r / "d" / "inner.txt").write_text("x\n")
     _git(r, "add", ".")
+    _git(r, "update-index", "--chmod=+x", "tool.sh")
     _git(r, "commit", "-q", "-m", "seed")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SID)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -105,8 +106,14 @@ def test_restores_modified_deleted_and_removes_created(repo, capsys, monkeypatch
     assert (repo / "mod.txt").read_bytes() == b"orig\r\nbytes\x00\xff\n"
     assert (repo / "gone.txt").read_text() == "gone\n"
     assert not (repo / "new.txt").exists()
-    assert os.stat(repo / "tool.sh").st_mode & 0o111
     assert len(calls) == 2
+    staged = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--stage", "tool.sh"],
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert staged.startswith("100755 ")
     status = subprocess.run(
         ["git", "-C", str(repo), "status", "--porcelain"],
         capture_output=True,

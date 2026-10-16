@@ -462,7 +462,8 @@ def test_completion_entry_rides_the_one_commit(env):
 
     entry = out["close"]["completion_entry"]
     shown = env.git("show", "--name-only", "--format=", out["sha"]).split()
-    assert entry in shown and PLAN in shown
+    process_half = env.git("show", "--name-only", "--format=", "HEAD").split()
+    assert PLAN in shown and entry in shown + process_half
     assert env.record()["settled"]["completion-entry"]["status"] == "ran"
 
 
@@ -594,10 +595,11 @@ def test_waived_not_met_and_attested_indeterminate_are_not_mismatches(env, monke
 def _stamped_not_implemented(env) -> dict:
     """Close once, then leave the plan `executing` with its minted stamp uncommitted, as a re-stamped plan sits."""
     env.new_record()
+    base = env.git("rev-parse", "HEAD").strip()
     env.call()
     text = (env.repo / PLAN).read_text(encoding="utf-8")
     assert "status: implemented" in text
-    env.git("reset", "--hard", "HEAD~1")
+    env.git("reset", "--hard", base)
     (env.repo / PLAN).write_text(text.replace("status: implemented", "status: executing", 1), encoding="utf-8")
     env.set_record(legs={**env.record()["legs"], "review": {"status": "failed", "detail": "x"}})
     return env.plan()["review_stamp"]

@@ -36,6 +36,13 @@ def test_absent_owed_key_reads_empty():
     assert c.StageManifest.from_json(data).owed == ()
 
 
+def test_ask_scout_schema_admits_acceptance_rows_and_grind_scout_does_not():
+    rows = c.ASK_SCOUT_SCHEMA["properties"]["acceptance_rows"]
+    assert rows["type"] == ["array", "null"]
+    assert rows["items"]["required"] == ["statement", "writes", "check"]
+    assert "acceptance_rows" not in c.SCOUT_SCHEMA["properties"]
+
+
 def test_phase_order_and_names():
     assert c.ASK_PHASES == ("size", "gate", "accept", "plan", "stage", "execute", "review")
     assert (c.OP_ASK_GATE, c.OP_ASK_STAGE) == ("dispatch.ask_gate", "dispatch.ask_stage")

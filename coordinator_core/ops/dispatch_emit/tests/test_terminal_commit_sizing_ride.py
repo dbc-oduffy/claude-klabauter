@@ -74,7 +74,9 @@ def test_the_cited_sizing_rewrite_lands_in_the_terminal_commit(repo):
     out = _fire(repo, "docs/plan.md")
 
     assert out["committed"] is True
-    assert _SIZING in _git(["show", "--name-only", "--format=", out["sha"]], repo)
+    # commit_v2 splits product from process paths (b4333bfd51): the sizing (state/) rides HEAD.
+    landed = _git(["show", "--name-only", "--format=", out["sha"]], repo) + _git(["show", "--name-only", "--format=", "HEAD"], repo)
+    assert _SIZING in landed
     assert _git(["status", "--porcelain", "--", _SIZING], repo) == ""
 
 

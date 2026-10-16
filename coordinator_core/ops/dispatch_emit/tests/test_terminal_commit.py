@@ -118,7 +118,7 @@ def test_lands_one_commit_over_done_chunks_only(repo):
     assert set(out["chunks_committed"]) == {"C3", "C4"}
 
     log = subprocess.run(
-        ["git", "show", "--stat", "--format=%s%n%b", "HEAD"],
+        ["git", "show", "--stat", "--format=%s%n%b", out["sha"]],
         cwd=str(repo), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
     ).stdout

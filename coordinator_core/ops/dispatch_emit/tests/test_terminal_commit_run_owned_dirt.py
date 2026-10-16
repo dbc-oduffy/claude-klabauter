@@ -107,6 +107,82 @@ def test_a_claimed_file_outside_the_declared_directories_is_not_run_owned(repo):
     assert out["run_owned"] == []
 
 
+def _track(repo: Path, *names: str) -> None:
+    for name in names:
+        (repo / "src" / name).write_text(name + "\n", encoding="utf-8")
+    _git(["add", "src"], repo)
+    _git(["commit", "-q", "-m", "track"], repo)
+    (repo / "src" / "a.py").write_text("a edited\n", encoding="utf-8")
+
+
+def _run_stranded(repo: Path, **params) -> dict:
+    request = CommitRequest(chunks=(
+        ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),
+        ChunkCommit(id="C2", title="t2", paths=("src/gone.py",)),
+    ))
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    return terminal_commit._handler(
+        {"script_path": "run.mjs", "incomplete_chunks": ["C2"], "inline_review": _REVIEWED, **params},
+        repo_root=repo / ".git",
+    )
+
+
+def test_a_stranded_rows_declared_deletion_lands_with_a_claimed_edit(repo):
+    _track(repo, "gone.py")
+    (repo / "src" / "gone.py").unlink()
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
+    session_scope.touch(SELF, "src/own.py", cwd=str(repo))
+    out = _run_stranded(repo, session_id=SELF)
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["src/a.py", "src/gone.py", "src/own.py"]
+    assert "src/gone.py" in out["deleted_paths"]
+    assert "src/gone.py" not in out["run_owned"]
+    assert "src/gone.py" not in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
+
+
+def test_an_undeclared_unclaimed_deleted_tracked_file_is_not_committed(repo):
+    _track(repo, "stray.py")
+    (repo / "src" / "stray.py").unlink()
+    out = _run(repo, session_id=SELF)
+    assert out["committed"] is True, out
+    assert "src/stray.py" not in _committed(repo)
+    assert "src/stray.py" not in out["deleted_paths"]
+    assert "src/stray.py" in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
+
+
+def test_a_peer_contested_deleted_file_is_not_committed(repo):
+    _track(repo, "gone.py")
+    (repo / "src" / "gone.py").unlink()
+    session_core.init(PEER, cwd=str(repo))
+    session_scope.touch(PEER, "src/gone.py", cwd=str(repo))
+    out = _run_stranded(repo, session_id=SELF)
+    assert "src/gone.py" not in out.get("deleted_paths", [])
+    assert "src/gone.py" in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
+
+
+def test_an_unreadable_head_spine_joins_no_run_owned_deletions(repo, monkeypatch):
+    _track(repo, "gone.py")
+    (repo / "src" / "gone.py").unlink()
+    from coordinator_core.git import commit as git_commit
+
+    calls: list = []
+
+    def partition(root, rels):
+        calls.append(list(rels))
+        return None
+
+    monkeypatch.setattr(git_commit, "partition_declared_deletions", partition)
+    request = CommitRequest(chunks=(
+        ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),
+        ChunkCommit(id="C2", title="t2", paths=("src/gone.py",)),
+    ))
+    snap = terminal_commit._Snapshot({"src/gone.py", "src/a.py"}, [], {"src/gone.py"}, [])
+    session_scope.touch(SELF, "src/gone.py", cwd=str(repo))
+    files, deletions = terminal_commit._run_owned_dirt(repo, request, snap, SELF, ["src/a.py"], [])
+    assert (files, deletions) == ([], [])
+    assert calls == [["src/gone.py"]]
+
+
 def test_a_call_without_a_session_id_keeps_the_declared_only_behaviour(repo):
     (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
     session_scope.touch(SELF, "src/own.py", cwd=str(repo))

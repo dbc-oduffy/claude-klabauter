@@ -51,10 +51,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     DOC_NEW_CMD,
     ASK_SCOUT_SCHEMA,
     ASSEMBLE_SCHEMA,
+    ACCEPTANCE_ROWS_CLAUSE,
     RESEARCH_CLASSIFY_CLAUSE,
     SCOUT_RETURN_CLAUSE,
     SCOUT_SCHEMA,
     SIZING_ASSEMBLE_CMD,
+    acceptance_rows_assemble_flags_js,
     research_assemble_flags_js,
     scout_assemble_flags_js,
 )
@@ -232,6 +234,17 @@ _REVISE_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verd
 _REVISE_STAGED_SCHEMA = _obj(
     ["plan_rel"],
     {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": {"type": ["object", "null"]}},
+)
+_REVIEW_SIGNALS_PROP = {"review_signals": {"type": "array", "items": {"type": "string"}}}
+_SPINE_REVIEW_SCHEMA = _obj(
+    ["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_REVIEW_SIGNALS_PROP}
+)
+_SPINE_REVIEW_STAGED_SCHEMA = _obj(
+    ["plan_rel"],
+    {
+        "plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": {"type": ["object", "null"]},
+        **_REVIEW_SIGNALS_PROP,
+    },
 )
 _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
@@ -718,6 +731,30 @@ def _read_plan_blitz() -> str:
     from coordinator_core.ops.dispatch_emit.ask_plan_blitz import load_plan_blitz_text
 
     return load_plan_blitz_text()
+
+
+def load_review_signal_selects(plugin_root: Optional[str] = None) -> dict[str, str]:
+    """`{signal: selects}` from DoE's contract/review-signals.json under the resolved plugin root, or refuse by name.
+
+    An unresolved root yields `{}` (no signal routing); a missing or unparseable file refuses.
+    """
+    from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
+
+    if plugin_root is None:
+        from coordinator_core.warm.caller_context import resolve_caller_context
+
+        plugin_root = resolve_caller_context().plugin_root
+    if not plugin_root:
+        # Reachable only with an injected plan-blitz text: the plugin-read path refuses an unresolved root first.
+        return {}
+    source = Path(plugin_root) / "contract" / "review-signals.json"
+    try:
+        signals = json.loads(source.read_text(encoding="utf-8"))["signals"]
+        return {str(name): str(entry["selects"]) for name, entry in signals.items()}
+    except FileNotFoundError:
+        raise AskPlanBlitzRefused(f"no review-signals.json at {source}") from None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise AskPlanBlitzRefused(f"unreadable review-signals.json at {source}: {exc}") from None
 
 
 _PHASE_CALL_TITLES = {"execute": _emit._EXECUTE_PHASE_TITLE}
@@ -1250,6 +1287,7 @@ def compose_ask_script(
             + SCOUT_RETURN_CLAUSE
             + EXIT_CRITERION_RULES_CLAUSE
             + " " + RESEARCH_CLASSIFY_CLAUSE
+            + " " + ACCEPTANCE_ROWS_CLAUSE
             + scout_closing
             + ledger_clause
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
@@ -1286,6 +1324,7 @@ def compose_ask_script(
             f"{_lit(SIZING_ASSEMBLE_CMD)}"
             + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
             + research_assemble_flags_js("_asmFields", "_q")
+            + acceptance_rows_assemble_flags_js("_asmFields", "_q")
             + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
             + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
         )
@@ -1627,6 +1666,7 @@ def compose_ask_script(
         b.append("    phase('plan');")
         # gateReportPath binds from the runtime `_sizingRel`: a raw ask's sizing is minted in-run.
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
+        signal_selects = load_review_signal_selects()
         review_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             "The ask gate minted a dispatch spine from the sizing's concrete acceptance rows at ",
@@ -1636,7 +1676,10 @@ def compose_ask_script(
             "Apply every finding IN PLACE with Edit -- never scaffold a new plan, never change its "
             "path -- then return its repo-relative path as plan_rel. Then run the "
             "`plan.readiness_verdict` op on the reviewed plan and return that reply's pull_class and "
-            "verdict alongside plan_rel."
+            "verdict alongside plan_rel. Also declare the spine's `review_signals` in its frontmatter "
+            "(ids from this vocabulary, empty when none: "
+            + ", ".join(sorted(signal_selects))
+            + ") and return them as review_signals."
             + ledger_clause,
             " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
             *(
@@ -1648,13 +1691,21 @@ def compose_ask_script(
         )
         review_call = _agent(
             review_prompt, label="plan-review", phase="plan", agent_type=_PLAN_REVIEW_AGENT_TYPE,
-            schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
+            schema=_SPINE_REVIEW_STAGED_SCHEMA if fold_stage else _SPINE_REVIEW_SCHEMA,
             effort=_PLAN_REVIEW_EFFORT,
         )
         b.append("    let _spineFallback = null;")
         b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
         b.append(f"      const _spineReview = await {review_call};")
         b.append("      _spineFallback = _spineReview?.plan_rel || _gate.spine_plan;")
+        b.append(
+            f"      const _signalSelects = {json.dumps(signal_selects, sort_keys=True)};"
+        )
+        b.append(
+            "      const _wrongReviewer = (_spineReview?.review_signals ?? []).some((s) => "
+            f"_signalSelects[s] !== undefined && _signalSelects[s] !== {_lit(_PLAN_REVIEW_AGENT_TYPE)});"
+        )
+        b.append("      if (!_wrongReviewer) {")
         b.append("      if (_spineReview?.verdict === 'ready') {")
         b.append("        _planRel = _spineFallback;")
         if fold_stage:
@@ -1665,6 +1716,7 @@ def compose_ask_script(
             "String(_spineReview?.verdict ?? 'none') + ' (not ready)', review: _spineReview ?? null, "
             "sizing: _sizingRel, run_id: _runId };"
         )
+        b.append("      }")
         b.append("      }")
         b.append("    }")
         b.append("    if (!_planRel && !_halted) {")
@@ -2174,7 +2226,7 @@ def compose_ask_script(
         _append_halt_record_commit(b)
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
-        "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : [], "
+        "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : (_commit?.close?.siblings?.released ?? []), "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
@@ -2313,7 +2365,8 @@ def _append_docs_and_commit(
     git-commit-agent running `dispatch.terminal_commit` with the run token. The docs were written
     earlier, by the verify agent. The commit lands product only: plans, sizings,
     briefs and sidecars are process records it never carries, and a doc no chunk declares stays
-    out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run.
+    out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run
+    only when its `fire` list (the sibling slices the close released) is empty.
 
     Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
     `block_subagent_commit` run-token leg admits nothing else. The params ride in the prompt's
@@ -2327,7 +2380,7 @@ def _append_docs_and_commit(
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(
         "    if (_commit && _commit.committed === true) { _nextAction = { kind: 'close_job', op: null, "
-        "params: { run_id: _runId, close: _commit.close ?? null } }; }"
+        "params: { run_id: _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }; }"
     )
     b.append(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "

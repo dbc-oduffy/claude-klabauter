@@ -47,12 +47,22 @@ def _emit_m_ask(repo, capsys, blitz_text, monkeypatch):
     return Path(json.loads(capsys.readouterr().out)["path"]).read_text(encoding="utf-8")
 
 
+_BLINDED_REVIEWER_TAIL = "' -- read it completely, then execute it as written.'"
+_CHECKPOINT_COMMITTER_MARK = "On commit-failed, put the verbatim refusal in `reason`."
+_VERDICT_WRITER_TAIL = "holding exactly this text and nothing else: ' + JSON.stringify(_v) + '. Return the path you wrote."
+
+
 def _agent_prompts(script: str) -> list[str]:
     out = []
     for m in re.finditer(r"(?<![\w.])agent\(", script):
         end = script.index("label:", m.end()) if "label:" in script[m.end():] else m.end() + 200
         out.append(script[m.end():end])
-    return out
+    # The blinded falsifier-integrity reviewer and its verdict-write writer carry no EM brief by design;
+    # so does the mechanical checkpoint committer, whose whole task is the declared path list.
+    return [
+        p for p in out
+        if not any(m in p for m in (_VERDICT_WRITER_TAIL, _BLINDED_REVIEWER_TAIL, _CHECKPOINT_COMMITTER_MARK))
+    ]
 
 
 def _balanced_function(script: str, name: str) -> str:
@@ -84,7 +94,7 @@ def test_halts_before_execute_are_only_the_named_kinds_and_none_precedes_size(
 ):
     script = _emit_m_ask(repo, capsys, blitz_text, monkeypatch)
     size_at = script.index("phase('size')")
-    execute_at = script.index("phase('execute')")
+    execute_at = script.index("phase('Execute')")
     assignments = [m for m in re.finditer(r"_halted = \{", script) if m.start() < execute_at]
     helper = script.index("function _haltOnUsageLimit(")
     helper_end = script.index("\n  }", helper)

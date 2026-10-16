@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """scripts/cloud_setup.py — the cloud provisioning entrypoint for the engine.
 
 Purpose: this is the single decision-carrying artifact behind the bash pasted into a

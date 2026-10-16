@@ -51,6 +51,9 @@ _TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
 #: terminal notification: bounds the read of a session that ran long past the run's end.
 _TRANSCRIPT_HEAD_BYTES = 64 * 1024 * 1024
 
+#: Bytes read per step of the head-window scan.
+_SCAN_CHUNK_BYTES = 1024 * 1024
+
 _EVIDENCE = "evidence"
 _TIMER = "timer"
 
@@ -194,27 +197,35 @@ def _run_ended(
 def _earlier_lines(path: str, needle: str) -> str:
     """The lines holding `needle` in the `_TRANSCRIPT_HEAD_BYTES` before the tail window: a run
     that ended in a session that kept going has its launch and terminal notification there.
-    Reads and holds up to `_TRANSCRIPT_HEAD_BYTES` per call (unmeasured against the 500ms bar); a
+    Streams the window in `_SCAN_CHUNK_BYTES` reads and keeps only matching lines plus the open
+    partial line, so memory is bounded by the chunk and the longest line, never the window (a
+    window with no newline at all degrades to holding it, re-copied per chunk); a
     line straddling the tail boundary is split across both windows and matches neither."""
+    key = needle.encode("utf-8")
+    lines: list[bytes] = []
     try:
         with open(path, "rb") as handle:
             handle.seek(0, os.SEEK_END)
             stop = max(0, handle.tell() - _TRANSCRIPT_TAIL_BYTES)
             start = max(0, stop - _TRANSCRIPT_HEAD_BYTES)
             handle.seek(start)
-            data = handle.read(stop - start)
+            remaining = stop - start
+            carry = b""
+            while remaining > 0:
+                chunk = handle.read(min(_SCAN_CHUNK_BYTES, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                data = carry + chunk
+                cut = data.rfind(b"\n") + 1
+                carry = data[cut:]
+                if cut and data.find(key, 0, cut) != -1:
+                    # rstrip(b"\r"): a CRLF transcript's lines match the LF-split tail's.
+                    lines.extend(ln.rstrip(b"\r") for ln in data[:cut].split(b"\n") if key in ln)
+            if key in carry:
+                lines.append(carry.rstrip(b"\r"))
     except OSError:
         return ""
-    key = needle.encode("utf-8")
-    lines: list[bytes] = []
-    pos = data.find(key)
-    while pos != -1:
-        begin = data.rfind(b"\n", 0, pos) + 1
-        end = data.find(b"\n", pos)
-        if end == -1:
-            end = len(data)
-        lines.append(data[begin:end])
-        pos = data.find(key, end)
     return b"\n".join(lines).decode("utf-8", errors="replace")
 
 

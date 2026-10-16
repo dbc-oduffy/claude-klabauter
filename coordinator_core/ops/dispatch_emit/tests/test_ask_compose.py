@@ -104,9 +104,10 @@ def test_each_halt_assigns_before_the_guarded_stage_and_execute():
     assert halt_at < script.index("phase('stage')") < script.index("phase('Execute')")
     assert script.index("_halted = { halted:", halt_at) < script.index("phase('stage')")
     stage_guard = script.rindex("if (!_halted) {", 0, script.index("phase('stage')"))
+    # Execute's guard may be compound (`!_halted && ...`), so match the prefix only.
     exec_guard = script.rindex("if (!_halted", 0, script.index("phase('Execute')"))
     assert halt_at < stage_guard < exec_guard
-    assert "return { halted:" not in script
+    assert "return { halted:" not in script[: script.index("phase('Execute')")]
     assert "_halted = { halted: 'no-op'," in script
     assert "..._gate.halt" in script
     assert f"'{HALT_REFUSAL}'" in script

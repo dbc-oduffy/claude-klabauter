@@ -128,8 +128,26 @@ ASK_SCOUT_SCHEMA = {
                 "questions": {"type": "array", "items": _STR},
             },
         },
+        "acceptance_rows": {
+            "type": ["array", "null"],
+            "items": {
+                "type": "object",
+                "required": ["statement", "writes", "check"],
+                "properties": {
+                    "statement": _STR,
+                    "writes": {"type": "array", "items": _STR},
+                    "check": _STR,
+                },
+            },
+        },
     },
 }
+#: Scout prompt passage: when to return `acceptance_rows`. Appended to the ask scout's prompt.
+ACCEPTANCE_ROWS_CLAUSE = (
+    "Return `acceptance_rows` (each row: statement, writes, check) only when every row can name "
+    "its file writes -- exact files, no glob and no directory -- and a runnable check that proves "
+    "it; otherwise return it null. Never pad rows to fill the field."
+)
 #: Scout prompt passage: when to return `research`. Appended to the ask scout's prompt.
 RESEARCH_CLASSIFY_CLAUSE = (
     "Return `research` (class, appetite, sources, depth, targets as `<source>=<ref>`, questions) "
@@ -187,6 +205,17 @@ def research_assemble_flags_js(scouted: str, quote: str) -> str:
         f" + {each('targets', '--research-target')}"
         f" + {each('questions', '--research-question')}"
         f" : '')"
+    )
+
+
+def acceptance_rows_assemble_flags_js(scouted: str, quote: str) -> str:
+    """JS expression text appending ``--acceptance-rows-json`` from ``<scouted>.acceptance_rows``;
+    the empty string unless that is a non-empty array. Starts with `` + `` so it follows the
+    command literal directly."""
+    a = f"{scouted}.acceptance_rows"
+    return (
+        f" + (Array.isArray({a}) && {a}.length > 0"
+        f" ? ' --acceptance-rows-json ' + {quote}(JSON.stringify({a})) : '')"
     )
 
 

@@ -136,6 +136,8 @@ _SEPARATELY_TESTED_ENTRYPOINTS = frozenset({
 # this already-large legacy population. Verifying/fixing any one of these is
 # a separate, scoped follow-up, not this guard's job.
 _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
+    "baseline-export.py",  # --help rejected: demands -- runner argv first
+    "coordinator-ensure-hooks-fleet.py",  # --help exits 0 with no stdout
     "statusline.py",  # harness status-line renderer: reads stdin JSON, has no --help surface
     "advance-tracker-status.py",
     "agent-worktree-sweep.py",
@@ -187,7 +189,6 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "check-pcli-drift-gate.py",
     "check-persona-slug-leak.py",
     "check-plugin-drift.py",
-    "check-posix-exec-assumptions.py",
     "check-rag-state.py",
     "check-registry-codename-leak.py",
     "check-sh-suffix-polyglot.py",

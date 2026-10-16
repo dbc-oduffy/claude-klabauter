@@ -289,15 +289,8 @@ def test_deferral_survives_detail_truncation_behind_a_long_chain_list(tmp_path, 
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([], names))
     _reading(monkeypatch, 4608)
     result = cb._post_close(_ctx(tmp_path, batons=BATONS))
-    assert len(result.detail) == cb._DETAIL_MAX
+    assert len(result.detail) == run_close.DETAIL_CAP
     assert "deferred: structural-index" in result.detail
-
-
-def test_scrub_removes_every_path_shape():
-    text = "a " + "C" + ":\\x\\y b /abs/p c rel\\back d ok/rel"
-    out = cb._scrub(text)
-    run_close.check_path_hygiene(out)
-    assert "ok/rel" in out
 
 
 def test_op_is_registered_mutating_fire_and_forget_common_dir():
@@ -365,3 +358,9 @@ def test_post_close_names_a_close_review_that_did_not_start(tmp_path, monkeypatc
     monkeypatch.setattr("coordinator_core.ops.ceremony.detached_spawn.spawn_detached", lambda *a, **k: False)
     assert "close.review not started" in cb._post_close(_ctx(tmp_path)).detail
 
+
+
+def test_close_review_still_imports_its_close_background_names():
+    import importlib
+
+    importlib.import_module("coordinator_core.ops.ceremony.close_review")

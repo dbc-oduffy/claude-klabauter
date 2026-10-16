@@ -545,12 +545,12 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.39.0"
+    pinned = "1.40.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
         f"{pinned!r} — check the vendored x-bump-note chain (1.24.0 "
         "`baton` at 7294c51d76, 1.25.0 `exit_criterion.amendments` at 158f9b08a5, "
-        "1.39.0 `spike` value_class at fb059af8ab) for a correspondingly "
+        "1.39.0 `spike` value_class at fb059af8ab, 1.40.0 `acceptance_rows` at 5c982f0e40) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
 
@@ -585,7 +585,8 @@ _VENDORED_SCHEMA_VERSION_PINS = (
     # Re-pinned 1.36.0 -> 1.37.0: DoE c01e16d913 adds `unrelated_turns` and the `visual` surface.
     # Re-pinned 1.37.0 -> 1.39.0: 1.38.0 `hands-on` mode (a2c86b93de), 1.38.1 (3beba6658b),
     # 1.39.0 `spike` value_class (fb059af8ab); all additive, recorded in the x-bump-note chain.
-    ("sizing-object.schema.json", "1.39.0", "coordinator-content-repo coordinator/schemas/sizing-object.schema.json (1.39.0 at fb059af8ab)"),
+    # Re-pinned 1.39.0 -> 1.40.0: DoE 5c982f0e40, optional top-level `acceptance_rows` (additive, x-bump-note chain).
+    ("sizing-object.schema.json", "1.40.0", "coordinator-content-repo coordinator/schemas/sizing-object.schema.json (1.40.0 at 5c982f0e40)"),
     # Re-pinned 1.3.0 -> 1.4.0 on DoE widening `applies_to` to
     # `state/roadmap/**/OVERVIEW.md` (MINOR, on the peer-set-entry 1.0.0 -> 1.1.0
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch

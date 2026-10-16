@@ -1745,6 +1745,7 @@ def _write_back(
     ask_conflicts: Optional[list[dict[str, str]]] = None,
     embed_verbatims: bool = True,
     relayed_ask_text: Optional[str] = None,
+    acceptance_rows: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1930,6 +1931,8 @@ def _write_back(
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
         if research:
             text = write_fm_nested_field(text, "research", _render_block(research))
+        if acceptance_rows:
+            text = write_fm_nested_field(text, "acceptance_rows", _render_block(acceptance_rows))
         if interaction_mode and not doc.get("interaction_mode"):
             text = _set_scalar(text, "interaction_mode", interaction_mode)
         # First write only: once present, the EM curates it by hand and a
@@ -2035,6 +2038,44 @@ def _write_back(
         },
         **({"register_coverage": register_coverage} if register_coverage else {}),
     }
+
+
+def parse_acceptance_rows(raw: str) -> tuple[Optional[list[dict[str, Any]]], list[str]]:
+    """The `--acceptance-rows-json` value as a list of `{statement, writes, check}` rows, with
+    one refusal string per bad value. Every string must be non-empty and `writes` a non-empty
+    list of them; rows are rebuilt with exactly those three keys."""
+    import json
+
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        return None, [f"--acceptance-rows-json is not valid JSON: {exc}"]
+    if not isinstance(data, list) or not data:
+        return None, ["--acceptance-rows-json must be a non-empty JSON array"]
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for n, item in enumerate(data):
+        if not isinstance(item, dict):
+            errors.append(f"--acceptance-rows-json row {n} is not an object")
+            continue
+        errors_before = len(errors)
+        extra = sorted(set(item) - {"statement", "writes", "check"})
+        if extra:
+            errors.append(f"--acceptance-rows-json row {n} has unknown keys {extra}")
+        statement, writes, check = item.get("statement"), item.get("writes"), item.get("check")
+        if not (isinstance(statement, str) and statement.strip()):
+            errors.append(f"--acceptance-rows-json row {n} needs a non-empty statement")
+        if not (
+            isinstance(writes, list)
+            and writes
+            and all(isinstance(w, str) and w.strip() for w in writes)
+        ):
+            errors.append(f"--acceptance-rows-json row {n} needs writes: a non-empty list of non-empty strings")
+        if not (isinstance(check, str) and check.strip()):
+            errors.append(f"--acceptance-rows-json row {n} needs a non-empty check")
+        if len(errors) == errors_before:
+            rows.append({"statement": statement, "writes": list(writes), "check": check})
+    return (None, errors) if errors else (rows, [])
 
 
 def build_research_block(
@@ -2213,6 +2254,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-target <source>=<ref> ...]\n"
         "    [--research-question <text> ...]\n"
         "    [--research-destination repo|local-only]\n"
+        "    [--acceptance-rows-json '[{\"statement\":..,\"writes\":[..],\"check\":..}]' (requires --write)]\n"
         "    [--write <state/sizings/x.yaml> [--verbatim-turns A-B | --no-verbatims]\n"
         "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block)\n"
@@ -2370,6 +2412,7 @@ def main(argv: list[str]) -> int:
     research_targets: list[str] = []
     research_questions: list[str] = []
     research_destination = None
+    acceptance_rows_json = None
     verbatim_turns_raw = None
     intent_turn_raw = None
     no_verbatims = False
@@ -2520,6 +2563,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-destination" and i + 1 < len(argv):
             research_destination = argv[i + 1]
+            i += 2
+        elif tok == "--acceptance-rows-json" and i + 1 < len(argv):
+            acceptance_rows_json = argv[i + 1]
             i += 2
         elif tok == "--json":
             i += 1
@@ -2723,6 +2769,16 @@ def main(argv: list[str]) -> int:
     if research_block is not None and write_path is None:
         print(f"{prog}: --research-* requires --write <state/sizings/x.yaml>", file=sys.stderr)
         return EXIT_USAGE
+    acceptance_rows = None
+    if acceptance_rows_json is not None:
+        acceptance_rows, acceptance_errors = parse_acceptance_rows(acceptance_rows_json)
+        if acceptance_errors:
+            for message in acceptance_errors:
+                print(f"{prog}: {message}", file=sys.stderr)
+            return EXIT_USAGE
+        if write_path is None:
+            print(f"{prog}: --acceptance-rows-json requires --write <state/sizings/x.yaml>", file=sys.stderr)
+            return EXIT_USAGE
 
     interaction_mode, interaction_mode_source = _resolve_interaction_mode_and_source(
         interaction_mode_flag
@@ -2799,6 +2855,7 @@ def main(argv: list[str]) -> int:
                 ask_conflicts=ask_conflicts,
                 embed_verbatims=not no_verbatims,
                 relayed_ask_text=relayed_ask_text,
+                acceptance_rows=acceptance_rows,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)

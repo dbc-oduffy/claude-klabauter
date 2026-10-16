@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 
 RUN_BOUND_LEGS: tuple[str, ...] = (
     "review",
@@ -54,6 +54,33 @@ def _unhygienic_token(text: str) -> Optional[str]:
         if "\\" in token or token.startswith("/") or _DRIVE.match(token):
             return token
     return None
+
+
+_PATHISH = re.compile(r"[A-Za-z]:[\\/]\S*|\S*\\\S*|(?<!\w)/\S+")
+
+
+def scrub_detail(text: str, root: Optional[Union[str, os.PathLike]] = None) -> str:
+    """Return *text* with whitespace collapsed, every non-repo-relative path made safe, capped at ``DETAIL_CAP``.
+
+    A path token under *root* becomes its repo-relative POSIX form; any other path-shaped token
+    becomes ``<path>``. The result passes ``check_path_hygiene``. Pure string work.
+    """
+    prefix = ""
+    if root is not None:
+        prefix = os.fspath(root).replace("\\", "/").rstrip("/").casefold() + "/"
+
+    def _swap(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        if prefix:
+            norm = token.replace("\\", "/")
+            # The prefix ends in "/" so <drive>:/repo-other never matches root <drive>:/repo.
+            if norm.casefold().startswith(prefix) and len(norm) > len(prefix):
+                rel = norm[len(prefix):]
+                if not _unhygienic_token(rel):
+                    return rel
+        return "<path>"
+
+    return _PATHISH.sub(_swap, " ".join(str(text).split()))[:DETAIL_CAP]
 
 
 def check_path_hygiene(detail: str) -> None:

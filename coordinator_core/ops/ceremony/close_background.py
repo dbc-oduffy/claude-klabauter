@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 from dataclasses import dataclass
@@ -57,9 +56,9 @@ _HANDOFF_SWEEP_CAP = 150
 _SIZINGS_SWEEP_NOTE = "sweep-terminal-sizings not run: 638ms cold, over the 500ms bar"
 _CEREMONY_NAME = "run-close"
 _ENSURE_WAIT_SECS = 5.0
-_DETAIL_MAX = 160
 
-_PATHISH = re.compile(r"[A-Za-z]:[\\/]\S*|\S*\\\S*|(?<!\w)/\S+")
+# close_review imports this name; the scrubber itself lives in run_close.
+_scrub = run_close.scrub_detail
 
 
 @dataclass(frozen=True)
@@ -76,13 +75,8 @@ class JobContext:
 Runner = Callable[[JobContext], LegResult]
 
 
-def _scrub(text: str) -> str:
-    """Replace every path-looking token so the text passes ``LegResult``'s hygiene check."""
-    return _PATHISH.sub("<path>", " ".join(str(text).split()))[:_DETAIL_MAX]
-
-
 def _failed(prefix: str, exc: BaseException) -> LegResult:
-    return LegResult("failed", _scrub(f"{prefix}{type(exc).__name__}: {exc}"))
+    return LegResult("failed", run_close.scrub_detail(f"{prefix}{type(exc).__name__}: {exc}"))
 
 
 def _bin_script(name: str) -> Any:
@@ -130,11 +124,11 @@ def _baton_drain(ctx: JobContext) -> LegResult:
         archived = len(acted)
         if failed:
             return LegResult(
-                "failed", _scrub(f"{len(failed)} of {len(moves)} move(s) failed; {_SIZINGS_SWEEP_NOTE}")
+                "failed", run_close.scrub_detail(f"{len(failed)} of {len(moves)} move(s) failed; {_SIZINGS_SWEEP_NOTE}")
             )
     return LegResult(
         "ran",
-        _scrub(
+        run_close.scrub_detail(
             f"archived {archived} of {len(ids)} claimed baton(s), "
             f"{len(skipped)} retained; {_SIZINGS_SWEEP_NOTE}"
         ),
@@ -162,7 +156,7 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
     if not inbox.is_file():
         if (corpus / "archive" / name).is_file():
             return LegResult("discharged", "source memo already archived")
-        return LegResult("failed", _scrub(f"source memo {name} is in neither inbox nor archive"))
+        return LegResult("failed", run_close.scrub_detail(f"source memo {name} is in neither inbox nor archive"))
 
     from coordinator_core import archive_stamp
 
@@ -170,8 +164,8 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
         str(inbox), "--actioned-note", f"resolved by run {ctx.run_id}", return_result=True
     )
     if int(result.get("exit_code", 1)) != 0:
-        return LegResult("failed", _scrub(f"resolve refused: {result.get('error', 'exit non-zero')}"))
-    return LegResult("ran", _scrub(f"source memo {name} resolved"))
+        return LegResult("failed", run_close.scrub_detail(f"resolve refused: {result.get('error', 'exit non-zero')}"))
+    return LegResult("ran", run_close.scrub_detail(f"source memo {name} resolved"))
 
 
 def _launch_close_review(ctx: JobContext) -> bool:
@@ -226,7 +220,7 @@ def _post_close(ctx: JobContext) -> LegResult:
     detail += f"; {chain_note}"
     if problems:
         detail += f"; failed: {', '.join(problems)}"
-    return LegResult("failed" if problems else "ran", _scrub(detail))
+    return LegResult("failed" if problems else "ran", run_close.scrub_detail(detail))
 
 
 def _chain_closure_note(ctx: JobContext, problems: list[str]) -> str:
@@ -330,7 +324,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         ctx = _context(main_worktree_root(Path(repo_root)), Path(repo_root), params or {})
         return _summary(ctx.run_id, run_background(ctx))
     except (ValueError, FileNotFoundError) as exc:
-        return {"error": _scrub(f"{type(exc).__name__}: {exc}")}
+        return {"error": run_close.scrub_detail(f"{type(exc).__name__}: {exc}")}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -347,7 +341,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         params = {**json.loads(args.params), "run_id": args.run_id}
         run_background(_context(root, resolve_git_common_dir(root), params))
     except (ValueError, FileNotFoundError) as exc:
-        print(_scrub(f"close.background: {type(exc).__name__}: {exc}"), file=sys.stderr)
+        print(run_close.scrub_detail(f"close.background: {type(exc).__name__}: {exc}"), file=sys.stderr)
         return 1
     return 0
 

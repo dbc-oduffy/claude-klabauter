@@ -59,7 +59,7 @@ def test_review_prep_is_the_first_act_of_each_wave_agent_and_no_prep_agent_spawn
     assert "'Review prep'" not in script.split("phases: [", 1)[1].split("]", 1)[0]
     wave = script.split("phase('Review wave')", 1)[1]
     assert wave.index("review.prep") < wave.index("label: 'review:coordinator:code-reviewer'")
-    assert script.count("review.prep") == 1
+    assert script.count('coordinator-invoke" review.prep') == 1
 
 
 def test_no_record_agent_is_composed():

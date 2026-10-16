@@ -293,6 +293,57 @@ def test_a_terminal_notification_beyond_the_head_window_leaves_the_run_live(repo
     assert run_token.is_live(repo, "r1")
 
 
+def test_earlier_lines_finds_lines_across_chunk_boundaries_with_bounded_reads(tmp_path, monkeypatch):
+    monkeypatch.setattr(warp_live, "_TRANSCRIPT_TAIL_BYTES", 8)
+    monkeypatch.setattr(warp_live, "_SCAN_CHUNK_BYTES", 7)
+    lines = [f'{{"n":{i},"pad":"{"p" * (i % 13)}"}}' for i in range(60)]
+    lines[17] = '{"id":"NEEDLE-a"}'
+    lines[41] = '{"id":"NEEDLE-b","pad":"' + "q" * 50 + '"}'
+    path = _transcript(tmp_path, "\n".join(lines) + "\nTAILTAIL")
+    reads = []
+    real_open = open
+
+    class Spy:
+        def __init__(self, handle):
+            self._h = handle
+
+        def __enter__(self):
+            self._h.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._h.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self._h, name)
+
+        def read(self, n=-1):
+            reads.append(n)
+            return self._h.read(n)
+
+    monkeypatch.setattr(warp_live, "open", lambda *a, **k: Spy(real_open(*a, **k)), raising=False)
+    got = warp_live._earlier_lines(path, "NEEDLE")
+    assert [ln.rstrip("\r") for ln in got.split("\n")] == [lines[17], lines[41]]
+    assert reads and all(0 < n <= 7 for n in reads)
+
+
+def test_earlier_lines_over_a_large_head_holds_no_full_window(tmp_path, monkeypatch):
+    import tracemalloc
+
+    monkeypatch.setattr(warp_live, "_TRANSCRIPT_TAIL_BYTES", 1024)
+    monkeypatch.setattr(warp_live, "_TRANSCRIPT_HEAD_BYTES", 16 * 1024 * 1024)
+    filler = '{"type":"assistant","text":"' + "x" * 900 + '"}\n'
+    path = _transcript(tmp_path, '{"w1":"done"}\n' + filler * (9 * 1024 * 1024 // len(filler)))
+    tracemalloc.start()
+    try:
+        got = warp_live._earlier_lines(path, "w1")
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert got == '{"w1":"done"}'
+    assert peak < 4 * warp_live._SCAN_CHUNK_BYTES
+
+
 def test_the_reader_names_no_system_tempdir():
     text = Path(warp_live.__file__).read_text(encoding="utf-8")
     assert "gettempdir" not in text and "sizing_mtime" not in text

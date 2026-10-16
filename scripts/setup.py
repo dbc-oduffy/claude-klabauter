@@ -4438,6 +4438,8 @@ def exec_bit_parity_problems(templates_bin: Path, installed_bin: Path) -> list[s
     A template with no installed copy is not drift (Windows-only templates are
     never installed on POSIX; presence is the forwarders item's concern).
     """
+    if sys.platform == "win32":
+        return []
     problems = []
     for template in sorted(templates_bin.iterdir()):
         if not template.is_file() or not template.stat().st_mode & 0o111:

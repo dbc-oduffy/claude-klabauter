@@ -47,7 +47,6 @@ def test_gate_targets_partition_engine_vs_by_path():
         "assert-no-dangling-plan-backlinks",
         "assert-plan-sizing-citation",
         "check-em-environment",
-        "check-posix-exec-assumptions",
         "check-pcli-drift-gate",
     }
 

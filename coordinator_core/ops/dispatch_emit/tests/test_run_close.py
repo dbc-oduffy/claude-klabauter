@@ -484,3 +484,39 @@ def test_amend_queue_fails_stale_queued_and_queues_named(tmp_path):
     assert "job not finished by" in legs["baton-drain"]["detail"]
     assert legs["lessons"] == {"status": "queued", "detail": ""}
     assert _rec(tmp_path)["deadline"] == new.isoformat()
+
+
+def test_scrub_removes_every_path_shape():
+    text = "a " + "C" + ":\\x\\y b /abs/p c rel\\back d ok/rel"
+    out = rc.scrub_detail(text)
+    rc.check_path_hygiene(out)
+    assert "ok/rel" in out
+
+
+def test_scrub_rewrites_in_root_windows_spelling_to_repo_relative(tmp_path):
+    win = str(tmp_path).replace("/", "\\")
+    out = rc.scrub_detail(f"refused {win}\\docs\\plans\\p.md now", tmp_path)
+    assert out == "refused docs/plans/p.md now"
+    rc.check_path_hygiene(out)
+
+
+def test_scrub_rewrites_in_root_posix_spelling_and_folds_case(tmp_path):
+    posix = tmp_path.as_posix()
+    out = rc.scrub_detail(f"see {posix.upper()}/docs/x.md and {posix}/y.md", tmp_path)
+    assert out == "see docs/x.md and y.md"
+
+
+def test_scrub_sibling_prefix_root_does_not_match(tmp_path):
+    root = tmp_path / "repo"
+    other = f"{tmp_path.as_posix()}/repo-other/x.md"
+    assert rc.scrub_detail(f"at {other}", root) == "at <path>"
+
+
+def test_scrub_out_of_root_and_foreign_drive_become_path_token(tmp_path):
+    out = rc.scrub_detail("cites " + "D" + ":/coordinator-content-repo/coordinator/x.md ok", tmp_path)
+    assert out == "cites <path> ok"
+
+
+def test_scrub_leaves_repo_relative_tokens_and_caps(tmp_path):
+    assert rc.scrub_detail("docs/plans/x.md", tmp_path) == "docs/plans/x.md"
+    assert len(rc.scrub_detail("w " * 200, tmp_path)) == rc.DETAIL_CAP

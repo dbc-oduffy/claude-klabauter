@@ -72,6 +72,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Split so the scanner's line match does not read this file's own specimen text as a live marker.
+_FIXTURE_COMMENT = "# posix-exec-" + "fixture"
 
 
 def _git(root, *args):
@@ -93,9 +95,31 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _commit_all(repo: Path, message: str = "seed") -> None:
+def _commit_all(repo: Path, message: str = "seed", exec_paths=()) -> None:
+    """Commit the tree; `exec_paths` get index mode 100755 through
+    `update-index --chmod=+x`, since NTFS has no exec bit for `chmod` to set."""
     _git(repo, "add", "-A")
+    for relpath in exec_paths:
+        _git(repo, "update-index", "--chmod=+x", relpath)
     _git(repo, "commit", "-q", "-m", message)
+
+
+def _stage_by_name(repo: Path, relpath: str, text: str = "fixture\n") -> None:
+    """Index a path through the object database, never the working tree: a
+    reserved device name, a forbidden character or an over-long path cannot be
+    written on Windows, and `git add -A` exits 128 on it."""
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+        input=text,
+        capture_output=True,
+        text=True,
+        check=True,
+        creationflags=_NO_WINDOW,
+    ).stdout.strip()
+    _git(
+        repo, "-c", "core.protectNTFS=false",
+        "update-index", "--add", "--cacheinfo", f"100644,{blob},{relpath}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +195,7 @@ def test_scan_detects_mode_100755_violation(tmp_path):
     repo = _init_repo(tmp_path)
     victim = repo / "data.txt"
     victim.write_text("not even a script\n")
-    victim.chmod(0o755)
-    _commit_all(repo)
+    _commit_all(repo, exec_paths=["data.txt"])
 
     result = scan(repo)
 
@@ -196,8 +219,7 @@ def test_scan_all_three_classes_are_independent_tells(tmp_path):
     repo = _init_repo(tmp_path)
     victim = repo / "combo-cli"
     victim.write_text("#!/usr/bin/env python3\nprint('hi')\n")
-    victim.chmod(0o755)
-    _commit_all(repo)
+    _commit_all(repo, exec_paths=["combo-cli"])
 
     result = scan(repo)
 
@@ -271,8 +293,8 @@ def test_scan_does_not_flag_distinct_names_as_case_collision(tmp_path):
 
 def test_scan_detects_reserved_device_name(tmp_path):
     repo = _init_repo(tmp_path)
-    (repo / "con.txt").write_text("reserved on Windows\n")
-    _commit_all(repo)
+    _stage_by_name(repo, "con.txt")
+    _git(repo, "commit", "-q", "-m", "seed")
 
     result = scan(repo)
 
@@ -281,10 +303,8 @@ def test_scan_detects_reserved_device_name(tmp_path):
 
 def test_scan_detects_reserved_device_name_in_subdirectory(tmp_path):
     repo = _init_repo(tmp_path)
-    sub = repo / "logs"
-    sub.mkdir()
-    (sub / "aux").write_text("reserved component, not just basename\n")
-    _commit_all(repo)
+    _stage_by_name(repo, "logs/aux", "reserved component, not just basename\n")
+    _git(repo, "commit", "-q", "-m", "seed")
 
     result = scan(repo)
 
@@ -293,8 +313,8 @@ def test_scan_detects_reserved_device_name_in_subdirectory(tmp_path):
 
 def test_scan_detects_forbidden_path_character(tmp_path):
     repo = _init_repo(tmp_path)
-    (repo / "report<final>.txt").write_text("forbidden char on Windows\n")
-    _commit_all(repo)
+    _stage_by_name(repo, "report<final>.txt", "forbidden char on Windows\n")
+    _git(repo, "commit", "-q", "-m", "seed")
 
     result = scan(repo)
 
@@ -315,10 +335,9 @@ def test_scan_does_not_flag_ordinary_filename_as_reserved(tmp_path):
 
 def test_scan_detects_path_too_long(tmp_path):
     repo = _init_repo(tmp_path)
-    deep = repo
     long_name = "x" * 220
-    (repo / long_name).write_text("too long once a clone root is prepended\n")
-    _commit_all(repo)
+    _stage_by_name(repo, long_name, "too long once a clone root is prepended\n")
+    _git(repo, "commit", "-q", "-m", "seed")
 
     result = scan(repo)
 
@@ -351,8 +370,21 @@ def test_check_tier_a_zero_tolerance_fails_on_any_violation_no_baseline_needed(t
     immediately, unlike CLASSES/REPORT_ONLY_CLASSES which compare against a
     frozen baseline file."""
     repo = _init_repo(tmp_path)
-    (repo / "con.txt").write_text("reserved\n")
-    _commit_all(repo)
+    # `con` is the DOS console device on Windows: a working-tree file of that
+    # name cannot be read back, so the entry goes in through the object database.
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+        input="reserved\n",
+        capture_output=True,
+        text=True,
+        check=True,
+        creationflags=_NO_WINDOW,
+    ).stdout.strip()
+    _git(
+        repo, "-c", "core.protectNTFS=false",
+        "update-index", "--add", "--cacheinfo", f"100644,{blob},con.txt",
+    )
+    _git(repo, "commit", "-q", "-m", "seed")
 
     ok, msg = check_tier_a_zero_tolerance(repo)
 
@@ -728,7 +760,7 @@ def test_fixture_marker_admissibility_honoured_in_test_path_file(tmp_path):
     (repo / "test_tool.py").write_text(
         "import os\n\n"
         "def specimen():\n"
-        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  " + _FIXTURE_COMMENT + "\n"
     )
     _commit_all(repo)
 
@@ -746,7 +778,7 @@ def test_fixture_marker_admissibility_not_honoured_outside_test_path(tmp_path):
     (repo / "production_tool.py").write_text(
         "import os\n\n"
         "def specimen():\n"
-        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  " + _FIXTURE_COMMENT + "\n"
     )
     _commit_all(repo)
 
@@ -763,7 +795,7 @@ def test_fixture_marker_suppresses_only_its_own_line(tmp_path):
     (repo / "test_tool.py").write_text(
         "import os\n\n"
         "def marked_specimen():\n"
-        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  " + _FIXTURE_COMMENT + "\n"
         "\n"
         "def unmarked_finding():\n"
         "    return os.sep in 'C:\\\\Users\\\\bob'\n"
@@ -780,7 +812,7 @@ def test_check_no_stale_fixture_markers_passes_when_marker_suppresses_a_hit(tmp_
     (repo / "test_tool.py").write_text(
         "import os\n\n"
         "def specimen():\n"
-        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  " + _FIXTURE_COMMENT + "\n"
     )
     _commit_all(repo)
 
@@ -796,7 +828,7 @@ def test_check_no_stale_fixture_markers_fails_on_marker_suppressing_nothing(tmp_
     repo = _init_repo(tmp_path)
     (repo / "test_tool.py").write_text(
         "def specimen():\n"
-        "    return 1 + 1  # posix-exec-fixture\n"
+        "    return 1 + 1  " + _FIXTURE_COMMENT + "\n"
     )
     _commit_all(repo)
 
@@ -932,6 +964,36 @@ def test_scan_does_not_flag_os_access_inside_nested_if_guard(tmp_path):
     result = scan(repo)
 
     assert "tool.py" not in result["posix_mode_bits"]
+
+
+def test_scan_does_not_flag_os_access_in_skipif_windows_decorated_function(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\nimport pytest\n\n"
+        "@pytest.mark.skipif(os.name == 'nt', reason='no exec bits')\n"
+        "def check(p):\n"
+        "    return os.access(p, os.X_OK)\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" not in result["posix_mode_bits"]
+
+
+def test_scan_flags_os_access_under_a_skipif_that_does_not_name_windows(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\nimport pytest\n\n"
+        "@pytest.mark.skipif(os.name == 'posix', reason='x')\n"
+        "def check(p):\n"
+        "    return os.access(p, os.X_OK)\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" in result["posix_mode_bits"]
 
 
 def test_scan_does_not_flag_os_access_inside_and_chain_guard(tmp_path):
@@ -1692,11 +1754,10 @@ def _repo_named(tmp_path: Path, dir_name: str) -> Path:
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
-    for relpath in (_EXEMPTED_IN_CLAUDE_KLABAUTER, "coordinator/scripts/control.py"):
-        target = repo / relpath
-        target.write_text("#!/usr/bin/env python3\nprint('hi')\n")
-        target.chmod(0o755)
-    _commit_all(repo)
+    exec_paths = (_EXEMPTED_IN_CLAUDE_KLABAUTER, "coordinator/scripts/control.py")
+    for relpath in exec_paths:
+        (repo / relpath).write_text("#!/usr/bin/env python3\nprint('hi')\n")
+    _commit_all(repo, exec_paths=exec_paths)
     return repo
 
 
@@ -1900,10 +1961,8 @@ def test_prefix_exclusion_never_suppresses_tier_a_checkout_breakers(tmp_path):
     repo = _repo_with_preserved_tree(tmp_path, "claude-klabauter", _CLAUDE_KLABAUTER_PREFIX)
     long_rel = _CLAUDE_KLABAUTER_PREFIX + "/".join(["preserved-deep-directory-segment"] * 7) + ".txt"
     assert len(long_rel) > 200
-    target = repo / long_rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("snapshot\n", encoding="utf-8")
-    _commit_all(repo, "deep snapshot path")
+    _stage_by_name(repo, long_rel, "snapshot\n")
+    _git(repo, "commit", "-q", "-m", "deep snapshot path")
 
     ok, msg = check_tier_a_zero_tolerance(repo)
 
@@ -2189,11 +2248,10 @@ def test_file_exempt_prefix_never_suppresses_tier_a(tmp_path):
     repo = _init_repo(tmp_path)
     long_rel = "vendor/thing/" + "/".join(["segment"] * 40) + ".txt"
     assert len(long_rel) > 200
-    target = repo / long_rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("x\n", encoding="utf-8")
     _write_file_exempt_prefixes(repo, {"vendor/thing/": _FILE_PREFIX_REASON})
-    _commit_all(repo)
+    _git(repo, "add", "state")
+    _stage_by_name(repo, long_rel, "x\n")
+    _git(repo, "commit", "-q", "-m", "seed")
 
     ok, msg = check_tier_a_zero_tolerance(repo)
 
