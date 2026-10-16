@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
+from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import emit as _emit
@@ -149,8 +150,10 @@ def _agent(
 #: `model: opus`, so `block_ungranted_opus_subagent` admits it and `enforce_agent_model_pin`
 #: sees an equal model and a cheaper-or-equal effort.
 _MECHANICAL_EFFORT = "low"
-#: One-command relay calls (gate, stage) carry no DoE definition: general-purpose at haiku.
+#: The gate legs: general-purpose at haiku, until a type that admits their multi-act prompt exists.
 _MECHANICAL_AGENT_TYPE = "general-purpose"
+#: general-purpose carries the whole tool surface (~28k turn-1 tokens); the op-runner lists Bash and PowerShell only.
+_STAGE_AGENT_TYPE = OP_RUNNER_AGENT_TYPE
 _MECHANICAL_MODEL = "haiku"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
 _PLAN_AUTHOR_EFFORT = "low"
@@ -480,31 +483,36 @@ HALT_NOT_CLOSEABLE = "not_closeable"
 
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
-_REVIEW_BLOCKED_HALT_JS = (
-    "  if (!_halted) {\n"
-    "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
-    "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
-    "    if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
-    "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
-    "slices: _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
-    "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null })), "
-    "next_action: 'Fix the unapplied findings named in each slice sidecar, then resume the run "
-    "(Workflow with this scriptPath and resumeFromRunId set to this Workflow run id, wf_...).' };\n"
-    "  }"
-)
+def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
+    """The BLOCKED-review halt; its next_action names the engine-ask refire, since journal replay
+    hands back the cached BLOCKED wave."""
+    return (
+        "  if (!_halted) {\n"
+        "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
+        "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
+        "    if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
+        "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
+        "slices: _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
+        "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null })), "
+        "next_action: 'Fix the unapplied findings named in each slice sidecar, then refire: ' + "
+        + _refire_js(sizing_rel) + " };\n"
+        "  }"
+    )
 
 
 #: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
 #: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
-_TEST_VERDICT_EMPTY_HALT_JS = (
-    "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
-    "&& _testResult.status && _testResult.status !== 'not_run' "
-    "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
-    "{ _halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
-    "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests', "
-    "next_action: 'Re-run the scoped tests, then resume the run (Workflow with this scriptPath and "
-    "resumeFromRunId set to this Workflow run id, wf_...).' }; }"
-)
+def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
+    """The empty-test-verdict halt; its next_action names the engine-ask refire, which re-runs the
+    verify leg, where journal replay would hand back the cached empty verdict."""
+    return (
+        "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
+        "&& _testResult.status && _testResult.status !== 'not_run' "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
+        "{ _halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
+        "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests', "
+        "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"
+    )
 
 
 def _usage_limit_helper_js() -> str:
@@ -1863,7 +1871,7 @@ def compose_ask_script(
             )
         b.append("  }")
     stage_call = _agent(
-        stage_prompt, label="stage", phase=ASK_STAGE_PHASE, agent_type=_MECHANICAL_AGENT_TYPE,
+        stage_prompt, label="stage", phase=ASK_STAGE_PHASE, agent_type=_STAGE_AGENT_TYPE,
         agent_model=_MECHANICAL_MODEL, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT,
     )
     if judged:
@@ -1994,7 +2002,7 @@ def compose_ask_script(
         f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
         "_reviewWave = []; }"
     )
-    b.append(_REVIEW_BLOCKED_HALT_JS)
+    b.append(_review_blocked_halt_js(sizing_rel))
     test_guard = (
         f"(_gate.arm !== {_lit(ARM_XS)} || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
     )
@@ -2092,7 +2100,7 @@ def compose_ask_script(
         "items: _verify.items, conflicts: Array.isArray(_verify.conflicts) ? _verify.conflicts : [] } : null;",
         "  }",
     ]
-    verify_lines[-1:-1] = [_TEST_VERDICT_EMPTY_HALT_JS.replace("TEST_GUARD", test_guard)]
+    verify_lines[-1:-1] = [_test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", test_guard)]
     b.extend(verify_lines)
     b.append(no_target)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
@@ -2293,8 +2301,8 @@ def _owed_handback_js(sizing_rel: Optional[str]) -> str:
     resumes them, or '' when none are owed."""
     return (
         "(((_manifest && !_manifest.error ? _manifest.owed : null) ?? []).length "
-        "? 'Owed to the EM, not run: ' + _manifest.owed.map((o) => o.id).join(', ') "
-        f"+ '. Perform them, record each with plan.tasks.mutate verb em-discharge, then refire: ' + {_refire_js(sizing_rel)} : '')"
+        "? 'Owed, not run: ' + _manifest.owed.map((o) => o.id + ': ' + (o.detail ?? '')).join('; ') "
+        f"+ '. Then refire: ' + {_refire_js(sizing_rel)} : '')"
     )
 
 

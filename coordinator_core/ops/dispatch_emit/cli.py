@@ -1788,11 +1788,19 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if isinstance(printed.get("fire_args"), dict):
         printed["fire_args"] = {k: v for k, v in printed["fire_args"].items() if k != "runToken"}
     print(json.dumps(printed, indent=2, sort_keys=True))
-    if args.lanes:
+    split_research = bool(result.get("parts")) and not args.lanes
+    if args.lanes or split_research:
         for emitted in result["parts"]:
             _print_workflow_invocation(
                 {**emitted, "fire_args": result.get("fire_args")},
                 is_queue_route=False,
+            )
+        if split_research:
+            print(
+                f"emit-dispatch-workflow: the emit was split into {len(result['parts'])} parts; "
+                "fire them in order, each after the previous run has landed, "
+                "then run next_action.",
+                file=sys.stderr,
             )
     else:
         _print_workflow_invocation(
@@ -1819,6 +1827,14 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
 
     if not result["ok"]:
+        return EXIT_DATA_ERROR
+
+    if args.fire and split_research:
+        print(
+            "emit-dispatch-workflow: ERROR — --fire fires one script; the emit was split into "
+            f"{len(result['parts'])} parts, none fired",
+            file=sys.stderr,
+        )
         return EXIT_DATA_ERROR
 
     if args.fire:

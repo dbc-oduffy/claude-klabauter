@@ -13,7 +13,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .test_ask_compose import _JUDGE_KW, _compose
 
-_HALT = ask_compose._REVIEW_BLOCKED_HALT_JS
+_SIZING = "state/sizings/x.yaml"
+_HALT = ask_compose._review_blocked_halt_js(None)
 
 
 def test_halt_sits_between_the_review_and_the_test_ledger_and_commit_stages():
@@ -32,7 +33,7 @@ def _run_halt(wave) -> dict | None:
     if node is None:
         pytest.skip("node not on PATH")
     source = (
-        "let _halted = null; const _runId = 'r1'; const _reviewWave = "
+        f"let _halted = null; const _runId = 'r1'; const _sizingRel = {_SIZING!r}; const _reviewWave = "
         + json.dumps(wave)
         + ";\n"
         + _HALT
@@ -57,7 +58,9 @@ def test_blocked_slice_with_unapplied_findings_halts_naming_findings_and_recover
     assert halted["halted"] == ask_compose.HALT_REVIEW_BLOCKED
     assert halted["unapplied_findings"] == 6
     assert halted["slices"] == [{"slice_id": "s1", "findings": 6, "applied": 0, "sidecar_path": "s1.md"}]
-    assert "resume" in halted["next_action"] and "Fix" in halted["next_action"]
+    assert "Fix" in halted["next_action"]
+    assert "resumeFromRunId" not in halted["next_action"]
+    assert ask_compose.fire_command(_SIZING) in halted["next_action"]
 
 
 @pytest.mark.spawns_process

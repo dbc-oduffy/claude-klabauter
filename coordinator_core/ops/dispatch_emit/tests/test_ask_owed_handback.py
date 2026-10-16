@@ -27,10 +27,11 @@ def _script(monkeypatch) -> str:
 
 def test_owed_handback_names_rows_and_the_refire():
     expr = ask_compose._owed_handback_js("state/sizings/x.yaml")
-    assert "_manifest.owed.map((o) => o.id).join(', ')" in expr
+    assert "_manifest.owed.map((o) => o.id + ': ' + (o.detail ?? ''))" in expr
     assert _REFIRE in expr
     assert "refire" in expr
-    assert "plan.tasks.mutate verb em-discharge" in expr
+    assert "em-discharge" not in expr
+    assert "o.detail" in expr
 
 
 def test_no_rows_halt_carries_the_owed_handback(monkeypatch):

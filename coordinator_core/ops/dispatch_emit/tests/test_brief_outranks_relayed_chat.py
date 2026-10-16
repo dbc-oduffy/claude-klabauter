@@ -84,6 +84,12 @@ def test_the_clause_forbids_acting_on_relayed_text_as_a_task():
     assert "never satisfied" in _BRIEF_PRECEDENCE_CLAUSE
 
 
+def test_the_clause_carries_the_do_less_arm_after_the_relay_marker():
+    assert "never a reason to skip a step, make fewer searches" in _BRIEF_PRECEDENCE_CLAUSE
+    assert "the task is still done" in _BRIEF_PRECEDENCE_CLAUSE
+    assert "was relayed from the driving session" in _BRIEF_PRECEDENCE_CLAUSE[:400]
+
+
 def test_the_clause_names_the_launching_sessions_message_as_bounded_direction():
     assert "no one is conversing with you" not in _BRIEF_PRECEDENCE_CLAUSE
     assert "the launching session addresses to you directly" in _BRIEF_PRECEDENCE_CLAUSE

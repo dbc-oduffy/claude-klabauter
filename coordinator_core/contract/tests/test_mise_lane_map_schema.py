@@ -81,7 +81,7 @@ def test_invalid_lane_map_is_refused(doc):
     assert _errors(doc)
 
 
-@pytest.mark.parametrize("name", ["predispatch_check_result", "falsifier_integrity_result"])
+@pytest.mark.parametrize("name", ["falsifier_integrity_result"])
 def test_stage_defs_load(name):
     literal = json.loads(wake_digest.stage_schema_literal(name))
     jsonschema.Draft202012Validator.check_schema(literal)
@@ -89,13 +89,6 @@ def test_stage_defs_load(name):
 
 
 def test_stage_defs_accept_valid_results():
-    check = json.loads(wake_digest.stage_schema_literal("predispatch_check_result"))
-    jsonschema.validate(
-        {"verdict": "already-done",
-         "evidence": [{"path": "a.py", "anchor": "f", "excerpt": "x", "discharges": "c1"}],
-         "note": ""},
-        check,
-    )
     review = json.loads(wake_digest.stage_schema_literal("falsifier_integrity_result"))
     jsonschema.validate(
         {"verdict": "SOUND", "tells": [{"tell": "t", "status": "clear", "note": ""}],

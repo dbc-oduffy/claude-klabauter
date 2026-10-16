@@ -58,6 +58,7 @@ def test_relay_clause_and_script_cap():
     clause = pc.PIPELINE_RELAY_CLAUSE.lower()
     assert "relayed chat" in clause and "quote" in clause
     assert "genuine instruction to stop" not in clause
+    assert "never a reason to skip a step" in clause
     for name in ("PIPELINE_RELAY_CLAUSE", "WORKFLOW_SCRIPT_CAP_BYTES", "HaltCount"):
         assert name in pc.__all__
 

@@ -1321,17 +1321,19 @@ def read_spine(
                     "on .coordinator-local/memo-outbox/sent/%s.md, not on a claim"
                     % (memo_slug, memo_slug, memo_slug),
                 )
+            elif _is_operator_row(raw):
+                _reason = (
+                    "operator",
+                    "execution_mode: operator — a human must run this row; it "
+                    "was NOT dispatched and has NOT been done; once it is run, "
+                    "release it with `coordinator-invoke plan.tasks.mutate` "
+                    "(verb resolve, plan_path, id, disposition coded, disposition_ref <sha>)",
+                )
             elif em_performed:
                 _reason = (
                     "em-performed",
                     "EM: perform it, then run `coordinator-invoke plan.tasks.mutate` "
                     "(verb em-discharge, plan_path, id, text)",
-                )
-            elif _is_operator_row(raw):
-                _reason = (
-                    "operator",
-                    "execution_mode: operator — a human must run this row; it "
-                    "was NOT dispatched and has NOT been done",
                 )
             elif plan_hold is not None:
                 _reason = ("depends_on_plan", plan_hold)

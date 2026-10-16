@@ -444,12 +444,12 @@ def next_action_parts(
         # takes verbatim; either is omitted, never emitted null, when unknown.
         # A row a halt kept from starting never landed either: terminal_commit
         # stamps every row NOT named here as coded.
-        skipped_spread = (
+        routed_out_spread = (
             ", ..." + RUNTIME_VARS[8] if predispatch else ""
         )
         params_expr = (
             "{ incomplete_chunks: [...new Set([..." + RUNTIME_VARS[0]
-            + ", ..." + RUNTIME_VARS[3] + skipped_spread + "])], "
+            + ", ..." + RUNTIME_VARS[3] + routed_out_spread +"])], "
             + (f"script_path: {_js_lit(script_path)}, " if script_path else "")
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
@@ -507,7 +507,7 @@ def completion_return_js(
     `falsifier_var`, `review_vars`), and emitter-computed literals (`chunks`, `width`,
     `plan_path`, ...) — never an executor's own free-text reply.
 
-    `predispatch` (any dict; its content is unread) is passed only by a script that composed
+    `predispatch` (non-None is the only signal; its content is unread) is passed only by a script that composed
     the falsifier-integrity phase: its digest block, the `routed_out` deviation
     kind and the terminal-commit `incomplete_chunks` spread then read the pre-phase
     bindings. Absent, the block renders `null` and no pre-phase binding is referenced.
