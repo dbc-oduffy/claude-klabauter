@@ -13,7 +13,7 @@ from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
-from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _compose
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _NO_FOLD, _compose
 
 _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
 
@@ -45,13 +45,10 @@ def test_gate_runs_haiku_at_low_effort(tmp_path):
     assert "model: 'haiku'" in opts and "effort: 'low'" in opts
 
 
-def test_fallback_stage_agent_is_haiku_at_low_effort_with_one_engine_call():
+def test_no_standalone_stage_agent_is_composed():
     script = _compose()
-    opts = _agent_opts(script, "stage")
-    assert "model: 'haiku'" in opts and "effort: 'low'" in opts
-    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in opts
-    call = script[script.rindex("agent(", 0, script.index("label: 'stage'")) : script.index("label: 'stage'")]
-    assert call.count(ask_compose.OP_ASK_STAGE) == 1 and "coordinator-invoke" in call
+    assert "label: 'stage'" not in script and "phase('stage')" not in script
+    assert _NO_FOLD in script
 
 
 def test_review_prep_is_the_first_act_of_each_wave_agent_and_no_prep_agent_spawns():
@@ -210,7 +207,7 @@ def test_raw_ask_embeds_the_roadmap_arm_and_skips_the_row_phases_on_it():
     assert "async function roadmapBlitz(" in script
     branch = script.index("_gate.arm === 'roadmap'")
     assert branch < script.index("_viaRoadmap = true;") < script.index("phase('roadmap-blitz')")
-    assert script.index("_nextAction = { kind: 'terminal_commit'") < script.index("  if (!_viaRoadmap) {") < script.index("phase('stage')")
+    assert script.index("_nextAction = { kind: 'terminal_commit'") < script.index("  if (!_viaRoadmap) {") < script.index(_NO_FOLD)
     assert "phase('workstream-complete')" not in script and "phase('execute')" not in script.split("_viaRoadmap = true;")[1].split("  if (!_viaRoadmap) {")[0]
 
 
@@ -278,7 +275,7 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start():
     for label in ("size", "accept", "xl-exit", "plan", "verify"):
         call = script[: script.index(f"label: '{label}'")]
         assert view in call[call.rindex("agent(") :], label
-    rows = script[script.index("phase('Execute');", script.index("phase('stage')")) :]
+    rows = script[script.index("phase('Execute');", script.index(_NO_FOLD)) :]
     assert view in rows[: rows.index("stallMs")]
     # plan-blitz is shadowed: every prompt it composes opens with the design brief, then the ledger clause.
     assert (
@@ -303,13 +300,13 @@ def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk(tmp_pat
     assert "function _agentDefsClause()" in script
     assert "agents\\/[^/]+\\.md$" in script
     # Every agent prompt after the helper opens through it: review, verify, rows.
-    for label in ("verify", "commit", "stage"):
+    for label in ("verify", "commit"):
         call = script[: script.index(f"label: '{label}'")]
         assert "_agentDefsClause()" in call[call.rindex("agent(") :], label
     gated = _existing_sizing_compose(tmp_path, in_run_commit=True)
     call = gated[: gated.index("label: 'gate'")]
     assert "_agentDefsClause()" in call[call.rindex("agent(") :]
-    rows = script[script.index("phase('Execute');", script.index("phase('stage')")) :]
+    rows = script[script.index("phase('Execute');", script.index(_NO_FOLD)) :]
     assert "_agentDefsClause()" in rows[: rows.index("stallMs")]
 
 
@@ -404,6 +401,41 @@ def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_g
     for entry in ("_ready", "_reready"):
         adopt = f"Array.isArray({entry}.readyOpReply?.rows)) {{ _stagedManifest = {entry}.readyOpReply; }}"
         assert adopt in script and f"!{entry}.readyOpReply?.error" in script
-    body = script.split("if (!_stagedManifest) {\n  phase('stage');", 1)[1]
-    assert "label: 'stage'" in body
-    assert "phase('stage')" not in script.split("if (_stagedManifest) { _manifest = _stagedManifest; }", 1)[0]
+    assert _NO_FOLD in script and "label: 'stage'" not in script
+
+
+def _fold_guard(script: str) -> str:
+    line = next(ln for ln in script.splitlines() if ln.strip().startswith("if (_stagedManifest) { const _thin"))
+    return line
+
+
+@pytest.mark.parametrize(
+    "rows, error",
+    [
+        ([{"id": "C1", "brief_path": "b/C1.md"}], None),
+        # plan-blitz's relay returned rows as {id, wave, deps}: every executor got "undefined".
+        ([{"id": "C1", "wave": 0}, {"id": "C2", "brief_path": "b/C2.md"}], "rows C1 carry no brief_path"),
+    ],
+)
+def test_a_folded_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
+    import json
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    js = (
+        f"let _manifest = null; let _stagedManifest = {json.dumps({'rows': rows})};\n"
+        + _fold_guard(_compose())
+        + "\nprocess.stdout.write(JSON.stringify(_manifest));\n"
+    )
+    out = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    if error is None:
+        assert out == {"rows": rows}
+    else:
+        assert error in out["error"]
+
+
+def test_the_ready_op_carries_the_manifest_schema_so_the_relay_is_typed():
+    script = _compose()
+    ready = script.split("readyOp: {", 1)[1].split("} } : {})", 1)[0]
+    assert '"brief_path"' in ready.split("schema:", 1)[1]

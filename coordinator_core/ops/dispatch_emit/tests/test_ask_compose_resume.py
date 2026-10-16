@@ -35,15 +35,11 @@ def test_m_plus_baton_revises_the_resumed_plan():
     assert "planPath: null" not in script
 
 
-def test_resume_rows_ride_the_gate_into_the_stage_call():
+def test_resume_rows_ride_the_gate_into_the_folded_stage_calls():
     script = _compose()
     assert "resume_rows: _reworded.resume_rows ?? null" in script
     assert "resume_rows: _scouted.resume_rows ?? null" in script
     spread = "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {})"
-    stage_line = next(
-        ln for ln in script.splitlines() if "plan_path: _planRel" in ln and "sizing_path: _sizingRel" in ln
-    )
-    assert spread in stage_line
     assert script.count(spread) >= 2
     assert "only_rows" not in script.replace(spread, "").replace("resume_rows", "")
 

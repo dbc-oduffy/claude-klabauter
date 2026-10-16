@@ -41,6 +41,9 @@ def _compose(**over):
     return compose_ask_script(**kw)
 
 
+_NO_FOLD = "if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest"
+
+
 def _titles(script):
     import re
 
@@ -51,10 +54,10 @@ def _titles(script):
 def test_phases_follow_the_contract_order_for_a_raw_ask():
     titles = _titles(_compose())
     present = [p for p in ASK_PHASES if p in titles]
-    assert {"size", "accept", "plan", "stage"} <= set(present)
+    assert {"size", "accept", "plan"} <= set(present) and "stage" not in titles
     positions = [titles.index(p) for p in present]
     assert positions == sorted(positions)
-    assert titles.index("stage") < titles.index("Execute") < titles.index("Review wave") < titles.index("Verify")
+    assert titles.index("plan") < titles.index("Execute") < titles.index("Review wave") < titles.index("Verify")
     assert "execute" not in titles and "review" not in titles
 
 
@@ -101,9 +104,10 @@ def test_exactly_one_of_prompt_or_sizing_is_required():
 def test_each_halt_assigns_before_the_guarded_stage_and_execute():
     script = _compose()
     halt_at = script.index("_gate.halt || !_gate.arm")
-    assert halt_at < script.index("phase('stage')") < script.index("phase('Execute')")
-    assert script.index("_halted = { halted:", halt_at) < script.index("phase('stage')")
-    stage_guard = script.rindex("if (!_halted) {", 0, script.index("phase('stage')"))
+    no_fold = script.index(_NO_FOLD)
+    assert halt_at < no_fold < script.index("phase('Execute')")
+    assert script.index("_halted = { halted:", halt_at) < no_fold
+    stage_guard = script.rindex("if (!_halted) {", 0, no_fold)
     # Execute's guard may be compound (`!_halted && ...`), so match the prefix only.
     exec_guard = script.rindex("if (!_halted", 0, script.index("phase('Execute')"))
     assert halt_at < stage_guard < exec_guard
@@ -149,7 +153,7 @@ def test_m_plus_stage_is_embedded_only_when_the_arm_can_be_m_plus(monkeypatch):
 
 def test_blitz_phases_merge_into_meta_after_plan():
     titles = _titles(_compose())
-    assert titles.index("plan") < titles.index("Size") < titles.index("stage")
+    assert titles.index("plan") < titles.index("Size") and "stage" not in titles
 
 
 def test_wrapped_stage_without_the_entry_function_is_refused():
@@ -197,7 +201,6 @@ def test_size_phase_schema_and_prompt_require_gated_rows():
     size_stage = script.split("const _scouted = await", 1)[1].split("_writes = _scouted", 1)[0]
     assert '"gated"' in size_stage and '"owner_repo"' in size_stage
     assert "`gated`" in size_stage
-    assert "gated: _gated" in script
 
 
 def test_degraded_host_ask_review_stages_emit_no_coordinator_review_type_and_keep_every_stage():
@@ -424,16 +427,17 @@ def test_folded_manifest_is_adopted_behind_the_rows_guard_and_the_fallback_stays
         in script
     )
     assert "_scoutClean" in script.split("Array.isArray(_scouted.manifest?.rows)", 1)[0].splitlines()[-1]
-    assert script.count("phase('stage')") == 1 and script.count("label: 'stage'") == 1
-    assert "if (_stagedManifest) { _manifest = _stagedManifest; }" in script
-    assert "if (!_stagedManifest) {\n  phase('stage');" in script
+    assert "phase('stage')" not in script and "label: 'stage'" not in script
+    assert "if (_stagedManifest) { const _thin" in script
+    assert _NO_FOLD in script
 
 
-def test_every_non_stop_after_arm_reaches_one_ask_stage_site_folded_or_fallback():
-    scout, script = _scout_prompt(_compose()), _compose()
-    assert OP_ASK_STAGE in scout
-    fallback = script.split("if (!_stagedManifest) {\n  phase('stage');", 1)[1]
-    assert OP_ASK_STAGE in fallback.split("label: 'stage'", 1)[0]
+def test_a_staging_path_with_no_folded_manifest_halts_naming_the_missing_fold():
+    script = _compose()
+    assert OP_ASK_STAGE in _scout_prompt(script)
+    tail = script.split(_NO_FOLD, 1)[1]
+    assert "_manifest.error || (!(_manifest.rows ?? []).length" in tail.split("phase('Execute')", 1)[0]
+    assert "no folded stage manifest" in script
 
 
 def test_a_sized_in_run_non_xs_scout_authors_the_falsifier_behind_the_adopted_spec_guard():

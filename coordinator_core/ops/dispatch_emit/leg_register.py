@@ -96,7 +96,6 @@ REGISTER: tuple[LegDecl, ...] = (
         "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs and the reviewer rows' verdict-write",
     ),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
-    _floor("ask", "stage", "fallback only when no fold staged a manifest (stop_after, failed fold); no preceding agent"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
     _floor("ask", "commit:wave-", _COMMIT_FLOOR),

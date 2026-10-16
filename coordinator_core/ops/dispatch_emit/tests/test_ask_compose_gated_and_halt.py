@@ -44,7 +44,7 @@ def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
 def test_gated_ids_are_pushed_after_stage_and_before_execute(monkeypatch):
     script = _script(monkeypatch)
     assert script.count(_PUSH) == 1
-    assert script.index("_manifest = await agent(") < script.index(_PUSH) < script.index("phase('Execute')")
+    assert script.index("if (_stagedManifest) { const _thin") < script.index(_PUSH) < script.index("phase('Execute')")
 
 
 def test_incomplete_chunks_feed_terminal_commit_params(monkeypatch):
@@ -68,7 +68,7 @@ def test_owed_ids_are_pushed_after_stage_and_before_execute(monkeypatch):
     script = _script(monkeypatch)
     push = "  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }"
     assert script.count(push) == 1
-    assert script.index("_manifest = await agent(") < script.index(push) < script.index("phase('Execute')")
+    assert script.index("if (_stagedManifest) { const _thin") < script.index(push) < script.index("phase('Execute')")
 
 
 def test_return_object_names_owed(monkeypatch):

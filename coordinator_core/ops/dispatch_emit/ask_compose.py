@@ -16,7 +16,6 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import emit as _emit
@@ -28,7 +27,6 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
     ASK_SOURCES,
-    ASK_STAGE_PHASE,
     ASK_VERIFY_LABEL,
     ASK_VERIFY_PHASE,
     DELIVERY_NOTE_DIR,
@@ -156,8 +154,6 @@ def _agent(
 _MECHANICAL_EFFORT = "low"
 #: The gate legs: general-purpose at haiku, until a type that admits their multi-act prompt exists.
 _MECHANICAL_AGENT_TYPE = "general-purpose"
-#: general-purpose carries the whole tool surface (~28k turn-1 tokens); the op-runner lists Bash and PowerShell only.
-_STAGE_AGENT_TYPE = OP_RUNNER_AGENT_TYPE
 _MECHANICAL_MODEL = "haiku"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
 _PLAN_AUTHOR_EFFORT = "low"
@@ -809,9 +805,8 @@ def _phase_titles(
     """One title per serial group, in run order: the contract phases and the review titles that an
     agent in this script carries, plus plan-blitz's own titles (DoE's, passed through).
 
-    Agents that run together carry one title (the verify leg; the standalone falsifier beside the
-    stage fallback under `ASK_STAGE_PHASE`), so a concurrent group reads as one row, and a title no
-    agent carries is never listed.
+    Agents that run together carry one title (the verify leg), so a concurrent group reads as one
+    row, and a title no agent carries is never listed.
     """
     titles: list[str] = []
 
@@ -1637,20 +1632,6 @@ def compose_ask_script(
     if xl_possible:
         _append_split_stage(b)
 
-    stage_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        f"Run `{_INVOKE} {OP_ASK_STAGE} '",
-        # ask_stage takes exactly one of plan_path / sizing_path: the plan
-        # when a plan phase authored one, else the XS sizing.
-        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, "
-        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS +
-        "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
-        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, "
-        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID })",
-        "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
-        "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
-        "empty -- never an empty manifest without the error.",
-    )
     fold_stage = not stop_after
 
     def stage_fold(lead: str) -> tuple[str, ...]:
@@ -1784,7 +1765,8 @@ def compose_ask_script(
             f"...(!_stagedManifest ? {{ readyOp: {{ op: {_lit(OP_ASK_STAGE)}, params: {{ run_id: _runId, "
             "writes: _writes, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
             + _ONLY_ROWS_JS
-            + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } } } : {}), "
+            + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) }, "
+            + f"schema: {json.dumps(_MANIFEST_SCHEMA, sort_keys=True)} }} }} : {{}}), "
             if fold_stage
             else ""
         )
@@ -1915,27 +1897,29 @@ def compose_ask_script(
                 "sizing: _sizingRel, run_id: _runId };"
             )
         b.append("  }")
-    stage_call = _agent(
-        stage_prompt, label="stage", phase=ASK_STAGE_PHASE, agent_type=_STAGE_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_MANIFEST_SCHEMA, effort=_MECHANICAL_EFFORT,
-    )
     if judged:
         b.append("  let _falsifierSpec = null;")
     b.append("  let _allLanded = false;")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
-    # Stage is folded into the plan agent's last act (stage_fold) wherever a plan agent runs. This
-    # standalone haiku call stays only for the arms with no plan agent to fold into (XS, a resumed
-    # plan, stop_after) -- there is no prior agent whose last act could carry it. The falsifier is
-    # authored by the scout or the plan legs, never a leg of its own.
-    b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
+    # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
+    # path; there is no standalone stage leg. A fold is an agent's relay of dispatch.ask_stage, and a
+    # relay can drop row fields (plan-blitz's readyOpReply did: rows came back {id, wave, deps}), so
+    # a row with no brief_path halts the run rather than briefing an executor with `undefined`.
+    # The falsifier is authored by the scout or the plan legs, never a leg of its own.
+    b.append(
+        "  if (_stagedManifest) { const _thin = (_stagedManifest.rows ?? [])"
+        ".filter((r) => !(r && typeof r.brief_path === 'string' && r.brief_path)).map((r) => String(r?.id ?? '?')); "
+        "_manifest = _thin.length ? { error: 'folded stage manifest rows ' + _thin.join(', ') + ' carry no brief_path: "
+        "the relay dropped fields; the run record manifest.json holds them' } : _stagedManifest; }"
+    )
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
         b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{ _falsifierSpec = {spec_js}; }}")
-    b.append("  if (!_stagedManifest) {")
-    b.append(f"  phase({_lit(ASK_STAGE_PHASE)});")
-    b.append(f"  _manifest = await {stage_call};")
-    b.append("  }")
+    b.append(
+        "  if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest: the agent that closes the "
+        "gate, plan or plan-blitz ready path returned none' }; }"
+    )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
     b.append(
