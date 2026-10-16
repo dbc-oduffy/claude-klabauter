@@ -297,8 +297,14 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
 from coordinator_core.ops.dispatch_emit.test_caller_widen import widen_waves as _widen_waves
 from coordinator_core.git.literal_pathspec import git_pathspec
+from coordinator_core.ops.dispatch_emit.criterion_leg import (
+    CRITERION_TYPECHECK_CLAUSE,
+    CriterionTypecheck,
+    criterion_typecheck,
+)
 from coordinator_core.ops.dispatch_emit.typecheck_leg import (
     TypecheckLeg,
+    criterion_typecheck_leg,
     typecheck_leg,
     typecheck_prompt_clause,
 )
@@ -1416,6 +1422,9 @@ class PlanContext:
     row_build_gates: tuple = ()
     #: Ids of spine rows marked ``needs_slot: true``; their briefs are author-only.
     slot_row_ids: frozenset = frozenset()
+    #: Set when ``exit_criterion`` names a typecheck: rows run none for it, the terminal
+    #: test phase does.
+    criterion_typecheck: Optional[CriterionTypecheck] = None
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -1796,11 +1805,13 @@ def derive_plan_context(
         _first_paragraph(problem_body) if problem_body is not None else None
     )
 
+    exit_criterion = _prime_exit_criterion_statement(plan_text)
     return PlanContext(
         title=_plan_title(stripped_text, fallback_title),
         goal=goal,
         problem_excerpt=problem_excerpt,
-        exit_criterion=_prime_exit_criterion_statement(plan_text),
+        exit_criterion=exit_criterion,
+        criterion_typecheck=criterion_typecheck(exit_criterion),
         operative_criterion=resolve_operative_criterion(
             plan_text, Path(repo_root) if repo_root is not None else None
         ),
@@ -2661,6 +2672,12 @@ def _row_prompt(
         else []
     )
     is_slot_row = plan_context is not None and row.id in plan_context.slot_row_ids
+    criterion_routed = (
+        plan_context is not None
+        and plan_context.criterion_typecheck is not None
+        and not is_slot_row
+        and not _is_verification_row(row)
+    )
     body = (
         f"{head}\n\n"
         f"The plan is {plan_path}. Read all of it: you are a collaborator on "
@@ -2676,7 +2693,7 @@ def _row_prompt(
         "dressed as compliance. Anything you do beyond your row, report under "
         "`Beyond brief:` with your reason. Never take another row (a peer "
         "holds it) and never edit the plan (it is every peer's instructions)."
-        f"\n\n{_row_return_contract(row, plan_path, shared=shared, gate_owed_reply=bool(gate_commands) and not is_slot_row)}"
+        f"\n\n{_row_return_contract(row, plan_path, shared=shared, gate_owed_reply=(bool(gate_commands) or criterion_routed) and not is_slot_row)}"
     )
     if new_module_paths:
         body += (
@@ -2698,6 +2715,8 @@ def _row_prompt(
             body += f"\n\n{_slot_row_clause(gate_commands)}"
         elif gate_commands:
             body += f"\n\n{_build_gate_clause(gate_commands)}"
+        if criterion_routed:
+            body += f"\n\n{CRITERION_TYPECHECK_CLAUSE}"
     if predecessor_state:
         body += f"\n\n{predecessor_state}"
     if plan_context is not None:
@@ -4700,6 +4719,41 @@ def _widen_marker_scope(rows, row_pathspecs, row_prefixes, extra_rows, repo_root
     )
 
 
+def _ts_written_paths(plan_context, flat_rows) -> list:
+    return [
+        p
+        for row in flat_rows
+        if plan_context is None
+        or not _row_build_gate_commands(row, plan_context.row_build_gates)
+        for p in _declared_paths(row)
+    ]
+
+
+def _criterion_leg(plan_context, flat_rows, repo_root) -> Optional[TypecheckLeg]:
+    """The terminal leg for a criterion that names a typecheck, else ``None``."""
+    if plan_context is None or plan_context.criterion_typecheck is None:
+        return None
+    return criterion_typecheck_leg(
+        plan_context.criterion_typecheck.commands,
+        _ts_written_paths(plan_context, flat_rows),
+        repo_root,
+    )
+
+
+def _merged_typecheck_leg(plan_context, flat_rows, repo_root) -> Optional[TypecheckLeg]:
+    """The written-``.ts`` leg and the criterion leg as one; commands and ``not_run`` deduped."""
+    ts = typecheck_leg(_ts_written_paths(plan_context, flat_rows), repo_root)
+    crit = _criterion_leg(plan_context, flat_rows, repo_root)
+    if crit is None:
+        return ts
+    if ts is None:
+        return crit
+    return TypecheckLeg(
+        tuple(dict.fromkeys((*ts.commands, *crit.commands))),
+        tuple(dict.fromkeys((*ts.not_run, *crit.not_run))),
+    )
+
+
 def compose_script(
     waves: list[list[WaveRow]],
     *,
@@ -5404,7 +5458,30 @@ def compose_script(
                     )
             _plan_surface = [p for p in _plan_surface if p not in _gone]
     except NoTestTargetError as exc:
-        if criterion_expr is not None:
+        crit_leg = _criterion_leg(plan_context, flat_rows, repo_root)
+        if crit_leg is not None:
+            phase_titles.append(_TEST_PHASE_TITLE)
+            _call = _test_agent_call_expr(
+                [],
+                agent_type_host=agent_type_host,
+                repo_root=repo_root,
+                plan_path=plan_path,
+                typecheck=crit_leg,
+                review_edits_base=_stage_edits_base,
+                owed_gates=owed_gates,
+                surface=_plan_surface,
+                review_terminal=_review_terminal,
+            )
+            _block = (
+                f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
+                f"  {_TEST_RESULT_VAR} = await {_call};"
+            )
+            test_var = _TEST_RESULT_VAR
+            if criterion_expr is not None:
+                _block += f"\n  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
+                falsifier_var = _FALSIFIER_RESULT_VAR
+            guarded_blocks.append(_block)
+        elif criterion_expr is not None:
             phase_titles.append(_TEST_PHASE_TITLE)
             guarded_blocks.append(criterion_block)
             falsifier_var = _FALSIFIER_RESULT_VAR
@@ -5416,16 +5493,7 @@ def compose_script(
                 "falsifier to fall back to"
             )
     else:
-        ts_leg = typecheck_leg(
-            [
-                p
-                for row in flat_rows
-                if plan_context is None
-                or not _row_build_gate_commands(row, plan_context.row_build_gates)
-                for p in _declared_paths(row)
-            ],
-            repo_root,
-        )
+        ts_leg = _merged_typecheck_leg(plan_context, flat_rows, repo_root)
         if not scope and ts_leg is None:
             guarded_blocks.append(_no_test_scope_narration())
             test_absent_note = "spine writes no testable surface"

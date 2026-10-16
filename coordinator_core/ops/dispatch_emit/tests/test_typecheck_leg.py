@@ -70,6 +70,41 @@ def test_clause_makes_a_nonzero_exit_fail_the_phase(tmp_path):
     assert "status `fail`" in clause and "`node_modules/.bin/tsc --noEmit -p .`" in clause
 
 
+def test_criterion_commands_win_over_written_ts_files(tmp_path):
+    _touch(tmp_path, "tsconfig.json")
+    _touch(tmp_path, "node_modules/.bin/tsc")
+    leg = mod.criterion_typecheck_leg(("npx tsc --noEmit -p web",), ["x.ts"], tmp_path)
+    assert leg.commands == ("npx tsc --noEmit -p web",)
+    assert leg.not_run == ()
+
+
+def test_criterion_without_commands_uses_the_written_ts_leg(tmp_path):
+    _touch(tmp_path, "tsconfig.json")
+    _touch(tmp_path, "node_modules/.bin/tsc")
+    leg = mod.criterion_typecheck_leg((), ["x.ts"], tmp_path)
+    assert leg == typecheck_leg(["x.ts"], tmp_path)
+
+
+def test_criterion_falls_back_to_the_root_tsconfig(tmp_path):
+    _touch(tmp_path, "tsconfig.json")
+    _touch(tmp_path, "node_modules/.bin/tsc")
+    leg = mod.criterion_typecheck_leg((), ["a.py"], tmp_path)
+    assert leg.commands == ("node_modules/.bin/tsc --noEmit -p .",)
+    assert leg.not_run == ()
+
+
+def test_criterion_with_nothing_resolvable_is_not_run_never_a_pass(tmp_path):
+    leg = mod.criterion_typecheck_leg((), ["a.py"], tmp_path)
+    assert leg.commands == ()
+    assert leg.not_run[0][0] == "."
+    assert "names a typecheck" in leg.not_run[0][1]
+    assert "typecheck not_run (.):" in typecheck_prompt_clause(leg)
+
+
+def test_criterion_leg_without_a_repo_root_is_none():
+    assert mod.criterion_typecheck_leg(("tsc",), ["x.ts"], None) is None
+
+
 def test_compose_script_folds_the_leg_into_the_terminal_test_prompt(tmp_path):
     from coordinator_core.ops.dispatch_emit.tests.test_emit import REVIEW_KW, _wave_row
     from coordinator_core.ops.dispatch_emit.emit import compose_script

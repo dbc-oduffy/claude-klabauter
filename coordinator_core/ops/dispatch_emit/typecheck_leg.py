@@ -85,6 +85,38 @@ def typecheck_leg(written_paths: list[str], repo_root: Optional[Path]) -> Option
     return TypecheckLeg(tuple(commands), tuple(not_run))
 
 
+_CRITERION_NOT_RUN = (
+    "the exit criterion names a typecheck and no command, written .ts file or root "
+    "tsconfig.json resolves one"
+)
+
+
+def criterion_typecheck_leg(
+    commands: tuple[str, ...], written_paths: list[str], repo_root: Optional[Path]
+) -> Optional[TypecheckLeg]:
+    """The terminal leg for an exit criterion that names a typecheck, or ``None``
+    when ``repo_root`` is ``None``. Resolution: the criterion's own ``commands``
+    verbatim; else the written-``.ts`` leg; else the root ``tsconfig.json``; else a
+    ``not_run`` leg, never a pass."""
+    if repo_root is None:
+        return None
+    if commands:
+        return TypecheckLeg(tuple(commands), ())
+    leg = typecheck_leg(written_paths, repo_root)
+    if leg is not None:
+        return leg
+    if (repo_root / "tsconfig.json").is_file():
+        tsc = _local_tsc(".", repo_root)
+        if tsc is not None:
+            return TypecheckLeg((f"{tsc} --noEmit -p .",), ())
+        if shutil.which("npx") is not None:
+            return TypecheckLeg(("npx --no-install tsc --noEmit -p .",), ())
+        return TypecheckLeg(
+            (), ((".", "no node_modules/.bin/tsc up to the repo root and no npx on PATH"),)
+        )
+    return TypecheckLeg((), ((".", _CRITERION_NOT_RUN),))
+
+
 def typecheck_prompt_clause(leg: TypecheckLeg) -> str:
     """The prompt sentences that make the leg part of the phase's verdict."""
     parts: list[str] = []
