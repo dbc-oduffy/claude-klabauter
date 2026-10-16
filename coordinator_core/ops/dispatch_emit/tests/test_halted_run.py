@@ -129,3 +129,77 @@ def test_no_subprocess(tmp_path, monkeypatch):
     hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
     assert hr.halted_run_for(tmp_path, SIZING) == d.name
     assert hr.mark_resumed(d)
+
+
+BASE = "a" * 40
+
+
+def _ask(root, stamp):
+    return root / RECORD_DIR_ROOT / f"ask-{stamp}"
+
+
+def test_marker_without_base_is_byte_identical_and_with_base_carries_it(tmp_path):
+    a = hr.write_halt_marker(_dir(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)
+    b = hr.write_halt_marker(_dir(tmp_path, "20261016T020000-bbbbbb"), halted="x", sizing_rel=SIZING,
+                             run_base_sha=None)
+    assert a.read_bytes() == b.read_bytes()
+    assert hr.HALT_RUN_BASE_FIELD not in json.loads(a.read_text())
+    c = hr.write_halt_marker(_dir(tmp_path, "20261016T030000-cccccc"), halted="x", sizing_rel=SIZING,
+                             run_base_sha=BASE)
+    assert json.loads(c.read_text())[hr.HALT_RUN_BASE_FIELD] == BASE
+    d = hr.write_halt_marker(_dir(tmp_path, "20261016T040000-dddddd"), halted="x", sizing_rel=SIZING,
+                             run_base_sha="nothex")
+    assert d.read_bytes() == a.read_bytes()
+
+
+def test_halted_run_base_reader(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    assert hr.halted_run_base(d) is None
+    d.mkdir(parents=True)
+    (d / hr.HALTED_FILE).write_text("{bad", encoding="utf-8")
+    assert hr.halted_run_base(d) is None
+    (d / hr.HALTED_FILE).write_text(json.dumps({"run_base_sha": "xyz"}), encoding="utf-8")
+    assert hr.halted_run_base(d) is None
+    (d / hr.HALTED_FILE).write_text(json.dumps({"run_base_sha": 5}), encoding="utf-8")
+    assert hr.halted_run_base(d) is None
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING, run_base_sha=BASE)
+    assert hr.halted_run_base(d) == BASE
+
+
+def test_ask_lookup_matches_newest_halted_ask(tmp_path):
+    hr.write_halt_marker(_ask(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)
+    hr.write_halt_marker(_ask(tmp_path, "20261016T020000-bbbbbb"), halted="x", sizing_rel=SIZING)
+    assert hr.halted_ask_run_for(tmp_path, SIZING) == "ask-20261016T020000-bbbbbb"
+
+
+def test_ask_lookup_skips_mismatch_and_resumed(tmp_path):
+    hr.write_halt_marker(_ask(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)
+    hr.write_halt_marker(_ask(tmp_path, "20261016T020000-bbbbbb"), halted="x",
+                         sizing_rel="state/sizings/2026-10-16-other.yaml")
+    done = _ask(tmp_path, "20261016T030000-cccccc")
+    hr.write_halt_marker(done, halted="x", sizing_rel=SIZING)
+    hr.mark_resumed(done)
+    assert hr.halted_ask_run_for(tmp_path, SIZING) == "ask-20261016T010000-aaaaaa"
+
+
+def test_ask_dir_older_than_sizing_date_is_not_read(tmp_path):
+    hr.write_halt_marker(_ask(tmp_path, "20261015T230000-aaaaaa"), halted="x", sizing_rel=SIZING)
+    assert hr.halted_ask_run_for(tmp_path, SIZING) is None
+
+
+def test_a_newer_warp_run_supersedes_the_ask_run(tmp_path):
+    hr.write_halt_marker(_ask(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)
+    _dir(tmp_path, "20261016T020000-bbbbbb").mkdir(parents=True)
+    assert hr.halted_ask_run_for(tmp_path, SIZING) is None
+
+
+def test_an_older_warp_run_does_not_supersede_the_ask_run(tmp_path):
+    _dir(tmp_path, "20261016T010000-aaaaaa").mkdir(parents=True)
+    hr.write_halt_marker(_ask(tmp_path, "20261016T020000-bbbbbb"), halted="x", sizing_rel=SIZING)
+    assert hr.halted_ask_run_for(tmp_path, SIZING) == "ask-20261016T020000-bbbbbb"
+
+
+def test_undated_sizing_name_returns_none(tmp_path):
+    rel = "state/sizings/foo.yaml"
+    hr.write_halt_marker(_ask(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=rel)
+    assert hr.halted_ask_run_for(tmp_path, rel) is None

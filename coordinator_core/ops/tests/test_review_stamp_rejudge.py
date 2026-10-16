@@ -400,6 +400,41 @@ def test_judge_only_mint_requires_a_passing_build_test(tmp_path):
     assert stamp["build_test"]["verdict"] == "pass" and stamp["build_test"]["ran"] == 3
 
 
+def _register_hand_worked(tmp_path: Path, rows) -> tuple:
+    plan, head = _hand_worked(tmp_path)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / _SIZING).write_text(_sizing_text([_cascade_row("r1", claimed=False)]), encoding="utf-8")
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            f"plan_id: {PLAN_ID}\n",
+            f"plan_id: {PLAN_ID}\nsizing_object: {_SIZING}\nregister_claims:\n  sizing: {_SIZING}\n  rows: [r1]\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rec = _record(tmp_path, head)
+    fm = yaml.safe_load(rec.read_text(encoding="utf-8").split("---\n")[1])
+    if rows is not None:
+        fm["criterion"]["register_rows"] = rows
+    rec.write_text("---\n" + yaml.safe_dump(fm) + "---\n", encoding="utf-8")
+    return plan, head
+
+
+def test_judge_only_mint_writes_the_judged_register_rows_back(tmp_path):
+    plan, _ = _register_hand_worked(tmp_path, [_ROW])
+    assert _sizing_row(tmp_path)["status"] != "met"
+    _mint(plan, tmp_path)
+    assert _sizing_row(tmp_path)["status"] == "met"
+
+
+def test_refused_judge_only_mint_writes_no_register_rows(tmp_path):
+    plan, _ = _register_hand_worked(tmp_path, None)
+    before = (tmp_path / _SIZING).read_text(encoding="utf-8")
+    with pytest.raises(m.MintRefusal):
+        _mint(plan, tmp_path)
+    assert (tmp_path / _SIZING).read_text(encoding="utf-8") == before
+
+
 def test_rejudge_record_carries_the_judges_row_verdicts(tmp_path):
     from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 

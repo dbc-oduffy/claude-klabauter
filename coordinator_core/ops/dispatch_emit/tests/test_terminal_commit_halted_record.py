@@ -83,6 +83,24 @@ def _status(root: Path) -> dict:
     return {line[3:]: line[:2] for line in out.splitlines()}
 
 
+def test_stop_rule_typed_halt_lands_and_bare_string_halt_is_refused(repo):
+    _write_record(repo, RUN)
+    typed = {"halted": "stop_rule", "reason": "C1", "sizing": "state/sizings/x.yaml", "run_id": RUN}
+
+    bare = _call(repo, **{HALTED_RECORD_PARAM: "C1"})
+    assert bare.get("refused") == "missing-run-outcome"
+
+    out = _call(repo, **{HALTED_RECORD_PARAM: typed})
+    assert out.get("refused") != "missing-run-outcome"
+    assert out["committed"] is True
+    assert "Halted-By: stop_rule" in _git(["log", "-1", "--format=%B"], repo)
+
+
+def test_non_halted_product_commit_without_run_outcome_still_refused(repo):
+    out = terminal_commit._handler({"script_path": "run.mjs", "run_id": RUN}, repo_root=repo / ".git")
+    assert out.get("refused") == "missing-run-outcome"
+
+
 def test_sizing_refusal_lands_one_commit_of_record_and_leaves_unrelated_dirt(repo):
     _write_record(repo, RUN)
     others = _dirty_elsewhere(repo)

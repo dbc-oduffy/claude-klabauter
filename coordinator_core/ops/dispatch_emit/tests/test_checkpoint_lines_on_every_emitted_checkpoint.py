@@ -80,3 +80,24 @@ def test_a_head_resolving_to_no_commit_is_refused_before_any_script_exists(tmp_p
 
     with pytest.raises(ValueError, match="checkpoint_guard"):
         emit_script(repo / _PLAN_REL, repo_root=repo, **REVIEW_KW)
+
+
+def test_repo_less_emit_still_carries_both_lines_resolved_at_fire(tmp_path):
+    repo = _init(tmp_path, commit=False)
+
+    script = emit_script(repo / _PLAN_REL, repo_root=None, **REVIEW_KW)
+
+    assert "checkpoint(wave" in script
+    assert re.search(r"Checkpoint-Plan: [^\\\n']*" + re.escape(_PLAN_REL.rsplit("/", 1)[-1]), script)
+    assert "Checkpoint-Base: " in script
+    assert "_runBase" in script
+    assert "throw new Error('run base sha unreadable" in script
+
+
+def test_unborn_repo_emit_carries_both_lines_and_fails_loud_at_fire(tmp_path):
+    repo = _init(tmp_path, commit=False)
+
+    script = emit_script(repo / _PLAN_REL, repo_root=repo, **REVIEW_KW)
+
+    assert "Checkpoint-Plan: " in script and "Checkpoint-Base: " in script
+    assert "throw new Error('run base sha unreadable" in script

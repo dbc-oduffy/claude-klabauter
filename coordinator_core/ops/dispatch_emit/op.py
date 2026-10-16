@@ -620,6 +620,14 @@ def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
     _record_run_base(root, run_id)
 
 
+def _seed_run_base(root: Path, run_id: str, base: Optional[str]) -> None:
+    """Write `base` as the run's base when it has none yet (write-once)."""
+    from coordinator_core.session import claimed_write
+
+    if base and _recorded_run_base(root, run_id) is None:
+        claimed_write.replace_text(root / _run_base_rel(run_id), base + "\n")
+
+
 def _record_run_base(root: Path, run_id: str) -> None:
     """Record HEAD as the run's base, write-once; a spawn-free HEAD read."""
     from coordinator_core.session import claimed_write
@@ -648,7 +656,12 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
         from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
 
         mark_resumed(record_dir(root, ask_ctx["run_id"]))
+    if ask_ctx.get("resumes_ask"):
+        from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
+
+        mark_resumed(record_dir(root, ask_ctx["resumes_ask"]))
     if ask_ctx.get("sizing_rel") and not ask_ctx.get("reserved_parent"):
+        _seed_run_base(root, ask_ctx["run_id"], ask_ctx.get("inherited_base"))
         _record_run_base(root, ask_ctx["run_id"])
     ledger.start(root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask)
     if ask_ctx.get("sizing_rel"):
@@ -1693,12 +1706,26 @@ def _dispatch_emit(
         reserved_parent = None
         rebound = False
         output_redirect = None
+        inherited_base = None
+        resumes_ask = None
         if params.get("reserved_run_id") is not None:
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
         elif sizing_rel:
-            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+            from coordinator_core.ops.dispatch_emit.halted_run import (
+                halted_ask_run_for, halted_run_base, halted_run_for,
+            )
 
             halted_id = halted_run_for(ask_root, sizing_rel)
+            if halted_id:
+                inherited_base = _recorded_run_base(ask_root, halted_id) or halted_run_base(
+                    record_dir(ask_root, halted_id)
+                )
+            else:
+                resumes_ask = halted_ask_run_for(ask_root, sizing_rel)
+                if resumes_ask:
+                    inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(
+                        record_dir(ask_root, resumes_ask)
+                    )
             if halted_id:
                 from coordinator_core.ops.dispatch_emit.halted_run import rebind_blocker, recorded_emitter
 
@@ -1719,6 +1746,7 @@ def _dispatch_emit(
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
+            "inherited_base": inherited_base, "resumes_ask": resumes_ask,
             "ask_source": ask_source, "relayed_slice_text": relayed_slice_text,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }
@@ -2071,7 +2099,7 @@ def _dispatch_emit(
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
             required_reviewers=ask_ctx["required_reviewers"],
-            run_base_sha=(
+            run_base_sha=ask_ctx.get("inherited_base") or (
                 _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
                 if ask_ctx.get("reserved_parent") or ask_ctx.get("rebound")
                 else None

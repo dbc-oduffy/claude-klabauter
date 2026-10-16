@@ -3986,10 +3986,10 @@ def _checkpoint_trailer_js(
     prior_run_base: Optional[str] = None,
 ) -> str:
     """JS expression for the body lines `git.checkpoint_guard` reads to refuse
-    re-landing a closed or reverted row; ``''`` when the run has no plan or base.
+    re-landing a closed or reverted row; ``''`` when the run has no plan.
     ``prior_run_base`` (an ``--only-incomplete`` re-emit's halted-run base) rides as
     ``Checkpoint-Review-Base:`` so a later re-emit still finds the original base."""
-    if not plan_path or not run_base_sha:
+    if not plan_path:
         return "''"
     expr = (
         _js_string_literal(f"\n\nCheckpoint-Plan: {plan_path}\nCheckpoint-Base: ")
@@ -4025,6 +4025,8 @@ def _run_base_blocks(emit_sha: str, repo_anchor: Optional[str]) -> list[str]:
         f"    if (/^[0-9a-f]{{40}}$/.test(_rbSha)) {_RUN_BASE_VAR} = _rbSha;",
         f"    else log('Run base unreadable at fire; using the emit-time sha ' + {_RUN_BASE_VAR});",
         f"  }} catch (e) {{ log('Run base agent failed; using the emit-time sha ' + {_RUN_BASE_VAR}); }}",
+        f"  if (!{_RUN_BASE_VAR}) throw new Error('run base sha unreadable and none known at emit: "
+        "checkpoint commits would carry no Checkpoint-Base');",
         f"  log('Run base sha (observed at fire): ' + {_RUN_BASE_VAR});",
     ]
 
@@ -4382,7 +4384,7 @@ def _checkpoint_commit_js(
         + _checkpoint_trailer_js(plan_path, run_base_sha, prior_run_base)
         + (
             " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '');"
-            if plan_path and run_base_sha
+            if plan_path
             else ";"
         ),
         "    let r = null;",
@@ -4912,7 +4914,7 @@ def compose_script(
 
     # Review-only carries a caller-provided base, which always wins; every other
     # run resolves its base when it fires.
-    runtime_base = bool(run_base_sha) and not review_only
+    runtime_base = (bool(run_base_sha) or bool(plan_path)) and not review_only
     stage_base = prior_run_base or (
         _run_base_marker() if runtime_base else (run_base_sha or "")
     )
@@ -4922,7 +4924,7 @@ def compose_script(
         for p in _widen_with_test_candidates(_declared_paths(row), repo_root)
     ]
     if runtime_base:
-        body_blocks.extend(_run_base_blocks(run_base_sha, repo_anchor))
+        body_blocks.extend(_run_base_blocks(run_base_sha or "", repo_anchor))
     elif run_base_sha:
         body_blocks.append(
             f"  log({_js_string_literal(f'Run base sha (provided): {run_base_sha}')});"
@@ -6496,7 +6498,6 @@ def emit_script(
     # narration line rather than guessing a sha.
     if not review_only:
         run_base_sha = head_sha(repo_root) if repo_root is not None else None
-        # Only this case refuses: a None repo_root still degrades to a script with no trailer lines.
         if not run_base_sha and repo_root is not None and _repo_has_branches(repo_root):
             raise ValueError(
                 "emit refused: the repo has branches but HEAD resolves to no commit, so the script's "

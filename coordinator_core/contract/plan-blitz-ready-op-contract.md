@@ -32,7 +32,8 @@ Never for a pulled, replan or judgment plan.
 
 The reply is returned verbatim as `readyOpReply` on that plan's entry in `ready`, and nowhere else:
 never on a pulled, replan or judgment entry. plan-blitz never interprets the reply. Claude-klabauter adopts
-it as the staged manifest only when it is whole:
+it only as the signal that the stage act ran: the manifest claude-klabauter adopts is the one it reads back
+from `state/warp/<run_id>/manifest.json`, and only when that is whole:
 
 - an object with no `error`;
 - `rows`, `review_declared_paths` and `test_targets` are arrays;
@@ -40,8 +41,8 @@ it as the staged manifest only when it is whole:
   `wave` is an integer, and `writes` and `deps` are arrays;
 - every `gated[]` and `owed[]` entry present carries a non-empty string `id`.
 
-A reply that fails this halts the run with `relayed stage manifest is not whole: <first failing
-field>` and the refire `next_action`; no executor dispatches. A ready entry that is a bare string
+A disk manifest that fails this halts the run with `stage manifest on disk is not whole: <first
+failing field>`, and an absent one with `no stage manifest on disk: <manifest_rel>`; both carry the refire `next_action`; no executor dispatches. A ready entry that is a bare string
 carries none.
 
 ## 5. Absent arg and old plan-blitz

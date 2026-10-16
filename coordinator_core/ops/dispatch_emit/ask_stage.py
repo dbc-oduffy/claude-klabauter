@@ -79,7 +79,11 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger, sibling_spli
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
-from coordinator_core.ops.dispatch_emit.spine_read import EM_OWNED_REASONS, read_spine
+from coordinator_core.ops.dispatch_emit.spine_read import (
+    EM_OWNED_REASONS,
+    InvalidChangeKindError,
+    read_spine,
+)
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
 
@@ -516,11 +520,14 @@ def stage(
         for raw in load_rows(plan_text).rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
-    rows = read_spine(
-        plan_path,
-        exclusions=exclusions,
-        cleared_gate_owners=own_gate_owners(raw_by_id.values(), root),
-    )
+    try:
+        rows = read_spine(
+            plan_path,
+            exclusions=exclusions,
+            cleared_gate_owners=own_gate_owners(raw_by_id.values(), root),
+        )
+    except InvalidChangeKindError as exc:
+        raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     if only_rows is not None:
         rows, exclusions = _only_rows(rows, exclusions, frozenset(only_rows))
     check_unschedulable_rows(rows, raw_by_id)

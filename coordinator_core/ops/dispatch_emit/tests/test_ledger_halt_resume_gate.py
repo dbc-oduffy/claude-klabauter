@@ -109,7 +109,7 @@ def test_unlanded_row_the_halted_run_staged_resumes_at_the_ledger_without_a_poin
     assert not ledger_halt_path(repo, PLAN_REL).exists()
     v = gate(repo, REL)
     assert v.halt is None
-    assert v.resume_ledger["run_id"] == "run-1" and v.resume_ledger["blocking"] == ["R1"]
+    assert v.resume_ledger["run_id"] == "run-1" and v.resume_ledger["blocking"] == ["R1", "R2"]
     assert v.resume_rows is None and v.resume_plan is None
 
 

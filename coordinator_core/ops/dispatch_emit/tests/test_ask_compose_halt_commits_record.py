@@ -56,6 +56,18 @@ def test_stop_after_halt_commit_precedes_its_single_return(monkeypatch):
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 
+def test_stop_rule_string_halt_is_typed_before_the_next_action_and_halt_commit(monkeypatch):
+    # Textual ordering only: the composed JS is not executed here, so the typed value reaching the
+    # halt-commit param is unproven end to end.
+    script = _compose(monkeypatch, in_run_commit=True)
+    norm = "if (_halted && typeof _halted !== 'object') { _halted = { halted: "
+    assert script.count(norm) == 1
+    assert "'stop_rule'" in script[script.index(norm) :].split("\n", 1)[0]
+    assert script.index(norm) < script.index("\n  _nextAction = ")
+    assert script.index(norm) < script.index("\n  const _mkRevise")
+    assert script.index(norm) < script.index(_GATE)
+
+
 def test_without_in_run_commit_no_halt_commit_is_composed(monkeypatch):
     for over in ({}, {"stop_after": STOP_AFTER_PLAN}):
         script = _compose(monkeypatch, **over)

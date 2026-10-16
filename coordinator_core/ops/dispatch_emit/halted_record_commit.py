@@ -231,13 +231,12 @@ def _review_written(worktree_root: Path, session_id: Optional[str], run_id: str)
         return None
 
 
-def _integrity_findings(worktree_root: Path, run_id: str, params: dict, paths: list) -> list:
+def _integrity_findings(worktree_root: Path, run_id: str, base: Optional[str], paths: list) -> list:
     """Parse and since-base-overlap findings over ``paths``; the overlap arm is skipped when the
-    run has no recorded base."""
+    run has no recorded ``base``."""
     from coordinator_core.ops.dispatch_emit import landing_integrity
 
     found = landing_integrity.unparseable_py(worktree_root, paths)
-    base = landing_integrity.run_base_for(worktree_root, run_id, params)
     if base is not None and paths:
         found += landing_integrity.since_base_findings(worktree_root, paths, base, run_id=run_id)
     return found
@@ -253,8 +252,10 @@ def _land(
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
     from coordinator_core.ops.ceremony import commit_v2
     from coordinator_core.ops.dispatch_emit.terminal_commit import _own_prefix_files, _tracked_at_head
+    from coordinator_core.ops.dispatch_emit import landing_integrity
 
     base = {"record_dir": record_dir_rel, "halted": halted["halted"]}
+    run_base = landing_integrity.run_base_for(worktree_root, run_id, params)
     session_id: Optional[str] = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
         session_id = None
@@ -288,6 +289,7 @@ def _land(
             sizing_rel=sizing_rel,
             plan_rel=plan_rel,
             blocking=blocking if plan_rel else None,
+            run_base_sha=run_base,
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
@@ -381,7 +383,7 @@ def _land(
         )
         withheld.update({p: "import-closure-open" for p in product + gone if owner.get(p) in closure_open})
         integrity = _integrity_findings(
-            worktree_root, run_id, params, [p for p in product if p not in withheld]
+            worktree_root, run_id, run_base, [p for p in product if p not in withheld]
         )
         if integrity:
             bad_chunks = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}

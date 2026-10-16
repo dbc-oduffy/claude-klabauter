@@ -17,6 +17,7 @@ REL = "state/sizings/2026-10-16-refire-c3.yaml"
 OLDER = "warp-2026-10-16-refire-c3-20260101T000000-aaaaaa"
 BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 HEAD = "c" * 40
+HALTED_BASE = "a" * 40
 
 
 @pytest.fixture
@@ -38,10 +39,10 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _halt(repo, run_id=OLDER):
+def _halt(repo, run_id=OLDER, run_base_sha=None):
     rl.start(repo, run_id)
     rl.bind(repo, run_id, REL, ask_text="the ask")
-    write_halt_marker(record_dir(repo, run_id), halted="criterion", sizing_rel=REL)
+    write_halt_marker(record_dir(repo, run_id), halted="criterion", sizing_rel=REL, run_base_sha=run_base_sha)
 
 
 def _marker(repo, run_id=OLDER):
@@ -140,7 +141,7 @@ def test_a_dead_owner_halted_run_diverts_to_a_fresh_path_named_in_the_result(rep
     import coordinator_core.git.git_state as git_state
 
     monkeypatch.setattr(git_state, "head_sha", lambda *_a, **_k: HEAD)
-    _halt(repo)
+    _halt(repo, run_base_sha=HALTED_BASE)
     script, receipt = _emit_by(repo, "dead-peer", False, monkeypatch)
     before = (script.read_bytes(), receipt.read_bytes())
     reply = _fire(repo)
@@ -152,7 +153,7 @@ def test_a_dead_owner_halted_run_diverts_to_a_fresh_path_named_in_the_result(rep
     assert redirect["to"].endswith(f"{reply['run_id']}.workflow.mjs")
     assert (repo / redirect["to"]).is_file()
     assert (script.read_bytes(), receipt.read_bytes()) == before
-    assert op._recorded_run_base(repo, reply["run_id"]) == HEAD
+    assert op._recorded_run_base(repo, reply["run_id"]) == HALTED_BASE != HEAD
 
 
 def test_a_live_peer_halted_run_still_refuses(repo, monkeypatch):

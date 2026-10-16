@@ -2,7 +2,9 @@
 
 The marker is `halted.json` in the run's record dir. It is rewritten to `resumed`, never
 unlinked: terminal_commit drops record-dir deletions, so an unlinked marker would stay an
-uncommitted tracked deletion. Stdlib plus the atomic writer; no subprocess, no git.
+uncommitted tracked deletion. The marker may carry `run_base_sha` (the halted run's review base,
+read by `halted_run_base`); `halted_ask_run_for` finds a halted `ask-*` run naming a sizing.
+Stdlib plus the atomic writer; no subprocess, no git.
 
 Accepted residual: two concurrent refires of one halted sizing can both read `halted` before
 either rewrites it.
@@ -25,6 +27,9 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
+HALT_RUN_BASE_FIELD = "run_base_sha"
+_SHA40 = re.compile(r"[0-9a-f]{40}")
+_DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
 #: The `<%Y%m%dT%H%M%S>-<hex6>` tail of a run id; without it a sibling sizing whose stem extends
 #: this one's (`foo` vs `foo-slice-1`) shares the `warp-<stem>-` prefix and shadows the newest dir.
@@ -56,10 +61,12 @@ def write_halt_marker(
     sizing_rel: Optional[str],
     plan_rel: Optional[str] = None,
     blocking: Optional[tuple] = None,
+    run_base_sha: Optional[str] = None,
 ) -> Path:
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
-    `plan` and the blocking key are written only when given, so other halts' markers are unchanged.
+    `plan`, the blocking key and the base are written only when given (the base only when 40-hex),
+    so other halts' markers are unchanged.
     """
     payload = {
         "status": STATUS_HALTED,
@@ -70,7 +77,56 @@ def write_halt_marker(
         payload[HALT_PLAN_FIELD] = _norm(plan_rel)
     if blocking is not None:
         payload[HALT_BLOCKING_FIELD] = list(blocking)
+    if run_base_sha and _SHA40.fullmatch(run_base_sha):
+        payload[HALT_RUN_BASE_FIELD] = run_base_sha
     return _write(Path(record_dir), payload)
+
+
+def halted_run_base(record_dir: Path) -> Optional[str]:
+    """The base sha the halted run recorded in its marker, else None (absent, unreadable, not 40-hex)."""
+    marker = _read(Path(record_dir))
+    value = marker.get(HALT_RUN_BASE_FIELD) if marker else None
+    return value if isinstance(value, str) and _SHA40.fullmatch(value) else None
+
+
+def halted_ask_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
+    """Return the newest halted `ask-<stamp>` run naming `sizing_rel`, else None.
+
+    Only ask dirs stamped on or after the sizing filename's YYYY-MM-DD prefix are read (None for an
+    undated name), and a `warp-<stem>-*` dir stamped later supersedes the ask run.
+    """
+    norm = _norm(sizing_rel)
+    stem = PurePosixPath(norm).stem
+    dated = _DATE_PREFIX.match(stem)
+    if dated is None:
+        return None
+    floor = "".join(dated.groups())
+    prefix = f"warp-{stem}-"
+    root = Path(repo_root) / RECORD_DIR_ROOT
+    asks = []
+    newest_warp = ""
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith("ask-"):
+                    stamp = name[4:]
+                    if _STAMP.fullmatch(stamp) and stamp[:8] >= floor and entry.is_dir():
+                        asks.append(stamp)
+                elif name.startswith(prefix):
+                    stamp = name[len(prefix):]
+                    if _STAMP.fullmatch(stamp) and entry.is_dir() and stamp > newest_warp:
+                        newest_warp = stamp
+    except OSError:
+        return None
+    for stamp in sorted(asks, reverse=True):
+        if stamp < newest_warp:
+            return None
+        name = f"ask-{stamp}"
+        marker = _read(root / name)
+        if marker and marker.get("status") == STATUS_HALTED and marker.get("sizing_rel") == norm:
+            return name if safe_id(name) else None
+    return None
 
 
 def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:

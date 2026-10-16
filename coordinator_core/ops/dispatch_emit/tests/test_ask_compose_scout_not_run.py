@@ -79,6 +79,18 @@ def test_exit_zero_with_a_real_decision_does_not_halt(tmp_path):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.parametrize("gate", ["arm: 's', halt: null", "arm: null, halt: { kind: 'room' }"])
+def test_an_abridged_stdout_with_a_gate_reply_does_not_halt(gate, tmp_path):
+    # The scout summarised assemble's stdout; the gate reply proves the sizing was on disk.
+    script = _compose()
+    setup = (
+        "let _halted = null; const _runId = 'run-1';\n"
+        f"const _scouted = {{ exit_code: 0, stdout: 'route spec-dispatch, tshirt S (abridged)', stderr: '', {gate} }};"
+    )
+    assert _run([_line(script, _PARSE_MARK), _line(script, _NOT_RUN_MARK)], setup, tmp_path) is None
+
+
+@pytest.mark.spawns_process
 @pytest.mark.parametrize("sized_in_run", [True, False])
 @pytest.mark.parametrize(
     "gate, expect",

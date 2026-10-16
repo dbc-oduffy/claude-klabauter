@@ -140,6 +140,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import functools
+import json
 import logging
 import posixpath
 import re
@@ -746,6 +748,22 @@ class UndeclaredGateKeyError(SpineReadError):
     pass
 
 
+class InvalidChangeKindError(SpineReadError):
+    """A row's ``change_kind`` is present but not a member of the plan-tasks schema enum."""
+
+
+_PLAN_TASKS_SCHEMA = (
+    Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "plan-tasks.schema.json"
+)
+
+
+@functools.cache
+def change_kind_members() -> frozenset:
+    """The closed ``change_kind`` enum, read from plan-tasks.schema.json (never copied)."""
+    schema = json.loads(_PLAN_TASKS_SCHEMA.read_text(encoding="utf-8"))
+    return frozenset(schema["properties"]["change_kind"]["enum"])
+
+
 class InvalidRowIdError(SpineReadError):
     """Raised when a spine row's ``id`` is missing, non-string, or a
     duplicate of another row's ``id`` in the same spine.
@@ -1130,6 +1148,12 @@ def read_spine(
         if row_id in seen_ids:
             raise InvalidRowIdError(f"duplicate row id {row_id!r} in spine")
         seen_ids.add(row_id)
+        _kind = raw.get("change_kind")
+        if _kind is not None and _kind not in change_kind_members():
+            raise InvalidChangeKindError(
+                f"row {row_id!r} field change_kind: {_kind!r} is not in the plan-tasks schema "
+                f"enum {sorted(change_kind_members())}"
+            )
         if _UNDECLARED_GATE_KEY in raw:
             raise UndeclaredGateKeyError(
                 f"row {row_id!r} declares {_UNDECLARED_GATE_KEY!r}, which "

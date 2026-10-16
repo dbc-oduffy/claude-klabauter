@@ -34,7 +34,11 @@ Negative-spec:
     baton, plan, evidence and seam sidecars, delivery note, slice sizings, superseded predecessors'
     record dirs, the docs stage's ``doc_paths``) beside the declared writes, each only when dirty,
     not gitignored and not held by a live peer's claim; a withheld path is named in
-    ``run_artifacts.withheld`` and the commit proceeds. The sizing and an ask run's plan rewritten
+    ``run_artifacts.withheld`` and the commit proceeds. A path the EM ruled out through
+    ``workflow.revise withhold_paths`` (``withhold.jsonl`` in this run's record dir or a
+    superseded predecessor's) is left unstaged and dirty, checked before the peer-claim and
+    blob-drift gates, and recorded in ``run_artifacts.withheld`` as ``withhold_paths: <reason>``.
+    The sizing and an ask run's plan rewritten
     after the product commit ride the stamp commit. A candidate still dirty afterwards sets
     ``ok: false`` and ``run_artifact_residue``. Never for an anchor-only run; the pathspec is never
     widened to the dirty tree.
@@ -1277,6 +1281,20 @@ def _epoch_of(stamp: object) -> Optional[float]:
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
 
 
+def _withhold_reasons(worktree_root: Path, artifacts, record_dir_rel: Optional[str]) -> dict:
+    """``{path: reason}`` the EM withheld via ``workflow.revise withhold_paths``, read from this
+    run's record dir and the superseded predecessor dirs ``artifacts`` already carries (a
+    predecessor's entries are read first, so this run's own win). Empty with no bound sizing:
+    ``superseded_runs`` then yields no predecessor, so only the run's own dir is read."""
+    from coordinator_core.ops.dispatch_emit import run_withhold
+
+    dirs = list(artifacts.record_dirs) if artifacts is not None else []
+    if record_dir_rel and record_dir_rel not in dirs:
+        dirs.insert(0, record_dir_rel)
+    return run_withhold.read(worktree_root / d for d in reversed(dirs))
+
+
+_WITHHOLD_REMEDY = "workflow.revise run_id={run_id} withhold_paths=[{{path, reason}}], then re-fire."
 _GENERIC_DRIFT_REMEDY = "Re-review the current bytes and pass their blob, or leave the path out."
 
 
@@ -1285,7 +1303,8 @@ def _blob_drift_remedy(error: str, run_id: str) -> str:
     ``workflow.revise`` (a ``note`` is required), then the refire call its reply returns."""
     remedy = (
         f"Real drift: call workflow.revise run_id={run_id} with a note, then make the refire call "
-        "its reply's next.call returns; the refire's review re-reads the current bytes."
+        "its reply's next.call returns; the refire's review re-reads the current bytes. "
+        f"Or leave the path out: {_WITHHOLD_REMEDY.format(run_id=run_id)}"
     )
     if _GENERIC_DRIFT_REMEDY in error:
         return error.replace(_GENERIC_DRIFT_REMEDY, remedy)
@@ -3011,6 +3030,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     work the commit left uncommitted; ``{}`` when none, or when no marker was read. The key is
     omitted on a ``missing-run-outcome`` or ``unreviewed`` refusal: the incomplete set was not
     known, so an empty map would falsely read as "nothing stranded".
+    ``withheld_chunks`` (present only when non-empty) maps each done chunk whose every declared
+    path is withheld to ``[{path, reason}]``; it is in neither ``chunks_committed`` nor
+    ``no_product_hunk``, is not flipped ``coded``, gets no receipt, and its ``incomplete_reasons``
+    entry reads ``withheld: <reason>``. ``withhold_unmatched`` lists withheld paths the commit did
+    not carry. A refire with no bound sizing reads only its own record dir's withholds, not a
+    predecessor's.
     ``entangled`` (present only when non-empty) maps each chunk held back from the commit to
     the stranded chunk ids whose uncommitted ``.py`` files it imports (transitively): landing it
     would leave an unresolvable import at that sha. It is stranded with them, its reason
@@ -3092,7 +3117,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed) - set(regraded))
     if isinstance(incomplete, list) and isinstance(landed, list):
         entangled = reply.get("entangled") or {}
-        open_ids = (set(incomplete) - set(landed) - set(regraded)) | set(entangled) | set(held)
+        open_ids = (
+            (set(incomplete) - set(landed) - set(regraded)) | set(entangled) | set(held)
+            | set(reply.get("withheld_chunks") or ())
+        )
         reasons = {}
         for i in sorted(open_ids):
             if i in held:
@@ -3858,6 +3886,56 @@ def _terminal_commit_inner(
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
 
+    wh_reasons = _withhold_reasons(worktree_root, artifacts, record_dir_rel)
+    wh_map: dict = {}
+    wh_unmatched: list = []
+    wh_chunks: dict = {}
+    if wh_reasons:
+        carried_now = set(all_paths) | set(deleted_paths)
+        wh_map = {p: f"withhold_paths: {r}" for p, r in sorted(wh_reasons.items()) if p in carried_now}
+        wh_unmatched = sorted(p for p in wh_reasons if p not in carried_now)
+        for c in done_chunks:
+            own = set(c.paths) | set(_own_prefix_files(worktree_root, c, report_cache) or [])
+            if own and own <= set(wh_reasons):
+                wh_chunks[c.id] = [{"path": p, "reason": wh_reasons[p]} for p in sorted(own)]
+        if wh_chunks:
+            incomplete_chunks = incomplete_chunks | set(wh_chunks)
+            done_chunks = [c for c in done_chunks if c.id not in wh_chunks]
+            stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in wh_chunks})
+            if withheld is not None:
+                withheld.update({
+                    cid: "withheld: " + "; ".join(e["reason"] for e in entries)
+                    for cid, entries in wh_chunks.items()
+                })
+        if wh_map:
+            all_paths = [p for p in all_paths if p not in wh_map]
+            deleted_paths = [p for p in deleted_paths if p not in wh_map]
+            run_owned = [p for p in run_owned if p not in wh_map]
+            scope["run_owned"] = list(run_owned)
+            if art_landable is not None:
+                art_landable = run_artifacts.Landable(
+                    present=tuple(p for p in art_landable.present if p not in wh_map),
+                    deleted=tuple(p for p in art_landable.deleted if p not in wh_map),
+                    withheld=art_landable.withheld,
+                    contest_unknown=art_landable.contest_unknown,
+                )
+
+    def _with_withheld(reply: dict) -> dict:
+        if wh_chunks:
+            reply["withheld_chunks"] = wh_chunks
+        if wh_unmatched:
+            reply["withhold_unmatched"] = wh_unmatched
+        return reply
+
+    if wh_map and not all_paths and not deleted_paths:
+        scope.update(root=worktree_root, request=request, snapshot=snapshot)
+        if close_ctx is not None:
+            close_ctx.clear()
+        return _with_withheld(_with_siblings({
+            "committed": False, "nothing_to_commit": not sibling_paths,
+            "run_artifacts": {"landed": [], "withheld": wh_map},
+        }))
+
     scope_request = request
     if product_only and ask_note_rel is not None:
         scope_request = CommitRequest(
@@ -3915,7 +3993,8 @@ def _terminal_commit_inner(
         return _error(
             "live peer session(s) " + ", ".join(sids) + " hold write claims on path(s) this "
             "commit would carry: " + ", ".join(sorted({p for p, _s in peer_holds})) + ". "
-            "Wait for the peer to finish, or have it commit them, then re-fire",
+            "Wait for the peer to finish, or have it commit them, then re-fire, or leave them out: "
+            + _WITHHOLD_REMEDY.format(run_id=_run_id_of(params, ask_run_dir, script_path_raw)),
             refused="peer-claim",
             peer_claims=[{"path": p, "session": s} for p, s in peer_holds],
         )
@@ -4326,7 +4405,7 @@ def _terminal_commit_inner(
     if reply.get("committed") and reply.get("sha"):
         residue = _commit_residue(
             worktree_root, request, snapshot, report_cache, session_id,
-            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | {p for ps in sibling_paths.values() for p in ps},
+            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | {p for ps in sibling_paths.values() for p in ps},
             unfinished=incomplete_chunks | held_ids,
             commit_v2_mod=commit_v2_mod,
         )
@@ -4345,7 +4424,7 @@ def _terminal_commit_inner(
                 set(all_paths) | set(deleted_paths) | set(scope.get("landed", ()))
                 | set(reply.get("archived") or ())
             )
-            withheld_art = dict(art_landable.withheld) if art_landable is not None else {}
+            withheld_art = {**(dict(art_landable.withheld) if art_landable is not None else {}), **wh_map}
             art_residue = run_artifacts.residue(
                 artifacts, snapshot.changed if snapshot is not None else (), landed_now, withheld_art,
             )
@@ -4401,6 +4480,7 @@ def _terminal_commit_inner(
     if entangled:
         reply["entangled"] = entangled
     reply["partial_committed"] = [c.id for c in contributing_partial]
+    _with_withheld(reply)
     reply["dropped_absent"] = dropped_absent
     reply["deleted_paths"] = deleted_paths
     reply["unmarked_incomplete"] = unmarked_incomplete

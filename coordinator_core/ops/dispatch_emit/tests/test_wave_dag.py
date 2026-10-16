@@ -28,6 +28,32 @@ def _row(id_, writes, depends_on=None, reads=None):
     )
 
 
+def test_self_consuming_chunk_raises_named_error_not_keyerror():
+    import pytest
+
+    from coordinator_core.ops.dispatch_emit.wave_map import SelfConsumingChunkError
+
+    c5 = _row("C5", ["t.py"], reads=["t.py"])
+    c7 = _row("C7", ["t.py"])
+    with pytest.raises(SelfConsumingChunkError) as exc:
+        dag_from_waves([[c5], [c7]])
+    assert isinstance(exc.value, ValueError)
+    assert "C5" in str(exc.value) and "t.py" in str(exc.value)
+
+
+def test_forward_declared_dependency_error_does_not_claim_a_shared_path():
+    import pytest
+
+    from coordinator_core.ops.dispatch_emit.wave_map import SelfConsumingChunkError
+
+    c1 = _row("C1", ["a.py"], depends_on=[{"chunk": "C2"}])
+    c2 = _row("C2", ["b.py"])
+    with pytest.raises(SelfConsumingChunkError) as exc:
+        dag_from_waves([[c1], [c2]])
+    assert "C1" in str(exc.value) and "C2" in str(exc.value)
+    assert "also writes" not in str(exc.value)
+
+
 def test_three_disjoint_rows_width_3_critical_path_1():
     rows = [_row("C1", ["a.py"]), _row("C2", ["b.py"]), _row("C3", ["c.py"])]
     dag = build_dag(rows)

@@ -396,13 +396,14 @@ def _mint_judge_only(
     if open_rows:
         raise MintRefusal(f"review-stamp: refusing to mint: spine rows not coded: {', '.join(open_rows)}")
 
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate, _register_writeback
 
     try:
         plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     except ValueError:
         raise MintRefusal(f"review-stamp: {plan_path} is outside {repo_root}; register gate cannot run") from None
-    gap = _register_gate(repo_root, plan_rel, {"criterion": dict(criterion)})
+    judged = {"criterion": dict(criterion)}
+    gap = _register_gate(repo_root, plan_rel, judged)
     if gap is not None:
         raise MintRefusal(f"review-stamp: refusing to mint: judge result {rel}: {gap}")
 
@@ -432,8 +433,9 @@ def _mint_judge_only(
         criterion_block={"status": "met", "observation": observation, "sidecar": rel},
         with_delivery=False,
     )
-    if not stamp["run_base_sha"]:
-        del stamp["run_base_sha"]  # the schema types it a string; a record without one has none to state
+    written = _register_writeback(repo_root, plan_rel, judged, head)
+    if "register_writeback_error" in written:
+        raise MintRefusal(f"review-stamp: refusing to mint: register write-back failed: {written['register_writeback_error']}")
     _write_stamp(plan_path, split, stamp)
     return stamp
 
@@ -1330,6 +1332,8 @@ def _assemble_stamp(
         },
         "stamped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if not stamp["run_base_sha"]:
+        del stamp["run_base_sha"]  # the schema types it a string; a run without a recorded base has none to state
     if not with_delivery or delivery_verdict is None:
         del stamp["delivery"]
     if criterion_block is not None:

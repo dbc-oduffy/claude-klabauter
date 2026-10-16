@@ -174,6 +174,40 @@ class WaveCycleError(ValueError):
     pass
 
 
+class SelfConsumingChunkError(WaveCycleError):
+    """A chunk reads a path that a LATER-wave chunk writes, so the derived edge points forward.
+
+    Typically the chunk lists a path in both its own writes and reads.
+    """
+
+    def __init__(self, chunk: str, later_chunk: str, paths: list[str]) -> None:
+        self.chunk = chunk
+        self.later_chunk = later_chunk
+        self.paths = paths
+        if paths:
+            shown = ", ".join(paths)
+            message = (
+                f"chunk {chunk} consumes {shown} which it also writes, and later chunk "
+                f"{later_chunk} writes it too: remove {shown} from {chunk}'s reads or "
+                f"declare an ordering between {chunk} and {later_chunk}"
+            )
+        else:
+            message = (
+                f"chunk {chunk} must run after later chunk {later_chunk} (no shared "
+                f"read/write path resolved): declare an ordering between "
+                f"{chunk} and {later_chunk}"
+            )
+        super().__init__(message)
+
+
+def _forward_edge_paths(reader: EmitterRow, writer: EmitterRow) -> list[str]:
+    """Paths ``reader`` reads that ``writer`` writes (exact match, normalized)."""
+    if writer.writes is UNDECLARED or not isinstance(writer.writes, list):
+        return []
+    written = {_normalize_path(p) for p in writer.writes}
+    return [p for p in reader.reads if _normalize_path(p) in written]
+
+
 class DagNode(NamedTuple):
     """One scheduled row plus the row ids its own promise must await.
 
@@ -810,6 +844,11 @@ def dag_from_waves(waves: list[list[WaveRow]]) -> DagPlan:
         after = tuple(
             sorted(after_ids, key=lambda rid: order_index[rid])
         )
+        for a in after:
+            if a not in depth:
+                raise SelfConsumingChunkError(
+                    row.id, a, _forward_edge_paths(row, flat[order_index[a]])
+                )
         row_depth = 1 + max((depth[a] for a in after), default=-1)
         depth[row.id] = row_depth
         depth_counts[row_depth] = depth_counts.get(row_depth, 0) + 1

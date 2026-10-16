@@ -53,6 +53,8 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
 
   } catch (e) { log('Run base agent failed; using the emit-time sha ' + _runBase); }
 
+  if (!_runBase) throw new Error('run base sha unreadable and none known at emit: checkpoint commits would carry no Checkpoint-Base');
+
   log('Run base sha (observed at fire): ' + _runBase);
 
   const _incompleteChunks = [];

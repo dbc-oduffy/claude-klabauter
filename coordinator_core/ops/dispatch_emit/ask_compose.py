@@ -541,6 +541,7 @@ HALT_REVIEW_BLOCKED = "review_blocked"
 HALT_CRITERION_NOT_MET = "criterion_not_met"
 HALT_DELIVERY_FAIL = "delivery_fail"
 HALT_NOT_CLOSEABLE = "not_closeable"
+HALT_STOP_RULE = "stop_rule"
 
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
@@ -1565,11 +1566,14 @@ def compose_ask_script(
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
         b.append("  else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }")
-        # Exit 0 proves nothing when the scout never ran sizing-assemble (stdout 'not run'): only a
-        # parsed assemble decision, which always carries `route`, proves the sizing was written.
+        # Exit 0 proves nothing when the scout never ran sizing-assemble (stdout 'not run'). Proof is
+        # a parsed assemble decision (always carries `route`) or a gate reply (an arm or a halt):
+        # ask_gate reads the sizing from disk, so it answers only once the file exists. Scouts
+        # abridge long stdout, so the gate reply alone must suffice.
         b.append(
             "  if (!_halted && (_decision === null || typeof _decision !== 'object' "
-            "|| typeof _decision.route !== 'string')) { _halted = { halted: "
+            "|| typeof _decision.route !== 'string') && typeof _scouted.arm !== 'string' "
+            "&& !(_scouted.halt && typeof _scouted.halt === 'object')) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble did not run: the scout replied exit 0 but its stdout is "
             "not a sizing-assemble decision, so the sizing file was never written; the gate, plan, stage, execute "
             "and review phases were skipped', "
@@ -2392,6 +2396,13 @@ def compose_ask_script(
         b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
     _fv = _emit._FALSIFIER_RESULT_VAR
     criterion_open = " && !_criterionOpen" if judged else ""
+    # The chunk gate's stop rule and the held-dependents check assign `_halted` a bare string; the
+    # halt-record commit and `_mkRevise` read it as the typed `{halted, ...}` shape.
+    b.append(
+        "  if (_halted && typeof _halted !== 'object') { _halted = { halted: "
+        f"(_haltedByHold ? {_lit(HALT_DEPENDENTS_UNSTARTED)} : {_lit(HALT_STOP_RULE)}), "
+        "reason: String(_halted), sizing: _sizingRel, run_id: _runId }; }"
+    )
     if judged:
         b.append(f"  const _criterionOpen = !!({_fv} && {_fv}.status === 'not_met');")
     roadmap_fan = bool(rb_fn and in_run_commit)
