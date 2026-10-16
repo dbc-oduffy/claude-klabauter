@@ -66,21 +66,23 @@ def test_each_pinned_field_is_checked(patch, field):
     assert _gap({**_WHOLE, **patch}) == field
 
 
-def test_no_adoption_site_adopts_on_a_rows_array_alone():
+def test_no_adoption_site_adopts_a_relayed_manifest():
     script = _compose()
-    assert not re.search(r"_stagedManifest\s*=\s*(?!null)[^;]*(?:readyOpReply|\.manifest)", script.replace(
-        "_stagedManifest = m;", ""))
+    assert not re.search(r"_stagedManifest\s*=\s*(?!null)[^;]*(?:readyOpReply|\.manifest)", script)
+    assert "_stagedManifest = _diskRead;" in script
     assert "Array.isArray(_ready.readyOpReply?.rows)" not in script
     for site in ("_ready.readyOpReply", "_reready.readyOpReply", "_spineReview.manifest",
                  "_revised.manifest", "_authored.manifest"):
         assert f"_adoptManifest({site})" in script, site
 
 
-def test_a_refused_relay_halts_with_the_named_reason_before_execute():
+def test_a_refused_disk_manifest_halts_with_the_named_reason_before_execute():
     script = _compose()
-    assert "_manifest = { error: 'relayed stage manifest is not whole: ' + _refusedField }" in script
+    assert "_stageHalt = 'stage manifest on disk is not whole: ' + _diskGap;" in script
+    assert "no stage manifest on disk: " in script
+    assert "relayed stage manifest is not whole" not in script
     assert "reason: _manifest.error" in script
-    assert script.index("relayed stage manifest is not whole") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
+    assert script.index("stage manifest on disk is not whole") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
 
 
 def test_incomplete_chunk_pushes_need_no_own_guard_and_result_rows_are_strings():

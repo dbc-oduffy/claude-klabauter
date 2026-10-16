@@ -409,6 +409,12 @@ _MANIFEST_SCHEMA = _obj(
     },
 )
 
+#: Requires every field `_wholeManifestGap` checks, so a trimmed copy fails the agent's own output
+#: validation instead of reaching the fold; an absent file fails it too and halts as no manifest.
+_MANIFEST_READ_SCHEMA = _obj(
+    [*_MANIFEST_SCHEMA["required"], "test_targets"], _MANIFEST_SCHEMA["properties"]
+)
+
 _PLAN_STAGED_SCHEMA = _obj(
     ["plan_rel", "manifest"], {"plan_rel": _STR, "manifest": _MANIFEST_SCHEMA, **_FALSIFIER_PROP}
 )
@@ -418,10 +424,11 @@ _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
 #: JS expression: the gate's design brief ahead of an agent's task text; '' when the gate carried none.
 _DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KEY}) + '\\n\\n' : '')"
 
-#: Adopts a relayed stage manifest into `_stagedManifest` only when `_wholeManifestGap` finds no
-#: gap; a refusal records the first failing field in `_refusedField` for the halt below.
+#: A fold site's relayed stage reply only marks that the stage act ran (`_stagedManifest` holds the
+#: relay until the disk read replaces it) or was refused (`_stageRefusal`); the manifest the run
+#: adopts is the disk read's, admitted by `_wholeManifestGap`.
 _ADMIT_MANIFEST_JS = (
-    "  let _refusedField = null;\n"
+    "  let _stageRefusal = null;\n"
     "  const _wholeManifestGap = (m) => {\n"
     "    const ne = (v) => typeof v === 'string' && v.trim() !== '';\n"
     "    if (!m || typeof m !== 'object' || Array.isArray(m)) return 'manifest';\n"
@@ -442,9 +449,8 @@ _ADMIT_MANIFEST_JS = (
     "    return null;\n"
     "  };\n"
     "  const _adoptManifest = (m) => {\n"
-    "    if (m === null || m === undefined) return;\n"
-    "    const gap = _wholeManifestGap(m);\n"
-    "    if (gap) { if (!_refusedField) _refusedField = gap; return; }\n"
+    "    if (m === null || m === undefined || typeof m !== 'object' || Array.isArray(m)) return;\n"
+    "    if (m.error) { if (!_stageRefusal) _stageRefusal = String(m.error); return; }\n"
     "    _stagedManifest = m;\n"
     "  };"
 )
@@ -1930,10 +1936,26 @@ def compose_ask_script(
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
-    # path; there is no standalone stage leg. A fold is an agent's relay of dispatch.ask_stage, and a
-    # relay can drop row fields, so _adoptManifest admits a reply only when whole; a refused reply
-    # leaves _stagedManifest null and the halt below names the first failing field.
-    # The falsifier is authored by the scout or the plan legs, never a leg of its own.
+    # path; there is no standalone stage leg. A fold is an agent's relay of dispatch.ask_stage and a
+    # relay can drop row fields, so a relay only says the stage act ran; the manifest the run adopts
+    # is the one read leg's reply from manifest.json on disk, admitted only when _wholeManifestGap
+    # finds no gap. The falsifier is authored by the scout or the plan legs, never a leg of its own.
+    read_prompt = prompt_of(
+        f"Read the file {manifest_rel} with the Read tool and return its JSON content verbatim, every "
+        "field and every row, trimming nothing. When the file is absent or unreadable, return only "
+        "error naming why."
+    )
+    b.append(
+        "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : null;\n"
+        "  if (_stagedManifest) {\n"
+        "    _stagedManifest = null;\n"
+        f"    const _diskRead = await {_agent(read_prompt, label='manifest-read', phase='plan', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_MANIFEST_READ_SCHEMA, effort=_MECHANICAL_EFFORT)};\n"
+        "    const _diskGap = (_diskRead && !_diskRead.error) ? _wholeManifestGap(_diskRead) : null;\n"
+        f"    if (!_diskRead || _diskRead.error) {{ _stageHalt = 'no stage manifest on disk: ' + {_lit(manifest_rel)}; }}\n"
+        "    else if (_diskGap) { _stageHalt = 'stage manifest on disk is not whole: ' + _diskGap; }\n"
+        "    else { _stagedManifest = _diskRead; }\n"
+        "  }"
+    )
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
@@ -1942,9 +1964,7 @@ def compose_ask_script(
         "  if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest: the agent that closes the "
         "gate, plan or plan-blitz ready path returned none' }; }"
     )
-    b.append(
-        "  if (!_stagedManifest && _refusedField) { _manifest = { error: 'relayed stage manifest is not whole: ' + _refusedField }; }"
-    )
+    b.append("  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt }; }")
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
     b.append(

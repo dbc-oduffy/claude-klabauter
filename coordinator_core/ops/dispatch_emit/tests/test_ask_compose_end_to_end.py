@@ -426,33 +426,19 @@ _WHOLE_ROW = {
     "rows, error",
     [
         ([_WHOLE_ROW], None),
-        # plan-blitz's relay returned rows as {id, wave, deps}: every executor got "undefined".
-        ([{"id": "C1", "wave": 0}], "relayed stage manifest is not whole: rows[0].brief_path"),
+        # The disk read returned rows as {id, wave, deps}: every executor got "undefined".
+        ([{"id": "C1", "wave": 0}], "stage manifest on disk is not whole: rows[0].brief_path"),
     ],
 )
-def test_a_folded_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
-    import json
+def test_a_disk_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import _fold
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node not on PATH")
-    reply = {"rows": rows, "review_declared_paths": [], "test_targets": []}
-    script = _compose()
-    halt = next(ln for ln in script.splitlines() if ln.strip().startswith("if (!_stagedManifest && _refusedField)"))
-    js = (
-        "let _manifest = null; let _stagedManifest = null;\n"
-        + ask_compose._ADMIT_MANIFEST_JS
-        + f"\n_adoptManifest({json.dumps(reply)});\n"
-        + _fold_guard(script)
-        + "\n"
-        + halt
-        + "\nprocess.stdout.write(JSON.stringify(_manifest));\n"
-    )
-    out = json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    disk = {"rows": rows, "review_declared_paths": [], "test_targets": []}
+    out = _fold({"rows": rows}, disk)
     if error is None:
-        assert out == reply
+        assert out["manifest"] == disk
     else:
-        assert error in out["error"]
+        assert error in out["manifest"]["error"]
 
 
 def test_the_ready_op_carries_the_manifest_schema_so_the_relay_is_typed():
