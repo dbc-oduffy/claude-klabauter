@@ -16,6 +16,12 @@ from coordinator_core.ops.emit.sections import cross_repo_memos, handoffs, plans
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
+if not (_REPO_ROOT / "state" / "handoffs").is_dir():
+    pytest.skip(
+        "no state/handoffs/ under the resolved repo root: not the claude-klabauter record corpus",
+        allow_module_level=True,
+    )
+
 _SECTIONS = (
     ("handoffs", handoffs, "handoff-summary"),
     ("plans", plans, "plan-summary"),

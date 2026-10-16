@@ -500,6 +500,21 @@ def _synthesize_new_file_hunk(path: str, content: bytes) -> str:
     )
 
 
+#: Suffix `execute_review.prep_slice_id_for` ends every run-keyed prep slice id with.
+_PREP_SUFFIX = "-prep"
+
+
+def _shelve_prior_attempt(diff_path: Path, sha_path: Path) -> None:
+    """Rename an earlier attempt's frozen pair to the first free `<id>.attemptN.*`."""
+    stem = diff_path.name[: -len(".diff")]
+    n = 1
+    while (diff_path.parent / f"{stem}.attempt{n}.diff").exists():
+        n += 1
+    diff_path.rename(diff_path.parent / f"{stem}.attempt{n}.diff")
+    if sha_path.exists():
+        sha_path.rename(sha_path.parent / f"{stem}.attempt{n}.head.sha")
+
+
 def _freeze_diff_worktree(
     repo_root: Path,
     base: str,
@@ -598,12 +613,16 @@ def _freeze_diff_worktree(
 
     diff_unchanged = diff_path.exists() and diff_path.read_bytes().decode("utf-8") == diff_text
     if diff_path.exists() and not diff_unchanged:
-        return _error(
-            f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
-            "different content — a slice id is a filename, and a generic one collides "
-            "with whatever peer froze it first. Re-freeze under a slice id that names "
-            "this range."
-        )
+        if not slice_id.endswith(_PREP_SUFFIX):
+            return _error(
+                f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
+                "different content — a slice id is a filename, and a generic one collides "
+                "with whatever peer froze it first. Re-freeze under a slice id that names "
+                "this range."
+            )
+        # A prep id carries its run's unique key, so the occupant is this run's own earlier
+        # attempt over a worktree that has since moved (a re-fire). Keep it as evidence.
+        _shelve_prior_attempt(diff_path, sha_path)
 
     # No commit leg here (unlike range mode's post-P157-C1 behaviour):
     # worktree mode exists specifically for a review read that must NOT

@@ -441,3 +441,31 @@ def test_glob_pathspecs_still_expand_in_a_worktree_freeze(tmp_path):
     result = freeze_diff(repo, base, "glob-slice", paths=["*.py"], worktree=True)
     assert result["error"] is None, result
     assert "diff --git a/a.py" in Path(result["diff_path"]).read_text(encoding="utf-8")
+
+
+def test_refired_prep_freeze_shelves_its_own_earlier_attempt(tmp_path):
+    from coordinator_core.ops.review_mint.execute_review import prep_slice_id_for
+
+    _init_repo(tmp_path)
+    _commit(tmp_path, "seed.txt", "seed\n", "seed")
+    base = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    sid = prep_slice_id_for("manifest", base, "ask-run")
+    (tmp_path / "a.py").write_text("a = 1\n")
+    first = freeze_diff(tmp_path, base, sid, ["a.py"], worktree=True)
+    (tmp_path / "a.py").write_text("a = 2\n")
+    second = freeze_diff(tmp_path, base, sid, ["a.py"], worktree=True)
+
+    assert first["error"] is None and second["error"] is None
+    diffs = Path(second["diff_path"]).parent
+    assert "a = 2" in Path(second["diff_path"]).read_text()
+    assert "a = 1" in (diffs / f"{sid}.attempt1.diff").read_text()
+
+
+def test_non_prep_slice_id_collision_still_refuses(tmp_path):
+    _init_repo(tmp_path)
+    _commit(tmp_path, "seed.txt", "seed\n", "seed")
+    base = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    (tmp_path / "a.py").write_text("a = 1\n")
+    freeze_diff(tmp_path, base, "generic", ["a.py"], worktree=True)
+    (tmp_path / "a.py").write_text("a = 2\n")
+    assert "already names a frozen diff" in freeze_diff(tmp_path, base, "generic", ["a.py"], worktree=True)["error"]

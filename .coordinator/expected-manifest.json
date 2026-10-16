@@ -2086,8 +2086,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "611f1b74b8994f1beb1fda154b1869cfe7f86d5f",
-    "coordinator_core/_engine_stamp": "1b3c720272ae955cacb92749eadc53b5bffdfa08",
+    "coordinator_core/_engine_published_at": "95c9a1a43c33fc975a1444b9d01e638f9469818f",
+    "coordinator_core/_engine_stamp": "dec59cc61cbf076ed5ad8fe25e7aabffe58b5614",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4950,7 +4950,7 @@
     "coordinator_core/ops/emit/tests/test_initiatives_status_enum.py": "578a87f0cb22cb1b245436634d849293af112d11",
     "coordinator_core/ops/emit/tests/test_lessons_provenance_ref.py": "2a134562c7c8d631d0f6fee04f27fff3c520a2b5",
     "coordinator_core/ops/emit/tests/test_lma_cache.py": "1d09a937cd6c5d7fc319475a9dae7eaeb3767bca",
-    "coordinator_core/ops/emit/tests/test_owned_records_conform.py": "c4f20cdc4b400ddb0ac245f8ab5758fbd6d4446b",
+    "coordinator_core/ops/emit/tests/test_owned_records_conform.py": "a45c465785498629d076fbaeb0c1e02a106bed58",
     "coordinator_core/ops/emit/tests/test_plan_review_verified_is_emitted.py": "5b93547fb0c7685575e7d4ebe51ff77aaa5ac70c",
     "coordinator_core/ops/emit/tests/test_plan_status_blocked.py": "6fe1f1adb4a0a730ce264a8a09363d16f695cc55",
     "coordinator_core/ops/emit/tests/test_plan_status_closed_partial.py": "ad1dcf1572e9993b9acace5f6d497b37d585ceda",
@@ -5382,7 +5382,7 @@
     "coordinator_core/ops/review_brightline_gate.py": "1ad3667d15bec9751ea9655b653d6045b365f813",
     "coordinator_core/ops/review_coverage_core.py": "7352c148744ce85059b5b9a273e9c76e1e59ba08",
     "coordinator_core/ops/review_findings_ledger.py": "88fa00e475536521d31b233cdfee34121f1bf0f5",
-    "coordinator_core/ops/review_freeze_diff.py": "7e44bb680c2873954d8e9ad21991277d7fc98716",
+    "coordinator_core/ops/review_freeze_diff.py": "5f6f9500428287e32746237aa92ff9e889cbd0ee",
     "coordinator_core/ops/review_mint/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/review_mint/compose.py": "c26bc0ae67fb91d571e7b0a40ff35f9324816a95",
     "coordinator_core/ops/review_mint/execute_review.py": "86bd384cecd4c298c5fe7210bab5c3b44e6f4152",
@@ -5692,7 +5692,7 @@
     "coordinator_core/ops/test_review_coverage_core.py": "f386823a9a2b21b518142a3fc54bcbc0436a5a5f",
     "coordinator_core/ops/test_review_coverage_core_single_commit_batch.py": "0322f5f59d4ebeee7bc086e12d58b2686edf890d",
     "coordinator_core/ops/test_review_freeze_diff.py": "3a27f9b7a20fe95434b9b15ade58c92471b84649",
-    "coordinator_core/ops/test_review_freeze_diff_worktree.py": "a399d166ded410c6fe18e94f6f04755d9c07eca8",
+    "coordinator_core/ops/test_review_freeze_diff_worktree.py": "b9f0245ce363594f718e6f3151771f1b9c770bfa",
     "coordinator_core/ops/test_rollup_derive.py": "2b5ae258605028acbb62fc5ed4b6dd6ce986edd4",
     "coordinator_core/ops/test_run_pip_audit.py": "c898291b28ddb1b0ee29615942d5a4a64c3ef009",
     "coordinator_core/ops/test_run_pre_ci_hooks.py": "e4bec90fc0ea22079461742374687e43d506d2b2",
@@ -7937,5 +7937,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "190d94463f76d44e28d485acb44d7340d389baff"
+  "source_head": "188623dd9d88a3556369287e31f6b02c59d106f5"
 }
