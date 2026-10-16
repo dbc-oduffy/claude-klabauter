@@ -1442,14 +1442,21 @@ def commit_paths(
     # BLOB-DRIFT CHECK: `assembled` is final here and nothing is written yet.
     # Compares in process; adds no spawn, no read, no index access.
     if exp_blobs or exp_content:
+        # A path whose assembled blob equals HEAD's is not changed by this commit, so it cannot
+        # land unreviewed bytes; a stale expectation on it (a peer committed it since) is moot.
+        def _unchanged(p: str) -> bool:
+            head_dir, _, head_name = p.rpartition("/")
+            head_entry = spine.get(head_dir, {}).get(head_name)
+            return p in assembled and head_entry is not None and head_entry[1] == assembled[p][1]
+
         drift = []
         for p, want in exp_blobs.items():
             got = assembled[p][1]
-            if got != want:
+            if got != want and not _unchanged(p):
                 drift.append(BlobDrift(p, "blob", want, got))
         for p, want in exp_content.items():
             got = content_digest.get(p)
-            if got != want:
+            if got != want and not _unchanged(p):
                 drift.append(BlobDrift(p, "content-sha256", want, got))
         if drift:
             shown = "; ".join(

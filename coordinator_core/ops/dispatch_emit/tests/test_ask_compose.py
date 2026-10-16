@@ -541,6 +541,12 @@ def test_the_ask_script_predeclares_wave_not_run_as_an_empty_list():
     assert "wave_not_run: (Array.isArray(_waveNotRun) ? _waveNotRun : [])" in script
 
 
+def test_the_sizing_write_asks_for_json_and_the_ledger_check_schema_carries_met_by():
+    script = _compose(**_ratio_kw())
+    assert "--json" in script
+    assert "met_by" in script
+
+
 def test_the_ask_script_return_carries_a_research_halts_fire_list():
     script = _compose(**_ratio_kw())
     assert "_halted.halted === 'research' && Array.isArray(_halted.fire) ? _halted.fire" in script

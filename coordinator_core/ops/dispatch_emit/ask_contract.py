@@ -32,8 +32,7 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
 
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
-#: Serial groups, in run order. "stage" is also the one title the standalone stage fallback and
-#: the standalone falsifier share when both spawn (`ASK_STAGE_PHASE`).
+#: Serial groups, in run order. "stage" is the title of the standalone stage fallback (`ASK_STAGE_PHASE`).
 ASK_STAGE_PHASE = "stage"
 ASK_FALSIFIER_PHASE = ASK_STAGE_PHASE
 #: The merged tail agent: scoped tests, criterion and ledger verdict, declared docs. Its label

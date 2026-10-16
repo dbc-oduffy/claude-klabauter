@@ -117,6 +117,18 @@ def test_content_match_and_mismatch(tmp_path):
     assert _state(repo) == before
 
 
+def test_stale_expectation_on_a_path_equal_to_head_does_not_refuse(tmp_path):
+    repo = _repo(tmp_path)
+    _write(repo, "new.txt", "n\n")
+    out = gcommit.commit_paths(
+        repo,
+        ["seed.txt", "new.txt"],
+        "m",
+        expected_content_sha256={"seed.txt": _sha256(b"stale\n"), "new.txt": _sha256(b"n\n")},
+    )
+    assert _git(repo, "show", "--name-only", "--format=", out.sha).stdout.split() == ["new.txt"]
+
+
 def _stage_then_diverge(repo):
     _write(repo, "seed.txt", "STAGED\n")
     _git(repo, "add", "--", "seed.txt")
