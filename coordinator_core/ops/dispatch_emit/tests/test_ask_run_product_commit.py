@@ -444,7 +444,7 @@ def _composed_digest(ledger_js: str) -> dict:
     stubs = (
         "const _manifest={plan_id:'p'}, _incompleteChunks=[], _notStarted=[], _planHeld={}, _verifications=[], "
         "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewPrep={slices:[1]}, _reviewWave=[], "
-        "_deliveryVerdict=null, _deliveryNotRun=null, _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
+        "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
         "_sizingRel='s', _planRel=null, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
         f"_stoppedBy=[], _blockedChunks=[], _docs=null, _commit=null; let _nextAction=null; const _ledger={ledger_js};\n"
     )

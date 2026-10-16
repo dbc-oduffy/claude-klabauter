@@ -1689,6 +1689,23 @@ def compose_ask_script(
         f"  if (_resumeLedger) {{ _planRel = _gate.{RESUME_LEDGER_KEY}.plan; "
         f"_gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
     )
+    if fold_stage:
+        # The gate stages only for xs or s+resume_plan, so a ledger verdict arrives with no manifest:
+        # stage the resumed plan here and let the one disk read and wholeness guard admit it.
+        restage_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run `{_INVOKE} {OP_ASK_STAGE} '",
+            "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
+            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
+            "'` and return its JSON reply verbatim as `manifest`. If it replies `{\"error\": ...}`, "
+            "return that reply as `manifest` unchanged. Stage and commit nothing else.",
+        )
+        b.append(
+            "  if (_resumeLedger && !_stagedManifest) { "
+            f"const _restaged = await {_agent(restage_prompt, label='ledger-restage', phase='plan', agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_obj(['manifest'], {'manifest': {'type': ['object', 'null']}}), effort=_MECHANICAL_EFFORT)}; "
+            "_adoptManifest(_restaged?.manifest); }"
+        )
 
     if xl_possible:
         _append_split_stage(b)
@@ -2005,7 +2022,7 @@ def compose_ask_script(
         f"{{ _allLanded = true; _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
     )
     b.append(
-        "  if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded)) { _halted = { halted: "
+        "  if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
         "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : {{}}) }}; }}"
