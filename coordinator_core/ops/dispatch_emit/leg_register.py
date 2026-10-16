@@ -100,6 +100,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _floor("ask", "stage", "fallback only when no fold staged a manifest (stop_after, failed fold); no preceding agent"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
+    _floor("ask", "commit:wave-", _COMMIT_FLOOR),
     *_review_legs("ask"),
     _earns("emit", "work:", "executes one row"),
     _earns("emit", "seam:wave-", "relays the wave's seam record and runs reachability over its landed range; "

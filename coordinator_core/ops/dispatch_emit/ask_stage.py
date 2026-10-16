@@ -73,12 +73,12 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit import requirements_ledger
+from coordinator_core.ops.dispatch_emit import requirements_ledger, sibling_split
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import EM_OWNED_REASONS, read_spine
-from coordinator_core.ops.dispatch_emit.wave_map import build_waves, dag_from_waves
+from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
 
 # Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
@@ -430,7 +430,8 @@ def stage(
         check_cross_repo_writes(rows, root, approved=cross_repo_approved, session_id=session_id)
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
-    waves = build_waves(rows)
+    # Split, not refuse: runtime_cap is CPU-dependent and a refusal would halt hands-off runs.
+    waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
     if not waves and not (only_rows is not None and (owed or gated)):
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:

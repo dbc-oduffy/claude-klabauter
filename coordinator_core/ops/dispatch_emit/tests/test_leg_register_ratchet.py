@@ -44,6 +44,7 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("ask", "gate"),
         ("ask", "commit"),
         ("ask", "halt-commit"),
+        ("ask", "commit:wave-"),
         ("ask", "stage"),
         ("emit", "run-base"),
         ("emit", "commit:wave-"),
@@ -53,7 +54,7 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("grind", "ledger-sweep:drain"),
     }
 )
-_RUNTIME_FLOOR_MAX = 10
+_RUNTIME_FLOOR_MAX = 11
 
 #: Judgment legs that sit on the mechanical haiku type; every other such leg is refused.
 _JUDGMENT_ON_MECHANICAL_TYPE: frozenset[Key] = frozenset({("grind", "triage")})

@@ -1073,6 +1073,10 @@ def compose_ask_script(
             raise AskComposeRefused("row runner's verify prompt no longer has the shape the EM brief prefixes")
         runner_js = runner_js.replace(_ROW_VERIFY_PROMPT_OPEN, f"{EM_BRIEF_VAR} + {_ROW_VERIFY_PROMPT_OPEN}")
     b.append(runner_js)
+    b.append(f"  const {_emit._REPO_ROOT_VAR} = REPO_ROOT;")
+    b.append(_emit._checkpoint_commit_js(
+        agent_type_host, repo_root=repo_root, session_id=session_id, push_branch=None, seam=None,
+    ))
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = null;")
@@ -1827,10 +1831,19 @@ def compose_ask_script(
     b.append(
         f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
         f"{{ label: {_lit(build_work_label(''))} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
-        f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}));"
+        f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
+        "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
     )
     b.append("    }")
+    # Wave barrier: wave w+1 launches only once wave w's commit:wave-w leg has settled.
+    b.append("    const _waveIds = _manifest.rows.filter((x) => x.wave === w).map((x) => x.id);")
+    b.append("    await Promise.allSettled(_waveIds.map((i) => _rows[i]));")
+    b.append("    await _commitWave(w, _waveIds);")
     b.append("  }")
+    b.append(
+        "  if (_commitFailures.length) log('Wave commit failures (the terminal commit covers their paths): ' "
+        "+ _commitFailures.join('; '));"
+    )
     b.append("  await Promise.all(Object.values(_rows));")
     # verify:<row> (emit.py's _runRow) stays one test-runner per row, not folded into the
     # executor: an executor never runs a test tier, and the runner is an independent check that

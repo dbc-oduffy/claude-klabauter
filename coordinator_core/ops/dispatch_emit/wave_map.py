@@ -767,6 +767,16 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
     ]
 
 
+def cap_waves(waves: list[list[WaveRow]], cap: int) -> list[list[WaveRow]]:
+    """Split any wave wider than ``cap`` into consecutive sub-waves of at most ``cap`` rows.
+
+    Pure and order-preserving: predecessors stay in strictly earlier waves,
+    so no ordering or write-overlap invariant changes. Spawns nothing.
+    """
+    size = max(1, cap)
+    return [wave[i : i + size] for wave in waves for i in range(0, len(wave), size)]
+
+
 def dag_from_waves(waves: list[list[WaveRow]]) -> DagPlan:
     """Waves (as ``build_waves`` returns them) -> the DAG the emitter schedules from.
 
