@@ -2087,8 +2087,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "765a809e5f4084aa568414081d3e668bc9a60de1",
-    "coordinator_core/_engine_stamp": "97ac6a983692d652cbdf53bf4baced9b7d0076a2",
+    "coordinator_core/_engine_published_at": "ca79b7918a591e648a53aa842bfa71064fa2966d",
+    "coordinator_core/_engine_stamp": "7b4020ee34266fd81fcccc8bbeb6847074c7f0b1",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4327,7 +4327,7 @@
     "coordinator_core/ops/dispatch_emit/abandoned_runs.py": "15f98bd10c4734550f8d5a15e3160933d1017508",
     "coordinator_core/ops/dispatch_emit/admission.py": "dc4befd7cba86b544eceea0beb3068de435d281b",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "cf2be379e4f266cf49a5e5287ae4fe3ee6ee8a5c",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "0193cac82355a106801abf3f7ff97afd175f3e6f",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "8e257b688928facd3b42115f38ae82f14037aa3f",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "1bd1e690b0ba9939b72ec6478c494ea85b1bcee1",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "3a0cb61aa388b7484640d42bc38f263c19307a94",
     "coordinator_core/ops/dispatch_emit/ask_fanout_contract.py": "779619f73156ce795abc3f0875e1e5c311748118",
@@ -4345,7 +4345,7 @@
     "coordinator_core/ops/dispatch_emit/cross_plan_write_overlap.py": "782cb8e7f4fd52e1bdcc5d7e148a24e67a80b5be",
     "coordinator_core/ops/dispatch_emit/cross_repo_write_refusal.py": "2980ec33eb432cb7b89a471a27dee0a6a24ff767",
     "coordinator_core/ops/dispatch_emit/delivery_credit.py": "392973bcc7c4d39fa15642b6f5d174d1af2db698",
-    "coordinator_core/ops/dispatch_emit/design_conformance.py": "10b0a9932c45f9a88326bff8b8ad87d0d60658e9",
+    "coordinator_core/ops/dispatch_emit/design_conformance.py": "2e843a1a5e804fb40d7d4d978424cc14497d4ad9",
     "coordinator_core/ops/dispatch_emit/dirty_write_set.py": "b2c76fe15d19dfb4bbed53e8a810f9ec42e40c5a",
     "coordinator_core/ops/dispatch_emit/emission_receipt.py": "5f22ef3145f62eb57fe77f6cb03b8c2382eeec17",
     "coordinator_core/ops/dispatch_emit/emit.py": "c003394586baba4471cc022e7a2cd4caad685b00",
@@ -4468,7 +4468,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_commit_doc_paths.py": "2c86ce5d7016896df019fe8a66542791f3a57398",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_cross_repo_evidence.py": "48a2928f6a9e1506b864d6b74251b98d312e5f14",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_design_brief.py": "5b610ffe5c795def07fc5ce6baf4f8ec54e24432",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_design_met_by.py": "f39d5d8c398e8473c98fae5dc9b1d88eef625897",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_design_met_by.py": "ab77819e40f4ecbbc3bb2e6141e3d1f9a60a893d",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_em_brief.py": "6076093e3b46d53c1df73a3f133b488321c717e7",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_end_to_end.py": "5d05245b41efa2fddb757ea8598a7822658e727b",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_gated_and_halt.py": "efde4c7430b7ec3dc9a0feec48899a1cb6c73ff5",
@@ -4553,6 +4553,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_commit_legs_are_haiku.py": "ce6d77ee6b7729cf36075b696edc88ebe8b3c68f",
     "coordinator_core/ops/dispatch_emit/tests/test_commit_request.py": "e06c47bd5feba7eec2a1b8b44911f3e07984e687",
     "coordinator_core/ops/dispatch_emit/tests/test_completion_receipt_builder.py": "2209a78b994de6421f78a0d08da0832fcd028422",
+    "coordinator_core/ops/dispatch_emit/tests/test_compose_script_front_end_wave_leg.py": "0f24c3dd88f13295d4d08f55a03277f776f8cea9",
     "coordinator_core/ops/dispatch_emit/tests/test_criterion_leg.py": "6b5563a38c0a1ac962e077501ccc1a0699131cca",
     "coordinator_core/ops/dispatch_emit/tests/test_cross_plan_write_overlap.py": "76c43554a154b810551a69930f5459aa01442745",
     "coordinator_core/ops/dispatch_emit/tests/test_cross_repo_engine_ask.py": "e32c4e789ea50f20bc4024b2ffcec91568477522",
@@ -8034,5 +8035,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "4c3cef6bbefc5cdb655b9675e0903c4e0bee70a2"
+  "source_head": "0d6667a71dfdd9c25d668c9c9adac738b01e05c6"
 }

@@ -21,6 +21,13 @@ ANCHOR_PREFIX = "design-registry:"
 #: The gate-reply key `dispatch.ask_gate` fills and `ask_compose` reads.
 DESIGN_BRIEF_KEY = "design_brief"
 DESIGN_SURFACE = "visual"
+#: Prompt clause for the ledger check: a design row's default `met_by` is the wave's
+#: senior-front-end review sidecar, never the harvest output.
+DEFAULT_MET_BY_CLAUSE = (
+    " Default met_by for a design-registry item judged 'met' with no ratification file of its own: "
+    "the senior-front-end review sidecar of the review wave named here (it must name the item's board); "
+    "never the harvest output or its directory. Wave senior-front-end review sidecars: "
+)
 #: Review verdicts that never meet a design row.
 REFUSING_VERDICTS = frozenset({"REJECTED", "REQUIRES_CHANGES", "BLOCKED", "PIVOT"})
 

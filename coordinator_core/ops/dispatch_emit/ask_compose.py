@@ -62,7 +62,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     research_assemble_flags_js,
     scout_assemble_flags_js,
 )
-from coordinator_core.ops.dispatch_emit.design_conformance import DESIGN_BRIEF_KEY
+from coordinator_core.ops.dispatch_emit.design_conformance import DEFAULT_MET_BY_CLAUSE, DESIGN_BRIEF_KEY
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
@@ -2082,7 +2082,7 @@ def compose_ask_script(
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD"),
         docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
-        verdict_parts=(*verdict_parts, "js:" + _RESUME_LEDGER_CLAUSE_JS),
+        verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS),
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
     )
@@ -2347,6 +2347,16 @@ def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titl
     return script
 
 
+#: Repo-relative sidecars of the review wave's senior-front-end returns, or 'none'; the ledger
+#: check defaults a design row's met_by to one of them.
+_SFE_WAVE_SIDECARS_JS = (
+    "((() => { const _r = REPO_ROOT.replace(/\\\\/g, '/').replace(/\\/+$/, '') + '/'; "
+    "const _p = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && typeof w.sidecar_path === 'string' "
+    "&& /(?:^|:)senior-front-end$/.test(String(w.agent_type ?? ''))).map((w) => { "
+    "const s = w.sidecar_path.replace(/\\\\/g, '/'); "
+    "return s.toLowerCase().startsWith(_r.toLowerCase()) ? s.slice(_r.length) : s; }); "
+    "return _p.length ? _p.join(', ') : 'none'; })())"
+)
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.
 _RESUME_LEDGER_CLAUSE_JS = (

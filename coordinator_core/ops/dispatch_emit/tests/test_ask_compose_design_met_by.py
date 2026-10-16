@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit.design_conformance import DEFAULT_MET_BY_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
 _PREFIX = ask_compose._DESIGN_PREFIX_JS
@@ -43,3 +44,22 @@ def test_review_wave_agents_are_prefixed_with_the_design_brief():
     # shadow above is what carries the prefix to each of them.
     assert re.search(r"await agent\(", review[:end])
     assert "_reviewAgent" not in script
+
+
+def test_verify_prompt_defaults_design_met_by_to_the_wave_senior_front_end_sidecar():
+    script = _compose(in_run_commit=True)
+    assert "never the harvest output" in DEFAULT_MET_BY_CLAUSE
+    marker = "Wave senior-front-end review sidecars: ' + "
+    assert script.count(marker) == 1
+    assert "Default met_by for a design-registry item" in script[:script.index(marker)]
+    tail = script[script.index(marker) + len(marker):][:900]
+    assert "_reviewWave" in tail
+    assert "senior-front-end$/.test(String(w.agent_type" in tail
+    assert "w.sidecar_path.replace(" in tail
+    assert "'none'" in tail
+
+
+def test_default_met_by_sidecar_expression_is_valid_js_and_filters_by_reviewer():
+    expr = ask_compose._SFE_WAVE_SIDECARS_JS
+    assert expr.count("(") == expr.count(")")
+    assert "harvest" not in expr
