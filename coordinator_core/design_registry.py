@@ -23,7 +23,7 @@ UNPARSEABLE = "registry-unparseable"
 _STATUSES = ("designed", "partial", "implemented", "deviated")
 _KEY_RE = re.compile(r"^([A-Za-z0-9_\-]+):(?:[ \t]+(.*))?$")
 _BLOCK_SCALAR_RE = re.compile(r"^[|>][+\-0-9]*$")
-_URL_RE = re.compile(r"claude\.ai/artifact/([A-Za-z0-9_-]+)")
+ARTIFACT_URL_RE = re.compile(r"claude\.ai/artifact/([A-Za-z0-9_-]+)")
 _BOM = "﻿"
 
 
@@ -198,7 +198,7 @@ def _validate_entries(top: dict) -> list:
             raise _SubsetError("entry id missing or repeated")
         seen.add(ident)
         board = raw.get("board")
-        match = _URL_RE.search(board) if isinstance(board, str) else None
+        match = ARTIFACT_URL_RE.search(board) if isinstance(board, str) else None
         if match is None or board[match.end() :].strip():
             raise _SubsetError("board is not an artifact URL ending at its id")
         artboards, sources = raw.get("artboards"), raw.get("sources")

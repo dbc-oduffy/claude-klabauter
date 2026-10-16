@@ -3,10 +3,10 @@
 Reads the sizing; at M+ with no halt it mints the baton record in-process (a write). An unfired
 plan on disk with rows still to run rides the verdict as `resume_plan` and `resume_rows`.
 
-Every verdict carries the sizing's `design_route` payload when one is recorded. A canvas route with
-no recorded approval halts `design-review` at every arm, before any baton mint: unlike a touchpoint
-halt, the in-run accept loop and the emit-time gate never lift it, so only the PM's recorded
-design approval clears it.
+Every verdict carries the sizing's `design_route` payload when one is recorded. The gate never
+halts on it: a canvas route with no recorded approval arms (plan authored first) and
+`ask_stage.stage` refuses it with a `design-review:` reason, so the halt falls after plan and
+before stage.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import design_route
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    HALT_DESIGN_REVIEW,
     HALT_REFUSAL,
     HALT_RESEARCH,
     HALT_ROOM,
@@ -63,7 +62,7 @@ _PARAMS = (
     Field("record", "dict"),
     Field("run_id", "nonempty_str"),
 )
-_RECORD_KINDS = ("exit_criterion", "xl_exit")
+_RECORD_KINDS = ("exit_criterion", "xl_exit", design_route.RECORD_KIND)
 _XL_PICKS = ("roadmap", "accept_multi_session", "split")
 _DOC_NEW = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 
@@ -253,17 +252,6 @@ def _arm_verdict(
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
-    if route_payload is not None and route_payload["route"] == "canvas" and not route_payload["approved"]:
-        board = route_payload["board"]
-        reason = (
-            f"canvas route (authority {route_payload['authority']['by']}): the PM reviews the board "
-            f"{board['source']} (harvest {board['harvest']}) before any code row; "
-            "recipe coordinator/snippets/design-canvas-recipe.md"
-        )
-        return _halt(
-            HALT_DESIGN_REVIEW, reason, design_route=route_payload,
-            touchpoint=design_route.approval_touchpoint(sizing_rel),
-        )
     resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root) if resume else None
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
@@ -369,6 +357,13 @@ def _record_refusal(record: dict) -> Optional[str]:
     kind = record.get("kind")
     if kind not in _RECORD_KINDS:
         return f"dispatch.ask_gate params.record.kind must be one of {list(_RECORD_KINDS)}"
+    if kind == design_route.RECORD_KIND:
+        if "apm_ruling" in record:
+            return "dispatch.ask_gate params.record.apm_ruling is refused for design_approval; the PM approves a canvas"
+        for name in ("board_url", "pm_ruling", "ruling_ref"):
+            if not isinstance(record.get(name), str) or not record[name].strip():
+                return f"dispatch.ask_gate params.record.{name} must be a non-empty string"
+        return None
     for name in ("apm_ruling", "ruling_ref"):
         if not isinstance(record.get(name), str) or not record[name].strip():
             return f"dispatch.ask_gate params.record.{name} must be a non-empty string"
@@ -383,6 +378,13 @@ def _record_refusal(record: dict) -> Optional[str]:
 def _write_record(repo_root: Path, sizing_rel: str, record: dict) -> dict:
     """Write the ruling through its kind's single writer; `{"ok": bool, "error"?: str}`."""
     # Writer modules import lazily: they sit outside dispatch_emit and are needed only under `record`.
+    if record["kind"] == design_route.RECORD_KIND:
+        from coordinator_core.ops.dispatch_emit.design_approval import record as write_approval
+
+        reply = write_approval(repo_root, sizing_rel, board_url=record["board_url"])
+        if reply.get("exit_code") == 0:
+            return {"ok": True, "pm_ruling": record["pm_ruling"], "ruling_ref": record["ruling_ref"]}
+        return {"ok": False, "error": str(reply.get("error") or "record refused")}
     base = {"sizing": sizing_rel, "apm_ruling": record["apm_ruling"], "ruling_ref": record["ruling_ref"]}
     if record["kind"] == "exit_criterion":
         from coordinator_core.ops.sizing_accept_exit_criterion import _handler as writer
@@ -402,12 +404,14 @@ def _write_record(repo_root: Path, sizing_rel: str, record: dict) -> dict:
 @register_op("dispatch.ask_gate")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]), `baton` (str),
-    `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?),
+    `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?; or kind
+    design_approval, board_url, pm_ruling, ruling_ref: the canvas board link and the PM's verbatim approval,
+    echoed in `recorded` and not stored),
     `run_id` (str: the warp run asking).
 
     With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict. With
     `record`, writes that ruling through its single writer, then gates the sizing as it stands and
-    adds `recorded` {ok, error?} to the reply; a refused write still returns the verdict. Replies
+    adds `recorded` {ok, error?, pm_ruling?, ruling_ref?} to the reply; a refused write still returns the verdict. Replies
     `GateVerdict.to_json()`; a malformed request replies `{"error": str}` and writes nothing.
     """
     if repo_root is None:

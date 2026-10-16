@@ -1800,6 +1800,7 @@ def _write_back(
     scout_evidence: Optional[list[str]] = None,
     deliverable_id: Optional[str] = None,
     research: Optional[dict[str, Any]] = None,
+    design_route: Optional[str] = None,
     verbatim_turns: Optional[tuple[int, int]] = None,
     intent_verbatim: bool = False,
     name: Optional[str] = None,
@@ -1994,6 +1995,14 @@ def _write_back(
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
         if research:
             text = write_fm_nested_field(text, "research", _render_block(research))
+        if design_route is not None:
+            from coordinator_core.ops.dispatch_emit import design_route as _dr
+
+            try:
+                block = _dr.with_route(doc.get(_dr.DESIGN_ROUTE_KEY), design_route)
+            except ValueError as exc:
+                raise MutateAbort(str(exc)) from exc
+            text = write_fm_nested_field(text, _dr.DESIGN_ROUTE_KEY, _render_block(block))
         if acceptance_rows:
             text = write_fm_nested_field(text, "acceptance_rows", _render_block(acceptance_rows))
         if decision.get("initiatives"):
@@ -2397,6 +2406,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-question-mode split|combine]\n"
         "    [--research-question-target <n>=<source>[:<ref>] ... (source web|repo|local; ref for repo/local)]\n"
         "    [--research-destination repo|local-only]\n"
+        "    [--design-route canvas|reviewer|none (records design_route; requires --write)]\n"
         "    [--initiatives '[{\"label\":..,\"rows\":[..]}]' (2+ with disjoint rows at XL sets the bundle detent)]\n"
         "    [--acceptance-rows-json '[{\"statement\":..,\"writes\":[..],\"check\":..}]' (requires --write)]\n"
         "    [--write <state/sizings/x.yaml> [--json (print the decision instead of 'written: <path>')]\n"
@@ -2561,6 +2571,7 @@ def main(argv: list[str]) -> int:
     research_question_mode = None
     research_question_targets: list[str] = []
     research_destination = None
+    design_route_flag = None
     acceptance_rows_json = None
     initiatives_json = None
     verbatim_turns_raw = None
@@ -2725,6 +2736,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-destination" and i + 1 < len(argv):
             research_destination = argv[i + 1]
+            i += 2
+        elif tok == "--design-route" and i + 1 < len(argv):
+            design_route_flag = argv[i + 1]
             i += 2
         elif tok == "--initiatives" and i + 1 < len(argv):
             initiatives_json = argv[i + 1]
@@ -2942,6 +2956,18 @@ def main(argv: list[str]) -> int:
     if research_block is not None and write_path is None:
         print(f"{prog}: --research-* requires --write <state/sizings/x.yaml>", file=sys.stderr)
         return EXIT_USAGE
+    if design_route_flag is not None:
+        from coordinator_core.ops.dispatch_emit.design_route import ROUTES as _DESIGN_ROUTES
+
+        if design_route_flag not in _DESIGN_ROUTES:
+            print(
+                f"{prog}: --design-route must be one of {'|'.join(_DESIGN_ROUTES)}, got {design_route_flag!r}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if write_path is None:
+            print(f"{prog}: --design-route requires --write <state/sizings/x.yaml>", file=sys.stderr)
+            return EXIT_USAGE
     acceptance_rows = None
     if acceptance_rows_json is not None:
         acceptance_rows, acceptance_errors = parse_acceptance_rows(acceptance_rows_json)
@@ -3029,6 +3055,7 @@ def main(argv: list[str]) -> int:
                 scout_evidence=scout_evidence,
                 deliverable_id=deliverable_id,
                 research=research_block,
+                design_route=design_route_flag,
                 verbatim_turns=verbatim_turns,
                 intent_verbatim=intent_verbatim,
                 name=name,

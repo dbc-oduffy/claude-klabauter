@@ -21,6 +21,7 @@ from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.ops.dispatch_emit import design_route
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     DELIVERY_NOTE_DIR,
@@ -424,6 +425,16 @@ def _memo_draft_steps(
     return out_owed, steps
 
 
+def _refuse_unapproved_design(sizing: Mapping, sizing_rel: str) -> None:
+    """Refuse staging under a canvas design_route the PM has not approved."""
+    payload, error = design_route.read(sizing, sizing_rel)
+    if error:
+        raise AskStageError(error)
+    refusal = design_route.stage_refusal(payload)
+    if refusal:
+        raise AskStageError(refusal)
+
+
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `XS-MINT-MISROUTED` for a sizing the XS mint must not take: one with a
     `plan:` edge or a non-XS `estimate.tshirt`; `XS-MINT-NO-WRITES` for an empty `writes`.
@@ -496,6 +507,8 @@ def stage(
 
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
+        run_sizing_rel, run_sizing = sizing_rel, sizing
+        _refuse_unapproved_design(sizing, sizing_rel)
         _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
         spine_text, spine_path = mint_xs_spine(
             sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated
@@ -506,9 +519,15 @@ def stage(
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
             raise AskStageError(f"plan not found under the repo: {plan_rel!r}")
+    plan_text = plan_path.read_text(encoding="utf-8")
+    if not sizing_rel:
+        run_sizing_rel = _run_sizing_rel(commit_sizing_rel, plan_text)
+        run_sizing = _run_sizing(root, run_sizing_rel)
+        # An unloadable sizing_object yields None here and skips the design check (fails open).
+        if run_sizing is not None:
+            _refuse_unapproved_design(run_sizing, run_sizing_rel)
     plan_posix = _rel(root, plan_path)
 
-    plan_text = plan_path.read_text(encoding="utf-8")
     if plan_rel:
         unfilled = scaffold_markers(plan_text)
         if unfilled:
@@ -561,8 +580,6 @@ def stage(
 
     ask_file = record / ASK_TEXT_FILE
     ask_text = ask_file.read_text(encoding="utf-8") if ask_file.is_file() else None
-    run_sizing_rel = _run_sizing_rel(sizing_rel or commit_sizing_rel, plan_text)
-    run_sizing = _run_sizing(root, run_sizing_rel)
     pm_block = pm_intent_block(run_sizing, ask_text)
     if pm_block:
         _write(record / PM_INTENT_FILE, pm_block)

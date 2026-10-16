@@ -29,7 +29,7 @@ from typing import Any, NamedTuple
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
-from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY
+from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
 
@@ -55,7 +55,8 @@ OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
 HALT_SPLIT = "split"
 HALT_RESEARCH = "research"
-#: An unapproved canvas design route; only the PM's recorded design_approval clears it.
+#: Raised by the ask script when an ask_stage refusal starts with design_route.STAGE_REFUSAL_PREFIX;
+#: the PM's recorded design_approval clears it.
 HALT_DESIGN_REVIEW = "design-review"
 STOP_AFTER_PLAN = "plan"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
@@ -120,6 +121,7 @@ ASK_SCOUT_SCHEMA = {
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
+        "design_route": {"type": "string", "enum": list(DESIGN_ROUTES)},
         "manifest": {"type": ["object", "null"]},
         "falsifier": {"type": ["object", "null"]},
         "research": {
@@ -239,6 +241,22 @@ def acceptance_rows_assemble_flags_js(scouted: str, quote: str) -> str:
         f" ? ' --acceptance-rows-json ' + {quote}(JSON.stringify({a})) : '')"
     )
 
+
+def design_route_assemble_flags_js(scouted: str, quote: str) -> str:
+    """JS expression text appending ``--design-route <v>`` from ``<scouted>.design_route``;
+    the empty string unless that is one of ``design_route.ROUTES``. Starts with `` + `` so it
+    follows the command literal directly."""
+    d = f"{scouted}.design_route"
+    routes = ", ".join(f"'{r}'" for r in DESIGN_ROUTES)
+    return f" + ([{routes}].includes({d}) ? ' --design-route ' + {quote}({d}) : '')"
+
+
+#: Scout prompt passage: when to return `design_route`. Appended to the ask scout's prompt.
+DESIGN_ROUTE_CLAUSE = (
+    "Return `design_route` (canvas, reviewer or none) per the DoE page "
+    "coordinator/docs/wiki/coordinator-tripwires/a-large-design-ask-goes-to-the-canvas.md; "
+    "omit it when the ask is not a design ask."
+)
 
 PM_EXIT_QUESTION_KEY = "pm_exit_question"
 RUN_DIR_ROOT = "scratch/warp"
@@ -492,8 +510,8 @@ class ResumePlan(NamedTuple):
 class GateVerdict:
     """dispatch.ask_gate reply: an arm to run, or a halt dict
     {"kind": HALT_*, "reason": str, "touchpoint"?: str, "route"?: str,
-    "fire"?: list[str]} (a research halt's one ready Workflow call; a HALT_DESIGN_REVIEW halt
-    carries "design_route" and the approval "touchpoint"); baton is the
+    "fire"?: list[str]} (a research halt's one ready Workflow call); the verdict's
+    "design_route" key carries the sizing's payload and never halts; baton is the
     minted {"id", "path"} at an M+ arm."""
 
     arm: str | None

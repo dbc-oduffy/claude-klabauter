@@ -37,6 +37,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KEY,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
+    HALT_DESIGN_REVIEW,
     HALT_REFUSAL,
     HALT_RESEARCH,
     HALT_ROOM,
@@ -59,10 +60,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     SIZING_ASSEMBLE_CMD,
     acceptance_rows_assemble_flags_js,
     research_assemble_flags_js,
+    design_route_assemble_flags_js,
+    DESIGN_ROUTE_CLAUSE,
     scout_assemble_flags_js,
 )
 from coordinator_core.ops.dispatch_emit.design_conformance import DEFAULT_MET_BY_CLAUSE, DESIGN_BRIEF_KEY
-from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY
+from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
@@ -470,6 +473,12 @@ _ADMIT_MANIFEST_JS = (
     "    if (m === null || m === undefined || typeof m !== 'object' || Array.isArray(m)) return;\n"
     "    if (m.error) { if (!_stageRefusal) _stageRefusal = String(m.error); return; }\n"
     "    _stagedManifest = m;\n"
+    "  };\n"
+    "  // readyOpError is one agent-authored line that may carry a lead-in, so this stays a substring test.\n"
+    "  const _adoptReadyError = (e) => {\n"
+    "    if (!_stagedManifest && !_stageRefusal && String(e.readyOpError ?? '').includes("
+    + json.dumps(STAGE_REFUSAL_PREFIX)
+    + ")) _stageRefusal = String(e.readyOpError);\n"
     "  };"
 )
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -1385,6 +1394,7 @@ def compose_ask_script(
             f"--exit-criterion <exit_criterion>{deliverable_flag} [--jtbd-unclear when jtbd_unclear is true] "
             "[--well-trodden-step-change when well_trodden_step_change is true] "
             "[--research-class/-appetite/-source/-depth/-target/-question from research when research is returned] "
+            "[--design-route <design_route> when design_route is returned] "
             f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} --json {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
         )
         gate_template = (
@@ -1429,6 +1439,7 @@ def compose_ask_script(
             + EXIT_CRITERION_RULES_CLAUSE
             + " " + RESEARCH_CLASSIFY_CLAUSE
             + " " + ACCEPTANCE_ROWS_CLAUSE
+            + " " + DESIGN_ROUTE_CLAUSE
             + scout_closing
             + ledger_clause
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
@@ -1472,6 +1483,7 @@ def compose_ask_script(
             f"{_lit(SIZING_ASSEMBLE_CMD)}"
             + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
             + research_assemble_flags_js("_asmFields", "_q")
+            + design_route_assemble_flags_js("_asmFields", "_q")
             + acceptance_rows_assemble_flags_js("_asmFields", "_q")
             + f" + ' --write ' + _q(_sizingPath) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
             + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
@@ -1956,7 +1968,7 @@ def compose_ask_script(
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
-                "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { _adoptManifest(_ready.readyOpReply); }"
+                "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { _adoptManifest(_ready.readyOpReply); _adoptReadyError(_ready); }"
             )
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         if fold_stage:
@@ -2011,7 +2023,7 @@ def compose_ask_script(
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
-                "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { _adoptManifest(_reready.readyOpReply); }"
+                "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { _adoptManifest(_reready.readyOpReply); _adoptReadyError(_reready); }"
             )
         b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
         if fold_stage:
@@ -2161,7 +2173,13 @@ def compose_ask_script(
         f"{{ _allLanded = true; _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
     )
     b.append(
-        "  if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: "
+        f"  if (_manifest.error && String(_manifest.error).startsWith({json.dumps(STAGE_REFUSAL_PREFIX)})) {{ _halted = {{ "
+        f"halted: {_lit(HALT_DESIGN_REVIEW)}, kind: {_lit(HALT_DESIGN_REVIEW)}, reason: String(_manifest.error), "
+        f"board_url: _gate?.{DESIGN_ROUTE_KEY}?.board?.url ?? null, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, "
+        f"sizing: _sizingRel, plan: _planRel, run_id: _runId, next_action: {_design_next_action_js(sizing_rel)} }}; }}"
+    )
+    b.append(
+        "  else if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
         "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : {{}}) }}; }}"
@@ -2539,6 +2557,15 @@ def _refire_js(sizing_rel: Optional[str]) -> str:
     return (
         f"(_sizingRel ? {_lit(head)} + JSON.stringify(_sizingRel) + {_lit(tail)} : {_lit(fire_command(None))})"
     )
+
+
+def _design_next_action_js(sizing_rel: Optional[str]) -> str:
+    """JS expression for the design-review halt's next_action, rendered by `design_route.next_action`."""
+    if sizing_rel:
+        return _lit(_design_next_action(sizing_rel))
+    marker = "\u0000"
+    parts = _design_next_action(marker).split(marker)
+    return "(" + " + (_sizingRel ?? '') + ".join(_lit(p) for p in parts) + ")"
 
 
 def _owed_handback_js(sizing_rel: Optional[str]) -> str:

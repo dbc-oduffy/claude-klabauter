@@ -1007,6 +1007,62 @@ def test_vendored_sizing_object_schema_validates_full_xxl_object():
     assert result["ok"], result.get("errors")
 
 
+_DESIGN_ROUTE_OBJ = {
+    "route": "canvas",
+    "authority": None,
+    "board_url": None,
+    "approval": None,
+}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "canvas",
+        "reviewer",
+        "none",
+        dict(_DESIGN_ROUTE_OBJ),
+        {
+            "route": "canvas",
+            "authority": "A-LARGE-DESIGN-ASK-GOES-TO-THE-CANVAS",
+            "board_url": "https://claude.ai/artifact/abc",
+            "approval": {"by": "pm", "at": "2026-10-17T00:00:00Z"},
+        },
+    ],
+)
+def test_vendored_schema_admits_each_design_route_form(value):
+    from coordinator_core.frontmatter.schema_validate import validate
+
+    obj = _vendored_sizing_object_fixture()
+    obj["design_route"] = value
+    result = validate("sizing-object", obj)
+    assert result["ok"], result.get("errors")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {**_DESIGN_ROUTE_OBJ, "extra": 1},
+        {
+            **_DESIGN_ROUTE_OBJ,
+            "approval": {
+                "by": "pm",
+                "at": "x",
+                "board_url": "https://claude.ai/artifact/abc",
+            },
+        },
+        {"route": "canvas"},
+        "bogus",
+    ],
+)
+def test_vendored_schema_refuses_malformed_design_route(value):
+    from coordinator_core.frontmatter.schema_validate import validate
+
+    obj = _vendored_sizing_object_fixture()
+    obj["design_route"] = value
+    assert not validate("sizing-object", obj)["ok"]
+
+
 def test_vendored_sizing_object_schema_still_rejects_unknown_tshirt():
     from coordinator_core.frontmatter.schema_validate import validate
 
@@ -1162,7 +1218,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.40.0 -> 1.41.0: DoE a09fbe88d6, `research.question_mode` and `research.question_targets`.
     # Moved 1.41.0 -> 1.42.0 on two DoE lines (38c370f1a5 `research.seeds`; 12069c34ba `initiatives`, `bundle`).
     # Moved 1.42.0 -> 1.43.0: DoE e6fe40b3cc reconciles both 1.42.0 lines.
-    assert schema["x-schema-version"] == "1.43.0"
+    # Moved 1.43.0 -> 1.44.0: claude-klabauter-first optional `design_route`; DoE landed the same bytes at 91f02d8ae1.
+    assert schema["x-schema-version"] == "1.44.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
