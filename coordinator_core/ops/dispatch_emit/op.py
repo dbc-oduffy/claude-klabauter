@@ -518,19 +518,30 @@ class FiredDriftError(ValueError):
     """
 
 
-def _reserved_run(root: Path, reserved: object, intake_doc: Optional[dict], sizing_rel: Optional[str]) -> tuple:
+def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizing_rel: Optional[str]) -> tuple:
     """(run_id, parent_id) for a fan-out slice's reserved run id; ValueError when the id is not the
-    sizing's own `em_analysis.ask_parent` run or is already bound."""
+    sizing's own `em_analysis.ask_parent` run or is bound to a run that has not halted.
+
+    A halted slice rebinds: its refire is the only way the siblings held `after` it release."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent, status_rel
 
-    if not sizing_rel or intake_doc is None:
+    if not sizing_rel or sizing_doc is None:
         raise ValueError("dispatch.emit reserved_run_id takes a slice sizing_path, not a raw ask")
-    marker = parse_ask_parent((intake_doc.get("em_analysis") or {}).get("ask_parent"))
+    marker = parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent"))
     if marker is None or marker[1] != reserved:
         raise ValueError(f"dispatch.emit reserved_run_id {reserved!r} is not the run {sizing_rel} reserves")
-    if (root / status_rel(marker[1])).exists():
+    if (root / status_rel(marker[1])).exists() and not _halted(root / status_rel(marker[1])):
         raise ValueError(f"dispatch.emit reserved_run_id {reserved!r} is already bound to a run")
     return marker[1], marker[0]
+
+
+def _halted(status: Path) -> bool:
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
+
+    try:
+        return json.loads(status.read_text(encoding="utf-8")).get("status") == STATUS_HALTED
+    except (OSError, ValueError):
+        return False
 
 
 def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
@@ -543,10 +554,13 @@ def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
 
     status = root / status_rel(run_id)
     status.parent.mkdir(parents=True, exist_ok=True)
+    record = json.dumps({"run_id": run_id, "status": STATUS_RUNNING}) + "\n"
     try:
-        claimed_write.create_exclusive(status, json.dumps({"run_id": run_id, "status": STATUS_RUNNING}) + "\n")
+        claimed_write.create_exclusive(status, record)
     except FileExistsError:
-        raise ValueError(f"dispatch.emit reserved_run_id {run_id!r} is already bound to a run") from None
+        if not _halted(status):
+            raise ValueError(f"dispatch.emit reserved_run_id {run_id!r} is already bound to a run") from None
+        claimed_write.replace_text(status, record)
     parent = root / parent_record_rel(parent_id)
     if not parent.is_file():
         raise ValueError(f"dispatch.emit reserved_run_id {run_id!r}: parent record {parent_record_rel(parent_id)} is missing")
@@ -1381,6 +1395,7 @@ def _dispatch_emit(
             from coordinator_core.ops.sizing_intake_contract import is_intake, read_em_brief
 
             intake_doc = _load_ask_sizing(ask_root, sizing_rel)
+            sizing_doc = intake_doc
             if is_intake(intake_doc):
                 # Sized in-run: the gate and plan-blitz args are the run's, as for a raw ask.
                 ask_sizing = {"writes": list(params.get("writes") or []), "batons": []}
@@ -1391,7 +1406,7 @@ def _dispatch_emit(
                     cross_repo_approved=bool(params.get("cross_repo_approved")),
                 )
         else:
-            intake_doc = None
+            intake_doc = sizing_doc = None
             given_root = repo_root or params.get("target_root")
             if not given_root:
                 raise ValueError("dispatch.emit ask requires repo_root or target_root")
@@ -1403,7 +1418,7 @@ def _dispatch_emit(
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         reserved_parent = None
         if params.get("reserved_run_id") is not None:
-            run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], intake_doc, sizing_rel)
+            run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
