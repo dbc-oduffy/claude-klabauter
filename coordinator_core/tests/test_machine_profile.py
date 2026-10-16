@@ -259,6 +259,45 @@ def test_feature_explicit_overrides_both_ways(reg, tmp_path, feature):
     assert mp.feature_enabled(feature) is False
 
 
+def _author_repo(reg, tmp_path, extra=""):
+    repo = tmp_path / "authoring"
+    repo.mkdir(exist_ok=True)
+    (repo / ".coordinator-dev-repo").write_text("")
+    _write(reg, '"repos.content" = "%s"\n%s' % (repo.as_posix(), extra))
+
+
+def test_gem_cross_repo_commit_unset_is_on_for_consumer_and_author(reg, tmp_path):
+    assert mp.machine_profile() == "consumer"
+    assert mp.feature_enabled("gem_cross_repo_commit") is True
+    _author_repo(reg, tmp_path)
+    mp.reset_cache()
+    assert mp.machine_profile() == "author"
+    assert mp.feature_enabled("gem_cross_repo_commit") is True
+
+
+def test_gem_cross_repo_commit_explicit_wins_both_ways(reg, tmp_path):
+    _write(reg, '"coordinator.feature.gem_cross_repo_commit" = "off"\n')
+    assert mp.feature_enabled("gem_cross_repo_commit") is False
+    _write(reg, '"coordinator.feature.gem_cross_repo_commit" = "on"\n')
+    assert mp.feature_enabled("gem_cross_repo_commit") is True
+    _author_repo(reg, tmp_path, '"coordinator.feature.gem_cross_repo_commit" = "off"\n')
+    assert mp.machine_profile() == "author"
+    assert mp.feature_enabled("gem_cross_repo_commit") is False
+
+
+def test_gem_cross_repo_commit_env_override_wins(reg, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_GEM_CROSS_REPO_COMMIT", "off")
+    mp.reset_cache()
+    assert mp.feature_enabled("gem_cross_repo_commit") is False
+
+
+def test_gem_cross_repo_commit_leaves_other_defaults(reg):
+    assert mp.feature_enabled("gem_cross_repo_commit") is True
+    assert mp.feature_enabled("cross_repo_memos") is False
+    assert mp.feature_enabled("publishing") is False
+    assert mp.feature_enabled("doctrine_edit_gate") is True
+
+
 def test_features_are_independent(reg):
     _write(reg, '"coordinator.feature.publishing" = "on"\n')
     assert mp.feature_enabled("publishing") is True

@@ -156,6 +156,21 @@ Negative-spec:
     sites. Do not revert either early return back to falling straight into
     `_evaluate_foreign_repo_candidate`'s no-repo-anchor branch; that
     re-opens the exact misfire this fix closes.
+
+GROUP EM SETTING (GEM-CROSS-REPO-COMMIT-IS-A-BOX-SETTING)
+For a session holding live Group EM standing (or a subagent whose EM
+back-pointer resolves to it), `coordinator.feature.gem_cross_repo_commit`
+decides a git write into a foreign repo:
+
+  on / unset | scoped commit, pathspec-only add, mv | allowed (None)
+  on / unset | any other git write                  | ordinary bump, marker clears
+  off        | any git write                        | refused; marker does NOT clear
+  either     | plain-bash sink / interpreter payload | ordinary bump
+
+The allow leg returns None, never an allow envelope. The off leg withdraws
+only the marker self-clear; the managed-remote stand-down still wins and
+`apply_cross_repo_level` still softens it. Every unresolvable step fails open
+(unreadable standing = not a Group EM). The PowerShell leg passes no scope.
 """
 
 from __future__ import annotations
@@ -204,7 +219,13 @@ from coordinator_core.bash_guards._write_bump_marker import (
     path_has_git_ancestor,
     resolve_gitdir,
 )
+from coordinator_core.bash_guards._gem_cross_repo_commit import (
+    git_write_is_gem_scoped,
+    session_holds_live_gem_standing,
+)
+from coordinator_core.machine_profile import feature_enabled
 from coordinator_core.bash_guards._write_bump_message import (
+    render_gem_refusal_message,
     apply_cross_repo_level,
     AGENT_CLASS_SUBAGENT,
     DESTINATION_FOREIGN,
@@ -1324,8 +1345,8 @@ def _is_relative_target(raw_target: str) -> bool:
 
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str]
-) -> Iterator[Tuple[str, str, Optional[str]]]:
-    """Yield `(target_dir, label, raw_target)` for every depth-0 segment of
+) -> Iterator[Tuple[str, str, Optional[str], Optional[str]]]:
+    """Yield `(target_dir, label, raw_target, git_scope)` for every depth-0 segment of
     `cmd` that is either a git WRITE subcommand (`git -C <dir> <sub>` / `cd
     <dir> && git <sub>`, tracked via a running `effective_cwd` that a `cd`
     segment updates for later segments in the SAME compound command) or a
@@ -1434,7 +1455,8 @@ def _iter_write_sink_candidates(
                 rc.tokens, effective_cwd, raw_tokens=rc.raw_tokens
             )
             if subcommand and _git_invocation_is_write(subcommand, sub_args):
-                yield (target_cwd, "git %s" % subcommand, None)
+                scope = "scoped" if git_write_is_gem_scoped(subcommand, sub_args) else "unscoped"
+                yield (target_cwd, "git %s" % subcommand, None, scope)
             continue
 
         for raw_target in extract_write_sink_targets_for_segment(rc.tokens, head_base):
@@ -1443,7 +1465,7 @@ def _iter_write_sink_candidates(
             resolved_target = _resolve_relative(effective_cwd, raw_target)
             if resolved_target is None:
                 continue
-            yield (resolved_target, head_base, raw_target)
+            yield (resolved_target, head_base, raw_target, None)
 
     for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
         if cwd_unresolved and _is_relative_target(raw_target):
@@ -1451,7 +1473,7 @@ def _iter_write_sink_candidates(
         resolved_target = _resolve_relative(effective_cwd, raw_target)
         if resolved_target is None:
             continue
-        yield (resolved_target, "interpreter-payload", raw_target)
+        yield (resolved_target, "interpreter-payload", raw_target, None)
 
 
 def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
@@ -1486,6 +1508,7 @@ def _evaluate_foreign_repo_candidate(
     anchor_root: Optional[str] = None,
     write_verb_label: str = "",
     cwd: Optional[str] = None,
+    git_scope: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """One candidate write-sink `target_dir`, already resolved to an
     absolute-or-cwd-relative string by the caller's own extraction leg,
@@ -1679,7 +1702,21 @@ def _evaluate_foreign_repo_candidate(
     session_root_for_marker = (
         anchor_root if anchor_root is not None else resolve_git_root(marker_probe)
     )
-    if bump_is_cleared(
+    effective_sid = effective_session_id(session_id, session_root_for_marker, agent_id)
+
+    gem_refusal = False
+    if git_scope is not None:
+        try:
+            if session_holds_live_gem_standing(effective_sid, session_root_for_marker or anchor):
+                if feature_enabled("gem_cross_repo_commit"):
+                    if git_scope == "scoped":
+                        return None
+                else:
+                    gem_refusal = True
+        except Exception:  # noqa: BLE001 -- fail open to the ordinary bump
+            gem_refusal = False
+
+    if not gem_refusal and bump_is_cleared(
         marker_probe, session_id, git_root=session_root_for_marker, agent_id=agent_id
     ):
         return None
@@ -1696,7 +1733,6 @@ def _evaluate_foreign_repo_candidate(
         return None
 
     agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, session_root_for_marker)
-    effective_sid = effective_session_id(session_id, session_root_for_marker, agent_id)
     sandbox_root = (
         _sandbox_root_hint(session_root_for_marker, effective_sid)
         if agent_class == AGENT_CLASS_SUBAGENT
@@ -1748,18 +1784,21 @@ def _evaluate_foreign_repo_candidate(
         cwd=anchor,
     )
 
-    message = render_bump_message(
-        agent_class=agent_class,
-        target_repo=target_repo_label,
-        session_repo=session_repo_label,
-        gitdir=marker_gitdir,
-        session_id=effective_sid,
-        sandbox_root=sandbox_root,
-        destination_class=destination_class,
-        destination_owner=destination_owner,
-        raw_target=raw_target if raw_target and raw_target != target_dir else "",
-        write_verb_label=write_verb_label,
-    )
+    if gem_refusal:
+        message = render_gem_refusal_message(target_repo_label)
+    else:
+        message = render_bump_message(
+            agent_class=agent_class,
+            target_repo=target_repo_label,
+            session_repo=session_repo_label,
+            gitdir=marker_gitdir,
+            session_id=effective_sid,
+            sandbox_root=sandbox_root,
+            destination_class=destination_class,
+            destination_owner=destination_owner,
+            raw_target=raw_target if raw_target and raw_target != target_dir else "",
+            write_verb_label=write_verb_label,
+        )
     stood_down = _environment_stands_the_bump_down(env)
     if stood_down is not None:
         _log_environment_stand_down(
@@ -1879,7 +1918,7 @@ def check_bump_foreign_repo_write(
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
 
-    for target_dir, write_verb_label, raw_target in candidates:
+    for target_dir, write_verb_label, raw_target, git_scope in candidates:
         result = _evaluate_foreign_repo_candidate(
             target_dir=target_dir,
             session_id=session_id,
@@ -1893,6 +1932,7 @@ def check_bump_foreign_repo_write(
             anchor_root=anchor_root,
             write_verb_label=write_verb_label,
             cwd=cwd,
+            git_scope=git_scope,
         )
         if result is not None:
             return result

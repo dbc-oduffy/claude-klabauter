@@ -2842,6 +2842,33 @@ def seed_heavy_admission_defaults() -> None:
         print(f"[OK] heavy_admission seeded: {', '.join(sorted(written))}")
 
 
+GEM_CROSS_REPO_COMMIT_KEY = "coordinator.feature.gem_cross_repo_commit"
+
+
+def seed_gem_cross_repo_commit_default(*, get=None, put=None) -> None:
+    """Write coordinator.feature.gem_cross_repo_commit = "on" when absent; never overwrites, never fatal.
+
+    The reader treats an unset key as on, but an explicit "on" makes `machine-local get` show the
+    shipped state; set-if-absent keeps a box's "off" across re-runs. Runs under --register-only too:
+    it writes the machine-local registry, not the repo.
+    """
+    try:
+        if get is None or put is None:
+            from coordinator_core import machine_resolver
+
+            get = get or machine_resolver.merged_flat_registry
+            put = put or machine_resolver.registry_set
+        existing = get()
+        if GEM_CROSS_REPO_COMMIT_KEY in existing:
+            print(f"[SKIP] {GEM_CROSS_REPO_COMMIT_KEY} already set ({existing[GEM_CROSS_REPO_COMMIT_KEY]})")
+            return
+        put(GEM_CROSS_REPO_COMMIT_KEY, "on")
+    except Exception as exc:
+        print(f"[ADVISORY] {GEM_CROSS_REPO_COMMIT_KEY} seed skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
+        return
+    print(f"[OK] {GEM_CROSS_REPO_COMMIT_KEY} = on (default; set off to block Group EM cross-repo commits)")
+
+
 def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     """Install-time warm-engine opt-in, written to `engine.warm.enabled` in
     the machine-local TOML registry — the same registry `register_claude_klabauter_root`
@@ -4683,6 +4710,7 @@ def main(argv: list[str]) -> int:
         write_environment_import(repo_root, "local")
     offer_warm_opt_in(repo_root, args)
     seed_heavy_admission_defaults()
+    seed_gem_cross_repo_commit_default()
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
     check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)

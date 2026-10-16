@@ -310,6 +310,11 @@ for the filed defect. Do not read this as a protection in force. The deny messag
 fires names the exact path to create; prefer that over reconstructing one from this
 table, since it resolves the session id for you.
 
+With `coordinator.feature.gem_cross_repo_commit` off, the Bash-surface marker does not clear a
+live Group EM's git write refusal (see `docs/wiki/write-confinement.md` § Group EM setting).
+Set it with `machine-local set coordinator.feature.gem_cross_repo_commit off`; clear it with
+`machine-local unset coordinator.feature.gem_cross_repo_commit` (unset reads as on).
+
 Distinct from both, and not interchangeable with either:
 `.coordinator-doctrine-edit-approved` gates only while
 `machine-local set coordinator.feature.doctrine_edit_gate on` is in effect (off by

@@ -25,6 +25,11 @@ are ``on`` or ``off``; absent, ``on`` for an author box and ``off`` for a
 consumer box (``feature_enabled``). ``coordinator.feature.doctrine_edit_gate``
 is ``on`` on every profile until set ``off``: the doctrine-edit approval gate
 and its sentinel-creation guards fire unless disabled.
+``coordinator.feature.gem_cross_repo_commit`` is likewise ``on`` on every
+profile until set ``off``: a session holding live Group EM standing may make
+scoped commits in a foreign repo. It mirrors coordinator-content-repo's
+``coordinator/hooks/scripts/_machine_profile.py`` ``_FEATURE_DEFAULT``, which
+must agree.
 
 Change the level with ``machine-local set coordinator.guard_level warn``
 (or ``strict`` / ``off``); one guard with
@@ -148,11 +153,12 @@ def machine_profile() -> str:
 
 
 FEATURE_KEY = "coordinator.feature."
-FEATURES = ("cross_repo_memos", "publishing", "doctrine_edit_gate")
+FEATURES = ("cross_repo_memos", "publishing", "doctrine_edit_gate", "gem_cross_repo_commit")
 _FEATURE_LABEL = {
     "cross_repo_memos": "cross-repo memos",
     "publishing": "publishing (percolate)",
     "doctrine_edit_gate": "the doctrine-edit approval gate",
+    "gem_cross_repo_commit": "Group EM cross-repo commit",
 }
 
 #: Unset default per feature: ``"profile"`` follows the machine profile
@@ -161,6 +167,7 @@ _FEATURE_DEFAULT = {
     "cross_repo_memos": "profile",
     "publishing": "profile",
     "doctrine_edit_gate": "on",
+    "gem_cross_repo_commit": "on",
 }
 
 

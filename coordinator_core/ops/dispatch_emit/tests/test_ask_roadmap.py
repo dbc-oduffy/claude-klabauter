@@ -121,3 +121,29 @@ def test_non_roadmap_script_is_unchanged_by_the_roadmap_arm(repo, monkeypatch):
     monkeypatch.setattr(ask_compose, "ARM_ROADMAP", "never")
     assert with_arm == _compose(repo)
     assert "roadmapBlitz" not in with_arm
+
+
+# roadmap-blitz.mjs meta as landed at coordinator-content-repo bd56e7cb55: Fill stubs became Stage.
+_RB_LANDED = (
+    "export const meta = { name: 'rb', phases: ["
+    + ", ".join(f"{{ title: '{t}', detail: 'x' }}" for t in ("Synthesize", "Substantiate", "Review", "Approve", "Stage"))
+    + "] };\nreturn { gate_report_path: 'g.json' };"
+)
+
+
+def test_phase_titles_follow_the_landed_roadmap_blitz_meta(repo):
+    _put(repo)
+    script = _compose(repo, roadmap_blitz_text=_RB_LANDED)
+    phases = script.split("phases: [", 1)[1].split("]", 1)[0]
+    for title in ("Synthesize", "Substantiate", "Review", "Approve", "Stage"):
+        assert f"'{title}'" in phases
+    assert "Fill stubs" not in script and "Size review" not in script
+
+
+def test_waves_pass_plan_blitz_batons_only_with_no_size_review_switch(repo):
+    """DoE bd56e7cb55 folded Size review into Size; a sized baton (`sized: true`) already skips the
+    scout, so the wave call carries no extra switch."""
+    _put(repo)
+    call = _compose(repo).split("planBlitz({", 1)[1].split("})", 1)[0]
+    assert "batons: w.batons" in call
+    assert "sizeReview" not in call and "skipSizeReview" not in call

@@ -772,6 +772,21 @@ def render_external_workspace_message(target_repo: str, workspace_key: str, raw_
     )
 
 
+def render_gem_refusal_message(target_repo: str) -> str:
+    """The deny copy for a live Group EM's git write into a foreign repo
+    while `coordinator.feature.gem_cross_repo_commit` is off.
+
+    One fact, then the PM's two routes: a session in the target repo for
+    timely work, a cross-repo memo otherwise. Names no marker, clear line or
+    override key."""
+    return (
+        f"Coordinator guard — instead: Group EM git write into {_target_phrase(target_repo)} "
+        "is refused (`coordinator.feature.gem_cross_repo_commit` off). "
+        "Timely: start a session in that repo (Cockpit, or headless `claude -p`) and ask its EM. "
+        "Otherwise: send a cross-repo memo."
+    )
+
+
 def render_bump_message(
     *,
     agent_class: str,
