@@ -51,7 +51,7 @@ def test_non_register_ids_are_named_in_their_own_clause(monkeypatch):
     assert "const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));" in script
     text = _halt(script)
     assert "_blkForeign.length ?" in text
-    assert "name no register row: re-run the ledger check." in text
+    assert "are not in the stage manifest rulable_ids: re-run the ledger check." in text
     assert text.index("_blkRulable.length ?") < text.index("_blkForeign.length ?")
 
 

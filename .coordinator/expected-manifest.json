@@ -2086,8 +2086,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "b36c9e8f73afaa3a45e8ae06a0a3a3c2eb7b42ce",
-    "coordinator_core/_engine_stamp": "cca26b04f354b348ffcdacdece7165a5a39bee4a",
+    "coordinator_core/_engine_published_at": "3a830f28ad64af2beece8a6a3220510b75ef954d",
+    "coordinator_core/_engine_stamp": "1bb97977e7ce12b6e8d82711b7a6c1a2aae8c103",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4622,7 +4622,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ledger_empty_register_refuses.py": "dae777b8b517dd65bd2b90ad3895612c50ce947c",
     "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_commits_delivered_rows.py": "4f5b9f7f7fb079a3eabea01dce7d9ecf3cfd17ab",
     "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_contract.py": "a86d4834a0f2cb4e6309edd1a868c87d0e6fa48f",
-    "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_names_only_register_rows.py": "6a750ca4daabd050cf3de2fc482a409897f3c835",
+    "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_names_only_register_rows.py": "bd3fd2ae359c1d48ec20d25a9e041b55a4b88ddb",
     "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_pointer_written.py": "cbb60fa8834c42f86bc3a77f20c721b3c2d16b47",
     "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_recovery_text.py": "d72fd2a9213720b646d73b6e7f99150e1ca7d9ed",
     "coordinator_core/ops/dispatch_emit/tests/test_ledger_halt_resume_gate.py": "af6f113dda0d9e0564aaa435ef602c9d56343149",
@@ -8016,5 +8016,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "c5a1705e75d5513d05daef5f775eb5ebcd410d9e"
+  "source_head": "5d30ade5c59e4ea0bd0b980fbca8926071c40de4"
 }
