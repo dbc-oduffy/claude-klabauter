@@ -59,6 +59,7 @@ NOT_A_ROW_REASON = "names no requirement row"
 _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
     Field("verbatim", "str"),
+    Field("note", "str"),
     Field("all_of_pm_ask", "bool"),
     Field("out_of_scope", "str_list"),
 )
@@ -554,16 +555,19 @@ def bind(
 
 def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
-    out_of_scope: Sequence[str] = (),
+    out_of_scope: Sequence[str] = (), note: Optional[str] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
-    run's sizing is bound, else a queued revision `bind` folds in. `out_of_scope` ids are deferred
+    run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
+    not a requirement: it is accepted and adds no row or queued revision. Any non-empty `verbatim`
+    is a requirement and always adds a row: free text belongs in `note`. `out_of_scope` ids are deferred
     in the same register write as the revision row, the verbatim being their ruling; it needs that
     verbatim and a bound sizing. Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
-    if not text and all_of_pm_ask is None:
-        raise LedgerRefused("workflow.revise needs a non-empty verbatim, all_of_pm_ask, or both")
+    has_note = isinstance(note, str) and bool(note.strip())
+    if not text and all_of_pm_ask is None and not has_note:
+        raise LedgerRefused("workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, or a combination")
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
     if len(text.encode("utf-8")) > VERBATIM_BYTE_CAP:
@@ -806,8 +810,9 @@ def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
 
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str), `all_of_pm_ask` (bool),
-    `out_of_scope` (list of register row ids, needs `verbatim`: each is deferred with the verbatim as
+    """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str, a requirement), `note` (str, free
+    text that adds no row), `all_of_pm_ask` (bool), `out_of_scope` (list of register row ids, needs
+    `verbatim`: each is deferred with the verbatim as
     its ruling, carried open on the commit, and replied as `withheld`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
@@ -825,7 +830,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         ledger, dir_, added = revise(
             root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
-            out_of_scope=params.get("out_of_scope") or (),
+            out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}

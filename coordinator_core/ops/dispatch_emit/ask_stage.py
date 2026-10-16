@@ -103,13 +103,26 @@ __all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "rel
 PM_INTENT_HEADING = "## PM intent (verbatim)"
 
 
+_HARNESS_RELAY_MARKERS = (
+    "[Workflow harness",
+    "was relayed from the driving session",
+    "<system-reminder>",
+)
+
+
+def _is_harness_relay(text: str) -> bool:
+    """True when `text` is a harness-composed resume relay, not the PM's words."""
+    head = text.lstrip()
+    return any(head.startswith(m) for m in _HARNESS_RELAY_MARKERS) or _HARNESS_RELAY_MARKERS[1] in head[:400]
+
+
 def pm_intent_block(sizing: Optional[Mapping], ask_text: Optional[str]) -> str:
     """The brief's head: the PM's own words (sizing `pm_verbatims`, else a PM-verbatim `intent`,
     plus the ask as submitted), the exit criterion, and the precedence rule. Never the EM's
     paraphrase: an `em-elaborated` intent is left out. Empty when no PM words are on record."""
     sizing = sizing or {}
     quotes = requirements_ledger.pm_words(sizing)
-    if ask_text and ask_text.strip() and ask_text.strip() not in quotes:
+    if ask_text and ask_text.strip() and not _is_harness_relay(ask_text) and ask_text.strip() not in quotes:
         quotes.append(ask_text.strip())
     if not quotes:
         return ""
