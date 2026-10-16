@@ -67,6 +67,7 @@ from coordinator_core.ops.ceremony.records_query import query_records as _ceremo
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.deliverable_status import plan_review_verified
 
+from ._cockpit_required import PLAN_STATUS_ENUM, missing_required_fields
 from ._shared import normalize_frontmatter
 
 # Precedence tiering for resolving `reviewer` when a plan has MORE THAN ONE reviewed sidecar
@@ -99,23 +100,7 @@ _REVIEWER_SIDECAR_PLAIN_TIER = 100
 _REVIEWER_SIDECAR_MODEL_MARKERS: tuple[str, ...] = ("sonnet",)
 _REVIEWER_SIDECAR_MODEL_TIER = 200
 
-# PlanStatus enum, kept in parity with coordinator_core/frontmatter/schemas/plan.schema.json's
-# own `status` enum (originally the frozen 9-value bash:1616 / 1672 set, plus `closed_partial` —
-# terminal/archivable per lifecycle_constants.PLAN_ARCHIVABLE_STATUS). Order-insensitive
-# membership set.
-_PLAN_STATUS_ENUM = frozenset({
-    "draft",
-    "reviewed",
-    "approved",
-    "blocked",
-    "executing",
-    "landed",
-    "implemented",
-    "closed_partial",
-    "deferred",
-    "abandoned",
-    "superseded",
-})
+_PLAN_STATUS_ENUM = PLAN_STATUS_ENUM
 
 _MALFORMED_REASON = (
     "missing required field (title/created/author/status) or status outside PlanStatus enum"
@@ -156,18 +141,8 @@ def _query_plan_records(ctx: EmitContext) -> list[dict]:
     return parsed if isinstance(parsed, list) else []
 
 
-def _is_str(value) -> bool:
-    return isinstance(value, str)
-
-
 def _valid(fm: dict) -> bool:
-    return (
-        _is_str(fm.get("title"))
-        and _is_str(fm.get("created"))
-        and _is_str(fm.get("author"))
-        and _is_str(fm.get("status"))
-        and fm.get("status") in _PLAN_STATUS_ENUM
-    )
+    return not missing_required_fields(fm)
 
 
 def _sidecar_priority(suffix: str, kind: "str | None") -> int:

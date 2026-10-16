@@ -160,7 +160,7 @@ from .handoff_columns import (
     _resolve_shipped_in_dates as _resolve_shipped_in_dates_batch,
 )
 
-_REQUIRED_STRING_FIELDS = ("title", "created", "status", "deployment_state")
+from ._cockpit_required import REQUIRED_STRING_FIELDS
 
 # DR-084 P4 transitional ingest tolerance (module docstring) — old->new legacy tolerance,
 # restored 2026-07-23. Old-vocabulary ``status``/``deployment_state`` values are coerced UP to
@@ -375,7 +375,12 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         fm = normalize_frontmatter(rec)
         path = rec.get("path")
 
-        if not all(isinstance(fm.get(f), str) for f in _REQUIRED_STRING_FIELDS):
+        # A closure note records why a baton closed; it is not itself a baton, and the
+        # contract's HandoffSummary.kind has no value for it.
+        if fm.get("kind") == "closure-note":
+            continue
+
+        if not all(isinstance(fm.get(f), str) for f in REQUIRED_STRING_FIELDS):
             malformed.append({
                 "path": path,
                 "reason": "missing required non-nullable field (title/created/status/deployment_state)",

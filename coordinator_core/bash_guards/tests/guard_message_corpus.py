@@ -4090,7 +4090,9 @@ def _fire_nudge_hand_written_plan_fire() -> Optional[Dict[str, Any]]:
 
 
 def _fire_nudge_hand_written_plan_control() -> Optional[Dict[str, Any]]:
-    return _fire_nudge_hand_written_plan("---\nplan_id: pln-corpus-probe-000000\n---\n# Plan\n")
+    return _fire_nudge_hand_written_plan(
+        "---\nplan_id: pln-corpus-probe-000000\ntitle: T\ncreated: '2026-01-01'\nauthor: a\nstatus: draft\n---\n# Plan\n"
+    )
 
 
 # --- (7) nudge_foreground_agent_dispatch -- real firing row: `run_in_background`
@@ -4972,7 +4974,10 @@ def _fire_guard_handoff_summary_cap_on_write() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ghsc-", dir=_neutral_scratch_parent()) as scratch:
         target = Path(scratch) / "state" / "handoffs" / "foo.md"
         target.parent.mkdir(parents=True)
-        content = "---\nsummary: %s\n---\nbody\n" % ("x" * 150)
+        content = (
+            "---\ntitle: T\ncreated: '2026-10-16'\nstatus: open\ndeployment_state: pending\n"
+            "summary: %s\n---\nbody\n" % ("x" * 150)
+        )
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
         return _to_envelope_or_none(
             _run_maybe_async(_hook_guard_handoff_summary_cap_on_write._handler(payload))
@@ -4985,7 +4990,13 @@ def _fire_guard_handoff_summary_cap_on_write_control() -> Optional[Dict[str, Any
         target.parent.mkdir(parents=True)
         payload = {
             "tool_name": "Write",
-            "tool_input": {"file_path": str(target), "content": "---\nsummary: short\n---\nbody\n"},
+            "tool_input": {
+                "file_path": str(target),
+                "content": (
+                    "---\ntitle: T\ncreated: '2026-10-16'\nstatus: open\ndeployment_state: pending\n"
+                    "summary: short\n---\nbody\n"
+                ),
+            },
         }
         return _to_envelope_or_none(
             _run_maybe_async(_hook_guard_handoff_summary_cap_on_write._handler(payload))

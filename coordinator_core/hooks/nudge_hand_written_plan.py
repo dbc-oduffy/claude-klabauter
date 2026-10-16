@@ -3,7 +3,9 @@ coordinator_core.hooks.nudge_hand_written_plan — PostToolUse advisory leg.
 
 Purpose: when a Write lands a `docs/plans/<name>.md` whose content has no plan producer
 provenance (no frontmatter, or no `plan_id: pln-...`), return one line naming the
-`artifact.adopt` command that ports it to canonical shape. Advisory only; never blocks.
+`artifact.adopt` command that ports it to canonical shape. A plan that has `plan_id` but lacks a
+Cockpit-required field (title/created/author) or carries a status outside PlanStatus fires the
+same nudge naming the missing fields. Advisory only; never blocks.
 
 Fan-in: `postuse_advisory_dispatch` gathers `advisory_text` beside the other legs. A repeat
 for the same (session, path) is silent via a per-pair sentinel file under the temp dir; with no
@@ -16,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile  # noqa: F401  (tests redirect Temp via this module's `tempfile` attribute)
+from datetime import date
 
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.ops.artifact_adopt_contract import (
@@ -83,8 +86,29 @@ async def advisory_text(tool_name: str, file_path: str, content: str, session_id
         return ""
     fm = _frontmatter_text(content or "")
     if fm is not None and has_plan_producer_provenance(fm):
-        return ""
+        missing = _missing_required(fm)
+        if not missing:
+            return ""
+        reason = f"missing cockpit-required field(s) {', '.join(missing)}"
+    else:
+        reason = "no frontmatter" if fm is None else "no plan_id"
+        reason += " (hand-written)"
     if not _first_time_sync(session_id, rel):
         return ""
-    reason = "no frontmatter" if fm is None else "no plan_id"
-    return f"[adopt] {rel}: {reason} (hand-written). Port: {adopt_command(rel)}"
+    return f"[adopt] {rel}: {reason}. Port: {adopt_command(rel)}"
+
+
+def _missing_required(fm_text: str) -> list[str]:
+    """Cockpit-required fields the plan frontmatter lacks, by the plans emit section's own rule.
+    Fail-open: unparseable YAML answers []. A YAML date counts as a string value."""
+    try:
+        import yaml
+
+        from coordinator_core.ops.emit.sections._cockpit_required import missing_required_fields
+
+        fm = yaml.safe_load(fm_text)
+        if not isinstance(fm, dict):
+            return []
+        return missing_required_fields({k: (str(v) if isinstance(v, date) else v) for k, v in fm.items()})
+    except Exception:
+        return []

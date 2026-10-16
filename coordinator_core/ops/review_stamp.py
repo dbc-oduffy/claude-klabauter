@@ -1207,8 +1207,8 @@ def _assemble_stamp(
 ) -> Dict[str, Any]:
     """The `review_stamp` mapping both `mint` and `mint_receipt` write: one home for its
     key set and order, so the plan stamp and the inventory receipt cannot drift.
-    `with_delivery=False` omits the `delivery` block (a judge-only stamp: no verifier ran).
-    `criterion_block` is None for a receipt, which carries no criterion. Reads the terminal
+    `with_delivery=False` omits the `delivery` block (a judge-only stamp: no verifier ran);
+    a None `delivery_verdict` omits it too. `criterion_block` is None for a receipt, which carries no criterion. Reads the terminal
     commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
     if not terminal_tree_sha:
         try:
@@ -1246,7 +1246,7 @@ def _assemble_stamp(
         },
         "stamped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    if not with_delivery:
+    if not with_delivery or delivery_verdict is None:
         del stamp["delivery"]
     if criterion_block is not None:
         stamp["criterion"] = criterion_block

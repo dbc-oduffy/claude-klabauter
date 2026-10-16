@@ -1234,3 +1234,25 @@ def test_midline_or_non_sha_run_base_sha_is_not_the_report(tmp_path):
         encoding="utf-8",
     )
     assert "run_base_sha" not in m._load_sidecar(prep, prep=True)
+
+
+@pytest.mark.parametrize("verdict, expect_key", [(None, False), ("PASS", True)])
+def test_assemble_stamp_omits_delivery_block_when_verdict_is_none(tmp_path, verdict, expect_key):
+    """A stamp built with no delivery verdict carries no `delivery` key."""
+    integration = tmp_path / "state" / "i.md"
+    stamp = m._assemble_stamp(
+        tmp_path,
+        terminal_sha="a" * 40,
+        terminal_tree_sha="b" * 40,
+        run_base_sha="c" * 40,
+        integration_path=integration,
+        integration_data={},
+        prep_data={},
+        slices=1,
+        delivery_verdict=verdict,
+        tests_status="pass",
+        build_test_data={},
+        build_test_sidecar=None,
+        criterion_block=None,
+    )
+    assert ("delivery" in stamp) is expect_key

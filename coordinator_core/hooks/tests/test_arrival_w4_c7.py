@@ -168,7 +168,10 @@ def test_test_tree_git_fixture_guard_allows_wrong_tool():
 def test_handoff_summary_cap_guard_allows_short_summary(tmp_path):
     target = tmp_path / "state" / "handoffs" / "2026-09-18-x.md"
     target.parent.mkdir(parents=True)
-    content = "---\nsummary: short\n---\nbody\n"
+    content = (
+        "---\ntitle: x\ncreated: '2026-09-18'\nstatus: active\ndeployment_state: none\n"
+        "summary: short\n---\nbody\n"
+    )
     params = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
     result = guard_handoff_summary_cap_on_write._handler(params)
     assert result == {}

@@ -14,7 +14,13 @@ from coordinator_core.ops.artifact_adopt_contract import adopt_command
 PLAN = "docs/plans/2026-10-06-x.md"
 NO_FM = "# Plan\n\nbody\n"
 NO_ID_FM = "---\ntitle: X\n---\n# Plan\n"
-MINTED = '---\nplan_id: "pln-abc-123"\n---\n# Plan\n'
+MINTED = (
+    '---\nplan_id: "pln-abc-123"\ntitle: X\ncreated: 2026-10-06\nauthor: a (s)\nstatus: draft\n---\n# Plan\n'
+)
+MINTED_NO_AUTHOR = '---\nplan_id: "pln-abc-123"\ntitle: X\ncreated: 2026-10-06\nstatus: draft\n---\n# Plan\n'
+MINTED_BAD_STATUS = (
+    '---\nplan_id: "pln-abc-123"\ntitle: X\ncreated: 2026-10-06\nauthor: a\nstatus: wip\n---\n# Plan\n'
+)
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +36,19 @@ def _run(tool="Write", path=PLAN, content=NO_FM, session="test-session-hw-a", ro
 def test_fires_for_frontmatterless_and_planidless(content):
     text = _run(content=content, session="test-session-hw-fires")
     assert text.startswith("[adopt] ")
+    assert adopt_command(PLAN) in text
+    assert "\n" not in text
+
+
+@pytest.mark.parametrize(
+    "content,field",
+    [(MINTED_NO_AUTHOR, "author"), (MINTED_BAD_STATUS, "status"), ('---\nplan_id: "pln-a-1"\n---\n', "title")],
+)
+def test_fires_for_plan_id_but_missing_required_field(content, field):
+    text = _run(content=content, session="test-session-hw-missing-" + field)
+    assert text.startswith("[adopt] ")
+    assert "missing cockpit-required field(s)" in text
+    assert field in text.split("Port:")[0]
     assert adopt_command(PLAN) in text
     assert "\n" not in text
 

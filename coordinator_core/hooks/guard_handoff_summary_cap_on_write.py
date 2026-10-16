@@ -26,9 +26,12 @@ prose ("One-line session summary (<=140 chars)"); the schema itself carries
 no `maxLength`. `_HANDOFF_SUMMARY_CAP` below is that same 140, transcribed
 once, at the one place this guard needs it.
 
+A second advisory reason names any cockpit-required field (the emit section's
+`REQUIRED_STRING_FIELDS`) the written frontmatter lacks.
+
 Scope, mirroring `guard_python_syntax_on_write.py`: a `.md` file under
-`state/handoffs/` (this repo's own live handoff directory). Archived
-handoffs (`state/handoffs/archive/`) are NOT excluded on purpose — a
+`state/handoffs/` (this repo's own live handoff directory) or `archive/handoffs/`.
+Archived handoffs (`state/handoffs/archive/`) are NOT excluded on purpose — a
 hand-edit to an archived file's frontmatter is the same class of defect.
 
 Fail-open (returns `no_advisory()`), in order: `tool_name` not in the
@@ -48,6 +51,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C7
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
@@ -63,7 +67,7 @@ except Exception:  # pragma: no cover -- exercised only in a PyYAML-less env
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
-_SCOPE_DIR = "state/handoffs/"
+_SCOPE_DIRS = ("state/handoffs/", "archive/handoffs/")
 
 _HANDOFF_SUMMARY_CAP = 140
 
@@ -72,7 +76,7 @@ def is_in_scope(target: Path) -> bool:
     if target.suffix != ".md":
         return False
     posix = target.as_posix()
-    return _SCOPE_DIR in posix or posix.endswith(_SCOPE_DIR.rstrip("/"))
+    return any(d in posix or posix.endswith(d.rstrip("/")) for d in _SCOPE_DIRS)
 
 
 def _split_frontmatter(text: str) -> "tuple[dict | None, str]":
@@ -100,6 +104,25 @@ def _warn_reason(target: str, length: int) -> str:
     return (
         f"{name}: summary is {length} chars, over the {_HANDOFF_SUMMARY_CAP}-char "
         "schema cap. Write proceeds; fix on the next edit."
+    )
+
+
+def _missing_required(fm: dict) -> "list[str]":
+    """Required cockpit fields absent from `fm`. The tuple is the emit section's own, so this
+    advisory and the emit filter cannot disagree. A YAML date counts as a string value."""
+    from coordinator_core.ops.emit.sections._cockpit_required import REQUIRED_STRING_FIELDS
+
+    return [
+        f for f in REQUIRED_STRING_FIELDS
+        if not isinstance(fm.get(f), (str, date))
+    ]
+
+
+def _missing_reason(target: str, missing: "list[str]") -> str:
+    name = Path(target).name
+    return (
+        f"{name}: missing cockpit-required field(s) {', '.join(missing)}. "
+        "Scaffold: coordinator-doc-new --type handoff."
     )
 
 
@@ -138,13 +161,16 @@ def _handler(params: dict, repo_root=None) -> dict:
     if fm is None:
         return no_advisory()
 
+    reasons = []
     summary = fm.get("summary")
-    if not isinstance(summary, str):
+    if isinstance(summary, str) and len(summary) > _HANDOFF_SUMMARY_CAP:
+        reasons.append(_warn_reason(target_raw, len(summary)))
+    # A closure note is not a baton; the emit section skips it too.
+    missing = [] if fm.get("kind") == "closure-note" else _missing_required(fm)
+    if missing:
+        reasons.append(_missing_reason(target_raw, missing))
+    if not reasons:
         return no_advisory()
 
-    length = len(summary)
-    if length <= _HANDOFF_SUMMARY_CAP:
-        return no_advisory()
-
-    context = render(compose(_warn_reason(target_raw, length)))
+    context = render(compose(" ".join(reasons)))
     return allow_advisory("PreToolUse", context)
