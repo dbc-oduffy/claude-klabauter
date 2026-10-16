@@ -69,10 +69,10 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-claude-author-launcher.sh"
+_PROG = "gen-claude-author-launcher.py"
 
 _USAGE = """\
-Usage: gen-claude-author-launcher.sh [OPTIONS]
+Usage: gen-claude-author-launcher.py [OPTIONS]
 
 Renders the Windows-native claude-author launcher(s) (claude-author.cmd,
 Claude-author.ps1) from the coordinator templates into
@@ -144,10 +144,10 @@ def smoke_launcher(dest: str) -> Tuple[int, str]:
             **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
-        print(f"skip: smoke_launcher: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(f"skip: smoke_launcher: {dest} timed out after 60s", file=sys.stderr)
         return (124, f"smoke of {dest} timed out after 60s")
     except OSError as err:
-        print(f"skip: smoke_launcher: result = subprocess.run( failed: {err}", file=sys.stderr)
+        print(f"skip: smoke_launcher: could not execute {dest}: {err}", file=sys.stderr)
         return (126, str(err))
 
     combined = (result.stdout or "") + (result.stderr or "")

@@ -97,6 +97,22 @@ def test_template_not_supplied_is_fail_loud(capsys):
     assert "--template not supplied" in capsys.readouterr().err
 
 
+def test_rendered_shim_comes_only_from_the_passed_template_path(tmp_path):
+    """The caller-supplied --template is the sole byte source: two distinct
+    templates render two distinct shims, and a sibling template left beside
+    the passed one is never read."""
+    home = Path(os.environ["HOME"])
+    shim_dest = home / ".claude" / "shell" / "claude-author-shim.sh"
+    decoy_dir = tmp_path / "decoy"
+    decoy_dir.mkdir()
+    (decoy_dir / "claude-author-shim.sh.tmpl").write_text("# DECOY\n")
+    for name, body in (("a.tmpl", "# from A\n"), ("b.tmpl", "# from B\n")):
+        tmpl = tmp_path / name
+        tmpl.write_text(body)
+        assert main(["--template", str(tmpl), "--shell", "bash"]) == 0
+        assert shim_dest.read_text() == body
+
+
 def test_template_not_found_exits_one(tmp_path, capsys):
     rc = main(["--template", str(tmp_path / "nope.tmpl")])
     assert rc == 1

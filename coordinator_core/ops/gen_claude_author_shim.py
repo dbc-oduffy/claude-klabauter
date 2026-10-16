@@ -136,8 +136,8 @@ Options:
                       env var and $SHELL-based detection)
   --check-only        Validate without mutating any live file (renders to a
                       temp path, discards it, exits 0 on success)
-  --template <path>   Override template source path (default: auto-resolved
-                      relative to the DoE trampoline; useful for tests)
+  --template <path>   Template source path (required; the DoE trampoline always
+                      passes it, and no local default is consulted)
   --shell <family>    Target shell family: "bash" (covers bash/zsh) or
                       "powershell" (selects the .ps1 shim path, the pwsh
                       profile as the rc target, and a dot-source wired line

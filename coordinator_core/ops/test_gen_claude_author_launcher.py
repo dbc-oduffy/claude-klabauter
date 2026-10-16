@@ -93,7 +93,9 @@ def test_msystem_signal_detected(monkeypatch):
 def test_help_exits_zero(capsys):
     rc = main(["--help"])
     assert rc == 0
-    assert "Usage: gen-claude-author-launcher.sh" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Usage: gen-claude-author-launcher.py" in err
+    assert ".sh" not in err
 
 
 def test_unknown_argument_exits_one(capsys):

@@ -255,6 +255,52 @@ def test_unknown_available_memory_still_spawns(tool, monkeypatch, tmp_path):
     assert tool.run("merge-to-main", tmp_path).startswith("scip-rebuild: spawned")
 
 
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "-1", "-0.5"])
+def test_nonsense_memory_floor_falls_back_to_default(tool, monkeypatch, bad):
+    monkeypatch.setenv(tool._MIN_AVAILABLE_GB_ENV, bad)
+    assert tool._min_available_gb() == tool._MIN_AVAILABLE_GB_DEFAULT
+
+
+def test_zero_memory_floor_is_accepted(tool, monkeypatch):
+    monkeypatch.setenv(tool._MIN_AVAILABLE_GB_ENV, "0")
+    assert tool._min_available_gb() == 0.0
+
+
+def test_nan_floor_does_not_disable_the_gate(tool, monkeypatch, tmp_path):
+    spawned: list = []
+    _spawnable(tool, monkeypatch, tmp_path, spawned)
+    monkeypatch.setattr(tool, "available_memory_gb", lambda: 5.5)
+    monkeypatch.setenv(tool._MIN_AVAILABLE_GB_ENV, "nan")
+    assert tool.run("merge-to-main", tmp_path).startswith("scip-rebuild: skipped -- 5.5 GB")
+    assert spawned == []
+
+
+def test_missing_engine_is_a_defect_and_does_not_spawn(tool, monkeypatch, tmp_path):
+    spawned: list = []
+    _spawnable(tool, monkeypatch, tmp_path, spawned)
+
+    def _absent():
+        raise tool.EngineUnavailable("no engine")
+
+    monkeypatch.setattr(tool, "available_memory_gb", _absent)
+    line = tool.run("merge-to-main", tmp_path)
+    assert line.startswith("scip-rebuild: defect -- ")
+    assert "no engine" in line
+    assert spawned == []
+
+
+def test_available_memory_gb_raises_when_engine_does_not_resolve(monkeypatch):
+    mod = _load()
+    monkeypatch.setitem(sys.modules, "coordinator_core.telemetry.host_sampler", None)
+    # A sibling test's import leaves `host_sampler` bound on the package, and
+    # `from package import name` reads that attribute before sys.modules.
+    import coordinator_core.telemetry as telemetry_pkg
+
+    monkeypatch.delattr(telemetry_pkg, "host_sampler", raising=False)
+    with pytest.raises(mod.EngineUnavailable):
+        mod.available_memory_gb()
+
+
 def test_available_memory_gb_reads_the_fleet_avail_mb_helper(monkeypatch):
     from coordinator_core.telemetry import host_sampler
 
