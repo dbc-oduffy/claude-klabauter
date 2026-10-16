@@ -1113,7 +1113,7 @@ def _recorded_fingerprints(
     worktree_root: Path, session_id: str, candidates: Sequence[str], all_paths: Sequence[str],
     deleted_paths: Sequence[str], *, excluded: set,
     reviewed: Optional[dict] = None, reviewed_at: Optional[float] = None,
-    fixes_integrated_at: Optional[float] = None,
+    fixes_integrated_at: Optional[float] = None, wave_paths: frozenset = frozenset(),
 ) -> dict:
     """``{path: sha256}`` the run's expectation for the commit's candidate paths; one batched sink
     read. Per path the newer of the session's last recorded write and the run's newest review
@@ -1121,7 +1121,8 @@ def _recorded_fingerprints(
     an exact tie goes to the session write. When the review wave applied fixes
     (``fixes_integrated_at``: epoch the wave's integration was recorded), a reviewed path whose
     bytes were last written no later than that moment, after the newest session write, is declared
-    at those bytes; a later change keeps the older expectation and refuses. A hashless newest
+    at those bytes; a later change keeps the older expectation and refuses. A path the wave's own
+    record lists (``wave_paths``) counts as reviewed when no stored hash names it. A hashless newest
     session event, or an unrecorded path outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
@@ -1135,7 +1136,7 @@ def _recorded_fingerprints(
     for p in wanted:
         event = seen.get(p)
         review_hash = reviewed.get(p)
-        if review_hash and fixes_integrated_at is not None and (event is None or fixes_integrated_at > event[1]):
+        if (review_hash or p in wave_paths) and fixes_integrated_at is not None and (event is None or fixes_integrated_at > event[1]):
             target = worktree_root / p
             try:
                 settled = target.stat().st_mtime <= fixes_integrated_at
@@ -1152,16 +1153,17 @@ def _recorded_fingerprints(
     return out
 
 
-def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> Optional[float]:
-    """Epoch the review wave's integration was recorded (its sidecar's mtime), ``None`` when the
+def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> tuple:
+    """``(epoch, reviewed_paths)``: when the review wave's integration was recorded (its
+    sidecar's mtime) and that sidecar's ``prep.slice_files``; ``(None, frozenset())`` when the
     wave applied no fixes or its sidecar does not resolve. The sidecar's mtime is the cutoff, so a
     later rewrite of that sidecar moves it forward; ``integration.sidecar`` is tried before the
     share-dir glob, which scans every session's directory."""
     if not isinstance(inline_review, dict):
-        return None
+        return None, frozenset()
     fixes = inline_review.get("fixes")
     if not (isinstance(fixes, int) and not isinstance(fixes, bool) and fixes > 0):
-        return None
+        return None, frozenset()
     integration = inline_review.get("integration")
     sidecar = integration.get("sidecar") if isinstance(integration, dict) else None
     candidates: list = []
@@ -1177,10 +1179,31 @@ def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> Optional
     stamps: list = []
     for c in candidates:
         try:
-            stamps.append(c.stat().st_mtime)
+            stamps.append((c.stat().st_mtime, c))
         except OSError:
             continue
-    return max(stamps) if stamps else None
+    if not stamps:
+        return None, frozenset()
+    at, newest = max(stamps, key=lambda s: s[0])
+    return at, _wave_slice_files(newest)
+
+
+def _wave_slice_files(sidecar: Path) -> frozenset:
+    """``prep.slice_files`` of the wave's on-disk integration record: the paths the wave reviewed.
+    A run whose prep was a test-runner sidecar stores no ``reviewed_sha256``; this is then the
+    only record of which paths the wave's fixes may have touched. Empty when unreadable."""
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    try:
+        split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
+        fm = yaml.safe_load(split.fm_text) if split else None
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return frozenset()
+    prep = fm.get("prep") if isinstance(fm, dict) else None
+    files = prep.get("slice_files") if isinstance(prep, dict) else None
+    return frozenset(f for f in files if isinstance(f, str)) if isinstance(files, list) else frozenset()
 
 
 def _epoch_of(stamp: object) -> Optional[float]:
@@ -3822,13 +3845,14 @@ def _terminal_commit_inner(
         commit_params["declared_reverts"] = deleted_paths
     if session_id is not None:
         commit_params["session_id"] = session_id
+        fixes_at, wave_paths = _fixes_integrated_at(worktree_root, inline_review)
         expected = _recorded_fingerprints(
             worktree_root, session_id,
             [p for c in done_chunks for p in c.paths] + list(run_owned),
             all_paths, deleted_paths,
             excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, note_committed},
             reviewed=reviewed_bytes, reviewed_at=reviewed_at,
-            fixes_integrated_at=_fixes_integrated_at(worktree_root, inline_review),
+            fixes_integrated_at=fixes_at, wave_paths=wave_paths,
         )
         if note_committed and note_committed not in deleted_paths:
             from coordinator_core.session import touch_record

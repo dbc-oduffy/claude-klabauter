@@ -332,3 +332,44 @@ def test_a_foreign_edit_of_the_note_after_the_expectation_still_refuses(ask_repo
     assert out["committed"] is False
     assert out["refused"] == "blob-drift"
     assert out["blob_drift"][0]["path"] == NOTE
+
+
+def _bookkeeping(repo: Path, slice_files: list, at: float) -> None:
+    """The wave's engine-written integration record naming the paths it reviewed, stamped at ``at``."""
+    import os
+
+    share = repo / ".coordinator-local" / "subagent-share" / SID
+    share.mkdir(parents=True, exist_ok=True)
+    f = share / "rev-stem.md"
+    f.write_text(f"---\n{yaml.safe_dump({'prep': {'slice_files': slice_files}})}---\n", encoding="utf-8")
+    os.utime(f, (at, at))
+
+
+def test_a_wave_fixed_path_with_no_stored_review_hash_commits(repo, monkeypatch):
+    """A run whose prep was a test-runner sidecar stores no reviewed_sha256: the wave's own record
+    of its slice files is then what admits the post-fix bytes."""
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _stamp(repo, "a.py", 2500.0)
+    _bookkeeping(repo, ["a.py"], 3000.0)
+    out, seen = _fire(repo, monkeypatch, _FIXED)
+    assert out["committed"] is True, out
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("FIXED\n")}
+
+
+def test_a_path_outside_the_waves_slice_files_still_refuses(repo, monkeypatch):
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _stamp(repo, "a.py", 2500.0)
+    _bookkeeping(repo, ["b.py"], 3000.0)
+    out, _ = _fire(repo, monkeypatch, _FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+def test_a_change_after_a_slice_file_wave_integrated_still_refuses(repo, monkeypatch):
+    (repo / "a.py").write_text("LATE\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _stamp(repo, "a.py", 3500.0)
+    _bookkeeping(repo, ["a.py"], 3000.0)
+    out, _ = _fire(repo, monkeypatch, _FIXED)
+    assert out["refused"] == "blob-drift"
