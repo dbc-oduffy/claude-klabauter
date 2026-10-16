@@ -453,7 +453,7 @@ _PREP_FROM_WAVE_JS = (
     "_prepReplies.filter(p => !p.error).flatMap(p => (p.slices ?? []).map(s => s.id)).join(', ') + ')', "
     f"reason: {_js_string_literal(_PREP_BUSY_REFUSAL)}, "
     "prep: _busyReplies[0], wave: null, integration: null }; }\n"
-    "  if (_waveRaw.some(r => r && r.prep && !r.prep.error && (r.review === undefined || r.review === null))) { "
+    "  if (_waveRaw.some(r => r && r.prep && !r.prep.error && (r.prep.slices ?? []).length && (r.review === undefined || r.review === null))) { "
     f"return {{ halted: {_js_string_literal(REVIEW_MISSING_HALT)}, "
     f"reason: {_js_string_literal(_REVIEW_MISSING_REFUSAL)}, "
     "prep: _prepReplies[0] ?? null, wave: null, integration: null }; }\n"

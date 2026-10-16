@@ -1201,6 +1201,11 @@ def test_a_wave_return_with_no_review_beside_a_clean_prep_is_refused():
     assert result["halted"] == REVIEW_MISSING_HALT
 
 
+def test_a_wave_agent_whose_group_got_no_slices_may_return_prep_alone():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => n === 0 ? { prep: { ...r.prep, slices: [] } } : r")
+    assert result.get("halted") != REVIEW_MISSING_HALT
+
+
 def test_a_wave_return_with_no_review_beside_a_refused_prep_is_accepted():
     result = _run_in_wave(_FULL, 9, patch="(r, n) => n === 0 ? { prep: { ...r.prep, error: 'freeze failed' } } : r")
     assert result.get("halted") != REVIEW_MISSING_HALT
