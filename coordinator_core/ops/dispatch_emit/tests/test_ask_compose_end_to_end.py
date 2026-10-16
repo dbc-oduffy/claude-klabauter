@@ -9,6 +9,7 @@ import subprocess
 import pytest
 import yaml
 
+from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
@@ -48,7 +49,7 @@ def test_fallback_stage_agent_is_haiku_at_low_effort_with_one_engine_call():
     script = _compose()
     opts = _agent_opts(script, "stage")
     assert "model: 'haiku'" in opts and "effort: 'low'" in opts
-    assert "agentType: 'general-purpose'" in opts
+    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in opts
     call = script[script.rindex("agent(", 0, script.index("label: 'stage'")) : script.index("label: 'stage'")]
     assert call.count(ask_compose.OP_ASK_STAGE) == 1 and "coordinator-invoke" in call
 

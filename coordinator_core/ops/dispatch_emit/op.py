@@ -1994,11 +1994,11 @@ def _dispatch_emit(
                 agent_type_host=agent_type_host,
                 before_write=_declare_output_root,
             )))
-        first = emitted[0][1]
-        written = first
-        error_count = sum(e["error_count"] for _, e in emitted)
-        warn_count = sum(e["warn_count"] for _, e in emitted)
-        finding_dicts = [f for _, e in emitted for f in e["findings"]]
+        written = emitted[0][1]
+        # plan_findings ride on every part; count each distinct finding once.
+        finding_dicts = list({json.dumps(f, sort_keys=True): f for _, e in emitted for f in e["findings"]}.values())
+        error_count = sum(1 for f in finding_dicts if f["severity"] == Severity.ERROR.value)
+        warn_count = sum(1 for f in finding_dicts if f["severity"] == Severity.WARN.value)
     else:
         written = _emit_script_file(
             guarded_path,
