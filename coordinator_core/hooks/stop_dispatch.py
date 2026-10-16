@@ -156,6 +156,11 @@ from coordinator_core.hooks.receiver_state_sensor import _handler as _receiver_s
 from coordinator_core.hooks.runtime_tripwire_em_check import _handler as _runtime_tripwire_em_check_handler
 from coordinator_core.hooks.watchdog_undischarged_next_move import _handler as _watchdog_undischarged_next_move_handler
 from coordinator_core.ipc import register_op
+from coordinator_core.write_guards._drive_root import (
+    configured_drive_roots,
+    is_checkout_or_link,
+    override_active,
+)
 
 
 def _wrap_flat_op(op_fn) -> dict:
@@ -224,7 +229,6 @@ def _workflow_stall_stop_op(params: dict, repo_root=None) -> dict:
 
 _DRIVE_GUARD = "guard-drive-root-new-dir"
 _DRIVE_TRIPWIRE = "SCRATCH-AT-A-DRIVE-ROOT-IS-LITTER"
-_DRIVE_OVERRIDE_KEY = "COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR"
 _TRANSCRIPT_TAIL_BYTES = 400_000
 
 
@@ -234,9 +238,9 @@ def _drive_baseline_path() -> Path:
 
 
 def _drive_roots(cwd: str, repo_root: Optional[str]) -> list:
-    env = os.environ.get("COORDINATOR_DRIVE_ROOTS")
-    if env:
-        return [r for r in env.split(os.pathsep) if r]
+    configured = configured_drive_roots()
+    if configured:
+        return list(configured)
     anchors: list = []
     for p in (cwd, repo_root, str(Path.home())):
         if p:
@@ -252,15 +256,6 @@ def _top_level_dir_names(root: str) -> set:
             return {e.name for e in it if e.is_dir(follow_symlinks=False)}
     except OSError:
         return set()
-
-
-def _is_checkout_or_link(path: str) -> bool:
-    try:
-        if os.path.islink(path) or getattr(os.path, "isjunction", lambda _p: False)(path):
-            return True
-        return os.path.exists(os.path.join(path, ".git"))
-    except OSError:
-        return False
 
 
 def _creating_command(transcript_path: str, name: str) -> Optional[str]:
@@ -322,7 +317,7 @@ def _guard_drive_root_new_dir_handler(params: dict, repo_root=None) -> dict:
                 continue
             known_set = set(known)
             new.extend((root, n) for n in sorted(current - known_set)
-                       if not _is_checkout_or_link(os.path.join(root, n)))
+                       if not is_checkout_or_link(os.path.join(root, n)))
             if current != known_set:
                 baseline[root] = sorted(current)
                 changed = True
@@ -333,7 +328,7 @@ def _guard_drive_root_new_dir_handler(params: dict, repo_root=None) -> dict:
             os.replace(tmp, baseline_path)
     except Exception:
         return no_advisory()
-    if not new or os.environ.get(_DRIVE_OVERRIDE_KEY) == "1":
+    if not new or override_active(payload):
         return no_advisory()
 
     session_id = payload.get("session_id") or "unknown-session"

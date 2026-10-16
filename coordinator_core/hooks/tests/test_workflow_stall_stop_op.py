@@ -149,3 +149,12 @@ def test_drive_root_override_and_checkout_and_chained_stop_pass(tmp_path, drive,
     monkeypatch.setenv("COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR", "1")
     res = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     assert not _blocked(res)
+
+
+def test_drive_root_override_is_caller_keyed_not_ambient(tmp_path, drive, monkeypatch):
+    sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
+    (drive / "stray3").mkdir()
+    monkeypatch.setenv("COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR", "1")
+    res = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path, env={"PATH": "x"}))
+    assert res["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "stray3" in res["hookSpecificOutput"]["permissionDecisionReason"]

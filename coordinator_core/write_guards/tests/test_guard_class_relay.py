@@ -172,6 +172,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_hand_authored_handoff_creation": ["hard-deny", ["Write", "Edit", "MultiEdit"], 61],
 "block_hand_authored_sidecar_creation": ["hard-deny", ["Write"], 60],
 "block_hand_set_test_verdict": ["hard-deny", ["Write", "Edit", "MultiEdit"], 32],
+"block_drive_root_new_dir_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 134],
 "block_home_dir_memo_delivery": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 125],
 "block_home_root_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 133],
 "block_illegal_filename": ["hard-deny", ["Write", "Edit", "NotebookEdit"], 20],

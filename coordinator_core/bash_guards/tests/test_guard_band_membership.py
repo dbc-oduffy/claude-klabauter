@@ -63,6 +63,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-fleet-delegation-creation",
     "block-hand-authored-handoff-creation",
     "block-home-root-bash-write",
+    "block-drive-root-new-dir-bash-write",
     "block-disarm-marker-sentinel-creation",
     "block-dev-repo-sentinel-removal",
     "block-noncanonical-branch-creation",

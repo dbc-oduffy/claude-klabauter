@@ -184,6 +184,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "block_home_root_bash_write": (
         lambda mod: "Out-File ~/home-root-dialect-probe.txt"
     ),
+    "block_drive_root_new_dir_bash_write": (
+        lambda mod: "New-Item -Path ~/drive-root-dialect-probe/a -ItemType Directory"
+    ),
     "guard_head_tail_rewrite": (
         lambda mod: "Get-Content foo.log | Select-Object -First 20"
     ),

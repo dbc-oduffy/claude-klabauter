@@ -303,6 +303,9 @@ EXPECTED: Dict[str, _Expected] = {
     "block-home-root-bash-write": _Expected(
         ("Bash", "PowerShell"),
     ),
+    "block-drive-root-new-dir-bash-write": _Expected(
+        ("Bash", "PowerShell"),
+    ),
     "head-tail-plumbing-rewrite": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -490,9 +493,10 @@ def test_discovery_found_the_expected_scope():
     `guard_headless_claude_plugin_dir`, and 41 -> 42 with
     `block_home_root_bash_write` (merge 49df735aad), and 42 -> 43 with
     `guard_move_from_inside_cwd`, and 43 -> 44 with
-    `block_push_pr_non_owned_remote`."""
+    `block_push_pr_non_owned_remote`, and 44 -> 45 with
+    `block_drive_root_new_dir_bash_write`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 44, sorted(stems)
+    assert len(stems) == 45, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -515,9 +519,10 @@ def test_every_registered_guard_is_classified():
     54 -> 55 with `block-venv-creation` (PM directive 2026-09-29); 55 -> 56
     with `background-publish`; 69 -> 70 with `block-home-root-bash-write`
     (merge 49df735aad); 70 -> 72 with `trailing-background-ampersand` and
-    `move-from-inside-cwd` (example-game-repo-3b friction advisories)."""
+    `move-from-inside-cwd` (example-game-repo-3b friction advisories); 73 -> 74 with
+    `block_drive_root_new_dir_bash_write`."""
     actual = _actual_matchers()
-    assert len(actual) == 73, sorted(actual)
+    assert len(actual) == 74, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -558,7 +563,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 73
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 74
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

@@ -170,6 +170,7 @@ HARD_DENY_NAMES = [
     "block_hand_authored_sidecar_creation",
     "block_home_dir_memo_delivery",
     "block_home_root_write",
+    "block_drive_root_new_dir_write",
     "block_illegal_filename",
     "block_memo_status_hand_edit",
     "block_oss_mirror_memo_delivery",

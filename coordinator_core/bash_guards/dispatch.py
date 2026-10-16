@@ -2324,6 +2324,10 @@ def _build_guard_chain(
         check as _check_home_root_bash_write,
         MATCHERS as _matchers_home_root_bash_write,
     )
+    from coordinator_core.bash_guards.block_drive_root_new_dir_bash_write import (
+        check as _check_drive_root_new_dir_bash_write,
+        MATCHERS as _matchers_drive_root_new_dir_bash_write,
+    )
     # block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
     # but on the module whose registered leg here is `check_advisory` -- the
     # `check()` leg that pairs with the declaration was RETIRED from guard_chain
@@ -2645,6 +2649,14 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_home_root_bash_write),
+        ),
+        GuardEntry(
+            "block-drive-root-new-dir-bash-write",
+            lambda: _check_drive_root_new_dir_bash_write(payload),
+            False,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_drive_root_new_dir_bash_write),
         ),
         # Deny leg of `block-dev-repo-sentinel-removal` (direct match); its
         # advisory leg (indirection) is registered in ADVISORY_REWRITE below.

@@ -802,6 +802,16 @@ def _home_root_bash_write_setup(
     return {_CMD_OVERRIDE_KEY: "echo x > ~/stray.txt"}
 
 
+def _drive_root_new_dir_bash_write_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    home = scratch_dir / "fixture-home"
+    home.mkdir(parents=True, exist_ok=True)
+    mp.setenv("HOME", str(home))
+    mp.setenv("USERPROFILE", str(home))
+    return {_CMD_OVERRIDE_KEY: "echo x > ~/stray-dir/x.txt"}
+
+
 def _noncanonical_branch_creation_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1541,6 +1551,23 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "block-home-root-bash-write",
         "block-home-root-bash-write-control",
+        "echo x > normal_file.txt",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-drive-root-new-dir-bash-write",
+        "block-drive-root-new-dir-bash-write-fire",
+        "echo x > ~/stray-dir/x.txt",
+        True,
+        _DENY,
+        False,
+        setup=_drive_root_new_dir_bash_write_setup,
+    ),
+    CorpusRow(
+        "block-drive-root-new-dir-bash-write",
+        "block-drive-root-new-dir-bash-write-control",
         "echo x > normal_file.txt",
         False,
         _DENY,
@@ -2694,6 +2721,18 @@ def _wg_home_root_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[
     }
 
 
+def _wg_drive_root_new_dir_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    home = scratch_dir / "fixture-home"
+    home.mkdir(parents=True, exist_ok=True)
+    mp.setenv("HOME", str(home))
+    mp.setenv("USERPROFILE", str(home))
+    return {
+        "tool_name": "Write",
+        "cwd": str(scratch_dir),
+        "tool_input": {"file_path": str(home / "stray-dir" / "x.txt"), "content": "x"},
+    }
+
+
 def _wg_illegal_filename_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     return {"tool_name": "Write", "tool_input": {"file_path": "bad?name.txt", "content": "x"}}
 
@@ -3410,6 +3449,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_hand_authored_sidecar_creation", "control", False, _wg_benign),
     WriteGuardRow("block_home_dir_memo_delivery", "fire", True, _wg_home_dir_memo_delivery_fire),
     WriteGuardRow("block_home_dir_memo_delivery", "control", False, _wg_benign),
+    WriteGuardRow("block_drive_root_new_dir_write", "fire", True, _wg_drive_root_new_dir_write_fire),
+    WriteGuardRow("block_drive_root_new_dir_write", "control", False, _wg_benign),
     WriteGuardRow("block_home_root_write", "fire", True, _wg_home_root_write_fire),
     WriteGuardRow("block_home_root_write", "control", False, _wg_benign),
     WriteGuardRow("block_illegal_filename", "fire", True, _wg_illegal_filename_fire),

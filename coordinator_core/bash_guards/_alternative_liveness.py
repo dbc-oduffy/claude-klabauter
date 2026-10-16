@@ -170,6 +170,7 @@ from coordinator_core.bash_guards import guard_plumbing_and_loops
 from coordinator_core.bash_guards import block_fleet_delegation_creation
 from coordinator_core.bash_guards import block_hand_authored_handoff_creation
 from coordinator_core.bash_guards import block_home_root_bash_write
+from coordinator_core.bash_guards import block_drive_root_new_dir_bash_write
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
 from coordinator_core.bash_guards import guard_repo_setup_claude_home_refusal
 from coordinator_core.bash_guards import guard_host_subagent_bash_ban
@@ -787,6 +788,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_home_root_bash_write": lambda: block_home_root_bash_write.check(
         _payload("echo x > ~/home-root-liveness-probe.txt", agent_id=None)
+    ),
+    "block_drive_root_new_dir_bash_write": lambda: block_drive_root_new_dir_bash_write.check(
+        _payload("mkdir ~/drive-root-liveness-probe/a", agent_id=None)
     ),
     "guard_repo_setup_claude_home_refusal": lambda: guard_repo_setup_claude_home_refusal.check(
         _payload(
