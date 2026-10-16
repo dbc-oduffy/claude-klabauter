@@ -147,6 +147,18 @@ def live_run_deliverable_id(repo_root: Path, session_id: str, paths: Iterable[st
     return next(iter(ids)) if len(ids) == 1 else ""
 
 
+def _halted(root: Path, run_id: str) -> bool:
+    """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
+    the TTL but its declaration contests no one. A `resumed` marker is live again."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    try:
+        marker = halted_run._read(record_dir(root, run_id))
+    except ValueError:
+        return False
+    return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
+
+
 def _manifest_declared(run_id: str, root: Path) -> tuple:
     """`(paths, prefixes, unreadable)` a run's `manifest.json` (`rows[].writes`, `doc_writes`)
     and `commit-request.txt` (chunk paths and prefixes) declare, normalized. `unreadable` is True
@@ -221,6 +233,8 @@ def live_run_write_claims(
         if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
             continue
         if not touch_record.session_live(sid, cwd):
+            continue
+        if _halted(root, run_id):
             continue
         declared, prefixes, unreadable = _manifest_declared(run_id, root)
         if unreadable and not declared and not prefixes:

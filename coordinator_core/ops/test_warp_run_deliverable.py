@@ -329,3 +329,24 @@ def test_unknown_result_logs_offending_run_id(repo, live, caplog):
     with caplog.at_level("WARNING"):
         assert _claims(repo, ["a.py"]) is None
     assert "p-bad" in caplog.text
+
+
+def test_a_halted_run_declares_nothing(repo, live):
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    halted_run.write_halt_marker(record_dir(repo, "p1"), halted="criterion_not_met", sizing_rel=None)
+    assert _claims(repo, ["a.py"]) == {}
+
+
+def test_a_resumed_run_declares_again(repo, live):
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    halted_run.write_halt_marker(record_dir(repo, "p1"), halted="criterion_not_met", sizing_rel=None)
+    halted_run.mark_resumed(record_dir(repo, "p1"))
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
