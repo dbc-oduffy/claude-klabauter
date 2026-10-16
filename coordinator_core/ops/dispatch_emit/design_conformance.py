@@ -62,7 +62,8 @@ def brief_text(hits: Sequence[Mapping], registry_rel: Optional[str]) -> str:
     out = [
         f"Design registry ({registry_rel}): the writes in scope are drawn on these boards. "
         "Cite `<harvest>/harvest.json` for each entry or carry a ratified `design-deviation` block "
-        "(`entry:`, `ratified_by:`), and declare `front-end` in review_signals."
+        "(`entry:`, `ratified_by:`), and declare `front-end` in review_signals. A senior-front-end "
+        "reviewer writes one `Board: <url>` line in its sidecar for each board it checked."
     ]
     for hit in hits:
         out.append("")
@@ -191,12 +192,50 @@ def _record_refusal(target: Path, board: str) -> Optional[str]:
     return None
 
 
+def _wave_agent_type(root: Path, entry: Mapping) -> str:
+    """The wave return's reviewer type. The slice-review-result schema carries no `agent_type`,
+    so the spawn-provisioned sidecar frontmatter is the fallback; the verdict still comes from the return."""
+    declared = bare_agent_type(entry.get("agent_type"))
+    if declared:
+        return declared
+    target = _contained_file(root, entry.get("sidecar_path"))
+    if target is None:
+        return ""
+    try:
+        return bare_agent_type(_frontmatter(target.read_text(encoding="utf-8-sig")).get("agent_type"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _wave_refusal(root: Path, entry: Mapping, board: str) -> Optional[str]:
+    """Why this wave return is no senior-front-end review of `board`, or None when it is.
+    The verdict comes from the schema-validated return, never from the sidecar."""
+    if _wave_agent_type(root, entry) != SENIOR_FRONT_END:
+        return "names no senior-front-end reviewer"
+    verdict = re.sub(r"[\s-]+", "_", str(entry.get("verdict") or "").strip()).upper()
+    if not verdict or verdict in REFUSING_VERDICTS:
+        return f"carries verdict {verdict or '(none)'}"
+    rel = entry.get("sidecar_path")
+    target = _contained_file(root, rel)
+    if target is None or _in_plans(root, target):
+        return "is no review file outside docs/plans"
+    if not board:
+        return "names no board URL on the row"
+    try:
+        text = target.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return "is unreadable"
+    return None if board in text else "does not name the board"
+
+
 def evidence_refusal(
-    repo_root: Path, row: Mapping, verdict_item: Mapping, plan_text: Optional[str]
+    repo_root: Path, row: Mapping, verdict_item: Mapping, plan_text: Optional[str],
+    *, wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
 ) -> Optional[str]:
     """Does this met claim carry senior-front-end or ratified-deviation evidence? None when it
-    does; else one sentence naming what is missing. The registry entry's own status never meets
-    a row."""
+    does; else one sentence naming what is missing. Candidates, in order: the verdict item's
+    `met_by`, each revise-noted path (same checks), each senior-front-end wave return whose
+    sidecar names the board. The registry entry's own status never meets a row."""
     root = Path(repo_root)
     eid = entry_id(row)
     m = _BOARD_LINE.search(str(row.get(rr.ROW_TEXT) or ""))
@@ -209,21 +248,40 @@ def evidence_refusal(
     met_by = verdict_item.get("met_by")
     paths = [met_by] if isinstance(met_by, str) else [p for p in met_by or [] if isinstance(p, str)]
     prefix = f"design row {row.get(rr.ROW_ID)} ({eid})"
-    if not paths:
-        return f"{prefix}: met_by names no file. Name a senior-front-end review of the board or a ratification."
     first = ""
-    for rel in paths:
+
+    def passes(rel: str, label: str) -> bool:
+        nonlocal first
         target = _contained_file(root, rel)
         if target is None:
-            first = first or f"met_by {rel} is no file under the repo root"
-            continue
+            first = first or f"{label} {rel} is no file under the repo root"
+            return False
         if target in cited_files and not _in_plans(root, target):
-            return None
+            return True
         if target in cited_files:
-            first = first or f"met_by {rel} is a plan, which cannot ratify"
-            continue
+            first = first or f"{label} {rel} is a plan, which cannot ratify"
+            return False
         why = _record_refusal(target, board) if board else "names no board URL on the row"
         if why is None:
+            return True
+        first = first or f"{label} {rel} {why}"
+        return False
+
+    if any(passes(rel, "met_by") for rel in paths):
+        return None
+    if any(passes(rel, "revise-noted file") for rel in noted_paths if isinstance(rel, str)):
+        return None
+    for entry in wave_reviews:
+        if not isinstance(entry, Mapping) or _wave_agent_type(root, entry) != SENIOR_FRONT_END:
+            continue
+        why = _wave_refusal(root, entry, board)
+        if why is None:
             return None
-        first = first or f"met_by {rel} {why}"
-    return f"{prefix}: {first}. Name a senior-front-end review of the board or a cited ratification."
+        first = first or f"wave review {entry.get('sidecar_path')} {why}"
+    lead = first or "met_by names no file"
+    if first and not paths:
+        lead = f"met_by names no file; {first}"
+    return (
+        f"{prefix}: {lead}. No senior-front-end wave review and no revise-noted review of the board "
+        "met the row. Name a senior-front-end review of the board or a cited ratification."
+    )

@@ -235,3 +235,50 @@ def test_flag_shaped_token_after_dashdash_is_a_literal_path_not_a_flag(
     )
 
     assert result is None
+
+
+def _wire_peer_contest(monkeypatch, contested):
+    from coordinator_core.session import scope
+
+    monkeypatch.setattr(
+        scope,
+        "contested_by_live_peers",
+        lambda paths, sid, cwd=None: {p: ["peer"] for p in paths if p in contested},
+    )
+
+
+def test_own_run_record_dir_is_not_foreign_when_no_live_peer_holds_it(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    (root / "state" / "warp" / "ask-1").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(
+        monkeypatch,
+        str(root),
+        dry_run_lines=["add 'state/warp/ask-1/run.json'", "add 'state/warp/ask-1/ask.md'"],
+    )
+    _wire_claims(monkeypatch, set())
+    _wire_peer_contest(monkeypatch, set())
+
+    result = guard.check_blanket_git_add(
+        "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is None
+
+
+def test_run_record_dir_held_by_a_live_peer_is_still_foreign(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    (root / "state" / "warp" / "ask-1").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(monkeypatch, str(root), dry_run_lines=["add 'state/warp/ask-1/run.json'"])
+    _wire_claims(monkeypatch, set())
+    _wire_peer_contest(monkeypatch, {"state/warp/ask-1/run.json"})
+
+    result = guard.check_blanket_git_add(
+        "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    assert "state/warp/ask-1/run.json" in result["hookSpecificOutput"]["permissionDecisionReason"]

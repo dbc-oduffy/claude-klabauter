@@ -44,13 +44,17 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
+from coordinator_core.hooks.sizing_scout_deny import (
+    ARGS_SHAPE,
+    GUARD_NAME,
+    SIZING_SCOUT_TYPES,
+    sizing_scout_deny as _scout_deny,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_submit_name
 
-GUARD_NAME = "submit-engine-ask"
-SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
 
-_ARGS_SHAPE = 'args: {ask: "<words>"} | {sizing: "<path>"} | {asks: [{ask, source?}]}, brief: "<text>" | brief_file'
+_ARGS_SHAPE = ARGS_SHAPE
 
 EmitFn = Callable[[dict, Path], dict]
 FanoutFn = Callable[[dict, Path], dict]  # the contract's FANOUT_OP signature (ask_fanout_contract.FanoutFn)
@@ -475,37 +479,13 @@ def evaluate(
 
 
 def sizing_scout_deny(payload: Mapping[str, Any]) -> Optional[dict]:
-    """Deny the main loop's hand dispatch of the sizing scout; a live run is named when one exists.
-
-    Order is load-bearing: tool, agent_id and resolved type are checked before any file is read, so
-    no other Agent dispatch pays a launch-record directory listing.
-    """
-    if payload.get("tool_name") != "Agent" or payload.get("agent_id"):
-        return None
+    """The leaf's deny, resolving the payload's own subagent type (the Agent leg passes its own)."""
     tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
+    if payload.get("tool_name") != "Agent" or not isinstance(tool_input, dict):
         return None
     from coordinator_core.hooks.block_unenumerated_agent_type import resolve_subagent_type
 
-    if resolve_subagent_type(tool_input) not in SIZING_SCOUT_TYPES:
-        return None
-    live = None
-    session_id = payload.get("session_id")
-    root = _repo_root(None, payload.get("cwd")) if isinstance(session_id, str) and session_id else None
-    if root is not None:
-        from coordinator_core import warp_live
-
-        transcript = payload.get("transcript_path")
-        live = warp_live.live_run_for_session(
-            root, session_id, transcript_path=transcript if isinstance(transcript, str) else None
-        )
-    from coordinator_core.machine_profile import apply_guard_level
-
-    if live:
-        reason = f"Run {live} is already sizing; its completion is your one wake. End the turn."
-    else:
-        reason = f"Sizing runs in the ask workflow. Use Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})."
-    return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
+    return _scout_deny(payload, resolve_subagent_type(tool_input))
 
 
 @register_op("hooks.submit_engine_ask")

@@ -56,7 +56,7 @@ def test_relative_out_resolves_against_repo_root(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "harvest", fake)
     r = _call(_ok_params(session_id="s1", transcript="t.jsonl"), repo_root=str(tmp_path))
     assert seen["out"] == tmp_path / "rec"
-    assert seen["kw"] == {"session_id": "s1", "transcript": "t.jsonl"}
+    assert seen["kw"] == {"session_id": "s1", "transcript": "t.jsonl", "reader": False}
     assert r["ok"] is True and r["wrote"] == [str(tmp_path / "rec" / "harvest.json")]
     assert r[BOUND_KEY] == model.MAX_RECORD_FILES
 
@@ -83,6 +83,49 @@ def test_deleted_is_passed_through(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "harvest", lambda *a, **k: model.RecordWrite(written=(), deleted=(gone,)))
     r = _call(_ok_params(), repo_root=str(tmp_path))
     assert r["deleted"] == [str(gone)]
+
+
+def test_reader_dispatch_needs_only_url_and_never_probes(monkeypatch):
+    monkeypatch.setattr(api, "probe", lambda *a, **k: pytest.fail("probe called"))
+    monkeypatch.setattr(api, "harvest", lambda *a, **k: pytest.fail("harvest called"))
+    r = _call({"mode": "reader-dispatch", "url": "https://claude.ai/artifact/LvATpzxR9vvEBxJsy84rjx"})
+    assert r["ok"] is True and r["wrote"] == [] and r["deleted"] == []
+    assert r["dispatch"]["description"] == "canvas-reader LvATpzxR9vvEBxJsy84rjx"
+    assert r[BOUND_KEY] == model.MAX_RECORD_FILES
+
+
+def test_reader_dispatch_non_canvas_url_is_bad_params():
+    r = _call({"mode": "reader-dispatch", "url": "https://example.com/x"})
+    assert r["ok"] is False and r["reason"] == op.BAD_PARAMS
+
+
+def test_reader_without_transcript_is_bad_params(monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "harvest", lambda *a, **k: pytest.fail("harvest called"))
+    r = _call(_ok_params(reader=True), repo_root=str(tmp_path))
+    assert r["ok"] is False and r["reason"] == op.BAD_PARAMS
+
+
+def test_non_bool_reader_is_bad_params(tmp_path):
+    r = _call(_ok_params(reader="yes", transcript="t"), repo_root=str(tmp_path))
+    assert r["ok"] is False and r["reason"] == op.BAD_PARAMS
+
+
+def test_reader_with_probe_is_bad_params(monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "probe", lambda *a, **k: pytest.fail("probe called"))
+    r = _call({"mode": "probe", "url": URL, "out": "o", "reader": True, "transcript": "t"}, repo_root=str(tmp_path))
+    assert r["ok"] is False and r["reason"] == op.BAD_PARAMS
+
+
+def test_reader_is_forwarded_to_harvest(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake(url, out_dir, **kw):
+        seen.update(kw)
+        return model.RecordWrite(written=(), deleted=())
+
+    monkeypatch.setattr(api, "harvest", fake)
+    r = _call(_ok_params(reader=True, transcript="t.jsonl"), repo_root=str(tmp_path))
+    assert r["ok"] is True and seen["reader"] is True
 
 
 def _git_repo(path):

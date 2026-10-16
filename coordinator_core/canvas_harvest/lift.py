@@ -1,8 +1,9 @@
 """canvas_harvest.lift - one sequential transcript read yields a session's main-loop reads of one artifact.
 
 Reads each transcript once in binary, parses only lines that hold an Artifact tool name or a
-tool-use id already seen, skips sidechain records and a final line with no newline (a record
-mid-write), and never spawns. The result is whole or a named model.HarvestError.
+tool-use id already seen, skips sidechain records (except those of the one named
+`reader_agent_id`) and a final line with no newline (a record mid-write), and never spawns.
+The result is whole or a named model.HarvestError.
 """
 
 from __future__ import annotations
@@ -133,8 +134,11 @@ class _State:
         self.chain = {"threads": list(threads), "texts": [text], "next": cursor, "at": at}
 
 
-def lift(transcripts, artifact_id: str) -> model.Lifted:
-    """The main-loop reads of `artifact_id` found in `transcripts`, in order; raises HarvestError when partial or absent."""
+def lift(transcripts, artifact_id: str, *, reader_agent_id: Optional[str] = None) -> model.Lifted:
+    """The main-loop reads of `artifact_id` found in `transcripts`, in order; raises HarvestError when partial or absent.
+
+    `reader_agent_id` admits sidechain records whose `agentId` equals it; every other sidechain stays skipped.
+    """
     paths = [Path(p) for p in transcripts]
     if not paths:
         raise model.HarvestError(model.NO_TRANSCRIPT, "no transcript given")
@@ -156,7 +160,11 @@ def lift(transcripts, artifact_id: str) -> model.Lifted:
                 if not has_call and not (pending and any(tid in line for tid in pending)):
                     continue
                 entry = _loads(line)
-                if not isinstance(entry, dict) or entry.get("isSidechain") is True:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("isSidechain") is True and not (
+                    reader_agent_id is not None and entry.get("agentId") == reader_agent_id
+                ):
                     continue
                 message = entry.get("message")
                 content = message.get("content") if isinstance(message, dict) else None

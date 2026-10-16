@@ -189,6 +189,68 @@ def test_registry_entry_ratification_passes(repo, monkeypatch):
     assert dc.evidence_refusal(repo, row, {"met_by": [other]}, None) is not None
 
 
+def _wave(path, agent_type="coordinator:senior-front-end", verdict="APPROVED"):
+    return {"agent_type": agent_type, "sidecar_path": path, "verdict": verdict}
+
+
+def test_wave_default_passes_without_met_by(repo):
+    row = _row(repo)
+    side = _write(repo, "reviews/wave.md", f"agent_type: review-findings\nBoard: {BOARD}\n")
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side)]) is None
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side, verdict="approved")]) is None
+
+
+def test_wave_return_without_agent_type_falls_back_to_sidecar_frontmatter(repo):
+    row = _row(repo)
+    sfe = _write(repo, "reviews/sfe.md", f"---\nagent_type: coordinator:senior-front-end\n---\nBoard: {BOARD}\n")
+    code = _write(repo, "reviews/code.md", f"---\nagent_type: coordinator:code-reviewer\n---\nBoard: {BOARD}\n")
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(sfe, agent_type=None)]) is None
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(code, agent_type=None)]) is not None
+
+
+@pytest.mark.parametrize("kw", [
+    {"verdict": "REQUIRES_CHANGES"}, {"verdict": "REJECTED"}, {"verdict": None},
+    {"agent_type": "coordinator:code-reviewer"}, {"agent_type": None},
+])
+def test_wave_default_refusals(repo, kw):
+    row = _row(repo)
+    side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n")
+    why = dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side, **kw)])
+    assert why is not None and "met_by names no file" in why
+
+
+def test_wave_sidecar_under_plans_or_wrong_board_refuses(repo):
+    row = _row(repo)
+    plan = _write(repo, "docs/plans/p.md", f"Board: {BOARD}\n")
+    other = _write(repo, "reviews/other.md", f"Board: {OTHER_BOARD}\n")
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(plan)]) is not None
+    assert "board" in dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(other)])
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave("../x.md")]) is not None
+    assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave("reviews/none.md")]) is not None
+
+
+def test_noted_path_meets_row_with_record_checks(repo):
+    row = _row(repo)
+    rec = _record(repo, reviewer="coordinator:senior-front-end")
+    bad = _record(repo, "reviews/bad.md", reviewer="coordinator:code-reviewer")
+    assert dc.evidence_refusal(repo, row, {}, None, noted_paths=[rec]) is None
+    assert dc.evidence_refusal(repo, row, {}, None, noted_paths=[bad]) is not None
+    assert dc.evidence_refusal(repo, row, {}, None, noted_paths=["reviews/none.md"]) is not None
+
+
+def test_failed_met_by_does_not_end_the_search(repo):
+    row = _row(repo)
+    bad = _record(repo, "reviews/bad.md", reviewer="coordinator:code-reviewer")
+    side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n")
+    assert dc.evidence_refusal(repo, row, {"met_by": [bad]}, None, wave_reviews=[_wave(side)]) is None
+    why = dc.evidence_refusal(repo, row, {"met_by": [bad]}, None)
+    assert "senior-front-end" in why and "no revise-noted review" in why
+
+
+def test_brief_text_asks_for_board_line():
+    assert "Board: <url>" in dc.brief_text([HIT], "docs/design/registry.yaml")
+
+
 def test_refusal_is_one_sentence_naming_the_row(repo):
     row = _row(repo)
     why = dc.evidence_refusal(repo, row, {"met_by": []}, None)

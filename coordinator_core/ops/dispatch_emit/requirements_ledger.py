@@ -42,6 +42,7 @@ GENERATES = []
 
 RUN_FILE = "run.json"
 INBOX_FILE = "revisions.jsonl"
+NOTES_FILE = "notes.jsonl"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
@@ -121,7 +122,8 @@ def _is_design(anchor: object) -> bool:
 
 
 def _design_failure(
-    item: Item, row: Mapping, repo_root: Optional[Path], plan_text: Optional[str]
+    item: Item, row: Mapping, repo_root: Optional[Path], plan_text: Optional[str],
+    wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
 ) -> Optional[str]:
     """Why a `met` design row fails: evidence_refusal's sentence, else None."""
     from coordinator_core.ops.dispatch_emit.design_conformance import evidence_refusal
@@ -131,7 +133,7 @@ def _design_failure(
     return evidence_refusal(
         Path(repo_root),
         {rr.ROW_ID: item.id, rr.ROW_ANCHOR: item.anchor, rr.ROW_TEXT: item.text},
-        row, plan_text,
+        row, plan_text, wave_reviews=wave_reviews, noted_paths=noted_paths,
     )
 
 
@@ -176,6 +178,35 @@ def _inbox(dir_: Path) -> list[dict]:
             continue  # a torn tail line from a crashed writer; the rest stands
         if isinstance(entry, dict) and isinstance(entry.get("text"), str) and entry["text"].strip():
             out.append(entry)
+    return out
+
+
+def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
+    """Repo-relative, forward-slash paths of the files the run's stored notes name, first-seen order."""
+    from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
+
+    try:
+        raw = (Path(dir_) / NOTES_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    root = Path(repo_root).resolve()
+    out: list[str] = []
+    for line in raw.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # a torn tail line from a crashed writer; the rest stands
+        note = entry.get("note") if isinstance(entry, dict) else None
+        if not isinstance(note, str):
+            continue
+        for token in note.split():
+            token = token.strip("`'\"[]<>(").rstrip(".,;:)").strip("`'\"[]<>(")
+            found = _contained_file(root, token)
+            if found is None:
+                continue
+            rel = found.relative_to(root).as_posix()
+            if rel not in out:
+                out.append(rel)
     return out
 
 
@@ -499,6 +530,7 @@ def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
     try:
         ledger = read_ledger(repo_root, dir_)
     except LedgerRefused:
+        # The view is advisory; terminal_commit._ledger_gate refuses the unreadable sizing.
         return None
     if ledger is not None:
         atomic_write_bytes(dir_ / LEDGER_VIEW_FILE, render(ledger, run_id).encode("utf-8"), preserve_mode=False)
@@ -605,7 +637,7 @@ def revise(
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
-    not a requirement: it is accepted and adds no row or queued revision. Any non-empty `verbatim`
+    not a requirement: it is persisted to `NOTES_FILE` and adds no row or queued revision. Any non-empty `verbatim`
     is a requirement and always adds a row: free text belongs in `note`. `out_of_scope` ids are deferred
     in the same register write as the revision row, the verbatim being their ruling; it needs that
     verbatim and a bound sizing; that verbatim is only the ruling's quote and adds no row, and a
@@ -632,6 +664,14 @@ def revise(
         _write_run(dir_, run)
         declare_write(dir_ / RUN_FILE)
     added: Optional[str] = None
+    if has_note:
+        from coordinator_core.atomic_append import append_line
+
+        append_line(
+            dir_ / NOTES_FILE,
+            (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
+        )
+        declare_write(dir_ / NOTES_FILE)
     if named:
         _append_rows(root, run["sizing_rel"], [], withhold=withhold)
     elif text:
@@ -692,6 +732,7 @@ def judge(
     ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
     gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
     repo_root: Optional[Path] = None, plan_text: Optional[str] = None,
+    wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -724,7 +765,9 @@ def judge(
 
     A design-conformance row (anchor `design-registry:<id>`) is always essential: `essential: false`
     is ignored, `post_commit` fails, and `met` passes only when `design_conformance.evidence_refusal`
-    (given `repo_root` and the run's `plan_text`) returns None."""
+    (given `repo_root` and the run's `plan_text`) returns None. `wave_reviews` (the review wave's
+    `{agent_type, sidecar_path, verdict}` returns) and `noted_paths` (files the revise notes name)
+    are default evidence beside the item's own `met_by`."""
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
@@ -755,7 +798,7 @@ def judge(
         status = row.get("status")
         design = _is_design(item.anchor)
         if design and status == "met":
-            why = _design_failure(item, row, repo_root, plan_text)
+            why = _design_failure(item, row, repo_root, plan_text, wave_reviews, noted_paths)
             if why is not None:
                 failures.append({"id": item.id, "reason": why})
         if routed and item.id in routed and status in ("met", "not_met", "post_commit"):

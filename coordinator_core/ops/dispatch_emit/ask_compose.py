@@ -10,6 +10,7 @@ dispatch.ask_stage; the script only interprets the manifest. Pure composition: n
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from datetime import date
 from pathlib import Path
@@ -319,6 +320,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
                     "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
+                    "met_by": {"type": ["string", "array"], "items": _STR},
                 },
             ),
         },
@@ -342,7 +344,9 @@ _LEDGER_ITEMS_RULES = (
     "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
     "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
     "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
-    "and any other gap in plain words. "
+    "and any other gap in plain words. On a design-registry item (anchor design-registry:<id>) judged "
+    "'met', set met_by to the repo-relative path of the senior-front-end review file of its board, "
+    "or of its ratification file. "
 )
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
@@ -2000,6 +2004,11 @@ def compose_ask_script(
         "  const _noReviewPaths = !!((_manifest?.rows ?? []).length && "
         "!(_manifest?.review_declared_paths ?? []).length);"
     )
+    # Trap: textual rewrite of the review-wave JS, not a parse -- an `agent(` inside a string or
+    # template literal in review_text is rewritten too.
+    review_text = re.sub(r"(?<![\w.])agent\(", "_reviewAgent(", review_text)
+    b.append("  const _reviewOuterAgent = agent;")
+    b.append(f"  const _reviewAgent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
         f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_noReviewPaths) {{\n" + review_text + "\n  }"
     )
@@ -2169,7 +2178,7 @@ def compose_ask_script(
         "next_action: 'Ledger rows ' + (_blkIds.join(', ') || '(ledger unreadable)') + ' block the commit.' "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
-        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' name no register row: re-run the ledger check.' : '') "
+        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check.' : '') "
         "+ ' Once the rows are met out of band, re-fire the same sizing.' }; }"
     )
     b.append("  }")
@@ -2230,6 +2239,7 @@ def compose_ask_script(
         "...(i.superseded_by ? { superseded_by: i.superseded_by } : {}), "
         "...(i.withheld_by ? { withheld_by: i.withheld_by } : {}), "
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
+        "...(i.met_by ? { met_by: i.met_by } : {}), "
         "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
     )
     # A review agent may return a sidecar as an absolute Windows path; the commit command must carry
@@ -2241,6 +2251,7 @@ def compose_ask_script(
         "return s.toLowerCase().startsWith(_root.toLowerCase()) ? s.slice(_root.length) : s; }; "
         "const _ir = _nextAction.params.inline_review; "
         "if (Array.isArray(_ir.wave_sidecar_paths)) { _ir.wave_sidecar_paths = _ir.wave_sidecar_paths.map(_rel); } "
+        "if (Array.isArray(_ir.wave_reviews)) { _ir.wave_reviews = _ir.wave_reviews.map((w) => w && typeof w.sidecar_path === 'string' ? { ...w, sidecar_path: _rel(w.sidecar_path) } : w); } "
         "if (typeof _ir.prep_sidecar === 'string') { _ir.prep_sidecar = _rel(_ir.prep_sidecar); } }"
     )
     if in_run_commit:

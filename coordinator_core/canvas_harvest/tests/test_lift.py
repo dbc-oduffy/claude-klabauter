@@ -271,3 +271,81 @@ def test_torn_final_line_skipped(tmp_path):
     torn = '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "ArtifactComments"'
     got = lift_mod.lift([t.write(torn=torn)], AID)
     assert got.artifact_read.version == "v1" and got.comments is None
+
+
+def side_call(t, agent, name, inp, tid):
+    t.n += 1
+    t._add({
+        "type": "assistant", "isSidechain": True, "agentId": agent, "sessionId": "sess-1",
+        "timestamp": f"2026-10-13T10:00:{t.n:02d}Z",
+        "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]},
+    })
+
+
+def side_result(t, agent, tid, payload, text="rendered"):
+    t.n += 1
+    t._add({
+        "type": "user", "isSidechain": True, "agentId": agent, "sessionId": "sess-1",
+        "timestamp": f"2026-10-13T10:00:{t.n:02d}Z",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]},
+        "toolUseResult": payload,
+    })
+
+
+def test_named_reader_sidechain_lifts(tmp_path):
+    t = T(tmp_path)
+    side_call(t, "aX", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
+    side_result(t, "aX", "r1", files_read())
+    got = lift_mod.lift([t.write()], AID, reader_agent_id="aX")
+    assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
+
+
+def test_other_sidechain_ignored_beside_named_reader(tmp_path):
+    t = T(tmp_path)
+    side_call(t, "aY", "Artifact", {"action": "read", "url": URL, "paths": ["b.html"]}, "r0")
+    side_result(t, "aY", "r0", files_read(paths=("project/other.html",)))
+    side_call(t, "aX", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
+    side_result(t, "aX", "r1", files_read())
+    got = lift_mod.lift([t.write()], AID, reader_agent_id="aX")
+    assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
+
+
+def test_default_none_over_all_sidechain_refuses(tmp_path):
+    t = T(tmp_path)
+    side_call(t, "aX", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
+    side_result(t, "aX", "r1", files_read())
+    with pytest.raises(model.HarvestError) as err:
+        lift_mod.lift([t.write()], AID)
+    assert err.value.reason == model.NO_MAIN_LOOP_READ
+
+
+def test_named_reader_cursor_chain_and_toolsearch(tmp_path):
+    t = T(tmp_path)
+    side_call(t, "aX", "ToolSearch", {"query": "select:Artifact"}, "ts1")
+    side_call(t, "aX", "ArtifactComments", {"action": "read", "url": URL}, "c1")
+    side_result(t, "aX", "c1", {"threads": [thread("t1")], "cursor": "CUR1"}, text="P1")
+    side_call(t, "aX", "ToolSearch", {"query": "again Artifact"}, "ts2")
+    side_call(t, "aX", "ArtifactComments", {"action": "read", "url": URL, "cursor": "CUR1"}, "c2")
+    side_result(t, "aX", "c2", {"threads": [thread("t2")]}, text="P2")
+    got = lift_mod.lift([t.write()], AID, reader_agent_id="aX")
+    assert model.thread_ids(got.comments.threads) == ["t1", "t2"]
+
+
+def test_named_reader_absent_refuses_whole(tmp_path):
+    t = T(tmp_path)
+    side_call(t, "aY", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
+    side_result(t, "aY", "r1", files_read())
+    with pytest.raises(model.HarvestError) as err:
+        lift_mod.lift([t.write()], AID, reader_agent_id="aX")
+    assert err.value.reason == model.NO_MAIN_LOOP_READ
+
+
+def test_named_reader_relative_saved_to_resolves_in_transcript_dir(tmp_path):
+    sub = tmp_path / "subagents"
+    sub.mkdir()
+    t = T(sub, "agent-aX.jsonl")
+    side_call(t, "aX", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
+    side_result(t, "aX", "r1", files_read())
+    got = lift_mod.lift([t.write()], AID, reader_agent_id="aX")
+    assert got.transcript_dir == sub
+    assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]

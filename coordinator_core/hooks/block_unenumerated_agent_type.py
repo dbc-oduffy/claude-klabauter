@@ -929,9 +929,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # The sizing agent's only entry is the EM's engine submission; carried by this leg because
     # it is the engine call DoE's PreToolUse(Agent) fan-in already makes.
-    from coordinator_core.hooks.submit_engine_ask import sizing_scout_deny
+    from coordinator_core.hooks.sizing_scout_deny import sizing_scout_deny
 
-    scout = sizing_scout_deny(payload)
+    scout = sizing_scout_deny(payload, subagent_type)
     if scout is None:
         return _gate_legs(payload, tool_input, subagent_type)
     if scout.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":

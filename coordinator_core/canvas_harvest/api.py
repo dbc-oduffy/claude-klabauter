@@ -77,10 +77,17 @@ def harvest(
 ) -> model.RecordWrite:
     out_dir = Path(out_dir)
     now = now or datetime.now(timezone.utc)
+    if reader and transcript is None:
+        raise ValueError("reader requires a transcript")
     artifact_id, sid, transcripts = _resolve_inputs(url, session_id, transcript)
     from coordinator_core.canvas_harvest import lift
 
-    lifted = lift.lift(transcripts, artifact_id)
+    reader_agent_id = None
+    if reader:
+        from coordinator_core.canvas_harvest import reader as reader_mod
+
+        reader_agent_id = reader_mod.named_reader(transcripts[0], artifact_id)
+    lifted = lift.lift(transcripts, artifact_id, reader_agent_id=reader_agent_id)
     if lifted.error is not None:
         _raise_unreadable(lifted, artifact_id, out_dir, sid, now)
     from coordinator_core.canvas_harvest import record, render

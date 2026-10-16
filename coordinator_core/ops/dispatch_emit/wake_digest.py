@@ -366,6 +366,10 @@ def next_action_parts(
                 ", plan_id: " + review_vars.get("plan_id_literal", "null")
                 + ", wave_sidecar_paths: "
                 + f"(Array.isArray({wave_var}) ? {wave_var}.map(r => r && r.sidecar_path).filter(Boolean) : [])"
+                + ", wave_reviews: "
+                + f"(Array.isArray({wave_var}) ? {wave_var}.filter(r => r && r.sidecar_path)"
+                + ".map(r => ({ agent_type: r.agent_type ?? null, sidecar_path: r.sidecar_path, "
+                + "verdict: r.verdict ?? null })) : [])"
                 + ", prep: "
                 + f"({prep_var} ? {{ run_base_sha: {prep_var}.run_base_sha ?? null, "
                 + f"product_files: {prep_var}.product_files ?? null, "

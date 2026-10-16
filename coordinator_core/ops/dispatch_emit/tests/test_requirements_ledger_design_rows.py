@@ -102,6 +102,18 @@ def test_render_labels_design_row_by_origin(run):
     assert f"## {design.id} (design registry)" in rl.render(ledger, RUN)
 
 
+def test_judge_wave_review_and_noted_path_meet_a_design_row(run):
+    root, ledger, design, _ = run
+    (root / "wave.md").write_text(f"Board: {BOARD}\n", encoding="utf-8")
+    wave = [{"agent_type": "coordinator:senior-front-end", "sidecar_path": "wave.md", "verdict": "APPROVED"}]
+    assert rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root, wave_reviews=wave)["pass"]
+    bad = [{**wave[0], "verdict": "REJECTED"}]
+    assert not rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root, wave_reviews=bad)["pass"]
+    noted = _review(root)
+    assert rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root, noted_paths=[noted])["pass"]
+    assert not rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root)["pass"]
+
+
 def test_ledger_gate_supplies_root_and_plan_text(run):
     root, ledger, design, _ = run
     run_dir = root / RECORD_DIR_ROOT / RUN

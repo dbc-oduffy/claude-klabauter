@@ -1134,9 +1134,9 @@ def _reconcile_prep(
     prep = inline_review.get("prep")
     base = prep.get("run_base_sha") if isinstance(prep, dict) else None
     if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)):
-        from coordinator_core.ops.dispatch_emit import op
+        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
 
-        base = op._recorded_run_base(worktree_root, run_id)
+        base = recorded_run_base(worktree_root, run_id)
     if not base:
         return
     from coordinator_core.ops import review_prep
@@ -1626,7 +1626,7 @@ def _awaiting_operator(open_rows: Sequence[dict]) -> list:
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
-    plan_text: Optional[str] = None,
+    plan_text: Optional[str] = None, inline_review: Optional[dict] = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -1656,6 +1656,8 @@ def _ledger_gate(
     result = requirements_ledger.judge(
         ledger, verdict, _routed_from_manifest(manifest_path), gated=gated, operator=operator,
         repo_root=worktree_root, plan_text=plan_text,
+        wave_reviews=[w for w in (inline_review or {}).get("wave_reviews") or [] if isinstance(w, dict)],
+        noted_paths=requirements_ledger.noted_paths(worktree_root, run_dir),
     )
     if result["pass"]:
         return None, ledger, result.get("open") or []
@@ -3126,6 +3128,7 @@ def _terminal_commit_inner(
             [g.id for g in manifest.gated],
             {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
             _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
+            inline_review,
         )
         if unmet is not None:
             return unmet
@@ -3302,10 +3305,12 @@ def _terminal_commit_inner(
     art_run_id = ask_run_dir.name if ask_run_dir is not None else params.get("run_id")
     artifacts: Optional[run_artifacts.RunArtifacts] = None
     if not anchor_only and isinstance(art_run_id, str) and art_run_id:
-        artifacts = run_artifacts.candidate_paths(
+        from coordinator_core.ops.dispatch_emit.halted_record_commit import within_handoffs_home
+
+        artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
             worktree_root, art_run_id, sizing_rel=cited_sizing, plan_rel=request.plan_path,
             doc_paths=params.get(run_artifacts.DOC_PATHS_PARAM) or (),
-        )
+        ))
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]

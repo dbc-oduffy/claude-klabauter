@@ -134,6 +134,23 @@ def run_parent_copy_rel(run_id: str) -> str:
     return f"state/warp/{run_id}/parent.json"
 
 
+def run_base_rel(run_id: str) -> str:
+    """Write-once file holding a reserved run's base sha, beside its status file."""
+    return f"scratch/warp/{run_id}/run-base"
+
+
+def recorded_run_base(root: Any, run_id: str) -> Optional[str]:
+    """The sha a reserved run's first bind recorded as its base, None when no bind has.
+
+    Lives here, not in ``dispatch_emit.op``: ``terminal_commit`` reads it, and importing ``op`` from
+    there pulls ``sizing_assemble`` (hence the fleet record) into every ``review_stamp`` importer.
+    """
+    try:
+        return (root / run_base_rel(run_id)).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 def status_rel(run_id: str) -> str:
     """Runtime-only status file; only the run itself rewrites it."""
     return f"scratch/warp/{run_id}/sibling-status.json"

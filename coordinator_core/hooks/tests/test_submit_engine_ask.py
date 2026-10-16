@@ -848,13 +848,15 @@ def test_reserved_id_bind_copies_the_parent_and_marks_running(tmp_path):
     assert json.loads((root / contract.status_rel("r1")).read_text(encoding="utf-8"))["status"] == "running"
 
 
-def test_a_second_bind_of_one_reserved_id_is_refused(tmp_path):
+def test_a_second_bind_of_one_reserved_id_is_refused(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import op
 
     root, _ = _op_root(tmp_path)
     doc = {"em_analysis": {"ask_parent": f"{PARENT} r1"}}
     op._bind_reserved_run(root, "r1", PARENT)
-    with pytest.raises(ValueError, match="already bound"):
+    # A running status with no live run is settled halted and rebinds; only a live run refuses.
+    monkeypatch.setattr(warp_live, "live_run_for_sizing", lambda *_a, **_k: "r1")
+    with pytest.raises(ValueError, match="already working"):
         op._reserved_run(root, "r1", doc, "state/sizings/r1.yaml")
     with pytest.raises(ValueError, match="already bound"):
         op._bind_reserved_run(root, "r1", PARENT)

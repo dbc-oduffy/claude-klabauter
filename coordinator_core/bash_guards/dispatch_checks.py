@@ -6642,7 +6642,20 @@ def _bt_add_subtree_foreign_paths(
     except Exception:
         return []
 
-    return [p for p in staged if p not in my_claims]
+    foreign = [p for p in staged if p not in my_claims]
+    # Run record dirs are written by the engine, never through a claimed touch, so they are
+    # never in my_claims. Trap: foreign there means held by a live peer, not unclaimed.
+    run_records = [p for p in foreign if p.startswith("state/warp/")]
+    if run_records:
+        try:
+            from coordinator_core.session.scope import contested_by_live_peers
+
+            held = contested_by_live_peers(run_records, session_id, cwd=git_root)
+        except Exception:
+            held = None
+        if held is not None:
+            foreign = [p for p in foreign if p not in run_records or held.get(p)]
+    return foreign
 
 
 def _bt_commit_subtree_foreign_paths(

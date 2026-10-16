@@ -493,6 +493,133 @@ EXPECTED_READERS = (
     "coordinator_core.ops.tests.test_sizing_record_xl_exit",
     "coordinator_core.roadmap.blitz_stage",
     "coordinator_core.roadmap.tests.test_blitz_stage",
+    #
+    # --- engine-ask submission cluster (the same ONE edge as (a), measured) ---
+    #
+    # `hooks.submit_engine_ask` and `hooks.submit_bug_blitz` import
+    # `ops.dispatch_emit.op` (to emit the warp run), `ops.dispatch_emit.plan_route`
+    # imports `dispatch_emit.cli`, and the dispatch_emit / hooks / sizing_assemble
+    # tests import those or `ask_gate`/`ask_compose`/`sizing_assemble`: every
+    # module below reaches the record only through that already-allowlisted
+    # `dispatch_emit` -> `sizing_assemble` -> `mode_resolution` edge. The two
+    # `hooks.submit_*` modules rewrite or deny a `Workflow` submission on its
+    # own args shape (malformed ask, live run, unmet `after`); no mode value
+    # reaches either decision, and neither is under `write_guards/` or
+    # `bash_guards/`. Restructure alternative (move `route` behind a leaf)
+    # edits `sizing_assemble`, another owner's surface -- unchanged from (a).
+    #
+    # The WIDER edge this cluster once rode is NOT allowlisted but cut:
+    # `hooks.block_unenumerated_agent_type` (imported by guards and hooks
+    # across the tree) used to import `hooks.submit_engine_ask` for
+    # `sizing_scout_deny`, which put ~3,600 modules in the closure; it now
+    # imports the leaf `hooks.sizing_scout_deny`. Likewise
+    # `dispatch_emit.terminal_commit` read `op._recorded_run_base` (pulling `op`
+    # into every `ops.review_stamp` importer); it now reads
+    # `ask_fanout_contract.recorded_run_base`.
+    "coordinator_core.hooks.submit_bug_blitz",
+    "coordinator_core.hooks.submit_engine_ask",
+    "coordinator_core.hooks.tests.test_dispatch_escape_in_run_report",
+    "coordinator_core.hooks.tests.test_multi_ask_sibling_runs_e2e",
+    "coordinator_core.hooks.tests.test_submit_bug_blitz",
+    "coordinator_core.hooks.tests.test_submit_engine_ask",
+    "coordinator_core.hooks.tests.test_submit_engine_ask_real_emit",
+    "coordinator_core.hooks.tests.test_submit_engine_ask_research_sizing",
+    "coordinator_core.hooks.tests.test_submit_engine_ask_sizing_context",
+    "coordinator_core.hooks.tests.test_workflow_run_record_capture",
+    "coordinator_core.hooks.tests.test_workflow_stall_resume",
+    "coordinator_core.hooks.tests.test_workflow_stall_stop_op",
+    "coordinator_core.ops.dispatch_emit.plan_route",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_bundle_split_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_acceptance_rows",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_commit_doc_paths",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_cross_repo_evidence",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_design_brief",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_design_met_by",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_halt_commits_record",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_in_run_close",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_judge_evidence_and_run_base",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_ledger_resume",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_m_spine_direct",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_mechanical_revise",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_no_silent_end",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_research_classification",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_research_fire",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_resume_all_landed",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_test_leg_verdict",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_verify_only_skips_review",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_wave_barrier",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_design_registry",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_research_route",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_spawn_count",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_halt_detail",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_intake_sizing_submission",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_commit_pending_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_owed_handback",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_research_classification",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap_fanout_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_blinded_reviewer_row",
+    "coordinator_core.ops.dispatch_emit.tests.test_check_leg_cut",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_queue_route_run_token",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_multi_ask",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_parts",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_stdout_single_json",
+    "coordinator_core.ops.dispatch_emit.tests.test_commit_legs_are_haiku",
+    "coordinator_core.ops.dispatch_emit.tests.test_cross_repo_engine_ask",
+    "coordinator_core.ops.dispatch_emit.tests.test_em_mailbox_watch",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_register_pin_drift",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_verify_leg",
+    "coordinator_core.ops.dispatch_emit.tests.test_emitted_prompts_name_no_skill_to_invoke",
+    "coordinator_core.ops.dispatch_emit.tests.test_engine_owned_rows_judged_at_engine_root",
+    "coordinator_core.ops.dispatch_emit.tests.test_gate_baseline_owed_gates",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_improvement_queue",
+    "coordinator_core.ops.dispatch_emit.tests.test_halt_commit_relay_layout_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_withholds_peer_claims",
+    "coordinator_core.ops.dispatch_emit.tests.test_halted_rows_commit",
+    "coordinator_core.ops.dispatch_emit.tests.test_held_halt_reviews_landed_rows",
+    "coordinator_core.ops.dispatch_emit.tests.test_judge_reason_falls_back_to_observation",
+    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_names_only_register_rows",
+    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_pointer_written",
+    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_recovery_text",
+    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate",
+    "coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet",
+    "coordinator_core.ops.dispatch_emit.tests.test_no_run_leaves_a_dirty_tree",
+    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_own_leftover",
+    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_review_base",
+    "coordinator_core.ops.dispatch_emit.tests.test_plan_route",
+    "coordinator_core.ops.dispatch_emit.tests.test_plan_route_resume_rows",
+    "coordinator_core.ops.dispatch_emit.tests.test_reachability_fix_keeps_met_judge_met",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_echoes_revisions",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_reason_agrees_with_criterion",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_resumes_halted_run",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_xs_recorded_writes",
+    "coordinator_core.ops.dispatch_emit.tests.test_relayed_ask_registers_only_its_text",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_close_params_grounding",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_emit",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_script_cap",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_single_script",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_split",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_gate_end_to_end",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_halt_fire_routes",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_multi_ask_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_multi_repo_end_to_end",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_route_scout_questions",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_three_source_segment_halt",
+    "coordinator_core.ops.dispatch_emit.tests.test_reserved_run_refire",
+    "coordinator_core.ops.dispatch_emit.tests.test_resume_counts_ledger_halt_landed_chunks",
+    "coordinator_core.ops.dispatch_emit.tests.test_review_only_brief_drops_deleted_tests",
+    "coordinator_core.ops.dispatch_emit.tests.test_review_wave_blocked_halts_run",
+    "coordinator_core.ops.dispatch_emit.tests.test_seam_leg_executes_declared_paths",
+    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_cli_escape",
+    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record",
+    "coordinator_core.ops.dispatch_emit.tests.test_typecheck_criterion_routing",
+    "coordinator_core.ops.review_mint.tests.test_roster",
+    "coordinator_core.ops.tests.test_roadmap_blitz_stage_params",
+    "coordinator_core.sizing_assemble.test_acceptance_rows",
+    "coordinator_core.sizing_assemble.test_suite_tier_rewrite",
+    "coordinator_core.sizing_assemble.test_write_terse_default",
+    "coordinator_core.tests.test_cited_records_not_in_scratch",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

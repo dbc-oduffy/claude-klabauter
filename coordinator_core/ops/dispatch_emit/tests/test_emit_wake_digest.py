@@ -265,6 +265,23 @@ def test_zero_integration_stage_emits_no_integrate_dispatch_and_points_inline_re
     assert "integration_stem: 'pln-zero-stage-abc123.review-wave-bookkeeping'" in script
 
 
+def test_inline_review_carries_wave_reviews_on_integration_and_zero_integration_paths():
+    expr = (
+        "wave_reviews: (Array.isArray("
+    )
+    for fragment, kw in ((_V5_FRAGMENT, {}), (_V5_FRAGMENT_ZERO_STAGE, {"plan_id": "pln-zero-stage-abc123"})):
+        script = compose_script(
+            [[_row("C1", ["a.py"])]],
+            name="wf",
+            description="wave reviews",
+            review_roster_fragment=fragment,
+            review_stage_schemas=_V5_STAGE_SCHEMAS,
+            **kw,
+        )
+        assert expr in script
+        assert "agent_type: r.agent_type ?? null, sidecar_path: r.sidecar_path, verdict: r.verdict ?? null" in script
+
+
 def test_review_stages_feed_the_digests_review_block():
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
