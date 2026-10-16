@@ -1334,6 +1334,45 @@ def test_a_wave_review_with_plus_joined_real_slice_ids_is_accepted():
     assert "halted" not in result and "error" not in result
 
 
+def _slice_row(slice_id, i):
+    return {"id": slice_id, "files": [f"f{i}.py"], "diff_path": f"d/{i}.diff", "sidecar_path": "p.md"}
+
+
+_LONG_SLICES = [_slice_row(f"plan-run-f4068c-e964d43cd66e-prep-{i + 1}", i) for i in range(3)]
+_LONG_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 9, "slices": _LONG_SLICES, "error": None}
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [
+        "...f4068c-e964d43cd66e-prep-1+...f4068c-e964d43cd66e-prep-2",
+        "…e964d43cd66e-prep-1+prep-3",
+        "plan-run-f4068c-e964d43cd66e-prep-1+plan-run-f4068c-e964d43cd66e-prep-2",
+    ],
+)
+def test_a_wave_review_with_elided_or_exact_slice_id_parts_is_accepted(returned):
+    patch = f"(r, n) => n === 0 ? {{ ...r, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }} : r"
+    result = _run_in_wave(_LONG_PREP, 9, patch=patch)
+    assert "halted" not in result and "error" not in result
+    real = {s["id"] for s in _LONG_SLICES}
+    assert set(result["wave"][0]["slice_id"].split("+")) <= real
+
+
+@pytest.mark.parametrize("returned", ["prep", "...", "prep-1+nope", "prep-9", "-prep-1+..."])
+def test_a_wave_review_slice_id_part_matching_zero_or_several_real_ids_halts(returned):
+    ambiguous = [_slice_row(f"{'ab'[i % 2]}-prep-{i // 2 + 1}", i) for i in range(4)]
+    prep = {**_LONG_PREP, "slices": ambiguous + _LONG_SLICES}
+    patch = f"(r, n) => n === 0 ? {{ ...r, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }} : r"
+    result = _run_in_wave(prep, 9, patch=patch)
+    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
+    assert result["wave"] is None
+
+
+def test_a_wave_brief_names_a_short_slice_alias():
+    prompt = "\n".join(b for _, b in _in_wave())
+    assert "short alias" in prompt and "prep-1+prep-2" in prompt
+
+
 def test_wave_schema_types_prep_slices_as_an_array():
     assert '"slices": { "type": "array"' in _wave_schema_literal("{}")
 

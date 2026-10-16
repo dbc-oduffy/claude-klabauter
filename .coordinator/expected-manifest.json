@@ -2087,8 +2087,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "1d18baf2d0860c17c2e67deb02c8ed7d7be32cad",
-    "coordinator_core/_engine_stamp": "d531996f651f07a07ce27c17a120d55a3f134318",
+    "coordinator_core/_engine_published_at": "8ebd11561e3475bd31dad2a7553307afd2901151",
+    "coordinator_core/_engine_stamp": "b7b9373d04f3e573bc235efd3881034620acd472",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5533,7 +5533,7 @@
     "coordinator_core/ops/review_freeze_diff.py": "1b560c2d06d55297dd1aaa53a196bafa84880d91",
     "coordinator_core/ops/review_mint/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/review_mint/compose.py": "c26bc0ae67fb91d571e7b0a40ff35f9324816a95",
-    "coordinator_core/ops/review_mint/execute_review.py": "906eaa9d5134990aa9697f0c9f73ab0ab8691478",
+    "coordinator_core/ops/review_mint/execute_review.py": "db79a252b284063301fe5305c8c1c98138dc1eb5",
     "coordinator_core/ops/review_mint/op.py": "eeda44ffd4def5a879f80493805907cbe41e0148",
     "coordinator_core/ops/review_mint/roster.py": "5be41d3dbcba6830aabac9cda978ac1701d7f31c",
     "coordinator_core/ops/review_mint/share_stages.py": "35a7b41966cb279e84bda3b9775cc85862826356",
@@ -5542,7 +5542,7 @@
     "coordinator_core/ops/review_mint/tests/test_brief_conformance_reaches_stamp.py": "928d8ca40e235e47046c1b57878de9569ec96156",
     "coordinator_core/ops/review_mint/tests/test_compose.py": "7bd284327792b80978db8aae4349b524e34c7610",
     "coordinator_core/ops/review_mint/tests/test_criterion_judge_brief_passthrough.py": "2328ce2460a60d0c2797281be0111e1d1ad23d12",
-    "coordinator_core/ops/review_mint/tests/test_execute_review.py": "ec263622aef762797f75ce8bd2707880c401dcde",
+    "coordinator_core/ops/review_mint/tests/test_execute_review.py": "a82a78f7ba14a425251e8eac9b6f39cfe16979f1",
     "coordinator_core/ops/review_mint/tests/test_handlers_resolve_worktree_from_common_dir.py": "7bd5bcab97be1f35e80fe3bf158d35f057032563",
     "coordinator_core/ops/review_mint/tests/test_judge_evidence_order.py": "f1326798a4086885a15921b3ac7b92ffc3f51e74",
     "coordinator_core/ops/review_mint/tests/test_op.py": "911d1408d3fb6874719223e0d979be2dbb54927a",
@@ -8107,5 +8107,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "f8c2fc8685c72206dab4e6e4844bd950431f6216"
+  "source_head": "8aaf188ffde31f9c2ef54deb06cbbd2fb076dd62"
 }

@@ -523,20 +523,31 @@ _PREP_FROM_WAVE_JS = (
     "    return { ...ok, slices: merged };\n"
     "  })();\n"
     "  const _realSliceIds = new Set((_reviewPrep && Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).map(s => s.id));\n"
+    "  const _resolveSliceIdPart = (part) => {\n"
+    "    if (_realSliceIds.has(part)) return part;\n"
+    "    const tail = part.replace(/^(?:\\.{2,}|\\u2026)+/, '');\n"
+    "    if (!tail) return null;\n"
+    "    const hits = [..._realSliceIds].filter(id => id.endsWith(tail));\n"
+    "    return hits.length === 1 ? hits[0] : null;\n"
+    "  };\n"
     "  const _badSliceIdAt = _waveRaw.findIndex(r => r && r.review && typeof r.review.slice_id === 'string' && "
-    "r.review.slice_id.split('+').filter(Boolean).some(id => !_realSliceIds.has(id)));\n"
+    "r.review.slice_id.split('+').filter(Boolean).some(id => _resolveSliceIdPart(id) === null));\n"
     "  if (_badSliceIdAt >= 0) { "
     f"return {{ halted: {_js_string_literal(SLICE_ID_UNKNOWN_HALT)} + ' (wave agent ' + _badSliceIdAt + "
     "' returned slice_id ' + JSON.stringify(_waveRaw[_badSliceIdAt].review.slice_id) + '; real slice ids: ' + "
     "[..._realSliceIds].join(', ') + ')', "
     f"reason: {_js_string_literal(_SLICE_ID_UNKNOWN_REFUSAL)}, "
     "prep: _reviewPrep, wave: null, integration: null }; }\n"
+    "  for (const r of _waveRaw) if (r && r.review && typeof r.review.slice_id === 'string') "
+    "r.review.slice_id = r.review.slice_id.split('+').filter(Boolean).map(_resolveSliceIdPart).join('+');\n"
 )
 
 
 _WAVE_GROUP_CLAUSE = (
     "\nYou own every slice the reply lists: apply findings only inside their files, write one "
-    "sidecar at the first slice's sidecar_path, and return slice_id as the slice ids joined with `+`."
+    "sidecar at the first slice's sidecar_path, and return slice_id as the slice ids joined with `+`. "
+    "Name each slice by its short alias, the trailing `prep-<n>` of its id (e.g. `prep-1+prep-2`), never "
+    "the long id: an alias matching exactly one real slice id by suffix is resolved."
 )
 
 
