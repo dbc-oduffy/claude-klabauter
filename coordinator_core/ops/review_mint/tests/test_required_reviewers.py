@@ -9,6 +9,7 @@ from coordinator_core.ops.review_mint.roster import (
     RosterFragmentError,
     parse_execute_review,
     plan_required_reviewers,
+    plan_review_signals,
 )
 from coordinator_core.ops.review_mint.tests.test_execute_review import (
     _STAGE_SCHEMAS,
@@ -82,6 +83,33 @@ def test_required_reviewer_without_a_named_entry_raises():
 def test_malformed_required_reviewers_raise(bad):
     with pytest.raises(RosterFragmentError):
         parse_execute_review(_v5_fragment(), required_reviewers=bad)
+
+
+FE = "coordinator:senior-front-end"
+
+
+def test_front_end_signal_puts_senior_front_end_in_the_wave():
+    text = "---\ntitle: t\nreview_signals: [front-end]\n---\n# body\n"
+    signals = plan_review_signals(text)
+    assert signals == {"named": [FE]}
+    review = parse_execute_review(_v5_fragment(), signals=signals)
+    assert FE in [a.agent_type for a in review.review_wave]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [None, "no frontmatter", "---\ntitle: t\n---\n", "---\nreview_signals: [backend]\n---\n",
+     "---\nreview_signals: front-end\n---\n"],
+)
+def test_plan_without_front_end_signal_is_unchanged(text):
+    assert plan_review_signals(text) == {}
+    review = parse_execute_review(_v5_fragment(), signals=plan_review_signals(text))
+    assert FE not in [a.agent_type for a in review.review_wave]
+
+
+def test_signal_selects_mapping_is_overridable():
+    text = "---\nreview_signals: [front-end]\n---\n"
+    assert plan_review_signals(text, {"front-end": "coordinator:staff-ux"}) == {"named": ["coordinator:staff-ux"]}
 
 
 def test_plan_frontmatter_carries_required_reviewers():

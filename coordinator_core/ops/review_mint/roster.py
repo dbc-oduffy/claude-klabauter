@@ -146,18 +146,42 @@ def validate_required_reviewers(raw: object) -> List[str]:
 def plan_required_reviewers(plan_text: Optional[str]) -> List[str]:
     """The plan frontmatter's ``required_reviewers`` (plan.schema.json), validated; empty when the
     plan is absent, has no frontmatter, or declares none."""
+    return validate_required_reviewers(_plan_frontmatter(plan_text).get("required_reviewers"))
+
+
+def _plan_frontmatter(plan_text: Optional[str]) -> dict:
+    """The plan's frontmatter mapping; ``{}`` when absent, unparseable, or not a mapping."""
     if not plan_text:
-        return []
+        return {}
     split = split_frontmatter(plan_text)
     if split is None:
-        return []
+        return {}
     try:
         doc = yaml.safe_load(split.fm_text)
     except yaml.YAMLError:
-        return []
-    if not isinstance(doc, dict):
-        return []
-    return validate_required_reviewers(doc.get("required_reviewers"))
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+#: Plan ``review_signals`` that select a wave reviewer; the default for ``plan_review_signals``'s ``selects``.
+DEFAULT_SIGNAL_SELECTS = {"front-end": "coordinator:senior-front-end"}
+
+
+def plan_review_signals(
+    plan_text: Optional[str],
+    selects: Optional[Dict[str, str]] = None,
+) -> Dict[str, List[str]]:
+    """The ``signals`` mapping for ``parse_execute_review``: the agent types the plan's
+    ``review_signals`` select (per ``selects``, default ``DEFAULT_SIGNAL_SELECTS``), under the
+    ``named`` label. Empty when the plan is absent, malformed, or declares no selecting signal."""
+    declared = _plan_frontmatter(plan_text).get("review_signals")
+    if not isinstance(declared, list):
+        return {}
+    table = DEFAULT_SIGNAL_SELECTS if selects is None else selects
+    agents = validate_required_reviewers(
+        [table[s] for s in declared if isinstance(s, str) and s in table]
+    )
+    return {NAMED_SIGNAL_LABEL: agents} if agents else {}
 
 
 def parse_execute_review(

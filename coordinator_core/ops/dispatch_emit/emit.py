@@ -375,9 +375,11 @@ from coordinator_core.ops.review_mint.execute_review import (
     compose_execute_review,
 )
 from coordinator_core.ops.review_mint.roster import (
+    NAMED_SIGNAL_LABEL,
     RosterFragmentError,
     parse_execute_review,
     plan_required_reviewers,
+    plan_review_signals,
 )
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
@@ -5241,7 +5243,11 @@ def compose_script(
             f"{review_roster_fragment.get('schema_version')!r}, not 5"
         )
     review = parse_execute_review(
-        review_roster_fragment, required_reviewers=plan_required_reviewers(plan_text)
+        review_roster_fragment,
+        required_reviewers=[
+            *plan_required_reviewers(plan_text),
+            *plan_review_signals(plan_text).get(NAMED_SIGNAL_LABEL, []),
+        ],
     )
     declared_paths = sorted(
         {path for paths in row_pathspecs.values() for path in paths} | set(prior_surface)
