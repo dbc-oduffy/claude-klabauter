@@ -600,6 +600,77 @@ def test_params_file_dash_parses_json_holding_an_escaped_backslash():
     assert json.loads(result.stdout).get("ok") is True
 
 
+_WIN_PATH_BRIEF = r'{"brief":"see F:\dev\x and C:\users\me","ok":"a\\b\n"}'  # abs-path-ok: fixture literal
+
+
+def test_loads_params_keeps_lone_backslash_windows_path_intact():
+    from coordinator_core.invoke.__main__ import _loads_params
+
+    parsed = _loads_params(_WIN_PATH_BRIEF)
+    assert parsed["brief"] == "see F:\\dev\\x and C:\\users\\me"  # abs-path-ok: fixture literal
+    assert parsed["ok"] == "a\\b\n"
+
+
+def test_loads_params_valid_json_unchanged_and_malformed_still_raises():
+    from coordinator_core.invoke.__main__ import _loads_params
+
+    assert _loads_params('{"a":"x\\\\y\\"z"}') == {"a": 'x\\y"z'}
+    with pytest.raises(json.JSONDecodeError):
+        _loads_params('{"a":"F:\\dev" ')
+
+
+def test_loads_params_reads_valid_escape_segment_as_json_defines_it():
+    from coordinator_core.invoke.__main__ import _loads_params
+
+    parsed = _loads_params(r'{"a":"C:\new F:\dev"}')  # abs-path-ok: fixture literal
+    assert parsed["a"] == "C:\new F:\\dev"  # abs-path-ok: fixture literal
+
+
+def test_positional_params_with_windows_path_dispatches():
+    result = _invoke("ping", _WIN_PATH_BRIEF, "--bare")
+    assert result.returncode == 0, f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+    assert "Invalid params_json" not in result.stderr
+
+
+def test_params_file_dash_with_windows_path_dispatches():
+    result = subprocess.run(
+        [sys.executable, "-m", "coordinator_core.invoke", "ping",
+         "--params-file", "-", "--bare", "--allow-unstamped-dispatch"],
+        input=_WIN_PATH_BRIEF,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=str(_PROJECT_ROOT),
+        env=_make_env(),
+        creationflags=_NO_CONSOLE,
+    )
+    assert result.returncode == 0, f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+    assert "Invalid params_json" not in result.stderr
+
+
+_ECHO_PARAMS_SCRIPT = """
+import sys
+from coordinator_core import ipc
+
+async def _echo(params, repo_root=None):
+    return {"echo": params}
+
+ipc.register_op("test.params_echo_probe", _echo)
+
+sys.argv = ["coordinator_core.invoke", "test.params_echo_probe", PARAMS, "--allow-unstamped-dispatch"]
+from coordinator_core.invoke.__main__ import main
+main()
+"""
+
+
+def test_windows_path_reaches_the_op_intact():
+    result = _run_probe_script("PARAMS = " + repr(_WIN_PATH_BRIEF) + "\n" + _ECHO_PARAMS_SCRIPT)
+    assert result.returncode == 0, f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+    echoed = json.loads(result.stdout)["result"]["echo"]
+    assert echoed["brief"] == "see F:\\dev\\x and C:\\users\\me"  # abs-path-ok: fixture literal
+    assert echoed["ok"] == "a\\b\n"
+
+
 def test_params_file_dash_rejects_invalid_stdin_json():
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "ping",

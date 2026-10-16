@@ -75,9 +75,11 @@ Negative-spec:
     see, reports them, and carries no ``stranded``/``undeclared_dirty``. Carrying ``halted_by`` too is refused.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine. A dirty file in a
-    declared directory that the run's session claims and no live peer contests is ``run_owned``
-    and rides the one commit_v2 call (ask route and plan-route DAG, the flows the end-of-run
-    inventory marked GO). ``plan_chain``, ``workflow_fire`` and the execute-review fix keep the
+    declared directory that this run itself touched (its chunk reports, review ``slice_files``,
+    run artifacts) and no live peer contests is ``run_owned`` and rides the one commit_v2 call
+    (ask route and plan-route DAG); a sibling run's dirt of the same session in a shared
+    directory is never staged and surfaces in ``undeclared_dirty``. ``plan_chain``,
+    ``workflow_fire`` and the execute-review fix keep the
     declared-only behaviour: a chain's claims split across child sessions, the other two have
     no commit of their own.
   - Does NOT write a receipt when there is nothing to commit.
@@ -1413,7 +1415,8 @@ def _expanded_prefix_files(
 ) -> list:
     """Existing changed files under ``chunk``'s own ``writes_under`` prefixes that the run's
     session claims and no live peer contests, read from the pre-commit ``snapshot`` (no git
-    spawn). Empty with no snapshot, no session id or no prefixes."""
+    spawn). Empty with no snapshot, no session id or no prefixes. Admission is the session claim,
+    not the run's touched set: a sibling run of one session sharing a prefix is not excluded."""
     if snapshot is None or not session_id or not chunk.prefixes:
         return []
     found = sorted(
@@ -1843,17 +1846,18 @@ def _undeclared_dirty(
 
 def _run_owned_dirt(
     worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
-    session_id: Optional[str], all_paths: list, deleted_paths: list,
+    session_id: Optional[str], all_paths: list, deleted_paths: list, touched: frozenset,
 ) -> tuple:
     """``(files, deletions)`` beside the run's declared writes (``_in_scope``) that join the one
     commit_v2 call, read from the pre-commit snapshot; both empty with no snapshot or session id.
-    Files exist on disk, are claimed by the run's session and uncontested by a live peer.
-    Deletions are changed paths absent on disk and tracked at HEAD that any request chunk
-    (stranded included) declares or the session claims, likewise uncontested; the HEAD
+    Files exist on disk, are in ``touched`` (this run's own touched set) and uncontested by a
+    live peer. Deletions are changed paths absent on disk and tracked at HEAD that any request
+    chunk (stranded included) declares or ``touched`` names, likewise uncontested; the HEAD
     classification is one zero-spawn ``partition_declared_deletions`` and an unreadable tree
     yields none (these are not declared deletions, so unknown never means tracked).
-    ``own_path_claims`` is session-scoped, so the declared-directory test keeps a sibling run of
-    the same session out."""
+    Admission is the run's touched set, never a session claim: a sibling run's dirt in a shared
+    directory is not staged and surfaces in ``undeclared_dirty``. ``session_id`` only keys the
+    live-peer contest."""
     if snapshot is None or not session_id:
         return [], []
     taken = set(all_paths) | set(deleted_paths)
@@ -1865,7 +1869,7 @@ def _run_owned_dirt(
     from coordinator_core.session import scope as session_scope
 
     root_str = str(worktree_root)
-    owned = set(session_scope.own_path_claims(session_id, cwd=root_str))
+    owned = touched
     declared = {p for c in request.chunks for p in c.paths}
     candidates = [p for p in present if p in owned] + [p for p in gone if p in owned or p in declared]
     if not candidates:
@@ -3430,8 +3434,13 @@ def _terminal_commit_inner(
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
+    from coordinator_core.ops.dispatch_emit import run_touched
+
     run_owned, owned_deletions = _run_owned_dirt(
-        worktree_root, request, snapshot, session_id, all_paths, deleted_paths
+        worktree_root, request, snapshot, session_id, all_paths, deleted_paths,
+        run_touched.touched_paths(
+            request, inline_review, artifacts.paths() if artifacts is not None else ()
+        ),
     )
     all_paths.extend(run_owned)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))

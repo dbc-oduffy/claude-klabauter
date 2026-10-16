@@ -4365,6 +4365,90 @@ def test_subagent_may_clone_into_the_repos_scratch(scratch_tree):
     assert guard.check(_at("git clone --depth 50 -b main /x/r.git", main / "scratch")) is None
 
 
+_URL = "https://github.com/o/r.git"
+
+
+def _clone_spellings(main):
+    abs_fwd = (main / "scratch" / "x").as_posix()
+    abs_bs = str(main / "scratch" / "x").replace("/", "\\")
+    abs_mixed = main.as_posix() + "\\scratch\\x"
+    return {
+        "relative-forward": "scratch/x",
+        "relative-dot": "./scratch/x",
+        "relative-backslash": "scratch\\x",
+        "relative-dot-backslash": ".\\scratch\\x",
+        "relative-mixed": "scratch\\sub/x",
+        "absolute-forward": abs_fwd,
+        "absolute-backslash-quoted": f'"{abs_bs}"',
+        "absolute-backslash-unquoted": abs_bs,
+        "absolute-mixed": abs_mixed,
+        "absolute-mixed-forward-tail": str(main).replace("/", "\\") + "\\scratch/x",
+    }
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "relative-forward",
+        "relative-dot",
+        "relative-backslash",
+        "relative-dot-backslash",
+        "relative-mixed",
+        "absolute-forward",
+        "absolute-backslash-quoted",
+        "absolute-backslash-unquoted",
+        "absolute-mixed",
+        "absolute-mixed-forward-tail",
+    ],
+)
+def test_subagent_clone_into_scratch_allowed_for_every_spelling(scratch_tree, spelling):
+    main, _clone = scratch_tree
+    dest = _clone_spellings(main)[spelling]
+    assert guard.check(_at(f"git clone {_URL} {dest}", main)) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [_URL, "https://github.com/o/r", "https://github.com/o/r/", "git@github.com:o/r.git"],
+)
+def test_subagent_clone_implicit_trailing_name_from_scratch_cwd_allowed(scratch_tree, url):
+    main, _clone = scratch_tree
+    assert guard.check(_at(f"git clone {url}", main / "scratch")) is None
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [
+        "elsewhere",
+        "..\\r",
+        "scratch\\..\\x",
+        "scratch/../x",
+        "scratchy/x",
+        "scratchy\\x",
+        "scratch",
+        "scratch\\",
+        "../scratch/x",
+    ],
+)
+def test_subagent_clone_outside_scratch_denied_for_every_spelling(scratch_tree, dest):
+    main, _clone = scratch_tree
+    assert guard.check(_at(f"git clone {_URL} {dest}", main)) is not None
+
+
+def test_subagent_clone_decoy_segment_cannot_lend_its_backslashes(scratch_tree):
+    main, _clone = scratch_tree
+    assert guard.check(_at(f"git clone {_URL} scratchx; echo {_URL} scratch\\x", main)) is not None
+
+
+def test_subagent_clone_absolute_outside_scratch_denied(scratch_tree):
+    main, _clone = scratch_tree
+    sibling_fwd = (main.parent / "repo2" / "scratch" / "x").as_posix()
+    sibling_bs = sibling_fwd.replace("/", "\\")
+    scratchy = (main / "scratchy" / "x").as_posix()
+    for dest in (sibling_fwd, f'"{sibling_bs}"', scratchy, scratchy.replace("/", "\\")):
+        assert guard.check(_at(f"git clone {_URL} {dest}", main)) is not None
+
+
 def test_subagent_clone_outside_scratch_or_with_a_hook_vector_is_denied(scratch_tree):
     main, _clone = scratch_tree
     assert guard.check(_at("git clone https://github.com/o/r.git elsewhere", main)) is not None

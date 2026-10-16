@@ -2250,6 +2250,7 @@ def _dest_in_scratch(dest_name: str) -> bool:
     if ctx is None:
         return False
     here, main_root, _in_clone = ctx
+    dest_name = dest_name.replace("\\", "/")
     dest = Path(dest_name) if Path(dest_name).is_absolute() else here / dest_name
     scratch = (main_root / "scratch").resolve()
     try:
@@ -2258,9 +2259,41 @@ def _dest_in_scratch(dest_name: str) -> bool:
         return False
 
 
+#: The payload's unmodified command text for the running `check()`: segments reach the verdict
+#: functions with unquoted backslashes already dropped by shlex.
+_RAW_CMD: "contextvars.ContextVar[str]" = contextvars.ContextVar("_subagent_raw_cmd", default="")
+_RAW_SEGMENT_SPLIT_RE = re.compile(r"[;&|\n]+")
+
+
+def _with_backslashes_restored(remaining: List[str]) -> List[str]:
+    """POSIX shlex drops an unquoted backslash, so `scratch\\x` arrives as `scratchx`. Re-read the
+    raw command's segment whose trailing tokens match `remaining` up to backslashes, and take
+    that spelling; a token with no such match keeps its shlex form."""
+    for raw_seg in _RAW_SEGMENT_SPLIT_RE.split(_RAW_CMD.get()):
+        if "\\" not in raw_seg:
+            continue
+        try:
+            raw = shlex.split(raw_seg, posix=False)
+        except ValueError:
+            continue
+        if len(raw) < len(remaining) or "clone" not in raw[: len(raw) - len(remaining)]:
+            continue
+        out: List[str] = []
+        for tok, rtok in zip(remaining, raw[len(raw) - len(remaining):]):
+            if len(rtok) >= 2 and rtok[0] == rtok[-1] and rtok[0] in "\"'":
+                rtok = rtok[1:-1]
+            if rtok.replace("\\", "") != tok.replace("\\", ""):
+                break
+            out.append(rtok)
+        else:
+            return out
+    return remaining
+
+
 def _clone_into_scratch(remaining: List[str]) -> bool:
     if _SCRATCH_CTX.get() is None:
         return False
+    remaining = _with_backslashes_restored(remaining)
     positionals: List[str] = []
     skip = False
     for tok in remaining:
@@ -2276,7 +2309,7 @@ def _clone_into_scratch(remaining: List[str]) -> bool:
             continue
         positionals.append(tok)
     if len(positionals) == 1:
-        dest_name = positionals[0].rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        dest_name = positionals[0].replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
     elif len(positionals) == 2:
         dest_name = positionals[1]
     else:
@@ -4186,9 +4219,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         else None
     )
     memo_token = _SP_MEMO.set({})
+    raw_token = _RAW_CMD.set(flat)
     try:
         return _check_unscoped(payload)
     finally:
+        _RAW_CMD.reset(raw_token)
         _SP_MEMO.reset(memo_token)
         _SP_CTX.reset(sp_token)
         _SCRATCH_CTX.reset(token)

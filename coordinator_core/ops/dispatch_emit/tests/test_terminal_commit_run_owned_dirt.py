@@ -1,5 +1,7 @@
-"""dispatch.terminal_commit lands a dirty file beside the declared writes that the run's session
-claims and no live peer contests (``run_owned``), and only reports every other one."""
+"""dispatch.terminal_commit lands a dirty file beside the declared writes only when this run itself
+touched it (a chunk report, ``prep.slice_files`` or a run artifact) and no live peer contests it
+(``run_owned``). A session claim alone never lands a file: a sibling run of the same session in a
+shared directory is reported as ``undeclared_dirty``, like every other undeclared dirty file."""
 
 from __future__ import annotations
 
@@ -65,23 +67,50 @@ def _committed(repo: Path) -> list:
     return sorted(ln.split("\t")[-1] for ln in out.splitlines() if ln.strip())
 
 
+def _reviewed_touching(*files: str) -> dict:
+    return {**_REVIEWED, "prep": {"slice_files": list(files)}}
+
+
 def test_a_run_owned_undeclared_file_lands(repo):
     (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
-    session_scope.touch(SELF, "src/own.py", cwd=str(repo))
-    out = _run(repo, session_id=SELF)
+    out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("src/own.py"))
     assert out["committed"] is True, out
     assert "src/own.py" in _committed(repo)
     assert out["run_owned"] == ["src/own.py"]
     assert "src/own.py" not in out["undeclared_dirty"]
 
 
+def test_a_session_claimed_file_the_run_never_touched_is_reported_not_committed(repo):
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
+    session_scope.touch(SELF, "src/own.py", cwd=str(repo))
+    out = _run(repo, session_id=SELF)
+    assert out["committed"] is True, out
+    assert "src/own.py" not in _committed(repo)
+    assert out["run_owned"] == []
+    assert "src/own.py" in out["undeclared_dirty"]
+
+
+def test_sibling_run_same_session_same_directory_is_not_staged(repo):
+    (repo / "src" / "a_new.py").write_text("a new\n", encoding="utf-8")
+    (repo / "src" / "b.py").write_text("b\n", encoding="utf-8")
+    (repo / "src" / "b_other.py").write_text("b other\n", encoding="utf-8")
+    session_scope.touch(SELF, "src/b.py", cwd=str(repo))
+    session_scope.touch(SELF, "src/b_other.py", cwd=str(repo))
+    out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("src/a_new.py"))
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["src/a.py", "src/a_new.py"]
+    assert out["run_owned"] == ["src/a_new.py"]
+    for sibling in ("src/b.py", "src/b_other.py"):
+        assert sibling in out["undeclared_dirty"]
+        assert sibling in _git(["status", "--porcelain", "-uall", "--", "src"], repo)
+
+
 def test_a_peer_claimed_file_in_the_same_directory_is_reported_not_committed(repo):
     (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
     (repo / "src" / "theirs.py").write_text("theirs\n", encoding="utf-8")
-    session_scope.touch(SELF, "src/own.py", cwd=str(repo))
     session_core.init(PEER, cwd=str(repo))
     session_scope.touch(PEER, "src/theirs.py", cwd=str(repo))
-    out = _run(repo, session_id=SELF)
+    out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("src/own.py", "src/theirs.py"))
     assert out["committed"] is True, out
     assert _committed(repo) == ["src/a.py", "src/own.py"]
     assert out["run_owned"] == ["src/own.py"]
@@ -131,8 +160,7 @@ def test_a_stranded_rows_declared_deletion_lands_with_a_claimed_edit(repo):
     _track(repo, "gone.py")
     (repo / "src" / "gone.py").unlink()
     (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
-    session_scope.touch(SELF, "src/own.py", cwd=str(repo))
-    out = _run_stranded(repo, session_id=SELF)
+    out = _run_stranded(repo, session_id=SELF, inline_review=_reviewed_touching("src/own.py"))
     assert out["committed"] is True, out
     assert _committed(repo) == ["src/a.py", "src/gone.py", "src/own.py"]
     assert "src/gone.py" in out["deleted_paths"]
@@ -177,8 +205,9 @@ def test_an_unreadable_head_spine_joins_no_run_owned_deletions(repo, monkeypatch
         ChunkCommit(id="C2", title="t2", paths=("src/gone.py",)),
     ))
     snap = terminal_commit._Snapshot({"src/gone.py", "src/a.py"}, [], {"src/gone.py"}, [])
-    session_scope.touch(SELF, "src/gone.py", cwd=str(repo))
-    files, deletions = terminal_commit._run_owned_dirt(repo, request, snap, SELF, ["src/a.py"], [])
+    files, deletions = terminal_commit._run_owned_dirt(
+        repo, request, snap, SELF, ["src/a.py"], [], frozenset({"src/gone.py"})
+    )
     assert (files, deletions) == ([], [])
     assert calls == [["src/gone.py"]]
 

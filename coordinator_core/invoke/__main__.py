@@ -105,6 +105,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -448,6 +449,39 @@ def _resolve_repo_root(repo_arg: Optional[str], cwd: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Params parsing
+# ---------------------------------------------------------------------------
+
+# A backslash plus the escape JSON defines for it, else a lone backslash.
+_BACKSLASH_RE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
+
+
+def _loads_params(text: str):
+    """json.loads `text`, tolerating lone backslashes in a Windows-path string value.
+
+    Strict parse first, so valid JSON keeps its meaning byte-for-byte. Only when
+    that fails on an invalid escape is every backslash that does not start a
+    valid JSON escape doubled and the parse retried; any other failure, or a
+    retry that still fails, raises the ORIGINAL error. A path segment that
+    happens to spell a valid escape (`C:\\new`) is indistinguishable from the
+    escape and is read as JSON defines it, repaired retry included: in a value
+    with both `\\new` and `\\dev`, the first becomes a newline, the second stays literal.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        if "escape" not in exc.msg:
+            raise
+        repaired = _BACKSLASH_RE.sub(
+            lambda m: m.group(0) if len(m.group(0)) > 1 else "\\\\", text
+        )
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            raise exc from None
+
+
+# ---------------------------------------------------------------------------
 # Fatal error helper
 # ---------------------------------------------------------------------------
 
@@ -760,7 +794,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
 
     # 2. Parse params JSON — must be a JSON object.
     try:
-        params = json.loads(params_json_str)
+        params = _loads_params(params_json_str)
     except json.JSONDecodeError as exc:
         _fatal_stderr(f"Invalid params_json: {exc}")
 
