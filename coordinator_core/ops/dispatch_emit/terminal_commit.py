@@ -3595,15 +3595,17 @@ def _terminal_commit_inner(
     # Unlike a hand commit, a run's product commit never absorbs a live peer's in-flight edit.
     from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
 
+    changed = _changed(snapshot, worktree_root, all_paths)
+    # Only a path this commit actually carries can absorb a peer's edit: a clean declared path a
+    # peer holds is not contention, and refusing on it wedges every review-only close behind it.
+    carried = [p for p in all_paths if changed is None or p in changed] + list(deleted_paths)
     peer_holds: list = []
-    commit_v2_mod._peer_claim_warnings(
-        worktree_root, all_paths + deleted_paths, peer_holds, own_sid=session_id
-    )
+    commit_v2_mod._peer_claim_warnings(worktree_root, carried, peer_holds, own_sid=session_id)
     from coordinator_core.ops import warp_run_deliverable
 
     try:
         run_claims = warp_run_deliverable.live_run_write_claims(
-            worktree_root, all_paths + deleted_paths, exclude_session=session_id or "",
+            worktree_root, carried, exclude_session=session_id or "",
             cwd=str(worktree_root),
             minted_before=_own_run_seniority(worktree_root, params.get("run_id")),
             exclude_run=params.get("run_id") if isinstance(params.get("run_id"), str) else None,
@@ -3626,7 +3628,6 @@ def _terminal_commit_inner(
             peer_claims=[{"path": p, "session": s} for p, s in peer_holds],
         )
     final_paths_set = set(all_paths)
-    changed = _changed(snapshot, worktree_root, all_paths)
 
     def contributes(c) -> bool:
         def in_commit(p: str) -> bool:

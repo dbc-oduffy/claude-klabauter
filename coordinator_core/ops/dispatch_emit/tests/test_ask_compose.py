@@ -479,10 +479,11 @@ def test_no_composed_script_runs_a_standalone_falsifier_agent(monkeypatch, arm, 
 
 
 def test_the_m_plus_spine_review_carries_the_falsifier_clause_on_both_paths(monkeypatch):
-    for script in (_compose(**_JUDGE_KW), _presized(monkeypatch, arm="m_plus", **_JUDGE_KW)):
-        if "label: 'plan-review'" in script:
-            assert "author the baseline falsifier" in _agent_prompt(script, "plan-review")
-            assert "_planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);" in script
+    scripts = [s for s in (_compose(**_JUDGE_KW), _presized(monkeypatch, arm="m_plus", **_JUDGE_KW)) if "label: 'plan-review'" in s]
+    assert scripts, "no composed script carries a plan-review leg; the spine-review falsifier clause is unguarded"
+    for script in scripts:
+        assert "author the baseline falsifier" in _agent_prompt(script, "plan-review")
+        assert "_planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);" in script
 
 
 def test_folded_scripts_validate_with_zero_errors(monkeypatch):
@@ -538,6 +539,11 @@ def test_the_ask_script_predeclares_wave_not_run_as_an_empty_list():
     assert script.count("let _waveNotRun = [];") == 1
     assert "const _waveNotRun" not in script
     assert "wave_not_run: (Array.isArray(_waveNotRun) ? _waveNotRun : [])" in script
+
+
+def test_the_ask_script_return_carries_a_research_halts_fire_list():
+    script = _compose(**_ratio_kw())
+    assert "_halted.halted === 'research' && Array.isArray(_halted.fire) ? _halted.fire" in script
 
 
 def test_a_roster_without_a_delivery_verifier_assigns_the_not_rostered_reason():

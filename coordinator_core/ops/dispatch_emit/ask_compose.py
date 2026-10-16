@@ -238,13 +238,13 @@ _ACCEPT_SCHEMA = _obj(
     },
 )
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
-_FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _REVISE_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR})
 _REVISE_STAGED_SCHEMA = _obj(
     ["plan_rel"],
     {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": {"type": ["object", "null"]}},
 )
 _REVIEW_SIGNALS_PROP = {"review_signals": {"type": "array", "items": {"type": "string"}}}
+_FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _SPINE_REVIEW_SCHEMA = _obj(
     ["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_REVIEW_SIGNALS_PROP}
 )

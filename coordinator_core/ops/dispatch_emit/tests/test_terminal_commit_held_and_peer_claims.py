@@ -197,6 +197,16 @@ def test_a_declared_path_a_live_run_manifest_declares_refuses(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
+def test_a_clean_declared_path_a_peer_holds_does_not_refuse(repo):
+    request = _two_chunks(repo)
+    _git(["add", "a.py"], repo)
+    _git(["commit", "-q", "-m", "a"], repo)
+    _peer_run(repo, "peer-run-1", PEER, ["a.py"])
+    out = _run(repo, request)
+    assert out.get("refused") is None, out
+    assert _committed(repo) == ["b.py"]
+
+
 @pytest.mark.parametrize("committer", ["senior", "junior"])
 def test_mutual_declaration_refuses_only_the_junior_run(repo, monkeypatch, committer):
     now = time.time()
