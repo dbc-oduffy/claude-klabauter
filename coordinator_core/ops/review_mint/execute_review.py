@@ -182,6 +182,27 @@ _LEAN_READ_CLAUSE = (
 )
 
 
+_BRIEF_CONFORMANCE_CLAUSE = (
+    "Brief conformance: the plan's `## PM brief` section and its `prime_exit_criterion.statement` "
+    "are the one plan text you must open, whatever else is off limits. For each verbatim item "
+    "your diff bears on, add one row to your sidecar's frontmatter `brief_conformance:` list "
+    "({brief_item, requirement, file_line, verified_how, status: met|partial|unmet}) and return "
+    "the same rows as brief_conformance. An item with no evidence in your diff is `unmet`, never "
+    "omitted."
+)
+
+
+def _brief_conformance_clause(criterion: Optional["OperativeCriterion"]) -> str:
+    """The code-reviewer prompt line that hands it the brief items its ``brief_conformance`` rows
+    quote; names the operative criterion statement when one is resolved."""
+    named = f" Operative exit criterion: {criterion.statement}" if criterion is not None else ""
+    return f"\n{_BRIEF_CONFORMANCE_CLAUSE}{named}"
+
+
+def _is_code_reviewer(agent_type: str) -> bool:
+    return agent_type.split(":")[-1] == "code-reviewer"
+
+
 def _size_gated(full_prompt: str, lean_prompt: str) -> str:
     """A JS expression choosing ``lean_prompt`` over ``full_prompt`` when prep froze a small diff."""
     return f"({_SMALL_DIFF_JS} ? {_prompt_literal(lean_prompt)} : {_prompt_literal(full_prompt)})"
@@ -792,6 +813,7 @@ def compose_execute_review(
     )
     for agent in slice_agents:
         slice_type, slice_role = _host_native(agent.agent_type, host_degraded)
+        slice_bc = _brief_conformance_clause(criterion) if _is_code_reviewer(agent.agent_type) else ""
         if prep_in_wave:
             if agent.executor_rows_per_reviewer is None:
                 raise ValueError(
@@ -804,7 +826,7 @@ def compose_execute_review(
                 f"Review your assigned slice group of this run's diff.\n"
                 + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=True)
                 + f" Review exactly the slices the reply lists, and nothing else. If it lists none, "
-                f"there is nothing in your group: return `prep` alone.{_WAVE_GROUP_CLAUSE}\n"
+                f"there is nothing in your group: return `prep` alone.{_WAVE_GROUP_CLAUSE}{slice_bc}\n"
                 f"plan_path: {plan_path}\n"
                 f"run_base_sha: {run_base_sha}\n"
                 f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
@@ -841,12 +863,14 @@ def compose_execute_review(
             f"Review your assigned slice of this run's diff.\n"
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
+            f"{slice_bc}"
         ).strip()
         lean_prompt = (
             f"{prompt_head}\n\n{slice_role}"
             f"Review your assigned slice of this run's diff.\n{_LEAN_READ_CLAUSE}\n"
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
+            f"{slice_bc}"
         ).strip()
         call = _agent_call_literal(
             slice_type,
@@ -889,7 +913,7 @@ def compose_execute_review(
         role_note = (
             f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}{delivery_supersession_clause(criterion)}"
             if is_delivery_verifier
-            else ""
+            else (_brief_conformance_clause(criterion) if _is_code_reviewer(agent.agent_type) else "")
         )
         whole_type, whole_role = (
             (agent.agent_type, "")

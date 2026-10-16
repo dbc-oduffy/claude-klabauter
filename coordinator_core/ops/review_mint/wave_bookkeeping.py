@@ -241,9 +241,38 @@ def _confinement_notes(sidecar_path: Path, fm: Dict[str, Any], repo_root: Path) 
     return notes
 
 
-def _brief_conformance_rows(fm: Dict[str, Any]) -> List[Dict[str, Any]]:
-    rows = fm.get("brief_conformance")
+_BODY_BRIEF_HEADING_RE = re.compile(r"(?mi)^#{2,4}\s*brief[ _-]conformance\s*$")
+_BODY_FENCE_RE = re.compile(r"```(?:json|ya?ml)?[ \t]*\n(.*?)\n```", re.DOTALL)
+
+
+def _body_brief_conformance_rows(text: Optional[str]) -> List[Dict[str, Any]]:
+    """Rows from the first fenced JSON/YAML list under a ``## Brief conformance`` heading in a
+    sidecar body: where a reviewer writes them when it does not edit frontmatter."""
+    if not text:
+        return []
+    heading = _BODY_BRIEF_HEADING_RE.search(text)
+    if heading is None:
+        return []
+    section = text[heading.end():]
+    nxt = re.search(r"(?m)^#{1,2}\s", section)
+    if nxt is not None:
+        section = section[: nxt.start()]
+    fence = _BODY_FENCE_RE.search(section)
+    if fence is None:
+        return []
+    try:
+        rows = yaml.safe_load(fence.group(1))
+    except yaml.YAMLError:
+        return []
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _brief_conformance_rows(fm: Dict[str, Any], body: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Frontmatter rows win; a sidecar with none falls back to its body section."""
+    rows = fm.get("brief_conformance")
+    if isinstance(rows, list) and rows:
+        return [r for r in rows if isinstance(r, dict)]
+    return _body_brief_conformance_rows(body)
 
 
 _SEVERITY_ORDER = ("P0", "P1", "P2", "nit")
@@ -382,7 +411,7 @@ def bookkeep_wave(
         if isinstance(applied, int) and not isinstance(applied, bool):
             fixes_applied += applied
 
-        for row in _brief_conformance_rows(fm):
+        for row in _brief_conformance_rows(fm, _load_sidecar_text(sidecar_path)):
             brief_items += 1
             status = row.get("status")
             if status == "met":
