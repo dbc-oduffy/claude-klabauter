@@ -246,6 +246,83 @@ def _brief_conformance_rows(fm: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
+_SEVERITY_ORDER = ("P0", "P1", "P2", "nit")
+_SEVERITY_ALIASES = {"critical": "P0", "major": "P1", "minor": "P2", "nitpick": "nit"}
+_MD_SEVERITY_RE = re.compile(r"(?m)^\s*[-*]\s*\*\*Severity:\*\*\s*`?([A-Za-z0-9]+)`?")
+
+
+def _canonical_severity(raw: Any) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    token = raw.strip()
+    if token in _SEVERITY_ORDER:
+        return token
+    return _SEVERITY_ALIASES.get(token.lower())
+
+
+def _max_severity(findings_section_text: Optional[str]) -> Optional[str]:
+    """Worst severity (P0 > P1 > P2 > nit) in a ``## Findings`` section, read from
+    markdown ``- **Severity:**`` lines and JSON ``severity`` values. ``unranked``
+    when severities appear but none is in the closed vocabulary; ``None`` when none appear."""
+    from coordinator_core.ops.review_findings_ledger import _iter_json_findings_payloads
+
+    if not findings_section_text:
+        return None
+    text = findings_section_text.replace("\r\n", "\n")
+    raws: List[Any] = [m.group(1) for m in _MD_SEVERITY_RE.finditer(text)]
+    for findings in _iter_json_findings_payloads(text):
+        raws.extend(f["severity"] for f in findings if isinstance(f, dict) and "severity" in f)
+    if not raws:
+        return None
+    ranked = {c for c in map(_canonical_severity, raws) if c}
+    for token in _SEVERITY_ORDER:
+        if token in ranked:
+            return token
+    return "unranked"
+
+
+def review_firing_rows(sidecar_paths: List[Path], plan_id: str) -> List[Dict[str, Any]]:
+    """One ``{leg, plan_id, findings_count, max_severity, applied}`` summary row per
+    sidecar; a summary of the sidecar receipt, never a verdict. Unreadable sidecar:
+    leg from the stem, zero counts. Never raises."""
+    from coordinator_core.ops.review_findings_ledger import (
+        _declared_findings_count,
+        _extract_findings_section,
+        _parse_ledger_rows,
+        _row_status,
+    )
+
+    rows: List[Dict[str, Any]] = []
+    for path in map(Path, sidecar_paths):
+        leg, findings_count, applied, severity = _stem(path), 0, 0, None
+        text = _load_sidecar_text(path)
+        if text is not None:
+            fm = _load_sidecar_fm(path) or {}
+            agent_type = fm.get("agent_type")
+            if isinstance(agent_type, str) and agent_type:
+                leg = agent_type
+            try:
+                ledger = _parse_ledger_rows(text)
+            except LedgerError:
+                ledger = None
+            declared = _declared_findings_count(text)
+            findings_count = declared if declared is not None else len(ledger or [])
+            fm_applied = fm.get("applied")
+            if ledger is not None:
+                applied = sum(1 for r in ledger if _row_status(r) == "applied")
+            elif isinstance(fm_applied, int) and not isinstance(fm_applied, bool):
+                applied = fm_applied
+            severity = _max_severity(_extract_findings_section(text))
+        rows.append({
+            "leg": leg,
+            "plan_id": plan_id,
+            "findings_count": findings_count,
+            "max_severity": severity,
+            "applied": applied,
+        })
+    return rows
+
+
 def bookkeep_wave(
     wave_sidecar_paths: List[Path],
     *,
@@ -350,6 +427,7 @@ def bookkeep_wave(
     }
     if stage_returns:
         record.update({k: v for k, v in stage_returns.items() if v is not None})
+    record["review_firings"] = review_firing_rows(kept, plan_id)
 
     record_path = (
         repo_root

@@ -251,3 +251,98 @@ def test_phantom_prep_sidecar_with_no_real_file_is_recorded_absent(tmp_path):
         record_stem="rec",
     )
     assert record["prep_sidecar"] is None
+
+
+_FIRING_KEYS = ["leg", "plan_id", "findings_count", "max_severity", "applied"]
+
+
+def _firing_sidecar(tmp_path, name, findings, ledger=None, agent="coordinator:code-reviewer", eol="\n"):
+    parts = ["---\nagent_type: " + agent + "\n---\n# Review\n\n## Findings\n\n" + findings + "\n"]
+    if ledger is not None:
+        parts.append("## Findings Ledger\n\n```json\n" + json.dumps(ledger, indent=2) + "\n```\n")
+    path = tmp_path / name
+    path.write_bytes("".join(parts).replace("\n", eol).encode("utf-8"))
+    return path
+
+
+def test_review_firing_rows_code_reviewer_applied_p1(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    p = _firing_sidecar(
+        tmp_path, "a.md", "### Item A\n- **Severity:** P1\n",
+        ledger=[{"id": "f1", "file": "src.py", "status": "applied"}],
+    )
+    rows = review_firing_rows([p], "pln-x")
+    assert rows == [{"leg": "coordinator:code-reviewer", "plan_id": "pln-x",
+                     "findings_count": 1, "max_severity": "P1", "applied": 1}]
+    assert list(rows[0]) == _FIRING_KEYS
+
+
+def test_review_firing_rows_mixed_p2_nit_is_p2(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    p = _firing_sidecar(
+        tmp_path, "a.md",
+        "### Item A\n- **Severity:** nit\n### Item B\n- **Severity:** P2\n",
+    )
+    assert review_firing_rows([p], "pln-x")[0]["max_severity"] == "P2"
+
+
+def test_review_firing_rows_json_critical_minor_is_p0(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    payload = json.dumps({"findings": [{"severity": "minor"}, {"severity": "critical"}]})
+    p = _firing_sidecar(tmp_path, "a.md", "```json\n" + payload + "\n```\n")
+    row = review_firing_rows([p], "pln-x")[0]
+    assert row["max_severity"] == "P0"
+    assert row["findings_count"] == 2
+
+
+def test_review_firing_rows_off_vocabulary_is_unranked(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    payload = json.dumps({"findings": [{"severity": "info"}]})
+    p = _firing_sidecar(tmp_path, "a.md", "```json\n" + payload + "\n```\n")
+    assert review_firing_rows([p], "pln-x")[0]["max_severity"] == "unranked"
+
+
+def test_review_firing_rows_no_findings_is_zero_and_null(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    p = _firing_sidecar(tmp_path, "a.md", "None.\n")
+    row = review_firing_rows([p], "pln-x")[0]
+    assert (row["findings_count"], row["max_severity"], row["applied"]) == (0, None, 0)
+
+
+def test_review_firing_rows_crlf_parses_same(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    args = ("### Item A\n- **Severity:** P1\n",)
+    kw = {"ledger": [{"id": "f1", "status": "applied"}]}
+    lf = review_firing_rows([_firing_sidecar(tmp_path, "lf.md", *args, **kw)], "pln-x")
+    crlf = review_firing_rows([_firing_sidecar(tmp_path, "crlf.md", *args, eol="\r\n", **kw)], "pln-x")
+    assert lf == crlf and lf[0]["max_severity"] == "P1"
+
+
+def test_review_firing_rows_unreadable_sidecar_gives_zero_row(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    assert review_firing_rows([tmp_path / "gone.md"], "pln-x") == [
+        {"leg": "gone", "plan_id": "pln-x", "findings_count": 0, "max_severity": None, "applied": 0}
+    ]
+
+
+def test_review_firing_rows_bookkeep_wave_one_row_per_kept_sidecar(tmp_path):
+    (tmp_path / ".git").mkdir()
+    sid = tmp_path / ".coordinator-local" / "subagent-share" / "s"
+    sid.mkdir(parents=True)
+    mine = _firing_sidecar(sid, "mine.md", "### Item A\n- **Severity:** P2\n")
+    other = sid / "other-plan.delivery.md"
+    other.write_text("---\nagent_type: coordinator:delivery-verifier\n---\n", encoding="utf-8")
+    record = bookkeep_wave(
+        [mine, other], repo_root=tmp_path, session_id="s", plan_id="pln-mine-aaaaaa",
+        prep_sidecar=None, record_stem="rec",
+    )
+    assert record["excluded_sidecars"] == ["other-plan.delivery"]
+    assert [r["leg"] for r in record["review_firings"]] == ["coordinator:code-reviewer"]
+    assert record["review_firings"][0]["max_severity"] == "P2"

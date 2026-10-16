@@ -3042,6 +3042,7 @@ def _terminal_commit_inner(
     # no JS-callable "invoke a Python op" primitive
     # (review_mint/wave_bookkeeping.py's own module docstring).
     bookkeeping_record_path: Optional[str] = None
+    review_record_error: Optional[str] = None
     if not anchor_only:
         _derive_judge_status(inline_review)
     register_failure = (
@@ -3089,6 +3090,27 @@ def _terminal_commit_inner(
             ).replace("\\", "/")
         except ValueError:
             bookkeeping_record_path = None
+        # Written here, not in bookkeep_wave: supersede and review_stamp --repair re-record an
+        # earlier firing and would duplicate rows. The evidence-companion check below stages it.
+        if request.plan_path and record.get("review_firings"):
+            from coordinator_core.ops.criterion_evidence import _criterion_evidence_record
+            from coordinator_core.ops.fleet._common import main_worktree_root as _mwr
+
+            try:
+                if _mwr(worktree_root) != worktree_root:
+                    review_record_error = (
+                        f"review rows not written: main worktree {_mwr(worktree_root)} "
+                        f"differs from commit root {worktree_root}"
+                    )
+                else:
+                    written = _criterion_evidence_record(
+                        {"plan_path": request.plan_path, "reviews": record["review_firings"]},
+                        repo_root=worktree_root,
+                    )
+                    if isinstance(written, dict) and written.get("error"):
+                        review_record_error = str(written["error"])
+            except (OSError, ValueError) as exc:
+                review_record_error = f"review rows not written: {exc}"
 
     companions: list = []
     if not anchor_only:
@@ -3704,6 +3726,8 @@ def _terminal_commit_inner(
         reply["receipt_divergence"] = (
             f"receipt verdict agent-delivered beside plan_status {reply['plan_status']!r}"
         )
+    if review_record_error:
+        reply["review_record_error"] = review_record_error
     reply["branch_check"] = branch_check
     reply["chunks_committed"] = [c.id for c in contributing_chunks]
     no_hunk = [c for c in done_chunks if c not in contributing_chunks and c.id not in reply.get("no_product_hunk", [])]

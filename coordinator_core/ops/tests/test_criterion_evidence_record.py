@@ -12,6 +12,7 @@ from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops.criterion_evidence import _criterion_evidence_record as record
+from coordinator_core.ops.criterion_evidence import REVIEW_ROW_FIELDS
 from coordinator_core.ops.dispatch_emit.reverify_delivery import compose_rejudge_script
 from coordinator_core.ops.dispatch_emit.tests.test_emit_judge_reads_register import _fragment
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS
@@ -74,6 +75,60 @@ def test_refusals_write_no_sidecar(tmp_path):
     ):
         assert "error" in record(bad, repo_root=repo / ".git")
     assert not evidence_sidecar_path(plan).exists()
+
+
+def _review(**over):
+    return {"leg": "coordinator:code-reviewer", "plan_id": "p1", "findings_count": 2,
+            "max_severity": "P1", "applied": 1, **over}
+
+
+def _load(plan):
+    import yaml
+    return yaml.safe_load(evidence_sidecar_path(plan).read_text(encoding="utf-8"))
+
+
+def test_reviews_round_trip_appends_and_leaves_other_keys(tmp_path):
+    repo, plan, out = _setup(tmp_path)
+    record(_params(plan, out), repo_root=repo / ".git")
+    before = _load(plan)
+    res = record({"plan_path": str(plan), "reviews": [_review()]}, repo_root=repo / ".git")
+    assert res == {"recorded": True, "sidecar": evidence_sidecar_path(plan).name, "reviews": 1}
+    after = _load(plan)
+    (row,) = after["reviews"]
+    assert set(row) == {*REVIEW_ROW_FIELDS, "recorded_at"} and row["max_severity"] == "P1"
+    assert after["criterion_evidence"] == before["criterion_evidence"]
+
+
+def test_reviews_two_calls_append_never_replace(tmp_path):
+    repo, plan, _ = _setup(tmp_path)
+    record({"plan_path": str(plan), "reviews": [_review(leg="a"), _review(leg="b", max_severity=None)]},
+           repo_root=repo / ".git")
+    record({"plan_path": str(plan), "reviews": [_review(leg="c")]}, repo_root=repo / ".git")
+    assert [r["leg"] for r in _load(plan)["reviews"]] == ["a", "b", "c"]
+
+
+def test_reviews_refusals_write_no_sidecar(tmp_path):
+    repo, plan, out = _setup(tmp_path)
+    missing = _review()
+    del missing["applied"]
+    for bad in (
+        [missing],
+        [{**_review(), "extra": 1}],
+        [_review(findings_count=True)],
+        [_review(applied=-1)],
+        [_review(max_severity="P9")],
+        [_review(leg="")],
+        [],
+    ):
+        assert "error" in record({"plan_path": str(plan), "reviews": bad}, repo_root=repo / ".git")
+    assert "error" in record({**_params(plan, out), "reviews": [_review()]}, repo_root=repo / ".git")
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_reviews_only_sidecar_is_not_recorded_evidence(tmp_path):
+    repo, plan, _ = _setup(tmp_path)
+    record({"plan_path": str(plan), "reviews": [_review()]}, repo_root=repo / ".git")
+    assert not has_recorded_evidence(plan)
 
 
 def _rejudge(plan, repo):

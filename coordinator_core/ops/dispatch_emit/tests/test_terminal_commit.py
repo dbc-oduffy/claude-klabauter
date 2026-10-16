@@ -1302,3 +1302,106 @@ def test_any_other_absent_delivery_keeps_no_pass(repo, reason):
     review = _unrostered_review(reason)
     assert terminal_commit._anchor_request(repo, {"plan_path": "docs/plan.md"}, review) is None
     assert terminal_commit._reviewed_files_if_passed(review) is None
+
+
+_RR_SESSION = "11111111-2222-3333-4444-555555555555"
+_RR_PLAN_ID = "pln-review-record-abc123"
+
+
+def _review_record_call(repo: Path, *, with_plan: bool) -> dict:
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+
+    share = repo / ".coordinator-local" / "subagent-share" / _RR_SESSION
+    share.mkdir(parents=True)
+    base = f".coordinator-local/subagent-share/{_RR_SESSION}"
+    (share / "prep.md").write_text(
+        "---\nagent_type: coordinator:test-runner\nrun_base_sha: deadbeef\n"
+        "product_files: [foo.py]\nforeign_claims: []\nslices: [{id: A}]\n"
+        f"whole_diff_sidecars:\n  delivery: {base}/delivery.md\n---\nprep\n",
+        encoding="utf-8",
+    )
+    (share / "delivery.md").write_text(
+        "---\nagent_type: coordinator:delivery-verifier\nverdict: PASS\n---\nd\n", encoding="utf-8"
+    )
+    (share / "wave-code-reviewer.md").write_text(
+        "---\nagent_type: coordinator:code-reviewer\napplied: 1\n---\n"
+        "## Findings\n\n### Item A\n- **Severity:** P1\nSomething.\n"
+        "## Findings Ledger\n\n```json\n"
+        '[{"id": "finding-1", "file": "foo.py", "before": "x = 1", "after": "x = 2"}]\n```\n',
+        encoding="utf-8",
+    )
+    (repo / "foo.py").write_text("x = 2\n", encoding="utf-8")
+    plan_rel = None
+    if with_plan:
+        (repo / "docs" / "plans").mkdir(parents=True)
+        (repo / "docs" / "plans" / "ex.md").write_text(
+            f"---\nplan_id: {_RR_PLAN_ID}\n---\n# Ex\n", encoding="utf-8"
+        )
+        _git(["add", "-A"], repo)
+        _git(["commit", "-q", "-m", "add plan"], repo)
+        plan_rel = "docs/plans/ex.md"
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t1", paths=("foo.py",)),),
+        session_id=_RR_SESSION,
+        plan_path=plan_rel,
+    )
+    return _call(
+        repo,
+        {
+            "script_path": _write_script(repo, request),
+            "incomplete_chunks": [],
+            "session_id": _RR_SESSION,
+            "inline_review": {
+                "integration_stem": review_wave_bookkeeping_stem(_RR_PLAN_ID, _RR_SESSION),
+                "slices": 1,
+                "fixes": 1,
+                "prep_sidecar": f"{base}/prep.md",
+                "plan_id": _RR_PLAN_ID,
+                "wave_sidecar_paths": [f"{base}/wave-code-reviewer.md"],
+            },
+        },
+    )
+
+
+def _head_files(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "show", "--name-only", "--format=", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout
+
+
+def test_review_firing_writes_reviews_row_into_terminal_commit(repo):
+    import yaml
+
+    out = _review_record_call(repo, with_plan=True)
+    assert out["committed"] is True, out
+    assert "review_record_error" not in out
+    sidecar = repo / "docs" / "plans" / "ex.evidence.yaml"
+    reviews = yaml.safe_load(sidecar.read_text(encoding="utf-8"))["reviews"]
+    assert len(reviews) == 1
+    row = reviews[0]
+    assert {k: row[k] for k in ("leg", "plan_id", "findings_count", "max_severity", "applied")} == {
+        "leg": "coordinator:code-reviewer",
+        "plan_id": _RR_PLAN_ID,
+        "findings_count": 1,
+        "max_severity": "P1",
+        "applied": 1,
+    }
+    assert "docs/plans/ex.evidence.yaml" in _head_files(repo)
+
+
+def test_review_firing_without_plan_path_writes_no_evidence(repo):
+    out = _review_record_call(repo, with_plan=False)
+    assert out["committed"] is True, out
+    assert not list(repo.rglob("*.evidence.yaml"))
+
+
+def test_review_firing_writer_error_is_reported_not_raised(repo, monkeypatch):
+    from coordinator_core.ops import criterion_evidence
+
+    monkeypatch.setattr(
+        criterion_evidence, "_criterion_evidence_record", lambda *a, **k: {"error": "boom"}
+    )
+    out = _review_record_call(repo, with_plan=True)
+    assert out["committed"] is True, out
+    assert out["review_record_error"] == "boom"
