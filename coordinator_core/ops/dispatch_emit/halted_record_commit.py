@@ -17,9 +17,13 @@ from typing import Optional
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
+    LedgerHalt,
     halted_record_message,
+    ledger_halt_path,
+    write_ledger_halt,
 )
 
 
@@ -139,6 +143,28 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
             run_token.release(worktree_root, run_id, token, script_path)
 
 
+def _settle_ledger_pointer(repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str]) -> None:
+    """A landed ledger-check halt writes its plan's ledger-halt pointer; any other landed halt for
+    a known plan unlinks a stale one. A halt without a relative, contained plan touches nothing."""
+    plan_rel = halted.get(HALT_PLAN_FIELD)
+    if not isinstance(plan_rel, str) or not plan_rel or Path(plan_rel).is_absolute():
+        return
+    if contained_path(repo_root / plan_rel, [repo_root]) is None:
+        return
+    path = ledger_halt_path(repo_root, plan_rel)
+    if halted["halted"] != "ledger-check":
+        path.unlink(missing_ok=True)
+        return
+    if not sizing_rel:
+        return
+    items = halted.get("items")
+    blocking = tuple(
+        i["id"] for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict) and isinstance(i.get("id"), str)
+    )
+    write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, blocking))
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -195,6 +221,7 @@ def _land(
     paths = paths + product
     deleted = deleted + gone
     if not paths and not deleted:
+        _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **base,
@@ -219,6 +246,8 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
+    if not reply.get("error"):
+        _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
     extra: dict = {}
     if landed_chunks:
         extra["landed_chunks"] = landed_chunks

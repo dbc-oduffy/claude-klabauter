@@ -52,6 +52,9 @@ VERBATIM_BYTE_CAP = 16 * 1024
 #: Every seeded row's surface: a PM sentence names no entry kind, so the checker judges `wired`
 #: as reachable from the product at all.
 ROW_SURFACE = "internal"
+#: `judge` failure reasons the terminal gate also keys on.
+EMPTY_REGISTER_REASON = "the register holds no requirement row: nothing was judged"
+NOT_A_ROW_REASON = "names no requirement row"
 
 _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
@@ -423,7 +426,8 @@ def render(ledger: Ledger, run_id: str) -> str:
 
 def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     """The run's requirements, or None when the run was emitted without a ledger. Before the
-    sizing is bound, the queued revisions are the only items."""
+    sizing is bound, the queued revisions are the only items. LedgerRefused when the bound
+    sizing is unreadable."""
     run = read_run(dir_)
     if run is None:
         return None
@@ -437,8 +441,8 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
         )
     try:
         text = _sizing_path(repo_root, sizing_rel).read_text(encoding="utf-8")
-    except (LedgerRefused, OSError):
-        return Ledger((), all_of, sizing_rel)
+    except OSError as exc:
+        raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     register = rr.read_register(text)
     return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel, Path(dir_).name)
 
@@ -446,7 +450,10 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
 def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
     from coordinator_core.atomic_replace import atomic_write_bytes
 
-    ledger = read_ledger(repo_root, dir_)
+    try:
+        ledger = read_ledger(repo_root, dir_)
+    except LedgerRefused:
+        return None
     if ledger is not None:
         atomic_write_bytes(dir_ / LEDGER_VIEW_FILE, render(ledger, run_id).encode("utf-8"), preserve_mode=False)
     return ledger
@@ -671,6 +678,8 @@ def judge(
     operator = dict(operator or {})
     by_id: dict[str, Mapping] = {}
     failures: list[dict] = []
+    if not ledger.items and not ledger.withheld:
+        failures.append({"id": None, "reason": EMPTY_REGISTER_REASON})
     open_rows: list[dict] = []
     for row in rows:
         rid = row.get("id") if isinstance(row, Mapping) else None
@@ -731,7 +740,7 @@ def judge(
                 open_rows.append({"id": item.id, "reason": "non-essential"})
     withheld_ids = {w["id"] for w in ledger.withheld}
     unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator))
-    failures.extend({"id": rid, "reason": "names no requirement row"} for rid in unknown)
+    failures.extend({"id": rid, "reason": NOT_A_ROW_REASON} for rid in unknown)
     open_rows.extend(dict(w) for w in ledger.withheld)
     return {"pass": not failures, "failures": failures, "open": open_rows}
 

@@ -31,8 +31,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_VERIFY_LABEL,
     ASK_VERIFY_PHASE,
     DELIVERY_NOTE_DIR,
+    HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     PM_INTENT_FILE,
+    RESUME_LEDGER_KEY,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
     HALT_REFUSAL,
@@ -183,6 +185,7 @@ _GATE_SCHEMA = _obj(
         "resume_plan": {"type": ["string", "null"]},
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
+        RESUME_LEDGER_KEY: {"type": ["object", "null"]},
     },
 )
 _ONLY_ROWS_JS = (
@@ -376,6 +379,7 @@ _MANIFEST_SCHEMA = _obj(
         "no_test_target": {"type": ["object", "null"]},
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
+        "rulable_ids": {"type": "array", "items": _STR},
         "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "owner_root": _STR, "closure_key": {}})},
         "owed": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "detail": _STR})},
         "engine_rows": {"type": "array", "items": _obj(["id"], {"id": _STR, "owner_repo": _STR, "owner_root": _STR, "root_class": _STR, "engine": {"type": "boolean"}})},
@@ -1113,7 +1117,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows and spine_plan; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and spine_plan; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -1176,7 +1180,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, "
-            f"resume_rows and spine_plan; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger and spine_plan; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1248,7 +1252,7 @@ def compose_ask_script(
             "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. "
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows and "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and "
             "spine_plan; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
@@ -1302,7 +1306,7 @@ def compose_ask_script(
         b.append(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
             "baton: _reworded.baton ?? null, tshirt: _reworded.tshirt, route: _reworded.route, "
-            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
             "manifest: _reworded.manifest ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
@@ -1333,7 +1337,7 @@ def compose_ask_script(
             "  let _gate = _halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
-            "resume_rows: _scouted.resume_rows ?? null, spine_plan: _scouted.spine_plan ?? null };"
+            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null };"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -1362,7 +1366,7 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan, resume_rows and spine_plan, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan, resume_rows, resume_ledger and spine_plan, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
@@ -1477,6 +1481,14 @@ def compose_ask_script(
             f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId"
             f", ...(_pmExit ? {{ {PM_EXIT_QUESTION_KEY}: _pmExit }} : {{}}) }}; }}"
         )
+    # A ledger resume re-judges the blocking rows of a run whose executors already landed. It
+    # re-stages the plan (the terminal commit needs the manifest) and takes the XS tail: no plan
+    # author, review wave or scoped test runs, and execution is skipped by `_resumeLedger`.
+    b.append(f"  const _resumeLedger = !_halted && !!_gate.{RESUME_LEDGER_KEY};")
+    b.append(
+        f"  if (_resumeLedger) {{ _planRel = _gate.{RESUME_LEDGER_KEY}.plan; "
+        f"_gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
+    )
 
     if xl_possible:
         _append_split_stage(b, head=head, anchor=anchor, run_id=run_id)
@@ -1799,7 +1811,7 @@ def compose_ask_script(
     )
     b.append("  }")
 
-    b.append("  if (!_halted) {")
+    b.append("  if (!_halted && !_resumeLedger) {")
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
@@ -1896,7 +1908,7 @@ def compose_ask_script(
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD"),
         docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
-        verdict_parts=verdict_parts,
+        verdict_parts=(*verdict_parts, "js:" + _RESUME_LEDGER_CLAUSE_JS),
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
     )
@@ -1978,14 +1990,25 @@ def compose_ask_script(
         "      return false;\n"
         "    });"
     )
+    # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
+    # apart, with the ledger re-check as its remedy.
+    b.append(
+        f"    const _rulable = _manifest?.rulable_ids ?? _gate.{RESUME_LEDGER_KEY}?.rulable_ids ?? [];\n"
+        "    const _blkIds = (_ledger ? _ledgerBlocking(_ledger) : []).map((i) => i && i.id).filter(Boolean);\n"
+        "    const _blkRulable = _blkIds.filter((id) => _rulable.includes(id));\n"
+        "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));"
+    )
     b.append(
         "    if (!_halted && (!_ledger || !(_ledger.items ?? []).length || _ledgerBlocking(_ledger).length)) "
         "{ _halted = { halted: 'ledger-check', "
         "items: _ledger ? _ledgerBlocking(_ledger) : [], "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
-        "next_action: 'Ledger rows ' + ((_ledger ? _ledgerBlocking(_ledger) : []).map((i) => i && i.id).filter(Boolean)"
-        ".join(', ') || '(ledger unreadable)') + ' block the commit. Run coordinator-invoke workflow.revise with run_id ' "
-        "+ _runId + ' with out_of_scope: [row ids] for the rows ruled out, and a verbatim stating scope.' }; }"
+        f"{HALT_PLAN_FIELD}: _planRel, "
+        "next_action: 'Ledger rows ' + (_blkIds.join(', ') || '(ledger unreadable)') + ' block the commit.' "
+        "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
+        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out, and a verbatim stating scope.' : '') "
+        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' name no register row: re-run the ledger check.' : '') "
+        "+ ' Once the rows are met out of band, re-fire the same sizing.' }; }"
     )
     b.append("  }")
     b.append("  }")
@@ -2137,10 +2160,17 @@ def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titl
     return script
 
 
+#: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
+#: verdict covers exactly the rows the halted run blocked on.
+_RESUME_LEDGER_CLAUSE_JS = (
+    "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check and its rows already landed. "
+    "Judge only these requirement rows, now, against the current tree: ' + "
+    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. Return an item for each of them and no other item.' : '')"
+)
 #: The verify agent writes docs before any ledger or criterion verdict exists, so docs are asked
 #: for only on what is settled before it runs.
 _DOCS_PRE_TAIL_GUARD = (
-    "!_halted && _manifest && !_manifest.error && !_viaRoadmap && _RUN_TOKEN "
+    "!_halted && !_resumeLedger && _manifest && !_manifest.error && !_viaRoadmap && _RUN_TOKEN "
     "&& !(_deliveryVerdict && _deliveryVerdict.verdict === 'FAIL')"
 )
 

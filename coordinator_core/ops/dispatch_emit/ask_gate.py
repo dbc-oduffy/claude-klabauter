@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
     GateVerdict,
+    rulable_ids,
 )
 from coordinator_core.ops.sizing_acceptance import (
     ENGINE_SIZE_RULE,
@@ -188,13 +189,15 @@ def gate(
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
-    resume_plan = resume.plan_rel if resume else None
-    resume_rows = list(resume.incomplete) if resume else None
+    resume_ledger = _resume_ledger(sizing, resume.ledger) if resume else None
+    resume_plan = resume.plan_rel if resume and resume_ledger is None else None
+    resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
 
     if arm != ARM_M_PLUS:
         # roadmap mints no baton: roadmap-blitz stubs are the batons
         return GateVerdict(
-            arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows
+            arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows,
+            resume_ledger=resume_ledger,
         )
 
     doc_new = _load_doc_new()
@@ -219,7 +222,22 @@ def gate(
         resume_plan=resume_plan,
         resume_rows=resume_rows,
         spine_plan=spine,
+        resume_ledger=resume_ledger,
     )
+
+
+def _resume_ledger(sizing: dict, halt) -> Optional[dict]:
+    """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids and the
+    sizing's rulable register ids; None when the resume carries no halt pointer."""
+    if halt is None:
+        return None
+    rows = (sizing.get("requirement_register") or {}).get("rows") or []
+    return {
+        "run_id": halt.run_id,
+        "plan": halt.plan_rel,
+        "blocking": list(halt.blocking),
+        "rulable_ids": list(rulable_ids(rows)),
+    }
 
 
 def _spine_plan(repo_root: Path, sizing: dict, sizing_rel: str) -> tuple[Optional[str], Optional[str]]:

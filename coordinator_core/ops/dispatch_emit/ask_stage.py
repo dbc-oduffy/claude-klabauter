@@ -32,6 +32,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     OwedRow,
     StageManifest,
     record_dir,
+    rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
@@ -543,6 +544,9 @@ def stage(
         test_targets=test_targets,
         no_test_target=no_test_target,
         doc_writes=docs,
+        rulable_ids=rulable_ids(
+            [r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)]
+        ),
     )
     _write(record / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
     if session_id:

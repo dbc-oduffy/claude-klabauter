@@ -1513,7 +1513,13 @@ def _ledger_gate(
     the review stage's; it discharges none of them."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
-    ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
+    try:
+        ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
+    except requirements_ledger.LedgerRefused as exc:
+        return _error(
+            f"the run's bound sizing is unreadable: {exc}. Restore the sizing and re-fire",
+            refused="ledger-unreadable",
+        ), None, []
     if ledger is None:
         return None, None, []
     if not isinstance(verdict, dict):
@@ -1528,9 +1534,16 @@ def _ledger_gate(
     )
     if result["pass"]:
         return None, ledger, result.get("open") or []
+    foreign = [
+        str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON
+    ]
+    message = "the requirements are not met: " + "; ".join(
+        (f"{f['id']}: {f['reason']}" if f["id"] is not None else f["reason"]) for f in result["failures"][:10]
+    )
+    if foreign:
+        message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
     return _error(
-        "the requirements are not met: "
-        + "; ".join(f"{f['id']}: {f['reason']}" for f in result["failures"][:10]),
+        message,
         refused="ledger-unmet",
         ledger_failures=result["failures"],
         ledger_items=len(ledger.items),

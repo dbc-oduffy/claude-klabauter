@@ -19,11 +19,14 @@ Signatures implemented in their own modules:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NamedTuple
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops import _research_contract as _rc
+from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
 
@@ -260,12 +263,92 @@ def record_dir(repo_root: Path, run_id: str) -> Path:
 DELIVERY_NOTE_DIR = "docs/delivery"
 
 
+LEDGER_HALT_FILE = "ledger-halt.json"
+HALT_PLAN_FIELD = "plan"
+RESUME_LEDGER_KEY = "resume_ledger"
+
+
+def rulable_ids(rows: Any) -> tuple[str, ...]:
+    """Ids of the register rows whose status is neither met nor waived, in register order; a row
+    that is not a mapping is skipped. Pure."""
+    return tuple(
+        str(r.get(rr.ROW_ID))
+        for r in rows
+        if isinstance(r, dict) and r.get(rr.ROW_STATUS) not in (rr.STATUS_MET, rr.STATUS_WAIVED)
+    )
+
+
+@dataclass(frozen=True)
+class LedgerHalt:
+    """The pointer a ledger halt leaves beside its plan's dispatch reports: the run that halted,
+    the plan and sizing it ran, and the register row ids that blocked it."""
+
+    run_id: str
+    plan_rel: str
+    sizing_rel: str
+    blocking: tuple[str, ...]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            HALT_PLAN_FIELD: self.plan_rel,
+            "sizing": self.sizing_rel,
+            "blocking": list(self.blocking),
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "LedgerHalt":
+        blocking = data["blocking"]
+        if not isinstance(blocking, list) or not all(isinstance(b, str) for b in blocking):
+            raise ValueError("blocking is not a list of str")
+        return cls(
+            run_id=data["run_id"],
+            plan_rel=data[HALT_PLAN_FIELD],
+            sizing_rel=data["sizing"],
+            blocking=tuple(blocking),
+        )
+
+
+def ledger_halt_path(repo_root: Path, plan_rel: str) -> Path:
+    """`<repo_root>/<dispatch report dir>/<plan stem>/ledger-halt.json`."""
+    from coordinator_core.ops.dispatch_emit.emit import _DISPATCH_REPORT_DIR
+
+    return Path(repo_root) / _DISPATCH_REPORT_DIR / Path(plan_rel).stem / LEDGER_HALT_FILE
+
+
+def _relative_inside(value: str) -> bool:
+    p = PurePosixPath(value.replace("\\", "/"))
+    return bool(value) and not p.is_absolute() and ".." not in p.parts and not PureWindowsPath(value).is_absolute()
+
+
+def read_ledger_halt(path: Path) -> LedgerHalt | None:
+    """The halt pointer at ``path``, or None on an unreadable file, bad JSON, a missing or
+    mistyped field, an unsafe run_id, or an absolute or escaping path. One read; pure."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        halt = LedgerHalt.from_json(data)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if not (isinstance(halt.run_id, str) and safe_id(halt.run_id)):
+        return None
+    for rel in (halt.plan_rel, halt.sizing_rel):
+        if not isinstance(rel, str) or not _relative_inside(rel):
+            return None
+    return halt
+
+
+def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:
+    """Atomically write ``halt`` to ``path``."""
+    atomic_write_bytes(path, (json.dumps(halt.to_json(), indent=2) + "\n").encode("utf-8"))
+
+
 class ResumePlan(NamedTuple):
     """`sizing_fire.resumable_plan`'s return: the plan to resume and the ids of its rows still
-    to run, in spine order."""
+    to run, in spine order; ``ledger`` is the halt pointer a ledger-halted run resumes from."""
 
     plan_rel: str
     incomplete: tuple[str, ...]
+    ledger: LedgerHalt | None = None
 
 
 @dataclass(frozen=True)
@@ -289,9 +372,13 @@ class GateVerdict:
     spine_plan: str | None = None
     # Set only when the request carried `record`: {"ok": bool, "error"?: str}, the ruling's write.
     recorded: dict | None = None
+    # Set when a ledger-halted run's row was satisfied out of band: the halt pointer's JSON.
+    resume_ledger: dict | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
+        if self.resume_ledger is not None:
+            out[RESUME_LEDGER_KEY] = self.resume_ledger
         if self.recorded is not None:
             out["recorded"] = self.recorded
         if self.acceptance is not None:
@@ -412,9 +499,12 @@ class StageManifest:
     #: owner_root, root_class, engine}`; an absent key reads as ``()``.
     engine_rows: tuple[dict[str, Any], ...] = ()
     owed: tuple[OwedRow, ...] = ()
+    #: Register row ids still unruled (neither met nor waived) at stage time.
+    rulable_ids: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "rulable_ids": list(self.rulable_ids),
             "owed": [o.to_json() for o in self.owed],
             "engine_rows": [dict(r) for r in self.engine_rows],
             "plan_id": self.plan_id,
@@ -442,4 +532,5 @@ class StageManifest:
             doc_writes=tuple(data.get("doc_writes") or ()),
             engine_rows=tuple(dict(r) for r in data.get("engine_rows") or ()),
             owed=tuple(OwedRow.from_json(o) for o in data.get("owed") or ()),
+            rulable_ids=tuple(data.get("rulable_ids") or ()),
         )

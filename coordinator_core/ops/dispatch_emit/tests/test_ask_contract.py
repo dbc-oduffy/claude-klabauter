@@ -97,8 +97,9 @@ def test_scout_schema_admits_resume_rows_array_or_null():
 
 def test_resume_plan_is_a_named_tuple():
     r = c.ResumePlan("docs/plans/p.md", ("A1", "M0"))
-    plan_rel, incomplete = r
+    plan_rel, incomplete, ledger = r
     assert (plan_rel, incomplete) == (r.plan_rel, r.incomplete) == ("docs/plans/p.md", ("A1", "M0"))
+    assert ledger is r.ledger is None
 
 
 def test_record_dir_root_is_state_warp_and_run_dir_root_unchanged():
