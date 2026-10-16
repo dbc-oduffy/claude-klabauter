@@ -99,9 +99,16 @@ class CrossRepoMemoSummary(BaseModel):
     """
     created: IsoDate
     """ISO calendar date when the memo was created."""
-    kind: Literal["ask", "consult", "fyi", "friction"]
+    kind: Literal["ask", "consult", "fyi", "friction", "bug", "proposal", "notice", "reply"] | _NonEmptyStr
     """
     The memo kind discriminator (frontmatter `kind:` field).
+
+    MINOR bump 4.11.0 -> 4.12.0: the named members gain `bug`, `proposal`, `notice`,
+    `reply`, and any other non-empty string is accepted (`anyOf: [enum, string]`) so a
+    memo is never dropped for its kind. Reader-side widening: existing memos carry
+    kinds the writer-side vocabulary never listed and cannot be normalised
+    retroactively. The paragraph below is the 4.8.0 history, superseded on the
+    absent-members point.
 
     MINOR bump 4.7.0 -> 4.8.0 (2026-09-22, closes coordinator-content-repo
     state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-

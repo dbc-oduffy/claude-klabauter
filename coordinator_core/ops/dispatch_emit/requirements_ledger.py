@@ -22,6 +22,7 @@ delivery verifier, the terminal judge and the falsifier, never a stand-in for an
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -328,12 +329,24 @@ def foreign_turns(
     out: dict[int, str] = {}
     for n, text in turns:
         mine, theirs = _norm(text), recorded.get(n, "")
-        if n < earliest and min(len(mine), len(theirs)) >= _MIN_FOREIGN_MATCH and (mine in theirs or theirs in mine):
+        if min(len(mine), len(theirs)) < _MIN_FOREIGN_MATCH or not (mine in theirs or theirs in mine):
+            continue
+        if n < earliest or not _shares_content_word(ask_text, mine):
             out[n] = mine
     return out
 
 
-FOREIGN_TURN_REASON = "another run's PM turn: the run's ask does not quote it"
+_CONTENT_WORD = re.compile(r"[a-z0-9]{5,}")
+
+
+def _shares_content_word(ask: str, turn_text: str) -> bool:
+    """True when the turn and the ask share a word of five or more characters: the mark of a
+    follow-up, as opposed to an unrelated session turn (a question about token usage).
+    Lexical and lenient: one shared generic word keeps a turn coverable."""
+    return bool(set(_CONTENT_WORD.findall(ask.lower())) & set(_CONTENT_WORD.findall(turn_text.lower())))
+
+
+FOREIGN_TURN_REASON = "another run's PM turn: the run's ask neither quotes nor addresses it"
 
 
 def _append_rows(

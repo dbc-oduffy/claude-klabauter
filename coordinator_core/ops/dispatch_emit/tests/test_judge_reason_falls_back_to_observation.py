@@ -56,12 +56,10 @@ def test_a_met_with_nothing_observed_is_still_demoted():
     assert out["status"] == "indeterminate" and out["reason"] == "met demoted: nothing observed"
 
 
-# The shared e2e harness halts every case at ledger-check (research item 52).
-@pytest.mark.pending_fix
 def test_the_refire_reason_carries_the_judge_observation():
     judge = _judge_result(
         [_item("R1", "met")], reason=None, observation="X",
-        falsifier={"verdict": "pass"},
+        falsifier={"verdict": "pass"}, clauses=[{"status": "not_met"}],
     )
     (out,) = _run([judge], judged=True)
     revise = out["revise_and_refire"]

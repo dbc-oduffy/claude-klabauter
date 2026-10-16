@@ -512,7 +512,14 @@ GENERATES_EXTERNAL = True
 # not in `required[]`, no existing entity or field changed. Expected red window:
 # `ops/emit/tests/test_vendor_pin_version_consistency.py` until DoE regenerates
 # the bundle and claude-klabauter re-vendors.
-CONTRACT_VERSION = "4.11.0"
+#
+# MINOR bump 4.11.0 -> 4.12.0: CrossRepoMemoSummary.kind widens from a closed enum to
+# `anyOf: [enum(ask|consult|fyi|friction|bug|proposal|notice|reply), string]`. Readers
+# built against the closed enum reject rows of any other kind. Expected red window:
+# `ops/emit/tests/test_vendor_pin_version_consistency.py`, and any emit path reaching
+# `validate.assert_version_consistency`, until DoE regenerates the bundle and claude-klabauter
+# re-vendors.
+CONTRACT_VERSION = "4.12.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

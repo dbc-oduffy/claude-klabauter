@@ -40,7 +40,8 @@ this section's body-read pass), and ``actioned_at`` (IsoDate | None — the cale
 memo went terminal, derived from the frontmatter closure vocabulary; absent when the memo
 records no closure time, which means UNKNOWN and never "still open" — see ``_actioned_at``).
 A record is VALID only when title/from/to/status/created are strings, ``status`` is within
-{open, in_progress, actioned}, and ``kind`` (default "ask") is within {ask, consult, fyi}.
+{open, in_progress, actioned}, and ``kind`` (default "ask") is any non-empty string (the contract's
+open fallback).
 Records that fail land in the malformed quarantine ({path, reason}) — the exact
 partition the bash select()/negated-select() pair produces.
 
@@ -74,8 +75,7 @@ from coordinator_core.ops.records_query import _handler as _records_query_handle
 from ._shared import normalize_frontmatter
 
 _STATUS_ENUM = ("open", "in_progress", "actioned")
-_KIND_ENUM = ("ask", "consult", "fyi")
-_MALFORMED_REASON = "missing required field or invalid status/kind enum"
+_MALFORMED_REASON = "missing required field or invalid status/kind"
 
 # Frontmatter fields consulted, in order, for the emitted ``actioned_at`` closure date —
 # see ``_actioned_at``. Deliberately excludes ``picked_up_at``: a pickup is not a
@@ -225,7 +225,8 @@ def _is_valid(fm: dict) -> bool:
         and isinstance(fm.get("status"), str)
         and fm.get("status") in _STATUS_ENUM
         and isinstance(fm.get("created"), str)
-        and _kind_default(fm) in _KIND_ENUM
+        and isinstance(_kind_default(fm), str)
+        and _kind_default(fm) != ""
     )
 
 

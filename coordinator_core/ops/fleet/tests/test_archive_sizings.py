@@ -237,7 +237,75 @@ def test_ac4_byte_identical_dst_converges_via_force_move(tmp_path: Path) -> None
     assert dst.read_text(encoding="utf-8") == body
 
 
+def test_differing_dst_lands_under_deliverable_id_suffixed_name_never_clobbered(tmp_path: Path) -> None:
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-conflict.yaml"
+    _write_sizing(
+        worktree, "2026-01-15-conflict.yaml",
+        "---\nstatus: shipped\ntitle: mine\ndeliverable_id: \"dlv-mine-abc123\"\n---\n",
+    )
+    dst_dir = worktree / "archive" / "sizings" / "2026-01"
+    dst_dir.mkdir(parents=True)
+    dst = dst_dir / "2026-01-15-conflict.yaml"
+    dst_body = "status: shipped\ntitle: a DIFFERENT archived copy\n"
+    dst.write_text(dst_body, encoding="utf-8")
+
+    result, mover = _act(worktree, [cid])
+
+    assert result["acted"] == [{"id": cid, "archived": True}]
+    assert result["skipped"] == []
+    assert mover.captured is not None and len(mover.captured) == 1
+    move = mover.captured[0]
+    assert move.dst == dst_dir / "2026-01-15-conflict--dlv-mine-abc123.yaml"
+    assert move.force is False
+    assert dst.read_text(encoding="utf-8") == dst_body
+
+
+def test_differing_dst_and_differing_suffixed_dst_still_refuses(tmp_path: Path) -> None:
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-conflict.yaml"
+    _write_sizing(
+        worktree, "2026-01-15-conflict.yaml",
+        "---\nstatus: shipped\ntitle: mine\ndeliverable_id: \"dlv-mine-abc123\"\n---\n",
+    )
+    dst_dir = worktree / "archive" / "sizings" / "2026-01"
+    dst_dir.mkdir(parents=True)
+    (dst_dir / "2026-01-15-conflict.yaml").write_text("status: shipped\ntitle: other\n", encoding="utf-8")
+    second = dst_dir / "2026-01-15-conflict--dlv-mine-abc123.yaml"
+    second.write_text("status: shipped\ntitle: another\n", encoding="utf-8")
+
+    result, mover = _act(worktree, [cid])
+
+    assert result["skipped"] == [{"id": cid, "reason": _REASON_DEST_CONFLICT}]
+    assert mover.captured is None
+    assert second.read_text(encoding="utf-8") == "status: shipped\ntitle: another\n"
+
+
+def test_unfenced_commented_deliverable_id_and_identical_suffixed_dst_converge(tmp_path: Path) -> None:
+    """The live record's shape: bare-YAML document, quoted id with a trailing comment.
+    A suffixed destination already holding the identical bytes converges via force."""
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-conflict.yaml"
+    body = (
+        "schema: sizing-object\nstatus: shipped  # draft | sized\n"
+        'deliverable_id: "dlv-mine-abc123"  # durable spine join key\n'
+    )
+    _write_sizing(worktree, "2026-01-15-conflict.yaml", body)
+    dst_dir = worktree / "archive" / "sizings" / "2026-01"
+    dst_dir.mkdir(parents=True)
+    (dst_dir / "2026-01-15-conflict.yaml").write_text("status: shipped\ntitle: other\n", encoding="utf-8")
+    suffixed = dst_dir / "2026-01-15-conflict--dlv-mine-abc123.yaml"
+    suffixed.write_text(body, encoding="utf-8")
+
+    result, mover = _act(worktree, [cid])
+
+    assert result["acted"] == [{"id": cid, "archived": True}]
+    assert mover.captured is not None and mover.captured[0].dst == suffixed
+    assert mover.captured[0].force is True
+
+
 def test_ac4_differing_dst_skips_with_dest_conflict_reason_never_clobbered(tmp_path: Path) -> None:
+    """No deliverable_id -> no suffixed landing -> still refuses."""
     worktree = tmp_path / "repo"
     cid = "state/sizings/2026-01-15-conflict.yaml"
     src = _write_sizing(worktree, "2026-01-15-conflict.yaml", _TERMINAL_BODY.format(title="mine"))

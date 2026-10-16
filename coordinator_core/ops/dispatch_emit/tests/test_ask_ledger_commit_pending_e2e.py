@@ -46,6 +46,7 @@ const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings
 const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null;
 let _splitExit = null;
 let _writes = [];
+const _verdictReports = [];
 let %(owner_rows)s = [];
 %(agent_defs)s
 %(helper)s

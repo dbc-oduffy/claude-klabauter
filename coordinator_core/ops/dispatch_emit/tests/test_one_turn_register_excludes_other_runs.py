@@ -100,6 +100,37 @@ def test_a_short_ask_contained_in_the_turn_keeps_the_turn(repo):
     assert [r["source_text"] for r in _register(repo).rows] == ["fix it"]
 
 
+TOKEN_Q = "how many tokens did the last session burn on exploration alone"
+FOLLOW_UP = "also log every retry attempt with the failure reason at warning level"
+
+
+def _write_two(repo, turns):
+    doc = {
+        "schema": "sizing-object", "intent": "Uploader retry", "estimate": {"tshirt": "S", "provisional": True},
+        "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
+        "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+        "pm_verbatims": [{"turn": n, "text": t} for n, t in turns],
+    }
+    (repo / REL).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+
+def test_a_later_session_turn_the_ask_does_not_address_is_unrelated_not_uncovered(repo):
+    pm_turns.append_turn(TOKEN_Q, session_id="sid-f2")
+    _write_two(repo, [(1, OWN_ASK), (4, TOKEN_Q)])
+    rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
+    text = (repo / REL).read_text(encoding="utf-8")
+    assert [e["turn"] for e in _register(repo).raw[rr.UNRELATED_TURNS_KEY]] == [4]
+    assert rr.uncovered_turns(text) == []
+
+
+def test_a_follow_up_after_the_ask_stays_coverable(repo):
+    pm_turns.append_turn(FOLLOW_UP, session_id="sid-f2")
+    _write_two(repo, [(1, OWN_ASK), (4, FOLLOW_UP)])
+    rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
+    assert rr.UNRELATED_TURNS_KEY not in _register(repo).raw
+    assert FOLLOW_UP in [r["source_text"] for r in _register(repo).rows]
+
+
 def test_a_claimed_foreign_row_is_not_removed(repo):
     _write(repo, FOREIGN, derived_rows=True)
     path = repo / REL

@@ -169,8 +169,7 @@ class ScaffoldPlanEmitsSizingObjectTest(unittest.TestCase):
         fm_text = content.split("---", 2)[1]
         fields = yaml.safe_load(fm_text)
         self.assertNotIn("sizing_object", fields)
-        # The pre-existing commented-optional-key block is untouched.
-        self.assertIn(
+        self.assertNotIn(
             "# Optional keys — uncomment and fill as needed (promoted de-facto keys, D1):",
             content,
         )

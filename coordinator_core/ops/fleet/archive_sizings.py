@@ -431,6 +431,21 @@ def _dirty_sizing_relpaths(worktree_root: Path, candidate_relpaths: List[str]) -
     return dirty_relpaths_from_porcelain(worktree_root, candidate_relpaths, caller="archive_sizings")
 
 
+_UNSAFE_NAME_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _suffixed_dst(dst: Path, sizing_path: Path) -> Optional[Path]:
+    """`dst` with the sizing's own deliverable_id appended to the stem, or None
+    when the record carries no usable deliverable_id."""
+    raw = parse_frontmatter_field(sizing_path, "deliverable_id")
+    if raw in (None, "", "null", "~"):
+        return None
+    safe = _UNSAFE_NAME_CHARS_RE.sub("_", str(raw).strip())
+    if not safe:
+        return None
+    return dst.with_name(f"{dst.stem}--{safe}{dst.suffix}")
+
+
 def _plan_move(
     worktree_root: Path,
     cid: str,
@@ -467,9 +482,17 @@ def _plan_move(
         if not _is_identical_duplicate(sizing_path, dst):
             # A DIFFERENT file already occupies the archive destination —
             # never "already-archived" (that string is AC12-pinned to the
-            # source-gone case), never clobbered.
-            return None, _REASON_DEST_CONFLICT
-        force = True
+            # source-gone case), never clobbered. Land beside it under a
+            # deliverable_id-suffixed name; refuse when that is unavailable.
+            dst = _suffixed_dst(dst, sizing_path)
+            if dst is None:
+                return None, _REASON_DEST_CONFLICT
+            if dst.exists():
+                if not _is_identical_duplicate(sizing_path, dst):
+                    return None, _REASON_DEST_CONFLICT
+                force = True
+        else:
+            force = True
 
     return Move(src=sizing_path, dst=dst, candidate_id=cid, force=force), None
 
