@@ -111,6 +111,38 @@ def test_lands_record_plans_sizings_batons_then_fans_out(repo):
     assert not run_token.redeem(repo, RUN, token, "run.mjs")
 
 
+def _declare_run(repo: Path, run_id: str, session: str, writes: list) -> str:
+    from coordinator_core.session import core as session_core
+
+    session_core.init(session, cwd=str(repo))
+    rdir = repo / "state" / "warp" / run_id
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "manifest.json").write_text(json.dumps({"rows": [{"writes": writes}]}), encoding="utf-8")
+    return run_token.mint(repo, run_id, "run.mjs", session_id=session)
+
+
+def test_a_product_a_live_peer_run_declares_is_withheld(repo):
+    _make_plan(repo, "a")
+    _record(repo)
+    _declare_run(repo, "peer-run-1", "fanout-peer", [PLANS["a"]])
+
+    out = _call(repo, [PLANS["a"]])
+
+    assert out["withheld"] == {PLANS["a"]: "peer-held"}, out
+
+
+def test_a_product_the_fanout_runs_own_manifest_declares_is_committed(repo):
+    _make_plan(repo, "a")
+    _record(repo)
+    token = _declare_run(repo, RUN, "fanout-self", [PLANS["a"]])
+
+    out = _call(repo, [PLANS["a"]], run_token=token, session_id="not-a-uuid")
+
+    assert out["committed"] is True, out
+    assert "withheld" not in out, out
+    assert PLANS["a"] in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+
+
 def _parent_runs(repo, out) -> list:
     fan = out["fanout"]
     assert fan["exit_code"] == 0, fan

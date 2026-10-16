@@ -533,6 +533,13 @@ def test_the_ask_wave_sizes_reviewers_from_the_manifest_rows_and_gates_kira_on_t
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 
+def test_the_ask_script_predeclares_wave_not_run_as_an_empty_list():
+    script = _compose(**_ratio_kw())
+    assert script.count("let _waveNotRun = [];") == 1
+    assert "const _waveNotRun" not in script
+    assert "wave_not_run: (Array.isArray(_waveNotRun) ? _waveNotRun : [])" in script
+
+
 def test_a_roster_without_a_delivery_verifier_assigns_the_not_rostered_reason():
     script = _compose(**_ratio_kw())
     assert "_deliveryNotRun = 'roster names no coordinator:delivery-verifier';" in script

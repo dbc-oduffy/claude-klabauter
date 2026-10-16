@@ -385,6 +385,11 @@ def next_action_parts(
                     if "delivery_not_run" in review_vars
                     else ""
                 )
+                + (
+                    f", wave_not_run: (Array.isArray({review_vars['wave_not_run']}) ? {review_vars['wave_not_run']} : [])"
+                    if "wave_not_run" in review_vars
+                    else ""
+                )
                 + f", tests: {{ status: ({tests_status_expr} === 'pass-with-skips' ? 'pass' : {tests_status_expr}), "
                 + "skipped: " + record_skips + f", run: {test_num('tests_run')}, "
                 + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')} }}"

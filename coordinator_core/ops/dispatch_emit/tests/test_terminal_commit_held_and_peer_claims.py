@@ -157,6 +157,80 @@ def test_an_abandoned_live_peer_claim_does_not_refuse_the_commit(repo, monkeypat
     assert f"Absorbed-Peer-Claim {PEER} a.py" in body, body
 
 
+def _peer_run(repo: Path, run_id: str, session: str, writes: list, minted_at=None) -> None:
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    session_core.init(session, cwd=str(repo))
+    rdir = repo / "state" / "warp" / run_id
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "manifest.json").write_text(json.dumps({"rows": [{"writes": writes}]}), encoding="utf-8")
+    token = run_token.mint(repo, run_id, "run.mjs", session_id=session)
+    if minted_at is not None:
+        path = run_token._record_path(repo, run_id)
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["minted_at"] = minted_at
+        path.write_text(json.dumps(record), encoding="utf-8")
+    return token
+
+
+def test_a_live_run_manifest_path_is_peer_held_not_undeclared_dirty(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "x.py").write_text("x\n", encoding="utf-8")
+    (repo / "y.py").write_text("y\n", encoding="utf-8")
+    _peer_run(repo, "peer-run-1", PEER, ["x.py"])
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), session_id=SELF,
+    )
+    out = terminal_commit._undeclared_dirty(repo, request)
+    assert out["undeclared_dirty"] == ["y.py"], out
+    assert out["undeclared_dirty_peer_held"] == 1
+
+
+def test_a_declared_path_a_live_run_manifest_declares_refuses(repo):
+    request = _two_chunks(repo)
+    _peer_run(repo, "peer-run-1", PEER, ["a.py"])
+    head = _git(["rev-parse", "HEAD"], repo)
+    out = _run(repo, request)
+    assert out["committed"] is False
+    assert out["refused"] == "peer-claim"
+    assert out["peer_claims"] == [{"path": "a.py", "session": PEER}]
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+@pytest.mark.parametrize("committer", ["senior", "junior"])
+def test_mutual_declaration_refuses_only_the_junior_run(repo, monkeypatch, committer):
+    now = time.time()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),))
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    tokens = {
+        "senior": _peer_run(repo, "run-senior", SELF, ["a.py"], minted_at=now - 100),
+        "junior": _peer_run(repo, "run-junior", PEER, ["a.py"], minted_at=now - 10),
+    }
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF if committer == "senior" else PEER)
+    out = _run(repo, request, run_id=f"run-{committer}", run_token=tokens[committer])
+    if committer == "senior":
+        assert out["committed"] is True, out
+    else:
+        assert out["committed"] is False, out
+        assert out["refused"] == "peer-claim"
+        assert out["peer_claims"] == [{"path": "a.py", "session": SELF}]
+
+
+@pytest.mark.parametrize("claimed", [True, False])
+def test_a_run_never_contests_its_own_manifest_when_its_session_id_is_dropped(repo, claimed):
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),))
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "x.py").write_text("x\n", encoding="utf-8")
+    token = _peer_run(repo, "own-run", SELF, ["a.py", "x.py"])
+    extra = {"run_token": token} if claimed else {}
+    assert terminal_commit._peer_held(repo, None, ["x.py"]) == {"x.py"}
+    assert terminal_commit._peer_held(repo, None, ["x.py"], run_id="own-run") == set()
+    out = _run(repo, request, run_id="own-run", session_id="not-a-uuid", **extra)
+    assert out.get("refused") != "peer-claim", out
+    assert out["committed"] is True, out
+    assert out.get("undeclared_dirty_peer_held", 0) == 0, out
+
+
 def test_the_runs_own_session_claim_still_commits(repo):
     request = _two_chunks(repo)
     session_core.init(SELF, cwd=str(repo))

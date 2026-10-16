@@ -1620,6 +1620,17 @@ def contested_by_live_peers(
     Unknown-kind holds still contest (``touch_record.
     kind_blocks_a_peer_commit``), so no claim that blocks today stops
     blocking until a writer positively says it was a read.
+
+    SECOND CLAIM SOURCE: a LIVE engine run's declared writes
+    (``warp_run_deliverable.live_run_write_claims``: manifest ``rows[].writes``
+    + ``doc_writes`` and commit-request paths/prefixes). A run's executors are
+    not reliably touch-claimed, so without this a peer run's half-edited file
+    reads as uncontested. Liveness is a held run token plus ``session_live`` on
+    its session; a run of ``sid`` itself never contests. These claims are
+    write-kind by construction, so ``kind_blocks_a_peer_commit`` does not apply.
+    Read once per call (one token listing, no spawn). If a live run's
+    declaration is unparseable the reader returns ``None`` and so does this
+    function (DR-355: contest unknown, never "uncontested").
     """
     wanted = {p for p in paths if p}
     if not wanted:
@@ -1661,6 +1672,19 @@ def contested_by_live_peers(
                     return None
             if live_by_sid[owner]:
                 contested.setdefault(path, []).append(owner)
+    try:
+        from coordinator_core.git import repo_root as _repo_root_mod
+        from coordinator_core.ops.warp_run_deliverable import live_run_write_claims
+
+        root = _repo_root_mod.show_toplevel(cwd) or cwd or os.getcwd()
+        run_claims = live_run_write_claims(Path(root), sorted(wanted), exclude_session=sid, cwd=cwd)
+    except Exception:
+        return None
+    if run_claims is None:
+        return None
+    for path, owners in run_claims.items():
+        held = contested.setdefault(path, [])
+        held.extend(o for o in owners if o not in held)
     if contested:
         dirty = _paths_with_uncommitted_state(sorted(contested), cwd)
         if dirty is not None:

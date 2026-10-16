@@ -946,6 +946,14 @@ def test_the_run_record_carries_the_delivery_not_run_reason_for_a_null_delivery(
     assert out["delivery_not_run"] == "tier S excludes coordinator:delivery-verifier"
 
 
+def test_the_run_record_keeps_a_non_empty_wave_not_run_and_drops_an_empty_one():
+    entry = {"slot": 4, "agent_type": "coordinator:senior-front-end", "reason": "rejected: boom"}
+    review = {"prep": {"run_base_sha": "a" * 40}, "wave_not_run": [entry]}
+    assert terminal_commit._stage_returns(review)["wave_not_run"] == [entry]
+    for empty in ([], None, "x"):
+        assert "wave_not_run" not in terminal_commit._stage_returns({**review, "wave_not_run": empty})
+
+
 @pytest.mark.parametrize("reason", [None, "", 3])
 def test_the_run_record_omits_an_empty_delivery_not_run(reason):
     review = {"prep": {"run_base_sha": "a" * 40}, "delivery": None, "delivery_not_run": reason}

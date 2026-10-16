@@ -1,0 +1,134 @@
+"""End to end: another run's `dispatch.terminal_commit` never lands a file a live peer run's
+manifest declares (`rows[].writes`) as `run_owned`, even with no touch claim on it, and the control
+(peer token expired, or its session dead) admits the same file, so the test discriminates."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.ops import warp_run_deliverable
+from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit.commit_request import (
+    ChunkCommit,
+    CommitRequest,
+    render_marker,
+)
+from coordinator_core.session import core as session_core
+from coordinator_core.session import touch_record
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+SELF = "5e1f0000-0000-4000-8000-0000000000a1"
+PEER = "5e1f0000-0000-4000-8000-0000000000b2"
+_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_PEER_EDIT = "peer half-written edit\n"
+
+
+def _git(args, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.com"], root)
+    _git(["config", "user.name", "t"], root)
+    (root / "src").mkdir()
+    (root / "src" / "op.py").write_text("original\n", encoding="utf-8")
+    (root / "README.md").write_text("seed\n", encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    session_core.init(SELF, cwd=str(root))
+    session_core.init(PEER, cwd=str(root))
+    (root / "src" / "a.py").write_text("a\n", encoding="utf-8")
+    return root
+
+
+def _peer_run_declares(repo: Path, *writes: str) -> None:
+    """Run B: another session's live run whose manifest names `writes`; no touch claim is made."""
+    manifest_dir = repo / "state" / "warp" / "run-b"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": list(writes)}], "doc_writes": []}),
+        encoding="utf-8",
+    )
+    run_token.mint(repo, "run-b", "b.mjs", session_id=PEER)
+    (repo / "src" / "op.py").write_text(_PEER_EDIT, encoding="utf-8")
+
+
+def _run_a(repo: Path) -> dict:
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),))
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    review = {**_REVIEWED, "prep": {"slice_files": ["src/op.py"]}}
+    return terminal_commit._handler(
+        {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": review, "session_id": SELF},
+        repo_root=repo / ".git",
+    )
+
+
+def _committed(repo: Path) -> list:
+    out = _git(["show", "--numstat", "--format=", "HEAD"], repo)
+    return sorted(ln.split("\t")[-1] for ln in out.splitlines() if ln.strip())
+
+
+def test_a_live_peer_runs_manifest_path_is_never_landed_as_run_owned(repo):
+    _peer_run_declares(repo, "src/op.py")
+    out = _run_a(repo)
+    assert out["committed"] is True, out
+    assert "src/op.py" not in out["run_owned"]
+    assert _committed(repo) == ["src/a.py"]
+    assert _git(["show", "HEAD:src/op.py"], repo) == "original\n"
+    assert (repo / "src" / "op.py").read_text(encoding="utf-8") == _PEER_EDIT
+
+
+def test_control_an_expired_peer_token_admits_the_same_path(repo):
+    _peer_run_declares(repo, "src/op.py")
+    record_path = run_token._record_path(repo, "run-b")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["minted_at"] = 1.0
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    out = _run_a(repo)
+    assert out["committed"] is True, out
+    assert out["run_owned"] == ["src/op.py"]
+    assert _git(["show", "HEAD:src/op.py"], repo) == _PEER_EDIT
+
+
+def test_control_a_dead_peer_session_admits_the_same_path(repo, monkeypatch):
+    _peer_run_declares(repo, "src/op.py")
+    real = touch_record.session_live
+    monkeypatch.setattr(
+        touch_record, "session_live", lambda sid, cwd=None: False if sid == PEER else real(sid, cwd)
+    )
+    out = _run_a(repo)
+    assert out["committed"] is True, out
+    assert out["run_owned"] == ["src/op.py"]
+
+
+def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
+    _peer_run_declares(repo, "src/op.py")
+    listings: list = []
+    checks: list = []
+    real_held = run_token.held_records
+    real_claims = warp_run_deliverable.live_run_write_claims
+    monkeypatch.setattr(run_token, "held_records", lambda r: listings.append(1) or real_held(r))
+    monkeypatch.setattr(
+        warp_run_deliverable, "live_run_write_claims",
+        lambda *a, **k: checks.append(1) or real_claims(*a, **k),
+    )
+    out = _run_a(repo)
+    assert out["committed"] is True, out
+    assert checks
+    assert len(listings) == len(checks)

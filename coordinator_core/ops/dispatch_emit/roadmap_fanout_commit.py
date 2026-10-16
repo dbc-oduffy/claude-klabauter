@@ -141,7 +141,7 @@ def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id
         return _error(f"git status over {record_dir_rel} failed", **base)
     record, record_gone = record_dir_changes(worktree_root, record_dir_rel, snapshot.changed)
     product = [p for p in declared if p in snapshot.changed and (worktree_root / p).is_file()]
-    held = _peer_held(worktree_root, session_id, product)
+    held = _peer_held(worktree_root, session_id, product, run_id=run_id)
     withheld = {p: "peer-held" for p in sorted(held)}
     product = [p for p in product if p not in held]
     paths = record + product

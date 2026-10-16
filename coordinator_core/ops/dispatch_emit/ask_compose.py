@@ -98,6 +98,7 @@ from coordinator_core.ops.review_mint.execute_review import (
 )
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.roadmap.post_stamp_clause import (
     EXIT_CRITERION_REFUSAL_HEAD,
@@ -114,7 +115,7 @@ _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
 )
-_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", "_reviewIntegration")
+_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration")
 
 
 class AskComposeRefused(ValueError):
@@ -1195,7 +1196,7 @@ def compose_ask_script(
     ))
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
-        b.append(f"  let {name} = null;")
+        b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'null'};")
     if judged:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 

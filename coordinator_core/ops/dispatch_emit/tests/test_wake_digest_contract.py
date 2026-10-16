@@ -404,6 +404,23 @@ def test_inline_review_carries_the_delivery_not_run_reason_when_the_binding_is_n
     assert "delivery_not_run: (_deliveryNotRun ?? null)" in js
 
 
+def test_inline_review_carries_wave_not_run_when_the_binding_is_named():
+    review_vars = {**_kwargs()["review_vars"], "wave_not_run": "_waveNotRun"}
+    js = wd.completion_return_js(**_kwargs(review_vars=review_vars))
+    assert "wave_not_run: (Array.isArray(_waveNotRun) ? _waveNotRun : [])" in js
+    assert "wave_not_run" not in wd.completion_return_js(**_kwargs())
+
+
+def test_the_schema_declares_inline_review_wave_not_run():
+    import json
+    from pathlib import Path
+
+    schema = json.loads((Path(wd.__file__).parents[2] / "contract" / "wake-digest.schema.json").read_text(encoding="utf-8"))
+    text = json.dumps(schema)
+    assert '"wave_not_run": {"type": "array"' in text
+    assert '"reason": {"type": "string"}' in text
+
+
 def test_inline_review_omits_delivery_not_run_for_older_callers():
     assert "delivery_not_run" not in wd.completion_return_js(**_kwargs())
 

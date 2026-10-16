@@ -160,6 +160,17 @@ def test_live_records_skip_claimed_and_expired(tmp_path):
     assert [r["run_id"] for r in run_token.live_records(repo)] == ["ask-2"]
 
 
+def test_held_records_list_live_and_claimed_but_not_expired(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.mint(repo, "ask-2", "b.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    assert sorted(r["run_id"] for r in run_token.held_records(repo)) == ["ask-1", "ask-2"]
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + run_token.TTL_SECONDS + 5)
+    assert [r["run_id"] for r in run_token.held_records(repo)] == ["ask-1"]
+
+
 def test_racing_redeems_yield_exactly_one_true(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")

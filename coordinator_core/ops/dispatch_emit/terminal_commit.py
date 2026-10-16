@@ -83,6 +83,9 @@ Negative-spec:
     declared-only behaviour: a chain's claims split across child sessions, the other two have
     no commit of their own.
   - Does NOT write a receipt when there is nothing to commit.
+  - Declares ``expected_content_sha256`` only for paths the run's own session recorded writing
+    (never the receipts, allowlist, bookkeeping record or ask note this call writes); a drift
+    refuses the run's commit with ``blob_drift``, never drops paths.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
     toward ``commit_paths``.
@@ -1103,6 +1106,22 @@ def _ship_cited_sizing(worktree_root: Path, repo_root: Path, plan_path: Optional
     return {"sizing_shipped": sizing_rel} if reply.get("applied") else {}
 
 
+def _recorded_fingerprints(
+    worktree_root: Path, session_id: str, candidates: Sequence[str], all_paths: Sequence[str],
+    deleted_paths: Sequence[str], *, excluded: set,
+) -> dict:
+    """``{path: sha256}`` the run's own session last recorded writing, for the commit's candidate
+    paths; one batched sink read. A hashless newest event or an unrecorded path carries no entry."""
+    from coordinator_core.session import touch_record
+
+    committed = set(all_paths) - set(deleted_paths)
+    wanted = [p for p in dict.fromkeys(candidates) if p in committed and p not in excluded]
+    if not wanted:
+        return {}
+    seen = touch_record.last_seen_hashes(session_id, wanted, worktree_root)
+    return {p: h for p, h in seen.items() if h}
+
+
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _RESOLUTION_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 
@@ -1530,6 +1549,9 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
     not_run = inline_review.get("delivery_not_run")
     if isinstance(not_run, str) and not_run:
         out["delivery_not_run"] = not_run
+    wave_not_run = inline_review.get("wave_not_run")
+    if isinstance(wave_not_run, list) and wave_not_run:
+        out["wave_not_run"] = wave_not_run
     fixes = inline_review.get("fixes")
     if isinstance(fixes, int) and not isinstance(fixes, bool):
         out["fixes_applied"] = fixes
@@ -1846,18 +1868,45 @@ def _scope_pathspecs(request: CommitRequest) -> list:
     return list(specs)
 
 
-def _peer_held(worktree_root: Path, session_id: Optional[str], paths: list) -> set:
-    """The paths another session's touch claim holds: a peer's in-flight edit sitting in
-    one of this run's directories, not this run's residue. No git spawn."""
-    if not session_id or not paths:
+def _peer_held(
+    worktree_root: Path, session_id: Optional[str], paths: list, *, run_id: Optional[str] = None
+) -> set:
+    """The paths another session's touch claim, or a live peer run's declared writes, holds: a
+    peer's in-flight edit sitting in one of this run's directories, not this run's residue.
+    ``run_id`` keeps the caller's own run from holding its own declared paths. No git spawn."""
+    if not paths:
         return set()
-    from coordinator_core.session import claim_index
+    held: set = set()
+    if session_id:
+        from coordinator_core.session import claim_index
+
+        try:
+            answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
+        except Exception:
+            return set()
+        held = {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
+    from coordinator_core.ops import warp_run_deliverable
 
     try:
-        answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
+        run_claims = warp_run_deliverable.live_run_write_claims(
+            worktree_root, paths, exclude_session=session_id or "", cwd=str(worktree_root),
+            exclude_run=run_id,
+        )
     except Exception:
-        return set()
-    return {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
+        run_claims = None
+    return held | set(run_claims or ())
+
+
+def _own_run_seniority(worktree_root: Path, run_id: object) -> Optional[tuple]:
+    """`(minted_at, run_id)` of the committing run's claimed token, or None when it has none."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if not isinstance(run_id, str):
+        return None
+    record = run_token._read(run_token._record_path(worktree_root, run_id, claimed=True))
+    if record is None or not isinstance(record.get("minted_at"), (int, float)):
+        return None
+    return (record["minted_at"], run_id)
 
 
 def _in_scope(path: str, request: CommitRequest) -> bool:
@@ -1874,6 +1923,7 @@ def _in_scope(path: str, request: CommitRequest) -> bool:
 def _undeclared_dirty(
     worktree_root: Path, request: CommitRequest,
     snapshot: Optional[_Snapshot] = None, landed: frozenset = frozenset(),
+    *, run_id: Optional[str] = None,
 ) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
@@ -1912,7 +1962,7 @@ def _undeclared_dirty(
             }
             - declared
         )
-    peer_held = _peer_held(worktree_root, request.session_id, dirty)
+    peer_held = _peer_held(worktree_root, request.session_id, dirty, run_id=run_id)
     dirty = [p for p in dirty if p not in peer_held]
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
     if peer_held:
@@ -2769,7 +2819,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["run_owned"] = scope["run_owned"]
         reply.update(
             _undeclared_dirty(
-                scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ()))
+                scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ())),
+                run_id=params.get("run_id") if isinstance(params, dict) else None,
             )
         )
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
@@ -3548,6 +3599,23 @@ def _terminal_commit_inner(
     commit_v2_mod._peer_claim_warnings(
         worktree_root, all_paths + deleted_paths, peer_holds, own_sid=session_id
     )
+    from coordinator_core.ops import warp_run_deliverable
+
+    try:
+        run_claims = warp_run_deliverable.live_run_write_claims(
+            worktree_root, all_paths + deleted_paths, exclude_session=session_id or "",
+            cwd=str(worktree_root),
+            minted_before=_own_run_seniority(worktree_root, params.get("run_id")),
+            exclude_run=params.get("run_id") if isinstance(params.get("run_id"), str) else None,
+        )
+    except Exception:
+        run_claims = None
+    seen = set(peer_holds)
+    for path, sids in sorted((run_claims or {}).items()):
+        for sid in sids:
+            if (path, sid) not in seen:
+                peer_holds.append((path, sid))
+                seen.add((path, sid))
     if peer_holds:
         sids = sorted({sid for _p, sid in peer_holds})
         return _error(
@@ -3671,6 +3739,14 @@ def _terminal_commit_inner(
         commit_params["declared_reverts"] = deleted_paths
     if session_id is not None:
         commit_params["session_id"] = session_id
+        expected = _recorded_fingerprints(
+            worktree_root, session_id,
+            [p for c in done_chunks for p in c.paths] + list(run_owned),
+            all_paths, deleted_paths,
+            excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, ask_note_rel},
+        )
+        if expected:
+            commit_params["expected_content_sha256"] = expected
     if snapshot is not None:
         # Receipts and the regenerated allowlist are new tracked-by-design files the
         # snapshot predates; every other path must be covered or commit_v2 asks git itself.

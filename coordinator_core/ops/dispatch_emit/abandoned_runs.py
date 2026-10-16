@@ -95,18 +95,7 @@ def reap_message(run_ids: list[str]) -> str:
 def _token_records(repo_root: Path) -> list[dict]:
     """Every live record plus every claimed one (a run mid terminal-commit). One directory
     listing each; no spawn."""
-    records = list(run_token.live_records(repo_root))
-    common = run_token._common_dir(repo_root)
-    if common is not None:
-        try:
-            claimed = sorted((common / run_token._DIR / run_token._CLAIMED).glob("*.json"))
-        except OSError:
-            claimed = []
-        for path in claimed:
-            record = run_token._read(path)
-            if record is not None and isinstance(record.get("run_id"), str):
-                records.append(record)
-    return records
+    return run_token.held_records(repo_root)
 
 
 def _token_active(root: Path, record: dict, newest: Mapping[str, float], now: float) -> bool:

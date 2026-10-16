@@ -380,6 +380,7 @@ from coordinator_core.ops.review_mint.roster import (
     plan_required_reviewers,
 )
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
 
@@ -2077,6 +2078,7 @@ def review_stage_vars(review, *, bookkeeping_stem_literal: str, plan_id_literal:
         "wave": "_reviewWave",
         "delivery": "_deliveryVerdict",
         "delivery_not_run": "_deliveryNotRun",
+        "wave_not_run": WAVE_NOT_RUN_VAR,
         "bookkeeping_stem": bookkeeping_stem_literal,
         "plan_id_literal": plan_id_literal,
     }
@@ -5211,6 +5213,7 @@ def compose_script(
     body_blocks.append("  let _reviewWave = null;")
     body_blocks.append("  let _deliveryVerdict = null;")
     body_blocks.append("  let _deliveryNotRun = null;")
+    body_blocks.append(f"  let {WAVE_NOT_RUN_VAR} = [];")
     body_blocks.append("  let _reviewIntegration = null;")
     body_blocks.append(f"  let {_TEST_RESULT_VAR} = null;")
     body_blocks.append(f"  let {_FALSIFIER_RESULT_VAR} = null;")
@@ -5223,6 +5226,7 @@ def compose_script(
         "_reviewWave",
         "_deliveryVerdict",
         "_deliveryNotRun",
+        WAVE_NOT_RUN_VAR,
         "_reviewIntegration",
     )
     review_vars: Optional[dict] = None

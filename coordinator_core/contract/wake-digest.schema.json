@@ -311,6 +311,18 @@
                         "prep_sidecar": { "type": ["string", "null"] },
                         "wave_sidecar_paths": { "type": "array", "items": { "type": "string" } },
                         "wave_reviews": { "type": "array", "items": { "type": ["object", "null"] } },
+                        "wave_not_run": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "slot": { "type": "integer" },
+                              "agent_type": { "type": "string" },
+                              "reason": { "type": "string" }
+                            }
+                          }
+                        },
                         "prep": {
                           "type": ["object", "null"],
                           "additionalProperties": false,

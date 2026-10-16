@@ -12,6 +12,7 @@ hot path. Ambiguity returns "" (omit rather than guess).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,6 +145,92 @@ def live_run_deliverable_id(repo_root: Path, session_id: str, paths: Iterable[st
         if did:
             ids.add(did)
     return next(iter(ids)) if len(ids) == 1 else ""
+
+
+def _manifest_declared(run_id: str, root: Path) -> tuple:
+    """`(paths, prefixes, unreadable)` a run's `manifest.json` (`rows[].writes`, `doc_writes`)
+    and `commit-request.txt` (chunk paths and prefixes) declare, normalized. `unreadable` is True
+    when a file exists but does not parse; an absent file is not unreadable. A manifest that fails
+    mid-parse keeps the paths gathered before the failure."""
+    paths: list = []
+    prefixes: list = []
+    unreadable = False
+    try:
+        text = (record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        text = None
+    if text is not None:
+        try:
+            data = json.loads(text)
+            rows = data["rows"]
+            for row in rows:
+                paths.extend(w for w in row["writes"] if isinstance(w, str))
+            paths.extend(w for w in (data.get("doc_writes") or ()) if isinstance(w, str))
+        except (ValueError, KeyError, TypeError):
+            unreadable = True
+    try:
+        request = parse_marker((root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE).read_text(encoding="utf-8"))
+    except OSError:
+        request = None
+    except MalformedCommitRequestError:
+        request = None
+        unreadable = True
+    if request is not None:
+        for chunk in request.chunks:
+            paths.extend(chunk.paths)
+            prefixes.extend(chunk.prefixes)
+    return (
+        tuple(p for p in (_norm(x) for x in paths) if p),
+        tuple(p.rstrip("/") for p in (_norm(x) for x in prefixes) if p.rstrip("/")),
+        unreadable,
+    )
+
+
+def live_run_write_claims(
+    repo_root: Path,
+    paths: Iterable[str],
+    *,
+    exclude_session: str,
+    cwd: Optional[str] = None,
+    minted_before: Optional[tuple] = None,
+    exclude_run: Optional[str] = None,
+) -> Optional[dict]:
+    """`{path: sorted peer session ids}` for each of `paths` a live peer run declares it writes.
+
+    A peer run is a held token (`run_token.held_records`, listed once) that is fresh, whose
+    non-empty `session_id` differs from `exclude_session` and is `touch_record.session_live`.
+    `exclude_run` skips that run id before any other test. `minted_before=(minted_at, run_id)`
+    keeps only strictly senior runs. A path matches a declared path or sits under a declared
+    prefix. Returns None (contest unknown) when a live peer's declaration is unparseable and
+    yields no usable paths; {} when nothing is declared."""
+    from coordinator_core.session import touch_record
+
+    root = Path(repo_root)
+    wanted = {_norm(p) for p in paths if p}
+    wanted.discard("")
+    claims: dict = {}
+    if not wanted:
+        return claims
+    for record in run_token.held_records(root):
+        sid = record.get("session_id")
+        run_id = record["run_id"]
+        if exclude_run is not None and run_id == exclude_run:
+            continue
+        if not isinstance(sid, str) or not sid or sid == exclude_session or not run_token._fresh(record):
+            continue
+        if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
+            continue
+        if not touch_record.session_live(sid, cwd):
+            continue
+        declared, prefixes, unreadable = _manifest_declared(run_id, root)
+        if unreadable and not declared and not prefixes:
+            logging.getLogger(__name__).warning("live run %s: unreadable write declaration", run_id)
+            return None
+        declared_set = set(declared)
+        for path in wanted:
+            if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
+                claims.setdefault(path, set()).add(sid)
+    return {p: sorted(s) for p, s in claims.items()}
 
 
 def write_reconciled(run_dir: Path, sizing_rel: str, deliverable_id: str, shas: Iterable[str]) -> Path:

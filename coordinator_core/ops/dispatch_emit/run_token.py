@@ -216,6 +216,24 @@ def live_records(repo_root: Path) -> Iterator[dict]:
             yield record
 
 
+def held_records(repo_root: Path) -> list[dict]:
+    """Every record a run still holds: each fresh unclaimed one (`live_records`) plus every
+    claimed one (a run mid terminal-commit). One directory listing each; no spawn. A claimed
+    record is not freshness-checked here."""
+    records = list(live_records(repo_root))
+    common = _common_dir(repo_root)
+    if common is not None:
+        try:
+            claimed = sorted((common / _DIR / _CLAIMED).glob("*.json"))
+        except OSError:
+            claimed = []
+        for path in claimed:
+            record = _read(path)
+            if record is not None and isinstance(record.get("run_id"), str):
+                records.append(record)
+    return records
+
+
 def consume(repo_root: Path, run_id: str) -> None:
     """Remove the run's live and claimed records (the commit landed, or the run ended); a
     missing record is already consumed, and nothing is left for `release` to restore."""

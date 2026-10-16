@@ -183,3 +183,149 @@ def test_sizing_scalar_forms(repo):
     assert wrd.sizing_scalar(repo, SIZING, "deliverable_id") == "dlv-run-1"
     assert wrd.sizing_scalar(repo, SIZING, "missing") == ""
     assert wrd.sizing_scalar(repo, "nope.yaml", "status") == ""
+
+
+PEER = "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.fixture
+def live(monkeypatch):
+    from coordinator_core.session import touch_record
+
+    dead: set = set()
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: sid not in dead)
+    return dead
+
+
+def _manifest(repo, run_id, writes=(), doc_writes=(), raw=None):
+    d = repo / "state/warp" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    body = raw if raw is not None else json.dumps({"rows": [{"id": "C1", "writes": list(writes)}], "doc_writes": list(doc_writes)})
+    (d / "manifest.json").write_text(body, encoding="utf-8")
+
+
+def _claims(repo, paths, **kw):
+    kw.setdefault("exclude_session", SESSION)
+    return wrd.live_run_write_claims(repo, paths, **kw)
+
+
+def test_claims_manifest_row_path(repo, live):
+    _manifest(repo, "p1", writes=["pkg/op.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["pkg/op.py", "pkg/other.py"]) == {"pkg/op.py": [PEER]}
+
+
+def test_claims_doc_writes_path(repo, live):
+    _manifest(repo, "p1", doc_writes=["docs/a.md"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["docs\\a.md"]) == {"docs/a.md": [PEER]}
+
+
+def test_commit_request_prefix_claims_child(repo, live):
+    run_dir = repo / "scratch/warp/p1"
+    run_dir.mkdir(parents=True)
+    marker = render_marker(
+        CommitRequest(chunks=(ChunkCommit(id="C", title="t", prefixes=("pkg/tests/",)),), version=1)
+    )
+    (run_dir / "commit-request.txt").write_text((marker or "") + "\n", encoding="utf-8")
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["pkg/tests/t.py", "pkg/testsx/t.py"]) == {"pkg/tests/t.py": [PEER]}
+
+
+def test_own_session_excluded(repo, live):
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=SESSION)
+    assert _claims(repo, ["a.py"]) == {}
+
+
+def test_ownerless_token_excluded(repo, live):
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs")
+    assert _claims(repo, ["a.py"]) == {}
+
+
+def test_dead_session_excluded(repo, live):
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    live.add(PEER)
+    assert _claims(repo, ["a.py"]) == {}
+
+
+def test_claimed_token_counts(repo, live):
+    _manifest(repo, "p1", writes=["a.py"])
+    token = run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert run_token.redeem(repo, "p1", token, "s.mjs")
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+
+
+def test_expired_token_does_not_count(repo, live, monkeypatch):
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + run_token.TTL_SECONDS + 5)
+    assert _claims(repo, ["a.py"]) == {}
+
+
+def test_malformed_manifest_without_commit_request_is_unknown(repo, live):
+    _manifest(repo, "p1", raw="{not json")
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"]) is None
+
+
+def test_malformed_manifest_with_commit_request_falls_back(repo, live):
+    _manifest(repo, "p1", raw="{not json")
+    _run(repo, run_id="p1", writes=("a.py",))
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+
+
+def test_no_declaration_files_claims_nothing(repo, live):
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"]) == {}
+
+
+def test_minted_before_keeps_only_senior_runs(repo, live):
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    minted = next(iter(run_token.live_records(repo)))["minted_at"]
+    assert _claims(repo, ["a.py"], minted_before=(minted + 1, "z")) == {"a.py": [PEER]}
+    assert _claims(repo, ["a.py"], minted_before=(minted, "p1")) == {}
+    assert _claims(repo, ["a.py"], minted_before=(minted, "p2")) == {"a.py": [PEER]}
+
+
+def test_many_runs_many_paths_no_spawn_and_one_listing(repo, live, monkeypatch):
+    from coordinator_core.git import run as git_run
+
+    monkeypatch.setattr(git_run, "run_git", lambda *a, **k: (_ for _ in ()).throw(AssertionError("git")))
+    for i in range(3):
+        _manifest(repo, f"p{i}", writes=[f"f{j}.py" for j in range(0, 50, i + 1)])
+        run_token.mint(repo, f"p{i}", "s.mjs", session_id=f"{i}" * 8)
+    calls = []
+    real = run_token.held_records
+    monkeypatch.setattr(run_token, "held_records", lambda r: calls.append(1) or real(r))
+    out = _claims(repo, [f"f{j}.py" for j in range(50)])
+    assert len(calls) == 1
+    assert len(out) == 50
+
+
+def test_exclude_run_skips_record_whatever_its_session(repo, live):
+    _manifest(repo, "p1", writes=["a.py"])
+    _manifest(repo, "p2", writes=["b.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    run_token.mint(repo, "p2", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py", "b.py"], exclude_run="p1") == {"b.py": [PEER]}
+    assert _claims(repo, ["a.py", "b.py"], exclude_session="", exclude_run="p1") == {"b.py": [PEER]}
+
+
+def test_exclude_run_skips_malformed_manifest_of_that_run(repo, live):
+    _manifest(repo, "p1", raw="{not json")
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"], exclude_run="p1") == {}
+
+
+def test_unknown_result_logs_offending_run_id(repo, live, caplog):
+    _manifest(repo, "p-bad", raw="{not json")
+    run_token.mint(repo, "p-bad", "s.mjs", session_id=PEER)
+    with caplog.at_level("WARNING"):
+        assert _claims(repo, ["a.py"]) is None
+    assert "p-bad" in caplog.text

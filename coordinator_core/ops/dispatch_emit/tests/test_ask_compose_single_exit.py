@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import PurePath
 
 import pytest
@@ -9,7 +12,7 @@ import pytest
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _REVIEW_SLICES_GUARD, compose_ask_script
-from coordinator_core.ops.review_mint.execute_review import PREP_BUSY_HALT, PREP_MALFORMED_HALT, REVIEW_MISSING_HALT
+from coordinator_core.ops.review_mint.execute_review import NO_SLICES_HALT, PREP_BUSY_HALT, PREP_MALFORMED_HALT, REVIEW_MISSING_HALT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session.record_homes import record_path
 
@@ -140,3 +143,45 @@ def test_drifted_prep_busy_exit_refuses_composition():
 def test_m_plus_script_validates_with_zero_errors(monkeypatch):
     findings = run_checks(_m_plus_script(monkeypatch))
     assert [f for f in findings if f.severity is Severity.ERROR] == []
+
+
+def _merge_and_guard_fragment(script: str) -> str:
+    start = script.index("  if (!_halted) _reviewPrep = (() => {")
+    end_marker = f"halted: '{NO_SLICES_HALT}'"
+    end = script.index("\n", script.index(end_marker, start))
+    return script[start:end]
+
+
+def test_ask_no_slices_guard_is_array_guarded_and_follows_the_slice_id_rebuild(monkeypatch):
+    fragment = _merge_and_guard_fragment(_m_plus_script(monkeypatch))
+    rebuild = fragment.index("id.split('+')")
+    guard = fragment.index("if (!_halted && (!_reviewPrep ||")
+    assert rebuild < guard
+    guard_line = fragment[guard:]
+    assert "Array.isArray(_reviewPrep.slices)" in guard_line
+    assert "(_reviewPrep.slices ?? [])" not in guard_line
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
+@pytest.mark.parametrize(
+    ("slice_id", "halts"),
+    [("...b90a92-9c1affcf4e0d-prep-1+...-prep-2", False), ("", True)],
+)
+def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, slice_id, halts):
+    fragment = _merge_and_guard_fragment(_m_plus_script(monkeypatch))
+    harness = (
+        "let _halted = null;\n"
+        "let _reviewPrep = null;\n"
+        "const _prepReplies = [{ verdict: 'partition', slices: [], product_files: 3 }];\n"
+        f"const _waveRaw = [{{ prep: _prepReplies[0], review: {{ slice_id: {json.dumps(slice_id)}, sidecar_path: 'x.md' }} }}];\n"
+        "const _busyPrefix = 'review.prep busy:';\n"
+        "const _busyReplies = [];\n"
+        "const _malformed = [];\n"
+        f"{fragment}\n"
+        "process.stdout.write(JSON.stringify({ halted: _halted && _halted.halted, n: _reviewPrep.slices.length }));\n"
+    )
+    out = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=20, check=True)
+    result = json.loads(out.stdout)
+    assert bool(result["halted"] and result["halted"].startswith(NO_SLICES_HALT)) is halts
+    if not halts:
+        assert result["n"] == 2

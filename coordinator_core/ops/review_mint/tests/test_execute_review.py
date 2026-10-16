@@ -466,8 +466,62 @@ def test_delivery_reason_binds_on_the_tier_skip_rejection_and_empty_paths():
 
 def test_only_the_delivery_verifier_carries_the_reason_hook():
     block = _wave_block(_tiered_review(), tier_js="_tier")
-    assert block.count("'rejected: '") == 1
     assert block.count("catch (e) { _deliveryNotRunReason") == 1
+    assert block.count("_deliveryNotRunReason = 'rejected: '") == 1
+
+
+def _persona_review(**kw):
+    return parse_execute_review(
+        _v5_fragment(),
+        signals={"named": []},
+        required_reviewers=["coordinator:senior-front-end"],
+        **kw,
+    )
+
+
+def _not_run_catches(block: str) -> list:
+    return re.findall(r"catch \(e\) \{ (_waveNotRun\.push\(.*?\);) return null; \}", block)
+
+
+def test_every_non_delivery_whole_diff_slot_catch_records_a_rejected_reason():
+    review = _persona_review()
+    block = _wave_block(review)
+    whole = [a for a in review.review_wave if a.per != "slice" and a.agent_type != "coordinator:delivery-verifier"]
+    catches = _not_run_catches(block)
+    assert len(whole) >= 2 and len(catches) == len(whole)
+    persona = [c for c in catches if "'coordinator:senior-front-end'" in c]
+    assert len(persona) == 1
+    assert "reason: 'rejected: ' + String(e && e.message || e)" in persona[0]
+    assert block.count("catch (e) { _deliveryNotRunReason") == 1
+
+
+def test_a_gated_slot_records_skipped_with_the_tier():
+    block = _wave_block(_tiered_review(), tier_js="_tier")
+    assert (
+        "_waveNotRun.push({ slot: -3, agent_type: 'coordinator:overengineering-reviewer', "
+        "reason: 'skipped: tier ' + String(_tier) + ' excludes coordinator:overengineering-reviewer' }), null)"
+    ) in block
+
+
+def test_verify_only_skip_records_skipped_verify_only():
+    block = _wave_block(_persona_review())
+    assert block.count("reason: 'skipped: verify-only' }), null)") == 2
+
+
+def test_post_wave_sweep_records_returned_no_review_and_resolves_slot_indexes():
+    block = _wave_block(_persona_review())
+    sweeps = [l for l in block.splitlines() if "returned no review" in l and l.lstrip().startswith("if (!_reviewWave[_reviewWave.length")]
+    assert len(sweeps) == 2
+    assert all("!_reviewWave[_reviewWave.length - " in l and ".some(n => n.slot === " in l for l in sweeps)
+    assert block.index("returned no review") > block.index("const _reviewWave")
+    assert "_waveNotRun.forEach(n => { n.slot += _reviewWave.length; });" in block
+    assert "let _waveNotRun" not in block and "const _waveNotRun" not in block
+
+
+def test_prep_in_wave_prep_alone_reply_is_swept_before_the_prep_guards():
+    wave = dict(_in_wave())["Review wave"]
+    assert wave.index("returned no review") < wave.index("_reviewPrep")
+    assert wave.count("returned no review") == 3
 
 
 def test_tier_and_tier_js_together_or_unknown_tier_raise():
@@ -739,7 +793,7 @@ def test_landed_rows_with_product_files_keep_their_review_slice():
 def test_verification_only_skips_whole_diff_reviewers_and_integration_but_not_delivery_verifier():
     _, phases = _compose()
     wave_block, integration_block = phases[1][1], phases[2][1]
-    assert wave_block.count("() => _verifyOnly ? null : (") == 2
+    assert wave_block.count("() => _verifyOnly ? (_waveNotRun.push(") == 2
     verifier = wave_block.split("const _reviewWave")[1].rsplit("() => (async", 1)[1]
     assert "_verifyOnly" not in verifier
     assert "const _reviewIntegration = _verifyOnly ? null : await" in integration_block
@@ -1168,7 +1222,7 @@ def _run_in_wave(prep_full: dict, rows: int, *, landed=None, fail_all=False, rat
         f"const _full = {json.dumps(prep_full)}; const _failAll = {json.dumps(fail_all)};\n"
         f"const _group = (i, n) => {{ const gs = {json.dumps({str(n): [[s['id'] for s in g] for g in rp.group_slices(slices, n)] for n in range(1, 8)})}[String(n)] ?? []; "
         "const ids = gs[i] ?? []; return { ..._full, slices: _full.slices.filter(s => ids.includes(s.id)) }; };\n"
-        "const _spawned = [];\n"
+        "const _spawned = []; let _waveNotRun = null;\n"
         "const agent = async (p, o) => {\n"
         "  if (_failAll) throw new Error('rejected');\n"
         "  const m = /group_index: (\\d+)\\ngroup_count: (\\d+)/.exec(p);\n"
@@ -1181,7 +1235,7 @@ def _run_in_wave(prep_full: dict, rows: int, *, landed=None, fail_all=False, rat
         + (f"const _landed = {json.dumps(landed)};\n" if landed is not None else "")
         + body
         + "\n return { prep: _reviewPrep, wave: _reviewWave, verifyOnly: _verifyOnly, spawned: _spawned,"
-        " delivery: _deliveryVerdict }; })();\n console.log(JSON.stringify(_out));\n"
+        " delivery: _deliveryVerdict }; })();\n console.log(JSON.stringify({ ..._out, notRun: _waveNotRun }));\n"
         "} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
     )
     out = subprocess.run(
@@ -1200,6 +1254,50 @@ def test_wave_schema_requires_only_prep_and_the_consumer_enforces_review():
 def test_a_wave_return_with_no_review_beside_a_clean_prep_is_refused():
     result = _run_in_wave(_FULL, 9, patch="(r, n) => n === 0 ? { prep: r.prep } : r")
     assert result["halted"] == REVIEW_MISSING_HALT
+
+
+def test_a_rejected_whole_diff_slot_runs_into_a_named_not_run_entry_at_its_wave_index():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => { throw new Error('boom'); }")
+    n = len(_run_in_wave(_FULL, 9)["wave"])
+    by_slot = {e["slot"]: e for e in result["notRun"] if e["slot"] >= n - 3}
+    assert sorted(by_slot) == [n - 3, n - 2]
+    assert by_slot[n - 3]["agent_type"] == "coordinator:overengineering-reviewer"
+    assert all(e["reason"] == "rejected: boom" for e in by_slot.values())
+
+
+def test_a_whole_diff_slot_replying_prep_alone_records_returned_no_review():
+    base = _run_in_wave(_FULL, 9)
+    assert base["notRun"] == []
+    first_whole = base["spawned"].index("whole")
+    result = _run_in_wave(_FULL, 9, patch=f"(r, n) => (n === {first_whole} ? {{ prep: r.prep }} : r)")
+    assert result["notRun"] == [
+        {
+            "slot": len(base["wave"]) - 3,
+            "agent_type": "coordinator:overengineering-reviewer",
+            "reason": "returned no review",
+        }
+    ]
+
+
+def test_six_groups_over_three_slices_record_three_skipped_no_slices_in_group():
+    result = _run_in_wave(
+        {**_FULL, "slices": _SLICES[:3]},
+        99,
+        patch="(r, n) => (r.prep.slices.length ? r : { prep: r.prep })",
+    )
+    assert "halted" not in result and "error" not in result
+    assert [r is None for r in result["wave"][:6]].count(True) == 3
+    empty = [e for e in result["notRun"] if e["reason"] == "skipped: no slices in group"]
+    assert len(empty) == 3 and len(result["notRun"]) == 3
+    assert all(result["wave"][e["slot"]] is None and e["slot"] < 6 for e in empty)
+    assert all(e["agent_type"] == "coordinator:code-reviewer" for e in empty)
+
+
+def test_a_slice_slot_with_slices_and_no_review_records_returned_no_review():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => (n === 0 ? { prep: r.prep, review: null } : r)")
+    assert result["halted"] == REVIEW_MISSING_HALT
+    assert [e["reason"] for e in result["notRun"]] == ["returned no review"]
+    assert result["notRun"][0]["slot"] == 0
 
 
 def test_a_wave_agent_whose_group_got_no_slices_may_return_prep_alone():

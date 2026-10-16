@@ -27,6 +27,13 @@ from coordinator_core.ops.review_mint.roster import (
     VALID_TIERS,
 )
 from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal
+from coordinator_core.ops.review_mint.wave_not_run import (
+    NO_REVIEW as _WAVE_NO_REVIEW,
+    REJECTED as _WAVE_REJECTED,
+    SKIPPED as _WAVE_SKIPPED,
+    WAVE_NOT_RUN_VAR,
+    not_run_entry_js as _not_run_entry_js,
+)
 from coordinator_core.ops.review_partition_slices import MAX_SLICES
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -483,7 +490,7 @@ _PREP_FROM_WAVE_JS = (
     "_prepReplies.filter(p => !p.error).flatMap(p => (Array.isArray(p.slices) ? p.slices : []).map(s => s.id)).join(', ') + ')', "
     f"reason: {_js_string_literal(_PREP_BUSY_REFUSAL)}, "
     "prep: _busyReplies[0], wave: null, integration: null }; }\n"
-    "  const _malformed = _prepReplies.filter(p => !Array.isArray(p.slices) && !p.error);\n"
+    "  const _malformed = _prepReplies.filter(p => p.slices !== undefined && !Array.isArray(p.slices) && !p.error);\n"
     "  if (_malformed.length) { "
     f"return {{ halted: {_js_string_literal(PREP_MALFORMED_HALT)} + ' (' + _malformed.length + ' of ' + "
     "_waveRaw.length + ' wave agents)', "
@@ -932,8 +939,20 @@ def compose_execute_review(
         gate = _agent_gate(agent)
         item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")
 
-    for agent in whole_diff_agents:
+    for agent_idx, agent in enumerate(whole_diff_agents):
         is_delivery_verifier = agent.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE
+        # Slice count is runtime, so a slot is recorded as a negative offset from the end of
+        # `_reviewWave`; the block rewrites it to an index after the wave.
+        slot_js = str(agent_idx - len(whole_diff_agents))
+
+        def _not_run_expr(reason_js: str, _agent_type: str = agent.agent_type, _slot: str = slot_js) -> str:
+            return _not_run_entry_js(_slot, _agent_type, reason_js).rstrip(";")
+
+        degrade_on_error = (
+            _DELIVERY_REJECTED_JS
+            if is_delivery_verifier
+            else _not_run_expr(f"{_js_string_literal(_WAVE_REJECTED)} + String(e && e.message || e)") + ";"
+        )
         role_note = (
             f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}{delivery_supersession_clause(criterion)}"
             if is_delivery_verifier
@@ -1005,13 +1024,18 @@ def compose_execute_review(
                 else ""
             )
             call = f"() => agent({_prompt_literal(wave_prompt)}{wave_tail_js}{owner}, " + call[len(prefix):]
-            line = _degrading(call, _DELIVERY_REJECTED_JS if is_delivery_verifier else "")
+            line = _degrading(call, degrade_on_error)
             gate = _agent_gate(agent)
             if gate:
                 skipped = (
                     f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
                     if is_delivery_verifier
-                    else "null"
+                    else "("
+                    + _not_run_expr(
+                        f"{_js_string_literal(_WAVE_SKIPPED + 'tier ')} + String({tier_js}) + "
+                        f"{_js_string_literal(' excludes ' + agent.agent_type)}"
+                    )
+                    + ", null)"
                 )
                 line = f"() => ({gate} ? ({line})() : {skipped})"
             item_lines.append(f"    {line}")
@@ -1045,14 +1069,23 @@ def compose_execute_review(
             )
         )
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
-        degraded = _degrading(call, _DELIVERY_REJECTED_JS if is_delivery_verifier else "")
-        line = degraded if is_delivery_verifier else f"() => _verifyOnly ? null : ({degraded})()"
+        degraded = _degrading(call, degrade_on_error)
+        line = (
+            degraded
+            if is_delivery_verifier
+            else f"() => _verifyOnly ? ({_not_run_expr(_js_string_literal(_WAVE_SKIPPED + 'verify-only'))}, null) : ({degraded})()"
+        )
         gate = _agent_gate(agent)
         if gate:
             skipped = (
                 f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
                 if is_delivery_verifier
-                else "null"
+                else "("
+                + _not_run_expr(
+                    f"{_js_string_literal(_WAVE_SKIPPED + 'tier ')} + String({tier_js}) + "
+                    f"{_js_string_literal(' excludes ' + agent.agent_type)}"
+                )
+                + ", null)"
             )
             line = f"() => ({gate} ? ({line})() : {skipped})"
         item_lines.append(f"    {line}")
@@ -1073,12 +1106,48 @@ def compose_execute_review(
         wave_lines.append(_GROUP_SLICES_JS)
     if delivery_index is not None:
         wave_lines.append(f"  let {_DELIVERY_REASON_VAR} = null;")
+    tracked = [
+        (i - len(whole_diff_agents), a)
+        for i, a in enumerate(whole_diff_agents)
+        if a.agent_type != _DELIVERY_VERIFIER_AGENT_TYPE
+    ]
+    if tracked or slice_agents:
+        wave_lines.append(f"  {WAVE_NOT_RUN_VAR} = [];")
     if prep_in_wave:
         wave_lines.append(f"  const _waveRaw = await parallel([\n{map_lines}\n  ]);")
         wave_lines.append("  const _reviewWave = _waveRaw.map(r => (r ? (r.review ?? null) : null));")
-        wave_lines.append(_PREP_FROM_WAVE_JS + _PREP_GUARDS_JS)
     else:
         wave_lines.append(f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);")
+    if tracked:
+        for slot, a in tracked:
+            wave_lines.append(
+                f"  if (!_reviewWave[_reviewWave.length - {-slot}] && "
+                f"!{WAVE_NOT_RUN_VAR}.some(n => n.slot === {slot})) {{ "
+                + _not_run_entry_js(str(slot), a.agent_type, _js_string_literal(_WAVE_NO_REVIEW))
+                + " }"
+            )
+        wave_lines.append(f"  {WAVE_NOT_RUN_VAR}.forEach(n => {{ n.slot += _reviewWave.length; }});")
+    if slice_agents:
+        slice_types = "+".join(dict.fromkeys(a.agent_type for a in slice_agents))
+        empty_group = (
+            "(_waveRaw[i] && _waveRaw[i].prep && !_waveRaw[i].prep.error && "
+            "!(Array.isArray(_waveRaw[i].prep.slices) ? _waveRaw[i].prep.slices : [{}]).length)"
+            if prep_in_wave
+            else "false"
+        )
+        wave_lines.append(
+            f"  for (let i = 0; i < _reviewWave.length - {len(whole_diff_agents)}; i++) {{ "
+            f"if (!_reviewWave[i]) {{ "
+            + _not_run_entry_js(
+                "i",
+                slice_types,
+                f"({empty_group} ? {_js_string_literal(_WAVE_SKIPPED + 'no slices in group')} "
+                f": {_js_string_literal(_WAVE_NO_REVIEW)})",
+            )
+            + " } }"
+        )
+    if prep_in_wave:
+        wave_lines.append(_PREP_FROM_WAVE_JS + _PREP_GUARDS_JS)
     if delivery_index is not None:
         offset_from_end = len(whole_diff_agents) - delivery_index
         wave_lines.append(
