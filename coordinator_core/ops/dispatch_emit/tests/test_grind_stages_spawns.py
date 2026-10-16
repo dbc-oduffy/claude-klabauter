@@ -11,6 +11,15 @@ from coordinator_core.session import record_homes
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+_RECORD = {
+    "profile": "p1",
+    "run_id": "r1",
+    "counts": {"by_type": {}, "by_outcome": {}},
+    "spend": {"output_tokens": 0, "agent_calls_total": 0, "agent_calls_by_stage_kind": {}},
+    "handed_back": [],
+    "halted": False,
+}
+
 
 def test_run_record_reads_a_piped_record_through_the_bin_entry_and_the_door_routes_it_cold(tmp_path):
     """The grind's op-runner pipes the record into the bin entry; the warm door
@@ -29,9 +38,9 @@ def test_run_record_reads_a_piped_record_through_the_bin_entry_and_the_door_rout
         [sys.executable, str(repo / "coordinator" / "bin" / "backlog-grind-assemble.py"),
          "grind-row", "run-record", "--profile", "p1", "--run-id", "r1",
          "--record-file", "-", "--repo-root", str(tmp_path)],
-        input='{"run_id": "r1"}', capture_output=True, text=True,
+        input=json.dumps(_RECORD), capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert proc.returncode == 0, proc.stderr
     written = Path(record_homes.home_dir(str(tmp_path), "queue-grind")) / "p1" / "runs" / "r1.json"
-    assert json.loads(written.read_text(encoding="utf-8")) == {"run_id": "r1"}
+    assert json.loads(written.read_text(encoding="utf-8")) == _RECORD

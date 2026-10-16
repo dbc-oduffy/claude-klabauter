@@ -310,6 +310,7 @@
                         "plan_id": { "type": ["string", "null"] },
                         "prep_sidecar": { "type": ["string", "null"] },
                         "wave_sidecar_paths": { "type": "array", "items": { "type": "string" } },
+                        "wave_reviews": { "type": "array", "items": { "type": ["object", "null"] } },
                         "prep": {
                           "type": ["object", "null"],
                           "additionalProperties": false,

@@ -83,7 +83,6 @@ def _review_legs(workflow: str, *, prep: Optional[LegDecl] = None) -> tuple[LegD
 REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "size", "scouts the ask and judges its size and route"),
     _earns("ask", "size-reword", "rewords a refused exit criterion; absorbed the gate op and sizing-assemble that ran after it"),
-    _earns("ask", "falsifier", "authors the baseline falsifier for the exit criterion"),
     _earns("ask", "accept", "the APM rules on the exit criterion"),
     _earns("ask", "xl-exit", "the APM picks the XL exit; absorbed the split fanout op"),
     _earns("ask", "plan", "authors the plan"),

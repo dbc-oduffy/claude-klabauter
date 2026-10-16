@@ -163,22 +163,27 @@ def test_ask_run_stamps_its_plan_in_a_second_commit_and_its_note_rides_the_first
     assert f"Falsifier: {NODE}" in message and "Resolves-Sizing: 20260101-a S" in message
     receipt = out["receipts"][0]
     assert f"Completion-Receipt: {Path(receipt).stem}" in message
-    assert store.introducing_commits(repo, [receipt]) == {receipt: out["sha"]}
+    # commit_v2 splits the plan (a process file) into a second half carrying the same trailers.
+    assert store.introducing_commits(repo, [receipt]) == {receipt: out["process_sha"]}
     sizing = yaml.safe_load((repo / SIZING).read_text(encoding="utf-8"))
     assert sizing["status"] == "shipped" and sizing["resolution"] == {"sha": out["sha"], "run_id": RUN}
     assert "resolution_error" not in out
     assert f"disposition_ref: {out['sha']}" in (repo / PLAN).read_text(encoding="utf-8")
 
 
-def test_ask_run_stamp_commit_carries_the_baton_its_sizing_names(repo, monkeypatch):
+def test_ask_run_lands_the_baton_its_sizing_names_with_the_run_and_the_stamp_carries_the_sizing(repo, monkeypatch):
     baton = "state/handoffs/2026-01-01-p.md"
     _closable_plan(repo, PLAN)
     _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8") + f"baton: {baton}\n")
     _write(repo, baton, "---\ntitle: p\nstatus: open\nkind: session-handoff\n---\n\n# handoff\n")
     out = _call(repo, inline_review=_MINTING_REVIEW)
     assert out["committed"] is True and "coded_stamp_error" not in out, out.get("coded_stamp_error")
+    run_landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split()) | set(
+        _git(repo, "show", "--name-only", "--format=", out["process_sha"]).split()
+    )
+    assert baton in run_landed and baton in out["run_artifacts"]["landed"]
     stamp = set(_git(repo, "show", "--name-only", "--format=", "HEAD").split())
-    assert {PLAN, SIZING, baton} <= stamp
+    assert {PLAN, SIZING} <= stamp
     tracked = set(_git(repo, "ls-files").split())
     assert {PLAN, SIZING, baton} <= tracked
     assert _git(repo, "status", "--porcelain", "--", PLAN, SIZING, baton) == ""
@@ -406,9 +411,11 @@ def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatc
     out = _call(repo)
     assert out["committed"] is True, out
     assert len(seen) <= 2
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
+    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split()) | set(
+        _git(repo, "show", "--name-only", "--format=", out["process_sha"]).split()
+    )
     assert landed == {
-        "a.py", f"{rel}/manifest.json", f"{rel}/pm-intent.md",
+        "a.py", PLAN, f"{rel}/manifest.json", f"{rel}/pm-intent.md",
         f"{rel}/{rl.RUN_FILE}", f"{rel}/requirements.md",
     }
 

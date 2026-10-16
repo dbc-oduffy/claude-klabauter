@@ -24,7 +24,6 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    ASK_FALSIFIER_PHASE,
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
@@ -237,6 +236,7 @@ _ACCEPT_SCHEMA = _obj(
     },
 )
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
+_FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _REVISE_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR})
 _REVISE_STAGED_SCHEMA = _obj(
     ["plan_rel"],
@@ -250,7 +250,7 @@ _SPINE_REVIEW_STAGED_SCHEMA = _obj(
     ["plan_rel"],
     {
         "plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": {"type": ["object", "null"]},
-        **_REVIEW_SIGNALS_PROP,
+        **_REVIEW_SIGNALS_PROP, **_FALSIFIER_PROP,
     },
 )
 _XL_SCHEMA = _obj(
@@ -411,7 +411,9 @@ _MANIFEST_SCHEMA = _obj(
     },
 )
 
-_PLAN_STAGED_SCHEMA = _obj(["plan_rel", "manifest"], {"plan_rel": _STR, "manifest": _MANIFEST_SCHEMA})
+_PLAN_STAGED_SCHEMA = _obj(
+    ["plan_rel", "manifest"], {"plan_rel": _STR, "manifest": _MANIFEST_SCHEMA, **_FALSIFIER_PROP}
+)
 
 
 _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
@@ -551,11 +553,6 @@ _JUDGE_PATH_CLAUSE = (
     "\n\nThe plan_path below is the plan, or on the XS route (no plan is authored) the sizing: "
     "then its exit_criterion is the spec and there is no Verification section."
 )
-_FALSIFIER_SCHEMA = _obj(
-    ["how", "baseline_output", "expected_when_true"],
-    {"how": _STR, "baseline_output": _STR, "expected_when_true": _STR},
-)
-_FALSIFIER_AGENT_TYPE = "coordinator:exit-criterion-falsifier"
 #: The scout's folded falsifier act. Trap: the scout assembled the criterion, so the probe must hit
 #: the criterion's observable outcome and never the scout's own premise evidence.
 _FALSIFIER_ACT = (
@@ -565,6 +562,18 @@ _FALSIFIER_ACT = (
     "and record what it prints as baseline_output: it must show the criterion FALSE today. Write no "
     "repo file. Return how (one runnable observation, verbatim), baseline_output and "
     "expected_when_true (what the same observation shows once the criterion holds)."
+)
+#: The plan-authoring legs' falsifier act, for every arm with no in-run scout to fold it into (a presized
+#: ask, an M+ spine review) and for a scout that returned none. Same return shape as the scout fold.
+_PLAN_FALSIFIER_CLAUSE = (
+    " Also author the baseline falsifier for the sizing's prime exit criterion (its exit_criterion.statement). "
+    + _FALSIFIER_ACT + " Return it as `falsifier`."
+)
+#: JS arrow normalising a leg's `falsifier` reply into the `_falsifierSpec` shape; null unless all three fields are text.
+_AS_PLAN_FALSIFIER_JS = (
+    "const _asPlanFalsifier = (f) => (f && [f.how, f.baseline_output, f.expected_when_true]"
+    ".every((s) => typeof s === 'string' && s.trim())) ? { how: f.how, baseline_output: f.baseline_output, "
+    "expected_when_true: f.expected_when_true, authored_by: 'plan-author' } : null;"
 )
 #: Rides the judge prompt at run time; XS authors none, so `_falsifierSpec` may be null.
 _FALSIFIER_SUFFIX_JS = (
@@ -1193,6 +1202,9 @@ def compose_ask_script(
 
     fold_stage = not stop_after
     fold_falsifier = judged and not stop_after
+    if fold_falsifier:
+        b.append("  let _planFalsifier = null;")
+        b.append("  " + _AS_PLAN_FALSIFIER_JS)
     def _stage_act_parts(base: str, sizing: str, gated: str) -> tuple[str, ...]:
         """The closing act of the agent that just ran the gate: stage the arms with no plan agent to fold into.
 
@@ -1646,6 +1658,12 @@ def compose_ask_script(
             "empty manifest without the error.",
         )
 
+    # A raw ask's scout folds the falsifier itself; the plan legs author it only when the scout returned none.
+    plan_falsifier_parts = (
+        ("js:(_scoutFalsifier ? '' : " + json.dumps(_PLAN_FALSIFIER_CLAUSE) + ")",)
+        if sized_in_run
+        else (_PLAN_FALSIFIER_CLAUSE,)
+    )
     plan_author = _cat(
         "js:" + _DESIGN_PREFIX_JS,
         f"{head}\n\n{anchor}\n\n",
@@ -1668,6 +1686,7 @@ def compose_ask_script(
             if plan_blitz_args
             else ""
         ),
+        *(plan_falsifier_parts if fold_falsifier else ()),
         *(stage_fold(" Once the plan is filled and carries no marker,") if fold_stage else ()),
     )
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_S)}) {{")
@@ -1682,6 +1701,8 @@ def compose_ask_script(
         b.append(f"    const _authored = await {plan_call};")
         b.append("    _planRel = _authored.plan_rel;")
         b.append("    _stagedManifest = _authored.manifest ?? null;")
+        if fold_falsifier:
+            b.append("    _planFalsifier = _asPlanFalsifier(_authored.falsifier);")
     else:
         b.append(f"    _planRel = (await {plan_call}).plan_rel;")
     b.append("    }")
@@ -1708,6 +1729,7 @@ def compose_ask_script(
             + ") and return them as review_signals."
             + ledger_clause,
             " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+            *(plan_falsifier_parts if fold_falsifier else ()),
             *(
                 stage_fold(" When the final verdict is `ready`, also stage the plan:")
                 + (" Otherwise leave `manifest` null.",)
@@ -1723,6 +1745,8 @@ def compose_ask_script(
         b.append("    let _spineFallback = null;")
         b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
         b.append(f"      const _spineReview = await {review_call};")
+        if fold_falsifier:
+            b.append("      _planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);")
         b.append("      _spineFallback = _spineReview?.plan_rel || _gate.spine_plan;")
         b.append(
             f"      const _signalSelects = {json.dumps(signal_selects, sort_keys=True)};"
@@ -1894,46 +1918,16 @@ def compose_ask_script(
     b.append("  if (!_halted) {")
     # Stage is folded into the plan agent's last act (stage_fold) wherever a plan agent runs. This
     # standalone haiku call stays only for the arms with no plan agent to fold into (XS, a resumed
-    # plan, stop_after) -- there is no prior agent whose last act could carry it. The standalone
-    # falsifier reads only the sizing, so when both spawn they run together under one phase title.
+    # plan, stop_after) -- there is no prior agent whose last act could carry it. The falsifier is
+    # authored by the scout or the plan legs, never a leg of its own.
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
-    if judged:
-        falsifier_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            "Before any change lands, author the baseline falsifier for the prime exit criterion in the sizing at ",
-            "js:_sizingRel",
-            " (its exit_criterion.statement). The observation runs through the production entry point the "
-            "criterion names -- the command, import path or call site a user reaches -- never a unit test of "
-            "one helper. Run it now against the unchanged tree and record what it prints as baseline_output: "
-            "it must show the criterion FALSE today. Write no repo file; scratch only under the run dir. Return "
-            "how (one runnable observation, verbatim), baseline_output, and expected_when_true (what the same "
-            "observation shows once the criterion holds).",
-        )
-        standalone = (
-            f"_falsifierSpec = {{ ...(await {_agent(falsifier_prompt, label='falsifier', phase=ASK_FALSIFIER_PHASE, agent_type=_FALSIFIER_AGENT_TYPE, schema=_FALSIFIER_SCHEMA, agent_model=_emit._AGENT_MODELS[_FALSIFIER_AGENT_TYPE], effort=_MECHANICAL_EFFORT)}), "
-            "authored_by: 'exit-criterion-falsifier' };"
-        )
-        falsifier_body = (
-            f"if (_scoutFalsifier) {{ _falsifierSpec = _scoutFalsifier; }} else {{ {standalone} }}"
-            if fold_falsifier and sized_in_run
-            else standalone
-        )
-        b.append(f"  const _falsifierNeeded = !!(_gate.arm && _gate.arm !== {_lit(ARM_XS)});")
-        b.append("  const _stageNeeded = !_stagedManifest;")
-        b.append("  if (_falsifierNeeded || _stageNeeded) {")
-        b.append(f"  phase({_lit(ASK_STAGE_PHASE)});")
-        b.append(
-            "  await parallel([\n"
-            f"    async () => {{ if (_falsifierNeeded) {{ {falsifier_body} }} }},\n"
-            f"    async () => {{ if (_stageNeeded) {{ _manifest = await {stage_call}; }} }},\n"
-            "  ]);"
-        )
-        b.append("  }")
-    else:
-        b.append("  if (!_stagedManifest) {")
-        b.append(f"  phase({_lit(ASK_STAGE_PHASE)});")
-        b.append(f"  _manifest = await {stage_call};")
-        b.append("  }")
+    if judged and fold_falsifier:
+        spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
+        b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{ _falsifierSpec = {spec_js}; }}")
+    b.append("  if (!_stagedManifest) {")
+    b.append(f"  phase({_lit(ASK_STAGE_PHASE)});")
+    b.append(f"  _manifest = await {stage_call};")
+    b.append("  }")
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
     b.append(

@@ -242,6 +242,8 @@ def _run_generic_commit(commit_reply):
             return {"outcome": "pass"}
         if stage_kind == "commit":
             return commit_reply
+        if stage_kind == "ledger-sweep":
+            return {"outcome": "recorded", "swept": True}
         return None
 
     return gc.run_admission(

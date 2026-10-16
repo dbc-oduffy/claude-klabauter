@@ -42,6 +42,25 @@ def is_halted_record_call(params: object) -> bool:
     return isinstance(halted, dict) and isinstance(halted.get("halted"), str) and bool(halted["halted"])
 
 
+def within_handoffs_home(worktree_root: Path, artifacts: run_artifacts.RunArtifacts) -> run_artifacts.RunArtifacts:
+    """``artifacts`` without any ``baton`` candidate outside the handoffs home: a sizing's
+    ``baton:`` naming another directory is never landed."""
+    from coordinator_core.session.record_homes import home_dir
+
+    home = [Path(home_dir(str(worktree_root), "handoffs"))]
+    kept = tuple(
+        p for p in artifacts.by_class.get("baton", ()) if contained_path(worktree_root / p, home) is not None
+    )
+    if kept == artifacts.by_class.get("baton", ()):
+        return artifacts
+    return run_artifacts.RunArtifacts(
+        run_id=artifacts.run_id,
+        by_class={**artifacts.by_class, "baton": kept},
+        record_dirs=artifacts.record_dirs,
+        root=artifacts.root,
+    )
+
+
 def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -> tuple[list, list]:
     """The record dir's changed top-level files from one status read: ``(present, deleted)``.
     ``present`` are files on disk; ``deleted`` are changed entries gone from disk."""
@@ -225,12 +244,12 @@ def _land(
     if (worktree_root / record_dir_rel).is_dir():
         write_halt_marker(worktree_root / record_dir_rel, halted=halted["halted"], sizing_rel=sizing_rel)
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
-    artifacts = run_artifacts.candidate_paths(
+    artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
         worktree_root, run_id,
         sizing_rel=sizing_rel,
         plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
         doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
-    )
+    ))
     snapshot = _worktree_snapshot(
         worktree_root, declared + list(artifacts.paths()), [record_dir_rel, RECORD_DIR_ROOT], []
     )

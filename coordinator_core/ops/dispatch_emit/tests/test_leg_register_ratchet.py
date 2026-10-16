@@ -323,14 +323,6 @@ def test_phase_titles_show_concurrency_truthfully(tmp_path):
         assert [t for t in listed if t not in carried] == [], f"titles no agent carries: {listed}"
 
 
-def test_the_stage_fallback_and_the_standalone_falsifier_share_one_phase_title(tmp_path):
-    scripts = [s for s in _ask_scripts(tmp_path) if "'falsifier'" in s and "label: 'stage'" in s]
-    assert scripts
-    for script in scripts:
-        phases = {leg.label: leg.phase for leg in lr.emitted_legs(script) if leg.label in ("falsifier", "stage")}
-        assert phases == {"falsifier": "stage", "stage": "stage"}
-
-
 def _refused_outside_floor(register: Iterable[lr.LegDecl]) -> list[Key]:
     return [
         (d.workflow, d.label)

@@ -59,8 +59,9 @@ REQUIRED = {
 }
 
 
-def test_contract_version_is_4_11_0():
-    assert CONTRACT_VERSION == "4.11.0"
+def test_contract_version_carries_completion_receipts():
+    # Receipts entered at 4.11.0; later MINOR bumps keep them, so pin the floor, not the value.
+    assert tuple(int(p) for p in CONTRACT_VERSION.split(".")) >= (4, 11, 0)
 
 
 def test_envelope_declares_optional_completion_receipts(tmp_path):

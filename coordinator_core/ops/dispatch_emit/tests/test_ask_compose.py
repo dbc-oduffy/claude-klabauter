@@ -436,25 +436,14 @@ def test_every_non_stop_after_arm_reaches_one_ask_stage_site_folded_or_fallback(
     assert OP_ASK_STAGE in fallback.split("label: 'stage'", 1)[0]
 
 
-def test_the_standalone_falsifier_and_the_stage_fallback_run_in_one_parallel_under_one_title():
-    script = _compose(**_JUDGE_KW)
-    assert script.count("phase('stage')") == 1 and "phase('falsifier')" not in script
-    group = script[script.index("  await parallel([\n    async () => { if (_falsifierNeeded)") :]
-    group = group[: group.index("  ]);")]
-    assert "label: 'falsifier', phase: 'stage'" in group and "label: 'stage', phase: 'stage'" in group
-    assert "if (_stageNeeded) { _manifest = await agent(" in group
-
-
 def test_a_sized_in_run_non_xs_scout_authors_the_falsifier_behind_the_adopted_spec_guard():
     script = _compose(**_JUDGE_KW)
     scout = _scout_prompt(script)
     assert "baseline falsifier" in scout and "never your premise evidence" in scout
     assert "falsifier" in ask_compose.ASK_SCOUT_SCHEMA["properties"]
     assert "authored_by: 'sizing-scout'" in script
-    assert "if (_scoutFalsifier) { _falsifierSpec = _scoutFalsifier; } else {" in script
-    assert "phase('falsifier')" not in script and script.count("label: 'falsifier'") == 1
+    assert "_falsifierSpec = _scoutFalsifier ?? _planFalsifier;" in script
     assert script.index("_scoutClean") < script.index("_scoutFalsifier")
-    assert "authored_by: 'exit-criterion-falsifier'" in script
     assert "_falsifierSpec.authored_by" in script
 
 
@@ -462,10 +451,38 @@ def test_a_roster_without_a_judge_folds_no_falsifier_act():
     assert "baseline falsifier" not in _scout_prompt(_compose())
 
 
-def test_a_presized_script_composes_the_standalone_falsifier_unconditionally(monkeypatch):
+def test_a_presized_script_has_the_plan_author_author_the_falsifier(monkeypatch):
     script = _presized(monkeypatch, arm="s", **_JUDGE_KW)
     assert "_scoutFalsifier" not in script and "baseline falsifier" not in _gate_prompt(script)
-    assert "phase('falsifier')" not in script and script.count("label: 'falsifier'") == 1
+    assert "_falsifierSpec = _planFalsifier;" in script
+    assert "authored_by: 'plan-author'" in script
+    plan = _agent_prompt(script, "plan")
+    assert "author the baseline falsifier" in plan and "Return it as `falsifier`" in plan
+
+
+def test_the_raw_path_plan_author_authors_the_falsifier_only_when_the_scout_returned_none():
+    plan = _agent_prompt(_compose(**_JUDGE_KW), "plan")
+    assert "(_scoutFalsifier ? '' :" in plan and "author the baseline falsifier" in plan
+
+
+def _agent_prompt(script, label):
+    end = script.index(f"label: '{label}'")
+    return script[script.rindex("agent(", 0, end) : end]
+
+
+@pytest.mark.parametrize("presized", [False, True])
+@pytest.mark.parametrize("arm", ["xs", "s", "m_plus"])
+def test_no_composed_script_runs_a_standalone_falsifier_agent(monkeypatch, arm, presized):
+    script = _presized(monkeypatch, arm=arm, **_JUDGE_KW) if presized else _compose(**_JUDGE_KW)
+    assert "exit-criterion-falsifier" not in script
+    assert "label: 'falsifier'" not in script
+
+
+def test_the_m_plus_spine_review_carries_the_falsifier_clause_on_both_paths(monkeypatch):
+    for script in (_compose(**_JUDGE_KW), _presized(monkeypatch, arm="m_plus", **_JUDGE_KW)):
+        if "label: 'plan-review'" in script:
+            assert "author the baseline falsifier" in _agent_prompt(script, "plan-review")
+            assert "_planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);" in script
 
 
 def test_folded_scripts_validate_with_zero_errors(monkeypatch):
