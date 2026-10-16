@@ -119,8 +119,7 @@ def gate(
             return _halt(HALT_REFUSAL, RESEARCH_MIXED_REFUSAL)
         return _halt(
             HALT_ROOM,
-            "research sizing: re-submit "
-            f"{{sizing: {sizing_rel}}} to coordinator:engine-ask, which routes it to the research route",
+            f"research sizing {sizing_rel}: submit the ask at the research door, /coordinator:research",
             route=RESEARCH_HANDBACK_ROUTE,
         )
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:

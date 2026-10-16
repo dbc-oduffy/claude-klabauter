@@ -783,13 +783,17 @@ static int door_basename_declares_stdin_read_w(
     if (!basename_u8) return 1;
     int declared;
     if (argc >= 2 && wargv != NULL) {
-        /* Only argv[1] (the subcommand) is consulted by the scoped gate. */
-        const char *argv_u8[2] = { NULL, NULL };
-        char *sub_u8 = wide_to_utf8(wargv[1], &len);
-        if (!sub_u8) { free(basename_u8); return 1; }
-        argv_u8[1] = sub_u8;
-        declared = door_invocation_declares_stdin_read(basename_u8, argc, argv_u8);
-        free(sub_u8);
+        /* Every slot up to argc: the dash-flag scan walks the whole argv, so a
+         * shorter array read with the real argc is out of bounds. A slot that
+         * fails conversion stays NULL, which the predicate reads as cold. */
+        char **argv_u8 = (char **)calloc((size_t)argc, sizeof(char *));
+        if (!argv_u8) { free(basename_u8); return 1; }
+        for (int i = 1; i < argc; i++) argv_u8[i] = wide_to_utf8(wargv[i], &len);
+        if (!argv_u8[1]) declared = 1;
+        else declared = door_invocation_declares_stdin_read(
+            basename_u8, argc, (const char *const *)argv_u8);
+        for (int i = 1; i < argc; i++) free(argv_u8[i]);
+        free(argv_u8);
     } else {
         declared = door_invocation_declares_stdin_read(basename_u8, argc, NULL);
     }

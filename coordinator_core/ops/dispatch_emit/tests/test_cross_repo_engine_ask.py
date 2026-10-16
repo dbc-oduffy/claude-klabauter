@@ -190,7 +190,7 @@ def test_b3_review_prep_resolves_the_run_base_sha_in_the_targets_object_store(wo
     assert reply["run_base_sha"] == world.base and reply["product_files"] == 1
 
 
-def test_b4_the_delivery_reverify_judges_the_targets_head_and_diff(world, capsys):
+def test_b4_the_delivery_reverify_judges_the_targets_head_and_diff(world, capsys, verifier_roster):
     """`--reverify-delivery` on the target's run record, run from the driver cwd, composes the target's
     diff: its head is the target's HEAD, never the driver's."""
     _git(world.target, "add", "-A")

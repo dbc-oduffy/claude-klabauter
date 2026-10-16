@@ -896,3 +896,27 @@ def test_emitted_plan_workflow_script_is_exempt() -> None:
     assert _is_evidence_artifact("docs/plans/2026-10-02-x.workflow.mjs")
     assert not _is_evidence_artifact("docs/plans/2026-10-02-x.md")
     assert not _is_evidence_artifact("coordinator/bin/x.workflow.mjs")
+
+
+_WARP_LEAK = "the repo lives at /Users/realperson/X/claude-klabauter\n"
+
+
+def test_warp_pm_verbatim_names_are_exempt() -> None:
+    for name in ("ask.md", "pm-intent.md", "requirements.md"):
+        path = f"state/warp/ask-2026-x/{name}"
+        assert detect_in_text(_WARP_LEAK, filename=path) == []
+
+
+def test_warp_sibling_file_is_still_scanned() -> None:
+    path = "state/warp/ask-2026-x/plan.md"
+    assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))
+
+
+def test_warp_nested_verbatim_name_is_still_scanned() -> None:
+    path = "state/warp/ask-2026-x/x/ask.md"
+    assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))
+
+
+def test_warp_verbatim_name_outside_run_dir_is_still_scanned() -> None:
+    for path in ("state/warp/ask.md", "state/other/run/ask.md"):
+        assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))

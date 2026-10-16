@@ -324,11 +324,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEW_PHASE_TITLE
 from coordinator_core.ops.dispatch_emit.predispatch import (
     CACHED_SCHEMA,
-    ALREADY_DONE_RULE,
-    ALREADY_DONE_RULE_MARKER,
-    CHECK_PHASE_TITLE,
     AgentSpec,
-    check_specs,
 )
 from coordinator_core.ops.dispatch_emit.predecessor_state import predecessor_state_section
 from coordinator_core.ops.dispatch_emit.row_build_gate import gate_commands_for, parse_row_build_gates
@@ -3791,12 +3787,9 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Opti
         _degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host)
     )
     return (
-        "  const _alreadyDone = new Set();\n"
         "  const _falsifierBroken = new Map();\n"
         "  const _routedOut = [];\n"
-        "  const _skippedDone = [];\n"
         "  const _finished = new Set();\n"
-        "  const _unusableChecks = [];\n"
         "  const _reviews = [];\n"
         "  const _heldBy = {};\n"
         "  const _rowIdOf = new WeakMap();\n"
@@ -3869,10 +3862,6 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Opti
         "      _blockedChunks.push(id);\n"
         "      _heldBy[id] = _blocker;\n"
         "      return 'BLOCKED: held, dependency ' + _blocker + ' did not finish DONE';\n"
-        "    }\n"
-        "    if (_alreadyDone.has(id)) {\n"
-        "      _skippedDone.push(id);\n"
-        "      return 'ALREADY-DONE: pre-dispatch check';\n"
         "    }\n"
         "    let result;\n"
         "    try {\n"
@@ -4407,30 +4396,14 @@ def _checkpoint_commit_js(
 
 _PRE_SCHEMAS_VAR = "_PRE_SCHEMAS"
 
-#: Runtime fold of the pre-phase verdicts into the script-level sets
-#: ``_run_row_helper_js`` reads. An ``already-done`` with no usable evidence
-#: and a null or malformed check both fold to still-open; a null or malformed
-#: review is recorded UNREVIEWABLE and the plan proceeds. A BROKEN review is
-#: advisory: the plan executes, and ``_falsifierBroken`` carries it to
-#: ``dispatch.terminal_commit``, which withholds only the ``implemented`` stamp.
+#: Runtime fold of the falsifier-integrity verdicts into ``_reviews`` and
+#: ``_falsifierBroken``. A null or malformed review is recorded UNREVIEWABLE and
+#: the plan proceeds. A BROKEN review is advisory: the plan executes, and
+#: ``_falsifierBroken`` carries it to ``dispatch.terminal_commit``, which
+#: withholds only the ``implemented`` stamp.
 _PRE_PHASE_FOLD_JS = (
-    "  _checkIds.forEach((id, i) => {\n"
-    "    const r = _preResults[i];\n"
-    "    if (!r || (r.verdict !== 'already-done' && r.verdict !== 'still-open')) {\n"
-    "      _unusableChecks.push(id);\n"
-    "      return;\n"
-    "    }\n"
-    "    if (r.verdict === 'already-done') {\n"
-    "      const ev = Array.isArray(r.evidence) ? r.evidence : [];\n"
-    "      if (ev.length === 0 || ev.some(e => !e || !e.path || !e.excerpt)) {\n"
-    "        _unusableChecks.push(id);\n"
-    "        return;\n"
-    "      }\n"
-    "      _alreadyDone.add(id);\n"
-    "    }\n"
-    "  });\n"
     "  _reviewPlans.forEach((plan, j) => {\n"
-    "    const r = _preResults[_checkIds.length + j];\n"
+    "    const r = _preResults[j];\n"
     "    const known = !!r && ['SOUND', 'BROKEN', 'UNREVIEWABLE'].includes(r.verdict);\n"
     "    const fired = known && Array.isArray(r.tells)\n"
     "      ? r.tells.filter(t => t && t.status === 'FIRED').map(t => String(t.tell))\n"
@@ -4439,17 +4412,6 @@ _PRE_PHASE_FOLD_JS = (
     "    if (known && r.verdict === 'BROKEN') _falsifierBroken.set(plan, fired);\n"
     "  });"
 )
-
-
-def _spec_prompt_expr(spec: AgentSpec, shared: SharedBlocks) -> str:
-    """The JS expression for ``spec.prompt``: the already-done rule marker
-    becomes a ``SharedBlocks`` read, so the rule text is declared once."""
-    head, *tails = spec.prompt.split(ALREADY_DONE_RULE_MARKER)
-    pieces = [_resolve_markers_plus(head)]
-    for tail in tails:
-        pieces.append(shared.expr(ALREADY_DONE_RULE))
-        pieces.append(_resolve_markers_plus(tail))
-    return " + ".join(pieces)
 
 
 def _verdict_cache_instruction(spec: AgentSpec, repo_root: Optional[Path]) -> Optional[str]:
@@ -4470,7 +4432,6 @@ def _verdict_cache_instruction(spec: AgentSpec, repo_root: Optional[Path]) -> Op
 
 def _spec_thunk_js(
     spec: AgentSpec,
-    shared: SharedBlocks,
     agent_type_host: Optional[str],
     repo_root: Optional[Path] = None,
 ) -> str:
@@ -4486,7 +4447,7 @@ def _spec_thunk_js(
         )
     opts.append(_model_opt(spec.agent_type or "", spec.model))
     opts.append(f"schema: {_PRE_SCHEMAS_VAR}[{_js_string_literal(spec.schema)}]")
-    prompt = _spec_prompt_expr(spec, shared)
+    prompt = _resolve_markers_plus(spec.prompt)
     cache_tail = _verdict_cache_instruction(spec, repo_root)
     if cache_tail:
         prompt += " + " + _js_string_literal(cache_tail)
@@ -4498,31 +4459,24 @@ def _spec_thunk_js(
 
 
 def _pre_phase_blocks(
-    specs: Sequence[AgentSpec],
     review_specs: Sequence[AgentSpec],
-    shared: SharedBlocks,
     agent_type_host: Optional[str],
     repo_root: Optional[Path] = None,
 ) -> list[str]:
-    """The script blocks for the pre-dispatch phase: one ``parallel([...])`` of
-    every check and review thunk, then the fold into the ``_run_row_helper_js``
-    sets. Emitted after the runtime-var declarations and before the first row
-    registration, so the sets are complete before any row registers."""
-    all_specs = [*specs, *review_specs]
+    """The script blocks for the falsifier-integrity phase: one ``parallel([...])`` of
+    every review thunk, then the fold into ``_reviews`` / ``_falsifierBroken``. Emitted
+    after the runtime-var declarations and before the first row registration."""
     schemas = ", ".join(
         f"{_js_string_literal(name)}: {stage_schema_literal(name)}"
-        for name in sorted({spec.schema for spec in all_specs if spec.schema != CACHED_SCHEMA})
+        for name in sorted({spec.schema for spec in review_specs if spec.schema != CACHED_SCHEMA})
     )
     thunks = ",\n".join(
-        f"    {_spec_thunk_js(spec, shared, agent_type_host, repo_root)}" for spec in all_specs
+        f"    {_spec_thunk_js(spec, agent_type_host, repo_root)}" for spec in review_specs
     )
     return [
         f"  const {_PRE_SCHEMAS_VAR} = {{ {schemas} }};",
-        f"  phase({_js_string_literal(CHECK_PHASE_TITLE)});",
+        f"  phase({_js_string_literal(REVIEW_PHASE_TITLE)});",
         f"  const _preResults = await parallel([\n{thunks}\n  ]);",
-        "  const _checkIds = ["
-        + ", ".join(_js_string_literal(spec.key) for spec in specs)
-        + "];",
         "  const _reviewPlans = ["
         + ", ".join(_js_string_literal(spec.key) for spec in review_specs)
         + "];",
@@ -4531,17 +4485,17 @@ def _pre_phase_blocks(
 
 
 def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, int]:
-    """Estimated emitted UTF-8 bytes per row id: its registration and prompt,
-    plus its check thunk when ``predispatch``. A packing heuristic only -- the
-    composed script is the authority. Shared prompt text is counted by the
-    caller's fixed bytes, not per row.
+    """Estimated emitted UTF-8 bytes per row id: its registration and prompt.
+    ``predispatch`` gates only the falsifier-integrity review phase, which is
+    per plan and not per row, so it adds nothing here. A packing heuristic
+    only -- the composed script is the authority. Shared prompt text is counted
+    by the caller's fixed bytes, not per row.
 
     ``compose_context`` keys: ``plan_path``, ``plan_context``, ``repo_root``,
     ``agent_type_host``, ``preamble``.
     """
     shared = SharedBlocks()
     repo_root = compose_context.get("repo_root")
-    checks = {spec.key: spec for spec in check_specs(rows)} if predispatch else {}
     out: dict[str, int] = {}
     for row in rows:
         call_expr = _row_agent_call_expr(
@@ -4562,9 +4516,6 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
         size = len(text.encode("utf-8"))
         if row.writes is not UNDECLARED:
             size += sum(len(path.encode("utf-8")) + 8 for path in row.writes)
-        spec = checks.get(row.id)
-        if spec is not None:
-            size += len(_spec_thunk_js(spec, shared, None).encode("utf-8")) + 6
         out[row.id] = size
     return out
 
@@ -4839,9 +4790,8 @@ def compose_script(
     None when detached or unreadable) threads into the same marker; the
     terminal commit refuses when HEAD is on another branch.
 
-    ``predispatch`` composes the pre-dispatch phase before the first row
-    registration: one check agent per row (``predispatch.check_specs``) plus
-    one ``review_specs`` agent per falsifier-carrying plan, in one
+    ``predispatch`` gates the falsifier-integrity review phase before the first row
+    registration: one ``review_specs`` agent per falsifier-carrying plan, in one
     ``parallel([...])``. ``review_specs`` without ``predispatch`` raises
     ``ValueError``. Review prompts get no plan-context preamble.
 
@@ -5048,18 +4998,13 @@ def compose_script(
     gate_commands_all = _distinct_gate_commands(flat_rows, plan_context)
     if (gate_commands_all or carried_gate_owed) and not review_only:
         body_blocks.append(_GATE_BASELINE_JS)
-    pre_check_specs: list[AgentSpec] = []
     if predispatch:
         if gate_commands_all and not review_only:
             phase_titles.append(_GATE_BASELINE_PHASE_TITLE)
             body_blocks.extend(_gate_baseline_blocks(gate_commands_all, agent_type_host))
-        pre_check_specs = check_specs(flat_rows)
-        phase_titles.append(CHECK_PHASE_TITLE)
         if review_specs:
             phase_titles.append(REVIEW_PHASE_TITLE)
-        body_blocks.extend(
-            _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host, repo_root)
-        )
+            body_blocks.extend(_pre_phase_blocks(review_specs, agent_type_host, repo_root))
 
     runtime_cap = _runtime_cap_on_host()
     if not review_only:
@@ -5589,7 +5534,7 @@ def compose_script(
             anchor_plan_path=plan_path,
             script_path=script_path,
             session_id=session_id if session_id and _UUID_RE.fullmatch(session_id) else None,
-            predispatch={"checks_run": len(pre_check_specs)} if predispatch else None,
+            predispatch={} if predispatch else None,
             held=bool(held_rows),
             seam=seam_leg is not None,
         )

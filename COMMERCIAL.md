@@ -53,7 +53,7 @@ and using this engine, this exists precisely to remove it.
 
 For the resale cases the rider bars, [open a GitHub
 issue](https://github.com/dbc-oduffy/claude-klabauter/issues) with the label
-`commercial-license`, or contact Dónal example-operator directly.
+`commercial-license`, or contact Dónal O'Duffy directly.
 
 ## Why this model
 

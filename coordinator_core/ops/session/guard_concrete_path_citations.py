@@ -1184,6 +1184,9 @@ _CAPTURE_DATA_EXTENSIONS: Tuple[str, ...] = (".json", ".jsonl", ".patch", ".diff
 _COMMENT_SYNTAX_FREE_EXTENSIONS: Tuple[str, ...] = (".json", ".jsonl")
 
 
+_PM_VERBATIM_NAMES = frozenset({"ask.md", "pm-intent.md", "requirements.md"})
+
+
 def _is_evidence_artifact(filename: str) -> bool:
     if not filename:
         return False
@@ -1193,6 +1196,17 @@ def _is_evidence_artifact(filename: str) -> bool:
         return True
     # dispatch_emit output: regenerated from its plan, never hand-authored.
     if filename.startswith("docs/plans/") and filename.endswith(".workflow.mjs"):
+        return True
+    # PM verbatims: transcribed not originated, never rewritten or inline-marked.
+    # Shape-only; a blanket state/warp/ prefix would also exempt hand-authored files.
+    parts = filename.split("/")
+    if (
+        len(parts) == 4
+        and parts[0] == "state"
+        and parts[1] == "warp"
+        and parts[2]
+        and parts[3] in _PM_VERBATIM_NAMES
+    ):
         return True
     if filename.lower().endswith(_COMMENT_SYNTAX_FREE_EXTENSIONS):
         return True

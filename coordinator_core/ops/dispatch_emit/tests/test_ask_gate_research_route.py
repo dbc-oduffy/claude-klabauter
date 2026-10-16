@@ -49,7 +49,8 @@ def test_research_sizing_hands_back_at_every_tshirt(repo, tshirt):
     v = gate(repo, REL)
     assert v.arm is None and v.baton is None
     assert v.halt["kind"] == "room" and v.halt["route"] == "research"
-    assert "coordinator:engine-ask" in v.halt["reason"] and REL in v.halt["reason"]
+    assert "/coordinator:research" in v.halt["reason"] and REL in v.halt["reason"]
+    assert "engine-ask" not in v.halt["reason"]
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "M"])
@@ -58,6 +59,8 @@ def test_research_plus_writes_is_refused_with_two_step_remedy(repo, tshirt):
     v = gate(repo, REL, writes=["a.py"])
     assert v.arm is None and v.halt["kind"] == "refusal"
     assert v.halt["reason"] == RESEARCH_MIXED_REFUSAL
+    assert "/coordinator:research" in RESEARCH_MIXED_REFUSAL
+    assert "engine-ask" not in RESEARCH_MIXED_REFUSAL
 
 
 def test_pure_research_with_empty_writes_is_not_mixed(repo):

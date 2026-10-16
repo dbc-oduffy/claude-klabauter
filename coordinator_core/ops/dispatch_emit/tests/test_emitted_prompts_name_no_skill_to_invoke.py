@@ -33,6 +33,9 @@ def _compose(**over):
 
 
 def _root_with_skill(monkeypatch, tmp_path, *, with_file=True):
+    # plan-blitz reads the plugin root's review-signals contract; an empty one is enough here.
+    (tmp_path / "contract").mkdir()
+    (tmp_path / "contract" / "review-signals.json").write_text('{"signals": {}}', encoding="utf-8")
     if with_file:
         skill = tmp_path / "skills" / "sizing" / "SKILL.md"
         skill.parent.mkdir(parents=True)

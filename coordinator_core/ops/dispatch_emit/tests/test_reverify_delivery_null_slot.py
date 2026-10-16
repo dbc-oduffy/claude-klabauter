@@ -47,6 +47,7 @@ def test_record_without_a_review_still_refuses(tmp_path):
         rd.prior_unbacked_claims(record)
 
 
+@pytest.mark.usefixtures("verifier_roster")
 def test_emit_binds_diff_sha_in_ident_and_briefs_the_reviewed_diff(tmp_path, monkeypatch):
     repo, record, rel = _null_run(tmp_path)
     plan = _plan_file(repo)

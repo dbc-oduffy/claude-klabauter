@@ -897,7 +897,7 @@ def _normalize_windows_wrapper_argv0(cmd: str) -> str:
 #: double-slash head now also matches.
 _WINDOWS_ARGV0_HEAD_PATH_RE = re.compile(
     r"(?P<sep>\A|[;&|\n])(?P<ws>\s*)(?P<q>[\"']?)"
-    r"(?P<path>(?:[A-Za-z]:)?[\\/]{1,2}(?:[^\\/\r\n]+?[\\/])*"
+    r"(?P<path>(?:[A-Za-z]:)?[\\/]{1,2}(?:[^\\/\r\n'\"]+?[\\/])*"
     r"(?:git|bash|sh|zsh|python3?(?:\.\d+)*|env|xargs)(?:\.exe)?)"
     r"(?P=q)(?=[\s;&|]|\Z)",
     re.IGNORECASE,
@@ -933,6 +933,10 @@ def _normalize_windows_argv0_head_path_with_spaces(cmd: str) -> str:
     def _rewrite(m: "re.Match[str]") -> str:
         sep, ws, q, path = m.group("sep"), m.group("ws"), m.group("q"), m.group("path")
         normalized = path.replace("\\", "/")
+        if not q and re.search(r"\s", normalized) and not (re.match(r"[A-Za-z]:|//", path) or "\\" in path):
+            # A spaced POSIX "path" is a command plus its arguments that happen to reach a
+            # `/git`-shaped word later (e.g. `grep/git` inside a JSON operand), not one argv0.
+            return m.group(0)
         if not q and re.search(r"\s", normalized):
             quoted = normalized.replace("'", "'\\''")
             return sep + ws + "'" + quoted + "'"
@@ -2335,9 +2339,11 @@ def _scratchpad_dir_of(path: str, session_id: str) -> Optional[str]:
     from coordinator_core.bash_guards._write_bump_applicability import _all_temp_roots
 
     try:
-        real = os.path.normcase(os.path.realpath(path))
+        # `_all_temp_roots` case-folds its roots, so fold this side too: macOS TMPDIR carries `/T/`.
+        real_path = os.path.normcase(os.path.realpath(path))
+        real = real_path.casefold()
         for root in _all_temp_roots():
-            base = os.path.normcase(os.path.realpath(str(root)))
+            base = os.path.normcase(os.path.realpath(str(root))).casefold()
             if not real.startswith(base + os.sep):
                 continue
             parts = real[len(base) + 1 :].split(os.sep)
@@ -2345,9 +2351,9 @@ def _scratchpad_dir_of(path: str, session_id: str) -> Optional[str]:
                 len(parts) >= 5
                 and parts[0] == "claude"
                 and parts[3] == "scratchpad"
-                and parts[2] == os.path.normcase(session_id)
+                and parts[2] == os.path.normcase(session_id).casefold()
             ):
-                return base + os.sep + os.sep.join(parts[:4])
+                return real_path[: len(base) + 1 + len(os.sep.join(parts[:4]))]
     except (OSError, ValueError):
         return None
     return None

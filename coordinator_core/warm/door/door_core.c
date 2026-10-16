@@ -490,6 +490,7 @@ int door_argv_declares_advisory(int argc, const char *const *argv) {
 static const char *const door_stdin_reading_basenames[] = {
     "backlog-grind-assemble",
     "claims-emit",
+    "coordinator-safe-commit",
     "detect-initiative-candidates",
     "distill-log-append",
     "fan-out-dispatch",
@@ -538,9 +539,68 @@ static const door_stdin_scope_t door_stdin_subcommand_scoped[] = {
 
 #define DOOR_STDIN_SUBCOMMAND_SCOPED_COUNT     (sizeof(door_stdin_subcommand_scoped) / sizeof(door_stdin_subcommand_scoped[0]))
 
+/* =========================================================================
+ * Flag-scoped stdin need. A bin whose stdin read happens only when a named
+ * flag's value is the bare `-` (`sizing_assemble._read_path_or_stdin`) is
+ * absent from `door_stdin_reading_basenames` -- the read lives in the engine
+ * module, not the bin body the parity derivation scans -- and needs the cold
+ * leg only for an argv carrying `<flag> -`. Every other invocation is served
+ * warm, so this adds no spawn to the hot path. Only flags the engine parses
+ * as a separate token followed by `-` belong here (`--relayed-ask-file`
+ * resolves `-` as a repo-relative path and never reads stdin).
+ * `test_stdin_reading_table_parity.py` pins each pair against the engine
+ * source.
+ * ========================================================================= */
+typedef struct {
+    const char *basename;
+    const char *flag;
+} door_stdin_dash_flag_t;
+
+static const door_stdin_dash_flag_t door_stdin_dash_flags[] = {
+    { "sizing-assemble", "--register" },
+    { "sizing-assemble", "--scout-register" },
+};
+
+#define DOOR_STDIN_DASH_FLAGS_COUNT \
+    (sizeof(door_stdin_dash_flags) / sizeof(door_stdin_dash_flags[0]))
+
+static int door_basename_has_dash_flags(const char *basename) {
+    for (size_t i = 0; i < DOOR_STDIN_DASH_FLAGS_COUNT; i++) {
+        if (strcmp(basename, door_stdin_dash_flags[i].basename) == 0) return 1;
+    }
+    return 0;
+}
+
+/* 1 when argv carries `<flag> -` for one of the basename's flags, or when
+ * an argv slot the door could not render leaves that undecidable (fail
+ * closed: cold). */
+static int door_argv_dash_flag_declares_stdin(
+    const char *basename, int argc, const char *const *argv
+) {
+    if (argv == NULL) return 1;
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (arg == NULL) {
+            if (i == 1) continue; /* argv[1] alone is rendered by a door that scopes by subcommand */
+            return 1;
+        }
+        for (size_t f = 0; f < DOOR_STDIN_DASH_FLAGS_COUNT; f++) {
+            if (strcmp(basename, door_stdin_dash_flags[f].basename) != 0) continue;
+            if (strcmp(arg, door_stdin_dash_flags[f].flag) != 0) continue;
+            if (i + 1 >= argc) continue;
+            if (argv[i + 1] == NULL) return 1;
+            if (strcmp(argv[i + 1], DOOR_PARAMS_FILE_STDIN_VALUE) == 0) return 1;
+        }
+    }
+    return 0;
+}
+
 int door_invocation_declares_stdin_read(
     const char *basename, int argc, const char *const *argv
 ) {
+    if (basename != NULL && door_basename_has_dash_flags(basename)) {
+        return door_argv_dash_flag_declares_stdin(basename, argc, argv);
+    }
     if (!door_basename_declares_stdin_read(basename)) return 0;
     for (size_t i = 0; i < DOOR_STDIN_SUBCOMMAND_SCOPED_COUNT; i++) {
         if (strcmp(basename, door_stdin_subcommand_scoped[i].basename) != 0) continue;

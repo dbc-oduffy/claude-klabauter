@@ -23,7 +23,7 @@ _GUARD_FILE = os.path.normcase(guard.__file__)
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
-    h.mkdir()
+    (h / "X" / "repo" / "scratch").mkdir(parents=True)  # an existing repo's scratch, not a new home-dir folder
     monkeypatch.setenv("USERPROFILE", str(h))
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")

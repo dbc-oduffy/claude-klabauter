@@ -348,9 +348,6 @@ def merge_digests(digests: Mapping[str, dict], manifest: Mapping) -> dict:
     pres = [d["predispatch"] for d in ds if d["predispatch"]]
     predispatch = (
         {
-            "checks_run": sum(p["checks_run"] for p in pres),
-            "already_done": sum(p["already_done"] for p in pres),
-            "unusable_checks": [u for p in pres for u in p["unusable_checks"]],
             "reviews": [r for p in pres for r in p["reviews"]],
         }
         if pres else None

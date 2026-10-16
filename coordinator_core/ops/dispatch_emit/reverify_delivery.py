@@ -291,8 +291,8 @@ def compose_reverify_script(
     verifier judge `run_base..diff_sha` and is carried in the result ident."""
     review = parse_execute_review(fragment)
     agent = next((a for a in review.review_wave if a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE), None)
-    if agent is None:
-        raise ReverifyRefused("reverify-delivery: the review roster declares no delivery-verifier")
+    # A roster naming no verifier is delivery-exempt (review_stamp mint reads an absent verdict
+    # as not-rostered), so the script still re-runs tests and the judge, with no delivery leg.
     claim_lines = "\n".join(
         f"- {c['claim']} [lacked: {c.get('anchor')}]" for c in claims
     )
@@ -346,7 +346,7 @@ def compose_reverify_script(
     engine_rows = _engine_rows(plan_path, repo_root)
     if owner_rows or engine_rows:
         prompt += owner_repo_clause(owner_rows + engine_rows, owner_repo_roots())
-    call = _agent_call_literal(
+    call = agent and _agent_call_literal(
         _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
         prompt,
         _PHASE,
@@ -368,7 +368,7 @@ def compose_reverify_script(
         evidence=_register_evidence(plan_path, repo_root),
         em_owned_rows=owned,
     )
-    phases = [_js_string_literal(_PHASE)]
+    phases = [_js_string_literal(_PHASE)] if call else []
     tests_lines = ""
     tests_field = ""
     tests_ident: dict[str, str] = {}
@@ -431,9 +431,8 @@ def compose_reverify_script(
     return (
         "// Runs inside the Workflow runner; a top-level `return` is legal there.\n"
         f"{meta}\n"
-        f"  phase({_js_string_literal(_PHASE)});\n"
-        f"  const _delivery = await {call};\n"
-        f"{tests_lines}"
+        + (f"  phase({_js_string_literal(_PHASE)});\n  const _delivery = await {call};\n" if call else "  const _delivery = null;\n")
+        + f"{tests_lines}"
         f"{judge_lines}"
         f"  return {{ reverify_delivery: {json.dumps(ident, sort_keys=True)}, "
         "verdict: _delivery?.verdict ?? null, "

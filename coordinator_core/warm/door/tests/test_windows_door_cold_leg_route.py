@@ -169,7 +169,8 @@ def test_the_wide_predicate_reuses_c2s_shared_table():
     )
     core = read(DOOR_WINDOWS_C.with_name("door_core.c"))
     assert re.search(
-        r"door_invocation_declares_stdin_read\([^)]*\)\s*\{\s*"
+        # The dash-flag branch (`<flag> -` basenames) is decided first; every other basename narrows the table.
+        r"door_invocation_declares_stdin_read\([^)]*\)\s*\{[^}]*?\}\s*"
         r"if\s*\(\s*!door_basename_declares_stdin_read\(",
         core,
     ), (

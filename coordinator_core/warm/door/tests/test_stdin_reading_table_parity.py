@@ -166,3 +166,50 @@ def test_scoped_subcommand_is_the_only_stdin_site_in_the_body():
             f"{name}: sys.stdin referenced outside {handler} at lines {outside}; "
             f"narrowing the cold route to {sub!r} would starve those paths"
         )
+
+
+_DASH_DECL_RE = re.compile(
+    r"door_stdin_dash_flags\[\]\s*=\s*\{(?P<body>.*?)\n\};",
+    re.DOTALL,
+)
+
+_ENGINE_SOURCES = {
+    "sizing-assemble": Path(__file__).resolve().parents[4]
+    / "coordinator_core"
+    / "sizing_assemble"
+    / "__init__.py",
+}
+
+#: Flags the sizing-assemble CLI parses as `<flag> <value>` that resolve the
+#: value as a repo path and never read stdin for `-`.
+_NON_STDIN_PATH_FLAGS = {"sizing-assemble": ("--relayed-ask-file",)}
+
+
+def parse_dash_flag_pairs(source: str) -> "list[tuple[str, str]]":
+    match = _DASH_DECL_RE.search(source)
+    assert match is not None, (
+        "could not find 'door_stdin_dash_flags[] = { ... };' in "
+        f"{_DOOR_CORE_C_PATH}"
+    )
+    return _SCOPED_PAIR_RE.findall(match.group("body"))
+
+
+def test_dash_flag_pairs_name_the_engines_stdin_flags():
+    """Each {basename, flag} pair is a flag the engine CLI parses as a
+    separate token and resolves through `_read_path_or_stdin`; a flag the
+    engine reads as a plain path stays out (the cold leg would buy nothing)."""
+    pairs = parse_dash_flag_pairs(_DOOR_CORE_C_PATH.read_text(encoding="utf-8"))
+    assert pairs, "the dash-flag table parsed empty"
+    assert {name for name, _ in pairs} <= set(_ENGINE_SOURCES)
+    for name, flag in pairs:
+        engine = _ENGINE_SOURCES[name].read_text(encoding="utf-8")
+        assert f'tok == "{flag}"' in engine, f"{name} no longer parses {flag}"
+        assert "_read_path_or_stdin(" in engine
+    listed = {flag for _, flag in pairs}
+    for name, flags in _NON_STDIN_PATH_FLAGS.items():
+        assert not listed & set(flags), f"{name}: {flags} never reads stdin"
+        engine = _ENGINE_SOURCES[name].read_text(encoding="utf-8")
+        for flag in flags:
+            assert f'tok == "{flag}"' in engine
+            assert "_read_path_or_stdin(relayed_ask_file" not in engine
+    assert {"--register", "--scout-register"} <= listed

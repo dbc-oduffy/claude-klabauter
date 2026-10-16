@@ -299,6 +299,39 @@ int main(void) {
                   door_basename_declares_stdin_read(NULL), 0);
     }
 
+    {
+        const char *reg[] = {"d", "--register", "-", "--write", "s.yaml"};
+        check_int("dash_flag/register_dash",
+                  door_invocation_declares_stdin_read("sizing-assemble", 5, reg), 1);
+
+        const char *scout[] = {"d", "--derive-register", "--scout-register", "-", "--write", "s.yaml"};
+        check_int("dash_flag/scout_register_dash",
+                  door_invocation_declares_stdin_read("sizing-assemble", 6, scout), 1);
+
+        const char *reg_file[] = {"d", "--register", "o.yaml", "--write", "s.yaml"};
+        check_int("dash_flag/register_file_is_warm",
+                  door_invocation_declares_stdin_read("sizing-assemble", 5, reg_file), 0);
+
+        const char *trailing[] = {"d", "--write", "s.yaml", "--register"};
+        check_int("dash_flag/trailing_flag_is_warm",
+                  door_invocation_declares_stdin_read("sizing-assemble", 4, trailing), 0);
+
+        const char *relayed[] = {"d", "--relayed-ask-file", "-", "--write", "s.yaml"};
+        check_int("dash_flag/relayed_ask_file_is_warm",
+                  door_invocation_declares_stdin_read("sizing-assemble", 5, relayed), 0);
+
+        const char *other[] = {"d", "--register", "-"};
+        check_int("dash_flag/other_basename_is_warm",
+                  door_invocation_declares_stdin_read("ping", 3, other), 0);
+
+        const char *unrendered[] = {"d", "sub", NULL};
+        check_int("dash_flag/unrendered_slot_is_cold",
+                  door_invocation_declares_stdin_read("sizing-assemble", 3, unrendered), 1);
+
+        check_int("dash_flag/null_argv_is_cold",
+                  door_invocation_declares_stdin_read("sizing-assemble", 3, NULL), 1);
+    }
+
     printf("%s: %d checks, %d failures\n",
            failures == 0 ? "PASS" : "FAIL", checks, failures);
     return failures == 0 ? 0 : 1;

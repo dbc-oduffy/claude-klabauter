@@ -46,6 +46,7 @@ def _emit(tmp_path, monkeypatch, body):
     return out.read_text(encoding="utf-8")
 
 
+@pytest.mark.usefixtures("verifier_roster")
 def test_external_gate_row_names_owner_root_and_closure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         machine_resolver, "merged_flat_registry", lambda: {"repos.content_root": "/work/doe"}
@@ -56,6 +57,7 @@ def test_external_gate_row_names_owner_root_and_closure(tmp_path, monkeypatch):
     assert "cleared-repo" not in text and "ac-repo" not in text
 
 
+@pytest.mark.usefixtures("verifier_roster")
 def test_unregistered_owner_is_not_on_this_machine(tmp_path, monkeypatch):
     monkeypatch.setattr(machine_resolver, "merged_flat_registry", lambda: {})
     text = _emit(tmp_path, monkeypatch, _SPINE)

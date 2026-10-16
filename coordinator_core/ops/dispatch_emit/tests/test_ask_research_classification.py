@@ -109,7 +109,8 @@ def test_research_sizing_gets_a_research_hand_back_with_no_arm_and_no_baton(repo
     assert reply["arm"] is None and reply.get("baton") is None
     halt = reply["halt"]
     assert halt["route"] == "research"
-    assert "coordinator:engine-ask" in halt["reason"] and "sizing" in halt["reason"]
+    assert "/coordinator:research" in halt["reason"] and "sizing" in halt["reason"]
+    assert "engine-ask" not in halt["reason"]
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])

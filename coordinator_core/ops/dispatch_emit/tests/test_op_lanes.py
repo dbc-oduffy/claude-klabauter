@@ -84,7 +84,7 @@ def test_three_lane_inventory_writes_map_sub_inventories_and_scripts(tmp_path):
         script = tmp_path / part["script"]
         assert script.is_file() and part["bytes"] == script.stat().st_size
         text = script.read_text(encoding="utf-8")
-        assert "label: 'check:" in text and text.index("label: 'check:") < text.index("] = _runRow(")
+        assert "label: 'check:" not in text and "] = _runRow(" in text
     assert len(reply["parts"]) == 3
     assert all(Path(p["path"]).name.endswith(".workflow.mjs") for p in reply["parts"])
     assert all(p["receipt"] for p in reply["parts"])

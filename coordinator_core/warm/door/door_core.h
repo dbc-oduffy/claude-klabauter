@@ -251,7 +251,11 @@ int door_basename_declares_stdin_read(const char *basename);
  * for names whose stdin read lives in one handler. `argv` is the door's
  * argv with argv[0] the program (argv[1] the subcommand); an unreadable
  * argv returns 1 (cold). Unscoped names behave exactly as the basename
- * predicate. */
+ * predicate. A name in `door_core.c :: door_stdin_dash_flags` (stdin read
+ * only for `<flag> -`) is decided from the full argv instead: cold when the
+ * argv carries `<flag> -` or has an unrenderable slot past argv[1], warm
+ * otherwise. A door that renders only argv[1] therefore sends every such
+ * invocation cold. */
 int door_invocation_declares_stdin_read(
     const char *basename, int argc, const char *const *argv);
 

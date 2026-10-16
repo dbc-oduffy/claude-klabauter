@@ -61,6 +61,7 @@ def test_judge_preamble_names_the_python_interpreter():
     assert "`python3`" in _JUDGE_PREAMBLE and "`python`" in _JUDGE_PREAMBLE
 
 
+@pytest.mark.usefixtures("verifier_roster")
 def test_recorded_row_evidence_reaches_the_verifier_and_the_judge(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     fail = {"verdict": "FAIL", "unbacked": [{"claim": "timing", "anchor": "unmeasured"}]}

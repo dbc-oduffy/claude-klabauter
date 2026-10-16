@@ -4378,3 +4378,23 @@ def test_subagent_may_merge_inside_a_scratch_clone_only(scratch_tree):
     assert guard.check(_at("git merge --no-ff origin/feature", main)) is not None
     assert guard.check(_at(f"git -C {main} merge --no-ff origin/feature", clone)) is not None
     assert guard.check(_at(f"cd {main} && git merge --no-ff origin/feature", clone)) is not None
+
+
+
+def test_posix_argv0_path_with_a_slash_git_word_in_its_quoted_json_operand_allows():
+    # DoE report 2026-10-16: the Windows spaced-argv0 normaliser read
+    # `/Users/x/bin/coordinator-invoke op '{..."grep/git grep"...}'` as ONE path ending in `/git`,
+    # quoted it, broke the command's quoting, and the raw-text fallback split on a `;` in the JSON.
+    cmd = (
+        "cd /work/doe; /Users/x/.coordinator-claude-settings/bin/coordinator-invoke plan.readiness_verdict "
+        """'{"rows":[{"evidence":"file absent; plan C8 names it"},{"evidence":"grep/git grep; ok"},"""
+        """{"evidence":"git rev-parse --verify / cat-file all ok"}]}'"""
+    )
+    assert guard._tokenize_full_command(guard._normalize_windows_argv0_head_path_with_spaces(cmd)) is not None
+    result = guard.check(_payload(cmd))
+    assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
+def test_windows_spaced_git_path_is_still_normalised_to_one_token():
+    cmd = r"C:\Program Files\Git\bin\git.exe push --force origin main"
+    assert guard._normalize_windows_argv0_head_path_with_spaces(cmd).startswith("'C:/Program Files/Git/bin/git.exe'")

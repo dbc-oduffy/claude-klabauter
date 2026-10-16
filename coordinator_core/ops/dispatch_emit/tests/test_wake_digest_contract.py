@@ -523,5 +523,5 @@ def test_no_owed_gate_leaves_outcome_unchanged(tmp_path):
 
 
 def test_gate_owed_var_is_appended_last_and_kind_is_in_the_schema():
-    assert wd.RUNTIME_VARS[-1] == "_gateOwed" and wd.RUNTIME_VARS[13] == "_runBase"
+    assert wd.RUNTIME_VARS[-1] == "_gateOwed" and wd.RUNTIME_VARS[-2] == "_runBase"
     assert "gate_owed" in _schema()["properties"]["deviations"]["items"]["properties"]["kind"]["enum"]

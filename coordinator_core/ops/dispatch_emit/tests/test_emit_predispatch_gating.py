@@ -1,10 +1,9 @@
 """The pre-dispatch phase and the ``_runRow`` skip clauses of an emitted inventory script.
 
-Pins: the check and review agents precede the first executor registration;
+Pins: the review agents precede the first executor registration;
 a review prompt carries neither the plan path nor the plan-context preamble;
-the ``--plan`` route carries no pre-phase and a ``null`` digest block; an
-already-done row is skipped while its dependents run; a routed-out row
-routes its dependents out; unusable verdicts fold to still-open.
+the ``--plan`` route carries no pre-phase and a ``null`` digest block; a
+routed-out row routes its dependents out; unusable reviews fold to UNREVIEWABLE.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
     ReviewInput,
     review_specs,
 )
-from coordinator_core.ops.dispatch_emit.predispatch import CHECK_PHASE_TITLE, AgentSpec
+from coordinator_core.ops.dispatch_emit.predispatch import AgentSpec
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.session.record_homes import record_path
 from coordinator_core.win_portability import no_console_creationflags
@@ -87,12 +86,11 @@ WAVES = [[_row("A", ["a.py"])], [_row("B", ["b.py"], deps=["A"])]]
 def test_pre_phase_precedes_the_first_executor_registration():
     script = _compose(WAVES)
     last_pre = max(
-        m.start() for m in re.finditer(r"label: 'check:|label: 'falsifier-integrity:", script)
+        m.start() for m in re.finditer(r"label: 'falsifier-integrity:", script)
     )
     assert last_pre < script.index("] = _runRow(")
-    assert script.count("label: 'check:") == 2
     assert script.count(f"agentType: '{REVIEWER_AGENT_TYPE}'") == 1
-    assert f"phase('{CHECK_PHASE_TITLE}')" in script
+    assert f"phase('{REVIEW_PHASE_TITLE}')" in script
     assert REVIEW_PHASE_TITLE in script.split("export const meta", 1)[1].split("};", 1)[0]
 
 
@@ -116,19 +114,11 @@ def test_review_prompt_names_no_plan_path_and_no_plan_context_preamble():
     assert PLAN_BODY_MARKER not in script
 
 
-def test_check_prompts_share_the_already_done_rule_once():
-    script = _compose(WAVES)
-    assert script.count("A file's existence, a test file's presence") == 1
-    assert "{{ALREADY_DONE_RULE}}" not in script
-
-
 def test_plan_route_compose_has_no_pre_phase_and_a_null_digest_block():
     script = compose_script(
         WAVES, name="wf", description="plan", plan_path="docs/plans/x.md", **REVIEW_KW
     )
-    assert CHECK_PHASE_TITLE not in script
     assert REVIEW_PHASE_TITLE not in script
-    assert "label: 'check:" not in script
     assert "predispatch: null," in script
     assert "_PRE_SCHEMAS" not in script
 
@@ -147,9 +137,9 @@ def test_review_specs_without_predispatch_is_a_value_error():
 
 def test_predispatch_digest_block_and_deviation_kinds_are_rendered():
     script = _compose(WAVES)
-    assert "predispatch: { checks_run: 2, already_done: _skippedDone.length" in script
-    assert "'already_done'" in script and "'routed_out'" in script
-    assert "..._skippedDone" in script and "..._routedOut" in script
+    assert "predispatch: { reviews: _reviews.map(" in script
+    assert "'routed_out'" in script and "..._routedOut" in script
+    assert "_skippedDone" not in script
 
 
 def test_completion_return_without_predispatch_references_no_pre_phase_binding():
@@ -168,7 +158,7 @@ def test_completion_return_without_predispatch_references_no_pre_phase_binding()
         review_vars=None,
         has_commit_request=True,
     )
-    for name in ("_skippedDone", "_routedOut", "_reviews", "_unusableChecks"):
+    for name in ("_routedOut", "_reviews"):
         assert name not in js
     assert "predispatch: null," in js
 
@@ -180,12 +170,13 @@ def test_run_row_helper_carries_the_skip_clauses():
     assert helper.count("async function _runRow") == 1
 
 
-def test_row_block_bytes_counts_the_check_thunk_only_when_predispatch():
+def test_row_block_bytes_is_per_row_and_independent_of_predispatch():
     rows = [r for wave in WAVES for r in wave]
     plain = row_block_bytes(rows, predispatch=False, plan_path="p.md")
     with_pre = row_block_bytes(rows, predispatch=True, plan_path="p.md")
-    assert set(plain) == set(with_pre) == {"A", "B"}
-    assert all(with_pre[k] > plain[k] > 0 for k in plain)
+    assert set(plain) == {"A", "B"}
+    assert plain == with_pre
+    assert all(size > 0 for size in plain.values())
 
 
 _HARNESS = r"""
@@ -205,7 +196,7 @@ _HARNESS = r"""
   %(rows)s
   const results = {};
   for (const id of Object.keys(_rows)) results[id] = await _rows[id];
-  console.log(JSON.stringify({ calls, results, routedOut: _routedOut, skippedDone: _skippedDone }));
+  console.log(JSON.stringify({ calls, results, routedOut: _routedOut }));
 })();
 """
 
@@ -261,42 +252,24 @@ def test_a_falsifier_broken_plan_still_executes():
     assert out["routedOut"] == []
 
 
-def test_a_dependent_of_an_already_done_row_still_dispatches():
-    out = _run_harness(
-        row_plan={},
-        setup="_alreadyDone.add('D');",
-        rows=(
-            "_rows.D = _runRow('D', [], null, run('D'));"
-            "_rows.Y = _runRow('Y', [_rows.D], null, run('Y'));"
-        ),
-    )
-    assert out["calls"] == ["Y"]
-    assert out["results"]["D"].startswith("ALREADY-DONE:")
-    assert out["skippedDone"] == ["D"]
-    assert out["routedOut"] == []
-
-
 _FOLD_HARNESS = r"""
 (async () => {
-  const _alreadyDone = new Set(), _falsifierBroken = new Map(), _unusableChecks = [], _reviews = [];
-  const _checkIds = %(check_ids)s;
+  const _falsifierBroken = new Map(), _reviews = [];
   const _reviewPlans = %(review_plans)s;
   const _preResults = %(results)s;
 %(fold)s
   console.log(JSON.stringify({
-    done: [..._alreadyDone], unusable: _unusableChecks, reviews: _reviews,
-    broken: [..._falsifierBroken.entries()],
+    reviews: _reviews, broken: [..._falsifierBroken.entries()],
   }));
 })();
 """
 
 
-def _run_fold(check_ids, review_plans, results):
+def _run_fold(review_plans, results):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
     source = _FOLD_HARNESS % {
-        "check_ids": json.dumps(check_ids),
         "review_plans": json.dumps(review_plans),
         "results": json.dumps(results),
         "fold": emit._PRE_PHASE_FOLD_JS,
@@ -313,28 +286,10 @@ def _run_fold(check_ids, review_plans, results):
     return json.loads(proc.stdout)
 
 
-def test_an_already_done_verdict_without_evidence_folds_to_still_open_and_is_recorded():
-    good = {"path": "a.py", "anchor": "f", "excerpt": "def f(): ...", "discharges": "clause 1"}
-    out = _run_fold(
-        ["empty", "partial", "good", "open", "nullcheck"],
-        [],
-        [
-            {"verdict": "already-done", "evidence": [], "note": ""},
-            {"verdict": "already-done", "evidence": [{"path": "a.py", "excerpt": ""}], "note": ""},
-            {"verdict": "already-done", "evidence": [good], "note": ""},
-            {"verdict": "still-open", "evidence": [], "note": ""},
-            None,
-        ],
-    )
-    assert out["done"] == ["good"]
-    assert out["unusable"] == ["empty", "partial", "nullcheck"]
-
-
 def test_broken_review_marks_its_plan_and_unreviewable_or_null_proceeds():
     fired = {"tell": "SCOPE-WIDER-THAN-CLAIM", "status": "FIRED", "note": ""}
     clear = {"tell": "WRONG-DENOMINATOR", "status": "CLEAR", "note": ""}
     out = _run_fold(
-        [],
         ["p-broken", "p-sound", "p-unreviewable", "p-null"],
         [
             {"verdict": "BROKEN", "tells": [fired, clear], "contamination": "", "body": ""},
@@ -353,14 +308,6 @@ def test_broken_review_marks_its_plan_and_unreviewable_or_null_proceeds():
     }
 
 
-def test_check_agents_run_on_haiku_and_the_phase_precedes_execute():
-    script = _compose(WAVES)
-    for label in ("check:A", "check:B"):
-        call = script[script.index(f"label: '{label}'") :].split("schema:", 1)[0]
-        assert "model: 'haiku'" in call
-    assert script.index(f"phase('{CHECK_PHASE_TITLE}')") < script.index("phase('Execute')")
-
-
 def test_cached_review_spec_is_a_literal_thunk_not_an_agent_call_and_flows_through_the_fold():
     cached = ReviewInput(
         plan_path=PLAN, criterion="c", how="h", baseline_output=None, expected_when_true="e",
@@ -374,7 +321,7 @@ def test_cached_review_spec_is_a_literal_thunk_not_an_agent_call_and_flows_throu
     assert "cached_result" not in script.split("_PRE_SCHEMAS = ", 1)[1].split("\n", 1)[0]
     assert "_verdictCacheWrites" not in script
     out = _run_fold(
-        [], [PLAN],
+        [PLAN],
         [{"verdict": "BROKEN", "tells": [{"tell": "WRONG-DENOMINATOR", "status": "FIRED"}]}],
     )
     assert out["broken"] == [[PLAN, ["WRONG-DENOMINATOR"]]]

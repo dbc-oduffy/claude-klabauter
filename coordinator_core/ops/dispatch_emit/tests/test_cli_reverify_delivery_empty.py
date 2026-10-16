@@ -44,6 +44,7 @@ def test_empty_value_without_a_bookkeeping_record_refuses_naming_the_glob(tmp_pa
     assert f"plan_id: {_PLAN_ID}" in err
 
 
+@pytest.mark.usefixtures("verifier_roster")
 def test_empty_value_with_a_bookkeeping_record_emits_the_reverify_script(tmp_path, monkeypatch, capsys):
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)

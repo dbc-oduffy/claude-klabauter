@@ -86,8 +86,8 @@ def _run_digest(script: str, tmp_path) -> dict:
     harness = tmp_path / "digest.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _stoppedBy = [], _gateOwed = {}, "
-        "_blockedChunks = [], _verifications = [], _alreadyDone = new Set(), _falsifierBroken = new Map(), "
-        "_routedOut = [], _skippedDone = [], _unusableChecks = [], _reviews = [], "
+        "_blockedChunks = [], _verifications = [], _falsifierBroken = new Map(), "
+        "_routedOut = [], _reviews = [], "
         "_reviewPrep = null, _reviewWave = null, _deliveryVerdict = null, _reviewIntegration = null, "
         "_testResult = null, _falsifier = null;\n"
         "const _notStarted = [];\nconst _planHeld = {};\n" + held_line + "\n_notStarted.push(...Object.keys(_heldRows));\n"

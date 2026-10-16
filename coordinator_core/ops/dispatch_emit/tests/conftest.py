@@ -101,3 +101,28 @@ def execute_section(script: str) -> str:
     """The emitted script up to its review wave, for assertions about the
     execute phase that the review wave's own agents would otherwise satisfy."""
     return script.split("phase('Review prep')", 1)[0]
+
+
+@pytest.fixture
+def verifier_roster(monkeypatch):
+    """DoE's live plan-route roster plus a delivery-verifier. The live roster names none
+    (delivery-exempt), so a test of the verifier's brief has to add one."""
+    import copy
+
+    from coordinator_core.ops.dispatch_emit import emission_receipt
+    from coordinator_core.ops.review_mint.tests.test_execute_review import _v5_fragment
+
+    live = emission_receipt._load_review_inputs
+    verifier = next(
+        a for s in _v5_fragment()["execute_review"]["stages"] if s["kind"] == "review-wave"
+        for a in s["agents"] if a.get("agentType") == "coordinator:delivery-verifier"
+    )
+
+    def _with_verifier(route):
+        fragment, schemas = live(route)
+        fragment = copy.deepcopy(fragment)
+        wave = next(s for s in fragment["execute_review"]["stages"] if s["kind"] == "review-wave")
+        wave["agents"].append(verifier)
+        return fragment, schemas
+
+    monkeypatch.setattr(emission_receipt, "_load_review_inputs", _with_verifier)

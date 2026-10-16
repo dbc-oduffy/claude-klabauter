@@ -40,7 +40,7 @@ def test_resume_binds_the_plan_and_takes_the_xs_tail_before_any_plan_or_executor
 
 def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
     script = _script(monkeypatch)
-    review = script.index("if (!_halted && _gate.arm !== 'xs') {")
+    review = script.index("if (!_halted && _gate.arm !== 'xs' && !_noReviewPaths) {")
     assert script.index("_gate = { ..._gate, arm: 'xs' }") < review < script.index("label: 'verify'")
 
 

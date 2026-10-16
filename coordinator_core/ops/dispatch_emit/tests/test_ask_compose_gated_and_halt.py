@@ -36,7 +36,7 @@ def _next_action(script: str) -> str:
 def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
     na = _next_action(_script(monkeypatch))
     assert na.startswith("  _nextAction = _closeable ? { kind: 'terminal_commit', op: 'dispatch.terminal_commit'")
-    assert f"const _closeable = !!(!_halted && {_GUARD[1:-1]}" in _script(monkeypatch)
+    assert f"const _closeable = !!((!_halted && {_GUARD[1:-1]}" in _script(monkeypatch)
     assert ": { kind: 'none', op: null, params: null };" in na.split("\n", 1)[0]
     assert na.rstrip().endswith("get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }, };")
 
@@ -44,7 +44,7 @@ def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
 def test_gated_ids_are_pushed_after_stage_and_before_execute(monkeypatch):
     script = _script(monkeypatch)
     assert script.count(_PUSH) == 1
-    assert script.index("_manifest = await agent(") < script.index(_PUSH) < script.index("phase('execute')")
+    assert script.index("_manifest = await agent(") < script.index(_PUSH) < script.index("phase('Execute')")
 
 
 def test_incomplete_chunks_feed_terminal_commit_params(monkeypatch):
@@ -68,7 +68,7 @@ def test_owed_ids_are_pushed_after_stage_and_before_execute(monkeypatch):
     script = _script(monkeypatch)
     push = "  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }"
     assert script.count(push) == 1
-    assert script.index("_manifest = await agent(") < script.index(push) < script.index("phase('execute')")
+    assert script.index("_manifest = await agent(") < script.index(push) < script.index("phase('Execute')")
 
 
 def test_return_object_names_owed(monkeypatch):
@@ -92,7 +92,7 @@ def test_unstarted_dependents_halt_before_the_review(monkeypatch):
         f"_halted = {{ halted: '{ask_compose.HALT_DEPENDENTS_UNSTARTED}', detail: _r }}; }}"
     )
     assert script.count(halt) == 1
-    assert script.index("await Promise.all(_verifications);") < script.index(halt) < script.index("phase('review')")
+    assert script.index("await Promise.all(_verifications);") < script.index(halt) < script.index("phase('Review wave')")
     assert "function _heldDependentsReason()" in script
 
 
