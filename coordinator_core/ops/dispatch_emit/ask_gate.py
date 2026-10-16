@@ -278,7 +278,8 @@ def _arm_verdict(
 def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
     """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids, the
     sizing's rulable register ids and the plan's em-discharged rows as `{row_id: text}`; None when
-    the resume carries no halt. A halt that recorded no blocking ids re-judges every rulable row."""
+    the resume carries no halt. `blocking` is the halt's blocking ids followed by every other rulable
+    row (neither met nor waived), so rows recorded or left unjudged after the halt are judged too."""
     if halt is None:
         return None
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
@@ -293,7 +294,7 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
     return {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
-        "blocking": list(halt.blocking) or rulable,
+        "blocking": [*halt.blocking, *(r for r in rulable if r not in halt.blocking)],
         RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged,
         "rulable_ids": rulable,
     }
