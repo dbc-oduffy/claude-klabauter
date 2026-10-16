@@ -1922,10 +1922,21 @@ def compose_ask_script(
     review_text = _single_exit_review(
         [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
     )
-    b.append(f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)}) {{\n" + review_text + "\n  }")
+    b.append(
+        "  const _noReviewPaths = !!((_manifest?.rows ?? []).length && "
+        "!(_manifest?.review_declared_paths ?? []).length);"
+    )
+    b.append(
+        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_noReviewPaths) {{\n" + review_text + "\n  }"
+    )
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_XS)}) {{ _reviewWave = []; }}")
+    b.append(
+        "  if (!_halted && _noReviewPaths && _gate.arm !== "
+        f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
+        "_reviewWave = []; }"
+    )
     b.append(_REVIEW_BLOCKED_HALT_JS)
     test_guard = (
         f"(_gate.arm !== {_lit(ARM_XS)} || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
@@ -2083,7 +2094,7 @@ def compose_ask_script(
         f"{HALT_PLAN_FIELD}: _planRel, "
         "next_action: 'Ledger rows ' + (_blkIds.join(', ') || '(ledger unreadable)') + ' block the commit.' "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
-        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out, and a verbatim stating scope.' : '') "
+        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out, and a note stating scope (`note`, row-free).' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' name no register row: re-run the ledger check.' : '') "
         "+ ' Once the rows are met out of band, re-fire the same sizing.' }; }"
     )
@@ -2115,7 +2126,7 @@ def compose_ask_script(
             else ""
         )
         + "'delivery verdict FAIL', "
-        f"revise: {_lit(f'{_INVOKE} workflow.revise (run_id, verbatim)')}, "
+        f"revise: {_lit(f'{_INVOKE} workflow.revise (run_id; verbatim for a PM requirement, note for free text)')}, "
         f"refire: {_refire_js(sizing_rel)} }});"
     )
     stopped_na = (

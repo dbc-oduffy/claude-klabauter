@@ -33,6 +33,7 @@ def test_ledger_halt_names_revise_run_id_and_scope(monkeypatch):
     text = _halt_text(_script(monkeypatch))
     assert "coordinator-invoke workflow.revise" in text
     assert "_runId" in text
-    assert "verbatim stating scope" in text
+    assert "a note stating scope (`note`, row-free)" in text
+    assert "verbatim stating scope" not in text
     assert "_ledgerBlocking(_ledger)" in text
     assert "or fix the change" not in text

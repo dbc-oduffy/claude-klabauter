@@ -276,7 +276,7 @@ def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_targe
 
 def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
     script = _compose()
-    gate = "if (!_halted && _gate.arm !== 'xs') {\n  phase('Review wave');"
+    gate = "if (!_halted && _gate.arm !== 'xs' && !_noReviewPaths) {\n  phase('Review wave');"
     assert script.count(gate) == 1
     assert "phase('review')" not in script
     assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("label: 'verify'")

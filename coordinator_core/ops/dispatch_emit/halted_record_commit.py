@@ -16,6 +16,7 @@ from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
+from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
@@ -199,6 +200,8 @@ def _land(
     ):
         declared.append(sizing_rel)
 
+    if (worktree_root / record_dir_rel).is_dir():
+        write_halt_marker(worktree_root / record_dir_rel, halted=halted["halted"], sizing_rel=sizing_rel)
     snapshot = _worktree_snapshot(worktree_root, declared, [record_dir_rel], [])
     if snapshot is None:
         return _error(f"git status over {record_dir_rel} failed", **base)

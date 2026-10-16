@@ -463,7 +463,11 @@ def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
 def start(repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False) -> Path:
     """Make the run ledger-bearing (emit time). Returns the run dir."""
     dir_ = run_dir(repo_root, run_id)
-    _write_run(dir_, {"sizing_rel": None, "all_of_pm_ask": bool(all_of_pm_ask)})
+    prior = read_run(dir_) or {}
+    _write_run(dir_, {
+        "sizing_rel": prior.get("sizing_rel"),
+        "all_of_pm_ask": bool(all_of_pm_ask) or bool(prior.get("all_of_pm_ask")),
+    })
     _write_view(repo_root, dir_, run_id)
     return dir_
 

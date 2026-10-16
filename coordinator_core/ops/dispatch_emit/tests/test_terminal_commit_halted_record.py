@@ -89,7 +89,7 @@ def test_sizing_refusal_lands_one_record_only_commit(repo):
     assert out["committed"] is True
     assert _git(["rev-parse", "HEAD~1"], repo).strip() == head
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert sorted(names) == sorted(f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json"))
+    assert sorted(names) == sorted(f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json"))
     message = _git(["log", "-1", "--format=%B"], repo)
     assert "Halted-By: refusal" in message
     assert REASON in message
@@ -105,7 +105,7 @@ def test_halt_after_stage_lands_manifest_and_requirements(repo):
 
     assert out["committed"] is True
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert len(names) == 5
+    assert len(names) == 6
     assert all(n.startswith(f"{RECORD_DIR_ROOT}/{RUN}/") for n in names)
     assert "Halted-By: ledger-check" in _git(["log", "-1", "--format=%B"], repo)
 
@@ -119,8 +119,9 @@ def test_tracked_record_file_deleted_from_disk_lands(repo):
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert _git(["show", "--name-status", "--format=", "HEAD"], repo).split() == [
-        "D", f"{RECORD_DIR_ROOT}/{RUN}/run.json",
+    assert sorted(_git(["show", "--name-status", "--format=", "HEAD"], repo).splitlines()) == [
+        f"A\t{RECORD_DIR_ROOT}/{RUN}/halted.json",
+        f"D\t{RECORD_DIR_ROOT}/{RUN}/run.json",
     ]
 
 
@@ -271,7 +272,7 @@ def test_run_json_sizing_lands_when_dirty_and_is_skipped_otherwise(repo):
     assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
     assert "landed_chunks" not in out
 
-    record = {f"{RECORD_DIR_ROOT}/{RUN}/ask.md", f"{RECORD_DIR_ROOT}/{RUN}/run.json"}
+    record = {f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "run.json", "halted.json")}
     for named in ("state/sizings/own.yaml", "../outside.yaml", "/abs/outside.yaml", "state/sizings/absent.yaml"):
         (repo / RECORD_DIR_ROOT / RUN / "ask.md").write_text(f"again {named}\n", encoding="utf-8")
         _name_sizing(repo, named)

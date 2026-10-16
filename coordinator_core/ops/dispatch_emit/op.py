@@ -582,6 +582,13 @@ def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
     copy = root / run_parent_copy_rel(run_id)
     copy.parent.mkdir(parents=True, exist_ok=True)
     claimed_write.replace_text(copy, parent.read_text(encoding="utf-8"))
+    _record_run_base(root, run_id)
+
+
+def _record_run_base(root: Path, run_id: str) -> None:
+    """Record HEAD as the run's base, write-once; a spawn-free HEAD read."""
+    from coordinator_core.session import claimed_write
+
     if _recorded_run_base(root, run_id) is None:
         from coordinator_core.git.git_state import head_sha
 
@@ -602,6 +609,12 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     root = Path(ask_ctx["root"])
     if ask_ctx.get("reserved_parent"):
         _bind_reserved_run(root, ask_ctx["run_id"], ask_ctx["reserved_parent"])
+    if ask_ctx.get("rebound"):
+        from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
+
+        mark_resumed(record_dir(root, ask_ctx["run_id"]))
+    if ask_ctx.get("sizing_rel") and not ask_ctx.get("reserved_parent"):
+        _record_run_base(root, ask_ctx["run_id"])
     ledger.start(root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask)
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
@@ -1438,12 +1451,19 @@ def _dispatch_emit(
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         reserved_parent = None
+        rebound = False
         if params.get("reserved_run_id") is not None:
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
+        elif sizing_rel:
+            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+
+            halted_id = halted_run_for(ask_root, sizing_rel)
+            if halted_id:
+                run_id, rebound = halted_id, True
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
-            "reserved_parent": reserved_parent,
+            "reserved_parent": reserved_parent, "rebound": rebound,
             "ask_source": ask_source,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }
@@ -1796,7 +1816,7 @@ def _dispatch_emit(
             required_reviewers=ask_ctx["required_reviewers"],
             run_base_sha=(
                 _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
-                if ask_ctx.get("reserved_parent")
+                if ask_ctx.get("reserved_parent") or ask_ctx.get("rebound")
                 else None
             ),
         )

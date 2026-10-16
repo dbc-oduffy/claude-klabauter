@@ -2973,7 +2973,8 @@ _UNJUDGED_CAUSE_JS = (
 #: DoE's `terminal-judge-verdict-rules` ($def beside `terminal-judge-result`,
 #: which may not carry the allOf itself), applied post hoc to the judge's
 #: return: a `met` with nothing observed, a failing falsifier or a non-met
-#: clause demotes to indeterminate; a non-met with no `reason` gets one.
+#: clause demotes to indeterminate; a non-met with no `reason` takes its
+#: observation, else a fixed one.
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
@@ -2991,7 +2992,8 @@ _JUDGE_VERDICT_RULES_JS = (
     "if (Array.isArray(r.clauses) && r.clauses.some(c => c && c.status !== 'met')) why.push('a clause is not met'); "
     "if (why.length) { const reason = 'met demoted: ' + why.join(', '); log(reason); "
     "return { ...r, status: 'indeterminate', differs_from_baseline: null, reason }; } return r; } "
-    "if (!r.reason) return { ...r, reason: 'judge returned ' + r.status + ' with no reason' }; "
+    "if (!r.reason) return { ...r, reason: (typeof r.observation === 'string' && r.observation) "
+    "? String(r.observation).slice(0, 200) : 'judge returned ' + r.status + ' with no reason' }; "
     "return r; })"
 )
 
