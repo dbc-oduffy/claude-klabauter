@@ -1358,6 +1358,7 @@ def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
     EM-side, in-process point that knows the run's declared paths, so it
     must register them here -- not leave the integration agent to discover
     mid-run that nothing was registered for it."""
+    (tmp_path / ".git").mkdir()
     waves = _two_wave_fixture()
     compose_script(
         waves,

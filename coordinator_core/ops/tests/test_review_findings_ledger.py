@@ -254,6 +254,7 @@ def test_reject_refuses_ambiguous_multiple_occurrences(tmp_path):
 
 
 def test_targets_add_dedupes_and_persists(tmp_path):
+    (tmp_path / ".git").mkdir()
     merged = m.targets_add(tmp_path, "session-1", ["a/b.py", "c/d.py", "a/b.py"])
     assert merged == ["a/b.py", "c/d.py"]
     again = m.targets_add(tmp_path, "session-1", ["e/f.py"])
@@ -263,12 +264,19 @@ def test_targets_add_dedupes_and_persists(tmp_path):
 
 
 def test_targets_add_agent_key_writes_a_separate_per_dispatch_file(tmp_path):
+    (tmp_path / ".git").mkdir()
     m.targets_add(tmp_path, "session-1", ["a.py"])
     merged = m.targets_add(tmp_path, "session-1", ["b.py"], agent_key="agent-x")
     assert merged == ["b.py"]
     base = tmp_path / ".git" / "coordinator-sessions" / "session-1"
     assert (base / "review-targets.agent-x.txt").read_text(encoding="utf-8") == "b.py\n"
     assert (base / "review-targets.txt").read_text(encoding="utf-8") == "a.py\n"
+
+
+def test_targets_add_refuses_a_root_that_is_not_a_repo(tmp_path):
+    with pytest.raises(m.LedgerError, match="not a git repository root"):
+        m.targets_add(tmp_path, "session-1", ["a.py"])
+    assert not (tmp_path / ".git").exists()
 
 
 def test_targets_add_refuses_a_path_shaped_agent_key(tmp_path):
@@ -333,6 +341,7 @@ def test_cli_verify_exit_codes(tmp_path):
 
 
 def test_cli_reject_and_targets(tmp_path):
+    (tmp_path / ".git").mkdir()
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -351,6 +360,7 @@ def test_cli_reject_and_targets(tmp_path):
 
 
 def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path):
+    (tmp_path / ".git").mkdir()
     assert (
         m.main(
             ["--root", str(tmp_path), "targets", "--add", "a.py", "b.py", "c.py", "--session-id", "s1"]
@@ -362,6 +372,7 @@ def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path):
 
 
 def test_cli_targets_add_defaults_session_id_from_hook_env(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "env-session-9")

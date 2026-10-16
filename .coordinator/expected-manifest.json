@@ -2087,8 +2087,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "ca79b7918a591e648a53aa842bfa71064fa2966d",
-    "coordinator_core/_engine_stamp": "7b4020ee34266fd81fcccc8bbeb6847074c7f0b1",
+    "coordinator_core/_engine_published_at": "fcec835e7fca00b79ccce9e20906b749b021895a",
+    "coordinator_core/_engine_stamp": "0f48a612902afa3be5382170ab169b5aeae59003",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4515,7 +4515,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_roadmap_fanout_e2e.py": "a1ab31e103675ce7c3537d53e06020d2fbe081ad",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_run_product_commit.py": "ea8b5faaa4c9cd98430382ff8ba8ffd3cdcb6ad0",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_shape_handback.py": "fec34937c263dbcd56c1a8c72a5e69ce014b882d",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_stage.py": "da6f2390dfea5cf9a3bb9ab1e791ba2095d3896e",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_stage.py": "af0b6cd44a53d4654695cf3584cd7386c60a8a8a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_stage_blinded_reviewer_row.py": "50ffb7c9ddc5a5ccc6bdce4a27893cfe15f70dc5",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_stage_cross_repo.py": "dff0407adf193ef70f9accc5ae958e83ac5b5419",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_stage_engine_rows.py": "a540696542090d87b3899876db25a067104076e0",
@@ -4570,7 +4570,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_doe_port_fidelity_and_scope.py": "9afe5474c9458e3388432fb0e197d8db6fa2cc30",
     "coordinator_core/ops/dispatch_emit/tests/test_em_discharge_releases_dependents.py": "dda109db79ca852d97f4fb481924654be19f7f8f",
     "coordinator_core/ops/dispatch_emit/tests/test_em_mailbox_watch.py": "e176db70c798bf6b6018f2d00d02b5161e4ab104",
-    "coordinator_core/ops/dispatch_emit/tests/test_emit.py": "ae4fb8b75bdd3dd8b0911e9c0daa750d3cd4a5cf",
+    "coordinator_core/ops/dispatch_emit/tests/test_emit.py": "3201288bfc9f4c18d0ee0d34fe447d2e1fc52eb4",
     "coordinator_core/ops/dispatch_emit/tests/test_emit_brightline.py": "99380f26ab0289bd81ff9f1701803d6458137f12",
     "coordinator_core/ops/dispatch_emit/tests/test_emit_cli_import_cost.py": "6888338d6e6223c4ccb1b9218d08b0a783f6b030",
     "coordinator_core/ops/dispatch_emit/tests/test_emit_dag.py": "c0d7b7c81a4bb1dcb1e75ea7a4386663ff55cd28",
@@ -5459,7 +5459,7 @@
     "coordinator_core/ops/resolve_swept_baton.py": "6ce9a4c06c0958a8bb22ef73d582b73c437d57bc",
     "coordinator_core/ops/review_brightline_gate.py": "1ad3667d15bec9751ea9655b653d6045b365f813",
     "coordinator_core/ops/review_coverage_core.py": "7352c148744ce85059b5b9a273e9c76e1e59ba08",
-    "coordinator_core/ops/review_findings_ledger.py": "88fa00e475536521d31b233cdfee34121f1bf0f5",
+    "coordinator_core/ops/review_findings_ledger.py": "07f4dbd6681ec0af25c98eeb2426bc942f4e4c8e",
     "coordinator_core/ops/review_freeze_diff.py": "1b560c2d06d55297dd1aaa53a196bafa84880d91",
     "coordinator_core/ops/review_mint/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/review_mint/compose.py": "c26bc0ae67fb91d571e7b0a40ff35f9324816a95",
@@ -6108,7 +6108,7 @@
     "coordinator_core/ops/tests/test_reverify_delivery.py": "87ed05c582b2f5ca65ccdada7eb4ce4d91deff3f",
     "coordinator_core/ops/tests/test_review_brightline_gate_worktree.py": "f7b564efcf703f7c985e84784c560e420adea1ac",
     "coordinator_core/ops/tests/test_review_coverage_core.py": "332a47d96bf05cbd85c803cb4ed0f3d4c09b541b",
-    "coordinator_core/ops/tests/test_review_findings_ledger.py": "6dac8e2af4fc74d24500a3a43ddde2fdc90ca483",
+    "coordinator_core/ops/tests/test_review_findings_ledger.py": "6dff61777c5a17072f9616f87dff3a208b76d9db",
     "coordinator_core/ops/tests/test_review_partition_slices.py": "51bb8d1c79c36837f6553a374d3c8ac5c577eeeb",
     "coordinator_core/ops/tests/test_review_prep.py": "94ad0732820bf2ab3c1dcd13602bfe290380f1e8",
     "coordinator_core/ops/tests/test_review_reachability.py": "48c5e2fd8bb70c025a0ac2cff88ee2a9eb0d704b",
@@ -8035,5 +8035,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "0d6667a71dfdd9c25d668c9c9adac738b01e05c6"
+  "source_head": "701342267a693b05a4cf87e8b0ebc5444426f015"
 }

@@ -767,6 +767,10 @@ def targets_add(
             )
         normalized.append(_normalize_path(raw))
 
+    # A non-repo root would mint `<root>/.git/` here, and every `.git`-walking guard then reads
+    # that directory (e.g. the session scratchpad) as a foreign repo and refuses writes into it.
+    if not (Path(repo_root) / ".git").is_dir():
+        raise LedgerError(f"targets: {repo_root} is not a git repository root")
     target_file = _session_targets_path(repo_root, session_id, agent_key)
     existing: List[str] = []
     if target_file.is_file():
