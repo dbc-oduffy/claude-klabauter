@@ -20,6 +20,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_ROOM,
     HALT_SPLIT,
     HALT_TOUCHPOINT,
+    RESEARCH_HANDBACK_ROUTE,
+    RESEARCH_MIXED_REFUSAL,
     GateVerdict,
 )
 from coordinator_core.ops.sizing_acceptance import (
@@ -109,6 +111,16 @@ def gate(
             f"route 'shape' is room-owned: {sa._ROOM_ENTRY['shape']}",
             route=route,
             handback=handback_line(sizing),
+        )
+    research = sizing.get("research")
+    if isinstance(research, dict) and research:
+        if writes:
+            return _halt(HALT_REFUSAL, RESEARCH_MIXED_REFUSAL)
+        return _halt(
+            HALT_ROOM,
+            "research sizing: re-submit "
+            f"{{sizing: {sizing_rel}}} to coordinator:engine-ask, which routes it to the research route",
+            route=RESEARCH_HANDBACK_ROUTE,
         )
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         extra = {}

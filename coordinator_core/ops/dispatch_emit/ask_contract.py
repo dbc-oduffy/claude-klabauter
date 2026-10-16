@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session.record_homes import home_dir
 
@@ -112,8 +113,35 @@ ASK_SCOUT_SCHEMA = {
         "route": _STR,
         "manifest": {"type": ["object", "null"]},
         "falsifier": {"type": ["object", "null"]},
+        "research": {
+            "type": ["object", "null"],
+            "required": ["class"],
+            "properties": {
+                "class": {"type": "string", "enum": list(_rc.VALUE_CLASSES)},
+                "appetite": {"type": "string", "enum": list(_rc.APPETITES)},
+                "sources": {"type": "array", "items": {"type": "string", "enum": list(_rc.SOURCES)}},
+                "depth": {"type": "string", "enum": list(_rc.DEPTHS)},
+                "targets": {"type": "array", "items": _STR},
+                "questions": {"type": "array", "items": _STR},
+            },
+        },
     },
 }
+#: Scout prompt passage: when to return `research`. Appended to the ask scout's prompt.
+RESEARCH_CLASSIFY_CLAUSE = (
+    "Return `research` (class, appetite, sources, depth, targets as `<source>=<ref>`, questions) "
+    "only when the ask's deliverable is knowledge -- a question answered, a survey, a comparison, "
+    "a diagnosis written up -- rather than a change to files; otherwise return it null. A pure "
+    "research ask returns `writes` as []: the research route's findings artifact is not a write. "
+    "An ask that also asks for a build returns both `research` and its `writes`."
+)
+#: `ask_gate` halt route for a research sizing: the hand-back to the sizing door.
+RESEARCH_HANDBACK_ROUTE = "research"
+#: `ask_gate` refusal for a research sizing whose request carries `writes`.
+RESEARCH_MIXED_REFUSAL = (
+    "Research ask also names file writes. Submit the research ask alone to coordinator:engine-ask, "
+    "then submit the build ask citing the research artifact."
+)
 ASSEMBLE_SCHEMA = {
     "type": "object",
     "required": ["exit_code", "stdout"],
@@ -137,6 +165,28 @@ def scout_assemble_flags_js(scouted: str, quote: str, extra: str = "") -> str:
         f" + ({scouted}.jtbd_unclear === true ? ' --jtbd-unclear' : '')"
         f" + ({scouted}.well_trodden_step_change === true ? ' --well-trodden-step-change' : '')"
     )
+
+
+def research_assemble_flags_js(scouted: str, quote: str) -> str:
+    """JS expression text appending the `--research-*` sizing-assemble flags from
+    ``<scouted>.research``; the empty string when that is not a non-null object.
+    Starts with `` + `` so it follows the command literal directly."""
+    r = f"{scouted}.research"
+    each = lambda field, flag: (  # noqa: E731
+        f"({r}.{field} || []).map(function (v) {{ return ' {flag} ' + {quote}(v); }}).join('')"
+    )
+    return (
+        f" + ({r} !== null && typeof {r} === 'object' ? ''"
+        f" + ' --research-class ' + {quote}({r}.class)"
+        f" + ({r}.appetite ? ' --research-appetite ' + {quote}({r}.appetite) : '')"
+        f" + {each('sources', '--research-source')}"
+        f" + ({r}.depth ? ' --research-depth ' + {quote}({r}.depth) : '')"
+        f" + {each('targets', '--research-target')}"
+        f" + {each('questions', '--research-question')}"
+        f" : '')"
+    )
+
+
 PM_EXIT_QUESTION_KEY = "pm_exit_question"
 RUN_DIR_ROOT = "scratch/warp"
 #: Engine-written beside the run's briefs: the ask as submitted (raw asks), and the PM's verbatim

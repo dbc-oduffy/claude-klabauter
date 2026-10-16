@@ -49,9 +49,11 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     DOC_NEW_CMD,
     ASK_SCOUT_SCHEMA,
     ASSEMBLE_SCHEMA,
+    RESEARCH_CLASSIFY_CLAUSE,
     SCOUT_RETURN_CLAUSE,
     SCOUT_SCHEMA,
     SIZING_ASSEMBLE_CMD,
+    research_assemble_flags_js,
     scout_assemble_flags_js,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
@@ -1155,6 +1157,7 @@ def compose_ask_script(
             "--premise-provenance <premise_provenance> --premise-evidence <premise_evidence> "
             f"--exit-criterion <exit_criterion>{deliverable_flag} [--jtbd-unclear when jtbd_unclear is true] "
             "[--well-trodden-step-change when well_trodden_step_change is true] "
+            "[--research-class/-appetite/-source/-depth/-target/-question from research when research is returned] "
             f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
         )
         gate_template = (
@@ -1196,6 +1199,7 @@ def compose_ask_script(
             "closing `sizing-assemble`. "
             + SCOUT_RETURN_CLAUSE
             + EXIT_CRITERION_RULES_CLAUSE
+            + " " + RESEARCH_CLASSIFY_CLAUSE
             + scout_closing
             + ledger_clause
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
@@ -1231,6 +1235,7 @@ def compose_ask_script(
         assemble_cmd_js = (
             f"{_lit(SIZING_ASSEMBLE_CMD)}"
             + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
+            + research_assemble_flags_js("_asmFields", "_q")
             + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
             + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
         )
