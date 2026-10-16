@@ -237,9 +237,8 @@ def _research_multi_ask_refusal(args: argparse.Namespace) -> "Optional[str]":
         return "a repeated --ask needs PROMPT"
     if any(i is None for i, _ in targets):
         return "--target needs a preceding --ask"
-    indexes = [i for i, _ in targets]
-    if len(indexes) != len(set(indexes)):
-        return "--target given twice for one --ask"
+    if len(set(targets)) != len(targets):
+        return "--target repeated with an identical value for one --ask"
     for _, raw in targets:
         try:
             _parse_target(raw)
@@ -251,13 +250,15 @@ def _research_multi_ask_refusal(args: argparse.Namespace) -> "Optional[str]":
 
 
 def _scout_questions(args: argparse.Namespace) -> "list[dict]":
-    """The [{text, target, ref}] of every --ask in order; an untargeted one is a web question."""
+    """The [{text, targets}] of every --ask in order; targets are `web` | `repo:PATH` | `local:PROBE[:ARG]` strings, `["web"]` when untargeted."""
+    from coordinator_core.ops import _research_contract as rc
+
     texts = [args.ask, *(args.ask_repeats or [])]
-    bound = {i: _parse_target(raw) for i, raw in (args.targets or [])}
-    return [
-        {"text": text, "target": bound.get(n, ("web", ""))[0], "ref": bound.get(n, ("web", ""))[1]}
-        for n, text in enumerate(texts)
-    ]
+    bound: "dict[int, list[str]]" = {}
+    for i, raw in args.targets or []:
+        kind, ref = _parse_target(raw)
+        bound.setdefault(i, []).append(kind if kind == "web" else f"{kind}{rc.TARGET_ENTRY_SEP}{ref}")
+    return [{"text": text, "targets": bound.get(n) or ["web"]} for n, text in enumerate(texts)]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -291,7 +292,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="targets",
         default=None,
         metavar="web|repo=PATH|local=PROBE",
-        help="research route: the target of the --ask it follows (default web)",
+        help="research route: a target of the --ask it follows; repeats to mix targets (default web)",
     )
     scout_mode = parser.add_mutually_exclusive_group()
     scout_mode.add_argument(

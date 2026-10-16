@@ -371,6 +371,60 @@ def test_stored_reply_for_run_returns_none_without_a_share_dir(repo):
     assert rp.stored_reply_for_run(repo, "sess-none", _base(repo), run_key="run1") is None
 
 
+def test_stored_reply_without_base_finds_the_one_ask_route_reply_by_run_key(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    b = _base(repo)
+    made = rp.review_prep(
+        repo, base=b, paths=["a/b/one.py"], slice_prefix=f"manifest-run1-{b[:12]}-prep",
+        plan_path="manifest.md", session_id=SESSION,
+    )
+    assert made["plan_id"] == "manifest"
+    got = rp.stored_reply_for_run(repo, SESSION, None, run_key="run1")
+    assert got is not None
+    assert got["run_base_sha"] == b
+    assert got["sidecar_path"] == made["sidecar_path"]
+
+
+def test_stored_reply_without_base_returns_none_on_two_bases_for_one_run(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    _stored(repo, ["a/b/one.py"], run="run1")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "second")
+    _stored(repo, ["a/b/one.py"], run="run1")
+    assert rp.stored_reply_for_run(repo, SESSION, None, run_key="run1") is None
+
+
+def test_stored_reply_without_base_and_run_key_returns_none(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    _stored(repo, ["a/b/one.py"])
+    assert rp.stored_reply_for_run(repo, SESSION, None) is None
+
+
+def test_stored_reply_without_base_ignores_a_non_engine_agent_type(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    made = _stored(repo, ["a/b/one.py"])
+    sidecar = repo / made["sidecar_path"]
+    sidecar.write_text(
+        sidecar.read_text(encoding="utf-8").replace("engine:prep-freeze", "executor"), encoding="utf-8"
+    )
+    assert rp.stored_reply_for_run(repo, SESSION, None, run_key="run1") is None
+
+
+def test_prep_block_unions_slice_files_in_order_and_copies_the_rest():
+    reply = {
+        "run_base_sha": "abc",
+        "product_files": 3,
+        "foreign_claims": ["x.py"],
+        "slices": [{"files": ["b.py", "a.py"]}, "junk", {"files": ["a.py", "c.py"]}],
+    }
+    assert rp.prep_block(reply) == {
+        "run_base_sha": "abc",
+        "product_files": 3,
+        "foreign_claims": ["x.py"],
+        "slice_files": ["b.py", "a.py", "c.py"],
+    }
+
+
 def test_registered_in_every_op_set():
     from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass  # noqa: PLC0415
     from coordinator_core.op_scopes import _OP_KEY_SCOPE  # noqa: PLC0415

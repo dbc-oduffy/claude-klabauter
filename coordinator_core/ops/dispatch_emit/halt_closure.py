@@ -25,6 +25,22 @@ def _name(detector) -> str:
     return getattr(detector, "__name__", type(detector).__name__).rsplit(".", 1)[-1]
 
 
+def partial_chunks(owner: Mapping[str, str], pending: Sequence[str], landing: Sequence[str]) -> Dict[str, List[str]]:
+    """Return `{chunk id: its pending paths missing from landing}` for chunks to withhold whole.
+
+    `pending` is every owned path with work to land (changed, declared); `landing` is the subset that
+    survived withholding. A chunk landing only part of its write set would leave HEAD without the
+    rest, so any missing path names the chunk. Pure set arithmetic; spawns nothing.
+    """
+    keep = set(landing)
+    out: Dict[str, List[str]] = {}
+    for p in pending:
+        cid = owner.get(p)
+        if cid is not None and p not in keep:
+            out.setdefault(cid, []).append(p)
+    return out
+
+
 def open_chunks(
     worktree_root: Path,
     owner: Mapping[str, str],

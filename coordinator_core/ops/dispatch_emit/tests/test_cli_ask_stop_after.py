@@ -32,14 +32,14 @@ def test_stop_after_plan_composes_no_execute_phase(repo, capsys):
     assert rc == 0
     script = Path(json.loads(out)["path"]).read_text(encoding="utf-8")
     assert "phase('plan')" in script
-    assert "phase('execute')" not in script
-    assert "phase('review')" not in script
+    assert "phase('Execute')" not in script
+    assert "phase('Review wave')" not in script
 
 
 def test_without_stop_after_composes_execute_phase(repo, capsys):
     rc, out, _ = _emit(repo, capsys, "--ask", "x")
     assert rc == 0
-    assert "phase('execute')" in Path(json.loads(out)["path"]).read_text(encoding="utf-8")
+    assert "phase('Execute')" in Path(json.loads(out)["path"]).read_text(encoding="utf-8")
 
 
 def test_stop_after_without_ask_is_refused_naming_the_flag(repo, capsys):

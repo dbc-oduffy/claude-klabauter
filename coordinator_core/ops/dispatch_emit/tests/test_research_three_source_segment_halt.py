@@ -142,6 +142,10 @@ def _close(repo: Path, params: dict) -> dict:
     for seg in ("web", "repo"):
         (scratch / seg).mkdir(parents=True, exist_ok=True)
         (scratch / seg / "sweep.md").write_text("sweep\n", encoding="utf-8")
+    sizing = params.get("sizing")
+    if sizing:
+        (repo / sizing).parent.mkdir(parents=True, exist_ok=True)
+        (repo / sizing).write_text("sizing\n", encoding="utf-8")
     return asyncio.run(_handler(params, repo / ".git"))
 
 

@@ -10,7 +10,9 @@ is withheld and named. Only a ``ledger-check`` halt lands chunk product, because
 only that halt's ``Lands-Chunks`` (``emit.resume_landed_rows``) and re-runs every other halt's
 chunks; any other halt lands the record and run artifacts only (``halt-record-only``). A
 ``ledger-check`` halt lands a chunk only with its import closure: a chunk whose Python or TS/JS
-imports would be missing at the commit, transitively, is withheld whole (``import-closure-open``).
+imports would be missing at the commit, transitively, is withheld whole (``import-closure-open``),
+and so is a chunk any of whose changed declared writes is withheld for another reason
+(``chunk-write-set-partial``): a chunk lands whole or not at all.
 With no finished chunk the commit is record-only. No receipt, sizing ship,
 plan stamp or close job runs, and the run token is redeemed then always released: a halt never
 spends the token the resumed run's product commit needs.
@@ -307,6 +309,7 @@ def _land(
         for p in product + gone:
             if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate):
                 withheld[p] = "peer-claim-indeterminate"
+    pending = product + gone
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
     art_paths = [p for p in art_paths if p not in withheld]
@@ -317,6 +320,11 @@ def _land(
     elif product or gone:
         from coordinator_core.authoring_leaks import import_closure, ts_import_closure
         from coordinator_core.ops.dispatch_emit import halt_closure
+
+        partial = halt_closure.partial_chunks(owner, pending, product + gone)
+        withheld.update({p: "chunk-write-set-partial" for p in product + gone if owner.get(p) in partial})
+        product = [p for p in product if p not in withheld]
+        gone = [p for p in gone if p not in withheld]
 
         closure_open = halt_closure.open_chunks(
             worktree_root, owner, product + gone + art_paths, (import_closure, ts_import_closure)

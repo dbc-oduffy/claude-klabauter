@@ -15,12 +15,12 @@ from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import op as op_module
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_research"
+_FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_research_probe"
 _ARGV = [
     "--research",
     "--ask", "Q one?",
     "--ask", "Q two?", "--target", "repo=docs/notes.md",
-    "--ask", "Q three?", "--target", "local=settings file fields",
+    "--ask", "Q three?", "--target", "local=claude-json-keys",
 ]
 
 
@@ -73,11 +73,11 @@ def test_split_fans_one_scout_per_question(repo, capsys):
     bodies = [sections[s] for s in slugs]
     assert "Q one?" in bodies[0] and "Target:" not in bodies[0]
     assert "Target: repo `docs/notes.md`" in bodies[1] and "Q two?" in bodies[1]
-    assert "Target: local `settings file fields`" in bodies[2] and "Q three?" in bodies[2]
+    assert "Target: local `claude-json-keys`" in bodies[2] and "Q three?" in bodies[2]
 
     targets = _scout_targets(reply)
     assert targets, "reply carries no scout_targets"
-    assert "docs/notes.md" in json.dumps(targets) and "settings file fields" in json.dumps(targets)
+    assert "docs/notes.md" in json.dumps(targets) and "claude-json-keys" in json.dumps(targets)
 
 
 def test_combine_is_one_scout_over_every_question(repo, capsys):
@@ -88,7 +88,7 @@ def test_combine_is_one_scout_over_every_question(repo, capsys):
     sections = _sections(ask)
     assert list(sections) == ["question"]
     body = sections["question"]
-    for text in ("Q one?", "Q two?", "Q three?", "Target: repo `docs/notes.md`", "Target: local `settings file fields`"):
+    for text in ("Q one?", "Q two?", "Q three?", "Target: repo `docs/notes.md`", "Target: local `claude-json-keys`"):
         assert text in body
 
 

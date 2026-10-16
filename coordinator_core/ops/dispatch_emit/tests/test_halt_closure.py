@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.authoring_leaks import import_closure
-from coordinator_core.ops.dispatch_emit.halt_closure import open_chunks
+from coordinator_core.ops.dispatch_emit.halt_closure import open_chunks, partial_chunks
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -102,6 +102,58 @@ def test_candidates_raising_detector_opens_every_landing_chunk(repo):
 
 def test_empty_landing_returns_empty(repo):
     assert open_chunks(repo, {"pkg/a.py": "A"}, [], [import_closure]) == {}
+
+
+def test_partial_chunk_names_missing_paths_and_whole_chunks_pass():
+    owner = {"a1": "A", "a2": "A", "b1": "B", "run/x": "C"}
+    got = partial_chunks(owner, ["a1", "a2", "b1"], ["a1", "b1"])
+    assert got == {"A": ["a2"]}
+    assert partial_chunks(owner, ["a1", "a2", "b1"], ["a1", "a2", "b1"]) == {}
+    assert partial_chunks(owner, ["unowned"], []) == {}
+    assert partial_chunks(owner, ["a1", "a2"], []) == {"A": ["a1", "a2"]}
+
+
+def test_halt_commit_withholds_chunk_with_a_peer_held_write(repo, monkeypatch):
+    import json
+
+    from coordinator_core.ops.ceremony import commit_v2
+    from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
+
+    _write(repo, "pkg/a1.py", "x = 1\n")
+    _write(repo, "pkg/a2.py", "x = 2\n")
+    _write(repo, "pkg/b1.py", "x = 3\n")
+    chunks = [
+        type("C", (), {"id": "A", "paths": ["pkg/a1.py", "pkg/a2.py"], "report": None})(),
+        type("C", (), {"id": "B", "paths": ["pkg/b1.py"], "report": None})(),
+    ]
+    monkeypatch.setattr(hrc, "done_chunks", lambda *_a: chunks)
+    monkeypatch.setattr(
+        "coordinator_core.ops.dispatch_emit.terminal_commit._own_prefix_files", lambda *_a: []
+    )
+
+    def claims(root, paths, holds, own_sid=None):
+        holds.append(("pkg/a2.py", "peer"))
+        return []
+
+    monkeypatch.setattr(commit_v2, "_peer_claim_warnings", claims)
+    seen: dict = {}
+
+    def fake_dispatch(op, params, repo_root=None):
+        seen.update(params)
+        return {"committed": True}
+
+    monkeypatch.setattr("coordinator_core.warm.entry_seam.reentrant_dispatch", fake_dispatch)
+    (repo / "state/warp/r1").mkdir(parents=True)
+    halted = {"halted": "ledger-check"}
+    reply = hrc._land(repo, repo, {}, "r1", "state/warp/r1", halted)
+    assert "pkg/a1.py" not in seen.get("paths", [])
+    assert "pkg/a2.py" not in seen.get("paths", [])
+    assert "pkg/b1.py" in seen["paths"]
+    assert reply["withheld"]["pkg/a1.py"] == "chunk-write-set-partial"
+    assert reply["withheld"]["pkg/a2.py"] == "peer-held"
+    assert reply["landed_chunks"] == ["B"]
+    assert "Lands-Chunks: B" in seen["message"]
+    json.dumps(reply)
 
 
 def test_finding_on_non_owner_path_is_ignored(repo):

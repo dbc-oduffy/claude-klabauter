@@ -1,0 +1,36 @@
+schema_version: 1
+pipeline: scouts
+description: Scouts research a question each and write a short sourced digest to scratch; an optional probe stage answers local targets first.
+inputs:
+  brief: required
+  scratch_dir: optional
+  flags:
+    local_probe: [true, false]
+  lists:
+    questions:
+      kind: strings
+    probes:
+      kind: strings
+stages:
+  - id: probe
+    phase: Probe
+    agent_type: general-purpose
+    model: haiku
+    template: scouts-probe-prompt-template.md
+    fan_out:
+      over: inputs.probes
+    when:
+      flag: local_probe
+    optional: true
+    output: "{{scratch_dir}}/probe-{{item}}.md"
+  - id: scout
+    phase: Scout
+    agent_type: general-purpose
+    model: sonnet
+    template: scouts-prompt-template.md
+    depends_on: [probe]
+    fan_out:
+      over: inputs.questions
+    max_concurrent: 2
+    web_caller: true
+    output: "{{scratch_dir}}/digest-{{item}}.md"

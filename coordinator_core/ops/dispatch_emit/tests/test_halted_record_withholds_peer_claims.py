@@ -94,7 +94,7 @@ def test_peer_held_run_artifact_is_withheld(repo, oracle):
     assert SIZING not in _landed(repo, out, "--name-only")
 
 
-def test_partly_withheld_chunk_is_not_landed_but_other_path_lands(repo, oracle):
+def test_partly_withheld_chunk_lands_none_of_its_paths(repo, oracle):
     _write_record(repo, RUN)
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
     (repo / "b.py").write_text("b = 1\n", encoding="utf-8")
@@ -103,8 +103,9 @@ def test_partly_withheld_chunk_is_not_landed_but_other_path_lands(repo, oracle):
 
     out = _call(repo, LEDGER)
 
+    # A chunk lands whole or not at all: a.py alone could import b.py's uncommitted half.
     names = _landed(repo, out, "--name-only")
-    assert "a.py" in names and "b.py" not in names
+    assert "a.py" not in names and "b.py" not in names
     assert "Lands-Chunks" not in _message(repo)
     assert "landed_chunks" not in out
 

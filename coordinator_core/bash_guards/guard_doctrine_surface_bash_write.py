@@ -1491,6 +1491,10 @@ def _assignment_indirection_reaches_a_write(
     for segment in segments:
         if not _has_write_marker(segment):
             continue
+        # A git add/commit pathspec through the variable is staging; those
+        # shapes already ignore marker words in quoted operands (-m text).
+        if _is_git_read_shape(segment) or _is_commit_wrapper_read_shape(segment):
+            continue
         if not _has_redirect_marker(segment):
             return True
         without_redirect = _BARE_REDIRECT_RE.sub(
@@ -1606,6 +1610,9 @@ def _interpreter_write_sinks_are_ungoverned(
     return not _has_write_marker("".join(blanked))
 
 
+_STD_STREAM_WRITE_RE = re.compile(r"\bsys\.std(?:out|err)\.write\(")
+
+
 def _is_interpreter_read_shape(segment: str, identifiers_lower: Tuple[str, ...]) -> bool:
     token = _segment_command_token(segment)
     if token is None:
@@ -1616,9 +1623,13 @@ def _is_interpreter_read_shape(segment: str, identifiers_lower: Tuple[str, ...])
         return False
     if _python_dash_m_module(segment) is not None:
         return False
-    if _has_write_marker(segment) and not _interpreter_write_sinks_are_ungoverned(
-        segment, identifiers_lower
-    ):
+    # `>` inside the quoted program is an operator, not a redirect, and
+    # sys.stdout/stderr.write is output, not a file write.
+    program = _STD_STREAM_WRITE_RE.sub(" ", segment)
+    if (
+        _has_non_redirect_write_marker(program)
+        or _has_redirect_marker(_strip_quoted_spans(program))
+    ) and not _interpreter_write_sinks_are_ungoverned(segment, identifiers_lower):
         return False
     if _has_os_exec_marker(segment):
         return False

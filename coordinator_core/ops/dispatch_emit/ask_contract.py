@@ -13,7 +13,8 @@ Signatures implemented in their own modules:
   ask_plan_blitz.wrap_stage(plan_blitz_text: str, *, agent_prefix_var: str | None = None)
                   -> tuple[str, list[str]]
   sizing_fire.resumable_plan(sizing, sizing_rel: str, repo_root, arm) -> ResumePlan | None
-                  (`ResumePlan` is declared here; a plan with every row landed raises SizingFireRefused)
+                  (`ResumePlan` is declared here; a plan with every row landed raises SizingFireRefused
+                  unless a ledger-halt pointer names it, then `ResumePlan.ledger` carries the pointer)
   ask_brief.load_em_brief(repo_root, *, brief, brief_file, context=(), session_id="") -> EmBrief | None
 """
 

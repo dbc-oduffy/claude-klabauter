@@ -34,9 +34,12 @@ def test_wave_reviews_sidecar_paths_are_relativised():
 def test_review_wave_agents_are_prefixed_with_the_design_brief():
     script = _compose()
     assert "const _reviewOuterAgent = agent;" in script
-    assert f"const _reviewAgent = (p, o) => _reviewOuterAgent({_PREFIX} + p, o);" in script
-    start = script.index("const _reviewAgent")
+    shadow = f"const agent = (p, o) => _reviewOuterAgent({_PREFIX} + p, o);"
+    assert script.count(shadow) == 1
+    start = script.index(shadow)
     review = script[script.index("_reviewPrep = (() =>", start):]
-    assert re.search(r"await _reviewAgent\(", review)
     end = review.index("_reviewWave = []; }")
-    assert not re.search(r"(?<![\w.])agent\(", review[:end])
+    # Call sites stay the literal `agent(` token the leg register and phase checks scan for; the
+    # shadow above is what carries the prefix to each of them.
+    assert re.search(r"await agent\(", review[:end])
+    assert "_reviewAgent" not in script

@@ -645,6 +645,52 @@ def _count(value: Any) -> int:
     return len(value) if isinstance(value, (list, tuple)) else 0
 
 
+def _committed_prep(
+    repo_root: Path, integration_path: Optional[Path], prep_data: Dict[str, Any], terminal_sha: Optional[str]
+) -> Dict[str, Any]:
+    """`prep_data`, or on a zero-file prep the run's engine `review.prep` record measured
+    `run_base_sha..terminal_sha` over its own reviewed files.
+
+    A relayed prep can lose `product_files` and `slices[].files`; the engine's stored reply is the
+    truth. Returns `prep_data` unchanged (no read) when it already counts a file, when there is no
+    run record or terminal sha, or when no single engine record matches. The committed range is
+    restricted to the record's files (peers commit inside the range) and excludes
+    `PRODUCT_FILE_EXCLUDED_PREFIXES`; an empty result stays empty, so `mint_refusal` still refuses."""
+    if integration_path is None or not terminal_sha:
+        return prep_data
+    if max(_count(prep_data.get("slice_files")), _count(prep_data.get("product_files"))) > 0:
+        return prep_data
+    from coordinator_core.ops import review_prep
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
+
+    run_key = integration_path.stem.removesuffix(".review-wave-bookkeeping")
+    base = prep_data.get("run_base_sha")
+    if not (isinstance(base, str) and base):
+        base = recorded_run_base(repo_root, run_key)
+    reply = review_prep.stored_reply_for_run(repo_root, integration_path.parent.name, base, run_key=run_key)
+    if reply is None:
+        return prep_data
+    block = review_prep.prep_block(reply)
+    prep = {**prep_data, **block}
+    prep["run_base_sha"] = block["run_base_sha"] or base
+    if prep_data.get("foreign_claims"):
+        prep["foreign_claims"] = prep_data["foreign_claims"]
+    reviewed = [f for f in block["slice_files"] if not f.startswith(PRODUCT_FILE_EXCLUDED_PREFIXES)]
+    if not (prep["run_base_sha"] and reviewed):
+        return {**prep, "slice_files": [], "product_files": 0}
+    try:
+        out = _run_git(
+            ["diff", "--name-only", "-z", f"{prep['run_base_sha']}..{terminal_sha}", "--"]
+            + [git_pathspec(f) for f in reviewed],
+            cwd=str(repo_root),
+        )
+    except _GitUnavailable:
+        return prep
+    changed = set(filter(None, out.split("\0")))
+    files = [f for f in reviewed if f in changed]
+    return {**prep, "slice_files": files, "product_files": len(files), "basis": "range"}
+
+
 def _drop_review_stamp_block(fm_text: str, key: str = "review_stamp") -> str:
     """`fm_text` without any top-level `<key>:` block (the key line and its indented body)."""
     kept: list[str] = []
@@ -815,6 +861,7 @@ def _resolve_mint(
         prep_data = _load_sidecar(prep_path, prep=True)
         if prep_data is None:
             raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
+    prep_data = _committed_prep(repo_root, integration_path, prep_data, terminal_sha)
 
     run_base_sha = prep_data.get("run_base_sha")
     from coordinator_core.ops.dispatch_emit.reverify_delivery import load_delivery
@@ -1222,8 +1269,8 @@ def _assemble_stamp(
     """The `review_stamp` mapping both `mint` and `mint_receipt` write: one home for its
     key set and order, so the plan stamp and the inventory receipt cannot drift.
     `with_delivery=False` omits the `delivery` block (a judge-only stamp: no verifier ran);
-    a None `delivery_verdict` omits it too. `criterion_block` is None for a receipt, which
-    carries no criterion. Reads the terminal commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
+    a None `delivery_verdict` omits it too. `criterion_block` is None for a receipt, which carries no criterion. Reads the terminal
+    commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
     if not terminal_tree_sha:
         try:
             tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))
@@ -1300,6 +1347,7 @@ def mint_receipt(
         prep_data = _load_sidecar(repo_root / prep_rel, prep=True) if prep_rel else None
         if prep_data is None:
             raise MintRefusal(f"review-stamp: refusing to mint a receipt: no prep record for {integration_path}")
+    prep_data = _committed_prep(repo_root, integration_path, prep_data, terminal_sha)
     frozen_claims = prep_data.get("foreign_claims")
     if isinstance(frozen_claims, list) and frozen_claims:
         from coordinator_core.ops.dispatch_emit.reverify_delivery import live_held_claims

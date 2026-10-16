@@ -12,7 +12,7 @@ Scout questions are slugged to [a-z0-9-] (at most 48 chars) because the scouts t
 brief) plus one `repo-compare` segment; `compare_output` names that segment's deliverable.
 
 Negative-spec: loads and validates no manifest (`gate_notebooklm` only rewrites one it is handed), composes no script, resolves no content root; stats a
-repo scout target and never touches a local one; the only writes are ask.md and brief.md under the caller's repo-relative scratch dir, and the per-segment
+repo scout target and checks a local one against the probe allowlist, never running it; reads only the allowlist JSON beside a content root it is handed; the only writes are ask.md and brief.md under the caller's repo-relative scratch dir, and the per-segment
 `<key>/brief.md` and `repo-compare/brief.md` files `bind_repo_targets` writes there.
 """
 
@@ -30,7 +30,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -138,52 +138,120 @@ def topic_slug(ask: str = "", sizing_rel: str = "") -> str:
     return _slug(stem or ask) or _TOPIC_FALLBACK
 
 
-def normalize_scout_questions(root: Path, questions: Sequence[str | Mapping]) -> list[rc.ScoutQuestion]:
-    """Each question as a `ScoutQuestion`: a str is a web question; a mapping is validated.
+_PROBE_ARG_RE = re.compile(rc.PROBE_ARG_PATTERN)
 
-    A repo ref must exist (absolute, else under `root`) and is stored repo-relative POSIX when under
-    `root`, else absolute POSIX; a local ref is a non-empty single line, stored verbatim and never
-    stat'd. Raises one PipelineEmitRefused naming every bad "scout question <n>".
+
+def probe_allowlist(content_root: Path) -> dict[str, bool]:
+    """DoE's probe allowlist as `{probe id: takes an arg}`, read from `<content_root>/contract/scouts-ask-fragment.json`.
+
+    A probe whose `ref` is `PROBE_NO_REF` takes no arg. Raises one PipelineEmitRefused naming the
+    file when it is missing, not JSON, or its `probe_allowlist` is absent or malformed (an empty
+    list is valid and refuses every local target). Runs no probe.
+    """
+    path = Path(content_root) / rc.SCOUTS_ASK_FRAGMENT
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))[rc.PROBE_ALLOWLIST_KEY]
+        return {e["id"]: e.get("ref") != rc.PROBE_NO_REF for e in entries}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
+        raise PipelineEmitRefused([f"{path.as_posix()} has no readable {rc.PROBE_ALLOWLIST_KEY} ({type(err).__name__})"]) from err
+
+
+def _split_entry(entry: object) -> tuple[object, object]:
+    """A target entry as (target, ref): a mapping `{target, ref}`, or the string `web | repo:<ref> | local:<probe>[:<arg>]`."""
+    if isinstance(entry, Mapping):
+        return entry.get("target") or rc.DEFAULT_SCOUT_TARGET, entry.get("ref") or ""
+    if isinstance(entry, str):
+        source, _, ref = entry.partition(rc.TARGET_ENTRY_SEP)
+        return source, ref
+    return None, None
+
+
+def _local_ref_refusal(ref: str, allowlist: Mapping[str, bool] | None) -> str:
+    if allowlist is None:
+        return "local target cannot be checked: no probe allowlist is loaded"
+    probe, sep, arg = ref.partition(rc.TARGET_ENTRY_SEP)
+    if probe not in allowlist:
+        return f"local probe {probe!r} is not in the probe allowlist ({', '.join(sorted(allowlist)) or 'empty'})"
+    if not allowlist[probe]:
+        return f"local probe {probe!r} takes no arg" if sep else ""
+    if not sep or not arg:
+        return f"local probe {probe!r} needs an arg after '{rc.TARGET_ENTRY_SEP}'"
+    if not _PROBE_ARG_RE.fullmatch(arg):
+        return f"local probe arg {arg!r} must match {rc.PROBE_ARG_PATTERN}"
+    return ""
+
+
+def _normalize_target(
+    root: Path, entry: object, allowlist: Mapping[str, bool] | None
+) -> tuple[rc.ScoutTarget | None, str]:
+    """One target entry as a `ScoutTarget` and "", or None and the refusal."""
+    target, ref = _split_entry(entry)
+    if not isinstance(target, str) or not isinstance(ref, str):
+        return None, "target entry must be a string or a {target, ref} mapping"
+    if target not in rc.SCOUT_TARGETS:
+        return None, f"target {target!r} is not one of {', '.join(rc.SCOUT_TARGETS)}"
+    if target == "web":
+        return (None, "a web target takes no ref") if ref else ({"target": target, "ref": ""}, "")
+    if target == "repo":
+        path = Path(ref) if ref and Path(ref).is_absolute() else root / ref
+        if not ref.strip() or not path.exists():
+            return None, f"repo ref {ref!r} is not an existing file or directory"
+        try:
+            ref = path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            ref = path.resolve().as_posix()
+        return {"target": target, "ref": ref}, ""
+    reason = _local_ref_refusal(ref, allowlist)
+    return (None, reason) if reason else ({"target": target, "ref": ref}, "")
+
+
+def normalize_scout_questions(
+    root: Path, questions: Sequence[str | Mapping], allowlist: Mapping[str, bool] | None = None
+) -> list[rc.ScoutQuestion]:
+    """Each question as a `ScoutQuestion`: a str is one web target; a mapping is validated.
+
+    A mapping carries `text` and either the single `target`/`ref` or a `targets` list (not both),
+    each entry `web | repo:<ref> | local:<probe>[:<arg>]` or `{target, ref}`. A repo ref must exist
+    (absolute, else under `root`) and is stored repo-relative POSIX when under `root`, else absolute
+    POSIX. A local ref is `<probe>[:<arg>]`, checked against `allowlist` (probe id -> takes an arg;
+    any local target is refused when None) and never stat'd or run. A duplicate target within one
+    question is refused. Raises one PipelineEmitRefused naming every bad "scout question <n>".
     """
     out: list[rc.ScoutQuestion] = []
     reasons: list[str] = []
     for index, raw in enumerate(questions):
         label = f"scout question {index + 1}"
         if isinstance(raw, str):
-            out.append({"text": raw, "target": rc.DEFAULT_SCOUT_TARGET, "ref": ""})
+            out.append({"text": raw, "targets": [{"target": rc.DEFAULT_SCOUT_TARGET, "ref": ""}]})
             continue
         if not isinstance(raw, Mapping):
             reasons.append(f"{label} must be a string or a mapping")
             continue
         text = raw.get("text")
-        target = raw.get("target") or rc.DEFAULT_SCOUT_TARGET
-        ref = raw.get("ref") or ""
         if not isinstance(text, str):
             reasons.append(f"{label} has no text")
             continue
-        if target not in rc.SCOUT_TARGETS:
-            reasons.append(f"{label} target {target!r} is not one of {', '.join(rc.SCOUT_TARGETS)}")
+        if "targets" in raw and ("target" in raw or "ref" in raw):
+            reasons.append(f"{label} gives both target/ref and targets; use one")
             continue
-        if not isinstance(ref, str):
-            reasons.append(f"{label} ref must be a string")
+        entries = raw["targets"] if "targets" in raw else [{"target": raw.get("target"), "ref": raw.get("ref")}]
+        if not isinstance(entries, (list, tuple)) or not entries:
+            reasons.append(f"{label} targets must be a non-empty list")
             continue
-        if target == "web":
-            if ref:
-                reasons.append(f"{label} is a web target and takes no ref")
-                continue
-        elif target == "repo":
-            path = Path(ref) if ref and Path(ref).is_absolute() else root / ref
-            if not ref.strip() or not path.exists():
-                reasons.append(f"{label} repo ref {ref!r} is not an existing file or directory")
-                continue
-            try:
-                ref = path.resolve().relative_to(root.resolve()).as_posix()
-            except ValueError:
-                ref = path.resolve().as_posix()
-        elif not ref.strip() or "\n" in ref or "\r" in ref:
-            reasons.append(f"{label} local ref must be a non-empty single line naming what to probe")
-            continue
-        out.append({"text": text, "target": target, "ref": ref})
+        targets: list[rc.ScoutTarget] = []
+        bad = False
+        for entry in entries:
+            normal, reason = _normalize_target(root, entry, allowlist)
+            if normal is None:
+                reasons.append(f"{label} {reason}")
+                bad = True
+            elif normal in targets:
+                reasons.append(f"{label} repeats target {normal['target']}" + (f" {normal['ref']!r}" if normal["ref"] else ""))
+                bad = True
+            else:
+                targets.append(normal)
+        if not bad:
+            out.append({"text": text, "targets": targets})
     if reasons:
         raise PipelineEmitRefused(reasons)
     return out
@@ -195,10 +263,15 @@ def multi_ask_preamble(questions: Sequence[rc.ScoutQuestion | str]) -> str:
     return "Research questions:\n\n" + "\n".join(f"{n}. {t.strip()}" for n, t in enumerate(texts, 1))
 
 
-def _target_line(question: rc.ScoutQuestion) -> str:
-    if question["target"] == rc.DEFAULT_SCOUT_TARGET:
-        return ""
-    return f"{rc.TARGET_LINE_PREFIX}{question['target']} `{question['ref']}`"
+def _target_lines(question: rc.ScoutQuestion) -> list[str]:
+    """One `Target:` line per target in list order; none for a question whose targets are exactly [web]."""
+    targets = question["targets"]
+    if all(t["target"] == rc.DEFAULT_SCOUT_TARGET for t in targets):
+        return []
+    return [
+        f"{rc.TARGET_LINE_PREFIX}{t['target']}" + (f" `{t['ref']}`" if t["target"] != rc.DEFAULT_SCOUT_TARGET else "")
+        for t in targets
+    ]
 
 
 def scout_slugs(questions: Sequence[str | rc.ScoutQuestion]) -> list[str]:
@@ -225,21 +298,27 @@ def scout_slugs(questions: Sequence[str | rc.ScoutQuestion]) -> list[str]:
 
 
 def write_ask(
-    root: Path, scratch_rel: str, ask: str, questions: Sequence[str | Mapping] = (), mode: str = rc.DEFAULT_SCOUT_MODE
+    root: Path,
+    scratch_rel: str,
+    ask: str,
+    questions: Sequence[str | Mapping] = (),
+    mode: str = rc.DEFAULT_SCOUT_MODE,
+    allowlist: Mapping[str, bool] | None = None,
 ) -> str:
     """Write `<root>/<scratch_rel>/ask.md` and return its repo-relative POSIX path.
 
     No questions: the file is the ask verbatim. Otherwise the ask, then (two or more questions)
     `multi_ask_preamble`, then sections. Split: each question under a `## <slug>` heading, the
-    section a scout finds by its `{{item}}`. Combine: one `## question` section, numbered. A repo
-    or local question's text is preceded by its `Target:` line. Refuses an empty ask, an unknown
-    mode, or questions `normalize_scout_questions`/`scout_slugs` refuse.
+    section a scout finds by its `{{item}}`. Combine: one `## question` section, numbered. A question
+    with a repo or local target has one `Target:` line per target before its text (combine: the first
+    on the number line, the rest indented). Refuses an empty ask, an unknown mode, or questions
+    `normalize_scout_questions` (given `allowlist`)/`scout_slugs` refuse.
     """
     if not isinstance(ask, str) or not ask.strip():
         raise PipelineEmitRefused(["the ask is empty"])
     if mode not in rc.SCOUT_MODES:
         raise PipelineEmitRefused([f"scout mode {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
-    normalized = normalize_scout_questions(root, questions)
+    normalized = normalize_scout_questions(root, questions, allowlist)
     slugs = scout_slugs(normalized)
     text = ask
     if slugs:
@@ -249,14 +328,14 @@ def write_ask(
         if mode == "combine":
             items = []
             for n, q in enumerate(normalized, 1):
-                target = _target_line(q)
-                items.append(f"{n}. {target}\n   {q['text'].strip()}" if target else f"{n}. {q['text'].strip()}")
+                lines = _target_lines(q) + [q["text"].strip()]
+                items.append(f"{n}. " + "\n   ".join(lines))
             text = head + f"\n\n## {rc.COMBINED_SCOUT_ITEM}\n\n" + "\n".join(items) + "\n"
         else:
             sections = []
             for slug, q in zip(slugs, normalized):
-                target = _target_line(q)
-                sections.append(f"\n\n## {slug}\n\n" + (f"{target}\n\n" if target else "") + q["text"].strip())
+                lines = _target_lines(q)
+                sections.append(f"\n\n## {slug}\n\n" + "".join(f"{line}\n" for line in lines) + ("\n" if lines else "") + q["text"].strip())
             text = head + "".join(sections) + "\n"
     rel = f"{scratch_rel.rstrip('/')}/{ASK_FILE}"
     target = root / rel
@@ -465,6 +544,14 @@ def _deep_roster(sources: Sequence[str]) -> list[dict[str, str]]:
     return roster
 
 
+def _has_local_target(question: str | Mapping) -> bool:
+    """Whether a raw or normalised question names a local target (any input form)."""
+    if not isinstance(question, Mapping):
+        return False
+    entries = question["targets"] if "targets" in question else [question]
+    return any(_split_entry(e)[0] == "local" for e in entries if isinstance(e, (str, Mapping)))
+
+
 def segments_for(
     shape: rc.ShapeResult,
     *,
@@ -481,7 +568,9 @@ def segments_for(
 
     Every segment binds `brief_rel` and `scratch_rel` and the flags `shape["flags"]` names for its
     pipeline. The scouts segment carries the slugs of `questions` (with none, or in combine `mode`,
-    the one entry `question`, the bare or combined ask); the unblock segment carries the deep roster, three role members plus
+    the one entry `question`, the bare or combined ask), the list `probes` (slugs of the questions
+    with a local target; combine: `question` when any has one) and the flag `local_probe`
+    (true iff `probes` is non-empty); the unblock segment carries the deep roster, three role members plus
     one specialist per `sources` entry that has one; the notebooklm segment carries the refs of
     the `targets` whose source is notebooklm as its notebooks. `CORPUS_DEFAULT_LISTS` is bound by
     the caller, which sees which lists each loaded manifest declares. With `repo_segments`, the
@@ -497,9 +586,15 @@ def segments_for(
             if mode not in rc.SCOUT_MODES:
                 raise PipelineEmitRefused([f"scout mode {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
             slugs = scout_slugs(questions) if questions else []
+            local = [slug for slug, q in zip(slugs, questions) if _has_local_target(q)]
             if mode == "combine" or not slugs:
                 slugs = [rc.COMBINED_SCOUT_ITEM]
             lists[_QUESTIONS_LIST] = tuple(slugs)
+            # Bound only when a question has a local target: a manifest that predates the probe
+            # stage (DoE's live one, until it ships) refuses any undeclared list or flag.
+            if local:
+                lists[rc.PROBES_LIST] = (rc.COMBINED_SCOUT_ITEM,) if mode == "combine" else tuple(local)
+                flags[rc.LOCAL_PROBE_FLAG] = True
         elif pipeline == rc.DEEP_PIPELINE:
             lists[_ROSTER_LIST] = tuple(_deep_roster(sources))
         elif pipeline == _NOTEBOOKLM_PIPELINE:

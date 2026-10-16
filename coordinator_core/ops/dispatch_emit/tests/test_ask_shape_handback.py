@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -44,10 +45,12 @@ def test_shape_sizing_hands_back_one_line_with_a_clean_exit(tmp_path, monkeypatc
     code = cli.main(["--sizing", REL, "--repo-root", str(tmp_path)])
     out = capsys.readouterr().out
     assert code == 0
-    assert out.strip() == (
-        "Job unclear: unclear job. Needs a PM conversation (coordinator:shape room); "
-        "re-run --ask once the JTBD is stated."
-    )
+    assert json.loads(out) == {
+        "hand_back": (
+            "Job unclear: unclear job. Needs a PM conversation (coordinator:shape room); "
+            "re-run --ask once the JTBD is stated."
+        )
+    }
 
 
 def test_topic_falls_back_to_a_slice_of_intent():

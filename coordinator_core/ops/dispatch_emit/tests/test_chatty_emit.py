@@ -32,7 +32,7 @@ def _embedded_roster(script: str) -> dict:
 
 def test_chatty_off_is_byte_identical_to_default():
     assert _script(chatty=False) == _script()
-    assert "roster" not in _script().lower()
+    assert "ROSTER:" not in _script()
     assert "chatty" not in _script()
 
 

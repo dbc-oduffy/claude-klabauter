@@ -289,7 +289,7 @@ def _hold(monkeypatch, held: set) -> None:
     monkeypatch.setattr(commit_v2, "_peer_claim_warnings", fake)
 
 
-def test_peer_held_done_path_is_withheld_and_named(repo, monkeypatch):
+def test_peer_held_path_withholds_its_whole_chunk_and_names_both(repo, monkeypatch):
     _write_record(repo, RUN)
     (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
     (repo / "other.py").write_text("o = 1\n", encoding="utf-8")
@@ -298,9 +298,9 @@ def test_peer_held_done_path_is_withheld_and_named(repo, monkeypatch):
 
     out = _call(repo, LEDGER)
 
-    assert out["withheld"] == {"other.py": "peer-held"}
+    assert out["withheld"] == {"other.py": "peer-held", "done.py": "chunk-write-set-partial"}
     names = _landed(repo, out, "--name-only")
-    assert "done.py" in names and "other.py" not in names
+    assert "done.py" not in names and "other.py" not in names
 
 
 def test_done_tracked_deletion_is_declared_and_never_tracked_path_is_not_staged(repo):

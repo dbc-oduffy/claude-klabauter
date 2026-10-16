@@ -1054,6 +1054,50 @@ def _em_mailbox(root: Path, scratch_rel: str) -> dict:
 _LEGACY_RESEARCH_TIER = {"scouts": "scouts", "notebooklm": "corpus", "unblock": "deep"}
 
 
+def _sizing_scout_mode(research: dict, given_mode: Optional[str]) -> Optional[str]:
+    """The sizing's `question_mode`, refused when an explicit `scout_mode` names another or it is not a mode."""
+    from coordinator_core.ops import _research_contract as rc
+
+    sized = research.get(rc.QUESTION_MODE_KEY)
+    if not sized:
+        return None
+    if sized not in rc.SCOUT_MODES:
+        raise PipelineEmitRefused([f"sizing {rc.QUESTION_MODE_KEY} {sized!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
+    if given_mode and given_mode != sized:
+        raise PipelineEmitRefused(
+            [f"{rc.SCOUT_MODE_PARAM} {given_mode!r} differs from the sizing's {rc.QUESTION_MODE_KEY} {sized!r}; drop one"]
+        )
+    return sized
+
+
+def _sizing_scout_questions(research: dict) -> list:
+    """`research.questions` as scout questions: each gains the `question_targets` entries numbered for it (a question with none is web).
+
+    Refuses an entry whose question number is outside 1..N, or any entry when there are no questions.
+    """
+    from coordinator_core.ops import _research_contract as rc
+
+    texts = [str(q) for q in research.get("questions") or ()]
+    raw_entries = list(research.get(rc.QUESTION_TARGETS_KEY) or ())
+    reasons = [f"{rc.QUESTION_TARGETS_KEY} entry {e!r} is not a mapping" for e in raw_entries if not isinstance(e, dict)]
+    entries = [e for e in raw_entries if isinstance(e, dict)]
+    reasons += [
+        f"{rc.QUESTION_TARGETS_KEY} entry names question {e.get('question')!r}, outside 1..{len(texts)}"
+        for e in entries
+        if not (type(e.get("question")) is int and 1 <= e["question"] <= len(texts))
+    ]
+    reasons += [
+        f"{rc.QUESTION_TARGETS_KEY} entry {e!r} has no string source" for e in entries if not isinstance(e.get("source"), str)
+    ]
+    if reasons:
+        raise PipelineEmitRefused(reasons)
+    questions: list = []
+    for n, text in enumerate(texts, 1):
+        mine = [{"target": e["source"], "ref": e.get("ref", "")} for e in entries if e["question"] == n]
+        questions.append({"text": text, "targets": mine} if mine else text)
+    return questions
+
+
 def _research_route_setup(
     params: dict, repo_root: Optional[Path], from_sizing: Optional[str], ask: object
 ) -> tuple[dict, dict, dict]:
@@ -1081,7 +1125,8 @@ def _research_route_setup(
         if slug_refusal:
             raise PipelineEmitRefused([slug_refusal])
     lists = dict(params.get("lists") or {})
-    mode = params.get(rc.SCOUT_MODE_PARAM) or rc.DEFAULT_SCOUT_MODE
+    given_mode = params.get(rc.SCOUT_MODE_PARAM)
+    mode = given_mode or rc.DEFAULT_SCOUT_MODE
     if mode not in rc.SCOUT_MODES:
         raise PipelineEmitRefused([f"{rc.SCOUT_MODE_PARAM} {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
     raw_questions = params.get(rc.SCOUT_QUESTIONS_PARAM)
@@ -1095,19 +1140,19 @@ def _research_route_setup(
             raise PipelineEmitRefused(mixed)
         if isinstance(raw_questions, (str, bytes)) or not isinstance(raw_questions, (list, tuple)):
             raise PipelineEmitRefused([f"{rc.SCOUT_QUESTIONS_PARAM} must be a list of questions"])
-        given_root = repo_root or params.get("target_root")
-        if not given_root:
-            raise ValueError("dispatch.emit research route requires repo_root or target_root")
-        questions = research_emit.normalize_scout_questions(Path(given_root), raw_questions)
+        questions = list(raw_questions)
     else:
         questions = [str(q) for q in lists.get("questions") or ()]
+    sizing_rel = ""
     if from_sizing:
         root = _sizing_root(params, repo_root, str(from_sizing))
-        brief_rel = normalize_sizing_rel(root, str(from_sizing))
+        brief_rel = sizing_rel = normalize_sizing_rel(root, str(from_sizing))
         research = load_sizing(root, brief_rel).get("research")
         if not isinstance(research, dict) or not research:
             raise PipelineEmitRefused([f"sizing {brief_rel} has no research block; set one with sizing-assemble --research-class"])
-        questions = questions or [str(q) for q in research.get("questions") or ()]
+        mode = _sizing_scout_mode(research, given_mode) or mode
+        if not questions:
+            questions = _sizing_scout_questions(research)
     else:
         given_root = repo_root or params.get("target_root")
         if not given_root:
@@ -1115,12 +1160,18 @@ def _research_route_setup(
         root = Path(given_root)
         research = {"value_class": "scouts", "appetite": "medium"}
         brief_rel = ""
+    allowlist = (
+        research_emit.probe_allowlist(_pipeline_content_root())
+        if any(research_emit._has_local_target(q) for q in questions)
+        else None
+    )
+    questions = research_emit.normalize_scout_questions(root, questions, allowlist)
     shape = research_shape.shape(research)
     digest_parts = {
         "brief": brief_rel or str(ask), "research": research, "lists": lists,
         "flags": params.get("flags") or {}, "context": [str(c) for c in params.get("context") or ()],
     }
-    if raw_questions or mode != rc.DEFAULT_SCOUT_MODE:
+    if raw_questions or from_sizing or mode != rc.DEFAULT_SCOUT_MODE:
         digest_parts["scout_questions"] = questions
         digest_parts["scout_mode"] = mode
     digest = research_emit.ask_digest(root, digest_parts)
@@ -1132,11 +1183,11 @@ def _research_route_setup(
         scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
     else:
         scratch_rel = _local_only_scratch(local_root, params.get("scratch_dir"), run_id)
-    if not from_sizing:
+    if not from_sizing or (questions and not lists.get("questions")):
         ask_text = str(ask or "")
-        if raw_questions and not ask_text.strip():
+        if (raw_questions or from_sizing) and not ask_text.strip():
             ask_text = questions[0]["text"]
-        brief_rel = research_emit.write_ask(root, scratch_rel, ask_text, questions, mode)
+        brief_rel = research_emit.write_ask(root, scratch_rel, ask_text, questions, mode, allowlist)
     members_brief = research_emit.bind_context(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
@@ -1179,6 +1230,16 @@ def _research_route_setup(
             except PipelineEmitRefused as exc:
                 reasons.extend(f"pipeline {pipeline!r}: {r}" for r in exc.reasons)
                 continue
+        if inputs.lists.get(rc.PROBES_LIST) and rc.PROBES_LIST not in manifest.lists:
+            reasons.append(
+                f"pipeline {pipeline!r}: a local target needs the {rc.PROBES_LIST} list, which this manifest does not declare"
+            )
+            continue
+        inputs = replace(
+            inputs,
+            lists={k: v for k, v in inputs.lists.items() if k != rc.PROBES_LIST or k in manifest.lists},
+            flags={k: v for k, v in inputs.flags.items() if k != rc.LOCAL_PROBE_FLAG or k in manifest.flags},
+        )
         defaults = research_emit.corpus_default_lists(
             pipeline, [q["text"] if isinstance(q, dict) else q for q in questions]
         )
@@ -1218,11 +1279,11 @@ def _research_route_setup(
         "tier": shape["tier"],
         "run_id": run_id,
         "topic_slug": given_topic
-        or research_emit.topic_slug(str(ask or ""), brief_rel if from_sizing else ""),
+        or research_emit.topic_slug(str(ask or ""), sizing_rel),
         "value_class": str(research["value_class"]),
     }
     if from_sizing:
-        close_params["sizing"] = brief_rel
+        close_params["sizing"] = sizing_rel
     if local_root is not None:
         close_params["local_root"] = local_root.as_posix()
     for index, (manifest, _, _) in enumerate(segments):
@@ -1246,9 +1307,8 @@ def _research_route_setup(
         ]
     scout_targets: list[dict] = []
     if any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments):
-        normalized = research_emit.normalize_scout_questions(root, questions) if questions else []
-        slugs = [rc.COMBINED_SCOUT_ITEM] * len(normalized) if mode == "combine" else research_emit.scout_slugs(normalized)
-        scout_targets = [{"slug": s, "target": q["target"], "ref": q["ref"]} for s, q in zip(slugs, normalized)]
+        slugs = [rc.COMBINED_SCOUT_ITEM] * len(questions) if mode == "combine" else research_emit.scout_slugs(questions)
+        scout_targets = [{"slug": s, "targets": q["targets"]} for s, q in zip(slugs, questions)]
     research_ctx = {
         "root": root,
         "run_id": run_id,

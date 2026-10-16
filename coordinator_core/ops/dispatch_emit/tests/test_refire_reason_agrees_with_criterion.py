@@ -41,7 +41,7 @@ def test_settled_criterion_reads_met_in_the_next_action_params():
 def test_gated_withheld_row_with_not_met_criterion_still_blocks():
     item = _item("R1", "not_met", withheld_by="C9", remaining=["C9 is gated"])
     (out,) = _run([_judged([item])], judged=True, gated=("C9",))
-    assert out["halted_by"] is None
+    assert out["halted_by"]["halted"] == "criterion_not_met"
     revise = out["revise_and_refire"]
     assert revise is not None and revise["reason"].startswith("criterion not_met")
     assert out["commit"] is None  # a halt commits its record only (a93b0ee881)

@@ -8,7 +8,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_research"
+_FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_research_probe"
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def repo(monkeypatch, tmp_path):
 _QS = [
     "What does the web say?",
     {"text": "How does a work?", "target": "repo", "ref": "src/a.py"},
-    {"text": "Is tool present?", "target": "local", "ref": "which git"},
+    {"text": "Is tool present?", "target": "local", "ref": "claude-json-keys"},
 ]
 
 
@@ -42,12 +42,12 @@ def test_split_gives_one_slug_per_question_and_reports_targets(repo):
     assert len(slugs) == 3 and "question" not in slugs
     assert shape["scout_mode"] == "split"
     assert shape["scout_targets"] == [
-        {"slug": slugs[0], "target": "web", "ref": ""},
-        {"slug": slugs[1], "target": "repo", "ref": "src/a.py"},
-        {"slug": slugs[2], "target": "local", "ref": "which git"},
+        {"slug": slugs[0], "targets": [{"target": "web", "ref": ""}]},
+        {"slug": slugs[1], "targets": [{"target": "repo", "ref": "src/a.py"}]},
+        {"slug": slugs[2], "targets": [{"target": "local", "ref": "claude-json-keys"}]},
     ]
     ask = (repo / ctx["brief"]).read_text(encoding="utf-8")
-    assert "Target: repo `src/a.py`" in ask and "Target: local `which git`" in ask
+    assert "Target: repo `src/a.py`" in ask and "Target: local `claude-json-keys`" in ask
 
 
 def test_combine_gives_one_combined_scout(repo):

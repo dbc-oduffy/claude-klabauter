@@ -37,11 +37,21 @@ def _compose(wrap=None, **over):
     return script, seen
 
 
+# Deliberately unbriefed: the per-wave committer is mechanical (exact message and paths, no task
+# judgement), and the blinded falsifier-integrity reviewer row (schema-bearing `work:` call) is
+# handed only its brief file so the EM's framing cannot colour its verdict.
+_UNBRIEFED = {"commit:wave-", "work:blinded-reviewer"}
+
+
 def _agent_prompts(script: str) -> list[str]:
     prompts = []
     for m in re.finditer(r"(?<![\w.])agent\(", script):
         end = script.index("label:", m.end())
-        prompts.append(script[m.end():end])
+        label = re.match(r"label: '([^']*)'", script[end:]).group(1)
+        if label == "work:" and "schema:" in script[end : script.index("})", end)]:
+            label = "work:blinded-reviewer"
+        if label not in _UNBRIEFED:
+            prompts.append(script[m.end():end])
     return prompts
 
 

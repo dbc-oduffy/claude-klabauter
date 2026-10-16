@@ -45,4 +45,14 @@ def test_scout_target_and_mode_vocabulary():
     assert rc.TARGET_LINE_PREFIX == "Target: "
     assert rc.SCOUT_QUESTIONS_PARAM == "scout_questions"
     assert rc.SCOUT_MODE_PARAM == "scout_mode"
-    assert set(rc.ScoutQuestion.__annotations__) == {"text", "target", "ref"}
+    assert set(rc.ScoutQuestion.__annotations__) == {"text", "targets"}
+    assert set(rc.ScoutTarget.__annotations__) == {"target", "ref"}
+    assert rc.PROBES_LIST == "probes"
+    assert rc.LOCAL_PROBE_FLAG == "local_probe"
+    assert rc.TARGET_ENTRY_SEP == ":"
+    assert rc.PROBE_ARG_PATTERN == r"[A-Za-z0-9._-]+"
+    assert rc.SCOUTS_ASK_FRAGMENT == "contract/scouts-ask-fragment.json"
+    assert rc.PROBE_ALLOWLIST_KEY == "probe_allowlist"
+    assert rc.PROBE_NO_REF == "none"
+    assert rc.QUESTION_MODE_KEY == "question_mode"
+    assert rc.QUESTION_TARGETS_KEY == "question_targets"

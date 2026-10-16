@@ -69,19 +69,41 @@ SCOUT_MODES: Final = ("split", "combine")
 DEFAULT_SCOUT_MODE: Final = "split"
 # The one fan-out item of a combine run and of a bare ask.
 COMBINED_SCOUT_ITEM: Final = "question"
-# Opens a repo/local question's ask.md section; absence means web.
+# Opens each target line of a question's ask.md section (one line per target); a web-only
+# question carries none.
 TARGET_LINE_PREFIX: Final = "Target: "
 # dispatch.emit params the CLI sends and the research route reads.
 SCOUT_QUESTIONS_PARAM: Final = "scout_questions"
 SCOUT_MODE_PARAM: Final = "scout_mode"
 
+# Scouts-segment names: list of local-target question slugs, and the flag true iff it is non-empty.
+PROBES_LIST: Final = "probes"
+LOCAL_PROBE_FLAG: Final = "local_probe"
+# Splits a target entry string: source, then (local only) probe id, then arg.
+TARGET_ENTRY_SEP: Final = ":"
+# A local arg is substituted into a shell command; only this charset (fullmatch) is admitted.
+PROBE_ARG_PATTERN: Final = r"[A-Za-z0-9._-]+"
+# DoE's probe allowlist, relative to the content root; a probe whose ref is PROBE_NO_REF takes no arg.
+SCOUTS_ASK_FRAGMENT: Final = "contract/scouts-ask-fragment.json"
+PROBE_ALLOWLIST_KEY: Final = "probe_allowlist"
+PROBE_NO_REF: Final = "none"
+# Keys of the sizing object's research block.
+QUESTION_MODE_KEY: Final = "question_mode"
+QUESTION_TARGETS_KEY: Final = "question_targets"
 
-class ScoutQuestion(TypedDict):
-    """One scout question: its text, its target (SCOUT_TARGETS) and the target's ref ("" for web)."""
 
-    text: str
+class ScoutTarget(TypedDict):
+    """One target (SCOUT_TARGETS) and its ref ("" for web)."""
+
     target: str
     ref: str
+
+
+class ScoutQuestion(TypedDict):
+    """One scout question: its text and its ordered, non-empty list of targets."""
+
+    text: str
+    targets: list[ScoutTarget]
 
 
 class ShapeResult(TypedDict):

@@ -180,7 +180,7 @@ def _stored_reply(sidecar: Path, base: str, paths: List[str], head: Optional[str
 def stored_reply_for_run(
     repo_root: Path,
     session_id: str,
-    base: str,
+    base: Optional[str],
     *,
     run_key: Optional[str] = None,
     within: Sequence[str] = (),
@@ -191,14 +191,19 @@ def stored_reply_for_run(
     ``execute_review.prep_slice_id_for``, not imported: that module is heavy). A file is kept when
     its name contains ``run_key`` (if given), its ``agent_type`` is ``engine:prep-freeze``, its
     ``run_base_sha`` is ``base`` and, when ``within`` is non-empty, every ``paths`` entry is in it.
-    Exactly one kept file returns; none, several or an unreadable one return ``None``."""
-    if not session_id or not base:
+    Exactly one kept file returns; none, several or an unreadable one return ``None``.
+
+    ``base`` may be ``None`` only together with ``run_key``: the glob is then
+    ``*-prep.review-prep.md`` and the base check is skipped, so two kept replies for one run
+    (different bases) return ``None``. Trap: ``run_key`` is a substring match on the file name, so a
+    run id that prefixes another run's id keeps both and returns ``None``."""
+    if not session_id or not (base or run_key):
         return None
     share = Path(share_dir(str(repo_root), session_id))
     allowed = set(within)
     kept: List[dict] = []
     try:
-        candidates = sorted(share.glob(f"*-{base[:12]}-prep.review-prep.md"))
+        candidates = sorted(share.glob(f"*-{base[:12]}-prep.review-prep.md" if base else "*-prep.review-prep.md"))
     except OSError:
         return None
     for sidecar in candidates:
@@ -211,13 +216,29 @@ def stored_reply_for_run(
             return None
         if not isinstance(fm, dict) or any(k not in fm for k in _STORED_KEYS):
             continue
-        if fm.get("agent_type") != "engine:prep-freeze" or fm["run_base_sha"] != base:
+        if fm.get("agent_type") != "engine:prep-freeze" or (base and fm["run_base_sha"] != base):
             continue
         paths = fm.get("paths")
         if allowed and not (isinstance(paths, list) and all(p in allowed for p in paths)):
             continue
         kept.append({**{k: fm[k] for k in _STORED_KEYS}, "error": None, "sidecar_path": _rel(sidecar, repo_root)})
     return kept[0] if len(kept) == 1 else None
+
+
+def prep_block(reply: dict) -> dict:
+    """A stored reply in the run record's ``prep`` shape; ``slice_files`` is the ordered,
+    deduplicated union of the dict slices' ``files``."""
+    seen: dict = {}
+    for s in reply.get("slices") or []:
+        if isinstance(s, dict):
+            for f in s.get("files") or []:
+                seen.setdefault(f, None)
+    return {
+        "run_base_sha": reply.get("run_base_sha"),
+        "product_files": reply.get("product_files"),
+        "foreign_claims": reply.get("foreign_claims") or [],
+        "slice_files": list(seen),
+    }
 
 
 def _claim(lock: Path) -> bool:

@@ -1563,7 +1563,7 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, spine_plan: %s.spine_plan ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, spine_plan: %s.spine_plan ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
@@ -1579,7 +1579,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 6)}\n"
+            f"      {take_gate % (('_apm',) * 7)}\n"
             "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
@@ -1594,7 +1594,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 6)}\n"
+            f"      {take_gate % (('_xl',) * 7)}\n"
             "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
@@ -1998,14 +1998,15 @@ def compose_ask_script(
         "  const _noReviewPaths = !!((_manifest?.rows ?? []).length && "
         "!(_manifest?.review_declared_paths ?? []).length);"
     )
-    # Trap: textual rewrite of the review-wave JS, not a parse -- an `agent(` inside a string or
-    # template literal in review_text is rewritten too.
-    review_text = re.sub(r"(?<![\w.])agent\(", "_reviewAgent(", review_text)
+    # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
+    # renaming its call sites: the leg register, phase-title and brief checks find legs by the
+    # literal `agent(` token, so a renamed call site is invisible to every one of them.
     b.append("  const _reviewOuterAgent = agent;")
-    b.append(f"  const _reviewAgent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
+    b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
         f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_noReviewPaths) {{\n" + review_text + "\n  }"
     )
+    b.append("  }")
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_XS)}) {{ _reviewWave = []; }}")

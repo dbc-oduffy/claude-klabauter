@@ -26,16 +26,29 @@ def _run(*argv):
 
 
 def test_two_asks_with_targets_and_combine(captured):
-    code = _run("--ask", "Q1", "--target", "repo=src", "--ask", "Q2", "--ask", "Q3", "--target", "local=uname -a", "--combine")
+    code = _run("--ask", "Q1", "--target", "repo=src", "--ask", "Q2", "--ask", "Q3", "--target", "local=uname:arg-1", "--combine")
     assert code == 0
     p = captured[0]
     assert p["ask"] == "Q1"
     assert p[rc.SCOUT_QUESTIONS_PARAM] == [
-        {"text": "Q1", "target": "repo", "ref": "src"},
-        {"text": "Q2", "target": "web", "ref": ""},
-        {"text": "Q3", "target": "local", "ref": "uname -a"},
+        {"text": "Q1", "targets": ["repo:src"]},
+        {"text": "Q2", "targets": ["web"]},
+        {"text": "Q3", "targets": ["local:uname:arg-1"]},
     ]
     assert p[rc.SCOUT_MODE_PARAM] == "combine"
+
+
+def test_repeated_target_builds_a_list(captured):
+    assert _run("--ask", "Q1", "--target", "web", "--target", "repo=src", "--target", "local=p:a") == 0
+    assert captured[0][rc.SCOUT_QUESTIONS_PARAM] == [
+        {"text": "Q1", "targets": ["web", "repo:src", "local:p:a"]}
+    ]
+
+
+def test_identical_duplicate_target_refused(captured, capsys):
+    assert _run("--ask", "Q1", "--target", "repo=src", "--target", "repo=src") == cli_module.EXIT_USAGE
+    assert "ERROR" in capsys.readouterr().err
+    assert captured == []
 
 
 def test_split_mode_sent(captured):
@@ -45,7 +58,7 @@ def test_split_mode_sent(captured):
 
 def test_single_ask_with_target_sends_one_item(captured):
     assert _run("--ask", "Q1", "--target", "web") == 0
-    assert captured[0][rc.SCOUT_QUESTIONS_PARAM] == [{"text": "Q1", "target": "web", "ref": ""}]
+    assert captured[0][rc.SCOUT_QUESTIONS_PARAM] == [{"text": "Q1", "targets": ["web"]}]
     assert rc.SCOUT_MODE_PARAM not in captured[0]
 
 
@@ -61,7 +74,6 @@ def test_plain_ask_unchanged(captured):
     [
         ["--ask", "Q1", "--ask"],
         ["--target", "web", "--ask", "Q1"],
-        ["--ask", "Q1", "--target", "web", "--target", "repo=x"],
         ["--ask", "Q1", "--target", "ftp"],
         ["--ask", "Q1", "--target", "repo="],
         ["--ask", "Q1", "--target", "web=x"],

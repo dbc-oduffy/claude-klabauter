@@ -91,7 +91,10 @@ def close_repo(tmp_path):
     repo.mkdir()
     _git(repo, "init", "-q")
     (repo / "seed.txt").write_text("seed\n")
-    _git(repo, "add", "seed.txt")
+    sizing = repo / "state" / "sizings" / "2026-10-08-r.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("sizing: stub\n")
+    _git(repo, "add", "seed.txt", "state/sizings/2026-10-08-r.yaml")
     _git(repo, "commit", "-q", "-m", "seed")
     return repo
 
