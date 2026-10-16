@@ -73,6 +73,9 @@ Negative-spec:
     (``grind_terminal_commit``): one commit_v2 over the finished rows' declared paths, a
     ``Grind-Row:`` trailer per landed row; it drops ledger-root paths and deletions git cannot
     see, reports them, and carries no ``stranded``/``undeclared_dirty``. Carrying ``halted_by`` too is refused.
+  - Lands a file the run's review stage wrote outside the declared writes as review residue (named
+    files only, admitted by a review-stage touch record; ``Review-Residue:`` trailers), or refuses
+    ``review-edit-unlanded`` naming the files; never leaves it silently dirty.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine. A dirty file in a
     declared directory that this run itself touched (its chunk reports, review ``slice_files``,
@@ -234,6 +237,38 @@ def _error(message: str, **extra: object) -> dict:
     result: dict = {"committed": False, "sha": None, "error": message}
     result.update(extra)
     return result
+
+
+def _landing_integrity_gate(
+    worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
+    params: dict, run_id: Optional[str],
+) -> dict:
+    """Pre-commit integrity findings over the product landing set (unparseable ``.py``, and a
+    blob dropping lines a foreign commit added since the run base). Returns ``{}``-like extras:
+    ``refused`` + ``integrity`` on any finding, ``since_base_check: "no-base"`` when the run has
+    no recorded base so the overlap arm was skipped."""
+    from coordinator_core.ops.dispatch_emit import landing_integrity as li
+
+    skip = set(deleted_paths)
+    if record_abs is not None:
+        try:
+            skip.add(Path(record_abs).resolve().relative_to(Path(worktree_root).resolve()).as_posix())
+        except ValueError:
+            pass
+    paths = [p for p in all_paths if p not in skip]
+    findings = li.unparseable_py(worktree_root, paths)
+    extra: dict = {}
+    base = li.run_base_for(worktree_root, run_id, params)
+    if base is None:
+        extra["since_base_check"] = "no-base"
+    else:
+        findings += li.since_base_findings(worktree_root, paths, base, run_id=run_id)
+    if findings:
+        extra["refused"] = findings[0].reason
+        extra["integrity"] = [
+            {"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings
+        ]
+    return extra
 
 
 #: Refusals raised before the run's incomplete set is known: ``stranded`` would
@@ -493,8 +528,15 @@ def _register_gate(
         if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
     }
     ledger_ids = {str(i) for i in ledger_judged}
+    ruled_out: frozenset = frozenset()
+    if register is not None:
+        from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+        ruled_out = frozenset(requirements_ledger.ruled_out_ids(register.rows))
     for row in claimed:
         rid, surface = row.get(rr.ROW_ID), row.get(rr.ROW_SURFACE)
+        if str(rid) in ruled_out:
+            continue
         got = judged.get(str(rid))
         if got is None and str(rid) in ledger_ids:
             continue
@@ -1436,6 +1478,7 @@ def _stamp_coded_commit(
     snapshot: Optional[_Snapshot] = None, flip_plan: Optional[str] = None,
     receipt: Optional[str] = None,
     trailers: tuple = (), commit: bool = True, archive_after_flip: tuple = (),
+    flip_reason: Optional[str] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1508,7 +1551,7 @@ def _stamp_coded_commit(
     flip_result: Optional[dict] = None
     if flip_plan is not None and paths:
         before = _read_rel(worktree_root, flip_plan)
-        flip_result = _stamp_plan_implemented(worktree_root, flip_plan, sha)
+        flip_result = _stamp_plan_implemented(worktree_root, flip_plan, sha, reason=flip_reason)
         if flip_result.get("plan_status") == "implemented":
             if before is not None:
                 originals.setdefault(flip_plan, before)
@@ -1752,6 +1795,7 @@ def _verdicts_section(ledger_verdict: object, inline_review: dict) -> str:
         "### Criterion", "",
         f"- status: {cell(criterion.get('status'))}",
         f"- observation: {cell(criterion.get('observation'))}",
+        *([f"- reason: {cell(criterion.get('reason'))}"] if criterion.get("reason") else []),
         "",
     ]
     return "\n".join(lines)
@@ -1928,13 +1972,23 @@ def _falsifier_broken_tells(marks: object, plan_path: Optional[str]) -> Optional
     return None
 
 
-def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dict:
+def _criterion_reason(inline_review: object) -> Optional[str]:
+    """The judge's ``reason`` off the run record's criterion, or None when absent."""
+    criterion = inline_review.get("criterion") if isinstance(inline_review, dict) else None
+    reason = criterion.get("reason") if isinstance(criterion, dict) else None
+    return reason.strip() or None if isinstance(reason, str) else None
+
+
+def _stamp_plan_implemented(
+    worktree_root: Path, plan_rel: str, sha: str, *, reason: Optional[str] = None
+) -> dict:
     """Write the plan's ``implemented`` status to disk, uncommitted, when the
     review stamp it now carries records a ``met`` criterion; the caller's commit
     carries it. The verdict is read off the plan on disk, never a param, so only
     a minted stamp can discharge it. A refusal (open spine rows, the goal gate)
     is reported and writes nothing. The refusal text is kept from its head: the
-    cause leads it and the override boilerplate trails."""
+    cause leads it and the override boilerplate trails. ``reason`` is the judge's own reason,
+    appended to the stamp prose only; the met check never reads it."""
     import contextlib
     import io
 
@@ -1968,7 +2022,7 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
         else {
             "falsifier_verdict": "pass",
             "falsifier_output": observation[:_FALSIFIER_OUTPUT_MAX],
-            "prose": f"criterion met at {sha} per {source}",
+            "prose": f"criterion met at {sha} per {source}" + (f"; {reason}" if reason else ""),
         }
     )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
@@ -2157,6 +2211,64 @@ def _run_owned_dirt(
         split = partition_declared_deletions(worktree_root, gone_ok)
         deletions = [] if split is None else sorted(split[0])
     return files, deletions
+
+
+def _review_since(
+    worktree_root: Path, run_id: Optional[str], inline_review: object
+) -> Optional[float]:
+    """Epoch seconds the run began: its ``submission.json`` ``submitted_at``, else the committer
+    time of its base commit (the review prep's ``run_base_sha``, else the recorded run base), read
+    in-process. ``None`` when neither resolves."""
+    started = _run_started_at(worktree_root, run_id)
+    if started is not None:
+        return started
+    prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
+    base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+    if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)) and run_id and _RESOLUTION_RUN_ID.match(run_id):
+        from coordinator_core.ops.dispatch_emit import op
+
+        base = op._recorded_run_base(worktree_root, run_id)
+    if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)):
+        return None
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    meta = commit_meta(resolve_git_common_dir(worktree_root), base)
+    epoch = (meta or {}).get("committer_epoch")
+    return float(epoch) if isinstance(epoch, int) and not isinstance(epoch, bool) else None
+
+
+def _review_edit_verdict(
+    worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
+    session_id: Optional[str], run_id: Optional[str], committed: set,
+):
+    """``review_edits.partition`` over the review stage's writes against the pre-commit snapshot.
+    Without a snapshot the dirt cannot be read, so the verdict is unanswerable."""
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    if writes is None or snapshot is None:
+        return review_edits.partition(
+            None, changed=set(), ignored=(), committed=set(), sibling_declared={},
+            contested=set(), present=lambda _p: False,
+        )
+    paths = [review_edits._norm(k) for k in writes]
+    inside = [p for p in paths if not review_edits._out_of_worktree(p)]
+    candidates = [p for p in inside if p in snapshot.changed and p not in committed]
+    contested: set = set()
+    if candidates and session_id:
+        from coordinator_core.session import scope as session_scope
+
+        found = session_scope.contested_by_live_peers(candidates, session_id, cwd=str(worktree_root))
+        contested = set(found) if found else set()
+    return review_edits.partition(
+        writes,
+        changed=snapshot.changed,
+        ignored=snapshot.ignored_among(inside),
+        committed=committed,
+        sibling_declared=review_edits.live_sibling_declared(worktree_root, run_id),
+        contested=contested,
+        present=lambda p: (worktree_root / p).is_file(),
+    )
 
 
 def _commit_siblings(
@@ -2589,14 +2701,9 @@ def _leg(status: str, detail: str = "", root=None):
 
 
 def _plan_source_memo(worktree_root: Path, plan_rel: Optional[str]) -> Optional[str]:
-    text = _read_rel(worktree_root, plan_rel) if plan_rel else None
-    if text is None:
-        return None
-    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops.dispatch_emit.source_memo_ref import resolve_source_memo
 
-    split = split_frontmatter(text.replace("\r\n", "\n"))
-    value = read_fm_field_unquoted(split.fm_text, "source_memo") if split else None
-    return None if value in (None, "", "null", "~") else value
+    return resolve_source_memo(worktree_root, plan_rel)
 
 
 def _deferred_rows(worktree_root: Path, plan_rel: str) -> list:
@@ -2920,6 +3027,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes, or under its declared prefixes, that no chunk declares: work the
     commit could never see. Reported, never committed. ``None`` when git could
     not answer; ``undeclared_dirty_total`` appears when the list is capped.
+    A file the run's review stage wrote (per-agent touch records since the run began) that is still
+    dirty, uncontested and declared by no sibling run rides the one commit as ``review_residue``
+    (a ``Review-Residue:`` trailer each). One that cannot land (``peer-contested``, ``deleted``,
+    ``out-of-worktree``) refuses before anything lands: ``refused: "review-edit-unlanded"`` with
+    ``review_edits_unlanded`` ({path: reason}). An unanswerable source lands the commit with
+    ``ok: false`` and ``review_edits: null``; a landed residue path still dirty sets ``ok: false``
+    and ``review_residue_dirty``.
 
     No-script close: a call carrying ``plan_path`` and ``run_id`` and no ``script_path``
     (the caller's own params; a ``task_output_path`` digest's script does not count) closes
@@ -3505,13 +3619,28 @@ def _terminal_commit_inner(
             worktree_root, art_run_id, sizing_rel=cited_sizing, plan_rel=request.plan_path,
             doc_paths=params.get(run_artifacts.DOC_PATHS_PARAM) or (),
         ))
+    review_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
+    review_checked = not anchor_only and bool(session_id)
+    review_writes: Optional[dict] = None
+    if review_checked:
+        from coordinator_core.ops.dispatch_emit import review_edits
+
+        try:
+            review_writes = review_edits.review_writes(
+                worktree_root, session_id, _review_since(worktree_root, review_run_id, inline_review)
+            )
+        except Exception:  # noqa: BLE001 -- an unreadable source is unanswerable, never "no edits"
+            review_writes = None
+        if review_writes is not None:
+            review_writes = {review_edits._norm(k): v for k, v in review_writes.items()}
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
         + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
         + companions
         + ([ask_note_rel] if ask_note_rel else [])
-        + (list(artifacts.paths()) if artifacts is not None else []),
+        + (list(artifacts.paths()) if artifacts is not None else [])
+        + [p for p in (review_writes or ()) if not review_edits._out_of_worktree(p)],
         [prefix for c in request.chunks for prefix in c.prefixes]
         + ([record_dir_rel] if record_dir_rel else [])
         + (list(artifacts.record_dirs) + [RECORD_DIR_ROOT] if artifacts is not None else []),
@@ -3737,6 +3866,24 @@ def _terminal_commit_inner(
             session_id=request.session_id,
         )
     scope.update(root=worktree_root, request=scope_request, snapshot=snapshot)
+    review_land: tuple = ()
+    review_unanswerable: Optional[str] = None
+    if review_checked:
+        verdict = _review_edit_verdict(
+            worktree_root, review_writes, snapshot, session_id, review_run_id,
+            set(all_paths) | set(deleted_paths),
+        )
+        if verdict.halt:
+            return _error(
+                "review-stage edit(s) outside this run's commit cannot land: "
+                + ", ".join(f"{p} ({why})" for p, why in verdict.halt.items())
+                + ". Commit or release them, then re-fire",
+                refused="review-edit-unlanded",
+                review_edits_unlanded=dict(verdict.halt),
+            )
+        review_land = verdict.land
+        review_unanswerable = verdict.unanswerable
+        all_paths.extend(p for p in review_land if p not in all_paths)
     # Unlike a hand commit, a run's product commit never absorbs a live peer's in-flight edit.
     from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
 
@@ -3852,6 +3999,7 @@ def _terminal_commit_inner(
     resolves = None if anchor_only or incomplete_chunks else _resolving_sizing(worktree_root, request.plan_path)
     if resolves is not None:
         trailers.append(f"Resolves-Sizing: {resolves['id']} {resolves['tshirt']}")
+    trailers.extend(f"Review-Residue: {p}" for p in review_land)
     trailers.extend(
         "Requirement-Open: " + " ".join((str(row["id"]) + " " + str(row["reason"])).split())
         for row in open_rows
@@ -3911,6 +4059,19 @@ def _terminal_commit_inner(
             commit_params["ignored_untracked"] = snapshot.ignored_among(
                 [p for p in all_paths if p not in fresh]
             )
+
+    integrity_extra = _landing_integrity_gate(
+        worktree_root, all_paths, deleted_paths, record_abs, params,
+        _run_id_of(params, ask_run_dir, script_path_raw),
+    )
+    if integrity_extra.get("refused"):
+        _remove(worktree_root, receipt_paths)
+        findings = integrity_extra["integrity"]
+        first = findings[0]
+        return _error(
+            f"landing refused {first['reason']}: {first['path']} ({first['detail']})",
+            **integrity_extra,
+        )
 
     try:
         reply = commit_v2(commit_params, repo_root)
@@ -4101,6 +4262,7 @@ def _terminal_commit_inner(
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
                 snapshot=snapshot,
                 flip_plan=request.plan_path if flips else None,
+                flip_reason=_criterion_reason(inline_review),
                 receipt=request.plan_path if plan_commits and reply.get("review_stamp") == "minted" else None,
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
@@ -4142,7 +4304,12 @@ def _terminal_commit_inner(
         elif flips and reply.get("coded_sha") and flipped is not None:
             reply.update(flipped)
         elif flips and product_only and "coded_stamp_error" not in reply:
-            reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
+            reply.update(
+                _stamp_plan_implemented(
+                    worktree_root, request.plan_path, str(reply["sha"]),
+                    reason=_criterion_reason(inline_review),
+                )
+            )
         elif request.plan_path and reply.get("review_stamp") == "minted":
             reply["plan_status"] = "not-stamped"
             reply["plan_status_reason"] = (
@@ -4194,6 +4361,26 @@ def _terminal_commit_inner(
                     + ", ".join(f"{p} ({cls})" for p, cls in art_residue.items())
                     + ". The run token is spent: commit them through ceremony.commit_v2"
                 )
+        if review_land:
+            reply["review_residue"] = sorted(review_land)
+            still = _changed_paths(worktree_root, list(review_land))
+            if still is None or still:
+                reply["review_residue_dirty"] = sorted(still) if still else sorted(review_land)
+                reply["ok"] = False
+                reply["error"] = (
+                    "review residue still dirty after the commit: "
+                    + ", ".join(reply["review_residue_dirty"])
+                    + ". The run token is spent: commit them through ceremony.commit_v2"
+                )
+    if review_unanswerable is not None:
+        reply["review_edits"] = None
+        reply["ok"] = False
+        reply["error"] = (
+            (str(reply["error"]) + "; " if reply.get("error") else "")
+            + f"review-stage edits unverified: {review_unanswerable}; check the tree for review-written files"
+        )
+    if integrity_extra.get("since_base_check"):
+        reply["since_base_check"] = integrity_extra["since_base_check"]
     reply["receipts"] = receipt_paths
     reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
     if (

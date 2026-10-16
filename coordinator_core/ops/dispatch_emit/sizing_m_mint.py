@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     is_glob_pathspec,
 )
 from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+from coordinator_core.ops.dispatch_emit.source_memo_ref import sizing_source_memo
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import (
     _route_plan_bodies,
     xs_spine_plan_id,
@@ -87,6 +88,9 @@ def mint_m_spine(
         "derived_from": "sizing object",
         "sizing_object": sizing_rel,
     }
+    source_memo = sizing_source_memo(sizing)
+    if source_memo is not None:
+        frontmatter["source_memo"] = source_memo
     if sizing.get("deliverable_id"):
         frontmatter["deliverable_id"] = str(sizing["deliverable_id"])
     frontmatter["prime_exit_criterion"] = {"statement": statement}

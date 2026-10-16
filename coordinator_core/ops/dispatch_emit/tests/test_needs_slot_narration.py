@@ -49,3 +49,15 @@ def test_a_slot_row_brief_is_author_only_and_drops_its_build_gate(tmp_path):
     assert script.count("Slot row (needs_slot): author only") == 1
     assert "UBT, editor, commandlet or" in script
     assert script.count("Build gate (mandatory)") == 1  # B1 keeps its gate; A1's moves to the EM
+
+
+def test_slot_row_prompt_names_admission_post_and_non_slot_row_does_not(tmp_path):
+    slot = emit_script(
+        _plan(tmp_path, _row("A1", "  needs_slot: true\n")), repo_root=tmp_path, **REVIEW_KW
+    )
+    assert slot.count("groupem.admission_post") == 1
+    assert "START before it and END after it" in slot
+    assert "(params phase, session_id, pids, run)" in slot
+    assert "you carry no SendMessage" in slot
+    plain = emit_script(_plan(tmp_path, _row("B1")), repo_root=tmp_path, **REVIEW_KW)
+    assert "groupem.admission_post" not in plain

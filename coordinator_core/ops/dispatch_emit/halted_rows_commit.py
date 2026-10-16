@@ -173,7 +173,8 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
         out["landed"].append({"row": rid, "sha": reply.get("sha"), "paths": paths + deleted})
     from coordinator_core.ops.dispatch_emit.run_close import sibling_release
 
-    siblings = sibling_release(root, _run_id(params, script_rel), None)
+    every_row_committed = not open_rows and not out["refused"] and set(chunks) <= set(delivered)
+    siblings = sibling_release(root, _run_id(params, script_rel), None, rows_committed=every_row_committed)
     if siblings is not None:
         out["siblings"] = siblings
     out["ok"] = not out["refused"]

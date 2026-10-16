@@ -424,9 +424,26 @@ def test_dispatch_emit_refuses_to_overwrite_a_different_emission(tmp_path):
             {"plan_path": str(plan_path), "output_path": str(output_path)}
         )
 
-    assert "refusing to overwrite" in str(excinfo.value)
+    assert "already holds a DIFFERENT emission" in str(excinfo.value)
     # The refusal must not have written anything -- the peer's bytes stand.
     assert output_path.read_bytes() == peer_bytes
+
+
+def test_foreign_emission_refusal_is_short_whole_and_repo_relative(tmp_path):
+    from coordinator_core.ops.dispatch_emit.op import _refuse_foreign_emission
+
+    (tmp_path / ".git").mkdir()
+    target = tmp_path / "state" / "warp" / (
+        "warp-2026-10-16-foreign-emission-refusal-and-fresh-output-path-20261016T200022-dc28d4.workflow.mjs"
+    )
+    target.parent.mkdir(parents=True)
+    target.write_text("// peer", encoding="utf-8", newline="")
+    with pytest.raises(ForeignEmissionError) as excinfo:
+        _refuse_foreign_emission(target, "// ours", "me", tmp_path)
+    msg = str(excinfo.value)
+    assert len(msg) <= 280
+    assert msg.startswith("state/warp/") and str(tmp_path.as_posix()) not in msg and "\\" not in msg
+    assert msg.endswith("pass force=true deliberately.")
 
 
 def test_dispatch_emit_force_overwrites_a_different_emission(tmp_path):

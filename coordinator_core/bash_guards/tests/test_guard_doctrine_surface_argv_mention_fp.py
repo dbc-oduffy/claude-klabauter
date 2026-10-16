@@ -1,10 +1,51 @@
-"""A governed path as an argv operand of a read-only or ungoverned-write
-command is not a governed write."""
-from __future__ import annotations
+"""A governed path as an argv operand of a read-only or ungoverned-write command is
+not a governed write; the sizing-record leg of the doctrine-surface Bash guard judges the write
+target: a redirect outside state/sizings does not deny a command that only
+names a sizing as an argument, and a write into state/sizings still denies."""
 
 import pytest
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
+
+
+def _check(cmd: str):
+    return guard.check({"tool_name": "Bash", "tool_input": {"command": cmd}}, None)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "cat state/sizings/a.yaml > scratch/out.txt",
+        "grep intent state/sizings/a.yaml >> scratch/out.txt",
+        "git diff state/sizings/a.yaml > scratch/d.patch",
+        "wc -l state/sizings/a.yaml 2>/dev/null > scratch/n",
+        'head -5 state/sizings/a.yaml > "scratch/out file.txt"',
+    ],
+)
+def test_argument_mention_with_scratch_redirect_is_allowed(cmd):
+    assert _check(cmd) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "cat x > state/sizings/a.yaml",
+        "cat scratch/a >> state/sizings/a.yaml",
+        "cat state/sizings/a.yaml > scratch/o && cat y > state/sizings/b.yaml",
+        "cat state/sizings/a.yaml > scratch/o; sed -i s/a/b/ state/sizings/a.yaml",
+        "cat state/sizings/a.yaml > scratch/o; cp scratch/o state/sizings/a.yaml",
+        "cat state/sizings/a.yaml | tee state/sizings/b.yaml > scratch/o",
+        'cat x > "state/sizings/a.yaml"',
+        "python3 tool.py state/sizings/a.yaml > scratch/o",
+        "cat state/sizings/a.yaml > $OUT",
+        "cat state/sizings/a.yaml > scratch/o <<EOF",
+    ],
+)
+def test_write_into_sizings_still_denies(cmd):
+    result = _check(cmd)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "state/sizings" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 IDS = guard._SIZING_RECORD_IDENTIFIERS
 SZ = "state/sizings/2026-10-11-x.yaml"

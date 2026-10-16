@@ -66,6 +66,44 @@ def test_the_in_run_fan_out_survives_the_closeable_overwrite(repo):
     assert "const _closeable = !!(_roadmapFan || (" in script
 
 
+_SCRIPT_PATH = "scratch/warp/r1.mjs"
+
+
+def _scripts_with_path(repo):
+    _put(repo)
+    return {
+        "standalone": _compose_standalone(repo, script_path=_SCRIPT_PATH),
+        "in-run": _compose_raw(roadmap_blitz_text=_RB_TEXT, in_run_commit=True, script_path=_SCRIPT_PATH),
+    }
+
+
+@pytest.mark.parametrize("which", ["standalone", "in-run"])
+def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(repo, which):
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import _REQUIRED_STR_KEYS
+
+    script = _scripts(repo)[which]
+    (call,) = [ln for ln in script.splitlines() if "_terminalCommitParamsBlock({" in ln and "..._nextAction.params" in ln]
+    block = call[call.index("_terminalCommitParamsBlock({"):]
+    assert "script_path: _nextAction.params.script_path ?? ''" in block, "an unknown path is '', never an absent key"
+    for key in _REQUIRED_STR_KEYS:
+        assert f"{key}:" in block, key
+    assert block.index("..._nextAction.params") < block.index("script_path:") < block.index("run_id: _runId")
+
+
+@pytest.mark.parametrize("which", ["standalone", "in-run"])
+def test_a_known_script_path_rides_the_next_action_and_the_commit_block(repo, which):
+    script = _scripts_with_path(repo)[which]
+    assert f"script_path: '{_SCRIPT_PATH}', {FANOUT_RECORD_PARAM}: {{ plans:" in script
+    assert f"script_path: _nextAction.params.script_path ?? '{_SCRIPT_PATH}', run_id: _runId" in script
+
+
+@pytest.mark.parametrize("which", ["standalone", "in-run"])
+def test_the_fan_out_next_action_params_replay_with_a_run_id(repo, which):
+    script = _scripts(repo)[which]
+    assert f"params: {{ run_id: _runId, {FANOUT_RECORD_PARAM}: {{ plans:" in script
+    assert "script_path: null" not in script
+
+
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_both_scripts_lint_clean(repo, which):
     assert not [f for f in run_checks(_scripts(repo)[which]) if f.severity is Severity.ERROR]

@@ -1,127 +1,161 @@
-"""coordinator_core.bash_guards.block_venv_creation -- PreToolUse(Bash)
-advisory guard for the fleet-wide per-repo/shared-venv ban (PM directive,
-2026-09-29: system interpreter only, no per-repo or shared venvs; the
-engine's own `fleet_env`/`ensure_venv` provisioners are being retired in
-the same chunk this guard ships in).
+"""coordinator_core.bash_guards.block_venv_creation -- PreToolUse(Bash |
+PowerShell) guard for the fleet-wide per-repo/shared-venv ban
+(``PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE``: system interpreter only).
 
-POSTURE -- ADVISORY, NOT DENY (PM amendment mid-chunk, 2026-09-29,
-superseding the chunk's original "hard deny, no override key" spec). This
-guard WARNS and lets the command run: `check()` always returns an
-``allow`` verdict, carrying ``additionalContext`` naming the tripwire
-(``PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE``) when a venv-creation shape is
-recognized, and ``None`` (silent allow) otherwise. There is deliberately no
-override key here -- an advisory that never blocks needs nothing to bypass.
+POSTURE -- DENY for the four creation shapes, ADVISORY for the rest.
+  - deny:     `python`/`python3`/`py` (also `pythonX.Y`) with `-m venv`,
+              `virtualenv`, `uv venv`, `conda create`.
+  - advisory: `uv sync`, `pipenv install|sync|shell`, `poetry install` --
+              allow verdict carrying ``additionalContext``; not promoted to
+              deny.
+  - never matched: `pip --target`, `grep venv`, `ls .venv`, or any command
+    whose argv merely contains the word `venv`. Classification is by
+    (executable, subcommand) token pairs, never a raw-text scan.
 
-Detection reuses the same tokenizer helpers `block_worktree_creation.py`
-already reuses from `block_subagent_destructive_action.py` (heredoc-body
-stripping, segment splitting on `&&`/`;`/`|`, leading env-assignment/
-wrapper skipping, basename normalization) rather than a raw substring scan
--- so a document-persisting heredoc that merely NAMES `python -m venv` in
-its prose does not fire, matching the sibling guard's own false-deny fix.
+OVERRIDE -- ``COORDINATOR_OVERRIDE_VENV_CREATION=1`` in the hook
+environment, the same pre-launch key shape the sibling deny guards use. It
+clears the deny and the advisory alike.
 
-Recognized shapes (the executable resolves via `_normalize_executable_
-basename`, so a full path or `.exe` suffix still matches):
-  - `python`/`python3`/`py` with `-m venv` anywhere in its argv
-  - `virtualenv ...`
-  - `uv venv` / `uv sync`
-  - `pipenv install|sync|shell`
-  - `poetry install`
-  - `conda create`
-
-Deliberately NOT matched: `grep venv`, `ls .venv`, or any other command
-whose argv merely contains the substring `venv` without the executable
-itself being one of the above -- this guard classifies by (executable,
-subcommand) token pairs, never by regexing the raw command text for the
-word `venv`.
+Tokenization (heredoc-body stripping, segment splitting, env-assignment and
+passthrough-wrapper skipping, `sh -c` unwrapping, the PowerShell segment
+resolver) is reused from `block_worktree_creation.py` and
+`block_subagent_destructive_action.py`, never re-implemented. A PowerShell
+command the resolver cannot parse falls back to the Bash classifier over
+the text with quoted spans and here-strings stripped.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import os
+import re
+from typing import Any, Dict, Optional, Tuple
 
+from coordinator_core._hook_envelope import deny
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    _strip_ps_quotes,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+    strip_powershell_prose_noise,
+)
+from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
+    _BUNDLED_C_FLAG_RE,
     _normalize_executable_basename,
     _segments_from_tokens,
     _strip_heredoc_bodies,
     _strip_leading_subshell_and_env,
     _tokenize_full_command,
 )
-from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards.block_worktree_creation import (
+    _C_FLAG_SHELL_INTERPRETERS,
+    _skip_leading_env_assignments,
+)
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
-_PY_EXECUTABLES = frozenset({"python", "python3", "py"})
+_OVERRIDE_ENV = "COORDINATOR_OVERRIDE_VENV_CREATION"
 _TRIPWIRE = "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE"
 
+_PY_EXE_RE = re.compile(r"^(?:python|py)[0-9.]*$")
 
-def _classify_segment(working: "list[str]") -> Optional[str]:
+#: (shape label, is_deny)
+_Hit = Tuple[str, bool]
+
+
+def _classify_segment(working: "list[str]") -> Optional[_Hit]:
     if not working:
         return None
     head = _normalize_executable_basename(working[0])
     rest = working[1:]
 
-    if head in _PY_EXECUTABLES:
+    if _PY_EXE_RE.match(head):
         for i, tok in enumerate(rest):
             if tok == "-m" and i + 1 < len(rest) and rest[i + 1] == "venv":
-                return "%s -m venv" % head
+                return ("%s -m venv" % head, True)
         return None
 
     if head == "virtualenv":
-        return "virtualenv"
+        return ("virtualenv", True)
 
-    if head == "uv":
-        if rest and rest[0] in ("venv", "sync"):
-            return "uv %s" % rest[0]
+    if head == "uv" and rest:
+        if rest[0] == "venv":
+            return ("uv venv", True)
+        if rest[0] == "sync":
+            return ("uv sync", False)
         return None
 
-    if head == "pipenv":
-        if rest and rest[0] in ("install", "sync", "shell"):
-            return "pipenv %s" % rest[0]
-        return None
+    if head == "conda" and rest and rest[0] == "create":
+        return ("conda create", True)
 
-    if head == "poetry":
-        if rest and rest[0] == "install":
-            return "poetry install"
-        return None
+    if head == "pipenv" and rest and rest[0] in ("install", "sync", "shell"):
+        return ("pipenv %s" % rest[0], False)
 
-    if head == "conda":
-        if rest and rest[0] == "create":
-            return "conda create"
-        return None
+    if head == "poetry" and rest and rest[0] == "install":
+        return ("poetry install", False)
 
     return None
 
 
-def _evaluate(cmd: str) -> Optional[str]:
+def _worse(a: Optional[_Hit], b: Optional[_Hit]) -> Optional[_Hit]:
+    """The deny hit wins over an advisory hit; first of equals wins."""
+    if a is None:
+        return b
+    if b is not None and b[1] and not a[1]:
+        return b
+    return a
+
+
+def _unwrap_shell_c(working: "list[str]") -> Optional[str]:
+    """The `-c` payload of `sh|bash|zsh|dash|ksh [-ic] '<payload>'`, else None."""
+    if _normalize_executable_basename(working[0]) not in _C_FLAG_SHELL_INTERPRETERS:
+        return None
+    for i in range(1, len(working) - 1):
+        if _BUNDLED_C_FLAG_RE.match(working[i]):
+            return working[i + 1]
+    return None
+
+
+def _scan_segments(segments, normalize) -> Optional[_Hit]:
+    found: Optional[_Hit] = None
+    for seg_tokens, _pipe_before in segments:
+        if not seg_tokens:
+            continue
+        working = _skip_leading_env_assignments(
+            _strip_leading_subshell_and_env([normalize(t) for t in seg_tokens])
+        )
+        if not working:
+            continue
+        payload = _unwrap_shell_c(working)
+        hit = _evaluate(payload) if payload is not None else _classify_segment(working)
+        found = _worse(found, hit)
+        if found is not None and found[1]:
+            return found
+    return found
+
+
+def _evaluate(cmd: str) -> Optional[_Hit]:
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
         return None
-
-    for seg_tokens, _pipe_before in _segments_from_tokens(tokens):
-        if not seg_tokens:
-            continue
-        working = _strip_leading_subshell_and_env(seg_tokens)
-        if not working:
-            continue
-        hit = _classify_segment(working)
-        if hit is not None:
-            return hit
-
-    return None
+    return _scan_segments(_segments_from_tokens(tokens), lambda t: t)
 
 
-def _advisory_reason(shape: str) -> str:
-    return (
-        "ADVISORY [%s]: `%s` creates a per-repo/shared venv -- banned "
-        "fleet-wide (system interpreter only). Command still ran; no "
-        "action required unless you meant to provision one."
-    ) % (_TRIPWIRE, shape)
+def _evaluate_powershell(cmd: str) -> Optional[_Hit]:
+    segments = resolve_segments_for_dialect(
+        cmd, Dialect.POWERSHELL, guard_name="block_venv_creation"
+    )
+    if segments is None:
+        return _evaluate(strip_powershell_prose_noise(cmd))
+    return _scan_segments(segments, lambda t: _strip_ps_quotes(t).replace("`", ""))
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if (payload.get("tool_name") or "") not in MATCHERS:
+    tool_name = payload.get("tool_name") or ""
+    if tool_name not in MATCHERS:
         return None
 
     tool_input = payload.get("tool_input") or {}
@@ -130,15 +164,30 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd = cmd.replace("\r", "")
 
-    cmd_for_classification = _strip_heredoc_bodies(cmd)
-    shape = _evaluate(cmd_for_classification)
-    if shape is None:
+    if dialect_from_tool_name(tool_name) is Dialect.POWERSHELL:
+        hit = _evaluate_powershell(cmd)
+    else:
+        hit = _evaluate(_strip_heredoc_bodies(cmd))
+    if hit is None:
         return None
 
+    if os.environ.get(_OVERRIDE_ENV) == "1":
+        return None
+
+    shape, is_deny = hit
+    if is_deny:
+        return deny(
+            "PreToolUse",
+            "BLOCKED [%s]: `%s` creates a venv. Use the system interpreter.\n\n%s"
+            % (_TRIPWIRE, shape, operator_override_note(_OVERRIDE_ENV, payload=payload)),
+        )
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
-            "additionalContext": _advisory_reason(shape),
+            "additionalContext": (
+                "ADVISORY [%s]: `%s` provisions a venv. Use the system interpreter."
+                % (_TRIPWIRE, shape)
+            ),
         }
     }

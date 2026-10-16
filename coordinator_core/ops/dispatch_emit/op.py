@@ -480,10 +480,14 @@ def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
     return None
 
 
-def _refuse_foreign_emission(output_path: Path, script: str, session_id: str) -> None:
+def _refuse_foreign_emission(
+    output_path: Path, script: str, session_id: str, repo_root: Optional[Path] = None
+) -> None:
     """Refuse to overwrite an existing emission whose bytes differ from ours,
     unless its receipt names ``session_id``: re-emitting your own output is
-    not a foreign write.
+    not a foreign write. The refusal names the target repo-relative (POSIX)
+    under ``repo_root`` (short, <=280 chars, pinned by test_op); with no resolvable
+    root the absolute path is shown and that bound does not hold.
 
     Compares against the bytes the write would actually land (``newline=""``,
     so the script's own "
@@ -505,14 +509,17 @@ def _refuse_foreign_emission(output_path: Path, script: str, session_id: str) ->
             recorded = None
         if recorded == session_id:
             return
-    mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat(timespec="seconds")
+    mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat(timespec="minutes")
+    shown = output_path.as_posix()
+    if repo_root is not None:
+        try:
+            shown = output_path.resolve().relative_to(Path(repo_root).resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
     raise ForeignEmissionError(
-        f"{output_path} already holds a DIFFERENT emission "
-        f"(written {mtime}, {len(existing)} bytes; ours is {len(ours)} bytes) "
-        "-- refusing to overwrite. Another session emitted this plan against a "
-        "different plan state; firing or resuming this path would run a wave "
-        "map neither session generated. Coordinate with that session, name a "
-        "different output_path, or pass force=true deliberately."
+        f"{shown} already holds a DIFFERENT emission "
+        f"(mtime {mtime}, {len(existing)}B vs ours {len(ours)}B). "
+        "Coordinate with that session, name a different output_path, or pass force=true deliberately."
     )
 
 
@@ -1196,14 +1203,15 @@ def _research_route_setup(
     repo_segments: list[tuple[str, str]] = []
     compare_brief = ""
     multi_repo = ""
-    if (
-        research_emit.REPO_PIPELINE in shape["pipelines"]
-        and sum(1 for t in targets if t.get("source") == research_emit.REPO_PIPELINE) >= 2
-    ):
+    seeds = [s for s in research.get("seeds") or () if isinstance(s, dict)]
+    seed_briefs = research_emit.bind_seed_briefs(root, scratch_rel, members_brief, seeds)
+    repo_seeds = [s for s in seeds if rc.SEED_KIND_SOURCE.get(s.get("kind")) == research_emit.REPO_PIPELINE]
+    repo_refs = sum(1 for t in targets if t.get("source") == research_emit.REPO_PIPELINE) + len(repo_seeds)
+    if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs >= (1 if repo_seeds else 2):
         compare_name = research_emit.REPO_COMPARE_PIPELINE + MANIFEST_SUFFIX
-        if any(p.is_file() for p in (content_root / PIPELINES_DIR).rglob(compare_name)):
+        if repo_refs < 2 or any(p.is_file() for p in (content_root / PIPELINES_DIR).rglob(compare_name)):
             repo_segments, compare_brief = research_emit.bind_repo_targets(
-                root, scratch_rel, members_brief, targets
+                root, scratch_rel, members_brief, targets, seeds
             )
         else:
             multi_repo = "unavailable: no repo-compare manifest in the content root"
@@ -1217,6 +1225,7 @@ def _research_route_setup(
         mode=mode,
         repo_segments=repo_segments,
         compare_brief=compare_brief,
+        seed_briefs=seed_briefs,
     )
     given_flags = {str(k): str(v) for k, v in (params.get("flags") or {}).items()}
     segments = []
@@ -1256,7 +1265,7 @@ def _research_route_setup(
         if key_refusals:
             reasons.extend(f"pipeline {pipeline!r}: {r}" for r in key_refusals)
             continue
-        if "notebooks" in manifest.lists and not inputs.lists.get("notebooks"):
+        if "notebooks" in manifest.lists and not inputs.lists.get("notebooks") and pipeline not in seed_briefs:
             reasons.append(
                 f"pipeline {pipeline!r} needs its notebooks: record them on the sizing with "
                 "sizing-assemble --research-target notebooklm=<letter or id>, or pass --list notebooks=A,B"
@@ -1300,7 +1309,7 @@ def _research_route_setup(
     nested = [segment_name(m, i) for index, (m, i, _) in enumerate(segments) if index > 0 or i.segment_key]
     if nested:
         close_params["segment_dirs"] = nested
-    if repo_segments:
+    if compare_brief:
         compare_manifest = next(m for m, _, _ in segments if m.pipeline == research_emit.REPO_COMPARE_PIPELINE)
         close_params["require_outputs"] = [
             f"{research_emit.REPO_COMPARE_PIPELINE}/{research_emit.compare_output(compare_manifest)}"
@@ -1375,7 +1384,7 @@ def _emit_script_file(
     # newline="" suppresses the platform line-ending translation: a CRLF-carrying .mjs is
     # rejected by the Workflow surface that fires it.
     if not params.get("force"):
-        _refuse_foreign_emission(path, script, session_id)
+        _refuse_foreign_emission(path, script, session_id, _repo_root_for_plan(str(path)))
     before_write()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(script, encoding="utf-8", newline="")
@@ -1683,6 +1692,7 @@ def _dispatch_emit(
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         reserved_parent = None
         rebound = False
+        output_redirect = None
         if params.get("reserved_run_id") is not None:
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
         elif sizing_rel:
@@ -1690,11 +1700,25 @@ def _dispatch_emit(
 
             halted_id = halted_run_for(ask_root, sizing_rel)
             if halted_id:
-                run_id, rebound = halted_id, True
+                from coordinator_core.ops.dispatch_emit.halted_run import rebind_blocker, recorded_emitter
+
+                blocker = None
+                if not aliased_param(params, "output_path", "out_path"):
+                    blocker = rebind_blocker(ask_root, halted_id, _receipt_session_id(params))
+                if blocker is None:
+                    run_id, rebound = halted_id, True
+                else:
+                    output_redirect = {
+                        "from": f"{RUN_DIR_ROOT}/{halted_id}.workflow.mjs",
+                        "to": f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
+                        "halted_run": halted_id,
+                        "prior_session": recorded_emitter(ask_root, halted_id),
+                        "reason": blocker,
+                    }
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
-            "reserved_parent": reserved_parent, "rebound": rebound,
+            "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
             "ask_source": ask_source, "relayed_slice_text": relayed_slice_text,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }
@@ -2215,6 +2239,10 @@ def _dispatch_emit(
 
     if ask_ctx is not None:
         reply["run_id"] = ask_ctx["run_id"]
+        if ask_ctx.get("output_redirect"):
+            from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+
+            reply[OUTPUT_PATH_REDIRECT_KEY] = ask_ctx["output_redirect"]
         if "batons" in ask_ctx:
             reply["batons"] = ask_ctx["batons"]
             reply["uncommitted"] = ask_ctx["uncommitted"]

@@ -250,6 +250,43 @@ def test_the_note_gets_its_verdicts_section_from_the_params_once(tmp_path):
     assert note.read_text(encoding="utf-8") == text
 
 
+def test_the_verdicts_section_prints_the_criterion_reason_only_when_present(tmp_path):
+    reason = "met; recorded falsifier did not run as authored: AttributeError"
+    with_reason = {**_INLINE, "criterion": {**_INLINE["criterion"], "reason": reason}}
+    assert f"- reason: {reason}" in terminal_commit._verdicts_section(_VERDICT, with_reason)
+    assert "- reason:" not in terminal_commit._verdicts_section(_VERDICT, _INLINE)
+
+
+def test_criterion_reason_reads_only_a_non_empty_string():
+    assert terminal_commit._criterion_reason({"criterion": {"reason": " why "}}) == "why"
+    assert terminal_commit._criterion_reason({"criterion": {"reason": "  "}}) is None
+    assert terminal_commit._criterion_reason({"criterion": {"reason": None}}) is None
+    assert terminal_commit._criterion_reason(None) is None
+
+
+@pytest.mark.parametrize("reason,tail", [("falsifier unrun", "; falsifier unrun"), (None, "")])
+def test_the_implemented_stamp_prose_carries_the_reason(tmp_path, monkeypatch, reason, tail):
+    import coordinator_core.archive_stamp as archive_stamp
+
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        "---\nreview_stamp:\n  criterion:\n    status: met\n    observation: saw it\n    sidecar: s1\n---\n# p\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake(path, **kw):
+        seen.update(kw)
+        return 0
+
+    monkeypatch.setattr(archive_stamp, "cs_stamp_plan_implemented", fake)
+    out = terminal_commit._stamp_plan_implemented(tmp_path, "docs/plans/p.md", "abc123", reason=reason)
+    assert out == {"plan_status": "implemented"}
+    assert seen["prose"] == "criterion met at abc123 per s1" + tail
+    assert seen["falsifier_verdict"] == "pass"
+
+
 def test_a_missing_note_or_inline_review_writes_nothing(tmp_path):
     terminal_commit._write_note_verdicts(tmp_path / "absent.md", _VERDICT, _INLINE)
     assert not (tmp_path / "absent.md").exists()

@@ -469,6 +469,11 @@ _PREP_BUSY_REFUSAL = (
     "A review-wave agent's review.prep call stayed busy past its retries, so its slice group was "
     "not reviewed. Re-run the review wave."
 )
+SLICE_ID_UNKNOWN_HALT = "review wave reply named a slice_id that is not a real slice id"
+_SLICE_ID_UNKNOWN_REFUSAL = (
+    "A review-wave agent returned a slice_id that is not the '+'-joined ids of real slices (a range "
+    "such as 'prep-1..5' is one), so coverage cannot be attributed. Re-run the review wave."
+)
 _PREP_MALFORMED_REFUSAL = (
     "A review-wave agent summarised its review.prep reply instead of returning it verbatim "
     "(slices was not a list), so its slice group was not reviewed. Re-run the review wave."
@@ -517,6 +522,15 @@ _PREP_FROM_WAVE_JS = (
     "    }\n"
     "    return { ...ok, slices: merged };\n"
     "  })();\n"
+    "  const _realSliceIds = new Set((_reviewPrep && Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).map(s => s.id));\n"
+    "  const _badSliceIdAt = _waveRaw.findIndex(r => r && r.review && typeof r.review.slice_id === 'string' && "
+    "r.review.slice_id.split('+').filter(Boolean).some(id => !_realSliceIds.has(id)));\n"
+    "  if (_badSliceIdAt >= 0) { "
+    f"return {{ halted: {_js_string_literal(SLICE_ID_UNKNOWN_HALT)} + ' (wave agent ' + _badSliceIdAt + "
+    "' returned slice_id ' + JSON.stringify(_waveRaw[_badSliceIdAt].review.slice_id) + '; real slice ids: ' + "
+    "[..._realSliceIds].join(', ') + ')', "
+    f"reason: {_js_string_literal(_SLICE_ID_UNKNOWN_REFUSAL)}, "
+    "prep: _reviewPrep, wave: null, integration: null }; }\n"
 )
 
 

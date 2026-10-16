@@ -439,8 +439,15 @@ def _read_json(path: Path) -> Optional[dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+ROWS_COMMITTED_KEY = "rows_committed"
+
+
 def sibling_release(
-    root: Path, run_id: str, landed_sha: Optional[str], budget: Optional[int] = None
+    root: Path,
+    run_id: str,
+    landed_sha: Optional[str],
+    budget: Optional[int] = None,
+    rows_committed: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Close *run_id*'s sibling status and name what the close frees.
 
@@ -448,7 +455,9 @@ def sibling_release(
     that file (``landed`` with *landed_sha*, or ``halted`` when it is ``None``), reads the write-once
     parent record and every sibling's status file, and returns ``{parent_id, released: [fire call],
     blocked: [{run_id, slice_sizing}]}``. A halted run frees its budget slot but releases no ``after``
-    successor; ``blocked`` names each waiting run behind a halted or blocked predecessor. A ``landed``
+    successor, unless it halted with *rows_committed* (every row's work landed): that mark is stored in
+    its status file and such a predecessor releases its successors as a landed one does. ``blocked`` names
+    each waiting run behind a halted-with-open-rows or blocked predecessor. A ``landed``
     status is never rewritten as halted: that call returns ``None`` and writes nothing.
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
@@ -465,6 +474,10 @@ def sibling_release(
     entry: dict[str, Any] = {"status": contract.STATUS_HALTED}
     if landed_sha:
         entry = {"status": contract.STATUS_LANDED, "sha": landed_sha}
+    elif rows_committed or (
+        prior.get("status") == contract.STATUS_HALTED and prior.get(ROWS_COMMITTED_KEY) is True
+    ):
+        entry[ROWS_COMMITTED_KEY] = True
     if isinstance(prior.get("parent_id"), str):
         entry["parent_id"] = prior["parent_id"]
     claimed_write.replace_text(own, json.dumps(entry, sort_keys=True) + "\n")
@@ -478,14 +491,18 @@ def sibling_release(
     except (ValueError, KeyError, TypeError):
         return None
     statuses: dict[str, str] = {}
+    complete: set[str] = set()
     for run in parent.runs:
         data = _read_json(base / contract.status_rel(run.run_id))
         status = data.get("status") if data else None
         statuses[run.run_id] = status if status in contract.RUN_STATUSES else run.status
+        if status == contract.STATUS_HALTED and data.get(ROWS_COMMITTED_KEY) is True:
+            complete.add(run.run_id)
     budget = contract.concurrent_run_budget() if budget is None else budget
-    freed = contract.release(parent, statuses, budget)
+    as_landed = {rid: (contract.STATUS_LANDED if rid in complete else st) for rid, st in statuses.items()}
+    freed = contract.release(parent, as_landed, budget)
     by_id = {r.run_id: r for r in parent.runs}
-    dead = {rid for rid, st in statuses.items() if st == contract.STATUS_HALTED}
+    dead = {rid for rid, st in statuses.items() if st == contract.STATUS_HALTED and rid not in complete}
     blocked: list[dict[str, str]] = []
     for run in parent.runs:
         if statuses[run.run_id] not in (contract.STATUS_AFTER, contract.STATUS_QUEUED):

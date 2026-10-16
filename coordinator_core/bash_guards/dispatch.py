@@ -3048,9 +3048,11 @@ def _build_guard_chain(
         # comment above: the declaration on this module's dead `check()` leg
         # does not describe `check_advisory`'s own tool-name coverage.
         GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        # block-venv-creation -- PM directive 2026-09-29: per-repo/shared
-        # venvs banned fleet-wide. WARN-only per mid-chunk PM amendment
-        # (always allows; never a CONFINEMENT_DENY), so it lives here.
+        # block-venv-creation -- per-repo/shared venvs banned fleet-wide.
+        # DENIES python -m venv / virtualenv / uv venv / conda create
+        # (override key COORDINATOR_OVERRIDE_VENV_CREATION); the remaining
+        # provisioner shapes stay advisory. Registered in this band like
+        # `check-raw-pid-liveness`: a deny with no confinement role.
         GuardEntry("block-venv-creation", lambda: _check_venv_creation(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # `stash-apply-verification-advisory` -- the ADVISORY_REWRITE sibling
         # of the two CONFINEMENT_DENY stash guards above, and deliberately

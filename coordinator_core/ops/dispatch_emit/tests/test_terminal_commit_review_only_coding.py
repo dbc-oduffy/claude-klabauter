@@ -102,7 +102,7 @@ def test_plan_status_flips_once_every_row_is_coded(repo, monkeypatch):
     monkeypatch.setattr(terminal_commit, "_changed_paths", lambda _r, paths: set(paths))
     monkeypatch.setattr(
         terminal_commit, "_stamp_plan_implemented",
-        lambda r, plan, sha: ({"plan_status": "implemented"} if _row_disposition(_rows(r)["C1"]) == "coded"
+        lambda r, plan, sha, **_kw: ({"plan_status": "implemented"} if _row_disposition(_rows(r)["C1"]) == "coded"
                               else {"plan_status": "refused"}),
     )
     out = terminal_commit._stamp_coded_commit(

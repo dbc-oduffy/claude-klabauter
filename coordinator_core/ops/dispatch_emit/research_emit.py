@@ -8,12 +8,15 @@ notebooklm manifest, and `claims_output` names its sweep output for `research.cl
 Scout questions are slugged to [a-z0-9-] (at most 48 chars) because the scouts template names
 `digest-{{item}}.md`.
 
-`bind_repo_targets` fans a sizing's repo targets out to one keyed `repo` segment each (own scratch dir and
-brief) plus one `repo-compare` segment; `compare_output` names that segment's deliverable.
+`bind_repo_targets` fans a sizing's repo targets and repo seeds out to one keyed `repo` segment each (own scratch dir and
+brief; a seed's brief carries the clone instruction) plus, from two refs, one `repo-compare` segment; `compare_output`
+names that segment's deliverable. `bind_seed_briefs` gives each other seeded pipeline its own `seeds-<pipeline>` brief.
 
 Negative-spec: loads and validates no manifest (`gate_notebooklm` only rewrites one it is handed), composes no script, resolves no content root; stats a
-repo scout target and checks a local one against the probe allowlist, never running it; reads only the allowlist JSON beside a content root it is handed; the only writes are ask.md and brief.md under the caller's repo-relative scratch dir, and the per-segment
-`<key>/brief.md` and `repo-compare/brief.md` files `bind_repo_targets` writes there.
+repo scout target and checks a local one against the probe allowlist, never running it; reads only the allowlist JSON
+beside a content root it is handed; the only writes are ask.md and brief.md under the caller's repo-relative scratch dir,
+the per-segment `<key>/brief.md` and `repo-compare/brief.md` files `bind_repo_targets` writes there and the
+`seeds-<pipeline>/brief.md` files `bind_seed_briefs` writes; a repo seed is cloned by its segment's scope stage, never here.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -484,25 +487,63 @@ def _write_brief(root: Path, rel: str, text: str) -> None:
     target.write_text(text, encoding="utf-8", newline="\n")
 
 
+def bind_seed_briefs(
+    root: Path, scratch_rel: str, members_brief: str, seeds: Sequence[Mapping[str, str]],
+) -> dict[str, str]:
+    """`{pipeline: brief_rel}` for each non-repo pipeline a seed feeds; repo seeds are `bind_repo_targets`'.
+
+    Writes `<scratch>/seeds-<pipeline>/brief.md`: it points at the members brief and its `## Seeds`
+    section lists that pipeline's seed URLs and no others. Raises ValueError on an unknown seed kind.
+    """
+    by_source: dict[str, list[tuple[str, str]]] = {}
+    for seed in seeds:
+        kind = seed.get("kind")
+        source = rc.SEED_KIND_SOURCE.get(kind)
+        if source is None:
+            raise ValueError(f"research.seeds kind {kind!r} is not one of {list(rc.SEED_KINDS)}")
+        if source != REPO_PIPELINE:
+            by_source.setdefault(source, []).append((kind, seed["url"]))
+    out: dict[str, str] = {}
+    base = scratch_rel.rstrip("/")
+    for source, rows in by_source.items():
+        rel = f"{base}/seeds-{source}/{BRIEF_FILE}"
+        _write_brief(root, rel, (
+            f"The brief is `{members_brief}`; read it first.\n\n"
+            "## Seeds\n\nThe PM named these sources to study. Start from them.\n\n"
+            + "".join(f"- {kind}: {url}\n" for kind, url in rows)
+        ))
+        out[source] = rel
+    return out
+
+
 def bind_repo_targets(
     root: Path, scratch_rel: str, members_brief: str, targets: Sequence[Mapping[str, str]],
+    seeds: Sequence[Mapping[str, str]] = (),
 ) -> tuple[list[tuple[str, str]], str]:
-    """Per-target repo segment (key, brief_rel) pairs and the compare brief path; ([], "") under two repo targets.
+    """Per-ref repo segment (key, brief_rel) pairs and the compare brief path.
 
-    Key i (1-based, target order) is `repo-<i>-<slug of the ref's last path component>`, cut to
-    MAX_SLUG_LEN. Writes `<scratch>/<key>/brief.md` per target and `<scratch>/repo-compare/brief.md`.
-    Refuses a ref with no slug-able character (PipelineEmitRefused naming the target index).
+    Refs are the repo targets, then the repo seeds. Without seeds, under two repo targets gives
+    ([], ""). With a repo seed every ref gets a segment; the compare brief is "" under two refs.
+
+    Key i (1-based, ref order) is `repo-<i>-<slug of the ref's last path component>`, cut to
+    MAX_SLUG_LEN. Writes `<scratch>/<key>/brief.md` per ref and `<scratch>/repo-compare/brief.md`.
+    A seed's brief names the URL and the clone dir `<scratch>/<key>/clone`; the segment's scope
+    stage runs the clone, this function spawns nothing.
+    Refuses a ref with no slug-able character (PipelineEmitRefused naming the ref index).
     """
     refs = [t.get("ref", "") for t in targets if t.get("source") == REPO_PIPELINE]
-    if len(refs) < 2:
+    seed_urls = [s["url"] for s in seeds if rc.SEED_KIND_SOURCE.get(s.get("kind")) == REPO_PIPELINE]
+    if len(refs) < 2 and not seed_urls:
         return [], ""
+    seed_from = len(refs)
+    refs = refs + seed_urls
     base = scratch_rel.rstrip("/")
     keys: list[tuple[str, str]] = []
     reasons: list[str] = []
     for index, ref in enumerate(refs, start=1):
         slug = _ref_slug(ref)
         if not slug:
-            reasons.append(f"repo target {index} ({ref!r}) has no letter or digit to slug")
+            reasons.append(f"repo {'seed' if index > seed_from else 'target'} {index} ({ref!r}) has no letter or digit to slug")
             continue
         prefix = f"{REPO_PIPELINE}-{index}-"
         key = (prefix + slug)[:MAX_SLUG_LEN].rstrip("-")
@@ -510,15 +551,27 @@ def bind_repo_targets(
     if reasons:
         raise PipelineEmitRefused(reasons)
     segments: list[tuple[str, str]] = []
-    for key, ref in keys:
+    for index, (key, ref) in enumerate(keys):
         rel = f"{base}/{key}/{BRIEF_FILE}"
+        if index < seed_from:
+            body = (
+                f"This segment studies the repo research target `{ref}` alone. It is the primary repo, "
+                "and no other repo target is folded in.\n\n"
+            )
+        else:
+            clone = f"{base}/{key}/clone"
+            body = (
+                f"This segment studies the repo seed `{ref}` alone. It is a remote repo: when `{clone}` "
+                f"is absent, shallow-clone it there (`git clone --depth 1 -- {ref} {clone}`), then treat "
+                "the clone as the primary repo. No other repo is folded in.\n\n"
+            )
         _write_brief(root, rel, (
-            f"The brief is `{members_brief}`; read it first.\n\n"
-            f"This segment studies the repo research target `{ref}` alone. It is the primary repo, "
-            "and no other repo target is folded in.\n\n"
-            "A requested output path in the brief does not apply here; write only under this segment's scratch dir.\n"
+            f"The brief is `{members_brief}`; read it first.\n\n" + body
+            + "A requested output path in the brief does not apply here; write only under this segment's scratch dir.\n"
         ))
         segments.append((key, rel))
+    if len(keys) < 2:
+        return segments, ""
     rows = "".join(
         f"- `{key}`: `{ref}`\n  - `{base}/{key}/synthesis.md`\n"
         f"  - `{base}/{key}/synthesis-pass-2.md` (read when present, for a deepest run)\n"
@@ -563,6 +616,7 @@ def segments_for(
     mode: str = rc.DEFAULT_SCOUT_MODE,
     repo_segments: Sequence[tuple[str, str]] = (),
     compare_brief: str = "",
+    seed_briefs: Mapping[str, str] | None = None,
 ) -> list[tuple[str, PipelineInputs]]:
     """One `(pipeline, PipelineInputs)` per manifest in `shape["pipelines"]`, in order.
 
@@ -575,8 +629,10 @@ def segments_for(
     the `targets` whose source is notebooklm as its notebooks. `CORPUS_DEFAULT_LISTS` is bound by
     the caller, which sees which lists each loaded manifest declares. With `repo_segments`, the
     `repo` pipeline expands to one keyed segment per `(key, brief_rel)` entry, followed by one
-    `repo-compare` segment bound to `compare_brief`.
+    `repo-compare` segment bound to `compare_brief`, omitted when that is "". A pipeline named in
+    `seed_briefs` binds that brief in place of `brief_rel`.
     """
+    seed_briefs = seed_briefs or {}
     shaped_flags = shape.get("flags") or {}
     segments: list[tuple[str, PipelineInputs]] = []
     for pipeline in shape["pipelines"]:
@@ -606,12 +662,13 @@ def segments_for(
                 segments.append((pipeline, PipelineInputs(
                     brief=key_brief, subjects=(), scratch_dir=scratch_rel, flags=dict(flags), lists=dict(lists), segment_key=key,
                 )))
-            segments.append((REPO_COMPARE_PIPELINE, PipelineInputs(
-                brief=compare_brief, subjects=(), scratch_dir=scratch_rel,
-                flags=dict(shaped_flags.get(REPO_COMPARE_PIPELINE) or {}), lists={},
-            )))
+            if compare_brief:
+                segments.append((REPO_COMPARE_PIPELINE, PipelineInputs(
+                    brief=compare_brief, subjects=(), scratch_dir=scratch_rel,
+                    flags=dict(shaped_flags.get(REPO_COMPARE_PIPELINE) or {}), lists={},
+                )))
             continue
         segments.append(
-            (pipeline, PipelineInputs(brief=brief_rel, subjects=(), scratch_dir=scratch_rel, flags=flags, lists=lists))
+            (pipeline, PipelineInputs(brief=seed_briefs.get(pipeline, brief_rel), subjects=(), scratch_dir=scratch_rel, flags=flags, lists=lists))
         )
     return segments

@@ -117,7 +117,7 @@ def test_revise_sets_all_of_pm_ask_alone(run):
         ({"verbatim": "   "}, "needs a non-empty verbatim"),
         ({"verbatim": 3}, "must be a string"),
         ({"run_id": "../x", "verbatim": "v"}, "safe path segment"),
-        ({"run_id": "never-emitted", "verbatim": "v"}, "emit it first"),
+        ({"run_id": "never-emitted", "all_of_pm_ask": True}, "emit it first"),
     ],
 )
 def test_revise_refusals_name_the_cause(run, params, needle):

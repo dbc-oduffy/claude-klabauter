@@ -112,8 +112,9 @@ ADVISORY_REWRITE_NAMES = [
     # Registered immediately after `destructive-git-revert-advisory` and
     # before `offer-git-c`.
     "block-dev-repo-sentinel-removal-advisory",
-    # PM directive 2026-09-29: per-repo/shared venv creation is advisory,
-    # not a hard deny -- see dispatch.py's own registration comment.
+    # Denies venv creation (python -m venv / virtualenv / uv venv / conda
+    # create), advisory for the other provisioners; a deny with no
+    # confinement role -- see dispatch.py's own registration comment.
     "block-venv-creation",
     # ADVISORY, not CONFINEMENT_DENY, and argued that way per DR-277: `git
     # stash apply` read as a data-loss check yields a false green, but the

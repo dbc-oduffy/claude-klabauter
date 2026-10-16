@@ -63,15 +63,26 @@ def approver_for(interaction_mode: object) -> str:
 ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];")
 
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
-ROADMAP_NEXT_ACTION_JS = (
-    "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
-    f"params: {{ {FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
-    "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])) } } }"
-)
+def roadmap_next_action_js(script_path: Optional[str] = None) -> str:
+    """The terminal-commit `_nextAction` literal. `params` is the replayable block: `run_id`, the
+    emitted script's repo-relative `script_path` when known (omitted, never null), and the fan-out."""
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+
+    path = f"script_path: {ac._lit(script_path)}, " if script_path else ""
+    return (
+        "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
+        f"params: {{ run_id: _runId, {path}{FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
+        "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])) } } }"
+    )
 
 
 def roadmap_stage_lines(
-    *, repo_root: str, run_id: str, interaction_mode: object, plan_blitz_args: Optional[dict]
+    *,
+    repo_root: str,
+    run_id: str,
+    interaction_mode: object,
+    plan_blitz_args: Optional[dict],
+    script_path: Optional[str] = None,
 ) -> list[str]:
     """roadmap-blitz, then plan-blitz per wave, each block under `if (!_halted)`; the last sets
     `_nextAction` to the fan-out commit. Waves come from the stage reply, never an agent. Reads
@@ -107,7 +118,7 @@ def roadmap_stage_lines(
         "  }",
         "  if (!_halted && !_ready.length) { " + halt("'plan-blitz reported no ready plan'") + " }",
         "  }",
-        f"  if (!_halted) {{ _nextAction = {ROADMAP_NEXT_ACTION_JS}; }}",
+        f"  if (!_halted) {{ _nextAction = {roadmap_next_action_js(script_path)}; }}",
     ]
 
 
@@ -122,6 +133,7 @@ def compose_roadmap_script(
     plan_blitz_phases: list[str],
     plan_blitz_args: Optional[dict],
     wrap_roadmap: Optional[Callable[[str], tuple[str, list[str]]]] = None,
+    script_path: Optional[str] = None,
 ) -> str:
     from coordinator_core.ops.dispatch_emit import ask_compose as ac
 
@@ -157,12 +169,17 @@ def compose_roadmap_script(
         "  phase('gate');",
         f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=ac._MECHANICAL_AGENT_TYPE, agent_model=ac._MECHANICAL_MODEL, effort=ac._MECHANICAL_EFFORT, schema=ac._GATE_SCHEMA)};",
         "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
-        f"{lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}",
+        f"{lit(HALT_REFUSAL)}, ..._gate.halt, reason: String((_gate.halt && _gate.halt.reason) || "
+        "(_gate.halt ? 'the gate halted (' + _gate.halt.kind + ') without a reason' : "
+        "'the gate returned no arm and no halt')), sizing: _sizingRel, run_id: _runId }; }",
         f"  if (!_halted && _gate.arm !== {lit('roadmap')}) {{ {halt(lit('sizing resolved to a non-roadmap arm in the roadmap script'))} }}",
         *roadmap_stage_lines(
-            repo_root=repo_root, run_id=run_id, interaction_mode=interaction_mode, plan_blitz_args=plan_blitz_args
+            repo_root=repo_root, run_id=run_id, interaction_mode=interaction_mode,
+            plan_blitz_args=plan_blitz_args, script_path=script_path,
         ),
-        *ac.roadmap_commit_lines(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id),
+        *ac.roadmap_commit_lines(
+            head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, script_path=script_path
+        ),
         "  return { arm: 'roadmap', sizing: _sizingRel, run_id: _runId, roadmap: _rb, ready: _ready, "
         "commit: _commit, fanout: _commit?.fanout ?? null, next_action: _nextAction, halted_by: _halted };",
     ]

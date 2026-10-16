@@ -262,6 +262,44 @@ def test_an_untracked_research_file_written_during_the_run_is_reported(repo, scr
     assert out["strays"] == ["docs/research/2026-10-09-elsewhere.md"]
 
 
+def test_strays_then_the_printed_remedy_then_reclose_records_every_output(repo, scratch):
+    research = repo / "docs" / "research"
+    research.mkdir(parents=True)
+    names = ["head-nlm.md", "head-nlm-advisory.md"]
+    for n in names:
+        (research / n).write_text(f"{n} body\n", encoding="utf-8")
+    first = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert first["exit_code"] == 0 and sorted(first["strays"]) == sorted(f"docs/research/{n}" for n in names)
+    assert "move each into the run's scratch dir and re-close" in first["warning"]
+
+    for n in names:
+        shutil.move(str(research / n), str(scratch / n))
+    again = _close(repo, scratch, "corpus", outputs=["final.md", *names])
+    assert again["exit_code"] == 0 and again["committed"] is True, again
+    assert "strays" not in again
+    dest = f"docs/research/{datetime.date.today().isoformat()}-topic"
+    expected = [f"{dest}/final.md", *(f"{dest}/{n}" for n in names)]
+    assert sorted(again["paths"]) == sorted(expected)
+    trail = (research / "trail" / "r1.yaml").read_text(encoding="utf-8")
+    assert "output_count: 3" in trail and all(p in trail for p in expected)
+    assert _git(repo, "status", "--porcelain") == ""
+    assert _close(repo, scratch, "corpus", outputs=["final.md", *names])["sha"] == again["sha"]
+
+
+def test_a_reclose_that_drops_an_output_is_still_refused(repo, scratch):
+    (scratch / "extra.md").write_text("extra\n", encoding="utf-8")
+    assert _close(repo, scratch, "corpus", outputs=["final.md", "extra.md"])["exit_code"] == 0
+    again = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert again["exit_code"] == 1 and "trail record exists with different content" in again["error"]
+
+
+def test_a_reclose_that_changes_a_non_path_key_is_still_refused(repo, scratch):
+    (scratch / "extra.md").write_text("extra\n", encoding="utf-8")
+    assert _close(repo, scratch, "corpus", outputs=["final.md"])["exit_code"] == 0
+    again = _close(repo, scratch, "scouts", outputs=["final.md", "extra.md"])
+    assert again["exit_code"] == 1, again
+
+
 def test_every_segment_dir_is_archived_at_its_relative_path(repo, scratch):
     (scratch / "web").mkdir()
     (scratch / "web" / "synthesis.md").write_text("web synthesis\n")

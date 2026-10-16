@@ -224,6 +224,10 @@ _ROUTE_TERMINAL = {
     "roadmap": "Skill(coordinator:plan)",
 }
 
+#: Terminal owed by a sizing carrying a `research` block: the research skill, or the emitted
+#: `pipeline-research-*.workflow.mjs` fire. Replaces the route's own terminal for that sizing.
+_RESEARCH_TERMINAL = "Skill|Workflow(coordinator:research|pipeline-research-*.workflow.mjs)"
+
 _REVIEW_NEXT_ACTION = "Agent(<named Opus reviewer>)"
 _EXECUTE_NEXT_ACTION = "Agent|Workflow(coordinator:executor or the emitted plan script)"
 _REVIEW_TERMINAL = "Skill(coordinator:review)"
@@ -560,6 +564,29 @@ def _sizing_route_and_exemption(repo_root: str, rel_path: str):
     return route, (fork_open or xl_open)
 
 
+def _has_research_block(repo_root: str, rel_path: str) -> bool:
+    """True when the sizing carries a non-empty top-level `research:` mapping."""
+    try:
+        with open(
+            os.path.join(repo_root, rel_path), "r", encoding="utf-8", errors="replace"
+        ) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return False
+    for i, line in enumerate(lines):
+        if not line.startswith("research:"):
+            continue
+        inline = line[len("research:"):].split("#", 1)[0].strip()
+        if inline:
+            return inline not in ("{}", "null", "~", "None")
+        for nxt in lines[i + 1:]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                continue
+            return nxt[:1] in (" ", "\t")
+        return False
+    return False
+
+
 def _split_call(next_action: str):
     if not next_action or "(" not in next_action or not next_action.endswith(")"):
         return None, None
@@ -586,7 +613,9 @@ def _is_warp_ask_fire(tool_name, tool_input) -> bool:
 
 
 def _matches_next_action(next_action: str, tool_name, tool_input) -> bool:
-    if next_action in _ROUTE_TERMINAL.values() and _is_warp_ask_fire(tool_name, tool_input):
+    if (
+        next_action in _ROUTE_TERMINAL.values() or next_action == _RESEARCH_TERMINAL
+    ) and _is_warp_ask_fire(tool_name, tool_input):
         return True
     kind, _ident = _split_call(next_action)
     if kind is None:
@@ -707,6 +736,8 @@ def open_sizing_routed(repo_root: str, rel_path: str, session_id: Optional[str])
         return False
     route, exempt = _sizing_route_and_exemption(repo_root, rel_path)
     next_action = None if exempt or route is None else _ROUTE_TERMINAL.get(route)
+    if next_action is not None and _has_research_block(repo_root, rel_path):
+        next_action = _RESEARCH_TERMINAL
     if next_action is None:
         return False
     from coordinator_core.group_em import obligations

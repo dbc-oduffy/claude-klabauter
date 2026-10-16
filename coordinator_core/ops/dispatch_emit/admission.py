@@ -339,7 +339,8 @@ def notice_line(record: dict) -> Optional[str]:
     """The one stderr line an emission prints for `record`, or None when the
     verdict is `admitted`/`disabled`. An unconfigured admission names each
     missing machine-local key once; every other verdict keeps verdict,
-    reasons and wait."""
+    reasons and wait. Called on every emit: nothing remembers a prior notice, so the
+    unconfigured line repeats until the keys are set."""
     verdict = record.get("verdict")
     if verdict in ("admitted", "disabled"):
         return None

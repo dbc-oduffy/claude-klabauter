@@ -66,7 +66,7 @@ def repo(tmp_path, monkeypatch):
     _write(root, PLAN, f"---\nsizing_object: {SIZING}\n---\nbody\n")
     _write(root, DOC, "seed\n")
     _write(root, "run.mjs", "// script\n")
-    _write(root, ".gitignore", ".coordinator-local/\n")
+    _write(root, ".gitignore", f".coordinator-local/\n{RUN_DIR_ROOT}/*/submission.json\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     monkeypatch.setattr(terminal_commit, "_ship_cited_sizing", lambda *a, **k: {})
@@ -75,6 +75,11 @@ def repo(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scope, "contested_by_live_peers", lambda paths, sid, cwd=None: {})
     monkeypatch.setattr(scope, "own_path_claims_in_process", lambda sid, cwd=None: [DOC])
+    from coordinator_core.session import core
+
+    ledger = Path(core.sessions_dir(str(root))) / SESSION / "dispatched-agents.txt"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("", encoding="utf-8")
     return root
 
 
@@ -87,6 +92,7 @@ def _author_graph(root: Path, run_id: str, *, docs: bool, evidence: bool = True)
     _write(root, SLICE, "status: draft\n")
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/run.json", json.dumps({"sizing_rel": SIZING}))
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/ask.md", "ask\n")
+    _write(root, f"{RUN_DIR_ROOT}/{run_id}/submission.json", json.dumps({"submitted_at": time.time() - 600}))
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/parent.json", json.dumps({"runs": [{"slice_sizing": SLICE}]}))
     if docs:
         _write(root, DOC, "edited by the docs stage\n")
@@ -252,6 +258,68 @@ def test_a_docs_stage_halt_lands_plan_handoff_and_delivery_note_and_leaves_the_t
     assert artifacts.class_of(DS_HANDOFF) == "handoff" and artifacts.class_of(DS_DELIVERY) == "delivery-note"
     assert DS_HANDOFF != BATON
     assert _git(["status", "--porcelain", "--untracked-files=all"], repo).strip() == ""
+
+
+REVIEW_FILE = "elsewhere/ask_roadmap.py"
+REVIEW_MODES = tuple(m for m in MODES if m != "abandoned")
+_REVIEW_AGENT = "agent-review-1"
+
+
+def _author_review_edit(root: Path) -> None:
+    """A reviewer edit in a directory no chunk declares, with the real per-agent touch record
+    ``review_edit_source`` reads: the dispatch ledger row, owner file, and a write event after the
+    run's ``submission.json`` ``submitted_at``."""
+    from coordinator_core.session import core, touch_record
+
+    _write(root, REVIEW_FILE, "edited by review\n")
+    hub = Path(core.sessions_dir(str(root)))
+    agent_dir = hub / ".agents" / _REVIEW_AGENT
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "em-session-id.txt").write_text(SESSION + "\n", encoding="utf-8")
+    ledger = hub / SESSION / "dispatched-agents.txt"
+    ledger.write_text(f"{_REVIEW_AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8")
+    with (agent_dir / touch_record.RECORD_FILENAME).open("ab") as fh:
+        fh.write(
+            touch_record.encode_line(
+                session_id=SESSION, agent_id=_REVIEW_AGENT, verb=touch_record.VERB_TOUCH,
+                path=REVIEW_FILE, timestamp=time.time(), kind=touch_record.KIND_WRITE,
+            )
+        )
+
+
+@pytest.mark.parametrize("mode", REVIEW_MODES)
+def test_a_review_written_file_outside_every_declared_path_is_committed_or_named(repo, mode):
+    land, _docs, _dirs = _setup(mode, repo)
+    if mode in ("completed", "refired"):
+        _prepare_ask_commit(repo)
+    _author_review_edit(repo)
+
+    reply = land(repo)
+
+    dirty = _git(["status", "--porcelain", "--untracked-files=all", "--", REVIEW_FILE], repo).strip()
+    if mode in ("completed", "refired"):
+        assert not dirty, (mode, dirty, reply)
+        assert reply.get("review_residue") == [REVIEW_FILE], reply
+        seed = _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
+        assert f"Review-Residue: {REVIEW_FILE}" in _git(["log", f"{seed}..HEAD", "--format=%B"], repo)
+    else:
+        assert reply.get("review_edits_unlanded") == {REVIEW_FILE: "halted-run"}, reply
+    if dirty:
+        assert reply.get("ok") is False or reply.get("refused") or reply.get("review_edits_unlanded"), reply
+        assert REVIEW_FILE in json.dumps(reply), reply
+
+
+def test_the_review_edit_oracle_goes_red_when_the_source_cannot_see_the_touch_record(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    _setup("completed", repo)
+    _prepare_ask_commit(repo)
+    _author_review_edit(repo)
+    monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {})
+
+    _land_completed(repo)
+
+    assert _git(["status", "--porcelain", "--untracked-files=all", "--", REVIEW_FILE], repo).strip()
 
 
 def test_the_composed_halt_call_still_carries_the_plan_and_doc_paths(monkeypatch):

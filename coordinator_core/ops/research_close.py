@@ -49,7 +49,9 @@ Idempotency: a re-run whose destination dir already holds byte-equal copies of e
 output and the identical trail record returns the sha of the commit that landed them (found
 by walking HEAD for the close subject); when no such commit is found, missing files are
 written and the commit is made. A destination file or trail record holding different bytes
-is refused, never overwritten; a re-close on a later day names a new destination dir, so
+is refused, never overwritten, except a trail record the new one extends (same keys, old paths a
+subset of the new, count not smaller): a re-close after moving strays into scratch adds them
+and commits the extended record; a re-close on a later day names a new destination dir, so
 its record differs and is refused.
 
 Negative-spec:
@@ -207,6 +209,32 @@ def _archived_bytes(src: Path, roots: list[tuple[str, str]]) -> bytes:
     return relativize_text(text, roots).encode("utf-8")
 
 
+def _extends(old_text: str, new_text: str) -> bool:
+    """True when `new_text` is `old_text` plus outputs: every key but ``output_count`` and
+    ``paths`` is equal, the old paths are a subset of the new, and the count did not shrink."""
+    def split(text: str) -> tuple[list[str], list[str], Optional[int]]:
+        head: list[str] = []
+        paths: list[str] = []
+        count: Optional[int] = None
+        for line in text.splitlines():
+            if line.startswith("  - "):
+                paths.append(line[4:])
+            elif line.startswith("output_count: "):
+                try:
+                    count = int(line[len("output_count: "):])
+                except ValueError:
+                    return [], [], None
+            elif not line.startswith("paths:"):
+                head.append(line)
+        return head, paths, count
+
+    old_head, old_paths, old_count = split(old_text)
+    new_head, new_paths, new_count = split(new_text)
+    if old_count is None or new_count is None or not old_head or old_head != new_head:
+        return False
+    return set(old_paths) <= set(new_paths) and old_count <= new_count
+
+
 def _strays(worktree: Path, dest_dir: Path, since: float) -> list[str]:
     """Untracked files under docs/research/, outside `dest_dir`, modified at or after `since`."""
     root = worktree / _RESEARCH_DIR
@@ -332,11 +360,16 @@ def _close_archived(
         return _err(f"trail record refused: {exc}")
     trail_path = worktree / trail_rel
     trail_bytes = trail_text.encode("utf-8")
+    extend = False
     if trail_path.exists() and (not trail_path.is_file() or trail_path.read_bytes() != trail_bytes):
-        return _err(
-            f"trail record exists with different content, refusing to overwrite: {trail_rel}",
-            dest=trail_rel,
+        extend = trail_path.is_file() and _extends(
+            trail_path.read_text(encoding="utf-8", errors="replace"), trail_text
         )
+        if not extend:
+            return _err(
+                f"trail record exists with different content, refusing to overwrite: {trail_rel}",
+                dest=trail_rel,
+            )
     for src, dst in pairs:
         if dst.exists() and (not dst.is_file() or dst.read_bytes() != payload[dst]):
             return _err(
@@ -345,7 +378,9 @@ def _close_archived(
             )
     subject = f"research({topic_slug}): close {run_id}"
 
-    landed = trail_path.is_file() and all(dst.is_file() for _, dst in pairs)
+    # Trap: a retry after the extended trail was written but the commit refused finds equal bytes
+    # and resolves the earlier close commit (same subject), leaving the extension uncommitted.
+    landed = trail_path.is_file() and not extend and all(dst.is_file() for _, dst in pairs)
     sha = _landed_sha(worktree, subject) if landed else None
     if sha is None:
         for src, dst in pairs:
@@ -353,7 +388,7 @@ def _close_archived(
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(payload[dst])
         trail_path.parent.mkdir(parents=True, exist_ok=True)
-        if not trail_path.is_file():
+        if extend or not trail_path.is_file():
             trail_path.write_bytes(trail_bytes)
         commit_rel = [*rel_paths, trail_rel]
         if meta.get("sizing_rel") and meta["sizing_rel"] not in commit_rel:

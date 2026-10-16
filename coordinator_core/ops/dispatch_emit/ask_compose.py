@@ -91,12 +91,14 @@ from coordinator_core.ops.review_mint.execute_review import (
     PREP_BUSY_HALT,
     PREP_MALFORMED_HALT,
     REVIEW_MISSING_HALT,
+    SLICE_ID_UNKNOWN_HALT,
     compose_execute_review,
     criterion_judge_brief,
     owner_repo_clause_js,
 )
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+from coordinator_core.ops.requirement_register import REGISTER_PIN_DRIFT_KIND, REPIN_OP
 from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.roadmap.post_stamp_clause import (
@@ -338,6 +340,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
     },
 )
 _LEDGER_ITEMS_RULES = (
+    "Rows under the ledger's Out of scope heading are ruled out: give them no item. "
     "Return one entry in items for EVERY ledger item, by "
     "its id (the sizing's requirement_register row id), and on every engine-plane item named above "
     "set root_read to each root you judged it at: status 'met' when the change makes the "
@@ -377,8 +380,9 @@ _LEDGER_CLAUSE = (
     "Requirements ledger: read {ledger} at the start of this stage, before anything else. It holds "
     "every PM requirement for this run in arrival order: the PM's own words and each revision the "
     "EM sent while the run was in flight, and it can grow mid-run. Each item outranks every brief, "
-    "plan and in-repo memo; a later revision governs over an earlier item it changes. Carry every "
-    "item into what you hand on."
+    "plan and in-repo memo; a later revision governs over an earlier item it changes. A revision "
+    "a peer session sent through workflow.revise (the row names its sender in `from`) is a ledger "
+    "item with the same authority as an EM revision. Carry every item into what you hand on."
 )
 #: `_LEDGER_CLAUSE` for a relayed ask: the ledger's ask item is an EM's relay, not the PM's words.
 _RELAYED_LEDGER_CLAUSE = _LEDGER_CLAUSE.replace(
@@ -606,7 +610,10 @@ _FALSIFIER_ACT = (
     "import path or call site a user reaches -- and probes the criterion's observable outcome, never "
     "your premise evidence and never a unit test of one helper. Run it now against the unchanged tree "
     "and record what it prints as baseline_output: it must show the criterion FALSE today. Write no "
-    "repo file. Return how (one runnable observation, verbatim), baseline_output and "
+    "repo file. The how runs this repo's own code from the working tree, a module or test run from "
+    "the repo root; the installed CLI and warm engine serve the published engine and cannot see "
+    "this run's uncommitted change. It probes observable output, not an internal name the change "
+    "may rename. Return how (one runnable observation, verbatim), baseline_output and "
     "expected_when_true (what the same observation shows once the criterion holds)."
 )
 #: The plan-authoring legs' falsifier act, for every arm with no in-run scout to fold it into (a presized
@@ -625,7 +632,10 @@ _AS_PLAN_FALSIFIER_JS = (
 _FALSIFIER_SUFFIX_JS = (
     "(_falsifierSpec ? '\\n\\nrecorded falsifier (authored before any change by ' + (_falsifierSpec.authored_by ?? 'unknown') "
     "+ '; run its how verbatim at HEAD, "
-    "compare to expected_when_true and baseline_output, and rule not_met when it still shows the baseline): ' "
+    "compare to expected_when_true and baseline_output, and rule not_met when it still shows the baseline). "
+    "When its how cannot run as written (a missing name, an engine that predates the change, a refused fixture), "
+    "report falsifier verdict error with the cause in output_anchor; fail is only for a how that ran and still shows the baseline. "
+    "Judge the criterion from your own observation: ' "
     "+ JSON.stringify(_falsifierSpec) : '')"
 )
 
@@ -787,6 +797,37 @@ def _intake_sizing(repo_root: str, sizing_rel: Optional[str]) -> Optional[dict]:
     return sizing if is_intake(sizing) else None
 
 
+def _source_memo_clause(repo_root: str, prompt: Optional[str], sizing_rel: Optional[str]) -> str:
+    """The planner clause naming the inbox memo(s) the ask or its sizing names; empty when none."""
+    from coordinator_core.ops.dispatch_emit.source_memo_ref import inbox_memo_refs, sizing_texts
+
+    texts: list = [prompt]
+    if sizing_rel:
+        try:
+            texts.extend(sizing_texts(load_sizing(Path(repo_root), sizing_rel)))
+        except (SizingFireRefused, OSError, ValueError, KeyError):
+            pass
+    found: dict[str, None] = {}
+    for t in texts:
+        if isinstance(t, str):
+            for ref in inbox_memo_refs(t):
+                found.setdefault(ref)
+    refs = list(found)
+    if not refs:
+        return ""
+    if len(refs) == 1:
+        return (
+            f"Source memo: set plan frontmatter `source_memo: {refs[0]}`. The close-out memo-lifecycle "
+            "leg resolves it against the landed sha; author no row that edits, closes or sends it.\n\n"
+        )
+    listed = ", ".join(f"`{r}`" for r in refs)
+    return (
+        f"Source memos named: {listed}. The close-out memo-lifecycle leg resolves one: set plan "
+        f"frontmatter `source_memo: {refs[0]}` and name the rest in an open question. Author no row "
+        "that edits, closes or sends any of them.\n\n"
+    )
+
+
 def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
     """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, ceo mode."""
     if not sizing_rel:
@@ -901,6 +942,8 @@ def _single_exit_review(blocks: list[str]) -> str:
     missing_exit = f"return {{ halted: '{REVIEW_MISSING_HALT}'"
     malformed_exit = f"return {{ halted: '{PREP_MALFORMED_HALT}'"
     malformed_guard = "  if (_malformed.length) {"
+    slice_id_exit = f"return {{ halted: '{SLICE_ID_UNKNOWN_HALT}'"
+    slice_id_guard = "  if (_badSliceIdAt >= 0) {"
     if (
         prep.count(malformed_exit) != 1
         or prep.count(malformed_guard) != 1
@@ -908,6 +951,8 @@ def _single_exit_review(blocks: list[str]) -> str:
         or prep.count(missing_exit) != 1
         or prep.count(_REVIEW_MISSING_GUARD) != 1
         or prep.count(_REVIEW_PREP_BIND) != 1
+        or prep.count(slice_id_exit) != 1
+        or prep.count(slice_id_guard) != 1
     ):
         raise AskComposeRefused("review prep block no longer has the prep-busy and review-missing exit shape single-exit composition rewrites")
     prep = prep.replace(busy_exit, busy_exit.replace("return ", "_halted = ", 1))
@@ -916,6 +961,8 @@ def _single_exit_review(blocks: list[str]) -> str:
     prep = prep.replace(missing_exit, missing_exit.replace("return ", "_halted = ", 1))
     prep = prep.replace(_REVIEW_MISSING_GUARD, _REVIEW_MISSING_GUARD.replace("if (", "if (!_halted && ", 1), 1)
     prep = prep.replace(_REVIEW_PREP_BIND, "  if (!_halted) _reviewPrep = (() => {\n", 1)
+    prep = prep.replace(slice_id_exit, slice_id_exit.replace("return ", "_halted = ", 1))
+    prep = prep.replace(slice_id_guard, "  if (!_halted && _badSliceIdAt >= 0) {", 1)
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
     prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))) {", 1)
     prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)
@@ -1124,6 +1171,7 @@ def compose_ask_script(
             plan_blitz_fn=blitz_fn,
             plan_blitz_phases=blitz_phases,
             plan_blitz_args=plan_blitz_args,
+            script_path=script_path,
         )
 
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
@@ -1225,7 +1273,11 @@ def compose_ask_script(
     if em_brief:
         b.append(f"  {brief_decl_js(em_brief)}")
         b.append("  const _askAgent = agent;")
-    b.append(f"  const {_LEDGER_PREFIX_VAR} = {_lit(ledger_clause_text.format(ledger=ledger_rel) + chr(10) * 2)};")
+    source_memo_clause = _source_memo_clause(repo_root, prompt, sizing_rel)
+    b.append(
+        f"  const {_LEDGER_PREFIX_VAR} = "
+        f"{_lit(ledger_clause_text.format(ledger=ledger_rel) + chr(10) * 2 + source_memo_clause)};"
+    )
     if blitz_fn:
         b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief)))
     runner_js = _row_runner_js()
@@ -1513,6 +1565,17 @@ def compose_ask_script(
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
         b.append("  else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }")
+        # Exit 0 proves nothing when the scout never ran sizing-assemble (stdout 'not run'): only a
+        # parsed assemble decision, which always carries `route`, proves the sizing was written.
+        b.append(
+            "  if (!_halted && (_decision === null || typeof _decision !== 'object' "
+            "|| typeof _decision.route !== 'string')) { _halted = { halted: "
+            f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble did not run: the scout replied exit 0 but its stdout is "
+            "not a sizing-assemble decision, so the sizing file was never written; the gate, plan, stage, execute "
+            "and review phases were skipped', "
+            "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
+            ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
+        )
         b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")
 
     b.append("  phase('gate');")
@@ -1670,15 +1733,28 @@ def compose_ask_script(
             "    if (!_progressed) break;\n"
             "  }"
         )
+    # Placed after the halt spread so an undefined `halt.reason` cannot erase it: a halt record
+    # always carries a non-empty reason, and a no-arm reply with no halt says so.
+    _gate_reason_js = (
+        "reason: String((_gate.halt && _gate.halt.reason) || (_gate.halt ? 'the gate halted ('"
+        " + _gate.halt.kind + ') without a reason' : 'the gate returned no arm and no halt'"
+        + (
+            " + (_scouted && String(_scouted.stdout ?? '').trim() ? ' (scout stdout: ' + "
+            "String(_scouted.stdout).trim().slice(0, 200) + ')' : '')"
+            if sized_in_run
+            else ""
+        )
+        + "))"
+    )
     if not sized_in_run:
         b.append(
             "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
-            f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}"
+            f"{_lit(HALT_REFUSAL)}, ..._gate.halt, {_gate_reason_js}, sizing: _sizingRel, run_id: _runId }}; }}"
         )
     else:
         b.append(
             "  if (_gate.halt || !_gate.arm) { if (!_halted) _halted = { halted: (_gate.halt && _gate.halt.kind) || "
-            f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId"
+            f"{_lit(HALT_REFUSAL)}, ..._gate.halt, {_gate_reason_js}, sizing: _sizingRel, run_id: _runId"
             f", ...(_pmExit ? {{ {PM_EXIT_QUESTION_KEY}: _pmExit }} : {{}}) }}; }}"
         )
     # A ledger resume re-judges the blocking rows of a run whose executors already landed. It
@@ -1878,6 +1954,7 @@ def compose_ask_script(
         if fold_stage:
             b.append(ready_restage("_ready", "    "))
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
+        b.append("    let _repeatBlocking = null;")
         b.append("    if (!_planRel && _pulledEntry) {")
         revise_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -1932,12 +2009,50 @@ def compose_ask_script(
         if fold_stage:
             b.append(ready_restage("_reready", "      "))
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
+        b.append(
+            "      const _rePulled = (_reblitz?.pulled ?? []).find((p) => p && p.planPath);"
+        )
+        b.append(
+            "      if (!_planRel && Array.isArray(_pulledEntry.blocking) && Array.isArray(_rePulled?.blocking) "
+            "&& _pulledEntry.blocking.length > 0 && _rePulled.blocking.length === _pulledEntry.blocking.length "
+            "&& _rePulled.blocking.every((r, i) => r === _pulledEntry.blocking[i])) "
+            "{ _repeatBlocking = _rePulled.blocking; }"
+        )
         b.append("      }")
         b.append("    }")
         b.append(
             f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
-            "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+            "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId };"
         )
+        b.append(
+            "    const _driftPull = [...(_blitz?.regate?.pulled ?? []), ...(_blitz?.pulled ?? [])].find((p) => p && p.planPath "
+            f"&& (String(p.reason ?? '') + String(p.prepGateReport ?? '')).includes({_lit(REGISTER_PIN_DRIFT_KIND)}));"
+        )
+        b.append("    if (_driftPull) {")
+        b.append(
+            "      const _pc = (_driftPull.reviews ?? _driftPull.reviewVerdicts ?? []).find((r) => r && r.reviewer === 'premise-check');"
+        )
+        b.append("      const _pcRows = _driftPull.premise?.rows ?? _driftPull.premiseRows;")
+        b.append(
+            "      const _premise = _pc ? { verdict: _pc.verdict, ...(_pc.ledger ? { ledger: _pc.ledger } : {}) } "
+            ": Array.isArray(_pcRows) ? { rows: _pcRows } : null;"
+        )
+        b.append("      const _repinParams = { plan: _driftPull.planPath, premise_check: _premise };")
+        b.append(
+            f"      _halted.next_action = {{ kind: 'repin_register', op: {_lit(REPIN_OP)}, params: _repinParams, "
+            f"call: {_lit(f'{_INVOKE} {REPIN_OP} ' + chr(39))} + JSON.stringify(_repinParams).replace(/'/g, \"'\\\\''\") + \"'\", "
+            f"refire: {_refire_js(sizing_rel)}, "
+            "note: _premise ? undefined : 'the pull carries no premise-check verdict: replace premise_check with the regate premise-check review {verdict[, ledger]}' };"
+        )
+        b.append("    }")
+        b.append(
+            f"    if (_repeatBlocking && !_halted.next_action) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            "reason: 'plan-blitz pulled twice on the same blocking set', blocking: _repeatBlocking, "
+            "next_action: { kind: 'rule_on_blocking_rows', blocking: _repeatBlocking, "
+            "note: 'a second pull blocked on the same rows: rule on them (revise the plan or accept them); the same plan pulls again' }, "
+            "blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+        )
+        b.append("    }")
         b.append("    }")
         b.append("  }")
     else:
@@ -1975,7 +2090,8 @@ def compose_ask_script(
 
             b.extend(
                 roadmap_stage_lines(
-                    repo_root=repo_root, run_id=run_id, interaction_mode="ceo", plan_blitz_args=plan_blitz_args
+                    repo_root=repo_root, run_id=run_id, interaction_mode="ceo",
+                    plan_blitz_args=plan_blitz_args, script_path=script_path,
                 )
             )
         else:
@@ -2308,7 +2424,7 @@ def compose_ask_script(
     b.append(
         f"  _nextAction = {'_roadmapFan ? _nextAction : ' if roadmap_fan else ''}_closeable "
         f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
-        f": {stopped_na};"
+        f": (_halted?.next_action?.kind === 'repin_register' ? _halted.next_action : {stopped_na});"
     )
     b.append("  let _reviseAndRefire = _closeable ? null : _mkRevise();")
     # An end that is not closeable and carries no halt would return with neither a commit nor a
@@ -2343,7 +2459,10 @@ def compose_ask_script(
         "if (typeof _ir.prep_sidecar === 'string') { _ir.prep_sidecar = _rel(_ir.prep_sidecar); } }"
     )
     if in_run_commit:
-        _append_docs_and_commit(b, head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, manifest_rel=manifest_rel)
+        _append_docs_and_commit(
+            b, head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, manifest_rel=manifest_rel,
+            script_path=script_path,
+        )
         _append_halt_record_commit(b)
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
@@ -2446,8 +2565,10 @@ _SFE_WAVE_SIDECARS_JS = (
 #: verdict covers exactly the rows the halted run blocked on.
 _RESUME_LEDGER_CLAUSE_JS = (
     "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check and its rows already ran: landed, "
-    "or left in the tree by the halt. Judge only these requirement rows, now, against the current tree: ' + "
-    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. Return an item for each of them and no other item.' + "
+    "or left in the tree by the halt. ' + "
+    f"(_gate.{RESUME_LEDGER_KEY}.blocking.length ? 'Judge only these requirement rows, now, against the current tree: ' + "
+    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. Return an item for each of them and no other item.' "
+    ": 'No requirement row is left to judge. Return items: [].') + "
     f"(Object.keys(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_EM_DISCHARGED_FIELD} ?? {{}}).length "
     "? ' EM-discharged rows (performed by the EM, recorded via em-discharge): ' + "
     f"Object.entries(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_EM_DISCHARGED_FIELD}).map(([k, v]) => k + ': ' + v).join('; ') + '.' : '') "
@@ -2496,7 +2617,8 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
 
 
 def _append_docs_and_commit(
-    b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str
+    b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str,
+    script_path: Optional[str] = None,
 ) -> None:
     """The run's commit stage, under a live terminal-commit `_nextAction` and no halt: a
     git-commit-agent running `dispatch.terminal_commit` with the run token. The docs were written
@@ -2511,7 +2633,9 @@ def _append_docs_and_commit(
     forward-slash file path, never JSON.
     """
     live = "_closeable && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN"
-    commit_call = _commit_stage_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
+    commit_call = _commit_stage_call(
+        head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, script_path=script_path
+    )
     b.append(f"  if ({live}) {{")
     b.append("    phase('commit');")
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
@@ -2542,10 +2666,14 @@ def roadmap_commit_decls(*, head: str, anchor: str, repo_root: str, run_id: str)
     ]
 
 
-def roadmap_commit_lines(*, head: str, anchor: str, repo_root: str, run_id: str) -> list[str]:
+def roadmap_commit_lines(
+    *, head: str, anchor: str, repo_root: str, run_id: str, script_path: Optional[str] = None
+) -> list[str]:
     """The standalone roadmap script's commit leg: the same `commit` agent the run-embedded
     commit stage fires, under a live fan-out `_nextAction`. A refusal halts by name."""
-    call = _commit_stage_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
+    call = _commit_stage_call(
+        head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, script_path=script_path
+    )
     return [
         "  if (!_halted && _nextAction && _nextAction.kind === 'terminal_commit' && _RUN_TOKEN) {",
         "    phase('commit');",
@@ -2557,8 +2685,14 @@ def roadmap_commit_lines(*, head: str, anchor: str, repo_root: str, run_id: str)
     ]
 
 
-def _commit_stage_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
-    """The `commit` agent call (git-commit-agent, haiku) running `dispatch.terminal_commit`."""
+def _commit_stage_call(
+    *, head: str, anchor: str, repo_root: str, run_id: str, script_path: Optional[str] = None
+) -> str:
+    """The `commit` agent call (git-commit-agent, haiku) running `dispatch.terminal_commit`.
+
+    The params block always carries `script_path` (the `_nextAction.params` value wins, else
+    `script_path`, else ''): `prompt_params` refuses a block without it, and the run-token hook then
+    never writes the params file."""
     params_file = params_path(repo_root, run_id)
     if params_file is None:
         raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
@@ -2570,7 +2704,9 @@ def _commit_stage_call(*, head: str, anchor: str, repo_root: str, run_id: str) -
         "request, so no `paths` array is owed.\n\n",
         f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
-        "js:_terminalCommitParamsBlock({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN, "
+        "js:_terminalCommitParamsBlock({ ..._nextAction.params, "
+        f"script_path: _nextAction.params.script_path ?? {_lit(script_path or '')}, "
+        "run_id: _runId, run_token: _RUN_TOKEN, "
         f"doc_paths: {_DOC_PATHS_JS} }})",
         "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, error, refused, "

@@ -313,6 +313,90 @@ def test_engine_refusal_is_the_deny_reason(tmp_path):
     assert "sizing not accepted" in hso["permissionDecisionReason"]
 
 
+def _foreign_refusal(root: Path) -> Exception:
+    from coordinator_core.ops.dispatch_emit.op import ForeignEmissionError
+
+    target = root / "state" / "warp" / ("ask-20261016T200022-" + "x" * 150 + ".workflow.mjs")
+    return ForeignEmissionError(
+        f"{target} already holds a DIFFERENT emission (mtime 2026-10-16T20:00:22, 1234 bytes). "
+        "Coordinate with that session, name a different output_path, or pass force=true deliberately."
+    )
+
+
+def test_foreign_emission_refusal_reaches_the_deny_whole(tmp_path):
+    # Pins hook pass-through only (no hook-side cap exists); the length bound is test_op's.
+    root = _repo(tmp_path)
+    exc = _foreign_refusal(root)
+    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=_Emit(raises=exc))
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "deny"
+    assert str(exc) in hso["permissionDecisionReason"]
+    assert hso["permissionDecisionReason"].count("pass force=true deliberately.") == 1
+
+
+def test_the_op_door_returns_the_whole_refusal(tmp_path, monkeypatch):
+    from coordinator_core import machine_profile
+
+    root = _repo(tmp_path)
+    exc = _foreign_refusal(root)
+    monkeypatch.setattr(mod, "_default_emit", _Emit(raises=exc))
+    monkeypatch.setattr(machine_profile, "apply_guard_level", lambda _name, env, **_kw: env)
+    out = mod._handler({"payload": _payload(root, {"sizing": "state/sizings/a.yaml"})})
+    assert str(exc) in _hso(out)["permissionDecisionReason"]
+
+
+def test_the_transport_shaping_keeps_the_whole_refusal(tmp_path):
+    from coordinator_core.warm import hook_http
+
+    root = _repo(tmp_path)
+    exc = _foreign_refusal(root)
+    env = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=_Emit(raises=exc))
+    body = hook_http._decision_to_response("PreToolUse", env)
+    assert str(exc) in body["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_refusal_longer_than_any_cap_keeps_its_tail_through_every_door(tmp_path, monkeypatch):
+    from coordinator_core import machine_profile
+    from coordinator_core.ops.dispatch_emit.op import ForeignEmissionError
+    from coordinator_core.warm import hook_http
+
+    tail = "TAIL-TOKEN-7f3a9c"
+    root = _repo(tmp_path)
+    exc = ForeignEmissionError("x" * 2500 + " " + tail)
+    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=_Emit(raises=exc))
+    assert tail in _hso(out)["permissionDecisionReason"]
+    assert tail in hook_http._decision_to_response("PreToolUse", out)["hookSpecificOutput"]["permissionDecisionReason"]
+    monkeypatch.setattr(mod, "_default_emit", _Emit(raises=exc))
+    monkeypatch.setattr(machine_profile, "apply_guard_level", lambda _name, env, **_kw: env)
+    handled = mod._handler({"payload": _payload(root, {"sizing": "state/sizings/a.yaml"})})
+    assert tail in _hso(handled)["permissionDecisionReason"]
+
+
+def test_a_redirected_emit_leads_the_allow_context_with_the_redirect(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+
+    root = _repo(tmp_path)
+
+    class _Redirected(_Emit):
+        def __call__(self, params, root):
+            result = super().__call__(params, root)
+            result[OUTPUT_PATH_REDIRECT_KEY] = {
+                "from": "state/warp/ask-old.workflow.mjs",
+                "to": "state/warp/ask-new.workflow.mjs",
+                "halted_run": "ask-old",
+                "prior_session": "sess-dead",
+                "reason": "emitter-gone",
+            }
+            return result
+
+    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/a.yaml"}), emit=_Redirected())
+    context = _hso(out)["additionalContext"]
+    lead = "Halted run ask-old belonged to sess-dead (emitter-gone); emitted fresh at state/warp/ask-new.workflow.mjs. "
+    assert context.index(lead) < context.index("Submitted to the engine")
+    plain = mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+    assert "Halted run" not in _hso(plain)["additionalContext"]
+
+
 def test_a_subagent_cannot_submit(tmp_path):
     root = _repo(tmp_path)
     emit = _Emit()
@@ -795,6 +879,59 @@ def test_a_fanout_refusal_is_the_deny_text_verbatim(tmp_path):
     assert _hso(out)["permissionDecision"] == "deny"
     assert _hso(out)["permissionDecisionReason"] == "[coordinator] Partition refused; unclaimed rows: R2."
     assert emit.calls == []
+
+
+def test_a_returned_fanout_refusal_is_named_not_reported_as_no_ready_run(tmp_path):
+    root = _repo(tmp_path)
+
+    def refusing(params, root):
+        return {"exit_code": 1, "applied": False, "error": "no recorded PM turn"}
+
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, _asks("a", "b")), emit=emit, fanout=refusing)
+    reason = _hso(out)["permissionDecisionReason"]
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert "no recorded PM turn" in reason and "no ready run" not in reason
+    assert emit.calls == []
+
+
+def test_the_reported_three_ask_relayed_shape_fires_one_and_orders_the_overlap(tmp_path):
+    root = _repo(tmp_path)
+    args = {
+        "source": "relayed",
+        "asks": [
+            {"ask": "revise from peer", "label": "revise-from-peer",
+             "writes": ["requirements_ledger.py", "ask_compose.py"]},
+            {"ask": "revise pinned plan warn", "label": "revise-pinned-plan-warn",
+             "writes": ["requirements_ledger.py"]},
+            {"ask": "venv creation guard", "label": "venv-creation-guard", "writes": []},
+        ],
+    }
+    fan = _Fanout([
+        ("r1", "revise-from-peer", (), "ready"),
+        ("r2", "revise-pinned-plan-warn", ("r1",), "after"),
+        ("r3", "venv-creation-guard", (), "ready"),
+    ])
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, args), emit=emit, fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert _sources(fan) == ["relayed"] * 3
+    assert [a["writes"] for a in fan.calls[0][0]["asks"]][1] == ["requirements_ledger.py"]
+    assert emit.calls[0][0]["reserved_run_id"] == "r1"
+    reason = json.dumps(out)
+    assert "state/sizings/r3.yaml" in reason and "state/sizings/r2.yaml" not in reason
+    assert "Held runs (r2)" in reason
+
+
+def test_the_reported_shape_partitions_into_two_firable_runs_and_one_ordered_after():
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+
+    slices = [
+        contract.AskSlice("revise-from-peer", "s1.yaml", (), ("requirements_ledger.py", "ask_compose.py"), None),
+        contract.AskSlice("revise-pinned-plan-warn", "s2.yaml", (), ("requirements_ledger.py",), None),
+        contract.AskSlice("venv-creation-guard", "s3.yaml", (), (), None),
+    ]
+    assert contract.after_edges(slices) == {0: (), 1: (0,), 2: ()}
 
 
 def _fanned(tmp_path, runs):

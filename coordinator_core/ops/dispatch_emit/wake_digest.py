@@ -411,14 +411,15 @@ def next_action_parts(
                 + (
                     f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
+                    f"reason: _cap({falsifier_var}.reason ?? null, {_maxlength(load_schema(), 'criterion.reason')}), "
                     f"sidecar: {falsifier_var}.sidecar_path ?? null, "
                     f"completion_summary: {judge_summary_js}, "
                     f"lesson_candidates: {judge_lessons_js}, "
                     f"register_rows: {falsifier_var}.register_rows ?? null }} "
-                    ": { status: 'not_run', observation: null, sidecar: null, "
+                    ": { status: 'not_run', observation: null, reason: null, sidecar: null, "
                     "completion_summary: null, lesson_candidates: null })"
                     if falsifier_present
-                    else "{ status: 'not_run', observation: null, sidecar: null, "
+                    else "{ status: 'not_run', observation: null, reason: null, sidecar: null, "
                     "completion_summary: null, lesson_candidates: null }"
                 )
             )

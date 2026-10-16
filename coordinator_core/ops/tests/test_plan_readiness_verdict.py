@@ -1,5 +1,6 @@
 """plan.readiness_verdict: reply shape against the pinned schema, verdict classes, no skip param,
-zero spawns and the process-time bar on a representative plan.
+zero spawns and the process-time bar on a representative plan; corrects-list cover, stale
+baseline_ref rows and the `blocking` key.
 """
 
 from __future__ import annotations
@@ -331,3 +332,118 @@ def test_handler_reply_for_a_suite_tier_statement_validates(tmp_path):
     reply = op._handler({"plan": REL}, common)
     _validate(reply)
     assert reply["verdict"] in {"pulled", "judgment", "ready"}
+
+
+def _corrects_plan(root: Path, corrects: str, fixer_disposition: str = "open", ref: str = "aaa111") -> Path:
+    (root / "docs" / "plans").mkdir(parents=True)
+    (root / "coordinator_core" / "ops").mkdir(parents=True)
+    spine = _SPINE + _SPINE.replace("id: C1", "id: C2").replace(
+        "disposition: open", f"disposition: {fixer_disposition}"
+    )
+    (root / REL).write_text(
+        "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
+        "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
+        f"{corrects}"
+        "prime_exit_criterion:\n  statement: the op reports per class\n"
+        "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
+        f"  falsifier:\n    how: run it\n    baseline_output: out\n    baseline_ref: {ref}\n"
+        "    expected_when_true: ok\n"
+        "---\n\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n" + spine + "```\n",
+        encoding="utf-8",
+    )
+    return root / ".git"
+
+
+_CORRECTS = "corrects:\n  - citation: tree claim X\n    fixed_by: C2\n"
+
+
+def _op_reply(root: Path, rows: list) -> dict:
+    reply = op._handler({"plan": REL, "premise": {"rows": rows}}, root)
+    _validate(reply)
+    return reply
+
+
+def _row(verdict="CONTRADICTED", citation="see tree claim X here", **extra) -> dict:
+    return {"verdict": verdict, "citation": citation, **extra}
+
+
+def test_contradicted_row_on_corrects_list_with_spine_fix_is_a_note(tmp_path):
+    common = _corrects_plan(tmp_path, _CORRECTS)
+    reply = _op_reply(common, [_row()])
+    assert "premise-check: CONTRADICTED" not in reply["reason"]
+    assert reply["blocking"] == []
+    assert "tree claim X -> C2" in reply["reason"]
+
+
+@pytest.mark.parametrize(
+    "corrects, disposition",
+    [
+        ("corrects:\n  - citation: tree claim X\n    fixed_by: C9\n", "open"),
+        (_CORRECTS, "backlogged"),
+        (_CORRECTS, "spun_off"),
+    ],
+)
+def test_corrects_entry_without_a_live_fixing_row_still_blocks(tmp_path, corrects, disposition):
+    common = _corrects_plan(tmp_path, corrects, disposition)
+    reply = _op_reply(common, [_row()])
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: CONTRADICTED see tree claim X here"]
+
+
+# Plan schema 2.39.0 types `corrects`, so a malformed entry fails the prep gate before the
+# premise rows are read; it must never reach the note path.
+@pytest.mark.parametrize(
+    "corrects", ["corrects:\n  - citation: tree claim X\n", "corrects: nonsense\n"]
+)
+def test_malformed_corrects_is_pulled_as_schema_invalid(tmp_path, corrects):
+    reply = _op_reply(_corrects_plan(tmp_path, corrects), [_row()])
+    assert reply["verdict"] == "pulled"
+    assert "SCHEMA:schema-invalid" in reply["reason"]
+
+
+def test_unresolved_row_on_corrects_list_still_blocks(tmp_path):
+    common = _corrects_plan(tmp_path, _CORRECTS)
+    reply = _op_reply(common, [_row("UNRESOLVED")])
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: UNRESOLVED see tree claim X here"]
+
+
+def test_corrects_citation_is_whitespace_normalised_and_case_sensitive(tmp_path):
+    common = _corrects_plan(tmp_path, _CORRECTS)
+    assert _op_reply(common, [_row(citation="tree   claim\nX")])["verdict"] == "ready"
+    assert _op_reply(common, [_row(citation="TREE CLAIM X")])["verdict"] == "judgment"
+
+
+def test_stale_class4_row_is_a_note_and_matching_baseline_ref_still_blocks(tmp_path):
+    common = _corrects_plan(tmp_path, "", ref="new222")
+    stale = _op_reply(common, [_row(citation="falsifier", baseline_ref="old111")])
+    assert stale["verdict"] == "ready"
+    assert "superseded baseline old111" in stale["reason"]
+    assert stale["blocking"] == []
+    fresh = _op_reply(common, [_row(citation="falsifier", baseline_ref="new222")])
+    assert fresh["verdict"] == "judgment"
+    assert fresh["blocking"] == ["premise-check: CONTRADICTED falsifier"]
+
+
+def test_non_string_baseline_ref_is_refused(tmp_path):
+    common = _corrects_plan(tmp_path, "")
+    with pytest.raises(ValueError, match="baseline_ref"):
+        op._handler({"plan": REL, "premise": {"rows": [_row(baseline_ref=3)]}}, common)
+
+
+def test_blocking_is_sorted_deduplicated_and_empty_on_ready():
+    rows = [_row("UNRESOLVED", "b"), _row("CONTRADICTED", "a"), _row("UNRESOLVED", "b")]
+    out = _premise(rows, [{"reviewer": "patrik", "verdict": "reject"}])
+    assert out["blocking"] == [
+        "the Staff Engineer: 'reject'",
+        "premise-check: CONTRADICTED a",
+        "premise-check: UNRESOLVED b",
+    ]
+    assert _premise([])["blocking"] == []
+    assert op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, [])["blocking"] == []
+
+
+def test_blocking_is_not_truncated_by_the_reason_tail():
+    out = _premise(_rows(*["UNRESOLVED"] * 10, citation="x" * 190))
+    assert len(out["blocking"]) == 10
+    assert out["reason"].endswith("more premise row(s)")

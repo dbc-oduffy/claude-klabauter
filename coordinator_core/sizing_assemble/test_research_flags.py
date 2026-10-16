@@ -189,6 +189,82 @@ def test_research_destination_is_written_amended_and_validated(repo: Path) -> No
     assert sa.main(["--amend-research", rel, "--research-destination", "elsewhere"]) == sa.EXIT_BUSINESS_FAIL
 
 
+def test_seeds_are_written_through_the_real_path_and_validate(repo: Path) -> None:
+    code, doc = _run(
+        repo, "--research-class", "corpus",
+        "--research-seed", "video=https://youtu.be/x", "--research-seed", "repo=https://h/o/r",
+    )
+    assert code == sa.EXIT_OK
+    assert doc["research"]["seeds"] == [
+        {"kind": "video", "url": "https://youtu.be/x"},
+        {"kind": "repo", "url": "https://h/o/r"},
+    ]
+    assert validate_frontmatter(doc, _SCHEMA) == []
+
+
+def test_seeds_build_in_order_with_repeats_dropped_and_equals_kept() -> None:
+    block, errors = sa.build_research_block(
+        "corpus", None, [], None, [], None, None, None, None,
+        [
+            "video=https://youtu.be/x?t=1",
+            "repo=git@host:o/r.git",
+            "video=https://youtu.be/x?t=1",
+            "doc=https://example.com/a",
+        ],
+    )
+    assert errors == []
+    assert block["seeds"] == [
+        {"kind": "video", "url": "https://youtu.be/x?t=1"},
+        {"kind": "repo", "url": "git@host:o/r.git"},
+        {"kind": "doc", "url": "https://example.com/a"},
+    ]
+    assert "targets" not in block
+
+
+@pytest.mark.parametrize(
+    "seed", ["bogus=https://x", "https://x", "doc=", "doc=   ", "doc=a b"]
+)
+def test_bad_seeds_are_refused_with_usage_exit(repo: Path, seed: str) -> None:
+    code, doc = _run(repo, "--research-class", "corpus", "--research-seed", seed)
+    assert code == sa.EXIT_USAGE
+    assert "research" not in doc
+
+
+def test_seed_without_research_class_is_refused(repo: Path) -> None:
+    code, doc = _run(repo, "--research-seed", "doc=https://x")
+    assert code == sa.EXIT_USAGE
+    assert "research" not in doc
+
+
+def test_amend_forwards_seeds_to_build_research_block(repo: Path, monkeypatch) -> None:
+    captured = {}
+    real = sa.build_research_block
+
+    def spy(*args):
+        captured["args"] = args
+        return real(*args)
+
+    monkeypatch.setattr(sa, "build_research_block", spy)
+    path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.write_text(_DRAFT + "research:\n  value_class: scouts\n", encoding="utf-8")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    sa.main(["--amend-research", rel, "--research-seed", "repo=https://h/o/r"])
+    assert captured["args"][9] == ["repo=https://h/o/r"]
+
+
+def test_amend_reopens_the_research_obligation(repo: Path, monkeypatch) -> None:
+    import coordinator_core.hooks.watchdog_undischarged_next_move as wd
+
+    opened = []
+    monkeypatch.setattr(wd, "open_sizing_routed", lambda root, rel, sid: opened.append(rel))
+    monkeypatch.setattr("coordinator_core.session.touch_record.append_touch_claims", lambda *a, **k: None)
+    _run(repo, "--research-class", "corpus")
+    opened.clear()
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
+    assert opened == [rel]
+
+
 _QS = ["a?", "b?", "c?"]
 
 

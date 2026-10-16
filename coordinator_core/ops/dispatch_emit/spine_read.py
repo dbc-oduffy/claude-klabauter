@@ -435,7 +435,7 @@ def _is_memo_send_row(raw: dict) -> bool:
             posix = p.replace("\\", "/").rstrip("/")
             if any(posix == d or posix.startswith(d + "/") for d in (MEMO_OUTBOX_RELDIR, LEGACY_MEMO_OUTBOX_RELDIR)):
                 return True
-    if _is_receiver_inbox_surface(raw):
+    if _is_receiver_inbox_surface(raw) and inbound_close_path(raw) is None:
         return True
     if any(isinstance(p, str) and "outbox" in p for p in paths):
         from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
@@ -456,6 +456,23 @@ def _is_receiver_inbox_surface(raw: dict) -> bool:
         if isinstance(p, str) and _RECEIVER_INBOX_SEGMENT in "/" + p.replace("\\", "/").strip("/") + "/":
             return True
     return False
+
+
+def inbound_close_path(raw: dict) -> Optional[str]:
+    """The one repo-relative ``state/cross-repo/inbox/<name>.md`` path that ``surface`` or a
+    ``writes`` entry is exactly, for a row naming no memo slug; else ``None``. Such a row closes
+    an inbound memo: the close-out memo-lifecycle leg owns it, never a memo-send."""
+    if memo_row_slug(raw) is not None:
+        return None
+    from coordinator_core.ops.dispatch_emit.source_memo_ref import inbox_memo_refs
+
+    found: dict = {}
+    for p in (raw.get("surface"), *(raw.get("writes") or ())):
+        if isinstance(p, str):
+            norm = p.strip().replace("\\", "/")
+            if inbox_memo_refs(norm) == (norm,):
+                found.setdefault(norm)
+    return next(iter(found)) if len(found) == 1 else None
 
 
 def memo_receipt_slug(ref: object) -> Optional[str]:
@@ -1291,10 +1308,16 @@ def read_spine(
         "plan frontmatter", plan_level_edges, plan_edge_root, plan_edge_cache
     )
     discharges: Optional[dict] = None
+    source_memo_resolved: Optional[str] = None
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred") is True or bool(raw.get("deferred_until"))
-        em_performed = raw.get("performer") == "em" or _is_memo_send_row(raw)
+        inbound_close = (
+            inbound_close_path(raw)
+            if disposition not in NON_DISPATCHABLE_DISPOSITIONS and deferred is not True
+            else None
+        )
+        em_performed = raw.get("performer") == "em" or _is_memo_send_row(raw) or inbound_close is not None
         memo_slug = None
         memo_delivered = False
         memo_owed = False
@@ -1386,6 +1409,26 @@ def read_spine(
                     "receipt: .coordinator-local/memo-outbox/sent/<slug>.md, send it, then %s"
                     % memo_close_route(str(raw.get("id")), None),
                 )
+            elif inbound_close is not None:
+                if source_memo_resolved is None:
+                    from coordinator_core.ops.dispatch_emit.source_memo_ref import resolve_source_memo
+
+                    root = _repo_root_of(plan_path)
+                    source_memo_resolved = (
+                        resolve_source_memo(root, str(plan_path)) if root is not None else None
+                    ) or ""
+                if source_memo_resolved == inbound_close:
+                    _reason = (
+                        "memo-lifecycle",
+                        "the close-out memo-lifecycle leg resolves %s against the landed sha; "
+                        "nothing to dispatch or send" % inbound_close,
+                    )
+                else:
+                    _reason = (
+                        "em-performed",
+                        "EM: set plan frontmatter source_memo to %s so the close-out "
+                        "memo-lifecycle leg resolves it; nothing to send" % inbound_close,
+                    )
             elif _is_operator_row(raw):
                 _reason = (
                     "operator",

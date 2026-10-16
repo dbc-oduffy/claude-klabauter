@@ -51,6 +51,19 @@ def test_plan_fire_prints_one_document_with_the_fire_record_nested(repo, monkeyp
     assert "Workflow(" in captured.err
 
 
+def test_a_fire_failure_still_leaves_one_document_on_stdout(repo, monkeypatch, capsys):
+    plan = _plan(repo)
+
+    def _boom(path, cwd=None):
+        raise RuntimeError("fire refused")
+
+    monkeypatch.setattr("coordinator_core.ops.workflow_fire.fire.fire_workflow", _boom)
+    with pytest.raises(RuntimeError):
+        cli.main(["--plan", str(plan), "--out", str(repo / "p.workflow.mjs"), "--fire"])
+    document = json.loads(capsys.readouterr().out)
+    assert "fire" not in document and document["path"]
+
+
 def test_plan_without_fire_has_no_fire_key(repo, capsys):
     plan = _plan(repo)
     assert cli.main(["--plan", str(plan), "--out", str(repo / "p.workflow.mjs")]) == cli.EXIT_OK

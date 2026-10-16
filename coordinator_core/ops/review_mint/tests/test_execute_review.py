@@ -9,6 +9,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     PREP_MALFORMED_HALT,
     PREP_BUSY_HALT,
     REVIEW_MISSING_HALT,
+    SLICE_ID_UNKNOWN_HALT,
     compose_execute_review,
 )
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
@@ -1316,6 +1317,25 @@ def test_a_busy_prep_in_the_wave_halts_rather_than_merging_a_prep_without_its_sl
     assert result["halted"].startswith(PREP_BUSY_HALT)
     assert result["prep"]["error"].startswith(REVIEW_PREP_BUSY_PREFIX)
     assert result["wave"] is None
+
+
+@pytest.mark.parametrize("bad_id", ["s0..s4", "prep-1..5", "s0+nope"])
+def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
+    patch = f"(r, n) => n === 0 ? {{ ...r, review: {{ ...r.review, slice_id: {json.dumps(bad_id)} }} }} : r"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
+    assert json.dumps(bad_id) in result["halted"]
+    assert result["wave"] is None and result["integration"] is None
+
+
+def test_a_wave_review_with_plus_joined_real_slice_ids_is_accepted():
+    patch = "(r, n) => n === 0 ? { ...r, review: { ...r.review, slice_id: 's0+s1' } } : r"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert "halted" not in result and "error" not in result
+
+
+def test_wave_schema_types_prep_slices_as_an_array():
+    assert '"slices": { "type": "array"' in _wave_schema_literal("{}")
 
 
 _SLICES = [

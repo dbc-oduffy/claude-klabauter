@@ -93,7 +93,86 @@ def test_plan_pin_drift_detects_edit(tmp_path):
     assert [d["id"] for d in rr.plan_pin_drift(_fm(pin), tmp_path)] == ["R1"]
 
 
+def _plan(claims_tail, nl="\n"):
+    text = (
+        "---\ntitle: t\nregister_claims:\n  sizing: state/sizings/s.yaml\n" + claims_tail
+        + "status: reviewed\n---\n\n# body\npins: {not: touched}\n"
+    )
+    return text.replace("\n", nl)
+
+
+def _repin(text, reg):
+    new, changed = rr.repin_plan_text(text, reg)
+    fm = new.replace("\r\n", "\n").split("---\n")[1]
+    return new, changed, rr.plan_pins(fm)
+
+
+def test_repin_flow_style_rewrites_only_pins_line():
+    old, cur = _reg("a"), _reg("b")
+    text = _plan(f'  rows: ["R1"]\n  pins: {{"R1": "{_pins(old)["R1"]}"}}\n')
+    new, changed, pins = _repin(text, cur)
+    assert pins == _pins(cur)
+    assert changed == [{"id": "R1", "pinned": _pins(old)["R1"], "current": _pins(cur)["R1"]}]
+    assert new.replace(f'  pins: {{"R1": "{_pins(cur)["R1"]}"}}\n', "") == text.replace(
+        f'  pins: {{"R1": "{_pins(old)["R1"]}"}}\n', "")
+
+
+def test_repin_block_style_collapses_to_flow_and_keeps_following_keys():
+    old, cur = _reg("a"), _reg("b")
+    text = _plan(f"  rows: [R1]\n  pins:\n    R1: '{_pins(old)['R1']}'\n")
+    new, changed, pins = _repin(text, cur)
+    assert pins == _pins(cur) and len(changed) == 1
+    assert "    R1:" not in new and "status: reviewed" in new
+
+
+def test_repin_inserts_pins_after_rows_when_absent():
+    cur = _reg("b")
+    text = _plan("  rows:\n    - R1\n")
+    new, changed, pins = _repin(text, cur)
+    assert pins == _pins(cur)
+    assert changed == [{"id": "R1", "pinned": None, "current": _pins(cur)["R1"]}]
+    assert new.index("- R1") < new.index("  pins:") < new.index("status:")
+
+
+def test_repin_keeps_crlf_and_body_bytes():
+    old, cur = _reg("a"), _reg("b")
+    text = _plan(f'  rows: [R1]\n  pins: {{"R1": "{_pins(old)["R1"]}"}}\n', nl="\r\n")
+    new, _, pins = _repin(text, cur)
+    assert pins == _pins(cur)
+    assert "\n" not in new.replace("\r\n", "")
+    assert new.endswith("# body\r\npins: {not: touched}\r\n")
+
+
+def test_repin_noop_returns_text_unchanged():
+    reg = _reg("a")
+    text = _plan(f'  rows: [R1]\n  pins: {{"R1": "{_pins(reg)["R1"]}"}}\n')
+    assert rr.repin_plan_text(text, reg) == (text, [])
+
+
+def test_repin_raises_naming_absent_claimed_id():
+    text = _plan('  rows: [R1, R2]\n')
+    try:
+        rr.repin_plan_text(text, _reg("a"))
+    except ValueError as e:
+        assert "R2" in str(e) and "R1" not in str(e)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_remedy_names_repin_op_and_forbids_hand_edit():
+    assert rr.REPIN_OP in rr.PIN_DRIFT_REMEDY and "never hand-edit" in rr.PIN_DRIFT_REMEDY
+    assert rr.REGISTER_PIN_DRIFT_KIND == "register-pin-drift"
+
+
 def test_plan_pin_drift_no_pins_or_escaping_sizing(tmp_path):
     assert rr.plan_pin_drift("register_claims:\n  sizing: s\n  rows: [R1]\n", tmp_path) == []
     fm = f"register_claims:\n  sizing: ../../etc/x\n  pins:\n    R1: '{rr.row_pin('a')}'\n"
     assert rr.plan_pin_drift(fm, tmp_path) == []
+
+
+def test_repin_inserts_after_block_list_rows_at_key_indent():
+    cur = _reg("b")
+    text = _plan("  rows:\n  - R1\n")
+    new, _, pins = _repin(text, cur)
+    assert pins == _pins(cur)
+    assert new.index("- R1") < new.index("  pins:") < new.index("status:")

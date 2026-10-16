@@ -19,6 +19,11 @@ Wire params:
     premise  (object, optional) — {rows: [{verdict, citation, ...}]}; verdict is RESOLVES |
                                   UNRESOLVED | CONTRADICTED | UNCHECKABLE. Only UNRESOLVED and
                                   CONTRADICTED rows pull; UNCHECKABLE is a note on a ready reply.
+                                  A CONTRADICTED row whose citation the plan's frontmatter
+                                  ``corrects: [{citation, fixed_by}]`` names, with ``fixed_by`` an
+                                  open or coded spine row, is a note. A class-4 row whose optional
+                                  ``baseline_ref`` differs from the plan's current falsifier
+                                  ``baseline_ref`` is stale and a note. UNRESOLVED never exempts.
                                   When passed, a ``premise-check`` reviews entry is dropped: the
                                   rows carry that verdict, and refusing the pair would hand the
                                   caller an unusable reply.
@@ -65,6 +70,8 @@ _CLEAR_VERDICTS = frozenset(
 _LEDGER_VERDICTS = frozenset({"warn", "blocked"})
 _PREP_VERDICTS_COMPUTED = frozenset({"PREPPED", "NOT-PREPPED"})
 _INSTRUCTION_MAX = 1000
+_LIVE_DISPOSITIONS = frozenset({"open", "coded"})
+_PULL_VERDICTS = frozenset({"pulled", "judgment"})
 
 
 def _clear(verdict: Any) -> bool:
@@ -115,6 +122,44 @@ def _render(finding: Any) -> str:
     return json.dumps(finding, sort_keys=True, default=str)
 
 
+def _norm(text: Any) -> str:
+    return " ".join(text.split()) if isinstance(text, str) else ""
+
+
+def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) -> Optional[tuple]:
+    """(citation, row id) of the first ``corrects`` entry that covers this premise row, else None.
+    Malformed entries, unknown row ids and rows not open/coded cover nothing."""
+    if not isinstance(corrects, list):
+        return None
+    live = {
+        str(r.get("id")).strip()
+        for r in spine_rows or []
+        if isinstance(r, dict) and str(r.get("disposition") or "").strip() in _LIVE_DISPOSITIONS
+    }
+    cited = _norm(row.get("citation"))
+    for entry in corrects:
+        if not isinstance(entry, dict):
+            continue
+        citation, fixed_by = _norm(entry.get("citation")), entry.get("fixed_by")
+        if citation and citation in cited and isinstance(fixed_by, str) and fixed_by.strip() in live:
+            return citation, fixed_by.strip()
+    return None
+
+
+def _plan_inputs(prep_gate: dict, repo_root: Path) -> tuple:
+    """(corrects, spine rows, falsifier baseline_ref) read from the plan file the prep gate resolved."""
+    from coordinator_core.lifecycle import main_worktree_root
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter, raw_spine_rows
+
+    path = Path(main_worktree_root(repo_root)) / str(prep_gate["plan"])
+    text = path.read_text(encoding="utf-8", errors="replace")
+    fm = plan_frontmatter(text)
+    pec = fm.get("prime_exit_criterion")
+    falsifier = pec.get("falsifier") if isinstance(pec, dict) else None
+    ref = falsifier.get("baseline_ref") if isinstance(falsifier, dict) else None
+    return fm.get("corrects"), raw_spine_rows(text), ref.strip() if isinstance(ref, str) and ref.strip() else None
+
+
 def _repair(kind: str, target: str, instruction: str) -> dict:
     return {"kind": kind[:100], "target": target[:300], "instruction": instruction[:_INSTRUCTION_MAX]}
 
@@ -150,6 +195,8 @@ def _check_params(params: dict) -> tuple:
                 )
             if not isinstance(row.get("citation"), str):
                 raise ValueError(f"premise.rows[{i}].citation must be a string")
+            if "baseline_ref" in row and not isinstance(row["baseline_ref"], str):
+                raise ValueError(f"premise.rows[{i}].baseline_ref must be a string")
         rows = premise["rows"]
         reviews = [r for r in reviews or [] if r.get("reviewer") != _PREMISE_REVIEWER]
     return raw_plan.strip(), coverage, reviews or [], rows
@@ -161,10 +208,15 @@ def readiness_verdict(
     reviews: List[dict],
     repo_root: Optional[Path] = None,
     premise_rows: Optional[List[dict]] = None,
+    corrects: Optional[Any] = None,
+    spine_rows: Optional[List[dict]] = None,
+    falsifier_baseline_ref: Optional[str] = None,
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
     them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
-    CONTRADICTED premise rows block; UNCHECKABLE and RESOLVES rows never do."""
+    CONTRADICTED premise rows block; UNCHECKABLE and RESOLVES rows never do. A CONTRADICTED row
+    covered by ``corrects`` (a spine row in ``spine_rows`` that is open or coded fixes it) and a
+    row whose ``baseline_ref`` differs from ``falsifier_baseline_ref`` are notes, not blockers."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -201,20 +253,39 @@ def readiness_verdict(
             judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
 
     uncheckable = 0
-    blocking: List[str] = []
+    premise_blocking: List[str] = []
+    covered: List[str] = []
+    stale_refs: List[str] = []
     for row in premise_rows or []:
+        ref = row.get("baseline_ref")
+        if ref is not None and falsifier_baseline_ref is not None and ref.strip() != falsifier_baseline_ref:
+            stale_refs.append(ref)
+            continue
         if row["verdict"] in _PREMISE_BLOCKING:
-            blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
+            fixer = _covering_row(row, corrects, spine_rows) if row["verdict"] == "CONTRADICTED" else None
+            if fixer is not None:
+                covered.append(f"{fixer[0]} -> {fixer[1]}")
+            else:
+                premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
-    for i, entry in enumerate(blocking):
-        if len("; ".join(judgment + blocking[: i + 1])) > _INSTRUCTION_MAX - 40:
-            tail = len(blocking) - i
-            blocking = blocking[:i] + [f"+{tail} more premise row(s)"]
+    shown = list(premise_blocking)
+    for i, entry in enumerate(shown):
+        if len("; ".join(judgment + shown[: i + 1])) > _INSTRUCTION_MAX - 40:
+            tail = len(shown) - i
+            shown = shown[:i] + [f"+{tail} more premise row(s)"]
             break
-    judgment.extend(blocking)
+    blocking_keys = [*substantive, *judgment, *premise_blocking]
+    judgment.extend(shown)
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
+    if covered:
+        notes.append(f"{len(covered)} CONTRADICTED premise row(s) the plan corrects: " + "; ".join(covered))
+    if stale_refs:
+        notes.append(
+            f"{len(stale_refs)} premise row(s) read against superseded baseline "
+            + ", ".join(sorted(set(stale_refs)))
+        )
 
     if substantive:
         verdict, pull_class, repairs = "pulled", "substantive", []
@@ -235,6 +306,7 @@ def readiness_verdict(
         "pull_class": pull_class,
         "mechanical_repairs": repairs,
         "reason": reason[:1000],
+        "blocking": sorted({key[:300] for key in blocking_keys}) if verdict in _PULL_VERDICTS else [],
     }
 
 
@@ -245,5 +317,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews, premise_rows = _check_params(params)
     prep_gate = _prep_gate_handler({"plan": raw_plan}, repo_root)
-    out = readiness_verdict(prep_gate, coverage, reviews, repo_root, premise_rows)
+    corrects, spine_rows, ref = _plan_inputs(prep_gate, repo_root) if premise_rows else (None, None, None)
+    out = readiness_verdict(
+        prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref
+    )
     return {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}

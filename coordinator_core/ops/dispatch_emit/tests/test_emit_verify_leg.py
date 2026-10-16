@@ -167,6 +167,25 @@ def test_a_review_only_run_composes_no_verify_leg():
     assert "verify" not in _agent_labels(script)
 
 
+def test_the_falsifier_act_aims_the_how_at_the_working_tree():
+    from coordinator_core.ops.dispatch_emit.ask_compose import _FALSIFIER_ACT
+
+    assert "from the working tree" in _FALSIFIER_ACT
+    assert "cannot see this run's uncommitted change" in _FALSIFIER_ACT.replace("\n", " ")
+    assert "not an internal name the change may rename" in _FALSIFIER_ACT
+
+
+def test_the_judge_suffix_reports_an_unrunnable_how_as_error_and_keeps_the_verbatim_run():
+    from coordinator_core.ops.dispatch_emit.ask_compose import _FALSIFIER_SUFFIX_JS
+
+    assert "cannot run as written" in _FALSIFIER_SUFFIX_JS
+    assert "falsifier verdict error" in _FALSIFIER_SUFFIX_JS and "output_anchor" in _FALSIFIER_SUFFIX_JS
+    assert "fail is only for a how that ran" in _FALSIFIER_SUFFIX_JS
+    assert "Judge the criterion from your own observation" in _FALSIFIER_SUFFIX_JS
+    assert "run its how verbatim" in _FALSIFIER_SUFFIX_JS
+    assert "rule not_met when it still shows the baseline" in _FALSIFIER_SUFFIX_JS
+
+
 def test_the_register_holds_verify_and_still_holds_the_arms_that_keep_the_absorbed_legs():
     for label in ("verify", "test:terminal", "review:coordinator:exit-criterion-judge"):
         assert leg_register.lookup("emit", label) is not None, label

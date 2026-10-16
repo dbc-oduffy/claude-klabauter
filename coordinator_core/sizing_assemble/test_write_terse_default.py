@@ -54,6 +54,14 @@ def test_json_flag_keeps_the_decision(target, capsys):
     assert "write" in json.loads(out)
 
 
+def test_json_without_write_is_inert(capsys):
+    argv = ["--tshirt", "M", "--premise-provenance", "read", "--premise-evidence", "x"]
+    assert sizing_assemble.main(argv) == 0
+    plain = capsys.readouterr().out
+    assert sizing_assemble.main([*argv, "--json"]) == 0
+    assert capsys.readouterr().out == plain
+
+
 def test_no_write_output_is_the_decision(capsys):
     code = sizing_assemble.main(["--tshirt", "M", "--premise-provenance", "read", "--premise-evidence", "x"])
     assert code == 0

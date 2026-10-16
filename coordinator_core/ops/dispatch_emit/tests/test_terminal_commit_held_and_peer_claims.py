@@ -304,7 +304,7 @@ def test_a_junior_runs_hunk_in_a_carried_file_still_refuses_on_blob_drift(repo, 
     (repo / "a.py").write_text("a\n", encoding="utf-8")
     _record_write(repo, "a.py", "a\n")
     _peer_run(repo, "run-junior", PEER, ["a.py"], minted_at=now - 10)
-    (repo / "a.py").write_text("a\njunior hunk\n", encoding="utf-8")
+    (repo / "a.py").write_text("a\njunior_hunk = 1\n", encoding="utf-8")
     head = _git(["rev-parse", "HEAD"], repo)
     out = _plan_run(repo, request, now - 100, session_id=_SELF_UUID)
     assert out["committed"] is False, out

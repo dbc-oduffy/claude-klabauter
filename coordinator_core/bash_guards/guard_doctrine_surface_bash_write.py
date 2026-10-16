@@ -237,6 +237,57 @@ _SIZING_RECORD_DENY = (
 )
 
 
+#: A literal-path redirect (``> p``, ``>> p``, ``2> p``), target unquoted or
+#: quoted, ended by whitespace/operator. fd duplication (``2>&1``) never
+#: matches: ``&`` is neither a target character nor skipped.
+_LITERAL_REDIRECT_RE = re.compile(
+    r"(?<![>&\d])\d?>>?[ \t]*(?:\"(?P<dq>[^\"$`\\\n]+)\"|'(?P<sq>[^'\n]+)'"
+    r"|(?P<bare>[^\s;&|\"'<>()$`\\]+))(?=[\s;&|)]|$)"
+)
+
+
+def _strip_ungoverned_redirects(
+    cmd: str, identifiers_lower: Tuple[str, ...]
+) -> Optional[str]:
+    """``cmd`` with every literal-path redirect removed, or ``None`` when that
+    judgement is unavailable: no such redirect, a redirect target that names a
+    governed identifier, or a command carrying a heredoc / live substitution
+    (the target of a write there is not readable from the text)."""
+    if "<<" in cmd or "$(" in cmd or "`" in cmd:
+        return None
+    removed = 0
+    names_governed = False
+
+    def _drop(match: "re.Match[str]") -> str:
+        nonlocal removed, names_governed
+        target = match.group("dq") or match.group("sq") or match.group("bare") or ""
+        if target.lower() == "/dev/null":
+            return match.group(0)
+        if _mentions_governed_identifier(target, identifiers_lower):
+            names_governed = True
+            return match.group(0)
+        removed += 1
+        return " "
+
+    stripped = _LITERAL_REDIRECT_RE.sub(_drop, cmd)
+    if names_governed or not removed:
+        return None
+    return stripped
+
+
+def _sizing_write_denied(cmd: str) -> bool:
+    """Sizing-record leg of the predicate, judged by write TARGET: a redirect
+    landing outside ``state/sizings`` is not a write into it, so the command
+    is re-judged without those redirects. Every other write marker and every
+    indirection marker still decides on the remainder."""
+    if not is_denied_bash_write(cmd, _SIZING_RECORD_IDENTIFIERS):
+        return False
+    remainder = _strip_ungoverned_redirects(cmd, _SIZING_RECORD_IDENTIFIERS)
+    if remainder is None:
+        return True
+    return is_denied_bash_write(remainder, _SIZING_RECORD_IDENTIFIERS)
+
+
 def _governed_identifiers_lower(surfaces: List[str]) -> Tuple[str, ...]:
     """Case-folded, de-duplicated, longest-first tuple of every full
     repo-relative path AND bare basename from ``surfaces`` -- the per-call
@@ -2047,7 +2098,7 @@ def check(
         return None
     cmd = cmd.replace("\r", "")
 
-    if is_denied_bash_write(cmd, _SIZING_RECORD_IDENTIFIERS):
+    if _sizing_write_denied(cmd):
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

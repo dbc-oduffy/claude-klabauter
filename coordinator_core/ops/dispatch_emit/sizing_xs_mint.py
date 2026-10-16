@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _refuse_if_directory_shaped,
     _refuse_if_glob,
 )
+from coordinator_core.ops.dispatch_emit.source_memo_ref import sizing_source_memo
 
 XS_ROW_ID = "X1"
 
@@ -148,6 +149,9 @@ def mint_xs_spine(
         "derived_from": "sizing object",
         "sizing_object": sizing_rel,
     }
+    source_memo = sizing_source_memo(sizing)
+    if source_memo is not None:
+        frontmatter["source_memo"] = source_memo
     if sizing.get("deliverable_id"):
         frontmatter["deliverable_id"] = str(sizing["deliverable_id"])
     frontmatter["prime_exit_criterion"] = {"statement": statement}

@@ -128,6 +128,13 @@ ASK_SCOUT_SCHEMA = {
                 "sources": {"type": "array", "items": {"type": "string", "enum": list(_rc.SOURCES)}},
                 "depth": {"type": "string", "enum": list(_rc.DEPTHS)},
                 "targets": {"type": "array", "items": _STR},
+                "seeds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": r"^(" + "|".join(_rc.SEED_KINDS) + r")=\S+$",
+                    },
+                },
                 "questions": {"type": "array", "items": _STR},
             },
         },
@@ -162,7 +169,9 @@ RESEARCH_CLASSIFY_CLAUSE = (
     "ask -- understand a repo or topic, survey, compare or rank candidates -- at any target count; "
     "`deep` only when the EM is stuck delivering something and needs the unblock team; `spike` "
     "for a binary verdict on one unproven mechanism. More thoroughness is `depth` or "
-    "`appetite: large`, never `deep`."
+    "`appetite: large`, never `deep`. "
+    "URLs the ask names to study go in `seeds` as `<kind>=<url>`, kind video, doc, repo or paper, "
+    "and never in `targets`."
 )
 #: `ask_gate` halt route for a research sizing: the hand-back to the sizing door.
 RESEARCH_HANDBACK_ROUTE = "research"
@@ -211,6 +220,7 @@ def research_assemble_flags_js(scouted: str, quote: str) -> str:
         f" + {each('sources', '--research-source')}"
         f" + ({r}.depth ? ' --research-depth ' + {quote}({r}.depth) : '')"
         f" + {each('targets', '--research-target')}"
+        f" + {each('seeds', '--research-seed')}"
         f" + {each('questions', '--research-question')}"
         f" : '')"
     )
@@ -258,6 +268,13 @@ HALTED_RECORD_PARAM = "halted_by"
 #: `dispatch.terminal_commit` params key for the roadmap fan-out record:
 #: `{plans: [repo-relative plan path, ...]}`.
 FANOUT_RECORD_PARAM = "fanout"
+#: `dispatch.emit` result key naming where an ask's script went when the halted run's path was not taken.
+OUTPUT_PATH_REDIRECT_KEY = "output_path_redirect"
+#: Field names of that entry: the halted script, the fresh script, the halted run id, its recorded
+#: emitter session, and one `OUTPUT_PATH_REDIRECT_REASONS` member.
+OUTPUT_PATH_REDIRECT_FIELDS = ("from", "to", "halted_run", "prior_session", "reason")
+#: `emitter-gone`: the halted run's recorded emitter session is no longer live (ended, or handed off and ended).
+OUTPUT_PATH_REDIRECT_REASONS = ("emitter-gone",)
 HALT_REASON_FIELDS = ("reason", "detail", "refused", "error")
 HALT_REASON_MAX_CHARS = 300
 
@@ -381,12 +398,17 @@ RESUME_LEDGER_KEY = "resume_ledger"
 
 
 def rulable_ids(rows: Any) -> tuple[str, ...]:
-    """Ids of the register rows whose status is neither met nor waived, in register order; a row
-    that is not a mapping is skipped. Pure."""
+    """Ids of the register rows whose status is neither met nor waived and that no recorded
+    out-of-scope ruling withholds, in register order; a row that is not a mapping is skipped. Pure."""
+    # Deferred: requirements_ledger imports this module at load.
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import ruled_out_ids
+
+    mappings = [r for r in rows if isinstance(r, dict)]
+    out = set(ruled_out_ids(mappings))
     return tuple(
         str(r.get(rr.ROW_ID))
-        for r in rows
-        if isinstance(r, dict) and r.get(rr.ROW_STATUS) not in (rr.STATUS_MET, rr.STATUS_WAIVED)
+        for r in mappings
+        if r.get(rr.ROW_STATUS) not in (rr.STATUS_MET, rr.STATUS_WAIVED) and str(r.get(rr.ROW_ID)) not in out
     )
 
 

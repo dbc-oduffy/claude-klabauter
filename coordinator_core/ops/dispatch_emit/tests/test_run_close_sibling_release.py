@@ -54,6 +54,30 @@ def test_halted_predecessor_blocks_successor_but_frees_queued_slot(tmp_path):
     assert out["blocked"] == [{"run_id": "B", "slice_sizing": "state/sizings/B.yaml"}]
 
 
+def test_halted_with_every_row_committed_releases_successor(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    out = run_close.sibling_release(tmp_path, "A", None, budget=2, rows_committed=True)
+    assert _status(tmp_path, "A") == {"status": "halted", "rows_committed": True}
+    assert out["released"] == [fire_command("state/sizings/B.yaml")]
+    assert out["blocked"] == []
+
+
+def test_rows_committed_mark_survives_a_later_plain_halt(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    run_close.sibling_release(tmp_path, "A", None, budget=2, rows_committed=True)
+    out = run_close.sibling_release(tmp_path, "A", None, budget=2)
+    assert _status(tmp_path, "A")["rows_committed"] is True
+    assert out["released"] == [fire_command("state/sizings/B.yaml")]
+
+
+def test_halted_with_an_uncommitted_row_still_blocks_successor(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    out = run_close.sibling_release(tmp_path, "A", None, budget=2, rows_committed=False)
+    assert "rows_committed" not in _status(tmp_path, "A")
+    assert out["released"] == []
+    assert [b["run_id"] for b in out["blocked"]] == ["B"]
+
+
 def test_queued_run_drains_when_slot_frees(tmp_path):
     runs = [_run("A"), _run("B", (), c.STATUS_QUEUED)]
     _seed(tmp_path, runs, bound=["A"])

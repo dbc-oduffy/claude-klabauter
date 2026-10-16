@@ -189,6 +189,18 @@ def test_a_halted_predecessor_releases_no_successor(repo):
     assert "fresh" in _hso(denied)["permissionDecisionReason"]
 
 
+def test_a_halted_predecessor_with_every_row_committed_admits_the_successor(repo):
+    reply = _reply_json(_submit(repo, {"asks": [{"ask": "one", "writes": ["a"]}, {"ask": "two", "writes": ["a"]}]}))
+    first, second = reply["runs"]
+    parent = _parent(repo, reply["parent_id"])
+    close = run_close.sibling_release(repo, first["run_id"], None, rows_committed=True)
+    assert close["released"] == [warp_fire.fire_command(parent.runs[1].slice_sizing)]
+    assert close["blocked"] == []
+    allowed = _fire_slice(repo, parent.runs[1].slice_sizing)
+    assert _hso(allowed)["permissionDecision"] == "allow", allowed
+    assert _status(repo, second["run_id"]) == "running"
+
+
 def test_budget_plus_one_asks_queue_the_overflow_and_refuse_nothing(repo):
     reply = _reply_json(_submit(repo, {"asks": _disjoint(3)}))
     parent = _parent(repo, reply["parent_id"])

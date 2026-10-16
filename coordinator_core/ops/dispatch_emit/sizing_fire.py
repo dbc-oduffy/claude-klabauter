@@ -6,6 +6,7 @@ writes, spawns, or reroutes: a sizing whose route disagrees with its arm is refu
 
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
@@ -180,6 +181,11 @@ def _ledger_halt_for(
     if any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows):
         return None
     pointer = read_ledger_halt(ledger_halt_path(root, plan_rel))
+    if pointer is None:
+        # The halt writer is handed the git common dir as its root, so a pointer may sit under it.
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+
+        pointer = read_ledger_halt(ledger_halt_path(resolve_git_common_dir(root), plan_rel))
     if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
         pointer = None
     if pointer is not None and not open_ids:
@@ -189,6 +195,10 @@ def _ledger_halt_for(
 
         state = resume_landed_state(root, plan_rel)
     if state.ledger_run is None:
+        # A halt commit without a `Halt-Plan:` trailer is invisible to `resume_landed_state`; the
+        # pointer's run then resumes when that run's halt commit landed every open row.
+        if pointer is not None and set(open_ids) <= _halt_run_landed_chunks(root, pointer.run_id, plan_rel):
+            return pointer
         return None
     record = read_halt_record(root, state.ledger_run)
     if (
@@ -203,6 +213,37 @@ def _ledger_halt_for(
     else:
         blocking = record.blocking or ()
     return LedgerHalt(state.ledger_run, plan_rel, sizing_rel, tuple(blocking))
+
+
+def _halt_run_landed_chunks(root: Path, run_id: str, plan_rel: str) -> frozenset:
+    """`Lands-Chunks:` ids of `ledger-check` halt commits whose subject names `run_id`: covers a
+    halt commit that carries no `Halt-Plan:` trailer (one naming another plan is skipped).
+    One `git log`; empty when git cannot answer."""
+    from coordinator_core.git.run import run_git
+
+    result = run_git(
+        [
+            "log", "-n", "50", f"--grep=^warp: record halted {run_id} run artifacts",
+            "--format=%s\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Halt-Plan,valueonly,separator=%x1d)\x1e",
+        ],
+        cwd=str(root),
+    )
+    if result.returncode != 0:
+        return frozenset()
+    ids: set = set()
+    for record in result.stdout.split("\x1e"):
+        parts = record.strip("\r\n").split("\x1f")
+        if len(parts) < 4 or not parts[0].startswith(f"warp: record halted {run_id} run artifacts"):
+            continue
+        named = [v for v in parts[3].split("\x1d") if v.strip()]
+        if named and not any(v.strip() == plan_rel for v in named):
+            continue
+        if any(v.strip() == "ledger-check" for v in parts[1].split("\x1d")):
+            ids.update(i for i in re.split(r"[,\s\x1d]+", parts[2]) if i)
+    return frozenset(ids)
+
 
 
 def _acceptance_skipped(sizing: Mapping) -> bool:

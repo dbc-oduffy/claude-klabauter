@@ -77,7 +77,7 @@ from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit import requirements_ledger, sibling_split
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
-from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
+from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import EM_OWNED_REASONS, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
@@ -420,6 +420,43 @@ def _memo_draft_steps(
     return out_owed, steps
 
 
+def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
+    """Raise AskStageError `XS-MINT-MISROUTED` for a sizing the XS mint must not take: one with a
+    `plan:` edge or a non-XS `estimate.tshirt`; `XS-MINT-NO-WRITES` for an empty `writes`.
+
+    A sizing with no readable tshirt is left to the writes check (the mint itself needs no estimate)."""
+    edge = sizing.get("plan")
+    has_edge = isinstance(edge, str) and bool(edge.strip())
+    try:
+        arm = resolve_arm(sizing)
+    except SizingFireRefused:
+        arm = ARM_XS
+    if has_edge or arm != ARM_XS:
+        why = f"plan edge {edge!r}" if has_edge else f"arm {arm!r}"
+        raise AskStageError(
+            f"XS-MINT-MISROUTED: {sizing_rel} has {why}; stage it by plan_path, not sizing_path"
+        )
+    if not any(str(w).strip() for w in writes):
+        raise AskStageError(f"XS-MINT-NO-WRITES: {sizing_rel} is an XS arm and needs at least one writes path")
+
+
+LIVE_RUN_WRITE_OVERLAP = "live-run-write-overlap"
+
+
+def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
+    """Raise AskStageError `live-run-write-overlap` naming each other live run whose staged
+    footprint intersects `writes`, and release this run's token so the refusal ends the run.
+    Trap: not atomic; two stages interleaving before either writes its manifest both pass."""
+    from coordinator_core.ops.dispatch_emit import live_run_writes, run_token
+
+    hits = live_run_writes.overlaps(writes, live_run_writes.live_footprints(root, exclude_run_id=run_id))
+    if not hits:
+        return
+    named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
+    run_token.consume(root, run_id)
+    raise AskStageError(f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands.")
+
+
 def stage(
     repo_root: Path,
     *,
@@ -455,6 +492,7 @@ def stage(
 
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
+        _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
         spine_text, spine_path = mint_xs_spine(
             sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated
         )
@@ -584,6 +622,9 @@ def stage(
     manifest_rows.extend(draft_rows)
 
     docs = doc_writes(run_id, run_sizing)
+    _refuse_live_write_overlap(
+        root, run_id, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]
+    )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
     chunks.append(ChunkCommit(id="docs", title="run docs", paths=docs))
     carried_sizing = sizing_rel or commit_sizing_rel

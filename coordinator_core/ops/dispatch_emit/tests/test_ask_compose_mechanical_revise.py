@@ -44,3 +44,4 @@ def test_substantive_branch_still_reblitzes_once():
     assert block.count("await planBlitz(") == 1
     assert block.count("label: 'plan-revise'") == 1
     assert "_blitz.regate = _reblitz" in block
+    assert "_rePulled" in block and "_repeatBlocking = _rePulled.blocking" in block

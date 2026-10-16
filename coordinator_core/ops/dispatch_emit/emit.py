@@ -357,7 +357,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     stage_schema_literal,
 )
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
-from coordinator_core.git.git_state import head_branch, head_sha
+from coordinator_core.git.git_state import head_branch, head_sha, resolve_git_common_dir
 from coordinator_core.executor_return_contract import (
     FOOTPRINT_CONSTRAINT_TEMPLATE,
     done_summary_constraint,
@@ -1963,13 +1963,19 @@ def _build_gate_clause(commands: list) -> str:
 
 def _slot_row_clause(commands: list) -> str:
     """A `needs_slot` row's process (build, compiler, editor) is scheduled by
-    the Group EM against box load and never launched by the executor, so the
-    row's build gate becomes the EM's slot leg."""
+    the Group EM against box load and never launched by the executor unless the
+    Group EM clears it (then START/END go via `groupem.admission_post`, the
+    executor having no SendMessage), so the row's build gate becomes the EM's
+    slot leg."""
     owed = "".join(f"\n- `{c}`" for c in commands)
     return (
         "Slot row (needs_slot): author only. Launch no build, compiler, UBT, editor, commandlet or "
         "other long-running or memory-heavy process; the EM runs that leg once the Group "
-        "EM clears box load. Report what it must run under `Slot leg:`." + owed
+        "EM clears box load. Report what it must run under `Slot leg:`. "
+        "If the Group EM clears you to run a heavy process yourself, post START before it and "
+        "END after it, each with the process's live PIDs, by `coordinator-invoke "
+        "groupem.admission_post` (params phase, session_id, pids, run); you carry no "
+        "SendMessage." + owed
     )
 
 
@@ -2996,6 +3002,11 @@ _UNJUDGED_CAUSE_JS = (
 #: return: a `met` with nothing observed, a failing falsifier or a non-met
 #: clause demotes to indeterminate; a non-met with no `reason` takes its
 #: observation, else a fixed one.
+#: A falsifier `error` (it could not run as authored) is no evidence either
+#: way, unlike `fail`: with `differs_from_baseline` true the met stands and
+#: `reason` names the unrun falsifier -- the re-judge's own evidentiary bar.
+#: DoE's $def still requires pass/not_present and no test here validates an `error` result
+#: against it; a boundary schema check would reject this met until the $def is realigned.
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
@@ -3009,10 +3020,14 @@ _JUDGE_VERDICT_RULES_JS = (
     "if (r.status === 'met') { const why = []; "
     "if (!Array.isArray(r.observed) || r.observed.length === 0) why.push('nothing observed'); "
     "const v = r.falsifier && r.falsifier.verdict; "
-    "if (v && v !== 'pass' && v !== 'not_present') why.push('falsifier ' + v); "
+    "const unrun = v === 'error' && r.differs_from_baseline === true; "
+    "if (v && v !== 'pass' && v !== 'not_present' && !unrun) why.push('falsifier ' + v); "
     "if (Array.isArray(r.clauses) && r.clauses.some(c => c && c.status !== 'met')) why.push('a clause is not met'); "
     "if (why.length) { const reason = 'met demoted: ' + why.join(', '); log(reason); "
-    "return { ...r, status: 'indeterminate', differs_from_baseline: null, reason }; } return r; } "
+    "return { ...r, status: 'indeterminate', differs_from_baseline: null, reason }; } "
+    "if (unrun) { const reason = ('met; recorded falsifier did not run as authored: ' "
+    "+ String((r.falsifier && r.falsifier.output_anchor) ?? '')).slice(0, 200); log(reason); "
+    "return { ...r, status: 'met', differs_from_baseline: true, reason }; } return r; } "
     "if (!r.reason) return { ...r, reason: (typeof r.observation === 'string' && r.observation) "
     "? String(r.observation).slice(0, 200) : 'judge returned ' + r.status + ' with no reason' }; "
     "return r; })"
@@ -6187,6 +6202,18 @@ def _pin_review_terminal(run_base_sha: str, repo_root: Optional[Path]) -> str:
     return terminal
 
 
+def _repo_has_branches(repo_root) -> bool:
+    """True when ``repo_root`` has history on disk (a loose branch ref or packed-refs); an
+    unborn or non-repo directory has none, so its emit degrades rather than refuses."""
+    common = resolve_git_common_dir(repo_root)
+    try:
+        return (common / "packed-refs").is_file() or any(
+            p.is_file() for p in (common / "refs" / "heads").rglob("*")
+        )
+    except OSError:
+        return False
+
+
 def emit_script(
     plan_path,
     *,
@@ -6469,6 +6496,13 @@ def emit_script(
     # narration line rather than guessing a sha.
     if not review_only:
         run_base_sha = head_sha(repo_root) if repo_root is not None else None
+        # Only this case refuses: a None repo_root still degrades to a script with no trailer lines.
+        if not run_base_sha and repo_root is not None and _repo_has_branches(repo_root):
+            raise ValueError(
+                "emit refused: the repo has branches but HEAD resolves to no commit, so the script's "
+                "checkpoint(wave N) commits would carry no Checkpoint-Plan/Checkpoint-Base "
+                "lines and git.checkpoint_guard would refuse every one. Commit once, then re-emit."
+            )
     observed_branch = head_branch(repo_root) if repo_root is not None else None
     expected_branch = None if observed_branch in (None, "HEAD") else observed_branch
 

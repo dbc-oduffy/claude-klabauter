@@ -1310,17 +1310,14 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_DATA_ERROR
     if args.slug is not None:
-        from coordinator_core.ops.dispatch_emit.research_emit import MAX_SLUG_LEN
+        from coordinator_core.ops.dispatch_emit.research_emit import given_slug_refusal
 
         if not is_research_route:
             print("emit-dispatch-workflow: ERROR — --slug requires --from-sizing or --research", file=sys.stderr)
             return EXIT_USAGE
-        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.slug) or len(args.slug) > MAX_SLUG_LEN:
-            print(
-                f"emit-dispatch-workflow: ERROR — --slug {args.slug!r} must be lowercase "
-                f"[a-z0-9-] words, at most {MAX_SLUG_LEN} characters",
-                file=sys.stderr,
-            )
+        slug_refusal = given_slug_refusal(args.slug)
+        if slug_refusal:
+            print(f"emit-dispatch-workflow: ERROR — --slug {args.slug!r}: {slug_refusal}", file=sys.stderr)
             return EXIT_USAGE
     if args.local_only and not is_research_route:
         print("emit-dispatch-workflow: ERROR — --local-only requires --from-sizing or --research", file=sys.stderr)

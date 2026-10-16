@@ -31,7 +31,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -70,6 +70,7 @@ class JobContext:
     run_id: str
     claimed_batons: tuple[str, ...]
     source_memo: Optional[str]
+    terminal_sha: Optional[str] = None
 
 
 Runner = Callable[[JobContext], LegResult]
@@ -160,9 +161,14 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
 
     from coordinator_core import archive_stamp
 
-    result = archive_stamp.cs_resolve_memo(
-        str(inbox), "--actioned-note", f"resolved by run {ctx.run_id}", return_result=True
-    )
+    if ctx.terminal_sha:
+        args = (
+            "--actioned-note", f"resolved by run {ctx.run_id} at {ctx.terminal_sha}",
+            "--realized-by", ctx.terminal_sha,
+        )
+    else:
+        args = ("--actioned-note", f"resolved by run {ctx.run_id}")
+    result = archive_stamp.cs_resolve_memo(str(inbox), *args, return_result=True)
     if int(result.get("exit_code", 1)) != 0:
         return LegResult("failed", run_close.scrub_detail(f"resolve refused: {result.get('error', 'exit non-zero')}"))
     return LegResult("ran", run_close.scrub_detail(f"source memo {name} resolved"))
@@ -273,12 +279,21 @@ def _now_for(deadline_text: str) -> datetime:
         return aware
 
 
-def _queued_legs(root: Path, run_id: str, legs: Sequence[str] = BACKGROUND_LEGS) -> list[str]:
-    """Legs the record still lists ``queued`` and whose deadline has not passed, in ledger order."""
+def _load_record(root: Path, run_id: str) -> Any:
     try:
-        record = json.loads((root / run_close.close_job_path(run_id)).read_text(encoding="utf-8"))
+        return json.loads((root / run_close.close_job_path(run_id)).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise FileNotFoundError(run_close.close_job_path(run_id)) from exc
+
+
+def _queued_legs(
+    root: Path, run_id: str, legs: Sequence[str] = BACKGROUND_LEGS, record: Any = None
+) -> list[str]:
+    """Legs the record still lists ``queued`` and whose deadline has not passed, in ledger order.
+
+    ``record`` is the already-parsed close-job record; omitted, it is read here."""
+    if record is None:
+        record = _load_record(root, run_id)
     resolved = run_close.read_close_job(root, run_id, _now_for(str(record.get("deadline", ""))))
     return [leg for leg in legs if leg in resolved and resolved[leg].status == "queued"]
 
@@ -296,7 +311,12 @@ def run_background(
     table = DEFAULT_RUNNERS if runners is None else runners
     started = cpu_ms()
     outcomes: dict[str, LegResult] = {}
-    for leg in _queued_legs(ctx.root, ctx.run_id):
+    record = _load_record(ctx.root, ctx.run_id)
+    if ctx.terminal_sha is None:
+        sha = record.get("terminal_sha") if isinstance(record, dict) else None
+        if isinstance(sha, str) and sha:
+            ctx = replace(ctx, terminal_sha=sha)
+    for leg in _queued_legs(ctx.root, ctx.run_id, record=record):
         spent = cpu_ms() - started
         if spent >= budget_ms:
             result = LegResult("failed", f"not started: job process time {spent:.0f}ms reached {budget_ms:.0f}ms")

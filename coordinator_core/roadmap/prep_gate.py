@@ -2062,7 +2062,7 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
         if drift:
             more = f" (+{len(drift) - 1} more)" if len(drift) > 1 else ""
             return _defect(
-                "register-pin-drift",
+                rr.REGISTER_PIN_DRIFT_KIND,
                 f"register row {drift[0]['id']}: source_text changed since the plan pinned it"
                 f"{more}; {rr.PIN_DRIFT_REMEDY}",
             )

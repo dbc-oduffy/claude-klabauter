@@ -67,6 +67,15 @@ def _submission_path(repo_root: Path, run_id: str) -> Path:
     return Path(repo_root) / RUN_DIR_ROOT / run_id / SUBMISSION_FILE
 
 
+def _head_sha_or_none(repo_root: Path) -> Optional[str]:
+    try:
+        from coordinator_core.git.git_state import head_sha
+
+        return head_sha(repo_root)
+    except Exception:
+        return None
+
+
 def record_submission(
     repo_root: Path,
     run_id: str,
@@ -77,7 +86,10 @@ def record_submission(
     sizing_rel: Optional[str],
     tool_use_id: Optional[str] = None,
 ) -> None:
-    """Write the run's submission record; the liveness read joins it to the harness task."""
+    """Write the run's submission record; the liveness read joins it to the harness task.
+
+    `run_base_sha` is HEAD at submit (an in-process ref read, no spawn); null when HEAD is unreadable.
+    """
     path = _submission_path(repo_root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -88,6 +100,7 @@ def record_submission(
         "sizing_rel": sizing_rel,
         "tool_use_id": tool_use_id or None,
         "submitted_at": time.time(),
+        "run_base_sha": _head_sha_or_none(repo_root),
     }
     path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 

@@ -165,6 +165,30 @@ def _submit(repo, run_id, transcript, tool_use_id="tu1", session="s1"):
     )
 
 
+def test_submission_records_head_as_run_base_sha(repo, dirs):
+    sha = "a" * 40
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (repo / ".git" / "refs" / "heads").mkdir(parents=True)
+    (repo / ".git" / "refs" / "heads" / "main").write_text(sha + "\n", encoding="utf-8")
+    _submit(repo, "r1", None)
+    record = json.loads(warp_live._submission_path(repo, "r1").read_text(encoding="utf-8"))
+    assert record["run_base_sha"] == sha
+
+
+def test_unreadable_head_records_null_run_base_and_does_not_raise(repo, dirs, monkeypatch):
+    _submit(repo, "r1", None)
+    record = json.loads(warp_live._submission_path(repo, "r1").read_text(encoding="utf-8"))
+    assert record["run_base_sha"] is None
+
+    def boom(_):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr("coordinator_core.git.git_state.head_sha", boom)
+    _submit(repo, "r2", None)
+    record = json.loads(warp_live._submission_path(repo, "r2").read_text(encoding="utf-8"))
+    assert record["run_base_sha"] is None
+
+
 def _result_line(tool_use_id, launch=False):
     obj = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id}]}}
     if launch:

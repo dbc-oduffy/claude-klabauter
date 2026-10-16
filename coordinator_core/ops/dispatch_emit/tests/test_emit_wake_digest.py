@@ -584,6 +584,17 @@ def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc():
     assert "'met demoted: '" not in plain
 
 
+def test_the_criterion_record_carries_the_judge_reason():
+    """The judged record branch reads `reason` off the judge result; the unjudged literal is null."""
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    judged = compose_script(
+        waves, name="wf", description="judge", plan_path="docs/plans/p.md",
+        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
+    )
+    assert "reason: _cap(_falsifierResult.reason ?? null, " in judged
+    assert "status: 'not_run', observation: null, reason: null, sidecar: null" in judged
+
+
 def test_a_judge_met_naming_an_unwired_entry_is_not_met():
     """DoE judge-reachability-check: unreachable or broken click paths turn a met
     into not_met naming the first; undecidable never moves the status."""

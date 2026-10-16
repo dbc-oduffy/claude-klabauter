@@ -171,6 +171,9 @@ def test_scout_schema_carries_the_closing_act_fields_as_optional():
         "manifest", "falsifier",
     ):
         assert field in props, field
+    assert c.ASK_SCOUT_SCHEMA["required"] == [*c.SCOUT_SCHEMA["required"], "exit_code"]
+    assert "exit_code" in c.ASK_SCOUT_SCHEMA["required"]
+    assert "exit_code" not in c.SCOUT_SCHEMA["required"]
     assert "exit_code" not in c.SCOUT_SCHEMA["properties"]
     assert not {"manifest", "falsifier"} & set(c.SCOUT_SCHEMA["properties"])
 
@@ -209,3 +212,18 @@ def test_scout_return_clause_names_every_required_field():
 def test_scout_return_clause_forbids_suite_tier_names_and_states_the_phrasing():
     assert "never name a suite tier" in c.SCOUT_RETURN_CLAUSE
     assert "'tests covering touched files pass'" in c.SCOUT_RETURN_CLAUSE
+
+
+def test_research_flags_js_appends_one_quoted_seed_flag_per_seed():
+    js = c.research_assemble_flags_js("s", "q")
+    assert "(s.research.seeds || []).map(function (v) { return ' --research-seed ' + q(v); })" in js
+    assert js.index("--research-target") < js.index("--research-seed") < js.index("--research-question")
+
+
+def test_scout_schema_seeds_pattern_admits_only_seed_kinds():
+    import re
+
+    items = c.ASK_SCOUT_SCHEMA["properties"]["research"]["properties"]["seeds"]["items"]
+    pat = re.compile(items["pattern"])
+    assert pat.match("repo=https://x/y.git") and pat.match("video=https://v?a=b")
+    assert not pat.match("blog=https://x") and not pat.match("doc=") and not pat.match("doc=a b")

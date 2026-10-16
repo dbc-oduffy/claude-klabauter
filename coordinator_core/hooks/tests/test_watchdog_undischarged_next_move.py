@@ -558,3 +558,50 @@ def test_every_route_terminal_accepts_the_warp_ask_fire(route) -> None:
     fire = {"scriptPath": "scratch/warp/ask-1.workflow.mjs"}
     assert _matches_next_action(_ROUTE_TERMINAL[route], "Workflow", fire)
     assert not _matches_next_action("Agent(<named Opus reviewer>)", "Workflow", fire)
+
+
+def _open_route(tmp_path, session_id, research_lines):
+    from coordinator_core.hooks.watchdog_undischarged_next_move import open_sizing_routed
+
+    repo_root = _make_repo(tmp_path)
+    rel = "state/sizings/thing.yaml"
+    _write_sizing(repo_root, rel, "plan")
+    with open(os.path.join(repo_root, rel), "a", encoding="utf-8") as fh:
+        fh.write(research_lines)
+    assert open_sizing_routed(repo_root, rel, session_id)
+    return repo_root
+
+
+_RESEARCH_BLOCK = "research:\n  value_class: spike\n"
+
+
+@pytest.mark.parametrize(
+    "script", ["scratch/warp/pipeline-research-x-1.workflow.mjs", r"C:\r\scratch\pipeline-research-y.workflow.mjs"]
+)
+def test_research_block_sizing_is_discharged_by_a_pipeline_research_fire(tmp_path, script) -> None:
+    repo_root = _open_route(tmp_path, "sid-res", _RESEARCH_BLOCK)
+    _post(repo_root, "sid-res", "Bash", {"command": "ls"})
+    assert _sizing_open(repo_root, "sid-res")
+    _post(repo_root, "sid-res", "Workflow", {"scriptPath": script})
+    assert not _sizing_open(repo_root, "sid-res")
+
+
+def test_research_block_sizing_is_discharged_by_the_research_skill(tmp_path) -> None:
+    repo_root = _open_route(tmp_path, "sid-res-skill", _RESEARCH_BLOCK)
+    _post(repo_root, "sid-res-skill", "Skill", {"skill": "coordinator:research"})
+    assert not _sizing_open(repo_root, "sid-res-skill")
+
+
+@pytest.mark.parametrize("research", ["", "research: {}\n", "research:\n", "research: null\n"])
+def test_sizing_without_a_research_block_still_demands_plan_or_fire(tmp_path, research) -> None:
+    repo_root = _open_route(tmp_path, "sid-nores", research)
+    _post(repo_root, "sid-nores", "Workflow", {"scriptPath": "scratch/pipeline-research-x.workflow.mjs"})
+    assert _sizing_open(repo_root, "sid-nores")
+    _post(repo_root, "sid-nores", "Workflow", {"scriptPath": "scratch/fire-0-1.mjs"})
+    assert not _sizing_open(repo_root, "sid-nores")
+
+
+def test_research_block_sizing_is_not_discharged_by_an_unrelated_script(tmp_path) -> None:
+    repo_root = _open_route(tmp_path, "sid-res-neg", _RESEARCH_BLOCK)
+    _post(repo_root, "sid-res-neg", "Workflow", {"scriptPath": "scratch/fire-0-1.mjs"})
+    assert _sizing_open(repo_root, "sid-res-neg")

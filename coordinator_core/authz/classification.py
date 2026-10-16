@@ -1310,6 +1310,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across processes? No.
     # Spec: coordinator_core/contract/readiness-verdict-producer-contract.md
     "plan.readiness_verdict": OpClass.COMPUTE_ONLY,
+    # plan.repin_register — MUTATING: rewrites `register_claims.pins` on ONE docs/plans/*.md, gated on a clear premise-check.
+    "plan.repin_register": OpClass.MUTATING,
     # plan.cross_plan_gate — COMPUTE_ONLY: reads one plan plus the predecessor plans
     # its depends_on_plan edges name and RETURNS whether they are satisfied.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.

@@ -10,7 +10,9 @@ is withheld and named. Only a ``ledger-check`` halt lands chunk product, because
 only that halt's ``Lands-Chunks`` (``emit.resume_landed_rows``) and re-runs every other halt's
 chunks; any other halt lands the record and run artifacts only (``halt-record-only``). A
 ``ledger-check`` halt lands a chunk only with its import closure: a chunk whose Python or TS/JS
-imports would be missing at the commit, transitively, is withheld whole (``import-closure-open``),
+imports would be missing at the commit, transitively, is withheld whole (``import-closure-open``).
+A chunk owning a ``.py`` that fails to parse (``py-unparseable``) or whose landing blob drops lines a
+foreign commit added since the run's base (``since-base-overlap``) is withheld whole the same way,
 and so is a chunk any of whose changed declared writes is withheld for another reason
 (``chunk-write-set-partial``): a chunk lands whole or not at all.
 With no finished chunk the commit is record-only. No receipt, sizing ship,
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import run_artifacts
+from coordinator_core.ops.dispatch_emit import review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -216,6 +218,31 @@ def _live_run_ids(repo_root: Path) -> list:
         return []
 
 
+HALT_RUN_REASON = "halted-run"
+
+
+def _review_written(worktree_root: Path, session_id: Optional[str], run_id: str) -> Optional[dict]:
+    """Review-stage writes since the run started; None when the source cannot answer."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _run_started_at
+
+    try:
+        return review_edits.review_writes(worktree_root, session_id, _run_started_at(worktree_root, run_id))
+    except Exception:
+        return None
+
+
+def _integrity_findings(worktree_root: Path, run_id: str, params: dict, paths: list) -> list:
+    """Parse and since-base-overlap findings over ``paths``; the overlap arm is skipped when the
+    run has no recorded base."""
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    found = landing_integrity.unparseable_py(worktree_root, paths)
+    base = landing_integrity.run_base_for(worktree_root, run_id, params)
+    if base is not None and paths:
+        found += landing_integrity.since_base_findings(worktree_root, paths, base, run_id=run_id)
+    return found
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -269,8 +296,13 @@ def _land(
         plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
         doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
     ))
+    review_written = _review_written(worktree_root, session_id, run_id)
+    review_literals = [] if review_written is None else [
+        p for p in review_written if not review_edits._out_of_worktree(review_edits._norm(p))
+    ]
     snapshot = _worktree_snapshot(
-        worktree_root, declared + list(artifacts.paths()), [record_dir_rel, RECORD_DIR_ROOT], []
+        worktree_root, declared + list(artifacts.paths()) + review_literals,
+        [record_dir_rel, RECORD_DIR_ROOT], [],
     )
     if snapshot is None:
         return _error(f"git status over {record_dir_rel} failed", **base)
@@ -332,6 +364,7 @@ def _land(
     art_paths = [p for p in art_paths if p not in withheld]
     art_deleted = [p for p in art_deleted if p not in withheld]
     closure_open: dict = {}
+    integrity: list = []
     if halted["halted"] != "ledger-check":
         withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
     elif product or gone:
@@ -347,6 +380,15 @@ def _land(
             worktree_root, owner, product + gone + art_paths, (import_closure, ts_import_closure)
         )
         withheld.update({p: "import-closure-open" for p in product + gone if owner.get(p) in closure_open})
+        integrity = _integrity_findings(
+            worktree_root, run_id, params, [p for p in product if p not in withheld]
+        )
+        if integrity:
+            bad_chunks = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}
+            withheld.update({
+                p: bad_chunks[owner[p]] for p in product + gone
+                if p not in withheld and owner.get(p) in bad_chunks
+            })
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
     unlanded_chunks = {owner[p] for p in withheld if p in owner}
@@ -358,14 +400,29 @@ def _land(
         cls = artifacts.class_of(p)
         if cls:
             landed_classes[cls] = landed_classes.get(cls, 0) + 1
+    review_reply: dict = {}
+    unlanded: dict = {}
+    if review_written is None:
+        review_reply["review_edits"] = None
+    else:
+        verdict = review_edits.partition(
+            review_written, changed=snapshot.changed, ignored=snapshot.ignored,
+            committed=set(paths) | set(deleted), sibling_declared={}, contested=set(),
+            present=lambda p: (worktree_root / p).is_file(),
+        )
+        unlanded = {p: HALT_RUN_REASON for p in sorted([*verdict.land, *verdict.halt])}
+    review_reply["review_edits_unlanded"] = unlanded
+
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
-            **({"withheld": withheld} if withheld else {}), **base,
+            **({"withheld": withheld} if withheld else {}), **review_reply, **base,
         }
 
     message = halted_record_message(run_id, halted)
+    for path in unlanded:
+        message += "\nReview-Edit-Unlanded: " + path
     if landed_chunks:
         message += "\nLands-Chunks: " + ", ".join(landed_chunks)
     if landed_classes:
@@ -386,7 +443,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {}
+    extra: dict = dict(review_reply)
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
         left = run_artifacts.residue(
@@ -403,4 +460,6 @@ def _land(
         extra["closure_open"] = closure_open
     if dropped:
         extra["dropped"] = dropped
+    if integrity:
+        extra["integrity"] = [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in integrity]
     return {**reply, "paths": paths + deleted, **extra, **base}  # paths: everything the commit names

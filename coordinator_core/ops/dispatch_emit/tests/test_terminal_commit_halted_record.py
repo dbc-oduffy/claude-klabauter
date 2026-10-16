@@ -547,3 +547,44 @@ def test_halt_lands_plan_handoff_and_delivery_note_the_halt_names(repo):
         "state/handoffs/2026-10-16-p.md", f"docs/delivery/{RUN}.md", "state/sizings/p-slice-2.yaml",
     } <= names
     assert not [p for p in _status(repo) if p.startswith(("docs/plans", "state/handoffs", "docs/delivery"))]
+
+
+def test_halt_names_dirty_review_written_file_and_does_not_land_it(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    _write_record(repo, RUN)
+    (repo / "elsewhere").mkdir()
+    (repo / "elsewhere" / "rev.py").write_text("edited\n", encoding="utf-8")
+    monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {"elsewhere/rev.py": "agent-1"})
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert out["review_edits_unlanded"] == {"elsewhere/rev.py": "halted-run"}
+    assert "elsewhere/rev.py" not in _landed(repo, out, "--name-only")
+    assert "Review-Edit-Unlanded: elsewhere/rev.py" in _git(["log", "-1", "--format=%B"], repo)
+    assert "elsewhere/rev.py" in _status(repo)
+
+
+def test_halt_with_no_review_writes_carries_empty_unlanded(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    _write_record(repo, RUN)
+    monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {})
+
+    out = _call(repo)
+
+    assert out["review_edits_unlanded"] == {}
+    assert "Review-Edit-Unlanded" not in _git(["log", "-1", "--format=%B"], repo)
+
+
+def test_halt_with_unanswerable_review_source_reports_null(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    _write_record(repo, RUN)
+    monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: None)
+
+    out = _call(repo)
+
+    assert out["committed"] is True
+    assert out["review_edits"] is None

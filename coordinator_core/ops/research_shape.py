@@ -31,20 +31,26 @@ def _choice(research: Mapping, key: str, allowed: tuple[str, ...], default: Opti
 def shape(research: Mapping) -> dict[str, Any]:
     """Return {tier, reason, pipelines, flags}; `flags` is per pipeline, bound by research_emit.segments_for.
 
+    Effective sources are the declared `sources` (default web, only when there are no seeds), then
+    the sources `research.seeds` feed (rc.seed_sources). Any seed floors scouts to corpus.
+
     `depth` reaches the repo manifest only: `deeper` runs Sonnet scouts, `deepest` adds the
     relay pass. Haiku scouts are the `standard` default and the documented failure on large repos.
 
-    Raises ValueError on an unknown value_class, appetite, source or depth.
+    Raises ValueError on an unknown value_class, appetite, source, seed kind or depth.
     """
     value_class = _choice(research, "value_class", rc.VALUE_CLASSES, None)
     appetite = _choice(research, "appetite", rc.APPETITES, _DEFAULT_APPETITE)
-    raw_sources = research.get("sources") or list(_DEFAULT_SOURCES)
+    seeds = research.get("seeds") or []
+    seeded = rc.seed_sources(seeds)
+    raw_sources = research.get("sources") or ([] if seeds else list(_DEFAULT_SOURCES))
     sources: list[str] = []
     for s in raw_sources:
         if s not in rc.SOURCES:
             raise ValueError(f"research.sources entry {s!r} is not one of {list(rc.SOURCES)}")
         if s not in sources:
             sources.append(s)
+    sources += [s for s in seeded if s not in sources]
     depth = _choice(research, "depth", rc.DEPTHS, "standard")
 
     tier = rc.TIER_TABLE[value_class][appetite]
@@ -53,13 +59,18 @@ def shape(research: Mapping) -> dict[str, Any]:
     if tier == "scouts" and floor:
         tier = "corpus"
         reason += f"; floor raised scouts to corpus (sources: {', '.join(floor)})"
+    elif tier == "scouts" and seeds:
+        tier = "corpus"
+        reason += "; floor raised scouts to corpus (seeds)"
 
     if tier == "scouts":
         pipelines = [rc.SCOUTS_PIPELINE]
     elif tier == "deep":
         # A named source with no deep specialist runs its own corpus ahead of the team, or deep
         # would drop it while the preflight still runs (named sources are honoured above scouts).
-        pipelines = [s for s in sources if s not in rc.SOURCE_SPECIALIST] + [rc.DEEP_PIPELINE]
+        pipelines = [s for s in sources if s not in rc.SOURCE_SPECIALIST or s in seeded] + [
+            rc.DEEP_PIPELINE
+        ]
     else:
         pipelines = list(sources)
     if "notebooklm" in sources:

@@ -90,3 +90,34 @@ def test_deeper_runs_sonnet_scouts_and_standard_keeps_haiku():
 def test_deep_reason_names_the_unblock_diagnostic():
     reason = shape({"value_class": "deep"})["reason"]
     assert "unblock-us diagnostic" in reason and "--research-class corpus" in reason
+
+
+def _seed(kind, url="https://x.test/a"):
+    return {"kind": kind, "url": url}
+
+
+def test_seeds_alone_replace_the_default_source():
+    r = shape({"value_class": "corpus", "seeds": [_seed("repo"), _seed("video"), _seed("doc")]})
+    assert r["pipelines"] == ["nlm-preflight", "repo", "notebooklm", "web"]
+
+
+def test_seeded_source_follows_declared_sources():
+    r = shape({"value_class": "corpus", "sources": ["web"], "seeds": [_seed("video")]})
+    assert r["pipelines"] == ["nlm-preflight", "web", "notebooklm"]
+
+
+def test_any_seed_floors_scouts_to_corpus():
+    r = shape({"value_class": "scouts", "appetite": "small", "seeds": [_seed("doc")]})
+    assert r["tier"] == "corpus" and r["pipelines"] == ["web"]
+    assert "floor raised scouts to corpus (seeds)" in r["reason"]
+
+
+def test_deep_runs_a_seeded_repo_before_the_team():
+    r = shape({"value_class": "deep", "sources": ["web"], "seeds": [_seed("repo")]})
+    assert r["pipelines"] == ["repo", "unblock"]
+    assert r["pipelines"].index("repo") < r["pipelines"].index("unblock")
+
+
+def test_unknown_seed_kind_raises():
+    with pytest.raises(ValueError):
+        shape({"value_class": "corpus", "seeds": [_seed("podcast")]})

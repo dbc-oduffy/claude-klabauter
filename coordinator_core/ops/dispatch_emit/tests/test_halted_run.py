@@ -66,6 +66,58 @@ def test_missing_state_warp(tmp_path):
     assert hr.halted_run_for(tmp_path, SIZING) is None
 
 
+def _receipt(root, run_id, session_id):
+    script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("// s\n", encoding="utf-8")
+    (script.parent / (script.name + ".emitted.json")).write_text(
+        json.dumps({"session_id": session_id}), encoding="utf-8"
+    )
+
+
+def _live(monkeypatch, live_ids):
+    from coordinator_core.session import liveness
+
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid in live_ids)
+
+
+def test_rebind_blocker_own_session_is_none(tmp_path, monkeypatch):
+    _live(monkeypatch, set())
+    _receipt(tmp_path, "r1", "me")
+    assert hr.rebind_blocker(tmp_path, "r1", "me") is None
+
+
+def test_rebind_blocker_live_peer_is_none(tmp_path, monkeypatch):
+    _live(monkeypatch, {"peer"})
+    _receipt(tmp_path, "r1", "peer")
+    assert hr.rebind_blocker(tmp_path, "r1", "me") is None
+
+
+def test_rebind_blocker_dead_peer_is_emitter_gone(tmp_path, monkeypatch):
+    _live(monkeypatch, set())
+    _receipt(tmp_path, "r1", "peer")
+    assert hr.rebind_blocker(tmp_path, "r1", "me") == "emitter-gone"
+
+
+def test_rebind_blocker_missing_receipt_or_script_is_none(tmp_path, monkeypatch):
+    _live(monkeypatch, set())
+    assert hr.rebind_blocker(tmp_path, "r1", "me") is None
+    script = tmp_path / "scratch" / "warp" / "r1.workflow.mjs"
+    script.parent.mkdir(parents=True)
+    script.write_text("// s\n", encoding="utf-8")
+    assert hr.rebind_blocker(tmp_path, "r1", "me") is None
+
+
+def test_rebind_blocker_spawns_nothing(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("subprocess spawned")
+
+    _live(monkeypatch, set())
+    _receipt(tmp_path, "r1", "peer")
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    assert hr.rebind_blocker(tmp_path, "r1", "me") == "emitter-gone"
+
+
 def test_no_subprocess(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")

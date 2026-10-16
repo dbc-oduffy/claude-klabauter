@@ -115,6 +115,61 @@ def test_a_fresh_sizing_fire_records_head_as_its_run_base(repo, monkeypatch):
     assert op._recorded_run_base(repo, run_id) == HEAD
 
 
+def _emit_by(repo, session, live, monkeypatch, run_id=OLDER):
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
+
+    script = repo / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("// peer emission\n", encoding="utf-8", newline="")
+    receipt = emission_receipt_path(script)
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(json.dumps({"session_id": session}), encoding="utf-8")
+    import coordinator_core.session.liveness as liveness
+
+    monkeypatch.setattr(liveness, "session_live", lambda s: live)
+    return script, receipt
+
+
+def test_a_dead_owner_halted_run_diverts_to_a_fresh_path_named_in_the_result(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        OUTPUT_PATH_REDIRECT_KEY,
+        OUTPUT_PATH_REDIRECT_REASONS,
+    )
+
+    import coordinator_core.git.git_state as git_state
+
+    monkeypatch.setattr(git_state, "head_sha", lambda *_a, **_k: HEAD)
+    _halt(repo)
+    script, receipt = _emit_by(repo, "dead-peer", False, monkeypatch)
+    before = (script.read_bytes(), receipt.read_bytes())
+    reply = _fire(repo)
+    assert reply["run_id"] != OLDER
+    redirect = reply[OUTPUT_PATH_REDIRECT_KEY]
+    assert redirect["halted_run"] == OLDER and redirect["prior_session"] == "dead-peer"
+    assert redirect["reason"] in OUTPUT_PATH_REDIRECT_REASONS
+    assert redirect["from"].endswith(f"{OLDER}.workflow.mjs")
+    assert redirect["to"].endswith(f"{reply['run_id']}.workflow.mjs")
+    assert (repo / redirect["to"]).is_file()
+    assert (script.read_bytes(), receipt.read_bytes()) == before
+    assert op._recorded_run_base(repo, reply["run_id"]) == HEAD
+
+
+def test_a_live_peer_halted_run_still_refuses(repo, monkeypatch):
+    _halt(repo)
+    _emit_by(repo, "live-peer", True, monkeypatch)
+    with pytest.raises(op.ForeignEmissionError):
+        _fire(repo)
+
+
+def test_a_dead_owner_halted_run_with_explicit_output_path_does_not_redirect(repo, monkeypatch):
+    _halt(repo)
+    _emit_by(repo, "dead-peer", False, monkeypatch)
+    reply = _fire(repo, output_path=str(repo / "mine.mjs"))
+    assert reply["run_id"] == OLDER
+    assert "output_path_redirect" not in reply
+
+
 def test_a_reserved_run_id_fire_does_not_rebind(repo):
     _halt(repo)
     with pytest.raises(ValueError):

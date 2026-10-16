@@ -18,7 +18,9 @@ from typing import Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops._path_guard import safe_id
-from coordinator_core.ops.dispatch_emit.ask_contract import HALT_BLOCKING_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    HALT_BLOCKING_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
+)
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 
 HALTED_FILE = "halted.json"
@@ -98,6 +100,39 @@ def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
     ):
         return None
     return newest
+
+
+#: The `rebind_blocker` reason for a recorded emitter that is no longer a live session.
+EMITTER_GONE = "emitter-gone"
+
+
+def recorded_emitter(repo_root: Path, run_id: str) -> Optional[str]:
+    """The session id the halted run's emission receipt names, else None (no script, no receipt,
+    unreadable, or no session recorded)."""
+    from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
+
+    script = Path(repo_root) / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    try:
+        receipt = json.loads(emission_receipt_path(script).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    recorded = receipt.get("session_id") if isinstance(receipt, dict) else None
+    return recorded if recorded and isinstance(recorded, str) else None
+
+
+def rebind_blocker(repo_root: Path, run_id: str, session_id: str) -> Optional[str]:
+    """Return a reason `session_id` must not take the halted run's script path, else None.
+
+    None when the run has no script or receipt, the receipt names `session_id` or no session, or
+    the recorded session is live. `EMITTER_GONE` when the recorded session is not live. One
+    receipt read, one `session_live` call, no spawn.
+    """
+    from coordinator_core.session.liveness import session_live
+
+    recorded = recorded_emitter(repo_root, run_id)
+    if recorded is None or recorded == session_id:
+        return None
+    return None if session_live(recorded) else EMITTER_GONE
 
 
 def mark_resumed(record_dir: Path) -> bool:

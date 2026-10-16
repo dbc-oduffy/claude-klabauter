@@ -96,8 +96,8 @@
     "doe_commit": "b00ee0a0e5a46e0c07aef430da8f5a5db707bb90"
   },
   "plan.schema.json": {
-    "blob": "0c0d77aa047229003e77c63d46691176c5383599",
-    "doe_commit": "c64530b006db1075689d7112c88e18e298b6767c"
+    "blob": "757e2a3f30e8b07dfa912dd9f4d5c3b374b94ee1",
+    "doe_commit": "e6fe40b3cc9112a204677373b830d82c8e250c06"
   },
   "prior-art-check.schema.json": {
     "blob": "70f770c2a1c104737f62f617b071f577575d309f",
@@ -148,8 +148,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "9ff32d264fd407741cd73475d058b4df67a276cb",
-    "doe_commit": "5c982f0e40a3fd140e6b3ce6ced3a403471291e2"
+    "blob": "2414b93ac86192d9b2d44d4926625ebd1cd4ff07",
+    "doe_commit": "e6fe40b3cc9112a204677373b830d82c8e250c06"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

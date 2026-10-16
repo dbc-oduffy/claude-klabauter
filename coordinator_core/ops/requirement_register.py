@@ -34,8 +34,11 @@ ROLLUP_KEY = "rollup"
 COVERAGE_KEY = "coverage"
 PINS_KEY = "pins"
 PIN_PREFIX = "sha256:"
+REGISTER_PIN_DRIFT_KIND = "register-pin-drift"
+REPIN_OP = "plan.repin_register"
 PIN_DRIFT_REMEDY = (
-    "restore the row's source_text, or re-plan against the changed row (claim the "
+    f"if the plan still serves the changed row and its premise-check is clear, run {REPIN_OP}; "
+    "else restore the row's source_text, or re-plan against the changed row (claim the "
     "workflow.revise revision row, or re-scaffold after a sizing.record_register "
     "amend/supersede); never hand-edit register_claims.pins"
 )
@@ -278,6 +281,97 @@ def pin_drift(register: Register, pins: Mapping[str, str]) -> list[dict[str, Any
         if pinned != current:
             drift.append({"id": str(rid), "pinned": pinned, "current": current})
     return drift
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _sub_block_end(lines: list[str], start: int, limit: int) -> int:
+    """Index after the deeper-indented continuation of the key line at `start`, within `limit`."""
+    base = _indent_of(lines[start])
+    end = start + 1
+    for i in range(start + 1, limit):
+        body = lines[i].strip()
+        if body and _indent_of(lines[i]) <= base and not (
+            _indent_of(lines[i]) == base and body.startswith("- ")
+        ):
+            break
+        if body:
+            end = i + 1
+    return end
+
+
+def repin_plan_text(plan_text: str, register: Register) -> tuple[str, list[dict[str, Any]]]:
+    """The plan text with only `register_claims.pins` recomputed against `register`.
+
+    Writes one flow-style line (`  pins: {"R1": "sha256:..."}`) over an existing flow or block
+    `pins:` sub-block, or inserts it after `rows:` when absent; every other byte is kept, CRLF
+    included. Returns the `{id, pinned, current}` entries that changed (empty, with the text
+    untouched, when the pins already match). Raises ValueError naming the claimed ids absent from
+    `register`: a gone row is re-planned, never re-pinned.
+    """
+    import json
+
+    import yaml
+
+    nl = "\r\n" if "\r\n" in plan_text else "\n"
+    lines = plan_text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise ValueError("plan has no frontmatter")
+    fm_end = next((i for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), None)
+    if fm_end is None:
+        raise ValueError("plan frontmatter is not closed")
+    fm_text = "".join(lines[1:fm_end])
+    claims = (yaml.safe_load(fm_text) or {}).get("register_claims")
+    if not isinstance(claims, Mapping):
+        raise ValueError("plan has no register_claims")
+    ids = [str(i) for i in (claims.get(ROWS_KEY) or [])]
+    by_id = {str(r.get(ROW_ID)): r for r in register.rows}
+    gone = [i for i in ids if i not in by_id]
+    if gone:
+        raise ValueError(f"claimed rows absent from the register: {', '.join(gone)}")
+    new_pins = register_pins(register, ids)
+    old_pins = plan_pins(fm_text)
+    if old_pins == new_pins and PINS_KEY in claims:
+        return plan_text, []
+    changed = [
+        {"id": i, "pinned": old_pins.get(i), "current": new_pins[i]}
+        for i in ids if old_pins.get(i) != new_pins[i]
+    ]
+
+    head = next(
+        (i for i in range(1, fm_end) if re.match(r"register_claims:\s*(#.*)?$", lines[i].rstrip("\r\n"))),
+        None,
+    )
+    if head is None:
+        raise ValueError("register_claims is not a block mapping")
+    claims_end = _sub_block_end(lines, head, fm_end)
+    child = next(
+        (_indent_of(lines[i]) for i in range(head + 1, claims_end) if lines[i].strip()), 2
+    )
+    key_re = re.compile(r"^ {%d}(\w+):" % child)
+
+    def _key_line(key: str) -> Optional[int]:
+        for i in range(head + 1, claims_end):
+            m = key_re.match(lines[i])
+            if m and m.group(1) == key:
+                return i
+        return None
+
+    pins_line = f"{' ' * child}{PINS_KEY}: {json.dumps(new_pins)}{nl}"
+    at = _key_line(PINS_KEY)
+    if at is not None:
+        lines[at:_sub_block_end(lines, at, claims_end)] = [pins_line]
+    else:
+        rows_at = _key_line(ROWS_KEY)
+        if rows_at is None:
+            raise ValueError("register_claims carries no rows key")
+        after = _sub_block_end(lines, rows_at, claims_end)
+        if not lines[after - 1].endswith("\n"):
+            lines[after - 1] += nl
+        lines.insert(after, pins_line)
+    return "".join(lines), changed
 
 
 def pin_drift_reason(drift: Sequence[Mapping[str, Any]]) -> str:

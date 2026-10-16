@@ -175,6 +175,33 @@ def test_the_deep_roster_carries_its_member_prompt_once():
     assert script.count("You are roster member") == 1
 
 
+def test_every_emitted_agent_call_sets_a_model():
+    import re
+
+    from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
+
+    segs = _segments({"value_class": "corpus", "sources": ["web", "notebooklm"]}, targets=[{"source": "notebooklm", "ref": "A"}])[1]
+    segs += _segments({"value_class": "deep"}, sources=["web", "repo"])[1]
+    segs += _segments({"value_class": "scouts"})[1]
+    assert {p for p, _ in segs} >= {"nlm-preflight", "web", "notebooklm", "unblock", "scouts"}
+    for pipeline, inputs in segs:
+        manifest = load_manifest(CONTENT, pipeline)
+        script = compose_pipeline_script(manifest, inputs, validate(manifest, inputs), run_id="r", agent_type_host=None)
+        calls = len(re.findall(r"\bagent\(", script))
+        with_model = len(re.findall(r"\bagent\([^\n]*?\bmodel: ", script))
+        assert calls > 0 and calls == with_model, pipeline
+
+
+def test_a_stage_declaring_no_model_gets_its_agent_type_pin_or_the_default():
+    from coordinator_core.ops.dispatch_emit import pipeline_compose as pc
+
+    stage = load_manifest(CONTENT, "unblock").stages[0]
+    assert stage.model is None
+    manifest = load_manifest(CONTENT, "unblock")
+    assert "model: 'sonnet'" in pc._agent_options(stage, manifest, "general-purpose", None)
+    assert "model: 'opus'" in pc._agent_options(stage, manifest, "coordinator:staff-eng", None)
+
+
 def test_context_files_are_named_in_the_ask(tmp_path):
     (tmp_path / "notes.md").write_text("n\n", encoding="utf-8")
     rel = re_.write_ask(tmp_path, SCRATCH, "What is X?")

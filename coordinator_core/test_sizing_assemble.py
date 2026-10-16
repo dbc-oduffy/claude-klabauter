@@ -1159,8 +1159,10 @@ def test_sizing_object_schema_version_and_bump_class():
     # covers a refused or abandoned run with no successor and no decision record (sizing.supersede).
     # Moved 1.38.1 -> 1.39.0 (2026-10-15): DoE 6930997bb4, `spike` joins research.value_class.
     # Moved 1.39.0 -> 1.40.0: DoE 5c982f0e40, optional top-level `acceptance_rows`.
-    # Moved 1.40.0 -> 1.42.0: DoE 12069c34ba, optional top-level `initiatives` and the `bundle` detent.
-    assert schema["x-schema-version"] == "1.42.0"
+    # Moved 1.40.0 -> 1.41.0: DoE a09fbe88d6, `research.question_mode` and `research.question_targets`.
+    # Moved 1.41.0 -> 1.42.0 on two DoE lines (38c370f1a5 `research.seeds`; 12069c34ba `initiatives`, `bundle`).
+    # Moved 1.42.0 -> 1.43.0: DoE e6fe40b3cc reconciles both 1.42.0 lines.
+    assert schema["x-schema-version"] == "1.43.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

@@ -2155,16 +2155,19 @@ def build_research_block(
     destination: Optional[str] = None,
     question_mode: Optional[str] = None,
     question_targets: Optional[list[str]] = None,
+    seeds: Optional[list[str]] = None,
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
     one refusal string per bad value. `(None, [])` when no research flag was given.
     `question_targets` are raw `<n>=<source>[:<ref>]` strings, split on the first `=` and
-    then the first `:` so a ref holding a colon stays intact."""
+    then the first `:` so a ref holding a colon stays intact. `seeds` are raw `<kind>=<url>`
+    strings split on the first `=`; repeats of a (kind, url) pair are dropped."""
     questions = [q.strip() for q in questions or ()]
     question_targets = list(question_targets or ())
+    seeds = list(seeds or ())
     if not (
         value_class or appetite or sources or depth or targets or questions or destination
-        or question_mode or question_targets
+        or question_mode or question_targets or seeds
     ):
         return None, []
     from coordinator_core.ops import _research_contract as rc
@@ -2193,6 +2196,18 @@ def build_research_block(
             errors.append(f"--research-target source must be one of {rc.SOURCES}, got {source!r}")
         else:
             parsed_targets.append({"source": source, "ref": ref.strip()})
+    parsed_seeds: list[dict[str, str]] = []
+    for raw in seeds:
+        kind, sep, url = raw.partition("=")
+        url = url.strip()
+        if not sep or not url:
+            errors.append(f"--research-seed {raw!r}: expected <kind>=<url>")
+        elif kind not in rc.SEED_KINDS:
+            errors.append(f"--research-seed kind must be one of {rc.SEED_KINDS}, got {kind!r}")
+        elif any(ch.isspace() for ch in url):
+            errors.append(f"--research-seed {raw!r}: url must not contain whitespace")
+        elif {"kind": kind, "url": url} not in parsed_seeds:
+            parsed_seeds.append({"kind": kind, "url": url})
     if any(not q for q in questions):
         errors.append("--research-question must not be empty")
     if destination is not None and destination not in rc.DESTINATIONS:
@@ -2242,6 +2257,8 @@ def build_research_block(
         block["depth"] = depth
     if parsed_targets:
         block["targets"] = parsed_targets
+    if parsed_seeds:
+        block["seeds"] = parsed_seeds
     if questions:
         block["questions"] = questions
     if destination is not None:
@@ -2300,6 +2317,7 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
             "targets": given.get(
                 "targets", [f"{t['source']}={t['ref']}" for t in prior.get("targets") or []]
             ),
+            "seeds": given.get("seeds", [f"{s['kind']}={s['url']}" for s in prior.get("seeds") or []]),
             "questions": given.get("questions", prior.get("questions") or []),
             "destination": given.get("destination", prior.get("destination")),
             "question_mode": given.get("question_mode", prior.get("question_mode")),
@@ -2314,7 +2332,7 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
         block, errors = build_research_block(
             merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
             list(merged["targets"]), list(merged["questions"]), merged["destination"],
-            merged["question_mode"], list(merged["question_targets"]),
+            merged["question_mode"], list(merged["question_targets"]), list(merged["seeds"]),
         )
         if errors:
             raise MutateAbort("; ".join(errors))
@@ -2374,6 +2392,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-source web|repo|structured|notebooklm ...]\n"
         "    [--research-depth standard|deeper|deepest]\n"
         "    [--research-target <source>=<ref> ...]\n"
+        "    [--research-seed <video|doc|repo|paper>=<url> ... (a URL to study; routed to its kind's pipeline)]\n"
         "    [--research-question <text> ...]\n"
         "    [--research-question-mode split|combine]\n"
         "    [--research-question-target <n>=<source>[:<ref>] ... (source web|repo|local; ref for repo/local)]\n"
@@ -2537,6 +2556,7 @@ def main(argv: list[str]) -> int:
     research_sources: list[str] = []
     research_depth = None
     research_targets: list[str] = []
+    research_seeds: list[str] = []
     research_questions: list[str] = []
     research_question_mode = None
     research_question_targets: list[str] = []
@@ -2687,6 +2707,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-target" and i + 1 < len(argv):
             research_targets.append(argv[i + 1])
+            i += 2
+        elif tok == "--research-seed" and i + 1 < len(argv):
+            research_seeds.append(argv[i + 1])
             i += 2
         elif tok == "--research-question" and i + 1 < len(argv):
             research_questions.append(argv[i + 1])
@@ -2886,6 +2909,7 @@ def main(argv: list[str]) -> int:
                 ("questions", research_questions), ("destination", research_destination),
                 ("question_mode", research_question_mode),
                 ("question_targets", research_question_targets),
+                ("seeds", research_seeds),
             )
             if v
         }
@@ -2897,6 +2921,9 @@ def main(argv: list[str]) -> int:
         except SizingAssembleError as exc:
             print(f"{prog}: --amend-research refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
+        # Per-session under the seam id: re-opens in the amending session only; a plan-terminal
+        # row opened by another writer session is out of reach.
+        _open_routed_obligation(amend_research_path)
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK
 
@@ -2906,6 +2933,7 @@ def main(argv: list[str]) -> int:
     research_block, research_errors = build_research_block(
         research_class, research_appetite, research_sources, research_depth, research_targets,
         research_questions, research_destination, research_question_mode, research_question_targets,
+        research_seeds,
     )
     if research_errors:
         for message in research_errors:

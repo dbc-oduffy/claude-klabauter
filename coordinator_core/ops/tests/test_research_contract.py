@@ -1,5 +1,7 @@
 """Pins the research contract tables: totality of TIER_TABLE and closed vocabularies."""
 
+import pytest
+
 from coordinator_core.ops import _research_contract as rc
 
 
@@ -56,3 +58,30 @@ def test_scout_target_and_mode_vocabulary():
     assert rc.PROBE_NO_REF == "none"
     assert rc.QUESTION_MODE_KEY == "question_mode"
     assert rc.QUESTION_TARGETS_KEY == "question_targets"
+
+
+def test_every_seed_kind_maps_to_a_source():
+    assert set(rc.SEED_KIND_SOURCE) == set(rc.SEED_KINDS)
+    assert set(rc.SEED_KIND_SOURCE.values()) <= set(rc.SOURCES)
+    assert rc.SEED_KIND_SOURCE == {"repo": "repo", "video": "notebooklm", "doc": "web", "paper": "web"}
+
+
+def test_seed_sources_first_seen_order_without_repeats():
+    seeds = [
+        {"kind": "video", "url": "u1"},
+        {"kind": "doc", "url": "u2"},
+        {"kind": "paper", "url": "u3"},
+        {"kind": "video", "url": "u4"},
+        {"kind": "repo", "url": "u5"},
+    ]
+    assert rc.seed_sources(seeds) == ["notebooklm", "web", "repo"]
+
+
+def test_seed_sources_empty_or_absent_is_empty():
+    assert rc.seed_sources([]) == []
+    assert rc.seed_sources(None) == []
+
+
+def test_seed_sources_unknown_kind_raises():
+    with pytest.raises(ValueError):
+        rc.seed_sources([{"kind": "podcast", "url": "u"}])

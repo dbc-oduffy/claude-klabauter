@@ -226,6 +226,20 @@ def _status_of(root: Path, run_id: str) -> Optional[str]:
     return status if isinstance(status, str) else None
 
 
+def _rows_committed(root: Path, run_id: str) -> bool:
+    """True when a halted run's status file carries the all-rows-committed mark."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import status_rel
+    from coordinator_core.ops.dispatch_emit.run_close import ROWS_COMMITTED_KEY
+
+    try:
+        data = json.loads((root / status_rel(run_id)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get(ROWS_COMMITTED_KEY) is True
+
+
 def _read_parent(root: Path, parent_id: str):
     import json
 
@@ -253,6 +267,8 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
         if state == STATUS_LANDED:
             continue
         if state == STATUS_HALTED:
+            if _rows_committed(root, pred):
+                continue
             return f"Predecessor {pred} halted, so {run_id} cannot start. Resubmit the slice as a fresh {{ask}}."
         return f"Predecessor {pred} has not landed ({state or 'not started'}); its close names this run's fire call."
     if mine.status in (STATUS_QUEUED, STATUS_AFTER):
@@ -288,6 +304,42 @@ def _default_fanout(params: dict, repo_root: Path) -> dict:
     from coordinator_core.ops.dispatch_emit.ask_fanout import fanout
 
     return fanout(params, repo_root)
+
+
+def _declared_writes(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any]) -> list[str]:
+    """`args.writes`, else the cited sizing's plan-spine writes; empty when neither is declared."""
+    args = tool_input.get("args")
+    writes = args.get("writes") if isinstance(args, dict) else None
+    if isinstance(writes, list) and writes and all(isinstance(w, str) and w.strip() for w in writes):
+        return [w.strip() for w in writes]
+    plan_rel = sizing_doc.get("plan")
+    if not isinstance(plan_rel, str) or not plan_rel.strip():
+        return []
+    from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import _declared_write_paths
+
+    plans = (root / "docs" / "plans").resolve()
+    plan = (root / plan_rel.strip()).resolve()
+    if plans not in plan.parents or not plan.is_file():
+        return []
+    return sorted(_declared_write_paths(plan))
+
+
+def _live_write_overlap_deny(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any]) -> Optional[str]:
+    """Deny text when a single ask's declared writes overlap a live run's staged footprint; else None."""
+    writes = _declared_writes(root, tool_input, sizing_doc)
+    if not writes:
+        return None
+    from coordinator_core.ops.dispatch_emit import live_run_writes
+
+    try:
+        hits = live_run_writes.overlaps(writes, live_run_writes.live_footprints(root, exclude_run_id=None))
+    except OSError:
+        return None
+    if not hits:
+        return None
+    run_id, paths = next(iter(sorted(hits.items())))
+    shown = ", ".join(paths[:5]) + (f" (+{len(paths) - 5} more)" if len(paths) > 5 else "")
+    return f"Run {run_id} is live and writes {shown}, which this ask also writes. Resubmit when {run_id} lands."
 
 
 def _refuse(text: str) -> dict:
@@ -357,7 +409,11 @@ def evaluate(
             fan_reply = (fanout or _default_fanout)(fan_params, root)
         except Exception as exc:  # the engine's refusal text is the whole message
             return deny("PreToolUse", str(exc))
-        parent = _read_parent(root, str(fan_reply.get("parent_id"))) if isinstance(fan_reply, dict) else None
+        if not isinstance(fan_reply, dict):
+            return deny("PreToolUse", f"The fan-out returned no reply: {fan_reply!r}.")
+        if fan_reply.get("error") or fan_reply.get("exit_code") or fan_reply.get("applied") is False:
+            return deny("PreToolUse", str(fan_reply.get("error") or "The fan-out was refused."))
+        parent = _read_parent(root, str(fan_reply.get("parent_id")))
         first = next((r for r in (parent.runs if parent else ()) if r.status == "ready"), None)
         if first is None:
             return deny("PreToolUse", "The fan-out produced no ready run to fire.")
@@ -389,6 +445,11 @@ def evaluate(
                 f"Run {live} is already working {sizing_rel}; its completion is your one wake. "
                 "End the turn.",
             )
+
+    if asks is None and reserved_run_id is None:
+        clash = _live_write_overlap_deny(root, payload["tool_input"], sizing_doc)
+        if clash:
+            return deny("PreToolUse", clash)
 
     params: dict = {"session_id": session_id or ""}
     if sizing_rel and _has_research_block(sizing_doc):
@@ -467,10 +528,19 @@ def evaluate(
             "It runs to its commit in the background; its completion notification is your one wake. "
             "End the turn: no polling, dispatch or verification meanwhile."
         )
+    from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+
+    redirect = result.get(OUTPUT_PATH_REDIRECT_KEY)
+    lead = (
+        f"Halted run {redirect.get('halted_run')} belonged to {redirect.get('prior_session')} "
+        f"({redirect.get('reason')}); emitted fresh at {redirect.get('to')}. "
+        if isinstance(redirect, dict)
+        else ""
+    )
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"Submitted to the engine as run {run_id}.{carries} {tail}",
+        f"{lead}Submitted to the engine as run {run_id}.{carries} {tail}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"

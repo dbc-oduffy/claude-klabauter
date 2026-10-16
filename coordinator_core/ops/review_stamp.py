@@ -359,13 +359,13 @@ def _mint_judge_only(
     """Mint the stamp of a plan no run record covers (hand-coded rows, a halted run finished by hand).
 
     The only evidence is the newest `criterion-rejudge` record bound to the plan, which
-    `reverify_delivery record` writes from the judge's task output. Predicates, all required:
+    `reverify-delivery record` writes from the judge's task output. Predicates, all required:
     the record is `met` with an observation; it was judged at HEAD or an ancestor; every
     non-deferred spine row is `coded`; the register gate passes; `--build-test`, when given, passes.
     The stamp carries no `delivery` block: no delivery verifier ran. Reads nothing from a parameter."""
     route = (
         f"; for a hand-worked plan: emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} "
-        "--rejudge --out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+        "--rejudge --out <x>.workflow.mjs, fire it, reverify-delivery record --result-json <task output>, "
         "then mint again"
     )
     from datetime import datetime, timezone
@@ -983,7 +983,10 @@ def _resolve_mint(
         prep_data,
         build_test_data,
         criterion_open_ok=criterion_open_ok,
-        delivery_exempt=delivery_verdict is None and _delivery_verifier_not_run(plan_path, repo_root, text),
+        delivery_exempt=delivery_verdict is None
+        and _verifier_absence_is_benign(integration_data.get("delivery_not_run"))
+        and _criterion_judged(gate_integration.get("criterion"))
+        and _delivery_verifier_not_run(plan_path, repo_root, text),
     )
 
     if not landed_here:
@@ -1038,6 +1041,26 @@ def _require_same_diff_sha(repo_root: Path, run_rel: str, terminal_sha: str) -> 
             f"review-stamp: refusing to mint: delivery-verdict record {record} is bound to {diff_sha}, "
             f"not the run's terminal commit {terminal_sha}; re-verify the run's terminal commit"
         )
+
+
+def _verifier_absence_is_benign(not_run: Any) -> bool:
+    """True when the run record names no reason for the absent delivery verdict, or names that the
+    roster or tier kept the verifier off; any other reason is a verifier that ran and failed."""
+    from coordinator_core.ops.review_mint.roster import DELIVERY_NOT_ROSTERED
+
+    if not isinstance(not_run, str) or not not_run:
+        return True
+    return not_run == DELIVERY_NOT_ROSTERED or not_run.startswith("tier ")
+
+
+def _criterion_judged(criterion: Any) -> bool:
+    """True for a `met` criterion with a non-blank observation: with no delivery verdict, the
+    judge's observation is the only delivery evidence."""
+    return (
+        isinstance(criterion, dict)
+        and criterion.get("status") == "met"
+        and bool(str(criterion.get("observation") or "").strip())
+    )
 
 
 def _delivery_verifier_not_run(plan_path: Path, repo_root: Path, plan_text: str) -> bool:
@@ -1128,7 +1151,7 @@ def _gate_refusal_with_hints(r: _Resolved) -> str:
     if "exit criterion is" in refusal:
         refusal += (
             f"; a re-judge clears this: emit-dispatch-workflow --plan {plan_path} --rejudge "
-            "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+            "--out <x>.workflow.mjs, fire it, reverify-delivery record --result-json <task output>, "
             "then mint again (a hand-run judge leaves no record mint can read)"
         )
     if (
@@ -1514,7 +1537,7 @@ def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
         return None
     return (
         f"review_stamp criterion is {status}; emit-dispatch-workflow --plan {plan_path} --rejudge "
-        "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+        "--out <x>.workflow.mjs, fire it, reverify-delivery record --result-json <task output>, "
         f"then: review-stamp.py rejudge --plan {plan_path}"
     )
 
@@ -1543,7 +1566,7 @@ def _refresh_register_rows(plan_path: Path, repo_root: Path, record: Optional[Di
 def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     """Record a fresh, plan-bound `met` criterion verdict into the existing stamp's criterion
     block. The verdict is read only off an engine-written record under `state/delivery-verdicts/`
-    (`reverify_delivery record`, from the Workflow's task output), never a parameter or a
+    (`reverify-delivery record`, from the Workflow's task output), never a parameter or a
     hand-written file. Returns `{"status": "rejudged"|"unchanged", "reason": ...}`; a
     not_met/indeterminate newest record, or none bound and newer than the stamp, writes nothing."""
     from coordinator_core.ops.dispatch_emit.verdict_supersession import _instant, latest_criterion_record
@@ -1554,7 +1577,7 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     if not isinstance(stamp, dict) or not isinstance(stamp.get("criterion"), dict):
         raise MintRefusal(
             f"review-stamp: {plan_path} carries no review_stamp criterion to re-judge; with no stamp, "
-            "record the re-judge (emit-dispatch-workflow --rejudge, fire, reverify_delivery record) "
+            "record the re-judge (emit-dispatch-workflow --rejudge, fire, reverify-delivery record) "
             "and run review-stamp mint, which reads the newer met verdict"
         )
     plan_id = str(fm_data.get("plan_id") or "")
@@ -1579,7 +1602,7 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
             "status": "unchanged",
             "reason": "no recorded judge result bound to this plan is newer than the stamp; run "
             f"emit-dispatch-workflow --plan {plan_path} --rejudge --out <x>.workflow.mjs, fire it, "
-            "then reverify_delivery record --result-json <task output>",
+            "then reverify-delivery record --result-json <task output>",
         }
     result = record["criterion"]
     rel = record["record_path"]

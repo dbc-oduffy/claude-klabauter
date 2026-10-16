@@ -35,6 +35,18 @@ DoE's `PREMISE_SCHEMA`, passed through unchanged.
   not a premise failure: it never makes the verdict `judgment` or pulls the plan. When the verdict
   is `ready`, `reason` appends `; N UNCHECKABLE premise row(s) left to reviewer judgment`, a
   non-blocking note only.
+- **Row `baseline_ref` (optional string).** Meaningful on a class-4 (falsifier arming) row only: the
+  falsifier `baseline_ref` the checker read against. When present and different from the plan's
+  current `prime_exit_criterion.falsifier.baseline_ref`, the row is **stale**: a note, never
+  blocking. A row without `baseline_ref` behaves as before; a non-string value is refused.
+- **Plan frontmatter `corrects:` (optional input, read by the op from the plan file).** A list of
+  `{citation: str, fixed_by: str}`. `citation` is non-empty text that the row's citation contains,
+  compared after whitespace normalisation, case-sensitively. `fixed_by` is a spine row id. An entry
+  **covers** a `CONTRADICTED` row only when its citation matches and `fixed_by` names a row in the
+  plan's spine whose disposition is `open` or `coded`. A malformed entry, an unknown row id, or a
+  deferred, spun-off or won't-do row covers nothing. `UNRESOLVED` rows are never covered. A covered
+  row is a note (`<n> CONTRADICTED premise row(s) the plan corrects: <citation> -> <row id>`), never
+  blocking.
 - `premise` together with a `reviews[]` entry whose `reviewer` is `premise-check` is refused: the
   rows are passed once.
 - An empty `rows` list adds nothing to the verdict (the `premise-check` exclusion still applies). With `premise` absent, the reply is unchanged.
@@ -68,6 +80,15 @@ findings-ledger sidecar. The op reads it in-process and never stamps or writes i
 | `mechanical_repairs` | `[{kind, target, instruction}]`; empty unless `pull_class` is `mechanical` |
 | `prep_gate` | the `plan.prep_gate` reply verbatim |
 | `reason` | one line |
+| `blocking` | optional; sorted, de-duplicated keys of everything that put the verdict into `judgment` or `pulled` |
+
+**`blocking` key spelling.** Premise: `premise-check: <VERDICT> <citation[:200]>`. Reviewer:
+`<reviewer>: '<verdict>'`. Any other entry that puts the verdict into `judgment` or `pulled` (a
+substantive prep-gate entry, the coverage judgment-finding count) appears verbatim as the string the
+op appends to its `substantive` or `judgment` list. Covered and stale premise rows never appear:
+they are notes. `blocking` is built before the `+N more` truncation of `reason` and is not
+truncated by it. A caller compares two pulls by comparing their `blocking` sets. Absent on replies
+from a producer that predates it; the schema does not require it.
 
 - `ready` with empty `mechanical_repairs`: no prep-gate or readiness agent is owed.
 - `pulled` + `mechanical`: apply the repairs in one revise; re-run the op, not the review round.

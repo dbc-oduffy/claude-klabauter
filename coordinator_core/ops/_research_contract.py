@@ -1,8 +1,8 @@
 """coordinator_core.ops._research_contract — research-by-value-class vocabulary as data.
 
-Purpose: one home for the value classes, appetites, sources, depths, tier table, pipeline
-names and deep-roster roles shared by research.shape, the research emit route and the chain
-composer. Pure: no I/O, no op registration.
+Purpose: one home for the value classes, appetites, sources, seed kinds, depths, tier table,
+pipeline names and deep-roster roles shared by research.shape, the research emit route and the
+chain composer. Pure: no I/O, no op registration.
 
 Negative-spec: applies no tier logic (research_shape does); authors no manifest or template.
 """
@@ -14,6 +14,15 @@ from typing import Final, TypedDict
 VALUE_CLASSES: Final = ("scouts", "corpus", "deep", "spike")
 APPETITES: Final = ("small", "medium", "large")
 SOURCES: Final = ("web", "repo", "structured", "notebooklm")
+# research.seeds[].kind -> the source (pipeline) a seed of that kind feeds. paper -> web is an
+# inference: no destination was named for papers.
+SEED_KINDS: Final = ("video", "doc", "repo", "paper")
+SEED_KIND_SOURCE: Final[dict[str, str]] = {
+    "repo": "repo",
+    "video": "notebooklm",
+    "doc": "web",
+    "paper": "web",
+}
 DEPTHS: Final = ("standard", "deeper", "deepest")
 TIERS: Final = ("scouts", "corpus", "deep")
 # local-only: every output stays under machine-local research.local_root, outside every repo.
@@ -90,6 +99,21 @@ PROBE_NO_REF: Final = "none"
 # Keys of the sizing object's research block.
 QUESTION_MODE_KEY: Final = "question_mode"
 QUESTION_TARGETS_KEY: Final = "question_targets"
+
+
+def seed_sources(seeds) -> list[str]:
+    """Sources fed by `seeds` ({kind, url} mappings), first-seen order, no repeats; None or [] -> [].
+
+    Raises ValueError on a kind outside SEED_KINDS.
+    """
+    out: list[str] = []
+    for seed in seeds or ():
+        kind = seed.get("kind")
+        if kind not in SEED_KIND_SOURCE:
+            raise ValueError(f"research.seeds kind {kind!r} is not one of {list(SEED_KINDS)}")
+        if SEED_KIND_SOURCE[kind] not in out:
+            out.append(SEED_KIND_SOURCE[kind])
+    return out
 
 
 class ScoutTarget(TypedDict):

@@ -67,7 +67,10 @@ _PARAMS = (
     Field("note", "str"),
     Field("all_of_pm_ask", "bool"),
     Field("out_of_scope", "str_list"),
+    Field("from", "str"),
 )
+#: Separator between a revision anchor's UTC stamp and the peer session that sent it.
+SENDER_SEP = " from "
 _SIZING_SCHEMA = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "sizing-object.schema.json"
 
 
@@ -82,9 +85,13 @@ class Item:
     origin: str
     at: str
     anchor: str = ""
+    sender: str = ""
 
     def to_json(self) -> dict:
-        return {"id": self.id, "text": self.text, "origin": self.origin, "at": self.at}
+        out = {"id": self.id, "text": self.text, "origin": self.origin, "at": self.at}
+        if self.sender:
+            out["from"] = self.sender
+        return out
 
 
 @dataclass(frozen=True)
@@ -108,6 +115,20 @@ def run_dir(repo_root: Path, run_id: str) -> Path:
         return record_dir(Path(repo_root), run_id)
     except ValueError as exc:
         raise LedgerRefused(str(exc)) from exc
+
+
+def _parent_lists_run(root: Path, run_id: str) -> bool:
+    """True when some write-once parent record under scratch/warp lists `run_id` among its minted runs."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ParentRecord, parent_record_rel
+
+    for path in root.glob(parent_record_rel("*")):
+        try:
+            record = ParentRecord.from_json(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if any(r.run_id == run_id for r in record.runs):
+            return True
+    return False
 
 
 def _now() -> str:
@@ -141,10 +162,25 @@ def _origin(anchor: object) -> tuple[str, str]:
     """(origin, at) from a row anchor; a row from a source document has origin ''."""
     text = anchor if isinstance(anchor, str) else ""
     if text.startswith(ORIGIN_REVISION + "@"):
-        return ORIGIN_REVISION, text[len(ORIGIN_REVISION) + 1:]
+        return ORIGIN_REVISION, text[len(ORIGIN_REVISION) + 1:].partition(SENDER_SEP)[0]
     if text in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED):
         return text, ""
     return "", ""
+
+
+def _sender(anchor: object) -> str:
+    """The peer session a revision anchor names, else '' (an EM revision carries none)."""
+    text = anchor if isinstance(anchor, str) else ""
+    return text.partition(SENDER_SEP)[2].strip() if text.startswith(ORIGIN_REVISION + "@") else ""
+
+
+def _clean_sender(sender: object) -> str:
+    return " ".join(sender.split()) if isinstance(sender, str) else ""
+
+
+def _revision_anchor(at: str, sender: object) -> str:
+    who = _clean_sender(sender)
+    return f"{ORIGIN_REVISION}@{at}" + (SENDER_SEP + who if who else "")
 
 
 def read_run(dir_: Path) -> Optional[dict]:
@@ -234,22 +270,30 @@ def _sizing_path(root: Path, sizing_rel: str) -> Path:
     return found
 
 
-def _withheld_revision(row: Mapping, run_id: str) -> Optional[str]:
-    """The revision row id that ruled `row` out of scope in run `run_id`, else None."""
+def _withheld_revision(row: Mapping) -> Optional[str]:
+    """The tail (`out_of_scope`, or a legacy revision row id) of a deferred row's
+    `workflow.revise:<run id>:<tail>` ruling ref, else None. The run id is provenance: the ruling
+    withholds the row for every run bound to the sizing."""
     ruling = row.get(rr.ROW_RULING)
     ref = ruling.get(rr.RULING_REF) if isinstance(ruling, Mapping) else None
-    prefix = f"{REVISE_REF}:{run_id}:"
-    if row.get(rr.ROW_STATUS) == rr.STATUS_DEFERRED and isinstance(ref, str) and ref.startswith(prefix):
-        return ref[len(prefix):] or None
-    return None
+    if row.get(rr.ROW_STATUS) != rr.STATUS_DEFERRED or not isinstance(ref, str):
+        return None
+    head, _, rest = ref.partition(":")
+    run_id, _, tail = rest.partition(":")
+    return tail if head == REVISE_REF and run_id and tail else None
 
 
-def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str], run_id: str = "") -> Ledger:
+def ruled_out_ids(rows: Sequence[Mapping]) -> tuple[str, ...]:
+    """Ids of the rows a recorded `workflow.revise` ruling withholds, in register order."""
+    return tuple(str(r.get(rr.ROW_ID)) for r in rows if _withheld_revision(r))
+
+
+def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str]) -> Ledger:
     items = []
     withheld = []
     for row in rows:
         if row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
-            revision = _withheld_revision(row, run_id)
+            revision = _withheld_revision(row)
             if revision:
                 reason = "withheld by out-of-scope ruling" if revision == OUT_OF_SCOPE_REF else f"withheld by revision {revision}"
                 withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": reason})
@@ -258,7 +302,7 @@ def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str],
         anchor = row.get(rr.ROW_ANCHOR)
         items.append(Item(
             str(row.get(rr.ROW_ID)), str(row.get(rr.ROW_TEXT) or ""), origin, at,
-            anchor if isinstance(anchor, str) else "",
+            anchor if isinstance(anchor, str) else "", _sender(anchor),
         ))
     return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
 
@@ -480,15 +524,15 @@ def render(ledger: Ledger, run_id: str) -> str:
         "",
         f"Every row of {where} still to deliver: the PM's words, the ask (origin `relayed`: an EM's relay, "
         "not the PM's words; a `pm_verbatims` row outranks it), and each revision the EM "
-        "sent while the run was in flight, in the order they arrived. A revision governs over an "
-        "earlier row it changes.",
+        "(or a peer session, named in `from`) sent while the run was in flight, in the order they "
+        "arrived. A revision governs over an earlier row it changes.",
         "",
         "All of the PM's ask is mandatory (all_of_pm_ask): " + ("yes" if ledger.all_of_pm_ask else "no"),
         "",
     ]
     for item in ledger.items:
         default_origin = "design registry" if _is_design(item.anchor) else "source document"
-        tag = ", ".join(p for p in (item.origin or default_origin, item.at) if p)
+        tag = ", ".join(p for p in (item.origin or default_origin, item.at, f"from {item.sender}" if item.sender else "") if p)
         lines.append(f"## {item.id} ({tag})")
         lines.append("")
         lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
@@ -501,6 +545,20 @@ def render(ledger: Ledger, run_id: str) -> str:
     return "\n".join(lines)
 
 
+def _queued_ledger(dir_: Path, all_of: bool) -> Ledger:
+    """The revisions waiting in the run's inbox as `Q<n>` items (no sizing bound, or no emit yet)."""
+    return Ledger(
+        tuple(
+            Item(
+                f"Q{n + 1}", e["text"].strip(), ORIGIN_REVISION, str(e.get("at") or ""),
+                sender=" ".join(str(e.get("from") or "").split()),
+            )
+            for n, e in enumerate(_inbox(dir_))
+        ),
+        all_of,
+    )
+
+
 def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     """The run's requirements, or None when the run was emitted without a ledger. Before the
     sizing is bound, the queued revisions are the only items. LedgerRefused when the bound
@@ -511,17 +569,13 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     all_of = bool(run.get("all_of_pm_ask"))
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     if not sizing_rel:
-        queued = _inbox(dir_)
-        return Ledger(
-            tuple(Item(f"Q{n + 1}", e["text"].strip(), ORIGIN_REVISION, str(e.get("at") or "")) for n, e in enumerate(queued)),
-            all_of,
-        )
+        return _queued_ledger(dir_, all_of)
     try:
         text = _sizing_path(repo_root, sizing_rel).read_text(encoding="utf-8")
     except OSError as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     register = rr.read_register(text)
-    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel, Path(dir_).name)
+    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel)
 
 
 def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
@@ -621,7 +675,7 @@ def bind(
             fresh = asked and text.strip() not in held
             entries.append((text, f"{ORIGIN_REVISION}@{_now()}" if fresh else origin))
     queued = _inbox(dir_)
-    entries.extend((e["text"], f"{ORIGIN_REVISION}@{e.get('at') or _now()}") for e in queued)
+    entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
     if entries or foreign:
         _append_rows(root, sizing_rel, entries, drop_turns=foreign)
     if not bound:
@@ -633,7 +687,7 @@ def bind(
 
 def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
-    out_of_scope: Sequence[str] = (), note: Optional[str] = None,
+    out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -641,7 +695,12 @@ def revise(
     is a requirement and always adds a row: free text belongs in `note`. `out_of_scope` ids are deferred
     in the same register write as the revision row, the verbatim being their ruling; it needs that
     verbatim and a bound sizing; that verbatim is only the ruling's quote and adds no row, and a
-    repeated call changes nothing. Returns (ledger, run dir, the new row id or None)."""
+    repeated call changes nothing. `sender` names the peer session that sent the revision; it is
+    stamped on the row anchor (`revision@<UTC> from <sender>`) and, for a queued revision, on the
+    inbox entry. A run with no run.json yet (held, not emitted) queues a `verbatim` in its inbox,
+    which `bind` folds in, only when an engine-minted parent record lists the run id (any other
+    unknown id refuses and creates no directory); the flag and `out_of_scope` need an emitted run and refuse.
+    Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
     has_note = isinstance(note, str) and bool(note.strip())
@@ -655,7 +714,28 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     if run is None:
-        raise LedgerRefused(f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first")
+        if named or all_of_pm_ask is not None:
+            raise LedgerRefused(
+                f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
+                "(a held run takes only a verbatim revision)"
+            )
+        if not text:
+            return Ledger((), False), dir_, None
+        if not _parent_lists_run(root, run_id):
+            raise LedgerRefused(
+                f"unknown run {run_id!r}: no engine-minted parent record under scratch/warp lists it "
+                "(check the run id); nothing was held"
+            )
+        from coordinator_core.atomic_append import append_line
+
+        dir_.mkdir(parents=True, exist_ok=True)
+        entry = {"text": text, "at": _now()}
+        if _clean_sender(sender):
+            entry["from"] = _clean_sender(sender)
+        append_line(dir_ / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+        declare_write(dir_ / INBOX_FILE)
+        queued = _queued_ledger(dir_, False)
+        return queued, dir_, f"Q{len(queued.items)}"
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
     withhold = {"ids": named, "run_id": run_id, "verbatim": text} if named else None
@@ -677,12 +757,14 @@ def revise(
     elif text:
         at = _now()
         if run.get("sizing_rel"):
-            rows = _append_rows(root, run["sizing_rel"], [(text, f"{ORIGIN_REVISION}@{at}")], withhold=withhold)
+            rows = _append_rows(root, run["sizing_rel"], [(text, _revision_anchor(at, sender))], withhold=withhold)
             added = str(rows[-1].get(rr.ROW_ID)) if rows else None
         else:
             from coordinator_core.atomic_append import append_line
 
-            append_line(dir_ / INBOX_FILE, (json.dumps({"text": text, "at": at}, ensure_ascii=False) + "\n").encode("utf-8"))
+            who = _clean_sender(sender)
+            entry = {"text": text, "at": at, **({"from": who} if who else {})}
+            append_line(dir_ / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
             declare_write(dir_ / INBOX_FILE)
             added = f"Q{len(_inbox(dir_))}"
     ledger = _write_view(root, dir_, run_id)
@@ -915,15 +997,18 @@ def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str, a requirement), `note` (str, free
-    text that adds no row), `all_of_pm_ask` (bool), `out_of_scope` (list of register row ids, needs
+    text that adds no row), `from` (str, the peer session sending the revision; stamped on the
+    row), `all_of_pm_ask` (bool), `out_of_scope` (list of register row ids, needs
     `verbatim`: each is deferred with the verbatim as
     its ruling, carried open on the commit, and replied as `withheld`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
-    all_of_pm_ask, sizing, ledger, run_live}`; `item` is the new row id (`Q<n>` while a raw ask's
-    sizing is not yet minted), `run_live` is false once the run's commit token is redeemed or absent
-    (nothing will read it). A refused request replies `{"error": str}`.
+    all_of_pm_ask, sizing, ledger, run_live}` plus `warning` and `pin_drift` (the drifted row ids)
+    when the sizing's plan pinned rows the register no longer matches, and `warning` plus
+    `unclaimed_rows` when its register_claims omit register rows; `item` is the new row id
+    (`Q<n>` while a raw ask's sizing is not yet minted), `run_live` is false once the run's commit
+    token is redeemed or absent (nothing will read it). A refused request replies `{"error": str}`.
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
@@ -935,9 +1020,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         ledger, dir_, added = revise(
             root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
+            sender=params.get("from"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
+    if read_run(dir_) is None:
+        return {
+            "ok": True, "run_id": params["run_id"], "item": added, "items": len(ledger.items),
+            "all_of_pm_ask": False, "sizing": None, "ledger": None, "run_live": False, "held": True,
+            "note": "run not emitted yet: the revision is held and folds into the ledger at emit.",
+        }
     from coordinator_core.ops.dispatch_emit import run_token
 
     live = run_token.is_live(root, params["run_id"])
@@ -954,28 +1046,68 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     named = set(params.get("out_of_scope") or ())
     if named:
         out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]
+    plan_rel, drifted = pinned_plan_drift(root, ledger.sizing_rel)
+    warnings = []
+    if drifted:
+        out["pin_drift"] = drifted
+        warnings.append(
+            f"{plan_rel} pinned register row(s) {', '.join(drifted)} that this register no longer matches: "
+            "the plan will be pulled on register-pin-drift."
+        )
+    unclaimed_result = _unclaimed_rows(root, ledger.sizing_rel)
+    unclaimed_plan, unclaimed = unclaimed_result
+    if unclaimed:
+        out["unclaimed_rows"] = unclaimed
+        warnings.append(
+            f"{unclaimed_plan} omits register row(s) {', '.join(unclaimed)} in register_claims.rows: "
+            "the plan will be pulled on register-rows-unclaimed."
+        )
+    if warnings:
+        out["warning"] = " ".join(warnings) + " Re-plan against the register before the run spends further."
     if not live:
-        out.update(_refire(ledger.sizing_rel, root))
+        out.update(_refire(ledger.sizing_rel, root, unclaimed_result))
     return out
 
 
-def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:
-    """`(plan_rel, register row ids the plan's register_claims omit)` for the sizing's `plan:` edge;
-    `(None, [])` when the sizing has no readable plan claiming it. File reads only."""
+def _sizing_plan(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], Optional[Path], str]:
+    """`(plan_rel, plan path, sizing text)` for the sizing's `plan:` edge; `(None, None, "")` when
+    the sizing or its plan is unreadable. File reads only."""
     if not sizing_rel:
-        return None, []
+        return None, None, ""
     import yaml
 
     try:
         sizing_text = _sizing_path(root, sizing_rel).read_text(encoding="utf-8")
         sizing = yaml.safe_load(sizing_text)
     except (LedgerRefused, OSError, yaml.YAMLError):
-        return None, []
+        return None, None, ""
     edge = sizing.get("plan") if isinstance(sizing, dict) else None
     if not (isinstance(edge, str) and edge.strip()):
-        return None, []
+        return None, None, ""
     plan = contained_path(Path(root) / edge, [Path(root) / "docs" / "plans"])
     if plan is None or not plan.is_file():
+        return None, None, ""
+    return edge, plan, sizing_text
+
+
+def pinned_plan_drift(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:
+    """`(plan_rel, ids)` of the register rows the sizing's plan pinned (`register_claims.pins`)
+    whose text no longer matches; `(None, [])` when there is no readable plan or nothing drifted."""
+    edge, plan, _ = _sizing_plan(root, sizing_rel)
+    if plan is None:
+        return None, []
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    split = split_frontmatter(plan.read_text(encoding="utf-8", errors="replace"))
+    drift = rr.plan_pin_drift(split.fm_text, root) if split is not None else []
+    return (edge, [d["id"] for d in drift]) if drift else (None, [])
+
+
+def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:
+    """`(plan_rel, register row ids the plan's register_claims omit)` for the sizing's `plan:` edge;
+    `(None, [])` when the sizing has no readable plan claiming it. File reads only."""
+    edge, plan, sizing_text = _sizing_plan(root, sizing_rel)
+    if plan is None:
         return None, []
     from coordinator_core.roadmap.prep_gate import plan_frontmatter
 
@@ -988,13 +1120,16 @@ def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str
     return (edge, missing) if missing else (None, [])
 
 
-def _refire(sizing_rel: Optional[str], root: Optional[Path] = None) -> dict:
+def _refire(
+    sizing_rel: Optional[str], root: Optional[Path] = None,
+    unclaimed: Optional[tuple[Optional[str], list[str]]] = None,
+) -> dict:
     """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
     will. When the sizing's plan omits register rows, the refire would fire that stale plan: the
     reply names the plan-revision step first and holds the fire call as `then`."""
     from coordinator_core.warp_fire import fire_command
 
-    plan_rel, missing = _unclaimed_rows(root, sizing_rel) if root is not None else (None, [])
+    plan_rel, missing = unclaimed or (_unclaimed_rows(root, sizing_rel) if root is not None else (None, []))
     if plan_rel:
         return {
             "next": {"kind": "revise-plan", "plan": plan_rel, "rows": missing, "then": fire_command(sizing_rel)},

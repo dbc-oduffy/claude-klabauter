@@ -51,6 +51,11 @@
         "engine_build": { "type": "object" }
       }
     },
+    "blocking": {
+      "type": "array",
+      "description": "Sorted, de-duplicated keys of everything that put the verdict into judgment or pulled. Premise keys read 'premise-check: <VERDICT> <citation[:200]>'; reviewer keys read \"<reviewer>: '<verdict>'\"; other entries are the verbatim strings the op appends to its substantive or judgment list. Covered and stale premise rows never appear. Optional: two pulls compare by comparing their blocking sets.",
+      "items": { "type": "string", "maxLength": 300 }
+    },
     "reason": {
       "type": "string",
       "maxLength": 1000,

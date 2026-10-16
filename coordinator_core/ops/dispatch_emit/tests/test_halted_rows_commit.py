@@ -181,11 +181,30 @@ def test_successor_is_told_the_predecessor_halted(repo):
     from coordinator_core.hooks.submit_engine_ask import _slice_deny
 
     _halt_fixture(repo)
-    _halt_call(repo)
+    _halt_call(repo, open_rows=[{"id": "r3", "reason": "gated on DoE field"}])
 
     deny = _slice_deny(repo, (PARENT, SUCC))
 
     assert deny is not None and "halted" in deny and "has not landed" not in deny
+
+
+def test_successor_is_released_when_every_row_is_committed(repo):
+    from coordinator_core.hooks.submit_engine_ask import _slice_deny
+
+    _halt_fixture(repo)
+    out = _halt_call(repo, delivered=["r1", "r2", "r3"])
+
+    assert out["siblings"]["blocked"] == []
+    assert _slice_deny(repo, (PARENT, SUCC)) is None
+
+
+def test_an_undelivered_row_keeps_the_successor_held(repo):
+    from coordinator_core.hooks.submit_engine_ask import _slice_deny
+
+    _halt_fixture(repo)
+    _halt_call(repo)
+
+    assert _slice_deny(repo, (PARENT, SUCC)) is not None
 
 
 def test_explicit_run_id_wins_over_script_stem(repo):

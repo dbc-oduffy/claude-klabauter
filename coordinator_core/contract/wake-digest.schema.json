@@ -381,6 +381,7 @@
                           "properties": {
                             "status": { "type": "string" },
                             "observation": { "type": ["string", "null"] },
+                            "reason": { "type": ["string", "null"], "maxLength": 200 },
                             "sidecar": { "type": ["string", "null"] },
                             "completion_summary": { "type": ["string", "null"], "maxLength": 1200 },
                             "lesson_candidates": {
