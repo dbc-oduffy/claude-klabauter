@@ -134,6 +134,15 @@ def test_refuses_to_stamp_bytes_that_do_not_parse(tmp_path, broken):
     assert receipt_path.read_text(encoding="utf-8") == before
 
 
+def test_restamp_accepts_unmodified_script_with_interpolation_regex_and_backtick_class(tmp_path):
+    script_path, _ = _write_script_and_receipt(tmp_path, session_id="sess-ours")
+    script_path.write_bytes(
+        b"const a = `x ${v.replace(/'/g, '')} y`;\nconst R = /[*_`]/g;\nf([1]);\n"
+    )
+
+    assert restamp(script_path, "sess-ours")["session_id"] == "sess-ours"
+
+
 def test_regex_and_division_restamp_clean(tmp_path):
     script_path, _ = _write_script_and_receipt(tmp_path, session_id="sess-ours")
     script_path.write_bytes(

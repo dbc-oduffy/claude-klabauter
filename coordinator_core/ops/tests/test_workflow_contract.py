@@ -10,6 +10,7 @@ from coordinator_core.ops._workflow_contract import (
     check_meta_required_fields,
     check_model_default,
     check_phase_mismatch,
+    check_structure,
     extract_meta_block,
     meta_phase_titles,
     phase_titles,
@@ -630,3 +631,24 @@ def test_meta_phase_titles_ignores_a_commented_out_title():
 def test_meta_phase_titles_ignores_a_title_shaped_fragment_nested_in_detail():
     block = "phases: [{ title: \"Real\", detail: \"see title: 'Nested' for context\" }]"
     assert meta_phase_titles(block) == {"Real"}
+
+
+_INTERP_REGEX = "const a = `x ${v.replace(/'/g, '')} y`;\nconst R = /[*_`]/g;\nf([1]);\n"
+
+
+def test_check_structure_skips_regex_literal_with_quote_inside_template_interpolation():
+    assert check_structure(_INTERP_REGEX) == []
+
+
+def test_check_structure_skips_backtick_in_regex_class_inside_template_interpolation():
+    assert check_structure("const a = `${v.replace(/[`]/g, '')}`;\nf([1]);\n") == []
+
+
+def test_check_structure_still_refuses_unbalanced_bracket_after_interpolation_regex():
+    findings = check_structure(_INTERP_REGEX + "g(]);\n")
+    assert [f.code for f in findings] == ["unbalanced-bracket"]
+
+
+def test_scrub_masks_template_with_interpolation_regex_literal():
+    out = scrub("`${v.replace(/'/g, '')}`; keep")
+    assert out.endswith("; keep")

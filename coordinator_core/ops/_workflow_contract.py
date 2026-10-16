@@ -71,6 +71,25 @@ def _quoted_end(script: str, i: int, quote: str) -> int:
     return min(i, n)
 
 
+def _regex_close(script: str, j: int) -> int:
+    """Index of the `/` closing a regex literal whose body starts at `j`; a
+    line break or len(script) when unterminated. A `/` inside `[...]` does not close."""
+    n = len(script)
+    in_class = False
+    while j < n and script[j] != "\n":
+        c = script[j]
+        if c == "\\":
+            j += 1
+        elif c == "[":
+            in_class = True
+        elif c == "]":
+            in_class = False
+        elif c == "/" and not in_class:
+            break
+        j += 1
+    return min(j, n)
+
+
 def _template_end(script: str, i: int) -> int:
     """Index of the backtick closing a template literal whose body starts at
     `i` (len(script) when unterminated).
@@ -102,6 +121,9 @@ def _template_end(script: str, i: int) -> int:
                 elif c == "/" and nxt == "*":
                     j = script.find("*/", i + 2)
                     i = n if j < 0 else j + 2
+                elif c == "/" and _regex_allowed(script, i):
+                    j = _regex_close(script, i + 1)
+                    i = j + 1 if j < n and script[j] == "/" else i + 1
                 else:
                     depth += {"{": 1, "}": -1}.get(c, 0)
                     i += 1
@@ -707,18 +729,7 @@ def check_structure(script: str) -> List[Finding]:
             line += script.count("\n", i, j)
             i = j + 2
         elif ch == "/" and _regex_allowed(script, i):
-            j, in_class = i + 1, False
-            while j < n and script[j] != "\n":
-                c = script[j]
-                if c == "\\":
-                    j += 1
-                elif c == "[":
-                    in_class = True
-                elif c == "]":
-                    in_class = False
-                elif c == "/" and not in_class:
-                    break
-                j += 1
+            j = _regex_close(script, i + 1)
             if j >= n or script[j] == "\n":
                 return fail("unterminated-regex", "regex literal ends at a line break or EOF", line)
             i = j + 1
