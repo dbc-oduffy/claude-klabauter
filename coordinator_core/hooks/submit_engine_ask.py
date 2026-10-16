@@ -50,12 +50,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_su
 GUARD_NAME = "submit-engine-ask"
 SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
 
-_ARGS_SHAPE = (
-    'args: {ask: "<the PM\'s words, verbatim>"} or {sizing: "<state/sizings/x.yaml>", '
-    'writes: ["<repo-relative file>", ...]} or {asks: [{ask: "<words>", label?: "<name>", '
-    'writes?: ["<repo-relative file>", ...]}, ...], confirm_split?: true}, '
-    'optional brief: "<your directives>" (or brief_file, context: [paths])'
-)
+_ARGS_SHAPE = 'args: {ask: "<words>"} | {sizing: "<path>"} | {asks: [{ask}]}, brief: "<text>" | brief_file'
 
 EmitFn = Callable[[dict, Path], dict]
 FanoutFn = Callable[[dict, Path], dict]  # the contract's FANOUT_OP signature (ask_fanout_contract.FanoutFn)
@@ -287,7 +282,7 @@ def _default_fanout(params: dict, repo_root: Path) -> dict:
 
 
 def _refuse(text: str) -> dict:
-    return deny("PreToolUse", f"{text}\nSubmit shape: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}}).")
+    return deny("PreToolUse", f"{text}\nShape: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}}).")
 
 
 def evaluate(
@@ -304,7 +299,7 @@ def evaluate(
     if asks_refusal:
         return _refuse(asks_refusal)
     if sum(x is not None for x in (ask, sizing_rel, asks)) != 1:
-        return _refuse("The submission carries neither an ask nor a sizing nor asks, or more than one of them.")
+        return _refuse("Submit exactly one of ask, sizing, asks.")
     if asks is not None and len(asks) == 1:
         ask, asks = asks[0]["ask"], None
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
@@ -327,7 +322,7 @@ def evaluate(
     root = _repo_root(repo_arg, payload.get("cwd"))
     if root is None:
         where = repo_arg or payload.get("cwd") or "the session cwd"
-        return _refuse(f"{where} is in no git repo. Add `repo: \"<absolute repo path>\"` to args.")
+        return _refuse(f"{where} is in no git repo. Add `repo: \"<abs path>\"` to args.")
 
     if (ask is not None or asks is not None) and repo_arg is None and brief.get("ask_context"):
         root = _context_home(root, brief["ask_context"])
@@ -501,7 +496,7 @@ def sizing_scout_deny(payload: Mapping[str, Any]) -> Optional[dict]:
     if live:
         reason = f"Run {live} is already sizing; its completion is your one wake. End the turn."
     else:
-        reason = f"Sizing runs inside the ask workflow, not by hand. Submit: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})."
+        reason = f"Sizing runs in the ask workflow. Use Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})."
     return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
 
 

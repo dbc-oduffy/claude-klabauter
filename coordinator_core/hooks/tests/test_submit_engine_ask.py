@@ -253,15 +253,15 @@ def test_repo_arg_selects_the_repo_from_a_non_repo_cwd(tmp_path):
 @pytest.mark.parametrize(
     "args, cwd_inside, needle",
     [
-        ({}, True, "neither an ask nor a sizing"),
-        ({"ask": "a", "sizing": "s.yaml"}, True, "nor asks, or more than one"),
-        ({"ask": "a", "asks": [{"ask": "b"}]}, True, "nor asks, or more than one"),
+        ({}, True, "Submit exactly one of"),
+        ({"ask": "a", "sizing": "s.yaml"}, True, "Submit exactly one of"),
+        ({"ask": "a", "asks": [{"ask": "b"}]}, True, "Submit exactly one of"),
         ({"asks": [{"ask": "a"}, {"ask": "b"}], "brief": "x"}, True, "rides one run"),
         ({"asks": [{"ask": "a"}, {"ask": "b"}], "source": "relayed"}, True, "one call each"),
         ({"asks": []}, True, "non-empty list"),
         ({"asks": [{"ask": " "}]}, True, "carries no ask text"),
         ({"asks": [{"ask": "a", "writes": "x"}, {"ask": "b"}]}, True, "writes must be a list"),
-        ({"ask": "   "}, True, "neither an ask nor a sizing"),
+        ({"ask": "   "}, True, "Submit exactly one of"),
         ({"ask": "a"}, False, "in no git repo"),
     ],
 )
@@ -445,7 +445,7 @@ def test_non_repo_cwd_refusal_shows_the_repo_argument_shape(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a"}, cwd=str(outside)), emit=_Emit())
-    assert 'repo: "<absolute repo path>"' in _hso(out)["permissionDecisionReason"]
+    assert 'repo: "<abs path>"' in _hso(out)["permissionDecisionReason"]
 
 
 def test_a_repo_argument_that_is_not_a_repo_is_refused_naming_it(tmp_path):

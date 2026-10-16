@@ -1,4 +1,4 @@
-"""dispatch.terminal_commit's halted-run record-only mode: one commit of state/warp/<run_id>/ only."""
+"""dispatch.terminal_commit's halted-run mode: one commit of the record dir plus the run's candidate set."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def _status(root: Path) -> dict:
     return {line[3:]: line[:2] for line in out.splitlines()}
 
 
-def test_sizing_refusal_lands_one_record_only_commit(repo):
+def test_sizing_refusal_lands_one_commit_of_record_and_leaves_unrelated_dirt(repo):
     _write_record(repo, RUN)
     others = _dirty_elsewhere(repo)
     head = _git(["rev-parse", "HEAD"], repo).strip()
@@ -293,3 +293,94 @@ def test_peer_held_run_json_sizing_is_withheld(repo, monkeypatch):
 
     assert out["withheld"] == {"state/sizings/own.yaml": "peer-held"}
     assert "state/sizings/own.yaml" not in _landed(repo, out, "--name-only")
+
+
+def _write_graph(root: Path, run_id: str) -> None:
+    (root / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (root / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "sizings" / "g.yaml").write_text(
+        "baton: state/handoffs/g.md\nplan: docs/plans/g.md\n", encoding="utf-8"
+    )
+    (root / "state" / "handoffs" / "g.md").write_text("---\ncarried_items: []\n---\nbaton\n", encoding="utf-8")
+    (root / "docs" / "plans" / "g.md").write_text("plan\n", encoding="utf-8")
+    (root / "docs" / "plans" / "g.evidence.yaml").write_text("e: 1\n", encoding="utf-8")
+    (root / RECORD_DIR_ROOT / run_id / "run.json").write_text(
+        '{"sizing_rel": "state/sizings/g.yaml"}\n', encoding="utf-8"
+    )
+
+
+def test_halt_lands_plan_baton_sizing_and_evidence_sidecar(repo):
+    _write_record(repo, RUN)
+    others = _dirty_elsewhere(repo)
+    _write_graph(repo, RUN)
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    names = set(_landed(repo, out, "--name-only"))
+    assert {
+        "state/sizings/g.yaml", "state/handoffs/g.md", "docs/plans/g.md", "docs/plans/g.evidence.yaml",
+    } <= names
+    assert "Lands-Artifacts:" in _git(["log", "-1", "--format=%B"], repo)
+    assert "run_artifact_residue" not in out
+    assert set(_status(repo)) == others
+
+
+def test_halt_lands_superseded_predecessor_record(repo):
+    _write_record(repo, RUN)
+    _write_graph(repo, RUN)
+    old = "ask-20261015T000000-000000"
+    _write_record(repo, old, ("ask.md", "run.json"))
+    (repo / RECORD_DIR_ROOT / old / "run.json").write_text(
+        '{"sizing_rel": "state/sizings/g.yaml"}\n', encoding="utf-8"
+    )
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    names = set(_landed(repo, out, "--name-only"))
+    assert f"{RECORD_DIR_ROOT}/{old}/ask.md" in names
+    assert not [p for p in _status(repo) if p.startswith(f"{RECORD_DIR_ROOT}/")]
+
+
+def test_halt_withholds_unclaimed_docs_stage_path(repo):
+    _write_record(repo, RUN)
+    (repo / "docs" / "guide.md").write_text("edited\n", encoding="utf-8")
+
+    out = _call(repo, doc_paths=["docs/guide.md"])
+
+    assert out["withheld"] == {"docs/guide.md": "not-claimed"}
+    assert "docs/guide.md" not in _landed(repo, out, "--name-only")
+
+
+def test_halt_lands_plan_handoff_and_delivery_note_the_halt_names(repo):
+    _write_record(repo, RUN)
+    (repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "delivery").mkdir(parents=True, exist_ok=True)
+    (repo / RECORD_DIR_ROOT / RUN / "run.json").write_text(
+        '{"sizing_rel": "state/sizings/p.yaml"}\n', encoding="utf-8"
+    )
+    (repo / "state" / "sizings" / "p.yaml").write_text("a: 1\n", encoding="utf-8")
+    (repo / "state" / "sizings" / "p-slice-2.yaml").write_text("a: 2\n", encoding="utf-8")
+    (repo / "docs" / "plans" / "2026-10-16-p.md").write_text("plan\n", encoding="utf-8")
+    (repo / "docs" / "plans" / "2026-10-16-p.evidence.yaml").write_text("e: 1\n", encoding="utf-8")
+    (repo / "state" / "handoffs" / "2026-10-16-p.md").write_text(
+        "---\ncarried_items: []\n---\nbaton\n", encoding="utf-8"
+    )
+    (repo / "docs" / "delivery" / f"{RUN}.md").write_text("d\n", encoding="utf-8")
+
+    out = _call(
+        repo,
+        **{HALTED_RECORD_PARAM: {"halted": "refusal", "reason": REASON, "plan": "docs/plans/2026-10-16-p.md"}},
+    )
+
+    assert out["committed"] is True, out
+    names = set(_landed(repo, out, "--name-only"))
+    assert {
+        "docs/plans/2026-10-16-p.md", "docs/plans/2026-10-16-p.evidence.yaml",
+        "state/handoffs/2026-10-16-p.md", f"docs/delivery/{RUN}.md", "state/sizings/p-slice-2.yaml",
+    } <= names
+    assert not [p for p in _status(repo) if p.startswith(("docs/plans", "state/handoffs", "docs/delivery"))]

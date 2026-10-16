@@ -182,6 +182,57 @@ def _admission(monkeypatch):
     return notices
 
 
+@pytest.fixture(autouse=True)
+def _reaper(monkeypatch):
+    """Stub the abandoned-run reaper; tests re-patch the reply."""
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    calls = []
+    monkeypatch.setattr(
+        abandoned_runs, "_handler",
+        lambda params, repo_root=None: (calls.append(repo_root), {"ok": True, "reaped": []})[1],
+    )
+    return calls
+
+
+def test_post_close_calls_the_reaper_once_and_reports_zero(tmp_path, monkeypatch, _reaper):
+    _queue(tmp_path, legs=("post-close",))
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([]))
+    result = cb._post_close(_ctx(tmp_path))
+    assert _reaper == [tmp_path] and "reaped: 0 run(s)" in result.detail and result.status == "ran"
+
+
+def test_post_close_reports_reaped_count(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    monkeypatch.setattr(abandoned_runs, "_handler", lambda p, repo_root=None: {"ok": True, "reaped": ["a", "b"]})
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([]))
+    assert "reaped: 2 run(s)" in cb._post_close(_ctx(tmp_path)).detail
+
+
+def test_post_close_raising_reaper_fails_the_leg_after_launchers_ran(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    def boom(p, repo_root=None):
+        raise RuntimeError("x")
+
+    calls = []
+    monkeypatch.setattr(abandoned_runs, "_handler", boom)
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
+    result = cb._post_close(_ctx(tmp_path))
+    assert calls[:2] == ["structural", "scip"]
+    assert result.status == "failed" and "reap RuntimeError" in result.detail
+
+
+def test_post_close_not_ok_reaper_reply_names_its_error(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    monkeypatch.setattr(abandoned_runs, "_handler", lambda p, repo_root=None: {"ok": False, "error": "status failed"})
+    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([]))
+    result = cb._post_close(_ctx(tmp_path))
+    assert result.status == "failed" and "reap status failed" in result.detail
+
+
 def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path, monkeypatch):
     calls = []
     stub = _chain_stub(calls, [_verdict("dlv-x", True), _verdict("dlv-x", True)])

@@ -30,19 +30,22 @@ Negative-spec:
   - Does NOT compare head_sha: peers commit to the shared branch mid-run.
     Only the branch NAME is checked (detached, unreadable, or differing from
     the marker's ``expected_branch`` refuses before any write).
-  - Carries exactly one undeclared file: the ``state/sizings/`` sizing the
-    plan (or minted spine) cites as ``sizing_object:``, which the ask arm
-    rewrites mid-run; an ask run's stamp commit also carries the
-    ``state/handoffs/`` baton that sizing names as ``baton:``. Never for an
-    anchor-only run, never outside those dirs.
+  - Lands the run's candidate set (``run_artifacts.candidate_paths``: record dir, cited sizing,
+    baton, plan, evidence and seam sidecars, delivery note, slice sizings, superseded predecessors'
+    record dirs, the docs stage's ``doc_paths``) beside the declared writes, each only when dirty,
+    not gitignored and not held by a live peer's claim; a withheld path is named in
+    ``run_artifacts.withheld`` and the commit proceeds. The sizing and an ask run's plan rewritten
+    after the product commit ride the stamp commit. A candidate still dirty afterwards sets
+    ``ok: false`` and ``run_artifact_residue``. Never for an anchor-only run; the pathspec is never
+    widened to the dirty tree.
   - A warp ask run (its script carries the ask-run-manifest marker) lands
-    PRODUCT plus its record directory: its declared writes, including the stage's
+    PRODUCT plus its candidate set: its declared writes, including the stage's
     ``docs`` chunk (the delivery note and the cited sizing's
     ``doc_consumers``/``ask_conflicts``), under the same in-scope and
     ``undeclared_dirty`` test as every code row, and the changed files in
     ``state/warp/<run_id>/`` (nothing from an in-flight run's ``scratch/warp``
     directory), plus its own ``docs/delivery/<run_id>.md`` when that file is on disk
-    (declared by no chunk). The commit takes no caller-named doc list. When its plan is stageable (set, not gitignored) a second,
+    (declared by no chunk). ``params.doc_paths`` is a candidate list only. When its plan is stageable (set, not gitignored) a second,
     plan-only stamp commit lands the plan, completion entry and shipped sizing; a
     gitignored plan keeps the stamps on disk and the run makes one commit. Sidecars and
     completion receipts stay on disk (receipts under ``.coordinator-local/``) and are
@@ -58,8 +61,8 @@ Negative-spec:
     every return where none landed (an error, a refusal, nothing to commit, an
     exception before commit_v2 returned) releases it for a retry.
   - A call whose ``halted_by`` is a dict with a ``halted`` kind is a halted run's record-only
-    commit (``halted_record_commit``): it lands only the changed top-level files of
-    ``state/warp/<run_id>/`` in one commit_v2 call, the halt in the message. It never consumes
+    commit (``halted_record_commit``): it lands the run's candidate set in one commit_v2
+    call, the halt in the message. It never consumes
     the run token (redeems, then releases) and is not a delivery: no receipt, sizing ship, plan
     stamp or close job.
   - A call whose ``fanout`` is ``{plans: [...]}`` is a roadmap run's record commit
@@ -153,6 +156,7 @@ _PARAM_FIELDS = (
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
+    Field("doc_paths", "str_list"),
 )
 
 _PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
@@ -1153,6 +1157,37 @@ def _undo_archive(archived: list) -> None:
                 os.replace(move.dst, move.src)
         except OSError:
             continue
+
+
+#: Artifact classes the product commit carries; ``sizing`` rides the stamp commit (it is rewritten after
+#: the product commit), ``plan`` only for an ask run (a plan-route DAG run stamps its plan itself).
+_PRODUCT_ARTIFACT_CLASSES = frozenset({
+    "record-dir", "evidence-sidecar", "seam-sidecar", "baton", "slice-sizing",
+    "superseded-record", "docs-stage", "delivery-note",
+})
+
+
+def _differs_from_commit(worktree_root: Path, sha: str, rel: str) -> bool:
+    """True when ``rel`` exists on disk and its content is not the blob ``sha`` holds for it.
+
+    In-process (no spawn); a CRLF working copy of an LF blob counts as equal.
+    """
+    import hashlib
+
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import _blob_at_commit
+
+    try:
+        data = (worktree_root / rel).read_bytes()
+    except OSError:
+        return False
+    head = _blob_at_commit(resolve_git_common_dir(worktree_root), sha, rel)
+    if not isinstance(head, str):
+        return True
+    for body in (data, data.replace(b"\r\n", b"\n")):
+        if hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest() == head:
+            return False
+    return True
 
 
 def _tracked_at_head(worktree_root: Path, rels: list) -> list:
@@ -3142,6 +3177,7 @@ def _terminal_commit_inner(
                 review_record_error = f"review rows not written: {exc}"
 
     companions: list = []
+    cited_sizing: Optional[str] = None
     if not anchor_only:
         cited_sizing = _cited_sizing(worktree_root, request.plan_path)
         if cited_sizing is not None:
@@ -3170,16 +3206,53 @@ def _terminal_commit_inner(
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
             _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review)
+    from coordinator_core.ops.dispatch_emit import run_artifacts
+
+    art_run_id = ask_run_dir.name if ask_run_dir is not None else params.get("run_id")
+    artifacts: Optional[run_artifacts.RunArtifacts] = None
+    if not anchor_only and isinstance(art_run_id, str) and art_run_id:
+        artifacts = run_artifacts.candidate_paths(
+            worktree_root, art_run_id, sizing_rel=cited_sizing, plan_rel=request.plan_path,
+            doc_paths=params.get(run_artifacts.DOC_PATHS_PARAM) or (),
+        )
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
         + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
         + companions
-        + ([ask_note_rel] if ask_note_rel else []),
+        + ([ask_note_rel] if ask_note_rel else [])
+        + (list(artifacts.paths()) if artifacts is not None else []),
         [prefix for c in request.chunks for prefix in c.prefixes]
-        + ([record_dir_rel] if record_dir_rel else []),
+        + ([record_dir_rel] if record_dir_rel else [])
+        + (list(artifacts.record_dirs) + [RECORD_DIR_ROOT] if artifacts is not None else []),
         _scope_pathspecs(request),
     )
+    art_landable: Optional[run_artifacts.Landable] = None
+    if artifacts is not None and snapshot is not None:
+        from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+        live_ids = {
+            str(rec["run_id"]) for rec in abandoned_runs._token_records(worktree_root)
+            if isinstance(rec.get("run_id"), str)
+        }
+        artifacts = artifacts.with_superseded(
+            run_artifacts.superseded_runs(
+                worktree_root, art_run_id, cited_sizing or next(iter(artifacts.by_class.get("sizing", ())), None),
+                snapshot.changed, live_run_ids=live_ids,
+            ),
+            RECORD_DIR_ROOT,
+        )
+        art_landable = run_artifacts.landable(
+            worktree_root, artifacts, snapshot.changed, snapshot.ignored_among(list(artifacts.paths())),
+            session_id=session_id,
+        )
+        art_classes = _PRODUCT_ARTIFACT_CLASSES | ({"plan"} if product_only else frozenset())
+        art_landable = run_artifacts.Landable(
+            present=tuple(p for p in art_landable.present if artifacts.class_of(p) in art_classes),
+            deleted=tuple(p for p in art_landable.deleted if artifacts.class_of(p) in art_classes),
+            withheld=art_landable.withheld,
+            contest_unknown=art_landable.contest_unknown,
+        )
 
     known_ids = {chunk.id for chunk in request.chunks}
     unsent_memos = _memo_rows_without_receipt(worktree_root, request)
@@ -3287,15 +3360,17 @@ def _terminal_commit_inner(
             )
         return reply
 
-    if not all_paths:
+    art_has_landing = art_landable is not None and bool(art_landable.present or art_landable.deleted)
+    if not all_paths and not art_has_landing:
         if close_ctx is not None:
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    if not anchor_only and not product_only:
+    if not anchor_only and artifacts is None:
         for companion in companions:
             if companion not in all_paths:
                 all_paths.append(companion)
+    if not (anchor_only or product_only):
         for seam_rel in _seam_sidecars(
             worktree_root, request.plan_path, [c.id for c in done_chunks + partial_chunks]
         ):
@@ -3338,6 +3413,11 @@ def _terminal_commit_inner(
         dropped_absent = list(absent_from_head)
         removed = set(dropped_absent) | set(deleted_paths)
         all_paths = [p for p in all_paths if p not in removed]
+
+    if art_landable is not None:
+        all_paths.extend(p for p in art_landable.present if p not in all_paths)
+        deleted_paths = sorted(set(deleted_paths) | set(art_landable.deleted))
+        all_paths = [p for p in all_paths if p not in deleted_paths]
 
     if not all_paths and not deleted_paths:
         if close_ctx is not None:
@@ -3625,10 +3705,20 @@ def _terminal_commit_inner(
                 reply.get("review_receipt"),
                 register_sizing,
                 shipped_sizing,
-                # The baton rides the stamp commit with the sizing; not a product-commit member.
-                ask_baton if product_only and shipped_sizing else None,
             ) if p
         )
+        late_rewrites: list = []
+        if artifacts is not None:
+            sizings = [*artifacts.by_class.get("sizing", ()), *([ledger.sizing_rel] if ledger is not None and ledger.sizing_rel else [])]
+            plans = [request.plan_path] if product_only and request.plan_path else []
+            sha_now = str(reply["sha"])
+            late_rewrites = [
+                p for p in dict.fromkeys([*sizings, *plans])
+                if p not in also_commit and p not in scope["landed"]
+                and not (snapshot is not None and snapshot.ignored_among([p]))
+                and _differs_from_commit(worktree_root, sha_now, p)
+            ]
+            also_commit += tuple(late_rewrites)
         paying_close = close_ctx is not None and close_ctx["applies"]
         if close_ctx is not None:
             prep = inline_review.get("prep")
@@ -3665,7 +3755,7 @@ def _terminal_commit_inner(
             and snapshot is not None
             and not snapshot.ignored_among([request.plan_path])
         )
-        stamp_commit = bool(shipped_sizing) or plan_commits
+        stamp_commit = bool(shipped_sizing) or plan_commits or bool(late_rewrites)
         reply.update(
             _stamp_coded_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
@@ -3744,6 +3834,27 @@ def _terminal_commit_inner(
                 reply["error"] = (
                     "commit landed but requested path(s) are still dirty or untracked: "
                     + ", ".join(bad)
+                    + ". The run token is spent: commit them through ceremony.commit_v2"
+                )
+        if artifacts is not None:
+            landed_now = (
+                set(all_paths) | set(deleted_paths) | set(scope.get("landed", ()))
+                | set(reply.get("archived") or ())
+            )
+            withheld_art = dict(art_landable.withheld) if art_landable is not None else {}
+            art_residue = run_artifacts.residue(
+                artifacts, snapshot.changed if snapshot is not None else (), landed_now, withheld_art,
+            )
+            reply["run_artifacts"] = {
+                "landed": sorted(p for p in artifacts.paths() if p in landed_now),
+                "withheld": dict(sorted(withheld_art.items())),
+            }
+            if art_residue:
+                reply["run_artifact_residue"] = art_residue
+                reply["ok"] = False
+                reply["error"] = (
+                    "run artifact(s) still dirty after the commit: "
+                    + ", ".join(f"{p} ({cls})" for p, cls in art_residue.items())
                     + ". The run token is spent: commit them through ceremony.commit_v2"
                 )
     reply["receipts"] = receipt_paths

@@ -110,7 +110,7 @@ def test_in_run_commit_composes_docs_in_the_verify_agent_then_commit_before_the_
     assert "agentType: 'coordinator:git-commit-agent'" in opts and "model: 'haiku'" in opts
     assert "a.runToken" in script and "_RUN_TOKEN = \"" not in script and "_RUN_TOKEN = '" not in script
     assert not re.search(r"[0-9a-f]{32,}", script)
-    assert "run_token: _RUN_TOKEN" in script and "doc_paths" not in script.split("phase('commit')")[1]
+    assert "run_token: _RUN_TOKEN" in script and "doc_paths" in script.split("phase('commit')")[1]
     # The docs stage edits only the stage's declared doc writes.
     assert "JSON.stringify(_manifest.doc_writes ?? [])" in script
     assert "_nextAction = { kind: 'close_job', op: null," in script

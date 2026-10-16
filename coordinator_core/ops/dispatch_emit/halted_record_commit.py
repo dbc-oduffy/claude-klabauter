@@ -1,8 +1,10 @@
-"""The halted-run record-only commit: ``dispatch.terminal_commit`` given ``halted_by``.
+"""The halted-run commit: ``dispatch.terminal_commit`` given ``halted_by``.
 
 A halted engine-ask run leaves its ``state/warp/<run_id>/`` record directory behind; this lands it
-as one ``ceremony.commit_v2`` call carrying that directory's top-level files, the declared writes
-of every chunk the run finished, and the halt reason in the message. A finished chunk's tracked
+as one ``ceremony.commit_v2`` call carrying that directory's top-level files, the run's
+``run_artifacts`` candidate set (sizing, baton, plan, evidence sidecar, slice sizings, superseded
+record dirs, claimed docs-stage paths), the declared writes of every chunk the run finished, and
+the halt reason in the message. Candidates are named paths, never the dirty tree. A finished chunk's tracked
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
 is withheld and named. With no finished chunk the commit is record-only. No receipt, sizing ship,
 plan stamp or close job runs, and the run token is redeemed then always released: a halt never
@@ -15,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.ops.dispatch_emit import run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -166,6 +169,16 @@ def _settle_ledger_pointer(repo_root: Path, run_id: str, halted: dict, sizing_re
     write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, blocking))
 
 
+def _live_run_ids(repo_root: Path) -> list:
+    """Run ids holding a live or claimed token; a read failure names none."""
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    try:
+        return [r["run_id"] for r in abandoned_runs._token_records(repo_root)]
+    except Exception:
+        return []
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -202,9 +215,24 @@ def _land(
 
     if (worktree_root / record_dir_rel).is_dir():
         write_halt_marker(worktree_root / record_dir_rel, halted=halted["halted"], sizing_rel=sizing_rel)
-    snapshot = _worktree_snapshot(worktree_root, declared, [record_dir_rel], [])
+    raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
+    artifacts = run_artifacts.candidate_paths(
+        worktree_root, run_id,
+        sizing_rel=sizing_rel,
+        plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
+        doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
+    )
+    snapshot = _worktree_snapshot(
+        worktree_root, declared + list(artifacts.paths()), [record_dir_rel, RECORD_DIR_ROOT], []
+    )
     if snapshot is None:
         return _error(f"git status over {record_dir_rel} failed", **base)
+    artifacts = artifacts.with_superseded(
+        run_artifacts.superseded_runs(
+            worktree_root, run_id, sizing_rel, snapshot.changed, live_run_ids=_live_run_ids(repo_root)
+        ),
+        RECORD_DIR_ROOT,
+    )
     paths, deleted = record_dir_changes(worktree_root, record_dir_rel, snapshot.changed)
 
     product: list = []
@@ -223,6 +251,32 @@ def _land(
     landed_chunks = sorted({owner[p] for p in product + gone if p in owner})
     paths = paths + product
     deleted = deleted + gone
+
+    handled = set(paths) | set(deleted) | set(declared) | set(withheld)
+    own_record = {p for p in artifacts.paths() if artifacts.class_of(p) == "record-dir"}
+    extra_artifacts = run_artifacts.landable(
+        worktree_root,
+        run_artifacts.RunArtifacts(
+            run_id=run_id,
+            by_class={
+                cls: tuple(p for p in ps if p not in handled and p not in own_record)
+                for cls, ps in artifacts.by_class.items()
+            },
+            record_dirs=artifacts.record_dirs,
+            root=artifacts.root,
+        ),
+        snapshot.changed, (), session_id=session_id,
+    )
+    withheld.update(extra_artifacts.withheld)
+    art_paths = list(extra_artifacts.present)
+    art_deleted = list(extra_artifacts.deleted)
+    paths = paths + art_paths
+    deleted = deleted + art_deleted
+    landed_classes: dict = {}
+    for p in art_paths + art_deleted:
+        cls = artifacts.class_of(p)
+        if cls:
+            landed_classes[cls] = landed_classes.get(cls, 0) + 1
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
         return {
@@ -233,13 +287,15 @@ def _land(
     message = halted_record_message(run_id, halted)
     if landed_chunks:
         message += "\nLands-Chunks: " + ", ".join(landed_chunks)
+    if landed_classes:
+        message += "\nLands-Artifacts: " + ", ".join(f"{c}={n}" for c, n in sorted(landed_classes.items()))
     if deleted:
         message += "\nRemoves: " + ", ".join(deleted)
     commit_params: dict = {"paths": paths, "message": message}
     if deleted:
         commit_params["deleted_paths"] = deleted
         commit_params["declared_reverts"] = deleted
-    if product:
+    if product or art_paths:
         commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
     if session_id is not None:
         commit_params["session_id"] = session_id
@@ -249,9 +305,15 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
+    extra: dict = {}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
-    extra: dict = {}
+        left = run_artifacts.residue(
+            artifacts, set(snapshot.changed) - set(paths) - set(deleted), paths + deleted, withheld
+        )
+        if left:
+            extra["run_artifact_residue"] = left
+    extra["run_artifacts"] = {"landed": sorted(paths + deleted), "withheld": withheld}
     if landed_chunks:
         extra["landed_chunks"] = landed_chunks
     if withheld:

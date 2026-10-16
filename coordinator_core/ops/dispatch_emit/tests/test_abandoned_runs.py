@@ -42,7 +42,7 @@ def test_path_outside_record_root_ignored():
 
 
 def test_young_run_not_abandoned():
-    young = NOW - run_token.TTL_SECONDS + 10
+    young = NOW - ar.TOKENLESS_QUIET_SECONDS + 10
     assert ar.abandoned_run_ids({f"{ROOT}/a/x.json"}, set(), ROOT, {"a": young}, NOW) == []
 
 
@@ -58,6 +58,45 @@ def test_message_carries_halted_by_abandoned():
     msg = ar.reap_message(["a", "b"])
     assert "Halted-By: abandoned" in msg
     assert "a, b" in msg.splitlines()[0]
+
+
+QUIET_OLD = NOW - ar.QUIET_SECONDS - 10
+QUIET_YOUNG = NOW - ar.QUIET_SECONDS + 10
+
+
+def test_superseded_run_ended_inside_ttl_after_quiet_floor():
+    changed = {f"{ROOT}/a/x.json", f"{ROOT}/b/x.json"}
+    mt = {"a": QUIET_OLD, "b": QUIET_YOUNG}
+    assert ar.abandoned_run_ids(changed, set(), ROOT, mt, NOW, later_stamp_of={"a": "z", "b": "z"}) == ["a"]
+
+
+def test_halt_marked_run_ended_after_quiet_floor():
+    changed = {f"{ROOT}/a/x.json"}
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_OLD}, NOW, halted={"a"}) == ["a"]
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_YOUNG}, NOW, halted={"a"}) == []
+
+
+def test_late_written_run_ended_after_quiet_floor():
+    changed = {f"{ROOT}/a/x.json"}
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_OLD}, NOW, late_written={"a"}) == ["a"]
+
+
+def test_tokenless_run_ended_only_after_tokenless_quiet_floor():
+    changed = {f"{ROOT}/a/x.json"}
+    old = NOW - ar.TOKENLESS_QUIET_SECONDS - 10
+    young = NOW - ar.TOKENLESS_QUIET_SECONDS + 10
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": QUIET_OLD}, NOW) == []
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": young}, NOW) == []
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": old}, NOW) == ["a"]
+    assert ar.abandoned_run_ids(changed, {"a"}, ROOT, {"a": old}, NOW) == []
+
+
+def test_live_run_stays_even_when_superseded_halted_and_late():
+    out = ar.abandoned_run_ids(
+        {f"{ROOT}/a/x.json"}, {"a"}, ROOT, {"a": QUIET_OLD}, NOW,
+        later_stamp_of={"a": "z"}, halted={"a"}, late_written={"a"},
+    )
+    assert out == []
 
 
 # --- the op over a tmp repo -------------------------------------------------------------
@@ -179,6 +218,151 @@ def test_dry_run_commits_nothing(repo):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
+MID_AGE = ar.QUIET_SECONDS + 300
+assert MID_AGE < run_token.TTL_SECONDS
+
+FOO_SIZING = "state/sizings/foo.yaml"
+FOO_BATON = "state/handoffs/foo-baton.md"
+FOO_PLAN = "docs/plans/foo.md"
+FOO_EVIDENCE = "docs/plans/foo.evidence.yaml"
+FOO_OLD = "warp-foo-20261001T000000-aaaaaa"
+FOO_NEW = "warp-foo-20261001T000100-bbbbbb"
+
+
+def _write(root: Path, rel: str, text: str = "x\n") -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _foo_graph(root: Path) -> None:
+    _write(root, FOO_SIZING, f"baton: {FOO_BATON}\nplan: {FOO_PLAN}\n")
+    _write(root, FOO_BATON, "---\ncarried_items: []\n---\nbaton\n")
+    for rel in (FOO_PLAN, FOO_EVIDENCE):
+        _write(root, rel)
+
+
+@pytest.fixture
+def bare(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.com"], root)
+    _git(["config", "user.name", "t"], root)
+    _write(root, "seed.txt", "seed\n")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    return root
+
+
+def _committed_names(root: Path) -> set[str]:
+    return set(_git(["show", "--name-only", "--format=", "HEAD"], root).split())
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_superseded_run_reaped_inside_ttl_with_baton_plan_and_evidence(bare):
+    _foo_graph(bare)
+    _record(bare, FOO_OLD, age=MID_AGE, sizing=FOO_SIZING)
+    _record(bare, FOO_NEW, age=60, sizing=FOO_SIZING)
+
+    out = _reap(bare)
+
+    assert out["ok"] is True, out.get("error")
+    assert out["reaped"] == [FOO_OLD]
+    assert set(out["artifacts"][FOO_OLD]) == {FOO_SIZING, FOO_BATON, FOO_PLAN, FOO_EVIDENCE}
+    assert _committed_names(bare) == {
+        f"state/warp/{FOO_OLD}/{f}" for f in ("ask.md", "run.json")
+    } | {FOO_SIZING, FOO_BATON, FOO_PLAN, FOO_EVIDENCE}
+    assert f"state/warp/{FOO_NEW}/ask.md" in _porcelain(bare)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_halt_marked_run_reaped_inside_ttl(bare):
+    _record(bare, FOO_OLD, age=MID_AGE)
+    marker = bare / "state" / "warp" / FOO_OLD / "halted.json"
+    marker.write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    os.utime(marker, (time.time() - MID_AGE,) * 2)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [FOO_OLD]
+    assert f"state/warp/{FOO_OLD}/halted.json" in _committed_names(bare)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_unmarked_unsuperseded_run_inside_ttl_waits(bare):
+    _record(bare, FOO_OLD, age=MID_AGE)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [] and out["committed_sha"] is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_late_modified_tracked_requirements_reaped_inside_ttl(bare):
+    _record(bare, FOO_OLD, age=MID_AGE)
+    req = bare / "state" / "warp" / FOO_OLD / "requirements.md"
+    req.write_text("one\n", encoding="utf-8")
+    _git(["add", "."], bare)
+    _git(["commit", "-q", "-m", "run commit"], bare)
+    req.write_text("two\n", encoding="utf-8")
+    os.utime(req, (time.time() - MID_AGE,) * 2)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [FOO_OLD]
+    assert _committed_names(bare) == {f"state/warp/{FOO_OLD}/requirements.md"}
+    assert _porcelain(bare) == set()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_live_token_halted_run_is_skipped(bare):
+    _record(bare, FOO_OLD, age=MID_AGE)
+    marker = bare / "state" / "warp" / FOO_OLD / "halted.json"
+    marker.write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    os.utime(marker, (time.time() - MID_AGE,) * 2)
+    run_token.mint(bare, FOO_OLD, SCRIPT, session_id="s")
+
+    assert _reap(bare)["reaped"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_claimed_token_superseded_run_is_skipped(bare):
+    _foo_graph(bare)
+    _record(bare, FOO_OLD, age=MID_AGE, sizing=FOO_SIZING)
+    _record(bare, FOO_NEW, age=60, sizing=FOO_SIZING)
+    token = run_token.mint(bare, FOO_OLD, SCRIPT)
+    assert run_token.redeem(bare, FOO_OLD, token, SCRIPT)
+
+    assert _reap(bare)["reaped"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_peer_held_baton_is_skipped_and_named(bare, monkeypatch):
+    from coordinator_core.session import scope
+
+    _foo_graph(bare)
+    _record(bare, FOO_OLD, age=MID_AGE, sizing=FOO_SIZING)
+    _record(bare, FOO_NEW, age=60, sizing=FOO_SIZING)
+    monkeypatch.setattr(
+        scope, "contested_by_live_peers",
+        lambda paths, sid, cwd=None: {p: ["peer"] if p == FOO_BATON else [] for p in paths},
+    )
+
+    out = _reap(bare, session_id="11111111-1111-4111-8111-111111111111")
+
+    assert FOO_BATON not in _committed_names(bare)
+    assert {"run_id": FOO_OLD, "reason": "peer-held", "path": FOO_BATON} in out["skipped"]
+    assert FOO_BATON in _porcelain(bare)
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_spawn_count_with_and_without_candidates(repo, monkeypatch):
@@ -199,3 +383,33 @@ def test_spawn_count_with_and_without_candidates(repo, monkeypatch):
 
     assert len(spawns) == 1
     assert with_candidates <= LIMIT_WITH_CANDIDATES, with_candidates
+
+
+def test_token_activity_window_decides_whether_a_token_is_live():
+    now = 1_000_000.0
+    fresh = {"run_id": FOO_NEW, "minted_at": now - 60}
+    stale = {"run_id": FOO_NEW, "minted_at": now - ar.TOKENLESS_QUIET_SECONDS - 60}
+    assert ar._token_active(Path("."), fresh, {}, now) is True
+    assert ar._token_active(Path("."), stale, {}, now) is False
+    assert ar._token_active(Path("."), stale, {FOO_NEW: now - 60}, now) is True
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_dead_token_does_not_hold_the_sizing(bare):
+    _foo_graph(bare)
+    _record(bare, FOO_OLD, age=MID_AGE, sizing=FOO_SIZING)
+    _record(bare, FOO_NEW, age=ar.TOKENLESS_QUIET_SECONDS + 600, sizing=FOO_SIZING)
+    run_token.mint(bare, FOO_NEW, SCRIPT, sizing_rel=FOO_SIZING)
+    path = run_token._record_path(bare, FOO_NEW)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["minted_at"] = time.time() - ar.TOKENLESS_QUIET_SECONDS - 600
+    path.write_text(json.dumps(record), encoding="utf-8")
+    old = record["minted_at"]
+    os.utime(path, (old, old))
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [FOO_OLD]
+    assert FOO_SIZING in out["artifacts"][FOO_OLD]
+    assert not [s for s in out["skipped"] if s.get("reason") == "sizing-held-by-live-token"]

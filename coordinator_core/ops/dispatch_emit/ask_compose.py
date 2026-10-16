@@ -287,7 +287,12 @@ _COMMIT_SCHEMA = _obj(
         "close": {"type": ["object", "null"]},
         "fanout": {"type": ["object", "null"]},
         "siblings": {"type": ["object", "array", "null"]},
+        "run_artifacts": {"type": ["object", "null"]},
+        "run_artifact_residue": {"type": ["object", "null"]},
     },
+)
+_DOC_PATHS_JS = (
+    "(typeof _docs !== 'undefined' && _docs && Array.isArray(_docs.doc_paths)) ? _docs.doc_paths : []"
 )
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
@@ -2363,9 +2368,9 @@ def _append_docs_and_commit(
 ) -> None:
     """The run's commit stage, under a live terminal-commit `_nextAction` and no halt: a
     git-commit-agent running `dispatch.terminal_commit` with the run token. The docs were written
-    earlier, by the verify agent. The commit lands product only: plans, sizings,
-    briefs and sidecars are process records it never carries, and a doc no chunk declares stays
-    out as `undeclared_dirty`. A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run
+    earlier, by the verify agent. The commit lands the product plus the run's
+    run_artifacts candidate set; the docs stage's `doc_paths` ride the params block.
+    A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run
     only when its `fire` list (the sibling slices the close released) is empty.
 
     Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
@@ -2432,9 +2437,12 @@ def _commit_stage_call(*, head: str, anchor: str, repo_root: str, run_id: str) -
         "request, so no `paths` array is owed.\n\n",
         f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
-        "js:_terminalCommitParamsBlock({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN })",
-        "\n\nReturn from its JSON reply committed, sha, error, refused, sizing_shipped, close, fanout and "
-        "siblings, verbatim (null where absent). Run nothing else.",
+        "js:_terminalCommitParamsBlock({ ..._nextAction.params, run_id: _runId, run_token: _RUN_TOKEN, "
+        f"doc_paths: {_DOC_PATHS_JS} }})",
+        "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
+        "one command and return its reply.\n\nReturn from its JSON reply committed, sha, error, refused, "
+        "sizing_shipped, close, fanout, siblings, run_artifacts and run_artifact_residue, verbatim (null "
+        "where absent). Run nothing else.",
     )
     # Stays its own agent: a commit is denied to every agent but git-commit-agent
     # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
@@ -2448,7 +2456,7 @@ def _halt_record_commit_fn(
     *, head: str, anchor: str, script_path: Optional[str], repo_root: object, run_id: str
 ) -> str:
     """`async function _commitHaltRecord()`: a git-commit-agent runs `dispatch.terminal_commit` in
-    `halted_by` mode, landing only `state/warp/<run_id>/`. Declared among the script's hoisted
+    `halted_by` mode, landing the run record dir plus the run_artifacts candidate set. Declared among the script's hoisted
     helpers so the commit stage's own label scan sees one `commit` agent after the tail.
 
     Trap: the command stays one bare `coordinator-invoke` segment, as in the commit stage, and the
@@ -2464,9 +2472,10 @@ def _halt_record_commit_fn(
         f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
-        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted }})",
-        "\n\nReturn from its JSON reply committed, sha, error and refused, verbatim (null where "
-        "absent). Run nothing else.",
+        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS} }})",
+        "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
+        "one command and return its reply.\n\nReturn from its JSON reply committed, sha, error, refused, "
+        "run_artifacts and run_artifact_residue, verbatim (null where absent). Run nothing else.",
     )
     call = _agent(
         prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,

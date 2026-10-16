@@ -214,13 +214,33 @@ def _post_close(ctx: JobContext) -> LegResult:
     except Exception as exc:  # the review leg then reads failed at the deadline
         problems.append(f"close.review {type(exc).__name__}")
     chain_note = _chain_closure_note(ctx, problems)
+    reap_note = _reap_note(ctx, problems)
     detail = f"launched: {', '.join(launched) or 'none'}"
     if deferred:
         detail += f"; deferred: {', '.join(deferred)}"
-    detail += f"; {chain_note}"
+    detail += f"; {chain_note}; {reap_note}"
     if problems:
         detail += f"; failed: {', '.join(problems)}"
     return LegResult("failed" if problems else "ran", run_close.scrub_detail(detail))
+
+
+def _reap_note(ctx: JobContext, problems: list[str]) -> str:
+    """Run the abandoned-run reaper in-process, last; a raise or ``ok: false`` is appended to
+    ``problems`` as ``reap <reason>`` and never stops the leg. Trap: the leg carries no session id, so
+    the reaper's peer-claim withhold does not run here."""
+    try:
+        from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+        reply = abandoned_runs._handler({}, repo_root=ctx.root)
+    except Exception as exc:
+        problems.append(f"reap {type(exc).__name__}")
+        return "reaped: not run"
+    if not isinstance(reply, dict) or not reply.get("ok"):
+        reason = reply.get("error", "not ok") if isinstance(reply, dict) else "bad reply"
+        problems.append(f"reap {reason}")
+        return "reaped: not run"
+    reaped = reply.get("reaped") or []
+    return f"reaped: {len(reaped)} run(s)"
 
 
 def _chain_closure_note(ctx: JobContext, problems: list[str]) -> str:
