@@ -458,6 +458,13 @@ _AGENT_MODELS = {
     "coordinator:code-reviewer": "sonnet",
     "coordinator:delivery-verifier": "sonnet",
     "coordinator:staff-eng": "opus",
+    "coordinator:senior-front-end": "opus",
+    "coordinator:eng-director": "opus",
+    "coordinator:staff-ux": "opus",
+    "coordinator:staff-data-sci": "opus",
+    "coordinator:vp-product": "opus",
+    "coordinator:overengineering-reviewer": "opus",
+    "coordinator:subtractive-adjudicator": "opus",
 }
 
 
