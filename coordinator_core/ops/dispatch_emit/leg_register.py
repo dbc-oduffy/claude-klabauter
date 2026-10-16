@@ -112,7 +112,16 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("emit", "chatty-survey", "surveys the chatty roster"),
     _earns("emit", "chatty-summary", "summarises the chatty run"),
     _earns("emit", "continue:", "continues a chatty executor"),
-    LegDecl("emit", "checkpoint-push:", LegClass.OVER_MODELLED, "one git push on an executor-tier model"),
+    _earns(
+        "emit", "verify",
+        "runs the plan's scoped tests, then rules the exit criterion in one agent on the judge's type, "
+        "absorbing the serial test:terminal and exit-criterion-judge legs of the judge arm",
+    ),
+    _earns("emit", "test:terminal", "runs the plan's scoped tests once, after every wave, and reports"),
+    _earns("emit", "review:coordinator:test-runner", "freezes the diff, runs tests and reports"),
+    _earns("emit", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),
+    _earns("emit", "review:coordinator:exit-criterion-judge", "rules whether the plan's exit criterion is met"),
+    _earns("emit", "review:general-purpose", "reviews the diff as a general reviewer"),
     _floor("emit", "run-base", "first step of the script: git rev-parse HEAD, no agent precedes it"),
     _floor("emit", "commit:wave-", _COMMIT_FLOOR),
     *_review_legs("emit", prep=_earns("emit", "review:coordinator:review-prep", "multi-step review prep")),

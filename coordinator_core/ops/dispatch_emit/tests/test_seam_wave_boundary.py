@@ -195,7 +195,6 @@ _HARNESS = textwrap.dedent(
       calls.push(label);
       if (label.startsWith('commit:')) return commitReply;
       if (label.startsWith('seam:')) { seamParams.push(prompt); return reply; }
-      if (label.startsWith('checkpoint-push')) return { pushed: true };
       return label.startsWith('work:') ? 'DONE: ok' : null;
     };
     const body = src + '\\nreturn { notStarted: _notStarted, drift: _seamDrift, haltedPlans: [..._haltedPlans], failures: _seamFailures };';
@@ -222,7 +221,9 @@ def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED) ->
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
-    head = script.split("  await Promise.all(_checkpointPushes);", 1)[0]
+    anchor = "  await _commitChain;\n"
+    assert script.count(anchor) == 1, "wave-commit settle line moved: re-anchor the harness split"
+    head = script.split(anchor, 1)[0] + anchor
     # LF pinned: the harness strips `meta` by a `\n};\n` regex that CRLF defeats on Windows.
     (tmp_path / "script.mjs").write_text(head, encoding="utf-8", newline="\n")
     (tmp_path / "harness.mjs").write_text(_HARNESS, encoding="utf-8", newline="\n")

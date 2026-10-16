@@ -21,9 +21,9 @@ def test_halt_sits_between_the_review_and_the_test_ledger_and_commit_stages():
 
     assert script.count(_HALT) == 1
     halt_at = script.index(_HALT)
-    assert script.index("phase('review')") < halt_at
-    assert halt_at < script.index("phase('Scoped test run')")
-    assert halt_at < script.index("coordinator:criterion-judge")
+    assert script.index("phase('Review wave')") < halt_at
+    assert halt_at < script.index("phase('Verify')")
+    assert halt_at < script.index("label: 'verify'")
     assert halt_at < script.index("const _closeable = ")
 
 

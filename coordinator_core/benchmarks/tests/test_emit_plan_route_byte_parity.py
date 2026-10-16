@@ -81,7 +81,19 @@ def _root_spellings(repo: Path) -> list[str]:
     return sorted(spellings, key=len, reverse=True)
 
 
+# Host-dependent bytes: the runtime cap reads os.cpu_count() and the vitest clause reads a
+# machine-local registry key, so either would pin the golden to the box that regenerated it.
+_HOST_CAP_RES = (
+    (re.compile(r"(dispatched-agent calls: )\d+( on the emitting host)"), r"\1<RUNTIME_CAP>\2"),
+    (re.compile(r"(runtime_cap_on_emitting_host: )\d+"), r"\1<RUNTIME_CAP>"),
+    (re.compile(r"Vitest worker cap: every vitest invocation you run passes `--maxWorkers=\d+` "
+                r"-- this box caps vitest at \d+ workers\."), "<VITEST_CAP_CLAUSE>"),
+)
+
+
 def normalise_script(text: str, repo: Path, session_id: str, run_base: str) -> str:
+    for pattern, repl in _HOST_CAP_RES:
+        text = pattern.sub(repl, text)
     for spelling in _root_spellings(repo):
         text = text.replace(spelling, REPO_ROOT_TOKEN)
     text = text.replace(run_base, RUN_BASE_TOKEN).replace(run_base[:12], RUN_BASE_PREFIX_TOKEN)

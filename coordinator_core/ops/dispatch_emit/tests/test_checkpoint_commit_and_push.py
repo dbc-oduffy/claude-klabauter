@@ -1,6 +1,6 @@
 """Each settled wave's DONE rows are committed once through `ceremony.commit_v2`
-by a serialised `coordinator:git-commit-agent` leg and checkpoint-pushed to the
-run's own work branch, so a run cut off mid-way strands nothing."""
+by a serialised `coordinator:git-commit-agent` leg, so a run cut off mid-way
+strands nothing. The push is the DR-329 cadence's, never a leg's."""
 
 from __future__ import annotations
 
@@ -25,8 +25,14 @@ def test_each_row_with_declared_paths_registers_a_commit_request():
     script = _script(expected_branch="work/run")
 
     assert "_runRow('C1', [], null, async () =>" in script
-    assert "{ title: 'title-C1', paths: ['pkg/C1.py', 'pkg/tests/test_C1.py'] });" in script
-    assert "{ title: 'title-C2', paths: ['pkg/C2.py', 'pkg/tests/test_C2.py'] });" in script
+    assert (
+        "{ title: 'title-C1', paths: ['pkg/C1.py', 'pkg/tests/test_C1.py'], declared: ['pkg/C1.py'] });"
+        in script
+    )
+    assert (
+        "{ title: 'title-C2', paths: ['pkg/C2.py', 'pkg/tests/test_C2.py'], declared: ['pkg/C2.py'] });"
+        in script
+    )
 
 
 def test_row_without_declared_paths_registers_no_commit():
@@ -76,8 +82,7 @@ def test_wave_commit_is_not_awaited_by_rows_or_later_waves():
     assert script.index("_waveCommit(1,") > script.index("_rows['C2'] = _runRow(") > first_row
     execute = execute_section(script)
     assert execute.index("await Promise.all(_waveTriggers);") < execute.index("await _commitChain;")
-    assert execute.index("await _commitChain;") < execute.index("await Promise.all(_checkpointPushes);")
-    assert "if (_commitFailures.length) log(" in execute
+    assert execute.index("await _commitChain;") < execute.index("if (_commitFailures.length) log(")
 
 
 def test_wave_with_no_done_row_emits_no_commit_leg():
@@ -89,22 +94,15 @@ def test_wave_with_no_done_row_emits_no_commit_leg():
     assert "_waveCommit(1," not in no_paths
 
 
-def test_checkpoint_push_targets_only_the_runs_own_branch_and_never_forces():
-    script = _script(expected_branch="work/machine-b/2026-10-02")
-
-    assert "git push origin HEAD:refs/heads/work/machine-b/2026-10-02" in script
-    assert "Never pass --force or --force-with-lease" in script
-    assert "refs/heads/main" not in script
-    assert "_checkpointPushes.push(agent(" in script
-
-
-def test_no_checkpoint_push_on_main_master_or_detached_head():
-    for branch in ("main", "master", None):
+def test_a_work_branch_run_composes_the_wave_commit_and_no_push_leg():
+    for branch in ("work/machine-b/2026-10-02", "main", None):
         script = _script(expected_branch=branch)
 
-        assert "_checkpointPushes.push(agent(" not in script
-        assert "No checkpoint push: the run is not on a non-protected work branch" in script
+        assert "label: 'commit:wave-' + n" in script
         assert "agentType: 'coordinator:git-commit-agent'" in script
+        assert "checkpoint-push" not in script
+        assert "git push" not in script
+        assert "ceremony.commit_v2" in script
 
 
 def test_row_over_the_path_threshold_is_left_to_the_terminal_commit():
@@ -114,18 +112,6 @@ def test_row_over_the_path_threshold_is_left_to_the_terminal_commit():
     assert "No checkpoint commit for rows declaring more than" in script
     assert "{ title: 'title-C1'" not in script
     assert "_waveCommit(1," not in script
-
-
-def test_push_failures_are_collected_and_logged_after_pushes_settle():
-    script = _script(expected_branch="work/run")
-
-    assert ".catch(() => null)" not in script
-    assert "_pushFailures.push(id + ': '" in script
-    assert "label: 'checkpoint-push:' + id" in script
-    execute = execute_section(script)
-    settled = execute.index("await Promise.all(_checkpointPushes);")
-    assert settled < execute.index("if (_pushFailures.length) log(")
-    assert "slice(-300)" in script
 
 
 def test_committer_passes_the_declared_list_verbatim_with_skip_missing():

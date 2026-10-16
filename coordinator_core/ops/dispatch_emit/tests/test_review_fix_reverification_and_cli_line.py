@@ -74,7 +74,7 @@ def test_review_edit_scope_falls_back_to_head_without_a_run_base():
 def test_ask_route_terminal_test_covers_review_edits_too():
     ask = _compose_ask()
 
-    assert ask.index("phase('review')") < ask.index("phase('Scoped test run')")
+    assert ask.index("phase('Review wave')") < ask.index("phase('Verify')")
     assert "No edited-set listing" in ask and "Review stages ran before this phase" in ask
 
 

@@ -118,12 +118,47 @@ def _wave_row(row_id: str, writes: list[str], depends_on: Optional[list[str]] = 
     )
 
 
-def _emit_scripts() -> list[str]:
+_GOLDEN_SCRIPT = (
+    Path(__file__).resolve().parents[3] / "benchmarks" / "fixtures" / "emit_full_path_plan.expected.script.mjs"
+)
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_JUDGE_ARM_SURFACE = "coordinator_core/ops/dispatch_emit/leg_register.py"
+
+
+def _judge_arm_script() -> str:
+    """A plan-route compose whose roster declares a judge and whose row writes a testable `.py` surface."""
+    from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _v5_fragment
+
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].append(
+        {
+            "kind": "judge",
+            "agents": [
+                {
+                    "agentType": "coordinator:exit-criterion-judge", "model": "sonnet", "effort": "low",
+                    "schema": "judge-result",
+                }
+            ],
+        }
+    )
+    return emit.compose_script(
+        [[_wave_row("T1", [_JUDGE_ARM_SURFACE])]], name="wf", description="d",
+        review_roster_fragment=fragment, review_stage_schemas={**_STAGE_SCHEMAS, "judge-result": {"type": "object"}},
+        plan_path="docs/plans/p.md", run_base_sha="a" * 40, repo_root=_REPO_ROOT,
+    )
+
+
+def _emit_scripts(*, golden: bool = True) -> list[str]:
+    """`golden=False` drops the checked-in script, whose model hunks follow its own regeneration, not the register."""
     from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
     from coordinator_core.ops.dispatch_emit.tests.test_emit_predispatch_gating import _review_spec_for, _row
 
     waves = [[_wave_row("C1", ["a.py"])], [_wave_row("C2", ["b.py"], ["C1"])]]
     return [
+        *([_GOLDEN_SCRIPT.read_text(encoding="utf-8")] if golden else []),
+        _judge_arm_script(),
         emit.compose_script(waves, name="wf", description="d", **REVIEW_KW),
         emit.compose_script(
             [[_wave_row("A", ["a.py"])]], name="wf", description="d", run_base_sha="a" * 40,
@@ -184,18 +219,18 @@ def _review_scripts() -> dict[str, list[str]]:
     }
 
 
-def _composed(repo: Path) -> dict[str, list[str]]:
+def _composed(repo: Path, *, golden: bool = True) -> dict[str, list[str]]:
     return {
         "ask": _ask_scripts(repo),
-        "emit": _emit_scripts(),
+        "emit": _emit_scripts(golden=golden),
         "grind": _grind_scripts(),
         **_review_scripts(),
     }
 
 
-def _emitted(repo: Path) -> dict[Key, list[lr.EmittedLeg]]:
+def _emitted(repo: Path, *, golden: bool = True) -> dict[Key, list[lr.EmittedLeg]]:
     found: dict[Key, list[lr.EmittedLeg]] = {}
-    for workflow, scripts in _composed(repo).items():
+    for workflow, scripts in _composed(repo, golden=golden).items():
         for script in scripts:
             for leg in lr.emitted_legs(script):
                 found.setdefault(_key(workflow, leg.label), []).append(leg)
@@ -238,6 +273,16 @@ def test_the_composed_set_reaches_every_workflow_and_the_hidden_legs(tmp_path):
 #: Plan-blitz and roadmap-blitz titles are DoE's, passed through as given.
 _PASSED_THROUGH_TITLES = frozenset({"Size", "Plan", "Synthesize", "roadmap-blitz"})
 _RETIRED_ASK_LEGS = ("test:terminal", "docs", "ledger-check", "review:coordinator:review-prep")
+#: The push belongs to the DR-329 cadence, never to a leg.
+_RETIRED_EMIT_LEGS = ("checkpoint-push:",)
+
+
+def test_no_emit_script_composes_a_retired_leg():
+    for script in _emit_scripts():
+        labels = {leg.label for leg in lr.emitted_legs(script)}
+        assert not any(label.startswith(_RETIRED_EMIT_LEGS) for label in labels), labels
+        assert "checkpoint-push" not in script
+    assert lr.lookup("emit", "checkpoint-push:") is None
 
 
 def _meta_titles(script: str) -> list[str]:
@@ -316,7 +361,7 @@ def test_the_floor_only_shrinks():
 
 
 def test_every_floor_member_cites_the_ruling_and_emits_haiku(tmp_path):
-    emitted = _emitted(tmp_path)
+    emitted = _emitted(tmp_path, golden=False)
     for key in sorted(_RUNTIME_FLOOR):
         assert lr.lookup(*key).runtime_floor == lr.RUNTIME_FLOOR_RULING, f"{key} does not cite the floor ruling"
         legs = emitted[key]

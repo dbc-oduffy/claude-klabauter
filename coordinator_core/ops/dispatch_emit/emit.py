@@ -366,6 +366,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
     ROOTS_READ_SCHEMA,
     compose_criterion_judge,
+    criterion_judge_brief,
     owner_repo_clause,
     OperativeCriterion,
     resolve_operative_criterion,
@@ -2995,24 +2996,126 @@ _JUDGE_VERDICT_RULES_JS = (
 )
 
 
-def _never_stranding_criterion(call_expr: str, *, judge: bool = False) -> str:
+def _never_stranding_criterion(call_expr: str, *, judge: bool = False, verify: bool = False) -> str:
     """Wrap the criterion leg so a throw (an agentType the firing session
     cannot resolve, a schema refusal) yields ``indeterminate`` instead of
     killing the run after every executor has written: the run must still
     reach its terminal_commit next_action. ``differs_from_baseline: null``
     routes wake_digest's computed status to this ``status`` verbatim.
-    ``judge`` applies DoE's verdict rules to a returned judge result."""
-    returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr})" if judge else f"await {call_expr}"
+    ``judge`` applies DoE's verdict rules to a returned judge result.
+    ``verify`` wraps the merged call: it resolves ``{test, judge}``, with a
+    ``null`` test (``not_run``) on a throw."""
+    if verify:
+        returned = (
+            f"((r) => ({{ test: r.test ?? null, judge: {_JUDGE_VERDICT_RULES_JS}(r.judge) }}))(await {call_expr})"
+        )
+    elif judge:
+        returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr})"
+    else:
+        returned = f"await {call_expr}"
+    indeterminate = (
+        "{ status: 'indeterminate', "
+        "differs_from_baseline: null, observation: 'unjudged: ' + _cause, "
+        "reason: String(e && e.message || e).slice(0, 200), sidecar_path: null }"
+    )
+    if verify:
+        indeterminate = f"{{ test: null, judge: {indeterminate} }}"
     return (
         "(async () => { try { return "
         + returned
         + "; } catch (e) { const _cause = "
         + _UNJUDGED_CAUSE_JS
         + "; log('criterion leg threw (' + _cause + '); criterion is indeterminate: ' + "
-        "String(e && e.message || e)); return { status: 'indeterminate', "
-        "differs_from_baseline: null, observation: 'unjudged: ' + _cause, "
-        "reason: String(e && e.message || e).slice(0, 200), sidecar_path: null }; } })()"
+        "String(e && e.message || e)); return " + indeterminate + "; } })()"
     )
+
+
+#: The merged test-then-judge call on the judge arm. Emit-local names: the per-row
+#: ``verify:`` family and ask_contract's ``ASK_VERIFY_*`` are other legs.
+_VERIFY_LABEL = "verify"
+_VERIFY_PHASE_TITLE = "Verify"
+
+
+def _scoped_test_steps(
+    scope: list[str],
+    repo_root: Optional[Path],
+    typecheck: Optional[TypecheckLeg],
+    review_edits_base: Optional[str],
+    owed_gates: Optional[dict],
+    surface: Optional[Sequence[str]],
+    review_terminal: Optional[str],
+) -> str:
+    """The scoped-test clauses shared by the test call and the verify call, ending in a space."""
+    scope = collapse_test_scope(scope, repo_root)
+    run_clause = (
+        f"Run the scoped test targets: [{', '.join(scope)}]. " if scope else "No scoped test targets. "
+    )
+    return (
+        run_clause
+        + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
+        + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
+        + f"{_test_runner_clause()} "
+        + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
+        + (
+            f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
+            if _is_full_sha(review_edits_base)
+            else ""
+        )
+    )
+
+
+def _verify_agent_call_expr(
+    review,
+    judge_brief_kwargs: dict,
+    scope: list[str],
+    repo_root: Optional[Path],
+    plan_path: Optional[str],
+    typecheck: Optional[TypecheckLeg],
+    review_edits_base: Optional[str],
+    owed_gates: Optional[dict],
+    surface: Optional[Sequence[str]],
+    review_terminal: Optional[str],
+) -> str:
+    """One ``agent(...)`` call EXPRESSION that runs the scoped tests, then rules the criterion.
+
+    Hosted on the roster judge's own type, which must hold no Edit or Write so the ruling agent cannot
+    change the tree it rules on or write a test-runner sidecar (``test.sidecar_path`` is absent).
+    Compose does not check the roster's type; ``test_the_roster_judges_type_holds_no_edit_or_write``
+    does, and skips where the plugin is not installed. A throw resolves ``test`` to ``null`` (not_run).
+    Returns ``{test, judge}``; ``judge_brief_kwargs`` are ``criterion_judge_brief``'s keywords.
+    """
+    judge = review.judge
+    judge_prompt, judge_schema = criterion_judge_brief(review, **judge_brief_kwargs)
+    test_schema = json.loads(stage_schema_literal("test_result"))
+    test_schema["required"] = [k for k in test_schema["required"] if k != "sidecar_path"]
+    schema = {
+        "type": "object",
+        "properties": {"test": test_schema, "judge": judge_schema},
+        "required": ["judge"],
+        "additionalProperties": False,
+    }
+    prompt = (
+        "Verify in two steps, in order, in one run.\n\n"
+        "Step 1 -- scoped tests. "
+        + _scoped_test_steps(
+            scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal
+        )
+        + "Report raw evidence; do not gate. You have no Write tool: return it under `test` and omit sidecar_path."
+        + (f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}." if plan_path else "")
+        + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
+        "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
+        "Return the verdict under `judge`.\n\n"
+        + judge_prompt
+    )
+    opts = (
+        f"label: {_js_string_literal(_VERIFY_LABEL)}, "
+        f"phase: {_js_string_literal(_VERIFY_PHASE_TITLE)}, "
+        f"agentType: {_js_string_literal(judge.agent_type)}"
+        + (f", model: {_js_string_literal(judge.model)}" if judge.model is not None else "")
+        + (f", effort: {_js_string_literal(judge.effort)}" if judge.effort is not None else "")
+        + f", schema: {json.dumps(schema, sort_keys=True)}"
+    )
+    return f"agent({_resolve_markers_plus(prompt)}, {{ {opts} }})"
 
 
 def _test_agent_call_expr(
@@ -3045,21 +3148,10 @@ def _test_agent_call_expr(
     range on a shared branch also holds peers' commits, whose test files must
     never enter this plan's scope or verdict.
     """
-    scope = collapse_test_scope(scope, repo_root)
-    run_clause = (
-        f"Run the scoped test targets: [{', '.join(scope)}]. " if scope else "No scoped test targets. "
-    )
     prompt = (
         f"{prompt_head or ''}{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
-        f"{run_clause}"
-        + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
-        + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
-        + f"{_test_runner_clause()} "
-        + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
-        + (
-            f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
-            if _is_full_sha(review_edits_base)
-            else ""
+        + _scoped_test_steps(
+            scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal
         )
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
@@ -3837,14 +3929,6 @@ _CHECKPOINT_COMMIT_SCHEMA = {
         "reason": {"type": "string"},
     },
 }
-_CHECKPOINT_PUSH_SCHEMA = {
-    "type": "object",
-    "required": ["pushed"],
-    "properties": {"pushed": {"type": "boolean"}, "reason": {"type": "string"}},
-}
-
-#: Branches a checkpoint push never targets.
-_CHECKPOINT_PROTECTED_BRANCHES = frozenset({"main", "master"})
 
 
 #: Script-scope binding of the run's base sha, resolved at the script's first step
@@ -4177,7 +4261,6 @@ def _checkpoint_commit_js(
     *,
     repo_root: Optional[str],
     session_id: Optional[str],
-    push_branch: Optional[str],
     plan_path: Optional[str] = None,
     run_base_sha: Optional[str] = None,
     seam: Optional[SeamLeg] = None,
@@ -4189,9 +4272,9 @@ def _checkpoint_commit_js(
     ``coordinator:git-commit-agent`` commits the union of that wave's DONE
     rows' paths through ``ceremony.commit_v2``, serialised on ``_commitChain``
     so wave commits never race the index. A wave with no DONE row emits no
-    leg. Each landed commit gets a non-awaited push of the run's own work
-    branch (``push_branch``; never main/master, never forced). The terminal
-    commit still lands the receipts, stamps and any prefix-claimed files."""
+    leg. The leg never pushes: ``ceremony.commit_v2`` marks the repo for the
+    DR-329 push cadence. The terminal commit still lands the receipts, stamps
+    and any prefix-claimed files."""
     root_clause = (
         "Your repo is `\0`: `cd` there before any command and resolve every "
         "relative path against it. "
@@ -4228,14 +4311,10 @@ def _checkpoint_commit_js(
         + _dispatching_session_id_paragraph(session_id)
     )
     commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
-    push_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
     phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
     lines = [
         f"  const _CHECKPOINT_COMMIT_SCHEMA = {json.dumps(_CHECKPOINT_COMMIT_SCHEMA)};",
-        f"  const _CHECKPOINT_PUSH_SCHEMA = {json.dumps(_CHECKPOINT_PUSH_SCHEMA)};",
         "  const _commitFailures = [];",
-        "  const _pushFailures = [];",
-        "  const _checkpointPushes = [];",
         "  const _landed = {};",
         "  const _waveTriggers = [];",
         "  let _commitChain = Promise.resolve();",
@@ -4287,32 +4366,6 @@ def _checkpoint_commit_js(
         "      return;",
         "    }",
     ]
-    if push_branch is not None:
-        branch = push_branch
-        git_c = " -C \0" if repo_root else ""
-        push_prompt = (
-            head
-            + f"Push a checkpoint of this run's work branch `{branch}`. Run "
-            f"`git{git_c} rev-parse --abbrev-ref HEAD`; if it is "
-            f"not `{branch}`, report pushed false with reason `branch moved` and stop. Otherwise run "
-            f"exactly `git{git_c} push origin HEAD:refs/heads/{branch}`. "
-            "Never pass --force or --force-with-lease, never push any other ref, never push main or "
-            "master. If the push is rejected or the remote is unreachable, report the verbatim output "
-            "in `reason` and stop: do not retry, merge or rebase."
-        )
-        lines += [
-            "    _checkpointPushes.push(agent(",
-            f"      {_js(push_prompt)},",
-            f"      {{ label: 'checkpoint-push:' + id, phase: {phase}, agentType: {push_type}, "
-            f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_PUSH_SCHEMA }}",
-            "    ).then((p) => {",
-            "      if (!p || p.pushed !== true) {",
-            "        _pushFailures.push(id + ': ' + String((p && p.reason) || 'no pusher reply').slice(-300));",
-            "      }",
-            "    }, (e) => {",
-            "      _pushFailures.push(id + ': ' + String((e && e.message) || e).slice(-300));",
-            "    }));",
-        ]
     if seam is not None:
         lines.append("    if (!r.sha) return;")
         lines.append("    done.forEach((i) => _seamCommitted.push(i));")
@@ -4911,11 +4964,6 @@ def compose_script(
             + ");"
         )
     else:
-        push_branch = (
-            expected_branch
-            if expected_branch and expected_branch not in _CHECKPOINT_PROTECTED_BRANCHES
-            else None
-        )
         seam_leg = seam_leg_for(
             waves,
             _row_plans,
@@ -4928,17 +4976,11 @@ def compose_script(
             ),
             run_base_sha,
         )
-        if push_branch is None:
-            body_blocks.append(
-                "  log('No checkpoint push: the run is not on a non-protected work branch "
-                "(detached HEAD, main or master); checkpoint commits stay local.');"
-            )
         body_blocks.append(
             _checkpoint_commit_js(
                 agent_type_host,
                 repo_root=repo_anchor,
                 session_id=session_id,
-                push_branch=push_branch,
                 plan_path=plan_path,
                 run_base_sha=run_base_sha,
                 seam=seam_leg,
@@ -5118,14 +5160,9 @@ def compose_script(
     if not review_only:
         body_blocks.append("  await Promise.all(_waveTriggers);")
         body_blocks.append("  await _commitChain;")
-        body_blocks.append("  await Promise.all(_checkpointPushes);")
         body_blocks.append(
             "  if (_commitFailures.length) log('Checkpoint commits that did not land (the "
             "terminal commit still covers their paths): ' + _commitFailures.join('; '));"
-        )
-        body_blocks.append(
-            "  if (_pushFailures.length) log('Checkpoint pushes that failed (the commits are "
-            "local only): ' + _pushFailures.join('; '));"
         )
         if seam_leg is not None:
             body_blocks.append(
@@ -5285,8 +5322,7 @@ def compose_script(
         judge_register = plan_judge_evidence(
             plan_path, Path(repo_root) if repo_root is not None else _REPO_ROOT, plan_text=plan_text
         )
-    judge_expr = compose_criterion_judge(
-        review,
+    judge_brief_kwargs = dict(
         stage_schemas=review_stage_schemas,
         plan_path=plan_path or "",
         run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
@@ -5297,11 +5333,16 @@ def compose_script(
             judge_register, excluded_rows,
         ),
         criterion=plan_context.operative_criterion if plan_context is not None else None,
-        host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         evidence_path=judge_evidence_path,
         evidence=judge_register,
         em_owned_rows=em_owned_rows(excluded_rows),
     )
+    _host_degraded = agent_type_host == _AGENT_TYPE_HOST_DEGRADED
+    judge_expr = compose_criterion_judge(
+        review, host_degraded=_host_degraded, **judge_brief_kwargs
+    )
+    # A degraded host runs the judge as general-purpose, which has Edit: keep the two legs there.
+    verify_merge = bool(judge_expr) and not _host_degraded
     if judge_expr:
         phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
     review_vars = review_stage_vars(
@@ -5402,6 +5443,25 @@ def compose_script(
                 phase_titles.append(_TEST_PHASE_TITLE)
                 guarded_blocks.append(criterion_block)
                 falsifier_var = _FALSIFIER_RESULT_VAR
+        elif verify_merge:
+            # One agent on the judge's own type: it runs the scoped tests, then rules on them.
+            phase_titles.remove(CRITERION_JUDGE_PHASE_TITLE)
+            phase_titles.append(_VERIFY_PHASE_TITLE)
+            verify_expr = _never_stranding_criterion(
+                _verify_agent_call_expr(
+                    review, judge_brief_kwargs, scope, repo_root, plan_path, ts_leg,
+                    _stage_edits_base, owed_gates, _plan_surface, _review_terminal,
+                ),
+                verify=True,
+            )
+            guarded_blocks.append(
+                f"  phase({_js_string_literal(_VERIFY_PHASE_TITLE)});\n"
+                f"  const _verifyReply = await {verify_expr};\n"
+                f"  {_TEST_RESULT_VAR} = _verifyReply.test;\n"
+                f"  {_FALSIFIER_RESULT_VAR} = _verifyReply.judge;"
+            )
+            test_var = _TEST_RESULT_VAR
+            falsifier_var = _FALSIFIER_RESULT_VAR
         elif criterion_expr is not None:
             # Serial, not parallel: the criterion judge must read the post-fix scoped test
             # result, so it starts only after the test call (owed row build gates included) lands.

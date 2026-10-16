@@ -588,10 +588,9 @@ def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
         waves, name="wf", description="judge+falsifier", falsifier=falsifier,
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
-    body = script[script.index("_testResult = await agent(") :]
-    assert body.index("test:terminal'") < body.index("_falsifierResult = await ")
+    body = script[script.index("phase('Verify')") :]
     assert "coordinator:criterion-judge" in body and "run it" in body
-    assert "test:terminal-falsifier'" not in script
+    assert "label: 'test:terminal" not in script
 
 
 def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted():

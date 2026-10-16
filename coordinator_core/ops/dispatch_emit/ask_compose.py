@@ -1082,7 +1082,7 @@ def compose_ask_script(
     b.append(runner_js)
     b.append(f"  const {_emit._REPO_ROOT_VAR} = REPO_ROOT;")
     b.append(_emit._checkpoint_commit_js(
-        agent_type_host, repo_root=repo_root, session_id=session_id, push_branch=None, seam=None,
+        agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
     ))
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):

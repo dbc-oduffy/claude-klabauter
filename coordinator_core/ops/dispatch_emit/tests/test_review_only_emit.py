@@ -24,7 +24,6 @@ _FORBIDDEN = (
     "_runRow",
     "_commitWave",
     "_waveCommit",
-    "_checkpointPushes",
     "label: 'commit:",
     "label: 'push",
 )
