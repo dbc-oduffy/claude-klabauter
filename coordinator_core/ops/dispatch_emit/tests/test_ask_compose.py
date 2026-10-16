@@ -199,7 +199,7 @@ def test_return_carries_the_plan_routes_terminal_commit_next_action():
 
 def test_size_phase_schema_and_prompt_require_gated_rows():
     script = _compose()
-    size_stage = script.split("const _scouted = await", 1)[1].split("_writes = _scouted", 1)[0]
+    size_stage = script.split("const _scoutedFirst = await", 1)[1].split("_writes = _scouted", 1)[0]
     assert '"gated"' in size_stage and '"owner_repo"' in size_stage
     assert "`gated`" in size_stage
 
@@ -576,6 +576,19 @@ def test_size_reword_runs_assemble_gate_and_stage_itself_with_no_wrapper_agent()
         assert field in ask_compose._REWORD_SCHEMA["properties"]
     assert "_rewordStaged = !_scouted.halt && !!_scouted.arm;" in script
     assert "(_scoutClean || _rewordStaged)" in script
+    assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
+
+
+def test_a_scout_reply_without_exit_code_is_redispatched_once_then_halts_distinctly():
+    script = _compose()
+    assert script.count("label: 'size-retry'") == 1
+    assert "you did not run sizing-assemble" in script
+    assert script.index("label: 'size-retry'") < script.index("if (!_scoutAssembled) { _halted")
+    assert "Number.isInteger(_scoutedFirst.exit_code) ? _scoutedFirst : await " in script
+    assert "if (!_scoutAssembled) { _halted" in script
+    assert ask_compose.SCOUT_DID_NOT_ASSEMBLE_REASON in script.replace("\\'", "'")
+    assert "else if (_scouted.exit_code !== 0) { _halted" in script
+    assert "sizing-assemble failed (exit " in script
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 

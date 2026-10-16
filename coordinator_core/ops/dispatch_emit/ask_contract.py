@@ -103,6 +103,7 @@ SCOUT_SCHEMA = {
 #: dispatch.ask_gate). Separate so the grind scout's embedded schema stays byte-identical.
 ASK_SCOUT_SCHEMA = {
     **SCOUT_SCHEMA,
+    "required": [*SCOUT_SCHEMA["required"], "exit_code"],
     "properties": {
         **SCOUT_SCHEMA["properties"],
         "exit_code": {"type": "integer"},

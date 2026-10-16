@@ -120,6 +120,17 @@ class AskComposeRefused(ValueError):
     """The ask cannot be composed into a script; the message names the cause."""
 
 
+#: Halt reason when the scout twice returned no integer exit_code, i.e. never ran sizing-assemble.
+SCOUT_DID_NOT_ASSEMBLE_REASON = (
+    "scout did not run sizing-assemble (no exit_code returned after one re-dispatch); "
+    "the gate, plan, stage, execute and review phases were skipped"
+)
+SCOUT_DID_NOT_ASSEMBLE_RETRY = (
+    "\n\nYour previous reply carried no exit_code: you did not run sizing-assemble. Run it as your "
+    "closing command and return its exit code as exit_code."
+)
+
+
 def _lit(text: str) -> str:
     return _js_string_literal(text)
 
@@ -1375,8 +1386,15 @@ def compose_ask_script(
             + (prompt or str((intake or {}).get("intent") or ""))
         )
         b.append(
-            f"  const _scouted = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=ASK_SCOUT_SCHEMA)};"
+            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=ASK_SCOUT_SCHEMA)};"
         )
+        # One re-dispatch when the scout never ran sizing-assemble (no integer exit_code); a second
+        # miss falls through to the did-not-run halt below.
+        b.append(
+            "  const _scouted = Number.isInteger(_scoutedFirst.exit_code) ? _scoutedFirst : await "
+            f"{_agent(scout_prompt + ' + ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY), label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=ASK_SCOUT_SCHEMA)};"
+        )
+        b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
         # valid only for the criterion and sizing the scout's own gate reply judged.
         b.append("  const _scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
@@ -1481,7 +1499,13 @@ def compose_ask_script(
             "catch (_e) { _decision = null; }"
         )
         b.append(
-            "  if (_scouted.exit_code !== 0) { _halted = { halted: "
+            "  if (!_scoutAssembled) { _halted = { halted: "
+            f"{_lit(HALT_REFUSAL)}, reason: {_lit(SCOUT_DID_NOT_ASSEMBLE_REASON)}, "
+            "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
+            ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
+        )
+        b.append(
+            "  else if (_scouted.exit_code !== 0) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble failed (exit ' + _scouted.exit_code + '); "
             "the gate, plan, stage, execute and review phases were skipped', "
             "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"

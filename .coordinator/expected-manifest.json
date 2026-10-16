@@ -2087,8 +2087,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "6d1b296f3e5a978181c3e39567e2ef6e5c6770e5",
-    "coordinator_core/_engine_stamp": "cb2f9b3eccf33ed0431803c4bd13f51448254eff",
+    "coordinator_core/_engine_published_at": "66f1305968dedb96bd4d563f6c013b1c4a149c8f",
+    "coordinator_core/_engine_stamp": "75efd30f3ce12500dc556c5e7973c8d9769598e2",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4330,8 +4330,8 @@
     "coordinator_core/ops/dispatch_emit/abandoned_runs.py": "15f98bd10c4734550f8d5a15e3160933d1017508",
     "coordinator_core/ops/dispatch_emit/admission.py": "dc4befd7cba86b544eceea0beb3068de435d281b",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "cf2be379e4f266cf49a5e5287ae4fe3ee6ee8a5c",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "320c3295011ababa998eb4654eafbc5210162e4e",
-    "coordinator_core/ops/dispatch_emit/ask_contract.py": "fabee94616e81feb20b67ff4a141ce4e6d07c6a6",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "07c1bc2abbb1f5c4cd940999735aa2cb5e63f674",
+    "coordinator_core/ops/dispatch_emit/ask_contract.py": "48d556614a1403fc415cfbd2f0f1e8e9588e052d",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "3a0cb61aa388b7484640d42bc38f263c19307a94",
     "coordinator_core/ops/dispatch_emit/ask_fanout_contract.py": "779619f73156ce795abc3f0875e1e5c311748118",
     "coordinator_core/ops/dispatch_emit/ask_gate.py": "45dedb04343d8d9f262660ef235e59c23cad8d4d",
@@ -4465,7 +4465,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_baton_input.py": "d6533ed8b05b5d4ad4bc6a2b990c5e466d73ffba",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_brief.py": "c9a61a55afc2e6347d073a31977390af104998f0",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_bundle_split_e2e.py": "c0ac24081c01b32b404da48a0fba908a2f5b27b8",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose.py": "4a72d56b3c8a7c8e299b4ec131ab627210b4f3b8",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose.py": "3178cd046d35ffb3b0d1b12e9a17245e02649751",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_acceptance_rows.py": "19692a2d77a9311abe7b72652c63296eb0aa15b5",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_apm_accept.py": "9c0b7f137ec18ee7b011ab47d10aaa18dcf6146c",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_commit_doc_paths.py": "2c86ce5d7016896df019fe8a66542791f3a57398",
@@ -4494,7 +4494,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_usage_limit.py": "7b8e20b79ae29d46114fd2b8dc5d8c0e4431c23a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_verify_only_skips_review.py": "14d12b4aebd1e7d6d0f88b0f135eceacfd4ed31a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_wave_barrier.py": "1a90049925eb2b87f57ff5efc2cd84ccc14c422f",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_contract.py": "5e5faf8954bc3206120b80f3543df90c58e8037b",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_contract.py": "b3bc151b9fbbe4473ff44a95edaf8735d38e7a94",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fanout.py": "90ace8b7bc8792ce5e9ebe922e2fa9ca5d7f891b",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fanout_contract.py": "f378444d15ef03b41cb7235fb900a57ba3198521",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fanout_sizings_arm.py": "8b2e4f7cce1e8dc5c21b87a207a453ecee85f8d6",
@@ -8041,5 +8041,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "9d82812e113a19b0a194e66c56b5793050f7ab63"
+  "source_head": "7db4896ca166f242840d8752d0d51e1db01b17b7"
 }

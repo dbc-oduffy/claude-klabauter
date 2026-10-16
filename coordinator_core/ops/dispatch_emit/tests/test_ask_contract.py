@@ -171,9 +171,23 @@ def test_scout_schema_carries_the_closing_act_fields_as_optional():
         "manifest", "falsifier",
     ):
         assert field in props, field
-    assert c.ASK_SCOUT_SCHEMA["required"] == c.SCOUT_SCHEMA["required"]
     assert "exit_code" not in c.SCOUT_SCHEMA["properties"]
     assert not {"manifest", "falsifier"} & set(c.SCOUT_SCHEMA["properties"])
+
+
+def test_ask_scout_schema_requires_integer_exit_code():
+    assert c.ASK_SCOUT_SCHEMA["required"] == [*c.SCOUT_SCHEMA["required"], "exit_code"]
+    assert c.ASK_SCOUT_SCHEMA["properties"]["exit_code"] == {"type": "integer"}
+    assert "exit_code" not in c.SCOUT_SCHEMA["required"]
+    jsonschema = pytest.importorskip("jsonschema")
+    reply = {
+        "tshirt": "S", "intent": "i", "name": "n", "premise_provenance": "read",
+        "premise_evidence": "e", "exit_criterion": "x", "writes": [], "exit_code": 0,
+    }
+    jsonschema.validate(reply, c.ASK_SCOUT_SCHEMA)
+    del reply["exit_code"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(reply, c.ASK_SCOUT_SCHEMA)
 
 
 def test_shim_commands_name_settings_home():
