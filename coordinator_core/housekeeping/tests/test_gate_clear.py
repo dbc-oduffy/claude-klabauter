@@ -172,7 +172,7 @@ def test_compute_cleared_frontmatter_flips_state_and_strips_blocker():
     )
     new_text = compute_cleared_frontmatter(old_text)
     assert "deployment_state: ready_to_fire" in new_text
-    assert "blocked_by" not in new_text
+    assert "blocked_by: []" in new_text and "hnd-b" not in new_text
     assert "handoff_id: hnd-a" in new_text
     assert new_text.endswith("body text\n")
 
@@ -195,7 +195,8 @@ def test_compute_cleared_frontmatter_strips_a_block_sequence_blocked_by(item_ind
     )
     new_text = compute_cleared_frontmatter(old_text)
     assert "deployment_state: ready_to_fire" in new_text
-    assert "blocked_by" not in new_text
+    # Kept as an empty list: a roadmap baton's schema requires the key.
+    assert "deployment_state: ready_to_fire\nblocked_by: []\n" in new_text
     assert "hnd-b1" not in new_text and "hnd-b2" not in new_text
     assert "\n- " not in new_text
     assert "pickup_ready: false\n# minted by x\nauthoring_session: s\n---" in new_text
@@ -228,7 +229,7 @@ def test_apply_gate_clear_lands_the_write(tmp_path):
     assert result.status == CLEARED
     on_disk = target.read_text(encoding="utf-8")
     assert "deployment_state: ready_to_fire" in on_disk
-    assert "blocked_by" not in on_disk
+    assert "hnd-b" not in on_disk
     assert on_disk == result.new_text
 
 

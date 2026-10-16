@@ -95,7 +95,7 @@ def test_receipt_lands_on_the_inventory_record_not_the_spine(env):
     assert stamp["terminal_commit_sha"] == out["sha"]
     assert stamp["run_base_sha"] == "a" * 40
     assert _stamp(repo / SPINE_REL) is None
-    shown = _git(repo, "show", "--name-only", "--format=", out["coded_sha"]).split()
+    shown = _git(repo, "diff", "--name-only", f"{out['coded_sha']}^", "HEAD").split()
     assert INVENTORY_REL in shown and SPINE_REL not in shown
     assert _git(repo, "status", "--porcelain", "--", INVENTORY_REL) == ""
 

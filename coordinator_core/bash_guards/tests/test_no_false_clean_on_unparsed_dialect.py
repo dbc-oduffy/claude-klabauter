@@ -244,6 +244,7 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         lambda mod: "UnrealEditor-Cmd.exe Proj.uproject -run=ResavePackages"
     ),
     "block_perforce_submit": lambda mod: "p4.exe submit -d msg",
+    "block_external_workspace_vcs_write": lambda mod: "git.exe commit -m msg",
     "block_topic_branch": lambda mod: "git checkout -b wip-nonstandard-name",
     "block_push_pr_non_owned_remote": lambda mod: "git.exe push https://github.com/x/r.git main",
     # Dev-install-only guard: the monkeypatch below supplies the sentinel and root.
@@ -353,6 +354,13 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
     },
     "block_perforce_submit": lambda mod, mp: (
         mp.setattr(mod, "_armed", lambda: True),
+        {},
+    )[-1],
+    "block_external_workspace_vcs_write": lambda mod, mp: (
+        mp.setattr(
+            "coordinator_core.machine_resolver.external_workspace_registry_readable",
+            lambda: False,
+        ),
         {},
     )[-1],
     "block_push_pr_non_owned_remote": lambda mod, mp: (

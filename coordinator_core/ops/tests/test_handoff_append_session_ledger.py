@@ -288,19 +288,43 @@ class RefusalTest(unittest.TestCase):
 class HeadingCreationTest(unittest.TestCase):
     _NO_HEADING_BODY = _LEDGER_BODY.split("## Session Ledger")[0]
 
-    def test_absent_heading_is_refused_and_file_left_untouched(self):
+    def test_absent_heading_is_created_with_the_row_and_second_append_lands_under_it(self):
         with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
             repo = _make_git_repo(Path(tmp))
-            hpath = _seed(repo, "2026-08-21-test.md", body=self._NO_HEADING_BODY)
-            before = hpath.read_bytes()
+            hpath = _seed(repo, "2026-08-21-test.md", body=self._NO_HEADING_BODY + "\n\n")
 
             result = _call(
                 repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "x"}
             )
 
-            self.assertEqual(result["exit_code"], 1, result)
-            self.assertIn("Session Ledger", result["error"])
-            self.assertEqual(hpath.read_bytes(), before)
+            self.assertEqual(result["exit_code"], 0, result)
+            text = hpath.read_text(encoding="utf-8")
+            self.assertEqual(text.count("## Session Ledger"), 1)
+            self.assertIn("\n\n## Session Ledger\n\n" + result["row"] + "\n", text)
+            self.assertNotIn("\n\n\n## Session Ledger", text)
+
+            second = _call(
+                repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "y"}
+            )
+            self.assertEqual(second["exit_code"], 0, second)
+            text2 = hpath.read_text(encoding="utf-8")
+            self.assertEqual(text2.count("## Session Ledger"), 1)
+            self.assertTrue(
+                text2.index(second["row"]) > text2.index(result["row"]) > text2.index("## Session Ledger")
+            )
+
+    def test_body_with_heading_is_identical_outside_the_inserted_row_and_correction_log(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+            before = hpath.read_text(encoding="utf-8")
+            result = _call(
+                repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "x"}
+            )
+            self.assertEqual(result["exit_code"], 0, result)
+            after = hpath.read_text(encoding="utf-8")
+            self.assertIn(result["row"] + "\n", after)
+            self.assertEqual(after.replace(result["row"] + "\n", "", 1).split("\n## Correction Log")[0], before.split("\n## Correction Log")[0])
 
     def test_body_with_heading_keeps_single_heading(self):
         with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:

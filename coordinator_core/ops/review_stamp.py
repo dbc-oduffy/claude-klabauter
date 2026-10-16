@@ -287,12 +287,26 @@ def _reviewed_file_count(repo_root: Path, integration_data: Dict[str, Any]) -> O
     return None if prep is None else _count(prep.get("product_files"))
 
 
+_PROCESS_SUBJECT_SUFFIX = " (process files)"  # mirrors ceremony.commit_v2._PROCESS_SUBJECT_SUFFIX
+
+
 def _based_at(repo_root: Path, integration_data: Dict[str, Any], sha: str) -> bool:
-    """True when the run's recorded `run_base_sha` prefix-matches `sha` (>= 7 chars)."""
+    """True when the run's recorded `run_base_sha` prefix-matches `sha` (>= 7 chars), or `sha` is
+    the process-files half commit landed directly on that base (a split commit copies the
+    Inline-Review trailer onto both halves, so the older run's newest trailer carrier is the half)."""
     prep = _prep_record(repo_root, integration_data)
     base = str((prep or {}).get("run_base_sha") or "").strip().lower()
     sha = sha.lower()
-    return len(base) >= 7 and len(sha) >= 7 and (sha.startswith(base) or base.startswith(sha))
+    if len(base) < 7 or len(sha) < 7:
+        return False
+    if sha.startswith(base) or base.startswith(sha):
+        return True
+    try:
+        parent = _run_git(["rev-parse", "--verify", "-q", f"{sha}^"], cwd=str(repo_root)).strip().lower()
+        subject = _run_git(["log", "-1", "--format=%s", sha], cwd=str(repo_root)).strip()
+    except _GitUnavailable:
+        return False
+    return subject.endswith(_PROCESS_SUBJECT_SUFFIX) and (parent.startswith(base) or base.startswith(parent))
 
 
 def _delivery_verdict(integration_data: Dict[str, Any]) -> Optional[str]:
@@ -1208,8 +1222,8 @@ def _assemble_stamp(
     """The `review_stamp` mapping both `mint` and `mint_receipt` write: one home for its
     key set and order, so the plan stamp and the inventory receipt cannot drift.
     `with_delivery=False` omits the `delivery` block (a judge-only stamp: no verifier ran);
-    a None `delivery_verdict` omits it too. `criterion_block` is None for a receipt, which carries no criterion. Reads the terminal
-    commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
+    a None `delivery_verdict` omits it too. `criterion_block` is None for a receipt, which
+    carries no criterion. Reads the terminal commit's tree (one git spawn) only when `terminal_tree_sha` is absent."""
     if not terminal_tree_sha:
         try:
             tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))

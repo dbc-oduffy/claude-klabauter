@@ -118,3 +118,24 @@ def test_no_commit_is_rejected_on_other_verbs(tmp_path, capsys):
 
     assert main(["stamp-superseded", "--plan", str(plan), "--by", "x.md", "--no-commit"]) == 1
     assert "--no-commit" in capsys.readouterr().err
+
+
+def test_ship_sha_reaches_the_cascade(tmp_path, monkeypatch):
+    # No stamp commit exists under --no-commit: the caller's sha is the only one the
+    # baton can ship on, and an empty one refuses every baton.
+    from coordinator_core.ops import plan_status_transition as pst
+
+    seen = []
+    monkeypatch.setattr(pst, "_run_cascade", lambda plan, did, sha="": seen.append(sha) or 0)
+    plan = _repo(tmp_path / "r", "coded")
+
+    assert cs_stamp_plan_implemented(str(plan), commit=False, ship_sha="abc123") == 0
+    assert seen == ["abc123"]
+
+
+def test_ship_sha_requires_no_commit(tmp_path, capsys):
+    plan = _repo(tmp_path / "r", "coded")
+
+    assert main(["stamp-implemented", "--plan", str(plan), "--ship-sha", "abc"]) == 1
+    assert "--ship-sha requires --no-commit" in capsys.readouterr().err
+    assert "status: executing" in plan.read_text(encoding="utf-8")

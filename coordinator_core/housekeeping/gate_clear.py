@@ -61,12 +61,13 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from coordinator_core.frontmatter.primitives import (
     _is_nested_block_key,
+    insert_fm_field_raw,
     git_blob_sha1,
     read_fm_field,
     rebuild,
-    remove_fm_field,
     remove_fm_nested_field,
     replace_fm_field,
+    replace_fm_field_raw,
     split_frontmatter,
 )
 from coordinator_core.housekeeping.resolve import AMBIGUOUS_BLOCKER_SENTINEL
@@ -225,12 +226,13 @@ def compute_cleared_frontmatter(old_text: str) -> str:
         )
 
     fm = replace_fm_field(fm, "deployment_state", _READY_TO_FIRE)
-    # `blocked_by` is inline (`[a]`, `a`) on some records and a block
-    # sequence on others; `remove_fm_field` refuses the block form.
+    # Cleared to `[]`, never removed: a roadmap baton's schema requires the key, and a
+    # baton missing it refuses every later cascade. Inline (`[a]`, `a`) on some
+    # records, a block sequence on others; `remove_fm_field` refuses the block form.
     if _is_nested_block_key(fm, "blocked_by"):
-        fm = remove_fm_nested_field(fm, "blocked_by")
+        fm = insert_fm_field_raw(remove_fm_nested_field(fm, "blocked_by"), "blocked_by", "[]", after_key="deployment_state")
     elif read_fm_field(fm, "blocked_by") is not None:
-        fm = remove_fm_field(fm, "blocked_by")
+        fm = replace_fm_field_raw(fm, "blocked_by", "[]")
 
     return rebuild(split, fm)
 

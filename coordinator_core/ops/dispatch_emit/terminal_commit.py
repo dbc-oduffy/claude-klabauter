@@ -1244,7 +1244,8 @@ _PRODUCT_ARTIFACT_CLASSES = frozenset({
 def _differs_from_commit(worktree_root: Path, sha: str, rel: str) -> bool:
     """True when ``rel`` exists on disk and its content is not the blob ``sha`` holds for it.
 
-    In-process (no spawn); a CRLF working copy of an LF blob counts as equal.
+    In-process (no spawn); a CRLF working copy of an LF blob counts as equal. Hashes sha1 only: a
+    sha256-format repo always reads as differing.
     """
     import hashlib
 
@@ -1813,7 +1814,9 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
         }
     )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-        rc = cs_stamp_plan_implemented(str(plan_abs), **record, refuse_open_spine_rows=True, commit=False)
+        rc = cs_stamp_plan_implemented(
+            str(plan_abs), **record, refuse_open_spine_rows=True, commit=False, ship_sha=sha
+        )
     if rc != 0:
         reason = err.getvalue().strip()[:600]
         return {"plan_status": "refused", "plan_status_refusal": reason, "plan_status_reason": reason}
@@ -3248,7 +3251,8 @@ def _terminal_commit_inner(
             from coordinator_core.ops.fleet._common import main_worktree_root as _mwr
 
             try:
-                if _mwr(worktree_root) != worktree_root:
+                # Trap: a token-released retry re-appends these rows; the writer has no dedupe key.
+                if _mwr(worktree_root).resolve() != worktree_root.resolve():
                     review_record_error = (
                         f"review rows not written: main worktree {_mwr(worktree_root)} "
                         f"differs from commit root {worktree_root}"

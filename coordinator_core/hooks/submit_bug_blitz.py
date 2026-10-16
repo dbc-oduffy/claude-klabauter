@@ -146,6 +146,7 @@ def _baseline_dirty(root: Path, session_id: str) -> list[str]:
         return []
     from coordinator_core.session.scope import own_path_claims_in_process
 
+    # Spawn-free reader: drops absolute-stored claim entries, so the baseline can under-report.
     roots = run_write_roots(PROFILE, [QUEUE_DIR])
     try:
         claims = own_path_claims_in_process(session_id, cwd=str(root))

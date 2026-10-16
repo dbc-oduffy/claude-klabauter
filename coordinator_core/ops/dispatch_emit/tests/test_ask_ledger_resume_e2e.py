@@ -90,6 +90,7 @@ def _second_run(root) -> str:
         deliverable_id=DLV, plan_path=PLAN,
     )
     _write(root, f"{RUN_DIR_ROOT}/{RUN2}/commit-request.txt", render_marker(request) + "\n")
+    # rows=() models a stage that staged no executable row; the composed script's own stage call is not run here.
     manifest = StageManifest(
         run_dir=f"{RUN_DIR_ROOT}/{RUN2}", rows=(), review_declared_paths=(),
         marker_path=f"{RUN_DIR_ROOT}/{RUN2}/commit-request.txt",

@@ -596,6 +596,13 @@ def _gaps(doc: Mapping[str, Any], owed: Optional[set[int]]) -> list[int]:
     ]
 
 
+def is_sibling_slice(doc: Mapping[str, Any]) -> bool:
+    """True when the sizing's `em_analysis.ask_parent` is a non-empty value: it is one slice of a
+    split ask and shares the parent's `pm_verbatims` with its siblings."""
+    analysis = doc.get("em_analysis")
+    return isinstance(analysis, Mapping) and bool(analysis.get("ask_parent"))
+
+
 def cited_turns(doc: Mapping[str, Any]) -> set[int]:
     """Embedded PM turns the sizing's ask cites: a row's `source_text` is inside the turn, a
     row's `anchor` is `pm_verbatims turn <t>`, or a `pm-verbatim` intent is inside the turn."""
@@ -653,6 +660,9 @@ def uncovered_turns(
     try:
         doc = _load(sizing_text)
         if not isinstance(doc, Mapping):
+            return []
+        # A slice shares the parent ask's turns with its siblings: whole-turn coverage is the parent's.
+        if is_sibling_slice(doc):
             return []
         turns = embedded_turns(doc)
         owed = cited_turns(doc)

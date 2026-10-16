@@ -80,7 +80,7 @@ def main(argv: list[str]) -> int:
     out = terminal_commit._handler(
         {
             "script_path": "run.mjs", "run_id": RUN_ID,
-            "halted_by": {"halted": "refusal", "reason": "sizing refused: route is not spec-dispatch"},
+            "halted_by": {"halted": "ledger-check", "reason": "sizing refused: route is not spec-dispatch"},
         },
         repo_root=repo / ".git",
     )

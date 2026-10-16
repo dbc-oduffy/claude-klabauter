@@ -11,8 +11,9 @@ is the APPEND half of AC-5,
 ("The Session Ledger row is machine-appended wherever the appending
 ceremony knows the values") — the CATCH half already shipped as
 `handoff.author_lint`'s `LEDGER_ROW_UNPARSEABLE` finding. A body with no
-`## Session Ledger` heading, or with several, is refused: `handoff.correct_body`
-rejects any new heading line, so this op never writes a heading without a row.
+`## Session Ledger` heading gets one created on first append, together with
+its row (via a private `handoff.correct_body` carve-out admitting exactly
+that heading); a body with several is refused.
 
 Of the row's five fields (`YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> |
 <summary>`), FOUR are machine-resolvable at append time and this op
@@ -330,6 +331,29 @@ def _build_append_replacement(
     )
 
 
+def _build_heading_creation_replacement(
+    body: str, row_line: str
+) -> "tuple[Optional[str], Optional[str]]":
+    """`(old_string, new_string)` that replaces the body's tail with itself
+    plus a created `## Session Ledger` heading and `row_line`, trailing
+    newlines normalised to one blank line before the heading. The tail
+    starts at the last non-blank line and widens until body-unique."""
+    stripped_len = len(body.rstrip())
+    if not stripped_len:
+        return None, "cannot create a Session Ledger heading in an empty body"
+    for k in range(24, min(stripped_len, _MAX_OLD_STRING_LEN // 2) + 1, 24):
+        candidate = body[stripped_len - k:]
+        if 2 * len(candidate) >= len(body):
+            break
+        if body.count(candidate) == 1:
+            return candidate, candidate.rstrip() + "\n\n## Session Ledger\n\n" + row_line + "\n"
+    return None, (
+        "cannot construct a body-unique insertion point for the Session "
+        "Ledger heading — body structure is too repetitive for this op's "
+        "disambiguation bound"
+    )
+
+
 @register_op("handoff.append_session_ledger")
 async def _handler(
     params: dict,
@@ -527,12 +551,16 @@ async def _handler(
 
     lines = body.splitlines(keepends=True)
     heading_idx, section_end, block_err = _find_ledger_block(lines)
+    create_heading = False
     if heading_idx is None:
-        return _err(block_err)
-
-    old_string, new_string_or_err = _build_append_replacement(
-        body, lines, heading_idx, section_end, row_line
-    )
+        if any(SESSION_LEDGER_HEADING_RE.match(ln) for ln in lines):
+            return _err(block_err)
+        create_heading = True
+        old_string, new_string_or_err = _build_heading_creation_replacement(body, row_line)
+    else:
+        old_string, new_string_or_err = _build_append_replacement(
+            body, lines, heading_idx, section_end, row_line
+        )
     if old_string is None:
         return _err(new_string_or_err)
     new_string = new_string_or_err
@@ -550,6 +578,8 @@ async def _handler(
         "old_string": old_string,
         "new_string": new_string,
     }
+    if create_heading:
+        correct_body_params["_create_session_ledger_heading"] = True
     if "override_reason" in params:
         correct_body_params["override_reason"] = params.get("override_reason")
 

@@ -4092,8 +4092,10 @@ def seam_leg_for(
             if m < n
             and m in gated
             and (
-                (_plan_of(row_plans.get(other.id), plan_path) != mine
-                 and _plan_of(row_plans.get(other.id), plan_path) in named)
+                (
+                    _plan_of(row_plans.get(other.id), plan_path) != mine
+                    and _plan_of(row_plans.get(other.id), plan_path) in named
+                )
                 or any(writes_path(other, path) for path in (row.reads or ()))
             )
         }
@@ -4168,7 +4170,7 @@ def _seam_leg_js(
         f"    const reach = {{ base_sha: {_RUN_BASE_VAR}, head_sha: sha, paths: _paths }};",
         "    const tests = [...new Set(_seamCommitted.flatMap((i) => _landed[i].declared))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
         "    const _seamPathPlan = {};",
-        f"    _seamCommitted.forEach((i) => _landed[i].paths.forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
+        f"    _seamCommitted.forEach((i) => [..._landed[i].paths, ..._landed[i].declared].forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
         "    let r = null;",
         "    try {",
         "      r = await agent(",
@@ -6074,6 +6076,41 @@ def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
     """Row ids named by commits whose ``Checkpoint-Plan:`` trailer names ``plan`` (checkpoint
     subjects and leading ``<id>:`` subjects alike)."""
     return checkpoint_landed_state(repo_root, plan)[0]
+
+
+def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
+    """Row ids of ``plan`` already landed: checkpoint commits (as ``checkpoint_landed_state``) plus
+    the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
+    ``Halted-By:`` is ``ledger-check``. One ``git log`` spawn; empty when git cannot answer."""
+    from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER
+
+    result = run_git(
+        [
+            "log", "-n", "500", "--grep=^Checkpoint-Plan: ", f"--grep=^{HALT_PLAN_TRAILER}: ",
+            "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
+            f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1e",
+        ],
+        cwd=str(repo_root),
+    )
+    if result.returncode != 0:
+        return frozenset()
+    ids: set = set()
+    for record in result.stdout.split("\x1e"):
+        parts = record.strip("\r\n").split("\x1f")
+        if len(parts) < 5:
+            continue
+        subject, checkpoint, halt_plan, halted_by, chunks = parts[:5]
+        if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
+            ids.update(plan_commit_row_ids(subject))
+        if any(v.strip() == "ledger-check" for v in halted_by.split("\x1d")) and any(
+            checkpoint_plan_matches(v, plan) for v in halt_plan.split("\x1d") if v.strip()
+        ):
+            ids.update(i for i in re.split(r"[,\s\x1d]+", chunks) if i)
+    return frozenset(ids)
 
 
 def deleted_in_range(

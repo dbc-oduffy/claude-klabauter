@@ -27,6 +27,7 @@ __all__ = [
     "FlagSpec", "FanOut", "When", "Stage", "Manifest", "PipelineInputs", "Schedule",
     "PipelineEmitRefused", "SUBJECTS_MODE_SEQUENTIAL", "WHEN_FLAG", "WHEN_RETURN", "WHEN_NONEMPTY",
     "ITEM_MARK", "subject_slug", "stage_phase", "VALIDATOR_TOKEN", "validator_bound",
+    "segment_name",
 ]
 
 SCHEMA_VERSION = 1
@@ -172,6 +173,9 @@ class PipelineInputs:
 
     `validator` is a command line the caller wants run as a step; `{{validator}}` substitutes it, and
     a stage that names that token is emitted only when it is given (see `validator_bound`).
+
+    `segment_key` names this segment in a chain where two segments share a pipeline; a keyed
+    segment always owns the scratch dir `<scratch>/<segment_key>` (see `segment_name`).
     """
 
     brief: str
@@ -180,6 +184,7 @@ class PipelineInputs:
     flags: Mapping[str, str | bool]
     lists: Mapping[str, tuple] = field(default_factory=dict)
     validator: str | None = None
+    segment_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,11 @@ class Schedule:
     scope: Mapping[str, str]
     levels: Mapping[str, tuple[tuple[str, ...], ...]]
     skipped: frozenset[str] = frozenset()
+
+
+def segment_name(manifest: Manifest, inputs: PipelineInputs) -> str:
+    """A segment's name in a chain: `inputs.segment_key` when set, else `manifest.pipeline`."""
+    return inputs.segment_key or manifest.pipeline
 
 
 def subject_key(subject: str | dict) -> str:

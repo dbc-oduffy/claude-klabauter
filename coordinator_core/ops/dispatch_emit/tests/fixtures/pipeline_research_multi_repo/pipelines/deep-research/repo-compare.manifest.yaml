@@ -1,0 +1,13 @@
+schema_version: 1
+pipeline: repo-compare
+description: "Cross-repo compare and rank over a multi-repo research run's per-repo syntheses"
+inputs:
+  brief: required
+  scratch_dir: optional
+stages:
+  - id: compare
+    phase: Compare
+    agent_type: coordinator:research-synthesizer
+    model: opus
+    template: repo-compare-template.md
+    output: "{{scratch_dir}}/comparison.md"

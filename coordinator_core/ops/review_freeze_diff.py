@@ -132,6 +132,7 @@ from __future__ import annotations
 
 MUTATES = ["state/review-trail/diffs/*.diff", "state/review-trail/diffs/*.head.sha"]  # slice_id-keyed, data-dependent set
 
+import re
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -500,8 +501,13 @@ def _synthesize_new_file_hunk(path: str, content: bytes) -> str:
     )
 
 
-#: Suffix `execute_review.prep_slice_id_for` ends every run-keyed prep slice id with.
-_PREP_SUFFIX = "-prep"
+#: `execute_review.prep_slice_id_for` ends every run-keyed prep slice id with `-prep`; a split prep adds `-N`.
+_PREP_SLICE_RE = re.compile(r"-prep(?:-\d+)?$")
+
+
+def _is_run_keyed_prep_id(slice_id: str) -> bool:
+    """True for `<run-key>-prep` and its split slices `<run-key>-prep-N`: ids unique to one run."""
+    return _PREP_SLICE_RE.search(slice_id) is not None
 
 
 def _shelve_prior_attempt(diff_path: Path, sha_path: Path) -> None:
@@ -613,7 +619,7 @@ def _freeze_diff_worktree(
 
     diff_unchanged = diff_path.exists() and diff_path.read_bytes().decode("utf-8") == diff_text
     if diff_path.exists() and not diff_unchanged:
-        if not slice_id.endswith(_PREP_SUFFIX):
+        if not _is_run_keyed_prep_id(slice_id):
             return _error(
                 f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
                 "different content — a slice id is a filename, and a generic one collides "
@@ -913,13 +919,15 @@ def freeze_diffs_batch(
 
         diff_unchanged = diff_path.exists() and diff_path.read_bytes().decode("utf-8") == diff_text
         if diff_path.exists() and not diff_unchanged:
-            results[i] = _error(
-                f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
-                "different content — a slice id is a filename, and a generic one collides "
-                "with whatever peer froze it first. Re-freeze under a slice id that names "
-                "this range."
-            )
-            continue
+            if not _is_run_keyed_prep_id(slice_id):
+                results[i] = _error(
+                    f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
+                    "different content — a slice id is a filename, and a generic one collides "
+                    "with whatever peer froze it first. Re-freeze under a slice id that names "
+                    "this range."
+                )
+                continue
+            _shelve_prior_attempt(diff_path, sha_path)
 
         # Re-freeze rule: a byte-identical, already-committed pair must not
         # have its .head.sha rewritten to this call's HEAD -- once the batch

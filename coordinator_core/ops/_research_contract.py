@@ -29,7 +29,8 @@ TIER_TABLE: Final[dict[str, dict[str, str]]] = {
     "spike": {"small": "scouts", "medium": "corpus", "large": "deep"},
 }
 
-# A scouts result naming any of these is raised to corpus: the scouts manifest is web-only.
+# A research block whose `sources` name any of these is raised from scouts to corpus. A scout
+# question's repo/local target is read by that scout and does not floor the tier.
 FLOOR_SOURCES: Final = frozenset({"repo", "structured", "notebooklm"})
 
 SCOUTS_PIPELINE: Final = "scouts"
@@ -58,7 +59,29 @@ SOURCE_SPECIALIST: Final[dict[str, str]] = {
     "repo": "coordinator:repo-specialist",
 }
 
-MAX_SCOUT_QUESTIONS: Final = 2
+# The bound is load: every scout is one more Sonnet LLM on a box already running ~50.
+MAX_SCOUT_QUESTIONS: Final = 8
+
+# Per-question scout targets: web (default), a named repo path, a local-box probe.
+SCOUT_TARGETS: Final = ("web", "repo", "local")
+DEFAULT_SCOUT_TARGET: Final = "web"
+SCOUT_MODES: Final = ("split", "combine")
+DEFAULT_SCOUT_MODE: Final = "split"
+# The one fan-out item of a combine run and of a bare ask.
+COMBINED_SCOUT_ITEM: Final = "question"
+# Opens a repo/local question's ask.md section; absence means web.
+TARGET_LINE_PREFIX: Final = "Target: "
+# dispatch.emit params the CLI sends and the research route reads.
+SCOUT_QUESTIONS_PARAM: Final = "scout_questions"
+SCOUT_MODE_PARAM: Final = "scout_mode"
+
+
+class ScoutQuestion(TypedDict):
+    """One scout question: its text, its target (SCOUT_TARGETS) and the target's ref ("" for web)."""
+
+    text: str
+    target: str
+    ref: str
 
 
 class ShapeResult(TypedDict):

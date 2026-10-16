@@ -415,7 +415,7 @@ def repair_absent_approved_stamp(text: str) -> str:
 class _Opts:
     __slots__ = (
         "verb", "plan", "by", "override_reason", "reason", "findings",
-        "falsifier_verdict", "falsifier_output", "prose", "no_commit",
+        "falsifier_verdict", "falsifier_output", "prose", "no_commit", "ship_sha",
     )
 
     def __init__(
@@ -430,8 +430,10 @@ class _Opts:
         falsifier_output: Optional[str] = None,
         prose: Optional[str] = None,
         no_commit: bool = False,
+        ship_sha: Optional[str] = None,
     ) -> None:
         self.no_commit = no_commit
+        self.ship_sha = ship_sha
         self.falsifier_verdict = falsifier_verdict
         self.falsifier_output = falsifier_output
         self.prose = prose
@@ -523,6 +525,11 @@ def _parse_args(argv: List[str]) -> _Opts:
             opts.findings = argv[i]
         elif a == "--no-commit":
             opts.no_commit = True
+        elif a == "--ship-sha":
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            opts.ship_sha = argv[i]
         elif a in _EXIT_CRITERION_FLAGS:
             if i + 1 >= len(argv):
                 raise _CliError(f"flag requires a value: {a}")
@@ -2074,7 +2081,9 @@ def _stamp_implemented(opts: _Opts) -> int:
 
     print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → implemented")
 
-    cascade_exit = _run_cascade(opts.plan, _state["deliverable_id"], stamp_sha)
+    # Under --no-commit no stamp sha exists; without the caller's sha the cascade refuses
+    # every baton and the flip reports as failed while the baton strands at ready_to_fire.
+    cascade_exit = _run_cascade(opts.plan, _state["deliverable_id"], stamp_sha or opts.ship_sha or "")
 
     # Archival occasion (see _archive_stamped_plan docstring): only attempted
     # when the flip itself was actually committed (worktree resolved, not
@@ -3731,6 +3740,13 @@ def main(argv: List[str]) -> int:
         print(
             f"{_PROG}: {opts.verb} does not accept --no-commit "
             "(only stamp-implemented can leave its write to a caller's commit)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if opts.ship_sha is not None and not opts.no_commit:
+        print(
+            f"{_PROG}: --ship-sha requires --no-commit (a committing stamp ships on its own sha)",
             file=sys.stderr,
         )
         return 1

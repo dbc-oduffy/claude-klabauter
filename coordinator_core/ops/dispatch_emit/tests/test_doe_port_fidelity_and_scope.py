@@ -238,5 +238,5 @@ def test_refuse_foreign_emission_is_called_from_the_registered_op():
     exercised only by test_queue_emit.py's direct unit calls."""
     import inspect
 
-    source = inspect.getsource(dispatch_op._dispatch_emit)
-    assert "_refuse_foreign_emission(" in source
+    assert "_emit_script_file(" in inspect.getsource(dispatch_op._dispatch_emit)
+    assert "_refuse_foreign_emission(" in inspect.getsource(dispatch_op._emit_script_file)

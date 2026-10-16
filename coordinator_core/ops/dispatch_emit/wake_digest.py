@@ -449,7 +449,7 @@ def next_action_parts(
         )
         params_expr = (
             "{ incomplete_chunks: [...new Set([..." + RUNTIME_VARS[0]
-            + ", ..." + RUNTIME_VARS[3] + routed_out_spread +"])], "
+            + ", ..." + RUNTIME_VARS[3] + routed_out_spread + "])], "
             + (f"script_path: {_js_lit(script_path)}, " if script_path else "")
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")

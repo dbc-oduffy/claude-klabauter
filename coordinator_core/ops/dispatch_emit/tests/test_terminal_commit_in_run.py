@@ -177,8 +177,8 @@ def test_declared_doc_writes_ride_the_commit_and_residue_does_not(repo):
     assert out["committed"] is True, out
     landed = _git(repo, "show", "--name-only", "--format=", out["sha"])
     assert "docs/delivery/ask-1.md" in landed and "scratch/" not in landed
-    # The commit takes no caller-named doc list: only the stage's declared writes land.
-    assert "doc_paths" not in {f.name for f in terminal_commit._PARAM_FIELDS}
+    # `doc_paths` is a candidate list only: the unnamed scratch residue stays out of the tree.
+    assert "scratch/warp/ask-1/briefs/C1.md" not in _git(repo, "ls-tree", "-r", "--name-only", "HEAD")
 
 
 def test_landed_run_ships_its_sizing_with_the_sha_in_a_trailer(repo):

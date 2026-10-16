@@ -986,3 +986,93 @@ def test_cli_splits_a_shell_joined_paths_argument(tmp_path: Path) -> None:
 
     assert cp.returncode == 0, cp.stderr
     assert "product_files: 2" in cp.stderr
+
+
+_PREP_ID = "manifest-run1-abc123def456-prep-2"
+
+
+def test_range_refreeze_of_prep_n_slice_shelves_prior_pair(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "one\n", "add a")
+    sha2 = _commit(tmp_path, "a.txt", "one\ntwo\n", "extend a")
+    sha3 = _commit(tmp_path, "a.txt", "one\ntwo\nthree\n", "extend a again")
+
+    first = freeze_diff(tmp_path, f"{sha1}..{sha2}", _PREP_ID)
+    assert first["error"] is None
+    d = _diffs_dir(tmp_path)
+    original = (d / f"{_PREP_ID}.diff").read_text()
+
+    second = freeze_diff(tmp_path, f"{sha1}..{sha3}", _PREP_ID)
+
+    assert second["error"] is None
+    assert (d / f"{_PREP_ID}.attempt1.diff").read_text() == original
+    assert (d / f"{_PREP_ID}.attempt1.head.sha").is_file()
+    assert (d / f"{_PREP_ID}.diff").read_text() != original
+
+
+def test_range_identical_refreeze_of_prep_n_slice_creates_no_attempt(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "one\n", "add a")
+    sha2 = _commit(tmp_path, "a.txt", "one\ntwo\n", "extend a")
+
+    assert freeze_diff(tmp_path, f"{sha1}..{sha2}", _PREP_ID)["error"] is None
+    assert freeze_diff(tmp_path, f"{sha1}..{sha2}", _PREP_ID)["error"] is None
+
+    assert not list(_diffs_dir(tmp_path).glob("*.attempt*"))
+
+
+def test_worktree_refreeze_of_prep_n_slice_shelves_prior_pair(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "a.txt", "one\n", "add a")
+    (tmp_path / "a.txt").write_text("one\ntwo\n")
+    first = freeze_diff(tmp_path, base, _PREP_ID, ["a.txt"], worktree=True)
+    assert first["error"] is None
+    d = _diffs_dir(tmp_path)
+    original = (d / f"{_PREP_ID}.diff").read_text()
+
+    (tmp_path / "a.txt").write_text("one\ntwo\nthree\n")
+    second = freeze_diff(tmp_path, base, _PREP_ID, ["a.txt"], worktree=True)
+
+    assert second["error"] is None
+    assert (d / f"{_PREP_ID}.attempt1.diff").read_text() == original
+    assert (d / f"{_PREP_ID}.attempt1.head.sha").is_file()
+    assert "three" in (d / f"{_PREP_ID}.diff").read_text()
+
+
+def test_worktree_identical_refreeze_of_prep_n_slice_creates_no_attempt(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "a.txt", "one\n", "add a")
+    (tmp_path / "a.txt").write_text("one\ntwo\n")
+
+    assert freeze_diff(tmp_path, base, _PREP_ID, ["a.txt"], worktree=True)["error"] is None
+    assert freeze_diff(tmp_path, base, _PREP_ID, ["a.txt"], worktree=True)["error"] is None
+
+    assert not list(_diffs_dir(tmp_path).glob("*.attempt*"))
+
+
+def test_range_generic_slice_id_still_refuses_on_changed_content(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "one\n", "add a")
+    sha2 = _commit(tmp_path, "a.txt", "one\ntwo\n", "extend a")
+    sha3 = _commit(tmp_path, "a.txt", "one\ntwo\nthree\n", "extend a again")
+    assert freeze_diff(tmp_path, f"{sha1}..{sha2}", "wave-1")["error"] is None
+
+    second = freeze_diff(tmp_path, f"{sha1}..{sha3}", "wave-1")
+
+    assert second["error"] is not None
+    assert "already names a frozen diff" in second["error"]
+    assert not list(_diffs_dir(tmp_path).glob("*.attempt*"))
+
+
+def test_worktree_generic_slice_id_still_refuses_on_changed_content(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "a.txt", "one\n", "add a")
+    (tmp_path / "a.txt").write_text("one\ntwo\n")
+    assert freeze_diff(tmp_path, base, "wave-1", ["a.txt"], worktree=True)["error"] is None
+    (tmp_path / "a.txt").write_text("one\ntwo\nthree\n")
+
+    second = freeze_diff(tmp_path, base, "wave-1", ["a.txt"], worktree=True)
+
+    assert second["error"] is not None
+    assert "already names a frozen diff" in second["error"]
+    assert not list(_diffs_dir(tmp_path).glob("*.attempt*"))

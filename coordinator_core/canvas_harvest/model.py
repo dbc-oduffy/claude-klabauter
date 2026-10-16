@@ -45,6 +45,7 @@ PROBE_READS_STALE = "probe-reads-stale"
 RECORD_ARTIFACT_MISMATCH = "record-artifact-mismatch"
 NO_SESSION_ID = "no-session-id"
 RECORD_TOO_LARGE = "record-too-large"
+READER_NOT_NAMED = "reader-not-named"
 
 
 class HarvestError(Exception):

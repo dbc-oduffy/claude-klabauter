@@ -15,7 +15,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import BinaryIO, Optional
 
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -105,7 +105,7 @@ def spawn_transcript_path(payload: dict) -> Optional[str]:
     return str(hits[0]) if len(hits) == 1 else None
 
 
-def _read_record_content(fh: object) -> Optional[str]:
+def _read_record_content(fh: BinaryIO) -> Optional[str]:
     """Content of the next capped transcript line when it is a `type: user` string record."""
     line = fh.readline(READ_CAP_BYTES + 1)
     if len(line) > READ_CAP_BYTES:

@@ -102,9 +102,9 @@ def test_plan_run_commit_tree_carries_one_valid_receipt(repo, claims):
     assert out["committed"] is True
     assert len(out["receipts"]) == 1 and out["receipt_coverage"] == "written"
     assert "receipt_divergence" not in out
-    tree = _git(["show", "--name-only", "--format=", out["sha"]], repo).split()
+    tree = _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
     assert out["receipts"][0] in tree
-    text = _git(["show", f"{out['sha']}:{out['receipts'][0]}"], repo)
+    text = _git(["show", f"HEAD:{out['receipts'][0]}"], repo)
     fm = yaml.safe_load(split_frontmatter(text.replace("\r\n", "\n")).fm_text)
     assert model.validate(fm) == []
     assert fm["deliverable_id"] == DLV and fm["baton_id"] is None
@@ -188,7 +188,7 @@ def test_inventory_run_writes_one_receipt_per_claimed_baton(repo, claims):
     assert out["chunks_committed"] == ["P1.C1"]
     ids = set()
     for rel in out["receipts"]:
-        text = _git(["show", f"{out['sha']}:{rel}"], repo)
+        text = _git(["show", f"HEAD:{rel}"], repo)
         fm = yaml.safe_load(split_frontmatter(text.replace("\r\n", "\n")).fm_text)
         assert fm["run"]["kind"] == "mise-en-place"
         ids.add(fm["baton_id"])

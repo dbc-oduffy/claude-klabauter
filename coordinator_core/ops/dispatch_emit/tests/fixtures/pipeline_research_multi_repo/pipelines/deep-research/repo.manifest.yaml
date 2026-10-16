@@ -1,0 +1,53 @@
+schema_version: 1
+pipeline: repo
+description: "Fixture repo pipeline: scope, scouts over the chunk or Haiku-scout lists, one synthesis"
+inputs:
+  brief: required
+  scratch_dir: optional
+  flags:
+    deepest: [true, false]
+    sonnet_scouts: [true, false]
+  lists:
+    chunks:
+      kind: strings
+    haiku_scouts:
+      kind: strings
+stages:
+  - id: scope
+    phase: Scope
+    agent_type: general-purpose
+    model: sonnet
+    template: repo-template.md
+    produces_brief: true
+    output: "{{scratch_dir}}/scope.md"
+  - id: scout-haiku
+    phase: Scouts
+    agent_type: general-purpose
+    model: haiku
+    template: repo-template.md
+    depends_on: [scope]
+    fan_out:
+      over: inputs.haiku_scouts
+    when:
+      flag: sonnet_scouts
+      equals: false
+    output: "{{scratch_dir}}/scout-{{item}}.md"
+  - id: scout-sonnet
+    phase: Scouts
+    agent_type: general-purpose
+    model: sonnet
+    template: repo-template.md
+    depends_on: [scope]
+    fan_out:
+      over: inputs.chunks
+    when:
+      flag: sonnet_scouts
+      equals: true
+    output: "{{scratch_dir}}/{{item}}-inventory.md"
+  - id: synthesis
+    phase: Synthesis
+    agent_type: general-purpose
+    model: sonnet
+    template: repo-template.md
+    depends_on: [scout-haiku, scout-sonnet]
+    output: "{{scratch_dir}}/synthesis.md"

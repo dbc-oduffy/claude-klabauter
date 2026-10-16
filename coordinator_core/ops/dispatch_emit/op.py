@@ -239,7 +239,7 @@ import sys
 import uuid
 from dataclasses import replace
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Optional
 
 from coordinator_core._content_root_primitive import content_root_for
@@ -248,6 +248,7 @@ from coordinator_core.content_root import read_content_root
 from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops._research_grounding import GROUNDING_REPORT
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_PM,
@@ -282,6 +283,9 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     RUN_ID_PREFIX,
     PipelineEmitRefused,
     PipelineInputs,
+    MANIFEST_SUFFIX,
+    PIPELINES_DIR,
+    segment_name,
     subject_key,
 )
 from coordinator_core.ops.dispatch_emit.pipeline_inputs import normalize_lists, subjects_from_value
@@ -523,6 +527,7 @@ def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizi
     """(run_id, parent_id) for a fan-out slice's reserved run id; ValueError when the id is not the
     sizing's own `em_analysis.ask_parent` run or is bound to a run that has not halted.
 
+    Trap: despite the lookup-shaped name this settles a stale run (writes); never call it read-only.
     A halted slice rebinds: its refire is the only way the siblings held `after` it release.
     A non-landed status with no live run for the sizing is settled `halted` here (a write, made
     before the caller's later checks); a landed or live run is refused by name."""
@@ -1068,13 +1073,34 @@ def _research_route_setup(
     from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
     from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
 
+    from coordinator_core.ops import _research_contract as rc
+
     given_topic = params.get("topic_slug")
     if given_topic is not None:
         slug_refusal = research_emit.given_slug_refusal(given_topic)
         if slug_refusal:
             raise PipelineEmitRefused([slug_refusal])
     lists = dict(params.get("lists") or {})
-    questions = [str(q) for q in lists.get("questions") or ()]
+    mode = params.get(rc.SCOUT_MODE_PARAM) or rc.DEFAULT_SCOUT_MODE
+    if mode not in rc.SCOUT_MODES:
+        raise PipelineEmitRefused([f"{rc.SCOUT_MODE_PARAM} {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
+    raw_questions = params.get(rc.SCOUT_QUESTIONS_PARAM)
+    if raw_questions:
+        mixed = []
+        if from_sizing:
+            mixed.append(f"{rc.SCOUT_QUESTIONS_PARAM} cannot combine with from_sizing; the sizing's research block carries its questions")
+        if lists.get("questions"):
+            mixed.append(f"{rc.SCOUT_QUESTIONS_PARAM} cannot combine with lists.questions; pass one or the other")
+        if mixed:
+            raise PipelineEmitRefused(mixed)
+        if isinstance(raw_questions, (str, bytes)) or not isinstance(raw_questions, (list, tuple)):
+            raise PipelineEmitRefused([f"{rc.SCOUT_QUESTIONS_PARAM} must be a list of questions"])
+        given_root = repo_root or params.get("target_root")
+        if not given_root:
+            raise ValueError("dispatch.emit research route requires repo_root or target_root")
+        questions = research_emit.normalize_scout_questions(Path(given_root), raw_questions)
+    else:
+        questions = [str(q) for q in lists.get("questions") or ()]
     if from_sizing:
         root = _sizing_root(params, repo_root, str(from_sizing))
         brief_rel = normalize_sizing_rel(root, str(from_sizing))
@@ -1090,10 +1116,14 @@ def _research_route_setup(
         research = {"value_class": "scouts", "appetite": "medium"}
         brief_rel = ""
     shape = research_shape.shape(research)
-    digest = research_emit.ask_digest(root, {
+    digest_parts = {
         "brief": brief_rel or str(ask), "research": research, "lists": lists,
         "flags": params.get("flags") or {}, "context": [str(c) for c in params.get("context") or ()],
-    })
+    }
+    if raw_questions or mode != rc.DEFAULT_SCOUT_MODE:
+        digest_parts["scout_questions"] = questions
+        digest_parts["scout_mode"] = mode
+    digest = research_emit.ask_digest(root, digest_parts)
     run_id = research_emit.run_id_for(
         root, RUN_DIR_ROOT, f"{RUN_ID_PREFIX}research-", digest, datetime.now().strftime("%Y%m%dT%H%M%S")
     )
@@ -1103,19 +1133,40 @@ def _research_route_setup(
     else:
         scratch_rel = _local_only_scratch(local_root, params.get("scratch_dir"), run_id)
     if not from_sizing:
-        brief_rel = research_emit.write_ask(root, scratch_rel, str(ask), questions)
+        ask_text = str(ask or "")
+        if raw_questions and not ask_text.strip():
+            ask_text = questions[0]["text"]
+        brief_rel = research_emit.write_ask(root, scratch_rel, ask_text, questions, mode)
     members_brief = research_emit.bind_context(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
+    content_root = _pipeline_content_root()
+    targets = [t for t in research.get("targets") or () if isinstance(t, dict)]
+    repo_segments: list[tuple[str, str]] = []
+    compare_brief = ""
+    multi_repo = ""
+    if (
+        research_emit.REPO_PIPELINE in shape["pipelines"]
+        and sum(1 for t in targets if t.get("source") == research_emit.REPO_PIPELINE) >= 2
+    ):
+        compare_name = research_emit.REPO_COMPARE_PIPELINE + MANIFEST_SUFFIX
+        if any(p.is_file() for p in (content_root / PIPELINES_DIR).rglob(compare_name)):
+            repo_segments, compare_brief = research_emit.bind_repo_targets(
+                root, scratch_rel, members_brief, targets
+            )
+        else:
+            multi_repo = "unavailable: no repo-compare manifest in the content root"
     pairs = research_emit.segments_for(
         shape,
         brief_rel=members_brief,
         scratch_rel=scratch_rel,
         questions=questions,
         sources=research.get("sources") or (),
-        targets=[t for t in research.get("targets") or () if isinstance(t, dict)],
+        targets=targets,
+        mode=mode,
+        repo_segments=repo_segments,
+        compare_brief=compare_brief,
     )
-    content_root = _pipeline_content_root()
     given_flags = {str(k): str(v) for k, v in (params.get("flags") or {}).items()}
     segments = []
     reasons: list[str] = []
@@ -1128,7 +1179,9 @@ def _research_route_setup(
             except PipelineEmitRefused as exc:
                 reasons.extend(f"pipeline {pipeline!r}: {r}" for r in exc.reasons)
                 continue
-        defaults = research_emit.corpus_default_lists(pipeline, questions)
+        defaults = research_emit.corpus_default_lists(
+            pipeline, [q["text"] if isinstance(q, dict) else q for q in questions]
+        )
         given = {
             **{k: v for k, v in defaults.items() if k in manifest.lists and k not in inputs.lists},
             **{k: tuple(v) for k, v in lists.items() if k in manifest.lists and k != "questions"},
@@ -1176,9 +1229,26 @@ def _research_route_setup(
         if manifest.pipeline == "notebooklm":
             claims = research_emit.claims_output(manifest)
             close_params["require_claims"] = [claims if index == 0 else f"notebooklm/{claims}"]
-    if len(segments) > 1:
-        # pipeline_compose writes every segment after the first under <scratch>/<pipeline>/.
-        close_params["segment_dirs"] = [m.pipeline for m, _, _ in segments[1:]]
+    if any(
+        m.pipeline == rc.SCOUTS_PIPELINE
+        and any(PurePosixPath(st.output).name == GROUNDING_REPORT for st in m.stages)
+        for m, _, _ in segments
+    ):
+        close_params["require_grounding"] = True
+    # pipeline_compose nests a segment under <scratch>/<segment name>/ when it is keyed or not first.
+    nested = [segment_name(m, i) for index, (m, i, _) in enumerate(segments) if index > 0 or i.segment_key]
+    if nested:
+        close_params["segment_dirs"] = nested
+    if repo_segments:
+        compare_manifest = next(m for m, _, _ in segments if m.pipeline == research_emit.REPO_COMPARE_PIPELINE)
+        close_params["require_outputs"] = [
+            f"{research_emit.REPO_COMPARE_PIPELINE}/{research_emit.compare_output(compare_manifest)}"
+        ]
+    scout_targets: list[dict] = []
+    if any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments):
+        normalized = research_emit.normalize_scout_questions(root, questions) if questions else []
+        slugs = [rc.COMBINED_SCOUT_ITEM] * len(normalized) if mode == "combine" else research_emit.scout_slugs(normalized)
+        scout_targets = [{"slug": s, "target": q["target"], "ref": q["ref"]} for s, q in zip(slugs, normalized)]
     research_ctx = {
         "root": root,
         "run_id": run_id,
@@ -1188,11 +1258,17 @@ def _research_route_setup(
             "tier": shape["tier"],
             "reason": shape["reason"],
             "pipelines": shape["pipelines"],
+            "scout_mode": mode,
+            "scout_targets": scout_targets,
             "segments": [
-                {"pipeline": m.pipeline, "flags": dict(i.flags), "lists": {k: list(v) for k, v in i.lists.items()}}
+                {
+                    "pipeline": m.pipeline, "segment": segment_name(m, i),
+                    "flags": dict(i.flags), "lists": {k: list(v) for k, v in i.lists.items()},
+                }
                 for m, i, _ in segments
             ],
         },
+        "multi_repo": multi_repo,
         "next_action": {"op": "research.close", "params": close_params},
         "legs": research_emit.halt_legs([m.pipeline for m, _, _ in segments]),
     }
@@ -2109,6 +2185,8 @@ def _dispatch_emit(
     if research_ctx is not None:
         reply.update(research_ctx["shape"])
         reply["next_action"] = research_ctx["next_action"]
+        if research_ctx["multi_repo"]:
+            reply["multi_repo"] = research_ctx["multi_repo"]
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled

@@ -1032,7 +1032,7 @@ def test_ratio_slice_agent_groups_slices_instead_of_one_reviewer_per_slice():
 
 
 @pytest.mark.parametrize("rows,slices,expected", [(1, 5, 1), (4, 5, 1), (5, 5, 1), (8, 5, 2), (9, 5, 3), (12, 5, 3), (9, 2, 2)])
-def test_grouped_reviewer_count_is_ceil_rows_over_max_capped_at_slices(rows, slices, expected):
+def test_grouped_reviewer_count_is_ceil_rows_over_max_floored_by_min_and_capped_at_slices(rows, slices, expected):
     prompts = _grouped_prompts(rows, slices)
     assert len(prompts) == expected
     owned = sum(p.count('"id":"s') for p in prompts)

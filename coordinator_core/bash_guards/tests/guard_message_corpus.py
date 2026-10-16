@@ -1258,6 +1258,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-external-workspace-vcs-write",
+        "block-external-workspace-vcs-write-control",
+        "git status",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-push-pr-non-owned-remote",
         "block-push-pr-non-owned-remote-control",
         "git fetch upstream",

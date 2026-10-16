@@ -79,12 +79,13 @@ def test_underscore_name_resolves_kebab_key(reg):
     assert "a-c" in text and "a_c" not in text
 
 
-def test_floor_guards_has_the_fourteen_names():
-    assert len(mp.FLOOR_GUARDS) == 14
+def test_floor_guards_has_the_fifteen_names():
+    assert len(mp.FLOOR_GUARDS) == 15
     assert "block-approval-sentinel-creation" in mp.FLOOR_GUARDS
     assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
     assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS
     assert "guard-heavy-command-admission" in mp.FLOOR_GUARDS
+    assert "block-external-workspace-vcs-write" in mp.FLOOR_GUARDS
 
 
 def test_heavy_command_admission_blocks_at_every_level(reg):

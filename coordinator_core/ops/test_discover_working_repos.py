@@ -152,6 +152,78 @@ class TestGateAndDedup:
         assert list(_gate_and_dedup([native], {_to_posix_key(forward)})) == []
 
 
+class TestExternalWorkspaceExcluded:
+    def _register(self, tmp_path: Path, monkeypatch, ws: Path) -> None:
+        reg_dir = tmp_path / "machine-local"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "registry.toml").write_text(
+            f'"external_workspaces.ws.path" = "{ws.as_posix()}"\n'
+            '"external_workspaces.ws.vcs" = "p4"\n'
+        )
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    def test_git_initialised_workspace_is_dropped_sibling_kept(self, tmp_path: Path, monkeypatch):
+        ws = tmp_path / "dev" / "p4-ws"
+        sibling = tmp_path / "dev" / "sibling"
+        _init_git_repo(ws)
+        _init_git_repo(sibling)
+        self._register(tmp_path, monkeypatch, ws)
+
+        out = list(_gate_and_dedup([str(ws), str(sibling)], set()))
+
+        assert out == [_emit_form(str(sibling))]
+
+    def test_repo_nested_inside_workspace_is_dropped(self, tmp_path: Path, monkeypatch):
+        ws = tmp_path / "dev" / "p4-ws"
+        nested = ws / "sub" / "inner"
+        _init_git_repo(nested)
+        self._register(tmp_path, monkeypatch, ws)
+
+        assert list(_gate_and_dedup([str(nested)], set())) == []
+
+    def test_tier_b_and_a5_candidates_are_dropped(self, tmp_path: Path, monkeypatch):
+        import coordinator_core.ops.discover_working_repos as m
+
+        ws = tmp_path / "dev" / "p4-ws"
+        sibling = tmp_path / "dev" / "sibling"
+        _init_git_repo(ws)
+        _init_git_repo(sibling)
+        self._register(tmp_path, monkeypatch, ws)
+        reg = tmp_path / "machine-local" / "registry.toml"
+        reg.write_text(reg.read_text() + f'"repos.leak" = "{ws.as_posix()}"\n')
+        monkeypatch.setattr(m, "_tier_a", lambda: [])
+        monkeypatch.setattr(m, "_tier_b", lambda: [str(ws), str(sibling)])
+
+        assert m.discover_repo_paths() == [_emit_form(str(sibling))]
+
+    def test_case_variant_candidate_is_dropped(self, tmp_path: Path, monkeypatch):
+        ws = tmp_path / "dev" / "p4-ws"
+        _init_git_repo(ws)
+        self._register(tmp_path, monkeypatch, ws)
+        variant = tmp_path / "dev" / "P4-WS"
+        if not variant.exists():
+            pytest.skip("case-sensitive filesystem: a case variant is a different path")
+
+        assert list(_gate_and_dedup([str(variant)], set())) == []
+
+    def test_windows_drive_case_variant_is_dropped(self, tmp_path: Path, monkeypatch):
+        if os.name != "nt":
+            pytest.skip("drive-letter case folding is a Windows-host property")
+        ws = tmp_path / "dev" / "p4-ws"
+        _init_git_repo(ws)
+        self._register(tmp_path, monkeypatch, ws)
+        s = str(ws)
+
+        assert list(_gate_and_dedup([s[0].swapcase() + s[1:]], set())) == []
+
+    def test_unregistered_repo_still_discovered(self, tmp_path: Path, monkeypatch):
+        repo = tmp_path / "dev" / "plain"
+        _init_git_repo(repo)
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "empty-registry"))
+
+        assert list(_gate_and_dedup([str(repo)], set())) == [_emit_form(str(repo))]
+
+
 class TestToPosixKey:
     def test_native_drive_form(self):
         assert _to_posix_key("C:\\dev\\repo") == "/x/dev/repo"

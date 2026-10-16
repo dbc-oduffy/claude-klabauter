@@ -538,11 +538,6 @@ def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
     return out
 
 
-def _is_sibling_slice(sizing: Mapping) -> bool:
-    analysis = sizing.get("em_analysis")
-    return isinstance(analysis, Mapping) and bool(analysis.get("ask_parent"))
-
-
 def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
     """A sibling slice shares its `pm_verbatims` with every other slice, so it seeds none of them:
     its register already holds the rows the split assigned it, else its `intent` is its one row,
@@ -578,7 +573,7 @@ def bind(
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     sizing = sizing if isinstance(sizing, dict) else {}
     foreign = foreign_turns(root, sizing, ask_text, relayed_text)
-    if _is_sibling_slice(sizing):
+    if rr.is_sibling_slice(sizing):
         entries = _slice_entries(sizing)
     elif relayed_text and relayed_text.strip():
         entries = []

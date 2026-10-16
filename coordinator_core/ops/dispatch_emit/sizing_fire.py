@@ -112,8 +112,8 @@ def resumable_plan(
 
     The plan is the sizing's `plan:` edge, else at arm S `s_plan_path`. Incomplete rows are those
     neither closed by disposition (`coded`, `delivered_elsewhere`, ...) nor landed by a checkpoint
-    commit of this plan; any row reports on disk are stale history and do not refuse. A plan with
-    rows, every one landed, raises SizingFireRefused ("already ran") unless a ledger-halt pointer
+    commit of this plan or a `ledger-check` halt commit whose `Halt-Plan:` names it; row reports
+    on disk are stale history and do not refuse. A plan with rows, every one landed, raises SizingFireRefused ("already ran") unless a ledger-halt pointer
     names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it. A plan with
     no readable spine or no rows is not resumable (None). One file read, plus one more on the
     already-ran path; one `git log` only when a row is open.
@@ -148,9 +148,9 @@ def resumable_plan(
         and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
     ]
     if open_ids:
-        from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_rows
+        from coordinator_core.ops.dispatch_emit.emit import resume_landed_rows
 
-        landed = checkpoint_landed_rows(root, plan_rel)
+        landed = resume_landed_rows(root, plan_rel)
         open_ids = [i for i in open_ids if i not in landed]
     if not open_ids:
         halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows)

@@ -256,7 +256,7 @@ HALTED_RECORD_PARAM = "halted_by"
 #: `dispatch.terminal_commit` params key for the roadmap fan-out record:
 #: `{plans: [repo-relative plan path, ...]}`.
 FANOUT_RECORD_PARAM = "fanout"
-HALT_REASON_FIELDS =("reason", "detail", "refused", "error")
+HALT_REASON_FIELDS = ("reason", "detail", "refused", "error")
 HALT_REASON_MAX_CHARS = 300
 
 
@@ -271,6 +271,9 @@ def halted_record_message(run_id: str, halted: dict) -> str:
         if text:
             lines.append(f"Halt-Reason: {text[:HALT_REASON_MAX_CHARS]}")
             break
+    plan = halted.get(HALT_PLAN_FIELD)
+    if isinstance(plan, str) and _relative_inside(plan) and plan == "".join(plan.split()):
+        lines.append(f"{HALT_PLAN_TRAILER}: {plan}")
     return "\n".join(lines)
 
 
@@ -300,6 +303,8 @@ DELIVERY_NOTE_DIR = "docs/delivery"
 
 LEDGER_HALT_FILE = "ledger-halt.json"
 HALT_PLAN_FIELD = "plan"
+#: Commit trailer naming the plan a halt commit landed chunks for; `resume_landed_rows` reads it.
+HALT_PLAN_TRAILER = "Halt-Plan"
 RESUME_LEDGER_KEY = "resume_ledger"
 
 

@@ -366,7 +366,7 @@ def _agent(**kw) -> ReviewAgent:
 
 @pytest.mark.parametrize("rows", range(1, 13))
 @pytest.mark.parametrize("slices", range(1, 6))
-def test_reviewer_count_is_ceil_rows_over_max_capped_by_slices(rows, slices):
+def test_reviewer_count_is_ceil_rows_over_max_floored_by_min_and_capped_by_slices(rows, slices):
     agent = _agent(executor_rows_per_reviewer=(3, 4))
     assert agent.reviewer_count(rows, slices) == max(1, min(slices, math.ceil(rows / 4), rows // 3))
 

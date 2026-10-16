@@ -250,6 +250,10 @@ SURFACE_TOOL = "tool"
 #: class (Anti-scope).
 DESTINATION_FOREIGN = "foreign"
 DESTINATION_PUBLISH = "publish"
+#: A registered external workspace (someone else's code, read-only). The
+#: copy carries no cross-repo-memo pointer and no clear line: the PM
+#: requirement is a hard one, so nothing here advertises an override.
+DESTINATION_EXTERNAL_WORKSPACE = "external-workspace"
 
 #: The durable source-side alternative's doctrine citation (AC15) -- the
 #: doctrine SECTION, never a bare directory, and never the mirror's own
@@ -757,6 +761,17 @@ def render_publish_subagent_message(
     )
 
 
+def render_external_workspace_message(target_repo: str, workspace_key: str, raw_target: str = "") -> str:
+    """The EXTERNAL_WORKSPACE-class deny copy, shared by both agent classes:
+    the target is a registered read-only workspace of someone else's code.
+    Names the workspace key; offers no memo, level verb or clear line."""
+    return (
+        f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is registered "
+        f"external workspace `{workspace_key}` — someone else's code, read-only; "
+        "a human changes it through its own VCS."
+    )
+
+
 def render_bump_message(
     *,
     agent_class: str,
@@ -827,6 +842,8 @@ def render_bump_message(
     neither Bash guard's own call site changes, and this dispatcher's
     contract is unchanged.
     """
+    if destination_class == DESTINATION_EXTERNAL_WORKSPACE:
+        return render_external_workspace_message(target_repo, destination_owner, raw_target)
     if destination_class == DESTINATION_PUBLISH:
         if agent_class == AGENT_CLASS_SUBAGENT:
             return render_publish_subagent_message(

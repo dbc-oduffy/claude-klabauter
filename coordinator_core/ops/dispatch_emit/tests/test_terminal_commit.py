@@ -1363,9 +1363,9 @@ def _review_record_call(repo: Path, *, with_plan: bool) -> dict:
     )
 
 
-def _head_files(repo: Path) -> str:
+def _commit_files(repo: Path, sha: str) -> str:
     return subprocess.run(
-        ["git", "show", "--name-only", "--format=", "HEAD"],
+        ["git", "show", "--name-only", "--format=", sha],
         cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
     ).stdout
 
@@ -1387,7 +1387,7 @@ def test_review_firing_writes_reviews_row_into_terminal_commit(repo):
         "max_severity": "P1",
         "applied": 1,
     }
-    assert "docs/plans/ex.evidence.yaml" in _head_files(repo)
+    assert "docs/plans/ex.evidence.yaml" in _commit_files(repo, out["sha"])
 
 
 def test_review_firing_without_plan_path_writes_no_evidence(repo):

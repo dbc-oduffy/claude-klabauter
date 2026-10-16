@@ -90,3 +90,54 @@ def test_unreadable_registry_fails_closed(monkeypatch):
 
     monkeypatch.setattr(machine_resolver, "registry_dir", boom)
     assert guard.check(_bash("p4 submit -d x")) is not None
+
+
+def _registry(monkeypatch, tmp_path, *, vcs=None, policy=None):
+    from coordinator_core import machine_resolver
+
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    lines = []
+    if vcs is not None:
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        lines += [
+            "[external_workspaces.ws]",
+            f"path = '{ws.as_posix()}'",
+            f'vcs = "{vcs}"',
+        ]
+    if policy is not None:
+        lines += ["[policy]", f"p4_no_submit = {policy}"]
+    (reg / "registry.local.toml").write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(machine_resolver, "registry_dir", lambda: reg)
+
+
+@pytest.mark.parametrize("cmd", ["p4 submit -d x", "p4 shelve -c 5"])
+def test_armed_by_p4_workspace_alone(monkeypatch, tmp_path, cmd):
+    _registry(monkeypatch, tmp_path, vcs="P4")
+    assert guard.check(_bash(cmd)) is not None
+
+
+def test_armed_by_policy_key_alone(monkeypatch, tmp_path):
+    _registry(monkeypatch, tmp_path, policy='["//depot"]')
+    assert guard.check(_bash("p4 submit -d x")) is not None
+
+
+def test_unarmed_with_neither(monkeypatch, tmp_path):
+    _registry(monkeypatch, tmp_path)
+    assert guard.check(_bash("p4 submit -d x")) is None
+
+
+def test_git_workspace_alone_does_not_arm(monkeypatch, tmp_path):
+    _registry(monkeypatch, tmp_path, vcs="git")
+    assert guard.check(_bash("p4 submit -d x")) is None
+
+
+def test_empty_policy_key_with_p4_workspace_stays_armed(monkeypatch, tmp_path):
+    _registry(monkeypatch, tmp_path, vcs="p4", policy="[]")
+    assert guard.check(_bash("p4 submit -d x")) is not None
+
+
+def test_p4_workspace_still_allows_local_verbs(monkeypatch, tmp_path):
+    _registry(monkeypatch, tmp_path, vcs="p4")
+    assert guard.check(_bash("p4 sync //depot/...")) is None

@@ -51,6 +51,17 @@ def test_markers_over_fixture_texts():
     assert model.classify_error("") is None
 
 
+def test_reader_not_named_is_distinct_from_every_other_reason():
+    reasons = [
+        value
+        for name, value in vars(model).items()
+        if name.isupper() and isinstance(value, str) and name not in {"SCHEMA", "PROJECT_PREFIX", "NOT_FOUND", "NEEDS_APPROVAL"}
+    ]
+    assert model.READER_NOT_NAMED == "reader-not-named"
+    assert reasons.count(model.READER_NOT_NAMED) == 1
+    assert len(reasons) == len(set(reasons))
+
+
 def test_artifact_id_from_url():
     assert model.artifact_id_from_url("https://claude.ai/artifact/Qz7LmPx2NcVt9RkHdYw3Fe") == "Qz7LmPx2NcVt9RkHdYw3Fe"
     assert model.artifact_id_from_url("claude.ai/artifact/Qz7LmPx2NcVt9RkHdYw3Fe?x=1") == "Qz7LmPx2NcVt9RkHdYw3Fe"

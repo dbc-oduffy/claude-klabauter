@@ -539,12 +539,14 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
     apply_cross_repo_level,
+    DESTINATION_EXTERNAL_WORKSPACE,
     DESTINATION_FOREIGN,
     DESTINATION_PUBLISH,
     SURFACE_TOOL,
     render_bump_message,
     resolve_agent_class,
 )
+from coordinator_core.machine_resolver import external_workspace_containing
 from coordinator_core.session import machinery_paths
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
@@ -1086,9 +1088,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 _resolve_git_root(target_dir) if target_dir is not None else file_path
             )
         )
+        workspace_key = external_workspace_containing(target_dir or file_path)
         if (
             effective_sid
             and not subagent_at_publish
+            and workspace_key is None
             and (
                 marker_present(marker_gitdir, effective_sid)
                 or marker_present(legacy_marker_gitdir, effective_sid)
@@ -1123,6 +1127,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if target_gitdir is not None and target_is_publish_destination(target_repo):
             destination_class = DESTINATION_PUBLISH
             destination_owner = publish_destination_owner(target_repo)
+        if workspace_key is not None:
+            destination_class = DESTINATION_EXTERNAL_WORKSPACE
+            destination_owner = workspace_key
 
         message = render_bump_message(
             agent_class=agent_class,

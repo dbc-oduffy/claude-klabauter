@@ -60,6 +60,7 @@ def rows(tmp_path):
 
 def test_changelog_touched_at_head_gives_no_line(rows):
     src, top, engine = rows
+    _commit(src, "unrelated/c.py", "3\n")
     assert _mod._changelog_lag_line([top, engine], [top, engine], src, "HEAD") == ""
 
 

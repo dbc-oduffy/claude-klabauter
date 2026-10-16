@@ -166,7 +166,10 @@ COORDINATOR_OWNED_KEYS: List[str] = [
 FAMILY_PREFIX_ENTRIES: List[str] = [
     "plugin.mirrors",
     "engine.working_repos",
+    "external_workspaces",
 ]
+# "external_workspaces" is DoE-declared (bare [regeneratability] entry for the
+# external_workspaces.<name>.{path,kind,vcs,p4_client} namespace); claude-klabauter supplies only the arm.
 
 
 def _key_matches_regen_entry(canon_key: str, regen_key: str) -> bool:

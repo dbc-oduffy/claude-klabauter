@@ -193,8 +193,11 @@ def test_from_sizing_is_exclusive_of_other_selectors(repo, extra):
     assert cli_module.main(["--from-sizing", "s.yaml", *extra]) == cli_module.EXIT_USAGE
 
 
-def test_three_scout_questions_are_refused(repo, capsys):
-    argv = ["--research", "--ask", "t", "--list", "questions=a,b,c"]
+def test_over_the_cap_scout_questions_are_refused(repo, capsys):
+    from coordinator_core.ops import _research_contract as rc
+
+    over = ",".join(f"q{n}" for n in range(rc.MAX_SCOUT_QUESTIONS + 1))
+    argv = ["--research", "--ask", "t", "--list", f"questions={over}"]
     assert cli_module.main(argv) == cli_module.EXIT_DATA_ERROR
 
 

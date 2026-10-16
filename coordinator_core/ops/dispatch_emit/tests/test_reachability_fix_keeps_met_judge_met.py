@@ -68,4 +68,4 @@ def test_baseline_shape_unreachable_list_demotes_the_same_judge():
     (out,) = _run([_met_judge({"unreachable": [f"{_LIFECYCLE}:owner_lease_tick"], "undecidable": []})], judged=True)
     assert out["revise_and_refire"] is not None
     assert out["revise_and_refire"]["reason"].startswith("not wired up: ")
-    assert "commit" not in out["phases"]
+    assert out["commit"] is None  # a halt commits its record only (a93b0ee881)

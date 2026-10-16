@@ -30,17 +30,19 @@ def _git(repo, *a):
     subprocess.run(["git", *a], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
 
-def _landed_repo(repo, rows=(("A1", "open"), ("A2", "open"))):
-    """A git repo whose plan rows are all checkpoint-landed, none coded (unless `rows` says so)."""
+def _landed_repo(repo, rows=(("A1", "open"), ("A2", "open")), landed=None):
+    """A git repo whose plan rows are all checkpoint-landed (only `landed` ids when given), none coded
+    (unless `rows` says so)."""
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "t@t.example")
     _git(repo, "config", "user.name", "t")
     _plan(repo, rows=list(rows))
     (repo / "x.txt").write_text("x\n", encoding="utf-8")
     _git(repo, "add", "x.txt")
-    ids = ", ".join(i for i, _ in rows)
+    landed_ids = [i for i, _ in rows if landed is None or i in landed]
+    ids = ", ".join(landed_ids)
     _git(
-        repo, "commit", "-q", "-m", f"checkpoint(wave 1): {len(rows)} rows — {ids}",
+        repo, "commit", "-q", "-m", f"checkpoint(wave 1): {len(landed_ids)} rows — {ids}",
         "-m", f"Checkpoint-Plan: {PLAN_REL}\nCheckpoint-Base: abc1234",
     )
 
@@ -72,6 +74,15 @@ def test_arm_s_resume_through_the_resume_sink(repo):  # noqa: F811
     _pointer(repo)
     v = gate(repo, REL)
     assert v.arm == "s" and v.resume_ledger is not None and v.halt is None
+
+
+def test_pointer_with_an_unlanded_row_is_never_a_ledger_resume(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, landed=("A1",))
+    _pointer(repo)
+    v = gate(repo, REL)
+    assert v.halt is None and v.resume_ledger is None
+    assert v.resume_plan == PLAN_REL and v.resume_rows == ["A2"]
 
 
 def _load(repo):

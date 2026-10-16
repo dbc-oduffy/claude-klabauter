@@ -1,4 +1,4 @@
-"""canvas_harvest.api - the two calls the op and the CLI make.
+"""canvas_harvest.api - the calls the op and the CLI make.
 
 `harvest` and `probe` resolve the session id and the transcript files, lift the
 canvas reads out of them and hand the result to the writers. The callee modules
@@ -8,7 +8,7 @@ every callee; None means the current UTC time.
 
 Callee signatures (the contract rows C2 to C5 build to):
 
-    lift.lift(transcripts: list[Path], artifact_id: str) -> model.Lifted
+    lift.lift(transcripts: list[Path], artifact_id: str, *, reader_agent_id: str | None = None) -> model.Lifted
     record.write_record(lifted: model.Lifted, out_dir: Path, now: datetime) -> model.RecordWrite
     probe_stamp.stamp_probe(lifted: model.Lifted, out_dir: Path, session_id: str, now: datetime,
                             *, artifact_id: str | None = None) -> Path   (the harvest.json written)
@@ -16,6 +16,10 @@ Callee signatures (the contract rows C2 to C5 build to):
                                  session_id: str, now: datetime) -> Path | None   (None: no record)
     render.write_settled_skeleton(lifted: model.Lifted, out_dir: Path) -> bool
         (True when this call created SETTLED.md, False when it already existed)
+    reader.dispatch(url: str) -> dict
+        (keys subagent_type, description, prompt, harvest_argv)
+    reader.named_reader(transcript: Path, artifact_id: str) -> str
+        (the agentId; raises HarvestError(model.READER_NOT_NAMED))
 """
 
 from __future__ import annotations
@@ -68,7 +72,9 @@ def _raise_unreadable(lifted, artifact_id, out_dir, sid, now):
     raise model.HarvestError(model.CANVAS_UNREADABLE, error.kind)
 
 
-def harvest(url, out_dir, *, session_id=None, transcript=None, now: Optional[datetime] = None) -> model.RecordWrite:
+def harvest(
+    url, out_dir, *, session_id=None, transcript=None, now: Optional[datetime] = None, reader: bool = False
+) -> model.RecordWrite:
     out_dir = Path(out_dir)
     now = now or datetime.now(timezone.utc)
     artifact_id, sid, transcripts = _resolve_inputs(url, session_id, transcript)

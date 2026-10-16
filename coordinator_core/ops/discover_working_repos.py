@@ -63,6 +63,8 @@ from typing import Iterable, Iterator, List, Optional, Sequence
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.path_identity import dir_identity
 from coordinator_core.machine_resolver import (
+    external_workspace_containing as _external_workspace_containing,
+    external_workspace_roots as _external_workspace_roots,
     merged_flat_registry as _merged_flat_registry,
     registry_value as _registry_value,
 )
@@ -196,10 +198,29 @@ def _identities(keys: Iterable[str]) -> set:
     return {dir_identity(_fs_probe_path(k), fallback=k) for k in keys}
 
 
+def _under_identity(path: str, ids: set) -> bool:
+    """True when ``path`` or an ancestor is a directory in ``ids`` (inode identity, so a
+    case-variant spelling on a case-insensitive filesystem still matches)."""
+    if not ids:
+        return False
+    cur = path
+    while True:
+        if dir_identity(cur, fallback=None) in ids:
+            return True
+        parent = os.path.dirname(cur)
+        if not parent or parent == cur:
+            return False
+        cur = parent
+
+
 def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> Iterator[str]:
     if mirror_keys is None:
         mirror_keys = _publish_mirror_keys()
     mirror_ids = _identities(mirror_keys)
+    ws_ids = {
+        i for i in _identities(e["path"] for e in _external_workspace_roots().values())
+        if isinstance(i, tuple)
+    }
     seen: set = set()
     for line in lines:
         if not line:
@@ -208,6 +229,8 @@ def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> 
         if key in mirror_keys:
             continue
         probe = _fs_probe_path(key)
+        if _external_workspace_containing(probe) or _under_identity(probe, ws_ids):
+            continue
         if not _is_git_root(probe):
             continue
         identity = dir_identity(probe, fallback=key)

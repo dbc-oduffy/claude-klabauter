@@ -8,8 +8,12 @@ notebooklm manifest, and `claims_output` names its sweep output for `research.cl
 Scout questions are slugged to [a-z0-9-] (at most 48 chars) because the scouts template names
 `digest-{{item}}.md`.
 
-Negative-spec: loads and validates no manifest (`gate_notebooklm` only rewrites one it is handed), composes no script, resolves no content root; the
-only writes are ask.md and brief.md under the caller's repo-relative scratch dir.
+`bind_repo_targets` fans a sizing's repo targets out to one keyed `repo` segment each (own scratch dir and
+brief) plus one `repo-compare` segment; `compare_output` names that segment's deliverable.
+
+Negative-spec: loads and validates no manifest (`gate_notebooklm` only rewrites one it is handed), composes no script, resolves no content root; stats a
+repo scout target and never touches a local one; the only writes are ask.md and brief.md under the caller's repo-relative scratch dir, and the per-segment
+`<key>/brief.md` and `repo-compare/brief.md` files `bind_repo_targets` writes there.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -36,11 +40,13 @@ DIGEST_LEN = 6
 SCRIPT_SUFFIX = ".workflow.mjs"
 SUBMISSION_FILE = "submission.json"
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
-_BARE_SLUG = "question"
+_TOPIC_FALLBACK = "question"
 _ROSTER_LIST = "roster"
 _QUESTIONS_LIST = "questions"
 _NOTEBOOKS_LIST = "notebooks"
 _NOTEBOOKLM_PIPELINE = "notebooklm"
+REPO_PIPELINE = "repo"
+REPO_COMPARE_PIPELINE = "repo-compare"
 
 # The corpus scope templates fix these shapes: the repo scope defines exactly four chunks A-D
 # (spanning every target, by the repos' architecture, not one per target) and assigns them to
@@ -74,7 +80,7 @@ def list_key_refusals(pipeline: str, lists: Mapping[str, Sequence[str]]) -> list
 
 
 def corpus_default_lists(pipeline: str, questions: Sequence[str] = ()) -> dict[str, tuple[str, ...]]:
-    """`CORPUS_DEFAULT_LISTS[pipeline]`, with web topics seeded one letter per research question."""
+    """`CORPUS_DEFAULT_LISTS[pipeline]`, with web topics seeded one letter per research question text."""
     lists = dict(CORPUS_DEFAULT_LISTS.get(pipeline, {}))
     if pipeline == "web" and questions:
         lists["topics"] = tuple("abcdefghijklmnopqrstuvwxyz"[: len(questions)])
@@ -129,10 +135,73 @@ def given_slug_refusal(value: object) -> str:
 def topic_slug(ask: str = "", sizing_rel: str = "") -> str:
     """The run's `research.close` topic: the sizing's stem without its date, else the ask's slug."""
     stem = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", Path(sizing_rel).stem) if sizing_rel else ""
-    return _slug(stem or ask) or _BARE_SLUG
+    return _slug(stem or ask) or _TOPIC_FALLBACK
 
 
-def scout_slugs(questions: Sequence[str]) -> list[str]:
+def normalize_scout_questions(root: Path, questions: Sequence[str | Mapping]) -> list[rc.ScoutQuestion]:
+    """Each question as a `ScoutQuestion`: a str is a web question; a mapping is validated.
+
+    A repo ref must exist (absolute, else under `root`) and is stored repo-relative POSIX when under
+    `root`, else absolute POSIX; a local ref is a non-empty single line, stored verbatim and never
+    stat'd. Raises one PipelineEmitRefused naming every bad "scout question <n>".
+    """
+    out: list[rc.ScoutQuestion] = []
+    reasons: list[str] = []
+    for index, raw in enumerate(questions):
+        label = f"scout question {index + 1}"
+        if isinstance(raw, str):
+            out.append({"text": raw, "target": rc.DEFAULT_SCOUT_TARGET, "ref": ""})
+            continue
+        if not isinstance(raw, Mapping):
+            reasons.append(f"{label} must be a string or a mapping")
+            continue
+        text = raw.get("text")
+        target = raw.get("target") or rc.DEFAULT_SCOUT_TARGET
+        ref = raw.get("ref") or ""
+        if not isinstance(text, str):
+            reasons.append(f"{label} has no text")
+            continue
+        if target not in rc.SCOUT_TARGETS:
+            reasons.append(f"{label} target {target!r} is not one of {', '.join(rc.SCOUT_TARGETS)}")
+            continue
+        if not isinstance(ref, str):
+            reasons.append(f"{label} ref must be a string")
+            continue
+        if target == "web":
+            if ref:
+                reasons.append(f"{label} is a web target and takes no ref")
+                continue
+        elif target == "repo":
+            path = Path(ref) if ref and Path(ref).is_absolute() else root / ref
+            if not ref.strip() or not path.exists():
+                reasons.append(f"{label} repo ref {ref!r} is not an existing file or directory")
+                continue
+            try:
+                ref = path.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                ref = path.resolve().as_posix()
+        elif not ref.strip() or "\n" in ref or "\r" in ref:
+            reasons.append(f"{label} local ref must be a non-empty single line naming what to probe")
+            continue
+        out.append({"text": text, "target": target, "ref": ref})
+    if reasons:
+        raise PipelineEmitRefused(reasons)
+    return out
+
+
+def multi_ask_preamble(questions: Sequence[rc.ScoutQuestion | str]) -> str:
+    """`Research questions:` and a numbered list of every question's text."""
+    texts = [q if isinstance(q, str) else q["text"] for q in questions]
+    return "Research questions:\n\n" + "\n".join(f"{n}. {t.strip()}" for n, t in enumerate(texts, 1))
+
+
+def _target_line(question: rc.ScoutQuestion) -> str:
+    if question["target"] == rc.DEFAULT_SCOUT_TARGET:
+        return ""
+    return f"{rc.TARGET_LINE_PREFIX}{question['target']} `{question['ref']}`"
+
+
+def scout_slugs(questions: Sequence[str | rc.ScoutQuestion]) -> list[str]:
     """The [a-z0-9-] slug of each question, in order.
 
     Refuses more than MAX_SCOUT_QUESTIONS, a question with no slug-able character, and two
@@ -143,7 +212,8 @@ def scout_slugs(questions: Sequence[str]) -> list[str]:
         reasons.append(f"{len(questions)} scout questions given; at most {rc.MAX_SCOUT_QUESTIONS} are allowed")
     slugs: list[str] = []
     for index, question in enumerate(questions):
-        slug = _slug(question) if isinstance(question, str) else ""
+        text = question.get("text") if isinstance(question, Mapping) else question
+        slug = _slug(text) if isinstance(text, str) else ""
         if not slug:
             reasons.append(f"scout question {index + 1} has no letter or digit to slug")
         elif slug in slugs:
@@ -154,19 +224,40 @@ def scout_slugs(questions: Sequence[str]) -> list[str]:
     return slugs
 
 
-def write_ask(root: Path, scratch_rel: str, ask: str, questions: Sequence[str] = ()) -> str:
+def write_ask(
+    root: Path, scratch_rel: str, ask: str, questions: Sequence[str | Mapping] = (), mode: str = rc.DEFAULT_SCOUT_MODE
+) -> str:
     """Write `<root>/<scratch_rel>/ask.md` and return its repo-relative POSIX path.
 
-    No questions: the file is the ask verbatim. Otherwise the ask is followed by each full question
-    under a `## <slug>` heading, the section a scout finds by its `{{item}}`. Refuses an empty ask
-    or questions `scout_slugs` refuses.
+    No questions: the file is the ask verbatim. Otherwise the ask, then (two or more questions)
+    `multi_ask_preamble`, then sections. Split: each question under a `## <slug>` heading, the
+    section a scout finds by its `{{item}}`. Combine: one `## question` section, numbered. A repo
+    or local question's text is preceded by its `Target:` line. Refuses an empty ask, an unknown
+    mode, or questions `normalize_scout_questions`/`scout_slugs` refuse.
     """
     if not isinstance(ask, str) or not ask.strip():
         raise PipelineEmitRefused(["the ask is empty"])
-    slugs = scout_slugs(questions)
+    if mode not in rc.SCOUT_MODES:
+        raise PipelineEmitRefused([f"scout mode {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
+    normalized = normalize_scout_questions(root, questions)
+    slugs = scout_slugs(normalized)
     text = ask
     if slugs:
-        text = ask.rstrip("\n") + "".join(f"\n\n## {slug}\n\n{q.strip()}" for slug, q in zip(slugs, questions)) + "\n"
+        head = ask.rstrip("\n")
+        if len(normalized) >= 2:
+            head += "\n\n" + multi_ask_preamble(normalized)
+        if mode == "combine":
+            items = []
+            for n, q in enumerate(normalized, 1):
+                target = _target_line(q)
+                items.append(f"{n}. {target}\n   {q['text'].strip()}" if target else f"{n}. {q['text'].strip()}")
+            text = head + f"\n\n## {rc.COMBINED_SCOUT_ITEM}\n\n" + "\n".join(items) + "\n"
+        else:
+            sections = []
+            for slug, q in zip(slugs, normalized):
+                target = _target_line(q)
+                sections.append(f"\n\n## {slug}\n\n" + (f"{target}\n\n" if target else "") + q["text"].strip())
+            text = head + "".join(sections) + "\n"
     rel = f"{scratch_rel.rstrip('/')}/{ASK_FILE}"
     target = root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -298,6 +389,73 @@ def claims_output(manifest: Manifest) -> str:
     return sweep.output.removeprefix(_SCRATCH_PREFIX)
 
 
+def compare_output(manifest: Manifest) -> str:
+    """The repo-compare manifest's single stage output relative to its segment dir."""
+    return manifest.stages[-1].output.removeprefix(_SCRATCH_PREFIX)
+
+
+def _ref_slug(ref: str) -> str:
+    parts = [p for p in re.split(r"[/\\]", ref.rstrip("/\\")) if p]
+    return _slug(parts[-1]) if parts else ""
+
+
+def _write_brief(root: Path, rel: str, text: str) -> None:
+    target = root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8", newline="\n")
+
+
+def bind_repo_targets(
+    root: Path, scratch_rel: str, members_brief: str, targets: Sequence[Mapping[str, str]],
+) -> tuple[list[tuple[str, str]], str]:
+    """Per-target repo segment (key, brief_rel) pairs and the compare brief path; ([], "") under two repo targets.
+
+    Key i (1-based, target order) is `repo-<i>-<slug of the ref's last path component>`, cut to
+    MAX_SLUG_LEN. Writes `<scratch>/<key>/brief.md` per target and `<scratch>/repo-compare/brief.md`.
+    Refuses a ref with no slug-able character (PipelineEmitRefused naming the target index).
+    """
+    refs = [t.get("ref", "") for t in targets if t.get("source") == REPO_PIPELINE]
+    if len(refs) < 2:
+        return [], ""
+    base = scratch_rel.rstrip("/")
+    keys: list[tuple[str, str]] = []
+    reasons: list[str] = []
+    for index, ref in enumerate(refs, start=1):
+        slug = _ref_slug(ref)
+        if not slug:
+            reasons.append(f"repo target {index} ({ref!r}) has no letter or digit to slug")
+            continue
+        prefix = f"{REPO_PIPELINE}-{index}-"
+        key = (prefix + slug)[:MAX_SLUG_LEN].rstrip("-")
+        keys.append((key, ref))
+    if reasons:
+        raise PipelineEmitRefused(reasons)
+    segments: list[tuple[str, str]] = []
+    for key, ref in keys:
+        rel = f"{base}/{key}/{BRIEF_FILE}"
+        _write_brief(root, rel, (
+            f"The brief is `{members_brief}`; read it first.\n\n"
+            f"This segment studies the repo research target `{ref}` alone. It is the primary repo, "
+            "and no other repo target is folded in.\n\n"
+            "A requested output path in the brief does not apply here; write only under this segment's scratch dir.\n"
+        ))
+        segments.append((key, rel))
+    rows = "".join(
+        f"- `{key}`: `{ref}`\n  - `{base}/{key}/synthesis.md`\n"
+        f"  - `{base}/{key}/synthesis-pass-2.md` (read when present, for a deepest run)\n"
+        for key, ref in keys
+    )
+    compare_rel = f"{base}/{REPO_COMPARE_PIPELINE}/{BRIEF_FILE}"
+    _write_brief(root, compare_rel, (
+        f"The brief is `{members_brief}`; read it first.\n\n"
+        f"## Repo segments\n\n{rows}\n"
+        "Compare the repos against the ask, rank them with the reason for each rank, "
+        "and cite each claim to the segment synthesis it came from. "
+        "A segment with no synthesis halted: name it as unranked rather than omit it.\n"
+    ))
+    return segments, compare_rel
+
+
 def _deep_roster(sources: Sequence[str]) -> list[dict[str, str]]:
     roster = [{"slug": role, "agent_type": rc.UNBLOCK_ROLE_AGENT_TYPE} for role in rc.UNBLOCK_ROLES]
     for source in sources or ("web",):
@@ -312,18 +470,23 @@ def segments_for(
     *,
     brief_rel: str,
     scratch_rel: str,
-    questions: Sequence[str] = (),
+    questions: Sequence[str | Mapping] = (),
     sources: Sequence[str] = (),
     targets: Sequence[Mapping[str, str]] = (),
+    mode: str = rc.DEFAULT_SCOUT_MODE,
+    repo_segments: Sequence[tuple[str, str]] = (),
+    compare_brief: str = "",
 ) -> list[tuple[str, PipelineInputs]]:
     """One `(pipeline, PipelineInputs)` per manifest in `shape["pipelines"]`, in order.
 
     Every segment binds `brief_rel` and `scratch_rel` and the flags `shape["flags"]` names for its
-    pipeline. The scouts segment carries the slugs of `questions` (with none, the one entry
-    `question`, the bare ask); the unblock segment carries the deep roster, three role members plus
+    pipeline. The scouts segment carries the slugs of `questions` (with none, or in combine `mode`,
+    the one entry `question`, the bare or combined ask); the unblock segment carries the deep roster, three role members plus
     one specialist per `sources` entry that has one; the notebooklm segment carries the refs of
     the `targets` whose source is notebooklm as its notebooks. `CORPUS_DEFAULT_LISTS` is bound by
-    the caller, which sees which lists each loaded manifest declares.
+    the caller, which sees which lists each loaded manifest declares. With `repo_segments`, the
+    `repo` pipeline expands to one keyed segment per `(key, brief_rel)` entry, followed by one
+    `repo-compare` segment bound to `compare_brief`.
     """
     shaped_flags = shape.get("flags") or {}
     segments: list[tuple[str, PipelineInputs]] = []
@@ -331,13 +494,28 @@ def segments_for(
         flags: dict[str, str | bool] = dict(shaped_flags.get(pipeline) or {})
         lists: dict[str, tuple] = {}
         if pipeline == rc.SCOUTS_PIPELINE:
-            lists[_QUESTIONS_LIST] = tuple(scout_slugs(questions) if questions else [_BARE_SLUG])
+            if mode not in rc.SCOUT_MODES:
+                raise PipelineEmitRefused([f"scout mode {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
+            slugs = scout_slugs(questions) if questions else []
+            if mode == "combine" or not slugs:
+                slugs = [rc.COMBINED_SCOUT_ITEM]
+            lists[_QUESTIONS_LIST] = tuple(slugs)
         elif pipeline == rc.DEEP_PIPELINE:
             lists[_ROSTER_LIST] = tuple(_deep_roster(sources))
         elif pipeline == _NOTEBOOKLM_PIPELINE:
             refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
             if refs:
                 lists[_NOTEBOOKS_LIST] = refs
+        if pipeline == REPO_PIPELINE and repo_segments:
+            for key, key_brief in repo_segments:
+                segments.append((pipeline, PipelineInputs(
+                    brief=key_brief, subjects=(), scratch_dir=scratch_rel, flags=dict(flags), lists=dict(lists), segment_key=key,
+                )))
+            segments.append((REPO_COMPARE_PIPELINE, PipelineInputs(
+                brief=compare_brief, subjects=(), scratch_dir=scratch_rel,
+                flags=dict(shaped_flags.get(REPO_COMPARE_PIPELINE) or {}), lists={},
+            )))
+            continue
         segments.append(
             (pipeline, PipelineInputs(brief=brief_rel, subjects=(), scratch_dir=scratch_rel, flags=flags, lists=lists))
         )

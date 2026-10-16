@@ -1,0 +1,1 @@
+Read `{{brief}}`, then read each per-repo synthesis it lists. Compare the repos against the ask, rank them with the reason for each rank, cite each claim to the synthesis it came from, and write the result to `{{scratch_dir}}/comparison.md`.

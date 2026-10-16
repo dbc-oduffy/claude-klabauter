@@ -6,8 +6,10 @@ Box policy (PM, 2026-10-05): FIFA code may be read, synced, built, run and
 edited locally; it is never submitted. A shelve is server-visible, so it is
 denied with the submit. The MCP route is DoE's guard; this is the shell route.
 
-Armed by the machine-local key `policy.p4_no_submit` (a list of the box's
-depot identifiers). Absent or empty: allow. Armed: deny regardless of which
+Armed by either (a) any registered external workspace with vcs = p4
+(`external_workspaces.<name>.vcs`), which holds even when the policy key is
+empty, or (b) the machine-local key `policy.p4_no_submit` (a list of the box's
+depot identifiers). Neither: allow; an unreadable registry fails closed. Armed: deny regardless of which
 server or client the command names (fail closed), for
   - `p4 [global opts] <verb>` where verb writes to the server
     (`SERVER_WRITE_VERBS`), and `git p4 submit` / `git-p4 submit`;
@@ -55,9 +57,28 @@ _P4PYTHON_RE = re.compile(
 )
 
 
-def _armed() -> bool:
-    from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
+def _registers_p4_workspace() -> bool:
+    """True when any registered external workspace has vcs == p4."""
+    from coordinator_core.machine_resolver import external_workspace_roots
 
+    return any(
+        str(entry.get("vcs", "")).strip().lower() == "p4"
+        for entry in external_workspace_roots().values()
+    )
+
+
+def _armed() -> bool:
+    from coordinator_core.machine_resolver import (
+        external_workspace_registry_readable,
+        load_flat_registry_file,
+        registry_dir,
+    )
+
+    try:
+        if _registers_p4_workspace() or not external_workspace_registry_readable():
+            return True
+    except Exception:  # noqa: BLE001 -- an unreadable registry cannot prove the box unarmed
+        return True
     try:
         reg_dir = registry_dir()
         for fname in ("registry.local.toml", "registry.toml"):

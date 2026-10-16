@@ -195,8 +195,15 @@ def _composed_objects(op: str) -> list:
                 yaml.safe_dump({"estimate": {"tshirt": "S"}, "route": "plan", "intent": "x"}), encoding="utf-8"
             )
             script = _compose(repo_root=tmp, prompt=None, sizing_rel=rel)
-    line = next(ln for ln in script.splitlines() if op in ln and "JSON.stringify(" in ln)
-    expr = line[line.index("JSON.stringify(") :]
+    if op == "dispatch.ask_stage":
+        # Only a literal params object counts: the gate agent's folded stage act names a base
+        # object in prose and adds the one path key there, per arm.
+        direct = f"{op} \\'' + JSON.stringify("
+        expr = "".join(ln[ln.index(direct) + len(direct) - len("JSON.stringify(") :]
+                       for ln in script.splitlines() if direct in ln)
+    else:
+        line = next(ln for ln in script.splitlines() if op in ln and "JSON.stringify(" in ln)
+        expr = line[line.index("JSON.stringify(") :]
     expr = re.sub(r",\s*\.\.\.\(_sizingRel \? \{ commit_sizing_path: _sizingRel \} : \{\}\)", "", expr)
     expr = re.sub(
         r",\s*\.\.\.\(_gate\.resume_plan && _gate\.resume_rows \? \{ only_rows: _gate\.resume_rows \} : \{\}\)", "", expr

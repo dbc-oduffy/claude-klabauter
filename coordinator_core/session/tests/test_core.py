@@ -109,6 +109,8 @@ def test_git_root_empty_outside_a_repo(tmp_path):
     assert core.git_root(cwd=str(tmp_path)) == ""
 
 
+# A read-only oracle on the live repo's own hub: the autouse hub redirect would answer a tmp path.
+@pytest.mark.real_home
 def test_sessions_dir_and_session_dir_composition():
     root = core.git_root()
     sdir = core.sessions_dir()

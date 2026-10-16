@@ -56,11 +56,14 @@ def test_two_questions_give_two_entries_and_headed_sections(tmp_path):
     _validate_all(segs)
 
 
-def test_three_questions_are_refused(tmp_path):
+def test_over_the_cap_questions_are_refused(tmp_path):
+    from coordinator_core.ops import _research_contract as rc
+
+    over = [f"question number {n}" for n in range(rc.MAX_SCOUT_QUESTIONS + 1)]
     with pytest.raises(PipelineEmitRefused):
-        re_.write_ask(tmp_path, SCRATCH, "t", ["a", "b", "c"])
+        re_.write_ask(tmp_path, SCRATCH, "t", over)
     with pytest.raises(PipelineEmitRefused):
-        _segments({"value_class": "scouts"}, questions=["a", "b", "c"])
+        _segments({"value_class": "scouts"}, questions=over)
 
 
 def test_empty_duplicate_and_unsluggable_questions_are_refused(tmp_path):

@@ -441,6 +441,9 @@ class SafeCommitOffer(TypedDict):
     # reading them (`CommitSet.read_only`). Never in `safe_paths`; named so
     # the omission is visible.
     read_only: NotRequired[List[str]]
+    # `declined` (additive, NotRequired): set when cwd is inside a registered
+    # external workspace; names the workspace key. safe_paths is then empty.
+    declined: NotRequired[str]
     # their-writes plan) — the four-bucket ownership readout (mine / named
     # peer / unattributed / degraded), extending C3's post-commit `residue`
     # report rather than replacing it. ADDITIVE ONLY: every pre-existing key
@@ -980,6 +983,22 @@ def full_ownership_map(session_id: str, cwd: Optional[str] = None):
     return mine, peer_map
 
 
+def _external_workspace_key(cwd: Optional[str]) -> Optional[str]:
+    """Registered external-workspace key containing ``cwd``, else None. Zero spawns; never raises."""
+    if not cwd:
+        return None
+    try:
+        from coordinator_core.machine_resolver import external_workspace_containing
+
+        return external_workspace_containing(cwd)
+    except Exception:  # noqa: BLE001 - a readout must never raise
+        return None
+
+
+def _external_workspace_decline(key: str) -> str:
+    return "cwd is inside external workspace %r: someone else's code, read-only; no commit offered" % key
+
+
 def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer:
     """Compute this session's commit pathspec and the withheld-path narration.
 
@@ -1110,6 +1129,23 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     """
     if not session_id:
         raise ValueError("session_id is required")
+
+    external = _external_workspace_key(cwd)
+    if external:
+        return {
+            "session_id": session_id,
+            "safe_paths": [],
+            "excluded": [],
+            "orphans": [],
+            "indeterminate": False,
+            "ownership": {
+                "mine": [],
+                "peer": [],
+                "unattributed": [],
+                "degraded": False,
+            },
+            "declined": _external_workspace_decline(external),
+        }
 
     answer = claim_index.commit_set(session_id, cwd=cwd)
     degraded = not answer.complete
@@ -2722,6 +2758,10 @@ def _handler(params: dict, repo_root=None) -> dict:
             "reconciliation": reconciliation,
             **offer,
         }
+
+    external = _external_workspace_key(cwd)
+    if external:
+        return _error_envelope(_external_workspace_decline(external))
 
     refusal = main_commit_refusal(
         core.git_root(cwd) or cwd or ".",

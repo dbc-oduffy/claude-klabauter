@@ -2888,6 +2888,7 @@ def cs_stamp_plan_implemented(
     prose: Optional[str] = None,
     refuse_open_spine_rows: bool = False,
     commit: bool = True,
+    ship_sha: Optional[str] = None,
 ) -> int:
     """Flips a plan's frontmatter status: to implemented via the native
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
@@ -2917,7 +2918,8 @@ def cs_stamp_plan_implemented(
 
     ``commit=False`` passes ``--no-commit``: every refusal still runs and the plan is
     written, but the caller owns committing it; archival is skipped because it rides
-    on the commit.
+    on the commit. ``ship_sha`` is the caller's commit the baton cascade ships on; without
+    it a no-commit stamp has no sha and the cascade refuses every baton.
     """
     if refuse_open_spine_rows:
         from coordinator_core.workstream_complete.directives_spine_worklist import (
@@ -2943,6 +2945,8 @@ def cs_stamp_plan_implemented(
             argv += [flag, value]
     if not commit:
         argv.append("--no-commit")
+        if ship_sha:
+            argv += ["--ship-sha", ship_sha]
     return plan_status_transition.main(argv)
 
 

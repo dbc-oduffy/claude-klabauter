@@ -477,3 +477,138 @@ def test_local_only_keeps_absolute_paths_byte_identical(repo, scratch, tmp_path)
     out = _close(repo, scratch, "corpus", local_root=local.as_posix())
     assert out["exit_code"] == 0, out
     assert (Path(out["destination"]) / "final.md").read_bytes() == (scratch / "final.md").read_bytes()
+
+
+def _digest_path() -> str:
+    return f"docs/research/{datetime.date.today().isoformat()}-topic/digest.md"
+
+
+_GOOD = (
+    "## digest-a.md\n- **grounded** a holds\n## digest-b.md\n- **grounded** b holds\n"
+    "## Contradictions\n- **real** sources disagree\n"
+)
+
+
+def _report(scratch: Path, body: str) -> None:
+    (scratch / "grounding.md").write_text(body, encoding="utf-8")
+
+
+def _refused(repo, scratch, **extra) -> dict:
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "scouts", **extra)
+    assert out["exit_code"] == 1 and out["committed"] is False and out["deliverable"] is False, out
+    assert "grounding.md" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert not (scratch / "digest.md").exists() and not (repo / "docs").exists()
+    return out
+
+
+@pytest.mark.parametrize("require", [False, True])
+@pytest.mark.parametrize(
+    "line,verdict",
+    [
+        ("- **ungrounded** a claim no source backs", "ungrounded"),
+        ("- **contradicted** a claim its source denies", "contradicted"),
+        ("- **invented** a contradiction nobody holds", "invented"),
+    ],
+)
+def test_ungrounded_contradicted_or_invented_line_refuses_with_counts(
+    repo, scratch, line, verdict, require
+):
+    _report(scratch, _GOOD + line + "\n")
+    out = _refused(repo, scratch, require_grounding=require, halted_segments=["x"])
+    assert verdict in out["error"] and out["grounding"][verdict] == 1
+    assert out["grounding"]["grounded"] == 2 and out["halted_segments"] == ["x"]
+
+
+def test_ungrounded_report_missing_a_digest_section_is_refused(repo, scratch):
+    _report(scratch, "## digest-a.md\n- **grounded** a holds\n")
+    out = _refused(repo, scratch)
+    assert "digest-b.md" in out["error"]
+
+
+def test_ungrounded_report_with_no_claim_line_is_refused(repo, scratch):
+    _report(scratch, "checked sources\n\nall held\n")
+    out = _refused(repo, scratch)
+    assert "grades no claim" in out["error"] and out["grounding"]["grounded"] == 0
+
+
+def test_all_grounded_report_with_a_real_ruling_commits_digest_and_trail(repo, scratch):
+    _report(scratch, _GOOD)
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
+    assert _trail_files(repo) == {_digest_path(), "docs/research/trail/r1.yaml"}
+
+
+def test_ungrounded_report_fixed_then_reclosed_commits(repo, scratch):
+    _report(scratch, _GOOD + "- **ungrounded** bad\n")
+    _refused(repo, scratch)
+    _report(scratch, _GOOD)
+    assert _close(repo, scratch, "scouts")["exit_code"] == 0
+
+
+def test_grounding_report_is_the_last_section_of_the_committed_digest(repo, scratch):
+    _report(scratch, _GOOD)
+    out = _close(repo, scratch, "scouts", require_grounding=True)
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
+    assert _git(repo, "show", f"HEAD:{_digest_path()}") == (
+        "alpha\n\nbeta\n\n## Grounding\n\n" + _GOOD.rstrip("\n")
+    )
+    assert _trail_files(repo) == {_digest_path(), "docs/research/trail/r1.yaml"}
+
+
+@pytest.mark.parametrize("body", [None, "", "  \n\t\n"])
+def test_grounding_required_but_absent_or_blank_refuses_without_a_write(repo, scratch, body):
+    if body is not None:
+        (scratch / "grounding.md").write_text(body, encoding="utf-8")
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "scouts", require_grounding=True, halted_segments=["x"])
+    assert out["exit_code"] == 1 and out["committed"] is False and out["deliverable"] is False
+    assert "grounding.md" in out["error"] and out["halted_segments"] == ["x"]
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert not (scratch / "digest.md").exists() and not (repo / "docs").exists()
+
+
+def test_grounding_not_required_leaves_a_run_without_it_closing_as_baseline(repo, scratch):
+    out = _close(repo, scratch, "scouts", require_grounding=False)
+    assert out["exit_code"] == 0, out
+    assert _git(repo, "show", f"HEAD:{_digest_path()}") == "alpha\n\nbeta"
+
+
+def test_grounding_blank_report_without_the_param_adds_no_section(repo, scratch):
+    (scratch / "grounding.md").write_text("\n \n", encoding="utf-8")
+    assert _close(repo, scratch, "scouts")["exit_code"] == 0
+    assert _git(repo, "show", f"HEAD:{_digest_path()}") == "alpha\n\nbeta"
+
+
+def test_grounding_run_never_commits_probe_or_grounding_files(repo, scratch):
+    _report(scratch, _GOOD)
+    (scratch / "probe-1.md").write_text("probe body\n", encoding="utf-8")
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out
+    assert _trail_files(repo) == {_digest_path(), "docs/research/trail/r1.yaml"}
+
+
+@pytest.mark.parametrize("bad", ["true", 1, None, []])
+def test_grounding_param_that_is_not_a_bool_is_refused_before_any_write(repo, scratch, bad):
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "scouts", require_grounding=bad)
+    assert out["exit_code"] == 1 and "require_grounding must be a bool" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head and not (scratch / "digest.md").exists()
+
+
+@pytest.mark.parametrize("tier", ["corpus", "deep"])
+def test_grounding_param_on_a_non_scouts_tier_is_refused(repo, scratch, tier):
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, tier, require_grounding=True)
+    assert out["exit_code"] == 1 and "scouts only" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+
+
+def test_grounding_reclose_of_a_grounded_run_returns_the_landed_sha(repo, scratch):
+    _report(scratch, _GOOD)
+    first = _close(repo, scratch, "scouts", require_grounding=True)
+    before = _count(repo)
+    again = _close(repo, scratch, "scouts", require_grounding=True)
+    assert again["exit_code"] == 0 and again["sha"] == first["sha"], again
+    assert _count(repo) == before

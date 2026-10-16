@@ -109,6 +109,16 @@ def _perforce_armed_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str
     return {}
 
 
+def _external_workspace_unreadable_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """`block-external-workspace-vcs-write` denies a git write on an unreadable registry."""
+    from coordinator_core import machine_resolver
+
+    mp.setattr(machine_resolver, "external_workspace_registry_readable", lambda: False)
+    return {}
+
+
 def _non_owned_remote_armed_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
     """`block-push-pr-non-owned-remote` arms from machine-local policy; declare a remote for the row."""
     from coordinator_core.bash_guards import block_push_pr_non_owned_remote as guard
@@ -182,6 +192,15 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         GuardBand.CONFINEMENT_DENY,
         False,
         setup=_perforce_armed_setup,
+    ),
+    CorpusRow(
+        "block-external-workspace-vcs-write",
+        "block-external-workspace-vcs-write-fire",
+        "git commit -m shape-probe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=_external_workspace_unreadable_setup,
     ),
     CorpusRow(
         "block-push-pr-non-owned-remote",

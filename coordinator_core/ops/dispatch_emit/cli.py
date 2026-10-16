@@ -178,6 +178,88 @@ def _default_profile_dir(profile: str) -> str:
     return str(profile_dir)
 
 
+class _AskAction(argparse.Action):
+    """First --ask sets `ask` as ever; each later one appends to `ask_repeats` (a bare repeat appends True)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        value = True if values is None else values
+        namespace.ask_count = (getattr(namespace, "ask_count", 0) or 0) + 1
+        if namespace.ask_count == 1:
+            namespace.ask = value
+            return
+        repeats = list(getattr(namespace, "ask_repeats", None) or [])
+        repeats.append(value)
+        namespace.ask_repeats = repeats
+
+
+class _TargetAction(argparse.Action):
+    """Appends (index of the most recent --ask or None, raw VALUE) to `targets`; parsing is main()'s."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        count = getattr(namespace, "ask_count", 0) or 0
+        targets = list(getattr(namespace, "targets", None) or [])
+        targets.append((count - 1 if count else None, values))
+        namespace.targets = targets
+
+
+def _parse_target(raw: str) -> "tuple[str, str]":
+    """`web` | `repo=PATH` | `local=PROBE` to (target, ref); ValueError when it is none of those."""
+    from coordinator_core.ops import _research_contract as rc
+
+    kind, sep, ref = raw.partition("=")
+    if kind not in rc.SCOUT_TARGETS:
+        raise ValueError(f"--target {raw!r} is not web, repo=PATH or local=PROBE")
+    if kind == "web":
+        if sep:
+            raise ValueError(f"--target {raw!r}: web takes no value")
+        return "web", ""
+    ref = ref.strip()
+    if not ref or "\n" in ref:
+        raise ValueError(f"--target {raw!r}: {kind}= needs one non-empty line")
+    return kind, ref
+
+
+def _research_multi_ask_refusal(args: argparse.Namespace) -> "Optional[str]":
+    """One-fact usage refusal for the repeatable --ask / --target / --split / --combine flags, else None."""
+    repeats = args.ask_repeats or []
+    targets = args.targets or []
+    mode = args.scout_mode
+    if not (repeats or targets or mode):
+        return None
+    if not args.research:
+        used = [
+            flag
+            for flag, on in (("repeated --ask", repeats), ("--target", targets), ("--split/--combine", mode))
+            if on
+        ]
+        return f"{', '.join(used)} requires --research"
+    if any(r is True for r in repeats) or args.ask is True:
+        return "a repeated --ask needs PROMPT"
+    if any(i is None for i, _ in targets):
+        return "--target needs a preceding --ask"
+    indexes = [i for i, _ in targets]
+    if len(indexes) != len(set(indexes)):
+        return "--target given twice for one --ask"
+    for _, raw in targets:
+        try:
+            _parse_target(raw)
+        except ValueError as exc:
+            return str(exc)
+    if any(item.partition("=")[0] == "questions" for item in (args.list or [])):
+        return "--list questions= cannot combine with repeated --ask or --target"
+    return None
+
+
+def _scout_questions(args: argparse.Namespace) -> "list[dict]":
+    """The [{text, target, ref}] of every --ask in order; an untargeted one is a web question."""
+    texts = [args.ask, *(args.ask_repeats or [])]
+    bound = {i: _parse_target(raw) for i, raw in (args.targets or [])}
+    return [
+        {"text": text, "target": bound.get(n, ("web", ""))[0], "ref": bound.get(n, ("web", ""))[1]}
+        for n, text in enumerate(texts)
+    ]
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="emit-dispatch-workflow",
@@ -198,9 +280,34 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         const=True,
         default=None,
+        action=_AskAction,
         metavar="PROMPT",
         help="emit one in-session Workflow from a raw ask (PROMPT), or from an "
-        "existing sizing with --sizing",
+        "existing sizing with --sizing; repeats under --research, one scout question each",
+    )
+    parser.add_argument(
+        "--target",
+        action=_TargetAction,
+        dest="targets",
+        default=None,
+        metavar="web|repo=PATH|local=PROBE",
+        help="research route: the target of the --ask it follows (default web)",
+    )
+    scout_mode = parser.add_mutually_exclusive_group()
+    scout_mode.add_argument(
+        "--split",
+        dest="scout_mode",
+        action="store_const",
+        const="split",
+        default=None,
+        help="research route: one scout per --ask question (default)",
+    )
+    scout_mode.add_argument(
+        "--combine",
+        dest="scout_mode",
+        action="store_const",
+        const="combine",
+        help="research route: one scout over every --ask question",
     )
     parser.add_argument(
         "--sizing",
@@ -534,7 +641,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--research",
         action="store_true",
         help="with --ask PROMPT: the scouts express lane -- write the ask to the run's record directory (state/warp/<run_id>/ask.md) and "
-        "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
+        "emit the scouts pipeline over it; repeat --ask for one scout question each, bind --target "
+        "web|repo=PATH|local=PROBE to the --ask it follows, and pick --split (default) or --combine",
     )
     parser.add_argument(
         "--slug",
@@ -587,6 +695,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NAME=VALUE",
         help="pipeline route: a manifest flag (repeatable)",
     )
+    parser.set_defaults(ask_repeats=None, ask_count=0)
     return parser
 
 
@@ -1149,6 +1258,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if args.research and not isinstance(args.ask, str):
         print("emit-dispatch-workflow: ERROR — --research needs --ask PROMPT", file=sys.stderr)
         return EXIT_USAGE
+    multi_ask_error = _research_multi_ask_refusal(args)
+    if multi_ask_error:
+        print(f"emit-dispatch-workflow: ERROR — {multi_ask_error}", file=sys.stderr)
+        return EXIT_USAGE
     is_research_route = bool(args.from_sizing) or args.research
     if is_research_route:
         others = [
@@ -1552,6 +1665,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         else:
             params["research"] = True
             params["ask"] = args.ask
+            from coordinator_core.ops import _research_contract as rc
+
+            if args.ask_repeats or args.targets:
+                params[rc.SCOUT_QUESTIONS_PARAM] = _scout_questions(args)
+            if args.scout_mode:
+                params[rc.SCOUT_MODE_PARAM] = args.scout_mode
         try:
             if args.list:
                 params["lists"] = _parse_lists(args.list)

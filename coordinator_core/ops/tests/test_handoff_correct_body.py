@@ -3274,3 +3274,62 @@ def test_discharge_split_already_ticked_criterion_refuses(tmp_path, monkeypatch)
     ))
     assert result["exit_code"] == 1
     assert "already ticked" in result["error"]
+
+
+_LEDGER_CARVE_OUT_OLD = "The count was 29."
+
+
+def _carve_out_call(repo, hpath, new_string, **extra):
+    return _run(_handler(
+        {
+            "handoff_path": str(hpath),
+            "old_string": _LEDGER_CARVE_OUT_OLD,
+            "new_string": new_string,
+            **extra,
+        },
+        repo_root=repo / ".git",
+    ))
+
+
+def test_ledger_heading_carve_out_admits_exactly_that_heading(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-10-15-carve-ok.md")
+    _set_calling_session(monkeypatch)
+    new = _LEDGER_CARVE_OUT_OLD + "\n\n## Session Ledger\n\nrow\n"
+    result = _carve_out_call(repo, hpath, new, _create_session_ledger_heading=True)
+    assert result["exit_code"] == 0, result
+    assert "\n## Session Ledger\n" in hpath.read_text(encoding="utf-8")
+
+
+def test_ledger_heading_refused_without_the_flag(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-10-15-carve-noflag.md")
+    _set_calling_session(monkeypatch)
+    new = _LEDGER_CARVE_OUT_OLD + "\n\n## Session Ledger\n\nrow\n"
+    result = _carve_out_call(repo, hpath, new)
+    assert result["exit_code"] == 1
+    assert "new heading line" in result["error"]
+
+
+def test_ledger_carve_out_refuses_any_other_added_heading(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-10-15-carve-other.md")
+    _set_calling_session(monkeypatch)
+    new = _LEDGER_CARVE_OUT_OLD + "\n\n## Session Ledger\n\n## Extra\n\nrow\n"
+    result = _carve_out_call(repo, hpath, new, _create_session_ledger_heading=True)
+    assert result["exit_code"] == 1
+    assert "new heading line" in result["error"]
+
+
+def test_ledger_carve_out_refuses_when_heading_already_present(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(
+        repo,
+        "2026-10-15-carve-present.md",
+        body="\n# Handoff body.\n\nThe count was 29.\n\n## Session Ledger\n\nold\n",
+    )
+    _set_calling_session(monkeypatch)
+    new = _LEDGER_CARVE_OUT_OLD + "\n\n## Session Ledger\n\nrow\n"
+    result = _carve_out_call(repo, hpath, new, _create_session_ledger_heading=True)
+    assert result["exit_code"] == 1
+    assert "new heading line" in result["error"]

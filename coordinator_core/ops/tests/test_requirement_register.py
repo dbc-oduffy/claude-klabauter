@@ -383,6 +383,46 @@ def test_coverage_gaps_row_in_no_turn_is_legal_and_turnless_skipped():
     assert rr.coverage_gaps(doc) == []
 
 
+@pytest.mark.parametrize(
+    "doc, expected",
+    [
+        ({"em_analysis": {"ask_parent": "ask-x"}}, True),
+        ({"em_analysis": {"ask_parent": ""}}, False),
+        ({"em_analysis": {"ask_parent": None}}, False),
+        ({"em_analysis": {}}, False),
+        ({"em_analysis": "text"}, False),
+        ({}, False),
+    ],
+)
+def test_is_sibling_slice_reads_non_empty_ask_parent(doc, expected):
+    assert rr.is_sibling_slice(doc) is expected
+
+
+# The pm-verbatim intent cites turn 29 (so it is owed); R1's text does not cover it.
+_TURN_SIZING = (
+    "intent_source: pm-verbatim\nintent: shared parent ask\n"
+    "pm_verbatims:\n  - turn: 29\n    text: shared parent ask\n"
+    "requirement_register:\n  rows:\n    - id: R1\n      source_text: slice own intent\n"
+)
+
+
+def test_uncovered_turns_owes_a_sibling_slice_nothing_but_lists_it_otherwise():
+    plain = rr.uncovered_turns(_TURN_SIZING)
+    assert plain == [(29, "shared parent ask")]
+    slice_text = "em_analysis:\n  ask_parent: ask-x\n" + _TURN_SIZING
+    assert rr.uncovered_turns(slice_text) == []
+
+
+def test_judge_evidence_of_a_slice_carries_no_uncovered_turn(tmp_path):
+    slice_text = "em_analysis:\n  ask_parent: ask-x\n" + _TURN_SIZING
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text(slice_text, encoding="utf-8")
+    plan = '---\nplan_id: "p1"\nsizing_object: "state/sizings/s.yaml"\n---\nbody\n'
+    assert rr.judge_evidence(plan, tmp_path, P1).uncovered_turns == []
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text(_TURN_SIZING, encoding="utf-8")
+    assert rr.judge_evidence(plan, tmp_path, P1).uncovered_turns == [(29, "shared parent ask")]
+
+
 def _scoped(doc, **kw):
     return [t for t, _ in rr.uncovered_turns(yaml.safe_dump(doc), **kw)]
 

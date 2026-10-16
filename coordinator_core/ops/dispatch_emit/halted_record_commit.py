@@ -6,7 +6,12 @@ as one ``ceremony.commit_v2`` call carrying that directory's top-level files, th
 record dirs, claimed docs-stage paths), the declared writes of every chunk the run finished, and
 the halt reason in the message. Candidates are named paths, never the dirty tree. A finished chunk's tracked
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
-is withheld and named. With no finished chunk the commit is record-only. No receipt, sizing ship,
+is withheld and named. Only a ``ledger-check`` halt lands chunk product, because a resumed run counts
+only that halt's ``Lands-Chunks`` (``emit.resume_landed_rows``) and re-runs every other halt's
+chunks; any other halt lands the record and run artifacts only (``halt-record-only``). A
+``ledger-check`` halt lands a chunk only with its import closure: a chunk whose Python or TS/JS
+imports would be missing at the commit, transitively, is withheld whole (``import-closure-open``).
+With no finished chunk the commit is record-only. No receipt, sizing ship,
 plan stamp or close job runs, and the run token is redeemed then always released: a halt never
 spends the token the resumed run's product commit needs.
 """
@@ -190,7 +195,8 @@ def _land(
     from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _own_prefix_files, _peer_held, _tracked_at_head
+    from coordinator_core.ops.ceremony import commit_v2
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _own_prefix_files, _tracked_at_head
 
     base = {"record_dir": record_dir_rel, "halted": halted["halted"]}
     session_id: Optional[str] = params.get("session_id")
@@ -247,15 +253,9 @@ def _land(
     tracked_gone = set(_tracked_at_head(worktree_root, gone))
     dropped = [{"path": p, "reason": "deletion-git-cannot-see"} for p in gone if p not in tracked_gone]
     gone = [p for p in gone if p in tracked_gone]
-    held = _peer_held(worktree_root, session_id, product + gone)
-    withheld = {p: "peer-held" for p in sorted(held)}
-    product = [p for p in product if p not in held]
-    gone = [p for p in gone if p not in held]
-    landed_chunks = sorted({owner[p] for p in product + gone if p in owner})
-    paths = paths + product
-    deleted = deleted + gone
+    withheld: dict = {}
 
-    handled = set(paths) | set(deleted) | set(declared) | set(withheld)
+    handled = set(paths) | set(deleted) | set(declared)
     own_record = {p for p in artifacts.paths() if artifacts.class_of(p) == "record-dir"}
     extra_artifacts = run_artifacts.landable(
         worktree_root,
@@ -273,8 +273,42 @@ def _land(
     withheld.update(extra_artifacts.withheld)
     art_paths = list(extra_artifacts.present)
     art_deleted = list(extra_artifacts.deleted)
-    paths = paths + art_paths
-    deleted = deleted + art_deleted
+
+    holds: list = []
+    warnings = commit_v2._peer_claim_warnings(
+        worktree_root, product + gone + art_paths + art_deleted, holds, own_sid=session_id
+    )
+    held = {p for p, _sid in holds}
+    withheld.update({p: "peer-held" for p in sorted(held)})
+    # Warning text is commit_v2._peer_claim_warnings' contract: "claim state indeterminate (<exc>)" or "... for '<path>'".
+    indeterminate = [w for w in warnings if w.startswith("claim state indeterminate")]
+    if indeterminate:
+        # Only declared product paths are withheld on an indeterminate claim; run artifacts (record, sizing) still land.
+        everywhere = any(w.startswith("claim state indeterminate (") for w in indeterminate)
+        for p in product + gone:
+            if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate):
+                withheld[p] = "peer-claim-indeterminate"
+    product = [p for p in product if p not in withheld]
+    gone = [p for p in gone if p not in withheld]
+    art_paths = [p for p in art_paths if p not in withheld]
+    art_deleted = [p for p in art_deleted if p not in withheld]
+    closure_open: dict = {}
+    if halted["halted"] != "ledger-check":
+        withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
+    elif product or gone:
+        from coordinator_core.authoring_leaks import import_closure, ts_import_closure
+        from coordinator_core.ops.dispatch_emit import halt_closure
+
+        closure_open = halt_closure.open_chunks(
+            worktree_root, owner, product + gone + art_paths, (import_closure, ts_import_closure)
+        )
+        withheld.update({p: "import-closure-open" for p in product + gone if owner.get(p) in closure_open})
+    product = [p for p in product if p not in withheld]
+    gone = [p for p in gone if p not in withheld]
+    unlanded_chunks = {owner[p] for p in withheld if p in owner}
+    landed_chunks = sorted({owner[p] for p in product + gone if p in owner} - unlanded_chunks)
+    paths = paths + product + art_paths
+    deleted = deleted + gone + art_deleted
     landed_classes: dict = {}
     for p in art_paths + art_deleted:
         cls = artifacts.class_of(p)
@@ -321,6 +355,8 @@ def _land(
         extra["landed_chunks"] = landed_chunks
     if withheld:
         extra["withheld"] = withheld
+    if closure_open:
+        extra["closure_open"] = closure_open
     if dropped:
         extra["dropped"] = dropped
     return {**reply, "paths": paths + deleted, **extra, **base}  # paths: everything the commit names

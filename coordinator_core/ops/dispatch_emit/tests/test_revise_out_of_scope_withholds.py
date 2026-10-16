@@ -70,13 +70,13 @@ def test_named_row_reads_deferred_with_ruling_and_leaves_items(repo):
     r1 = rows[0]
     assert r1["status"] == "deferred"
     assert r1["ruling"]["quote"] == WORDS
-    assert r1["ruling"]["ref"] == f"workflow.revise:{RUN}:{rows[-1]['id']}"
-    assert len(rows) == 3 and rows[-1]["anchor"].startswith("revision@")
+    assert r1["ruling"]["ref"] == f"workflow.revise:{RUN}:out_of_scope"
+    assert len(rows) == 2
     ledger = _ledger(repo)
     assert "R1" not in [i.id for i in ledger.items]
-    assert ledger.withheld[0]["reason"] == f"withheld by revision {rows[-1]['id']}"
+    assert ledger.withheld[0]["reason"] == "withheld by out-of-scope ruling"
     view = (repo / RECORD_DIR_ROOT / RUN / "requirements.md").read_text(encoding="utf-8")
-    assert "Out of scope" in view and "R1: withheld by revision" in view
+    assert "Out of scope" in view and "R1: withheld by out-of-scope ruling" in view
 
 
 def test_judge_passes_verdict_that_omits_it_and_lists_it_open(repo):
@@ -84,7 +84,7 @@ def test_judge_passes_verdict_that_omits_it_and_lists_it_open(repo):
     ledger = _ledger(repo)
     got = rl.judge(ledger, _met([i.id for i in ledger.items]))
     assert got["pass"] is True
-    assert got["open"] == [{"id": "R1", "reason": f"withheld by revision {ledger.items[-1].id}"}]
+    assert got["open"] == [{"id": "R1", "reason": "withheld by out-of-scope ruling"}]
 
 
 def test_judge_tolerates_verdict_that_judges_it(repo):

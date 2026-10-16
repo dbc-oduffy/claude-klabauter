@@ -467,6 +467,13 @@ def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():
     assert not _key_matches_regen_entry("engine.working_repos", "engine.working_repositories")
 
 
+def test_external_workspaces_family_arm_classifies_dotted_keys():
+    assert _key_matches_regen_entry("external_workspaces.x.path", "external_workspaces")
+    assert _key_matches_regen_entry("external_workspaces.p4_x.p4_client", "external_workspaces")
+    assert not _key_matches_regen_entry("external_workspacesx.x.path", "external_workspaces")
+    assert not _key_matches_regen_entry("external_workspaces.x.path", "external_workspaces2")
+
+
 def test_plugin_mirrors_family_prefix_arm_still_works_via_helper():
     assert _key_matches_regen_entry("plugin.mirrors", "plugin.mirrors.coordinator-claude")
     assert not _key_matches_regen_entry("plugin.mirrors", "plugin.mirrorsx")

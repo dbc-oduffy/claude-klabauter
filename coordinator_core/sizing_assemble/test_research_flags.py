@@ -187,3 +187,95 @@ def test_research_destination_is_written_amended_and_validated(repo: Path) -> No
     doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert doc["research"]["destination"] == "local-only"
     assert sa.main(["--amend-research", rel, "--research-destination", "elsewhere"]) == sa.EXIT_BUSINESS_FAIL
+
+
+_QS = ["a?", "b?", "c?"]
+
+
+def _block(mode=None, targets=(), questions=_QS):
+    return sa.build_research_block("scouts", None, [], None, [], list(questions), None, mode, list(targets))
+
+
+def test_question_mode_and_target_build_the_block() -> None:
+    block, errors = _block("combine", ["2=repo:.", "3=local:claude-json-keys", "1=web"])
+    assert errors == []
+    assert block["question_mode"] == "combine"
+    assert block["question_targets"] == [
+        {"question": 2, "source": "repo", "ref": "."},
+        {"question": 3, "source": "local", "ref": "claude-json-keys"},
+        {"question": 1, "source": "web"},
+    ]
+
+
+def test_question_target_ref_keeps_a_colon() -> None:
+    block, errors = _block(targets=["1=repo:drive:sub/x"])
+    assert errors == []
+    assert block["question_targets"] == [{"question": 1, "source": "repo", "ref": "drive:sub/x"}]
+
+
+@pytest.mark.parametrize(
+    "mode,targets,fragment",
+    [
+        ("both", [], "--research-question-mode must be one of"),
+        (None, ["0=web"], "positive integer"),
+        (None, ["-1=web"], "positive integer"),
+        (None, ["x=web"], "positive integer"),
+        (None, ["4=web"], "exceeds"),
+        (None, ["1=both"], "source must be one of"),
+        (None, ["1=repo"], "needs a ref"),
+        (None, ["1=local:"], "needs a ref"),
+        (None, ["1=web:x"], "takes no ref"),
+        (None, ["web"], "expected <n>="),
+    ],
+)
+def test_question_target_bad_values_are_refused(mode, targets, fragment) -> None:
+    block, errors = _block(mode, targets)
+    assert block is None
+    assert len(errors) == 1 and fragment in errors[0]
+
+
+def test_question_target_without_questions_is_refused() -> None:
+    block, errors = _block(targets=["1=web"], questions=())
+    assert block is None
+    assert any("needs --research-question" in e for e in errors)
+
+
+def test_question_mode_repeat_and_bad_target_are_cli_refusals(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.write_text(_DRAFT, encoding="utf-8")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    base = ["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, "--research-class", "scouts"]
+    code = sa.main([*base, "--research-question", "q?", "--research-question-mode", "split",
+                    "--research-question-mode", "combine"])
+    assert code == sa.EXIT_USAGE
+    capsys.readouterr()
+    code = sa.main([*base, "--research-question", "q?", "--research-question-target", "1=repo"])
+    assert code == sa.EXIT_USAGE
+    assert "needs a ref" in capsys.readouterr().err
+    assert "research" not in yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_amend_question_target_merges_prior_targets_back_to_flag_spelling(repo: Path, monkeypatch) -> None:
+    import coordinator_core.sizing_assemble as mod
+
+    captured = {}
+    real = mod.build_research_block
+
+    def spy(*args):
+        captured["args"] = args
+        return real(*args)
+
+    monkeypatch.setattr(mod, "build_research_block", spy)
+    path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.write_text(
+        _DRAFT
+        + "research:\n  value_class: scouts\n  questions: ['a?', 'b?']\n  question_mode: split\n"
+        "  question_targets:\n    - {question: 2, source: repo, ref: .}\n",
+        encoding="utf-8",
+    )
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    sa.main(["--amend-research", rel, "--research-question-mode", "combine"])
+    assert captured["args"][7] == "combine"
+    assert captured["args"][8] == ["2=repo:."]

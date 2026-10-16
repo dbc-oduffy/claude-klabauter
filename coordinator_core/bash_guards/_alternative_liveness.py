@@ -152,6 +152,7 @@ from coordinator_core.bash_guards import guard_heavy_command_admission
 from coordinator_core.bash_guards import guard_deploy_dirty_tree
 from coordinator_core.bash_guards import block_whole_filesystem_scan
 from coordinator_core.bash_guards import block_perforce_submit
+from coordinator_core.bash_guards import block_external_workspace_vcs_write
 from coordinator_core.bash_guards import block_push_pr_non_owned_remote
 from coordinator_core.bash_guards import block_unreal_engine_resave
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
@@ -672,6 +673,20 @@ def _trigger_block_perforce_submit() -> Optional[Dict[str, Any]]:
         block_perforce_submit._armed = orig_armed
 
 
+def _trigger_block_external_workspace_vcs_write() -> Optional[Dict[str, Any]]:
+    """The guard denies a git write on an unreadable registry; declare one unreadable for the probe."""
+    from coordinator_core import machine_resolver
+
+    orig = machine_resolver.external_workspace_registry_readable
+    machine_resolver.external_workspace_registry_readable = lambda: False
+    try:
+        return block_external_workspace_vcs_write.check(
+            _payload("git commit -m altlive-probe", agent_id=None)
+        )
+    finally:
+        machine_resolver.external_workspace_registry_readable = orig
+
+
 def _trigger_block_push_pr_non_owned_remote() -> Optional[Dict[str, Any]]:
     """The guard denies only toward a declared non-owned remote; declare one for the probe."""
     orig = block_push_pr_non_owned_remote._configured_prefixes
@@ -756,6 +771,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         _payload("UnrealEditor-Cmd Proj.uproject -run=ResavePackages", agent_id=None)
     ),
     "block_perforce_submit": _trigger_block_perforce_submit,
+    "block_external_workspace_vcs_write": _trigger_block_external_workspace_vcs_write,
     "block_push_pr_non_owned_remote": _trigger_block_push_pr_non_owned_remote,
     "block_subagent_stash_creation": lambda: block_subagent_stash_creation.check(
         _payload(" ".join(["git", "stash", "push"]), agent_type="coordinator:executor")

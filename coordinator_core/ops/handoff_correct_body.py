@@ -265,6 +265,7 @@ _DELIM_LINE_RE = re.compile(r"^---[ \t]*$", re.MULTILINE)
 # only this prefix is asserted as the forgery-guard / grep target, since the
 # timestamp/session-id suffix varies per correction.
 _CORRECTION_MARKER_PREFIX = "<!-- handoff-correct-body-correction:"
+_LEDGER_HEADING = "## Session Ledger"
 _CORRECTION_SECTION_HEADING = "## Correction Log (handoff.correct_body)"
 
 # Finding 1 (security-audit, 2026-07-31): the marker-forgery guard below was a
@@ -1000,6 +1001,16 @@ async def _handler(
     # check), so no separate new-vs-old count is needed for that half of AC3.
     old_heading_count = _count_matching_lines(old_string, _HEADING_LINE_RE)
     new_heading_count = _count_matching_lines(new_string, _HEADING_LINE_RE)
+    # Carve-out: handoff.append_session_ledger is the intended sole sender; the
+    # flag is not caller-authenticated, so the bound below is the control. It admits
+    # exactly one added heading, `## Session Ledger`, and only into a body
+    # that has none.
+    if (
+        params.get("_create_session_ledger_heading") is True
+        and not _heading_present(body, _LEDGER_HEADING)
+        and len(re.findall(rf"(?m)^{re.escape(_LEDGER_HEADING)}[ \t]*$", new_string)) == 1
+    ):
+        new_heading_count -= 1
     if new_heading_count > old_heading_count:
         return _err(
             "new_string introduces a new heading line ('#' through '######') — "

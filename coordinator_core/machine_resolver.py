@@ -541,6 +541,140 @@ def merged_flat_registry() -> dict:
     return merged
 
 
+# ---------------------------------------------------------------------------
+# External workspaces: registered checkouts of other people's code
+# (``external_workspaces.<key>.{path,kind,vcs,p4_client}``), kept apart from repos.*
+# ---------------------------------------------------------------------------
+
+_EXTERNAL_WS_PREFIX = "external_workspaces."
+_EXTERNAL_WS_DEFAULT_KIND = "external-readonly"
+_external_ws_cache: dict = {}
+
+
+def _canon_path(p: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(p)))
+
+
+def _read_registry_file_strict(path: Path) -> Optional[dict]:
+    """Flat keys of one registry file; ``{}`` when absent; ``None`` when present but unreadable."""
+    if not path.is_file():
+        return {}
+    try:
+        import tomllib as _tomllib  # type: ignore[import-not-found]
+    except ImportError:
+        try:
+            import tomli as _tomllib  # type: ignore[no-redef]
+        except ImportError:
+            return None
+    try:
+        with open(path, "rb") as f:
+            return _flatten(_tomllib.load(f))
+    except Exception:  # noqa: BLE001 — any read failure is "unreadable", never raised
+        return None
+
+
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
+def _external_workspace_state() -> tuple:
+    """``(roots, readable)``, cached per process on registry_dir and both files' mtimes."""
+    try:
+        reg_dir = registry_dir()
+        key = (
+            str(reg_dir),
+            _mtime_ns(reg_dir / "registry.toml"),
+            _mtime_ns(reg_dir / "registry.local.toml"),
+        )
+    except Exception:  # noqa: BLE001 — an unresolvable settings home must not raise out of a guard
+        return {}, False
+    hit = _external_ws_cache.get(key)
+    if hit is not None and hit[2] == _external_ws_dir_signature(hit[0]):
+        return hit[0], hit[1]
+    roots: dict = {}
+    readable = True
+    flat: dict = {}
+    for name in ("registry.toml", "registry.local.toml"):
+        part = _read_registry_file_strict(reg_dir / name)
+        if part is None:
+            readable = False
+            continue
+        flat.update(part)
+    if readable:
+        fields: dict = {}
+        for k, v in flat.items():
+            if not k.startswith(_EXTERNAL_WS_PREFIX):
+                continue
+            name, _, field = k[len(_EXTERNAL_WS_PREFIX):].rpartition(".")
+            if name:
+                fields.setdefault(name, {})[field] = v
+        for name, f in fields.items():
+            raw = f.get("path")
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                if not os.path.isdir(raw):
+                    continue
+                canon = _canon_path(raw)
+            except Exception:  # noqa: BLE001
+                continue
+            vcs = f.get("vcs")
+            p4c = f.get("p4_client")
+            roots[name] = {
+                "path": canon,
+                "kind": _EXTERNAL_WS_DEFAULT_KIND,
+                "vcs": vcs.strip() if isinstance(vcs, str) else "",
+                "p4_client": p4c.strip() if isinstance(p4c, str) else "",
+            }
+    _external_ws_cache.clear()
+    _external_ws_cache[key] = (roots, readable, _external_ws_dir_signature(roots))
+    return roots, readable
+
+
+def _external_ws_dir_signature(roots: dict) -> tuple:
+    """Existence of each cached root, so a workspace dir created or removed after the
+    registry was cached is not served stale."""
+    return tuple(sorted((k, os.path.isdir(v["path"])) for k, v in roots.items()))
+
+
+def external_workspace_roots() -> dict:
+    """``{key: {"path": canon_path, "kind", "vcs", "p4_client"}}`` over the merged registry.
+
+    An entry counts only when ``path`` is a non-empty existing directory; an absent or
+    unknown ``kind`` reads as ``external-readonly`` (fail closed); ``vcs``/``p4_client``
+    are ``""`` when absent. Zero spawns; never raises; ``{}`` on any read failure.
+    """
+    return dict(_external_workspace_state()[0])
+
+
+def external_workspace_registry_readable() -> bool:
+    """False when a registry file exists but cannot be read; lets a guard tell
+    "none registered" from "could not read"."""
+    return _external_workspace_state()[1]
+
+
+def external_workspace_containing(path: str) -> Optional[str]:
+    """The registered key whose root equals or contains ``path``, else ``None``.
+
+    Compares ``normcase(realpath(abspath(p)))`` on both sides, by equality or
+    root + ``os.sep`` prefix.
+    """
+    if not path:
+        return None
+    try:
+        target = _canon_path(path)
+        for key, entry in _external_workspace_state()[0].items():
+            root = entry["path"]
+            if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
+                return key
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 _DECLARED_ROSTER_FILENAME = "registry.toml"
 """The seeded, roster-declaring half of the two-file registry. `registry.toml`
 is created once from the shipped `registry.toml.example` and carries the

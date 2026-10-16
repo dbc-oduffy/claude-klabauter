@@ -471,18 +471,21 @@ def _transcript_idle_seconds(
     return now.timestamp() - activity_epoch
 
 
-#: What a named wait is ON, read in the few words after the `_NAMED_REASON`
-#: match. Any hit makes the line WAITING: the peer ended its turn on a gate only
-#: the Group EM or the PM opens, which is never a ledger obligation, so
-#: `obligations=none` on that line is not "nothing owed".
-#: The Group EM handle is `<doctrine repo>-<letter?><digits>`; the repo name is
-#: resolved at runtime because the publish scrub rewrites any literal of it.
+#: Characters read after the `_NAMED_REASON` match to say what a named wait is ON.
 _WAIT_WINDOW_CHARS = 80
 
 
 @functools.lru_cache(maxsize=1)
 def _gate_holder_re() -> "re.Pattern[str]":
-    """Gate-holder pattern; the handle alternative is dropped when no doctrine repo resolves."""
+    """Gate-holder pattern over the words after a named wait.
+
+    Any hit makes the line WAITING: the peer ended its turn on a gate only the
+    Group EM or the PM opens, which is never a ledger obligation, so
+    `obligations=none` on that line is not "nothing owed". The Group EM handle is
+    `<doctrine repo>-<letter?><digits>`; the repo name is resolved at runtime
+    because the publish scrub rewrites any literal of it, and the handle
+    alternative is dropped when no doctrine repo resolves.
+    """
     alternatives = ["group[- ]?em", r"\bslot\b", r"\bgo\b", r"\bruling\b"]
     from coordinator_core._fleet_names import doctrine_repo_name
 

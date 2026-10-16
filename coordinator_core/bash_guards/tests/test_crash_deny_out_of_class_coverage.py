@@ -32,6 +32,7 @@ from coordinator_core.bash_guards import (
     block_stash_destruction,
     block_topic_branch,
     block_perforce_submit,
+    block_external_workspace_vcs_write,
     block_push_pr_non_owned_remote,
     block_unreal_engine_resave,
     block_editor_kill_by_name,
@@ -131,6 +132,15 @@ def _perforce_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
 
     with mock.patch.object(block_perforce_submit, "_armed", lambda: True):
         return block_perforce_submit.check(_bash(cmd))
+
+
+def _external_workspace_unreadable(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
+    from unittest import mock
+
+    with mock.patch(
+        "coordinator_core.machine_resolver.external_workspace_registry_readable", lambda: False
+    ):
+        return block_external_workspace_vcs_write.check(_bash(cmd))
 
 
 def _non_owned_remote_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
@@ -263,6 +273,7 @@ _DENIED: List[Tuple[str, str, Runner]] = [
     ("block-topic-branch", "git checkout -b topic/x", _check_module(block_topic_branch, _bash)),
     ("block-topic-branch", "git push origin topic/x", _check_module(block_topic_branch, _bash)),
     ("block-perforce-submit", "p4 submit -d x", _perforce_armed),
+    ("block-external-workspace-vcs-write", "git commit -m x", _external_workspace_unreadable),
     (
         "block-push-pr-non-owned-remote",
         "git push https://github.com/x/r.git main",

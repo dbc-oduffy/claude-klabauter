@@ -443,6 +443,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-stash-destruction": ("stash",),
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-perforce-submit": ("p4", "submit", "shelve"),
+    "block-external-workspace-vcs-write": ("git",),
     "block-push-pr-non-owned-remote": ("push", "pr"),
     "block-unreal-engine-resave": ("-run=",),
     "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
@@ -1301,6 +1302,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_perforce_submit import (
             MATCHERS as _matchers_perforce_submit,
         )
+        from coordinator_core.bash_guards.block_external_workspace_vcs_write import (
+            MATCHERS as _matchers_external_workspace_vcs_write,
+        )
         from coordinator_core.bash_guards.block_push_pr_non_owned_remote import (
             MATCHERS as _matchers_push_pr_non_owned_remote,
         )
@@ -1348,6 +1352,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_noncanonical_branch_creation,
             _matchers_topic_branch,
             _matchers_perforce_submit,
+            _matchers_external_workspace_vcs_write,
             _matchers_push_pr_non_owned_remote,
             _matchers_deploy_dirty_tree,
             _matchers_unreal_engine_resave,
@@ -2350,6 +2355,10 @@ def _build_guard_chain(
         check as _check_perforce_submit,
         MATCHERS as _matchers_perforce_submit,
     )
+    from coordinator_core.bash_guards.block_external_workspace_vcs_write import (
+        check as _check_external_workspace_vcs_write,
+        MATCHERS as _matchers_external_workspace_vcs_write,
+    )
     from coordinator_core.bash_guards.block_push_pr_non_owned_remote import (
         check as _check_push_pr_non_owned_remote,
         MATCHERS as _matchers_push_pr_non_owned_remote,
@@ -2721,6 +2730,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_perforce_submit),
+        ),
+        # Registered external workspaces hold someone else's code: no git history write in or into one.
+        GuardEntry(
+            "block-external-workspace-vcs-write",
+            lambda: _check_external_workspace_vcs_write(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_external_workspace_vcs_write),
         ),
         # Publish is the line: no push or PR toward a remote the box does not own.
         GuardEntry(

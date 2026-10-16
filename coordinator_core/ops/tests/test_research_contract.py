@@ -33,4 +33,16 @@ def test_floor_sources_exclude_web_and_are_sources():
 def test_roster_and_limits():
     assert rc.UNBLOCK_ROLES == ("diagnose", "decompose", "challenge")
     assert set(rc.SOURCE_SPECIALIST) <= set(rc.SOURCES)
-    assert rc.MAX_SCOUT_QUESTIONS == 2
+    assert rc.MAX_SCOUT_QUESTIONS == 8
+
+
+def test_scout_target_and_mode_vocabulary():
+    assert rc.SCOUT_TARGETS == ("web", "repo", "local")
+    assert rc.DEFAULT_SCOUT_TARGET == "web"
+    assert rc.SCOUT_MODES == ("split", "combine")
+    assert rc.DEFAULT_SCOUT_MODE == "split"
+    assert rc.COMBINED_SCOUT_ITEM == "question"
+    assert rc.TARGET_LINE_PREFIX == "Target: "
+    assert rc.SCOUT_QUESTIONS_PARAM == "scout_questions"
+    assert rc.SCOUT_MODE_PARAM == "scout_mode"
+    assert set(rc.ScoutQuestion.__annotations__) == {"text", "target", "ref"}

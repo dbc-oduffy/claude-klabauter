@@ -186,6 +186,7 @@ EXPECTED: Dict[str, _Expected] = {
     "block-venv-creation": _Expected(("Bash", "PowerShell")),
     "block-topic-branch": _Expected(("Bash", "PowerShell")),
     "block-perforce-submit": _Expected(("Bash", "PowerShell")),
+    "block-external-workspace-vcs-write": _Expected(("Bash", "PowerShell")),
     "block-push-pr-non-owned-remote": _Expected(("Bash", "PowerShell")),
     "block-unreal-engine-resave": _Expected(("Bash", "PowerShell")),
     "block-editor-kill-by-name": _Expected(("Bash", "PowerShell")),
@@ -496,7 +497,7 @@ def test_discovery_found_the_expected_scope():
     `block_push_pr_non_owned_remote`, and 44 -> 45 with
     `block_drive_root_new_dir_bash_write`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 45, sorted(stems)
+    assert len(stems) == 46, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -520,9 +521,10 @@ def test_every_registered_guard_is_classified():
     with `background-publish`; 69 -> 70 with `block-home-root-bash-write`
     (merge 49df735aad); 70 -> 72 with `trailing-background-ampersand` and
     `move-from-inside-cwd` (example-game-repo-3b friction advisories); 73 -> 74 with
-    `block_drive_root_new_dir_bash_write`."""
+    `block_drive_root_new_dir_bash_write`; 74 -> 75 with
+    `block-external-workspace-vcs-write`."""
     actual = _actual_matchers()
-    assert len(actual) == 74, sorted(actual)
+    assert len(actual) == 75, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -563,7 +565,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 74
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 75
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

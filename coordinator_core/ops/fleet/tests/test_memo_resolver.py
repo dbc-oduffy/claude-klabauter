@@ -854,3 +854,51 @@ class TestPublishedSpellingOfCentralReceiver:
         for rid in self._IDS:
             _, repo, _ = resolve_receiver_inbox(rid)
             assert repo == doe, (rid, keys)
+
+
+class TestExternalWorkspaceReceiverRefused:
+    """A receiver whose repo root is inside a registered external workspace is refused."""
+
+    def _setup(self, tmp_path, monkeypatch, repos):
+        home = _make_claude_home(tmp_path, repos)
+        ws = tmp_path / "ws"
+        (ws / "sub" / ".git").mkdir(parents=True)
+        local = home / ".coordinator-claude-settings" / "machine-local" / "registry.local.toml"
+        local.write_text(
+            local.read_text(encoding="utf-8")
+            + f'[external_workspaces.p4_x]\npath = "{ws.as_posix()}"\n'
+            + 'kind = "external-readonly"\nvcs = "p4"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+        return ws
+
+    def test_repos_alias_into_workspace_raises_naming_key(self, tmp_path, monkeypatch):
+        from coordinator_core.ops.fleet._memo_resolver import ExternalWorkspaceReceiverError
+
+        ws = self._setup(tmp_path, monkeypatch, {})
+        home = Path(os.environ["CLAUDE_HOME"])
+        local = home / ".coordinator-claude-settings" / "machine-local" / "registry.local.toml"
+        local.write_text(
+            f'"repos.gadget_repo" = "{(ws / "sub").as_posix()}"\n'
+            + local.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        with pytest.raises(ExternalWorkspaceReceiverError) as exc:
+            resolve_receiver_inbox("gadget-repo-em")
+        assert "p4_x" in str(exc.value)
+        assert exc.value.workspace_key == "p4_x"
+
+    def test_explicit_path_inside_workspace_raises(self, tmp_path, monkeypatch):
+        from coordinator_core.ops.fleet._memo_resolver import ExternalWorkspaceReceiverError
+
+        ws = self._setup(tmp_path, monkeypatch, {})
+        with pytest.raises(ExternalWorkspaceReceiverError, match="p4_x"):
+            resolve_receiver_inbox(str(ws / "sub"))
+
+    def test_ordinary_receiver_resolves_unchanged(self, tmp_path, monkeypatch):
+        repo = tmp_path / "gadget"
+        (repo / ".git").mkdir(parents=True)
+        self._setup(tmp_path, monkeypatch, {"gadget_repo": repo})
+        _, receiver_repo, _ = resolve_receiver_inbox("gadget-repo-em")
+        assert receiver_repo == repo

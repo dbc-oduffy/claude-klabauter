@@ -223,6 +223,13 @@ def test_uncovered_turn_demotes_and_names_it(repo):
     assert review["criterion"]["status"] == "not_met"
 
 
+def test_sibling_slice_met_criterion_survives_uncovered_shared_turn(repo):
+    _turns_sizing(repo, extra=_CITE_TURN_2 + "em_analysis:\n  ask_parent: ask-parent-x ask-x\n")
+    review = _review([])
+    assert _register_gate(repo, _PLAN, review) is None
+    assert review["criterion"]["status"] == "met"
+
+
 def test_uncited_turn_is_not_owed(repo):
     _turns_sizing(repo)
     review = _review([])

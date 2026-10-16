@@ -2086,11 +2086,19 @@ def build_research_block(
     targets: list[str],
     questions: Optional[list[str]] = None,
     destination: Optional[str] = None,
+    question_mode: Optional[str] = None,
+    question_targets: Optional[list[str]] = None,
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
-    one refusal string per bad value. `(None, [])` when no research flag was given."""
+    one refusal string per bad value. `(None, [])` when no research flag was given.
+    `question_targets` are raw `<n>=<source>[:<ref>]` strings, split on the first `=` and
+    then the first `:` so a ref holding a colon stays intact."""
     questions = [q.strip() for q in questions or ()]
-    if not (value_class or appetite or sources or depth or targets or questions or destination):
+    question_targets = list(question_targets or ())
+    if not (
+        value_class or appetite or sources or depth or targets or questions or destination
+        or question_mode or question_targets
+    ):
         return None, []
     from coordinator_core.ops import _research_contract as rc
 
@@ -2122,6 +2130,40 @@ def build_research_block(
         errors.append("--research-question must not be empty")
     if destination is not None and destination not in rc.DESTINATIONS:
         errors.append(f"--research-destination must be one of {rc.DESTINATIONS}, got {destination!r}")
+    if question_mode is not None and question_mode not in rc.SCOUT_MODES:
+        errors.append(f"--research-question-mode must be one of {rc.SCOUT_MODES}, got {question_mode!r}")
+    parsed_question_targets: list[dict[str, Any]] = []
+    flag = "--research-question-target"
+    for raw in question_targets:
+        n_raw, sep, rest = raw.partition("=")
+        if not sep:
+            errors.append(f"{flag} {raw!r}: expected <n>=<source>[:<ref>]")
+            continue
+        try:
+            n = int(n_raw.strip())
+        except ValueError:
+            errors.append(f"{flag} {raw!r}: question number must be a positive integer")
+            continue
+        if n < 1:
+            errors.append(f"{flag} {raw!r}: question number must be a positive integer")
+            continue
+        source, colon, ref = rest.partition(":")
+        source, ref = source.strip(), ref.strip()
+        if source not in rc.SCOUT_TARGETS:
+            errors.append(f"{flag} {raw!r}: source must be one of {rc.SCOUT_TARGETS}, got {source!r}")
+        elif source == "web" and colon and ref:
+            errors.append(f"{flag} {raw!r}: a web target takes no ref")
+        elif source != "web" and not ref:
+            errors.append(f"{flag} {raw!r}: a {source} target needs a ref (<n>={source}:<ref>)")
+        elif questions and n > len(questions):
+            errors.append(f"{flag} {raw!r}: question {n} exceeds the {len(questions)} --research-question values")
+        else:
+            entry: dict[str, Any] = {"question": n, "source": source}
+            if source != "web":
+                entry["ref"] = ref
+            parsed_question_targets.append(entry)
+    if question_targets and not questions:
+        errors.append("--research-question-target needs --research-question")
     if errors:
         return None, errors
     block: dict[str, Any] = {"value_class": value_class}
@@ -2137,6 +2179,10 @@ def build_research_block(
         block["questions"] = questions
     if destination is not None:
         block["destination"] = destination
+    if question_mode is not None:
+        block["question_mode"] = question_mode
+    if parsed_question_targets:
+        block["question_targets"] = parsed_question_targets
     return block, []
 
 
@@ -2189,10 +2235,19 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
             ),
             "questions": given.get("questions", prior.get("questions") or []),
             "destination": given.get("destination", prior.get("destination")),
+            "question_mode": given.get("question_mode", prior.get("question_mode")),
+            "question_targets": given.get(
+                "question_targets",
+                [
+                    f"{t['question']}={t['source']}" + (f":{t['ref']}" if t.get("ref") else "")
+                    for t in prior.get("question_targets") or []
+                ],
+            ),
         }
         block, errors = build_research_block(
             merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
             list(merged["targets"]), list(merged["questions"]), merged["destination"],
+            merged["question_mode"], list(merged["question_targets"]),
         )
         if errors:
             raise MutateAbort("; ".join(errors))
@@ -2253,6 +2308,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-depth standard|deeper|deepest]\n"
         "    [--research-target <source>=<ref> ...]\n"
         "    [--research-question <text> ...]\n"
+        "    [--research-question-mode split|combine]\n"
+        "    [--research-question-target <n>=<source>[:<ref>] ... (source web|repo|local; ref for repo/local)]\n"
         "    [--research-destination repo|local-only]\n"
         "    [--acceptance-rows-json '[{\"statement\":..,\"writes\":[..],\"check\":..}]' (requires --write)]\n"
         "    [--write <state/sizings/x.yaml> [--json (print the decision instead of 'written: <path>')]\n"
@@ -2413,6 +2470,8 @@ def main(argv: list[str]) -> int:
     research_depth = None
     research_targets: list[str] = []
     research_questions: list[str] = []
+    research_question_mode = None
+    research_question_targets: list[str] = []
     research_destination = None
     acceptance_rows_json = None
     verbatim_turns_raw = None
@@ -2562,6 +2621,15 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-question" and i + 1 < len(argv):
             research_questions.append(argv[i + 1])
+            i += 2
+        elif tok == "--research-question-mode" and i + 1 < len(argv):
+            if research_question_mode is not None:
+                print(f"{prog}: --research-question-mode given more than once", file=sys.stderr)
+                return EXIT_USAGE
+            research_question_mode = argv[i + 1]
+            i += 2
+        elif tok == "--research-question-target" and i + 1 < len(argv):
+            research_question_targets.append(argv[i + 1])
             i += 2
         elif tok == "--research-destination" and i + 1 < len(argv):
             research_destination = argv[i + 1]
@@ -2744,6 +2812,8 @@ def main(argv: list[str]) -> int:
                 ("value_class", research_class), ("appetite", research_appetite),
                 ("sources", research_sources), ("depth", research_depth), ("targets", research_targets),
                 ("questions", research_questions), ("destination", research_destination),
+                ("question_mode", research_question_mode),
+                ("question_targets", research_question_targets),
             )
             if v
         }
@@ -2763,7 +2833,7 @@ def main(argv: list[str]) -> int:
 
     research_block, research_errors = build_research_block(
         research_class, research_appetite, research_sources, research_depth, research_targets,
-        research_questions, research_destination,
+        research_questions, research_destination, research_question_mode, research_question_targets,
     )
     if research_errors:
         for message in research_errors:

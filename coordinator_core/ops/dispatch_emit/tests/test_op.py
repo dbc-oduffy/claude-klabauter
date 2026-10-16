@@ -23,6 +23,8 @@ from coordinator_core.ops.dispatch_emit.op import (
     _dispatch_emit,
 )
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
+from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing, repo  # noqa: F401
 
 _FIXTURE_PLAN = textwrap.dedent(
     """\
@@ -566,3 +568,17 @@ def test_zero_waves_error_names_the_rows_read_spine_dropped(tmp_path):
     with pytest.raises(NoWavesError) as excinfo:
         _dispatch_emit({"plan_path": str(plan), "output_path": str(tmp_path / "e.mjs")})
     assert "ONLY (deferred" in str(excinfo.value)
+
+
+def test_dispatch_emit_research_route_honours_a_given_topic_slug(repo):
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "web")
+    reply = _dispatch_emit({"from_sizing": rel, "topic_slug": "my-topic"}, repo)
+    assert reply["next_action"]["params"]["topic_slug"] == "my-topic"
+
+
+def test_dispatch_emit_research_route_refuses_an_unsafe_topic_slug_and_writes_nothing(repo):
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "web")
+    before = {p for p in repo.rglob("*") if p.is_file()}
+    with pytest.raises(PipelineEmitRefused):
+        _dispatch_emit({"from_sizing": rel, "topic_slug": "Bad Slug"}, repo)
+    assert {p for p in repo.rglob("*") if p.is_file()} == before

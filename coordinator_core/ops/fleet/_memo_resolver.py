@@ -184,7 +184,10 @@ from typing import Optional, Tuple
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
 from coordinator_core.data_root import content_root_for
 from coordinator_core.content_root import read_content_root
-from coordinator_core.machine_resolver import canonical_repo_key_for_root
+from coordinator_core.machine_resolver import (
+    canonical_repo_key_for_root,
+    external_workspace_containing,
+)
 from coordinator_core.memo_corpus import receiver_inbox_root
 
 _LOG = logging.getLogger(__name__)
@@ -195,6 +198,23 @@ class RegistryReadError(Exception):
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(reason)
+
+
+class ExternalWorkspaceReceiverError(RegistryReadError):
+    """A receiver whose repo root is inside a registered external workspace.
+
+    Subclasses RegistryReadError so every caller that already fails loud on a
+    registry defect refuses this the same way.
+    """
+
+    def __init__(self, receiver: str, workspace_key: str):
+        self.receiver = receiver
+        self.workspace_key = workspace_key
+        super().__init__(
+            f"memo: {receiver!r} resolves into external workspace "
+            f"{workspace_key!r}, which is not a repo and has no inbox.\n"
+            f"  Send to a registered repo's EM instead."
+        )
 
 
 class AmbiguousReceiverError(Exception):
@@ -772,8 +792,17 @@ def explicit_git_repo_path(receiver: str) -> Optional[Path]:
         return None
     candidate = Path(os.path.expanduser(text))
     if candidate.is_dir() and (candidate / ".git").exists():
-        return candidate.resolve()
+        resolved = candidate.resolve()
+        _refuse_external_workspace(receiver, str(resolved))
+        return resolved
     return None
+
+
+def _refuse_external_workspace(receiver: str, repo_root: str) -> None:
+    """Raise ExternalWorkspaceReceiverError when `repo_root` is in an external workspace."""
+    key = external_workspace_containing(repo_root)
+    if key is not None:
+        raise ExternalWorkspaceReceiverError(receiver, key)
 
 
 def resolve_receiver_inbox(
@@ -839,6 +868,7 @@ def resolve_receiver_inbox(
     if not repo_path_str:
         return None, None, all_repos
     receiver_repo_path = Path(repo_path_str)
+    _refuse_external_workspace(receiver_em_id, str(receiver_repo_path))
     if publish_mirror_path_match(receiver_repo_path):
         return None, None, all_repos
     corpus_root_str, _ = receiver_inbox_root(str(receiver_repo_path))

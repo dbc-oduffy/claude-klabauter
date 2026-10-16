@@ -92,7 +92,7 @@ def _criterion_evidence_record(params: dict, repo_root: Optional[Path] = None) -
 
     Returns:
         {"recorded": True, "sidecar": str, "clause": str, "output_sha256": str}
-        or {"error": str}.
+        or {"error": str}. Reviews mode returns {"recorded": True, "sidecar": str, "reviews": int}.
     """
     p = params if isinstance(params, dict) else {}
     plan_path = _text(p, "plan_path")

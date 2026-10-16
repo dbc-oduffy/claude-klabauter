@@ -2,7 +2,9 @@
 coordinator_core.ops.research_close — JSON-RPC "research.close" op.
 
 Purpose: closes a research run by tier. Scouts first concatenates the run's ``digest-*.md``
-files into ``<scratch_dir>/digest.md`` and archives that as its only output. Every tier
+files, then a ``## Grounding`` section holding ``grounding.md`` when it has text, into
+``<scratch_dir>/digest.md`` and archives that as its only output (``probe-*.md`` and
+``grounding.md`` are never archived separately). Every tier
 copies the run's declared final outputs into ``docs/research/<YYYY-MM-DD>-<topic_slug>/``
 and makes exactly one ``commit_paths`` call over the copied paths plus the trail record
 ``docs/research/trail/<run_id>.yaml`` (built by ``_research_trail``).
@@ -23,10 +25,19 @@ which must hold a non-empty JSON array; otherwise the close is refused with
 ``deliverable: false`` before any copy or commit), ``halted_segments`` (optional list of safe
 path segments naming pipelines whose leg halted: an entry that is also in ``segment_dirs``
 has its ``require_claims`` entries dropped and may have no dir; an entry outside
-``segment_dirs`` is only echoed; the reply carries the list, success and refusal alike).
+``segment_dirs`` is only echoed; the reply carries the list, success and refusal alike), ``require_grounding`` (optional bool,
+scouts only, default false: true refuses the close with ``deliverable: false`` before any write
+when ``grounding.md`` is absent or whitespace-only). A scouts ``grounding.md`` that has text is
+always enforced, with or without the param: an ungrounded or contradicted claim, an invented
+contradiction ruling, a digest with no section, or no graded claim refuses the close
+(``_research_grounding.grounding_problems``).
 Only a named segment is excused: a root-level ``require_claims`` entry has no segment prefix
 and is never excused (the research route puts ``nlm-preflight`` ahead of notebooklm, so the
 root never holds notebooklm's claims).
+``require_outputs`` (optional list of non-empty scratch-relative paths, each a non-empty regular
+file; otherwise the close is refused with ``deliverable: false`` before any copy or commit).
+Unlike ``require_claims``, a halted segment never excuses an entry: the file is the run's
+deliverable.
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -76,6 +87,7 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import _research_contract as rc
+from coordinator_core.ops import _research_grounding
 from coordinator_core.ops import _research_trail
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -110,12 +122,28 @@ def _err(error: str, **extra) -> dict:
     return out
 
 
+def _grounding_text(scratch: Path) -> str:
+    """The grounding report's text, or "" when absent or whitespace-only; an unreadable report
+    yields a blocking ungrounded line so it refuses the close instead of passing unchecked."""
+    path = scratch / _research_grounding.GROUNDING_REPORT
+    try:
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"- **ungrounded** {_research_grounding.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}"
+    return text if text.strip() else ""
+
+
 def _build_digest(scratch: Path) -> Optional[str]:
-    """Concatenate ``digest-*.md`` into ``scratch/digest.md``; an error string when none exist."""
+    """Concatenate ``digest-*.md`` (then a ``## Grounding`` section when ``grounding.md`` holds
+    text) into ``scratch/digest.md``; an error string when no digest exists."""
     digests = sorted(p for p in scratch.glob("digest-*.md") if p.is_file())
     if not digests:
         return f"no digest-*.md under {str(scratch)!r}"
-    body = "\n\n".join(p.read_text(encoding="utf-8").rstrip("\n") for p in digests) + "\n"
+    body = "\n\n".join(p.read_text(encoding="utf-8").rstrip("\n") for p in digests)
+    grounding = _grounding_text(scratch)
+    if grounding:
+        body += "\n\n## Grounding\n\n" + grounding.rstrip("\n")
+    body += "\n"
     (scratch / "digest.md").write_text(body, encoding="utf-8", newline="\n")
     return None
 
@@ -400,6 +428,27 @@ def _missing_claims(scratch: Path, require_claims) -> Optional[dict]:
     return None
 
 
+def _missing_outputs(scratch: Path, require_outputs) -> Optional[dict]:
+    """A refusal reply when a ``require_outputs`` path is not a non-empty regular file, else None."""
+    if require_outputs is None:
+        return None
+    if not isinstance(require_outputs, list) or not all(
+        isinstance(r, str) and r for r in require_outputs
+    ):
+        return _err("require_outputs must be a list of non-empty scratch-relative paths")
+    for rel in require_outputs:
+        p = contained_path(scratch / rel, [scratch])
+        if p is None:
+            return _err(f"require_outputs entry escapes scratch_dir: {rel!r}")
+        try:
+            landed = p.is_file() and p.stat().st_size > 0
+        except OSError:
+            landed = False
+        if not landed:
+            return _err(f"run is not deliverable: {rel} is missing or empty", deliverable=False)
+    return None
+
+
 def _close_sync(worktree: Path, params: dict) -> dict:
     tier = str(params.get("tier") or "")
     run_id = str(params.get("run_id") or "")
@@ -444,12 +493,38 @@ def _close_sync(worktree: Path, params: dict) -> dict:
             if not (isinstance(r, str) and r.replace("\\", "/").split("/", 1)[0] in excused
                     and "/" in r.replace("\\", "/"))
         ]
-    problem = _missing_claims(scratch, require_claims)
+    require_grounding = params.get("require_grounding", False)
+    if not isinstance(require_grounding, bool):
+        return _err(f"require_grounding must be a bool: {require_grounding!r}")
+    if require_grounding and tier != "scouts":
+        return _err(f"require_grounding applies to tier scouts only: {tier!r}")
+    problem = _missing_claims(scratch, require_claims) or _missing_outputs(
+        scratch, params.get("require_outputs")
+    )
     if problem:
         if halted_segments is not None:
             problem["halted_segments"] = halted_segments
         return problem
     if tier == "scouts":
+        report = _research_grounding.GROUNDING_REPORT
+        grounding = _grounding_text(scratch)
+        problem = None
+        if require_grounding and not grounding:
+            problem = _err(f"run is not deliverable: {report} is absent or empty", deliverable=False)
+        elif grounding:
+            found = _research_grounding.grounding_problems(
+                grounding, [p.name for p in sorted(scratch.glob("digest-*.md")) if p.is_file()]
+            )
+            if found:
+                problem = _err(
+                    f"run is not deliverable: {report}: " + "; ".join(found),
+                    deliverable=False,
+                    grounding=_research_grounding.grounding_counts(grounding),
+                )
+        if problem:
+            if halted_segments is not None:
+                problem["halted_segments"] = halted_segments
+            return problem
         problem = _build_digest(scratch)
         if problem:
             return _err(problem)
@@ -461,7 +536,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
             return _err(f"trail record refused: sizing escapes the repo: {sizing!r}")
         if not sized.is_file():
             return _err(f"sizing is not on disk: {sizing!r}")
-        sizing_rel = sized.relative_to(worktree.resolve()).as_posix()
+        sizing_rel = os.path.normpath(sizing).replace("\\", "/")
     meta = {"tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel}
     local_root_raw = params.get("local_root")
     return _close_committed(
@@ -478,7 +553,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail}``;
     local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
-    ``{committed: false, error}``; a ``require_claims`` refusal adds ``deliverable: false``.
+    ``{committed: false, error}``; a ``require_claims``, ``require_outputs`` or ``require_grounding``
+    refusal adds ``deliverable: false``; a grounding-verdict refusal also adds ``grounding`` (the
+    five verdict counts).
     ``halted_segments`` is echoed in every reply when the param was given.
     """
     if repo_root is None:

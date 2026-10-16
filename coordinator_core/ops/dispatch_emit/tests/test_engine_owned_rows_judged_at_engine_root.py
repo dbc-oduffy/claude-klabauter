@@ -103,13 +103,13 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_ledger_check_and_judge_prompts_carry_the_engine_clause_and_root_read(monkeypatch):
+def test_verify_prompt_carries_the_engine_clause_and_root_read(monkeypatch):
     script = _script(monkeypatch)
-    ledger_at = script.index("phase: ledger-check")
-    ledger_end = script.index("label: 'ledger-check'", ledger_at)
-    assert "engine-plane row" in script[ledger_at:ledger_end]
-    assert "root_read" in script[ledger_at:ledger_end]
-    assert script.count("engine-plane row") >= 2
+    assert "label: 'ledger-check'" not in script
+    verify_end = script.index("label: 'verify'")
+    verify = script[script.rindex("agent(", 0, verify_end) : verify_end]
+    assert "engine-plane row" in verify
+    assert "root_read" in verify
     assert "root_read" in str(ask_compose._LEDGER_CHECK_SCHEMA)
 
 
@@ -128,10 +128,10 @@ def test_the_folded_judge_carries_the_engine_clause_and_root_read(monkeypatch):
         review_roster_fragment=roster, review_stage_schemas={**_V5_STAGE_SCHEMAS, "judge": {"type": "object"}},
     )
     assert "label: 'ledger-check'" not in script
-    judge = script[: script.index("agentType: 'coordinator:criterion-judge'")]
-    judge = judge[judge.rindex("agent(") :]
-    assert "engine-plane row" in judge and "root_read" in judge
-    assert '"root_read"' in script[script.index("agentType: 'coordinator:criterion-judge'") :].split("\n", 1)[0]
+    verify_end = script.index("label: 'verify'")
+    verify = script[script.rindex("agent(", 0, verify_end) : verify_end]
+    assert "engine-plane row" in verify and "root_read" in verify
+    assert '"root_read"' in script[verify_end:].split("\n", 1)[0]
 
 
 def _ledger() -> Ledger:
