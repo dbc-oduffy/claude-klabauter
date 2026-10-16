@@ -107,6 +107,58 @@ def test_checkpoint_plus_halt_commit_cover_every_row(repo):  # noqa: F811
     assert plan.incomplete == () and plan.ledger is not None
 
 
+def _run_halt(repo, run_id, halted_by="ledger-check", plan=PLAN_REL):
+    f = repo / f"{run_id}.txt"
+    f.write_text("x\n", encoding="utf-8")
+    _git(repo, "add", f.name)
+    _git(repo, "commit", "-q", "-m", halted_record_message(run_id, {"halted": halted_by, "plan": plan}))
+
+
+def test_ledger_run_is_the_newest_ledger_check_halt(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    _init(repo)
+    _run_halt(repo, "run-old")
+    _run_halt(repo, "run-new")
+    state = resume_landed_state(repo, PLAN_REL)
+    assert state.ledger_run == "run-new"
+
+
+def test_newer_refusal_halt_does_not_change_ledger_run(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    _init(repo)
+    _run_halt(repo, "run-ledger")
+    _run_halt(repo, "run-refusal", halted_by="refusal")
+    assert resume_landed_state(repo, PLAN_REL).ledger_run == "run-ledger"
+
+
+def test_ledger_halt_naming_another_plan_yields_no_ledger_run(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    _init(repo)
+    _run_halt(repo, "run-x", plan="docs/plans/other.md")
+    assert resume_landed_state(repo, PLAN_REL).ledger_run is None
+
+
+def test_resume_landed_state_spends_one_git_process(repo, monkeypatch):  # noqa: F811
+    from coordinator_core.git import run as run_mod
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    _init(repo)
+    _run_halt(repo, "run-1")
+    real = run_mod.run_git
+    calls: list = []
+
+    def spy(args, *a, **k):
+        calls.append(args)
+        return real(args, *a, **k)
+
+    monkeypatch.setattr(run_mod, "run_git", spy)
+    assert resume_landed_state(repo, PLAN_REL).ledger_run == "run-1"
+    assert len(calls) == 1
+
+
 def test_open_row_path_spends_one_git_process(repo, monkeypatch):  # noqa: F811
     from coordinator_core.git import run as run_mod
 

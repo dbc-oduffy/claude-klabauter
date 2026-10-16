@@ -176,13 +176,26 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
             run_token.release(worktree_root, run_id, token, script_path)
 
 
+def _ledger_halt_plan_and_blocking(repo_root: Path, halted: dict) -> tuple:
+    """(plan_rel, blocking ids) of a halt naming a relative, contained plan; (None, ()) otherwise."""
+    plan_rel = halted.get(HALT_PLAN_FIELD)
+    if not isinstance(plan_rel, str) or not plan_rel or Path(plan_rel).is_absolute():
+        return None, ()
+    if contained_path(repo_root / plan_rel, [repo_root]) is None:
+        return None, ()
+    items = halted.get("items")
+    blocking = tuple(
+        i["id"] for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict) and isinstance(i.get("id"), str)
+    )
+    return plan_rel, blocking
+
+
 def _settle_ledger_pointer(repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str]) -> None:
     """A landed ledger-check halt writes its plan's ledger-halt pointer; any other landed halt for
     a known plan unlinks a stale one. A halt without a relative, contained plan touches nothing."""
-    plan_rel = halted.get(HALT_PLAN_FIELD)
-    if not isinstance(plan_rel, str) or not plan_rel or Path(plan_rel).is_absolute():
-        return
-    if contained_path(repo_root / plan_rel, [repo_root]) is None:
+    plan_rel, blocking = _ledger_halt_plan_and_blocking(repo_root, halted)
+    if plan_rel is None:
         return
     path = ledger_halt_path(repo_root, plan_rel)
     if halted["halted"] != "ledger-check":
@@ -190,11 +203,6 @@ def _settle_ledger_pointer(repo_root: Path, run_id: str, halted: dict, sizing_re
         return
     if not sizing_rel:
         return
-    items = halted.get("items")
-    blocking = tuple(
-        i["id"] for i in (items if isinstance(items, list) else [])
-        if isinstance(i, dict) and isinstance(i.get("id"), str)
-    )
     write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, blocking))
 
 
@@ -244,7 +252,16 @@ def _land(
         declared.append(sizing_rel)
 
     if (worktree_root / record_dir_rel).is_dir():
-        write_halt_marker(worktree_root / record_dir_rel, halted=halted["halted"], sizing_rel=sizing_rel)
+        plan_rel, blocking = (
+            _ledger_halt_plan_and_blocking(repo_root, halted) if halted["halted"] == "ledger-check" else (None, ())
+        )
+        write_halt_marker(
+            worktree_root / record_dir_rel,
+            halted=halted["halted"],
+            sizing_rel=sizing_rel,
+            plan_rel=plan_rel,
+            blocking=blocking if plan_rel else None,
+        )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
         worktree_root, run_id,

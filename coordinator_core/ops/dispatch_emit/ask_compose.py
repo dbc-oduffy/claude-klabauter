@@ -33,6 +33,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     PM_INTENT_FILE,
+    RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_KEY,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
@@ -2413,9 +2414,13 @@ _SFE_WAVE_SIDECARS_JS = (
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.
 _RESUME_LEDGER_CLAUSE_JS = (
-    "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check and its rows already landed. "
-    "Judge only these requirement rows, now, against the current tree: ' + "
-    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. Return an item for each of them and no other item.' : '')"
+    "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check and its rows already ran: landed, "
+    "or left in the tree by the halt. Judge only these requirement rows, now, against the current tree: ' + "
+    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. Return an item for each of them and no other item.' + "
+    f"(Object.keys(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_EM_DISCHARGED_FIELD} ?? {{}}).length "
+    "? ' EM-discharged rows (performed by the EM, recorded via em-discharge): ' + "
+    f"Object.entries(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_EM_DISCHARGED_FIELD}).map(([k, v]) => k + ': ' + v).join('; ') + '.' : '') "
+    ": '')"
 )
 #: The verify agent writes docs before any ledger or criterion verdict exists, so docs are asked
 #: for only on what is settled before it runs.

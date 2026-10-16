@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt, ledger_halt_path, write_ledger_halt
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    LedgerHalt,
+    halted_record_message,
+    ledger_halt_path,
+    write_ledger_halt,
+)
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, resumable_plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
@@ -61,7 +67,7 @@ def test_matching_pointer_resumes_with_resume_ledger_and_no_halt(repo):  # noqa:
     _pointer(repo, blocking=("R1", "R2"))
     v = gate(repo, REL)
     assert v.halt is None
-    assert v.resume_ledger == {
+    assert {k: x for k, x in v.resume_ledger.items() if k != "em_discharged"} == {
         "run_id": "run-1", "plan": PLAN_REL, "blocking": ["R1", "R2"], "rulable_ids": ["R1", "R2"],
     }
     assert v.resume_rows is None and v.resume_plan is None
@@ -76,13 +82,85 @@ def test_arm_s_resume_through_the_resume_sink(repo):  # noqa: F811
     assert v.arm == "s" and v.resume_ledger is not None and v.halt is None
 
 
-def test_pointer_with_an_unlanded_row_is_never_a_ledger_resume(repo):  # noqa: F811
+def _halt_record(repo, staged=("A1", "A2"), plan=PLAN_REL, blocking=("R1",), run="run-1", owed=()):
+    """A committed ledger-check halt: `state/warp/<run>` record plus a halt commit naming the plan."""
+    d = repo / "state" / "warp" / run
+    d.mkdir(parents=True, exist_ok=True)
+    halted = {"halted": "ledger-check", "sizing_rel": REL}
+    if plan is not None:
+        halted["plan"] = plan
+    if blocking is not None:
+        halted["blocking"] = list(blocking)
+    (d / "halted.json").write_text(json.dumps(halted), encoding="utf-8")
+    manifest = {
+        "rows": [{"id": i} for i in staged],
+        "owed": [{"id": i} for i in owed],
+        "gated": [],
+    }
+    (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _git(repo, "add", "state")
+    _git(repo, "commit", "-q", "-m", halted_record_message(run, {"halted": "ledger-check", "plan": PLAN_REL}))
+
+
+def test_unlanded_row_the_halted_run_staged_resumes_at_the_ledger_without_a_pointer(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, landed=("A1",))
+    _halt_record(repo)
+    assert not ledger_halt_path(repo, PLAN_REL).exists()
+    v = gate(repo, REL)
+    assert v.halt is None
+    assert v.resume_ledger["run_id"] == "run-1" and v.resume_ledger["blocking"] == ["R1"]
+    assert v.resume_rows is None and v.resume_plan is None
+
+
+def test_owed_row_the_halted_run_staged_counts_as_staged(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, rows=(("A1", "open"), ("A2", "open")), landed=("A1",))
+    _halt_record(repo, staged=("A1",), owed=("A2",))
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == () and plan.ledger.run_id == "run-1"
+
+
+def test_pointer_blocking_wins_when_it_names_the_halted_run(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, landed=("A1",))
+    _halt_record(repo, blocking=("R1",))
+    _pointer(repo, blocking=("R2",))
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.ledger.blocking == ("R2",)
+
+
+def test_record_without_plan_or_blocking_still_resumes(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, landed=("A1",))
+    _halt_record(repo, plan=None, blocking=None)
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == () and plan.ledger.blocking == ()
+
+
+def test_row_the_halted_run_did_not_stage_keeps_resume_rows(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, landed=("A1",))
+    _halt_record(repo, staged=("A1",))
+    v = gate(repo, REL)
+    assert v.halt is None and v.resume_ledger is None
+    assert v.resume_plan == PLAN_REL and v.resume_rows == ["A2"]
+
+
+def test_pointer_alone_with_an_unlanded_row_is_not_a_ledger_resume(repo):  # noqa: F811
     _put_s(repo, requirement_register=REGISTER)
     _landed_repo(repo, landed=("A1",))
     _pointer(repo)
     v = gate(repo, REL)
-    assert v.halt is None and v.resume_ledger is None
-    assert v.resume_plan == PLAN_REL and v.resume_rows == ["A2"]
+    assert v.resume_ledger is None and v.resume_rows == ["A2"]
+
+
+def test_coded_row_with_an_unlanded_row_and_a_halt_record_does_not_resume(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, rows=(("A1", "coded"), ("A2", "open")), landed=("A1",))
+    _halt_record(repo)
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.ledger is None and plan.incomplete == ("A2",)
 
 
 def _load(repo):

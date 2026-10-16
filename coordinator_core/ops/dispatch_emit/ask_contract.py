@@ -21,6 +21,7 @@ Signatures implemented in their own modules:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NamedTuple
@@ -297,6 +298,76 @@ def record_dir(repo_root: Path, run_id: str) -> Path:
         ):
             return scratch
     return state
+
+
+#: halted.json key a ledger-check halt records its blocking register row ids under.
+HALT_BLOCKING_FIELD = "blocking"
+#: `resume_ledger` verdict key carrying the plan's em-discharged rows as `{row_id: text}`.
+RESUME_LEDGER_EM_DISCHARGED_FIELD = "em_discharged"
+_HALT_SUBJECT_RE = re.compile(r"^warp: record halted (\S+) run artifacts(?: \(process files\))?\s*$")
+
+
+def halted_run_id(subject: str) -> str | None:
+    """The run id a `halted_record_message` subject (with or without the ' (process files)'
+    suffix) names; None for any other subject or an unsafe id. Pure."""
+    match = _HALT_SUBJECT_RE.match(subject) if isinstance(subject, str) else None
+    if match is None or not safe_id(match.group(1)):
+        return None
+    return match.group(1)
+
+
+@dataclass(frozen=True)
+class HaltRecord:
+    """A ledger-check halt's committed record: the plan it named (None when halted.json predates
+    the `plan` key), its sizing, every row id it staged (rows, owed, gated), and the register row
+    ids that blocked it (None when unrecorded)."""
+
+    run_id: str
+    plan_rel: str | None
+    sizing_rel: str
+    staged: frozenset[str]
+    blocking: tuple[str, ...] | None
+
+
+def _read_json_object(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def read_halt_record(repo_root: Path, run_id: str) -> HaltRecord | None:
+    """Read `halted.json` and `manifest.json` from the run's record dir. None on an unsafe run id,
+    an unreadable or malformed file, or a halt that is not `ledger-check`. Two file reads."""
+    try:
+        base = record_dir(repo_root, run_id)
+    except ValueError:
+        return None
+    halted = _read_json_object(base / "halted.json")
+    manifest = _read_json_object(base / "manifest.json")
+    if halted is None or manifest is None or halted.get("halted") != "ledger-check":
+        return None
+    sizing_rel = halted.get("sizing_rel")
+    if not isinstance(sizing_rel, str) or not sizing_rel:
+        return None
+    staged: set[str] = set()
+    for key in ("rows", "owed", "gated"):
+        items = manifest.get(key, [])
+        if not isinstance(items, list):
+            return None
+        staged.update(i["id"] for i in items if isinstance(i, dict) and isinstance(i.get("id"), str))
+    plan = halted.get(HALT_PLAN_FIELD)
+    blocking = halted.get(HALT_BLOCKING_FIELD)
+    return HaltRecord(
+        run_id=run_id,
+        plan_rel=plan if isinstance(plan, str) and plan else None,
+        sizing_rel=sizing_rel,
+        staged=frozenset(staged),
+        blocking=tuple(blocking) if isinstance(blocking, list) and all(isinstance(b, str) for b in blocking) else None,
+    )
+
+
 #: The run's delivery note (`<dir>/<run_id>.md`): what was asked, what shipped, review findings,
 #: judge verdict. The first of an ask run's declared doc writes.
 DELIVERY_NOTE_DIR = "docs/delivery"

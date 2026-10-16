@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_TOUCHPOINT,
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
+    RESUME_LEDGER_EM_DISCHARGED_FIELD,
     GateVerdict,
     rulable_ids,
 )
@@ -237,7 +238,7 @@ def _arm_verdict(
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
-    resume_ledger = _resume_ledger(sizing, resume.ledger) if resume else None
+    resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root) if resume else None
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
 
@@ -274,17 +275,27 @@ def _arm_verdict(
     )
 
 
-def _resume_ledger(sizing: dict, halt) -> Optional[dict]:
-    """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids and the
-    sizing's rulable register ids; None when the resume carries no halt pointer."""
+def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
+    """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids, the
+    sizing's rulable register ids and the plan's em-discharged rows as `{row_id: text}`; None when
+    the resume carries no halt. A halt that recorded no blocking ids re-judges every rulable row."""
     if halt is None:
         return None
+    from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+
     rows = (sizing.get("requirement_register") or {}).get("rows") or []
+    rulable = list(rulable_ids(rows))
+    discharged = {
+        str(row_id): entry["text"]
+        for row_id, entry in read_em_discharges(Path(repo_root) / halt.plan_rel).items()
+        if isinstance(entry, dict) and isinstance(entry.get("text"), str)
+    }
     return {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
-        "blocking": list(halt.blocking),
-        "rulable_ids": list(rulable_ids(rows)),
+        "blocking": list(halt.blocking) or rulable,
+        RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged,
+        "rulable_ids": rulable,
     }
 
 

@@ -51,6 +51,28 @@ def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch):
     assert script.index("_gate.resume_ledger.blocking.join") < script.index("label: 'verify'")
 
 
+def test_the_clause_says_rows_ran_not_landed(monkeypatch):
+    script = _script(monkeypatch)
+    assert "its rows already ran: landed, or left in the tree by the halt" in script
+    assert "its rows already landed" not in script
+
+
+def test_the_clause_names_em_discharged_rows_from_the_pinned_key(monkeypatch):
+    script = _script(monkeypatch)
+    assert "EM-discharged rows (performed by the EM, recorded via em-discharge): " in script
+    assert "_gate.resume_ledger.em_discharged" in script
+    assert script.count("em_discharged") == script.count("_gate.resume_ledger.em_discharged")
+
+
+def test_the_discharge_clause_is_gated_on_a_non_empty_em_discharged_map():
+    clause = ask_compose._RESUME_LEDGER_CLAUSE_JS
+    gate = "Object.keys(_gate.resume_ledger.em_discharged ?? {}).length ? "
+    assert gate in clause
+    assert clause.index(gate) < clause.index("EM-discharged rows")
+    assert clause.index("Object.entries(_gate.resume_ledger.em_discharged).map(([k, v]) => k + ': ' + v)") > clause.index(gate)
+    assert clause.endswith(": '') : '')")
+
+
 def test_the_ledger_halt_still_precedes_the_commit_on_the_resume_path(monkeypatch):
     script = _script(monkeypatch)
     halt = script.index("halted: 'ledger-check'")

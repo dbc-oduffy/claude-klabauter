@@ -18,7 +18,7 @@ from typing import Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops._path_guard import safe_id
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import HALT_BLOCKING_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 
 HALTED_FILE = "halted.json"
@@ -47,16 +47,28 @@ def _write(record_dir: Path, payload: dict) -> Path:
     return target
 
 
-def write_halt_marker(record_dir: Path, *, halted: str, sizing_rel: Optional[str]) -> Path:
-    """Write the `halted` marker into `record_dir` (created if absent); return its path."""
-    return _write(
-        Path(record_dir),
-        {
-            "status": STATUS_HALTED,
-            "halted": halted,
-            "sizing_rel": _norm(sizing_rel) if sizing_rel else None,
-        },
-    )
+def write_halt_marker(
+    record_dir: Path,
+    *,
+    halted: str,
+    sizing_rel: Optional[str],
+    plan_rel: Optional[str] = None,
+    blocking: Optional[tuple] = None,
+) -> Path:
+    """Write the `halted` marker into `record_dir` (created if absent); return its path.
+
+    `plan` and the blocking key are written only when given, so other halts' markers are unchanged.
+    """
+    payload = {
+        "status": STATUS_HALTED,
+        "halted": halted,
+        "sizing_rel": _norm(sizing_rel) if sizing_rel else None,
+    }
+    if plan_rel:
+        payload[HALT_PLAN_FIELD] = _norm(plan_rel)
+    if blocking is not None:
+        payload[HALT_BLOCKING_FIELD] = list(blocking)
+    return _write(Path(record_dir), payload)
 
 
 def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:

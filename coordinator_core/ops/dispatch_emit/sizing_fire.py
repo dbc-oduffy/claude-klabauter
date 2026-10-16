@@ -116,7 +116,9 @@ def resumable_plan(
     on disk are stale history and do not refuse. A plan with rows, every one landed, raises SizingFireRefused ("already ran") unless a ledger-halt pointer
     names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it. A plan with
     no readable spine or no rows is not resumable (None). One file read, plus one more on the
-    already-ran path; one `git log` only when a row is open.
+    already-ran path; one `git log` only when a row is open. With rows left open, a ledger resume
+    also needs the newest ledger-check halt's committed record to have staged every one of them
+    (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`.
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
     from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -147,30 +149,60 @@ def resumable_plan(
         and isinstance(r.get("id"), str)
         and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
     ]
+    state = None
     if open_ids:
-        from coordinator_core.ops.dispatch_emit.emit import resume_landed_rows
+        from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
-        landed = resume_landed_rows(root, plan_rel)
-        open_ids = [i for i in open_ids if i not in landed]
+        state = resume_landed_state(root, plan_rel)
+        open_ids = [i for i in open_ids if i not in state.rows]
+    halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state)
+    if halt is not None:
+        return ResumePlan(plan_rel, (), ledger=halt)
     if not open_ids:
-        halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows)
-        if halt is not None:
-            return ResumePlan(plan_rel, (), ledger=halt)
         raise SizingFireRefused(
             [f"{plan_rel} already ran: every row is landed; residue is a new sizing naming it"]
         )
     return ResumePlan(plan_rel, tuple(open_ids))
 
 
-def _ledger_halt_for(root: Path, plan_rel: str, sizing_rel: str, rows: Sequence) -> LedgerHalt | None:
-    """The ledger-halt pointer when it names this plan and sizing and no row is `coded` (a coded
-    row means the terminal commit landed), else None."""
+def _ledger_halt_for(
+    root: Path, plan_rel: str, sizing_rel: str, rows: Sequence, open_ids: Sequence[str], state=None
+) -> LedgerHalt | None:
+    """The ledger halt a refire resumes at, else None. None when a row is `coded` (the terminal
+    commit landed). Otherwise the halt is the newest `ledger-check` halt commit naming the plan
+    (`state.ledger_run`) whose committed record names this sizing (and this plan when it records
+    one) and staged every id in `open_ids`; its blocking ids come from the pointer when the pointer
+    names that run, else the record. With no open id the pointer alone also suffices. `state` is the
+    `resume_landed_state` answer already spent; absent, it is read here only when the pointer
+    cannot answer, so no path spends a second `git log`."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record
+
     if any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows):
         return None
-    halt = read_ledger_halt(ledger_halt_path(root, plan_rel))
-    if halt is None or halt.plan_rel != plan_rel or halt.sizing_rel != sizing_rel:
+    pointer = read_ledger_halt(ledger_halt_path(root, plan_rel))
+    if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
+        pointer = None
+    if pointer is not None and not open_ids:
+        return pointer
+    if state is None:
+        from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+        state = resume_landed_state(root, plan_rel)
+    if state.ledger_run is None:
         return None
-    return halt
+    record = read_halt_record(root, state.ledger_run)
+    if (
+        record is None
+        or record.sizing_rel != sizing_rel
+        or (record.plan_rel is not None and record.plan_rel != plan_rel)
+        or not set(open_ids) <= record.staged
+    ):
+        return None
+    if pointer is not None and pointer.run_id == state.ledger_run:
+        blocking = pointer.blocking
+    else:
+        blocking = record.blocking or ()
+    return LedgerHalt(state.ledger_run, plan_rel, sizing_rel, tuple(blocking))
 
 
 def _acceptance_skipped(sizing: Mapping) -> bool:

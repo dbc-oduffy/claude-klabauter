@@ -6095,13 +6095,27 @@ def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
     return checkpoint_landed_state(repo_root, plan)[0]
 
 
+class ResumeLanded(NamedTuple):
+    """``rows``: ids of the plan already landed. ``ledger_run``: run id of the newest ledger-check
+    halt commit naming the plan, else None."""
+
+    rows: frozenset
+    ledger_run: Optional[str]
+
+
 def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
+    """``resume_landed_state(...).rows``."""
+    return resume_landed_state(repo_root, plan).rows
+
+
+def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     """Row ids of ``plan`` already landed: checkpoint commits (as ``checkpoint_landed_state``) plus
     the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
-    ``Halted-By:`` is ``ledger-check``. One ``git log`` spawn; empty when git cannot answer."""
+    ``Halted-By:`` is ``ledger-check``; and the run id parsed from the newest such halt commit's
+    subject. One ``git log`` spawn; empty when git cannot answer."""
     from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
     from coordinator_core.git.run import run_git
-    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
 
     result = run_git(
         [
@@ -6114,8 +6128,9 @@ def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
         cwd=str(repo_root),
     )
     if result.returncode != 0:
-        return frozenset()
+        return ResumeLanded(frozenset(), None)
     ids: set = set()
+    ledger_run: Optional[str] = None
     for record in result.stdout.split("\x1e"):
         parts = record.strip("\r\n").split("\x1f")
         if len(parts) < 5:
@@ -6127,7 +6142,9 @@ def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
             checkpoint_plan_matches(v, plan) for v in halt_plan.split("\x1d") if v.strip()
         ):
             ids.update(i for i in re.split(r"[,\s\x1d]+", chunks) if i)
-    return frozenset(ids)
+            if ledger_run is None:
+                ledger_run = halted_run_id(subject)
+    return ResumeLanded(frozenset(ids), ledger_run)
 
 
 def deleted_in_range(
