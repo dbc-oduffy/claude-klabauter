@@ -8,7 +8,8 @@ every callee; None means the current UTC time.
 
 Callee signatures (the contract rows C2 to C5 build to):
 
-    lift.lift(transcripts: list[Path], artifact_id: str, *, reader_agent_id: str | None = None) -> model.Lifted
+    lift.lift(transcripts: list[Path], artifact_id: str, *, reader_agent_id: str | None = None,
+              require_frames: bool = True) -> model.Lifted
     record.write_record(lifted: model.Lifted, out_dir: Path, now: datetime) -> model.RecordWrite
     probe_stamp.stamp_probe(lifted: model.Lifted, out_dir: Path, session_id: str, now: datetime,
                             *, artifact_id: str | None = None) -> Path   (the harvest.json written)
@@ -106,7 +107,7 @@ def probe(url, out_dir, *, session_id=None, transcript=None, now: Optional[datet
     artifact_id, sid, transcripts = _resolve_inputs(url, session_id, transcript)
     from coordinator_core.canvas_harvest import lift
 
-    lifted = lift.lift(transcripts, artifact_id)
+    lifted = lift.lift(transcripts, artifact_id, require_frames=False)
     if lifted.error is not None:
         _raise_unreadable(lifted, artifact_id, out_dir, sid, now)
     from coordinator_core.canvas_harvest import probe_stamp

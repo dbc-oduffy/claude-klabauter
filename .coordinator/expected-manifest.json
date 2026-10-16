@@ -2087,8 +2087,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "26926756424eab0f43195c3c5dbabbcf356a371f",
-    "coordinator_core/_engine_stamp": "547f62f16e4f0879feb867d452c63376dcc66c9b",
+    "coordinator_core/_engine_published_at": "8d654bd9085fbdeb03ba37e239ab2ea6fcf1f3d1",
+    "coordinator_core/_engine_stamp": "1c08dbaae1365a0e2da5b70aa3a665afc9b6bdd4",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2811,8 +2811,8 @@
     "coordinator_core/bug_blitz/tests/test_targeted_run.py": "2d749c99bad987effe92f95886681fe23d26239b",
     "coordinator_core/cache.py": "0d07aec6b31804d6e890152a86816b9c303c5fde",
     "coordinator_core/canvas_harvest/__init__.py": "62e7e877f9c0e37cd93811dd4f32a038a5d2beb3",
-    "coordinator_core/canvas_harvest/api.py": "8cfc103256c30f3ec97d6ed6066e2a43e275c48d",
-    "coordinator_core/canvas_harvest/lift.py": "77f2eff50f19be23059000b555bdf645a8f4b464",
+    "coordinator_core/canvas_harvest/api.py": "17c198f5d9d72b11daa87976d19d914f440f6616",
+    "coordinator_core/canvas_harvest/lift.py": "4dc2309f7a102ed670735dd6f35a8592a9f74245",
     "coordinator_core/canvas_harvest/model.py": "6ac5c52f8fd9d1a58ca750630adb5e8146ded461",
     "coordinator_core/canvas_harvest/probe_stamp.py": "ab2bc1d2b5dec8cc17642e7fc87ee2e25f461e7d",
     "coordinator_core/canvas_harvest/reader.py": "eacb5f1f967dbde52c90eb8bb9f1dc2f203d4afa",
@@ -2821,7 +2821,7 @@
     "coordinator_core/canvas_harvest/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/canvas_harvest/tests/test_budget.py": "64b2b30dc87986f42c4119028c5fb36da6fd6668",
     "coordinator_core/canvas_harvest/tests/test_fixture_round_trip.py": "564818962671085c2dbeb9919829600d1f46b95c",
-    "coordinator_core/canvas_harvest/tests/test_lift.py": "32d75840fa7795d63ac2f19d06bb433085290a90",
+    "coordinator_core/canvas_harvest/tests/test_lift.py": "f8367a9807b0f55249d9059b7a142c27f224bf97",
     "coordinator_core/canvas_harvest/tests/test_lift_comment_text.py": "a57c497d493e02fa9d832748e575980afed98552",
     "coordinator_core/canvas_harvest/tests/test_model.py": "9adb94386ea2d012267662e87364adc6af41d69d",
     "coordinator_core/canvas_harvest/tests/test_probe_stamp.py": "78459b56b70715112cbab962d205857fe0e0ded7",
@@ -8035,5 +8035,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "4032472d9a61c28f641d1e1eb2afd6697b733f0a"
+  "source_head": "e75c2cbb57418e4ad4b3e5ed517281e2ce00c8f7"
 }

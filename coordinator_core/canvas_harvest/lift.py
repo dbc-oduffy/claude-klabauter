@@ -194,10 +194,13 @@ class _State:
         self.chain = {"threads": list(threads), "next": cursor, "at": at}
 
 
-def lift(transcripts, artifact_id: str, *, reader_agent_id: Optional[str] = None) -> model.Lifted:
+def lift(
+    transcripts, artifact_id: str, *, reader_agent_id: Optional[str] = None, require_frames: bool = True
+) -> model.Lifted:
     """The main-loop reads of `artifact_id` found in `transcripts`, in order; raises HarvestError when partial or absent.
 
     `reader_agent_id` admits sidechain records whose `agentId` equals it; every other sidechain stays skipped.
+    `require_frames=False` skips the listed-paths-all-read refusal (probe needs only version and comments).
     """
     paths = [Path(p) for p in transcripts]
     if not paths:
@@ -248,7 +251,7 @@ def lift(transcripts, artifact_id: str, *, reader_agent_id: Optional[str] = None
                             _on_result(state, call, block, entry, at, directory)
     if not opened:
         raise model.HarvestError(model.NO_TRANSCRIPT, "no transcript could be opened")
-    return _finish(state)
+    return _finish(state, require_frames)
 
 
 def _on_result(state: _State, call: dict, block: dict, entry: dict, at: str, directory: Path) -> None:
@@ -290,7 +293,7 @@ def _on_result(state: _State, call: dict, block: dict, entry: dict, at: str, dir
         state.on_comments(call, result, text, at)
 
 
-def _finish(state: _State) -> model.Lifted:
+def _finish(state: _State, require_frames: bool) -> model.Lifted:
     artifact_read = None
     frames = state.reads.get("frames")
     if frames:
@@ -306,7 +309,7 @@ def _finish(state: _State) -> model.Lifted:
             frames=tuple(frames.values()),
             read_at=info["at"],
         )
-    if state.listing and state.listing["paths"]:
+    if require_frames and state.listing and state.listing["paths"]:
         missing = [p for p in state.listing["paths"] if p not in (frames or {})]
         if missing:
             raise model.HarvestError(

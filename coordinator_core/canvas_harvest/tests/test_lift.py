@@ -128,6 +128,74 @@ def test_listing_not_covered_is_incomplete(tmp_path):
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE
 
 
+def _listing_and_comments(t, comments=True):
+    t.call("Artifact", {"action": "list", "url": URL}, "l1")
+    t.result("l1", file_list(paths=("project/a.html", "project/b.html")))
+    if comments:
+        t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
+        t.result("c1", {"threads": [thread("t1")]}, text="THREADS")
+
+
+def test_listing_without_frame_reads_lifts_version_and_comments_when_frames_not_required(tmp_path):
+    t = T(tmp_path)
+    _listing_and_comments(t)
+    path = t.write()
+    got = lift_mod.lift([path], AID, require_frames=False)
+    assert got.version.version == "v1" and got.artifact_read is None
+    assert model.thread_ids(got.comments.threads) == ["t1"]
+    with pytest.raises(model.HarvestError) as err:
+        lift_mod.lift([path], AID)
+    assert err.value.reason == model.FRAMES_READ_INCOMPLETE
+
+
+def test_frames_not_required_still_refuses_incomplete_comments(tmp_path):
+    t = T(tmp_path)
+    _listing_and_comments(t, comments=False)
+    t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
+    t.result("c1", {"threads": [thread("t1")], "cursor": "CUR1"})
+    with pytest.raises(model.HarvestError) as err:
+        lift_mod.lift([t.write()], AID, require_frames=False)
+    assert err.value.reason == model.COMMENTS_READ_INCOMPLETE
+
+
+def test_api_probe_lifts_without_frames_and_harvest_requires_them(tmp_path, monkeypatch):
+    from coordinator_core.canvas_harvest import api
+
+    seen = []
+
+    def spy(transcripts, artifact_id, **kw):
+        seen.append(kw)
+        raise model.HarvestError(model.NO_MAIN_LOOP_READ, "stop")
+
+    monkeypatch.setattr(lift_mod, "lift", spy)
+    t = T(tmp_path)
+    _listing_and_comments(t)
+    for call in (
+        lambda: api.probe(URL, tmp_path / "out", session_id="sess-1", transcript=str(t.write())),
+        lambda: api.harvest(URL, tmp_path / "out", session_id="sess-1", transcript=str(t.write())),
+    ):
+        with pytest.raises(model.HarvestError):
+            call()
+    assert seen[0].get("require_frames") is False
+    assert seen[1].get("require_frames", True) is True
+
+
+def test_api_probe_hands_stamp_the_version_and_comments_of_a_frameless_transcript(tmp_path, monkeypatch):
+    from coordinator_core.canvas_harvest import api, probe_stamp
+
+    seen = []
+
+    def fake_stamp(lifted, out_dir, session_id, now, *, artifact_id=None):
+        seen.append(lifted)
+        return tmp_path / "harvest.json"
+
+    monkeypatch.setattr(probe_stamp, "stamp_probe", fake_stamp)
+    t = T(tmp_path)
+    _listing_and_comments(t)
+    api.probe(URL, tmp_path / "out", session_id="sess-1", transcript=str(t.write()))
+    assert seen[0].version.version == "v1" and model.thread_ids(seen[0].comments.threads) == ["t1"]
+
+
 def test_newer_version_drops_older_reads(tmp_path):
     t = T(tmp_path)
     read_artifact(t, ver="v1")
