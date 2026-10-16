@@ -19,6 +19,12 @@ first callers claim ``<slice_prefix>.review-prep.lock`` with ``O_EXCL``; the los
 with ``REVIEW_PREP_BUSY_PREFIX`` for the caller to re-call. No path computes without the lock.
 Only a success is stored, so a refusal is recomputed.
 
+The sidecar also stores ``reviewed_sha256`` (repo-relative POSIX product path -> sha256 of the
+bytes frozen) beside ``recorded_at``. A worktree-mode stored reply is served only when that map is
+present and every entry still matches the bytes on disk; a moved worktree recomputes, shelving the
+prior freeze. Range mode ignores it. Trap: the key is deliberately outside ``_STORED_KEYS``, so an
+older sidecar without it stays readable by ``stored_reply_for_run``.
+
 Optional ``group_index`` / ``group_count`` (both or neither) narrow the reply's ``slices`` to the
 one contiguous balanced group at ``group_index`` of ``min(slices, group_count)`` groups, the split
 ``execute_review._GROUP_SLICES_JS`` applies; every other field is the whole-run reply. Without
@@ -62,6 +68,7 @@ from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session.machinery_paths import share_dir
+from coordinator_core.session.touch_record import compute_content_hash
 
 _SHA_RE = re.compile(r"^[0-9a-f]{4,64}$")
 _GIT_TIMEOUT_SECS = 5.0
@@ -157,9 +164,19 @@ _LOCK_STALE_SECS = 10.0
 _LOCK_POLL_SECS = 0.05
 
 
-def _stored_reply(sidecar: Path, base: str, paths: List[str], head: Optional[str]) -> Optional[dict]:
+def _reviewed_bytes_unmoved(repo_root: Path, reviewed: object) -> bool:
+    """True when ``reviewed`` is a ``reviewed_sha256`` map and every entry still hashes equal."""
+    if not isinstance(reviewed, dict):
+        return False
+    return all(compute_content_hash(repo_root / rel) == digest for rel, digest in reviewed.items())
+
+
+def _stored_reply(
+    repo_root: Path, sidecar: Path, base: str, paths: List[str], head: Optional[str]
+) -> Optional[dict]:
     """The reply a success sidecar stored, or ``None`` when absent, unreadable, written before
-    replies were stored, or written for another base, basis, head or path list."""
+    replies were stored, written for another base, basis, head or path list, or (worktree mode)
+    lacking ``reviewed_sha256`` or recorded over bytes that have since moved."""
     try:
         split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
         fm = yaml.safe_load(split.fm_text) if split else None
@@ -174,7 +191,12 @@ def _stored_reply(sidecar: Path, base: str, paths: List[str], head: Optional[str
         or fm.get("paths") != paths
     ):
         return None
-    return {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
+    if not head and not _reviewed_bytes_unmoved(repo_root, fm.get("reviewed_sha256")):
+        return None
+    reply = {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
+    if "reviewed_sha256" in fm:
+        reply["reviewed_sha256"] = fm["reviewed_sha256"]
+    return reply
 
 
 def stored_reply_for_run(
@@ -221,7 +243,11 @@ def stored_reply_for_run(
         paths = fm.get("paths")
         if allowed and not (isinstance(paths, list) and all(p in allowed for p in paths)):
             continue
-        kept.append({**{k: fm[k] for k in _STORED_KEYS}, "error": None, "sidecar_path": _rel(sidecar, repo_root)})
+        entry = {**{k: fm[k] for k in _STORED_KEYS}, "error": None, "sidecar_path": _rel(sidecar, repo_root)}
+        for optional in ("reviewed_sha256", "recorded_at"):
+            if optional in fm:
+                entry[optional] = fm[optional]
+        kept.append(entry)
     return kept[0] if len(kept) == 1 else None
 
 
@@ -289,7 +315,7 @@ def review_prep(
     lock = share / f"{slice_prefix}.review-prep.lock"
 
     def served() -> Optional[dict]:
-        return _stored_reply(sidecar, base, paths, head)
+        return _stored_reply(repo_root, sidecar, base, paths, head)
 
     def compute_locked() -> dict:
         try:
@@ -361,6 +387,10 @@ def _compute(
     out["whole_diff_path"] = whole["diff_path"]
     product = diff_product_files(Path(whole["diff_path"]))
     out["product_files"] = len(product)
+    # Trap: hashed after the freeze, so a write landing between the two is recorded as reviewed
+    # though the frozen diff lacks it; the moved-bytes check then serves that stale freeze.
+    hashes = {rel: compute_content_hash(repo_root / rel) for rel in product}
+    out["reviewed_sha256"] = {rel: h for rel, h in hashes.items() if h is not None}
 
     part = partition_slices(repo_root, base, paths, slice_prefix, head=head or None)
     if part["error"]:
@@ -402,6 +432,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         "lead_session_id": session,
         "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **{k: result[k] for k in _STORED_KEYS},
+        "reviewed_sha256": result.get("reviewed_sha256", {}),
         "head": head or None,
         "paths": paths,
     }

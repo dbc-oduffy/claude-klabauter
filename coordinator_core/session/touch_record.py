@@ -563,9 +563,22 @@ def last_seen_hash(
 def last_seen_hashes(
     session_id: str, rel_paths: "Iterable[str]", root: "Path | str"
 ) -> "dict[str, Optional[str]]":
-    """Batched ``last_seen_hash``: ``{path: newest recorded fingerprint}`` for
-    every entry of ``rel_paths``, from one walk of this session's own sink
-    family.
+    """Batched ``last_seen_hash``: ``{path: newest recorded fingerprint}``, the
+    hash-only projection of ``last_seen_events`` (one walk, same degrade
+    contract). A hashless newest event yields ``None``, never an older hash.
+    """
+    return {
+        p: (ev[0] if ev else None)
+        for p, ev in last_seen_events(session_id, rel_paths, root).items()
+    }
+
+
+def last_seen_events(
+    session_id: str, rel_paths: "Iterable[str]", root: "Path | str"
+) -> "dict[str, Optional[tuple[Optional[str], float]]]":
+    """``{path: (content_hash, timestamp)}`` of the deciding event per entry
+    of ``rel_paths``, from one walk of this session's own sink family;
+    ``None`` for a path with no recorded event.
 
     The walk goes newest generation first and newest line first; the FIRST
     event per wanted path decides, and its ``content_hash`` is returned
@@ -581,7 +594,7 @@ def last_seen_hashes(
     """
     requested = list(rel_paths)
     wanted = {p for p in requested if p}
-    result: dict[str, Optional[str]] = {p: None for p in requested}
+    result: dict[str, Optional[tuple[Optional[str], float]]] = {p: None for p in requested}
     if not session_id or not root or not wanted:
         return result
     try:
@@ -603,7 +616,7 @@ def last_seen_hashes(
                 except MalformedRecordLine:
                     continue
                 if event.path in pending and event.session_id == session_id:
-                    result[event.path] = event.content_hash
+                    result[event.path] = (event.content_hash, event.timestamp)
                     pending.discard(event.path)
                     if not pending:
                         return result

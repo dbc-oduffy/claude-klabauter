@@ -125,6 +125,29 @@ def test_walk_stops_once_every_path_is_decided(tmp_path, monkeypatch):
     assert [n for n in reads if n.startswith("touch-record.jsonl")] == ["touch-record.jsonl"]
 
 
+def test_events_newest_decides_with_timestamp(tmp_path):
+    paths = _fixture(tmp_path)
+    assert tr.last_seen_events(SID, paths, tmp_path) == {
+        "old_only.py": ("a" * 64, 1),
+        "reedited.py": ("c" * 64, 3),
+        "hashed.py": ("d" * 64, 4),
+        "hashless.py": (None, 6),
+        "unknown.py": None,
+    }
+
+
+def test_events_parity_with_last_seen_hashes(tmp_path):
+    paths = _fixture(tmp_path)
+    events = tr.last_seen_events(SID, paths, tmp_path)
+    assert tr.last_seen_hashes(SID, paths, tmp_path) == {
+        p: (ev[0] if ev else None) for p, ev in events.items()
+    }
+
+
+def test_events_missing_session_dir_is_all_none(tmp_path):
+    assert tr.last_seen_events("nope", ["x.py", "y.py"], tmp_path) == {"x.py": None, "y.py": None}
+
+
 def test_empty_and_falsy_inputs(tmp_path):
     assert tr.last_seen_hashes(SID, [], tmp_path) == {}
     assert tr.last_seen_hashes("", ["a.py"], tmp_path) == {"a.py": None}

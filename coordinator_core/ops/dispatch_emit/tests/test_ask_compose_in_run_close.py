@@ -96,6 +96,13 @@ def test_refused_commit_halts_and_returns_revise_and_refire(monkeypatch):
     assert "refused: _commit?.refused ?? null" in refused and "error: _commit?.error ?? null" in refused
     assert _REVISE in refused and "_reviseAndRefire = _mkRevise();" in refused
     assert "kind: 'close_job'" in tail[: tail.index("else { if (!_halted)")]
+    assert "blob_drift: _commit?.blob_drift ?? null" in refused
+
+
+def test_roadmap_commit_halt_carries_blob_drift():
+    lines = ask_compose.roadmap_commit_lines(head="h", anchor="a", repo_root="r", run_id="run1")
+    halt = next(ln for ln in lines if "halted: 'commit'" in ln)
+    assert "blob_drift: _commit?.blob_drift ?? null" in halt
 
 
 def test_commit_prompt_carries_a_path_command_and_an_uncopied_params_block(monkeypatch):

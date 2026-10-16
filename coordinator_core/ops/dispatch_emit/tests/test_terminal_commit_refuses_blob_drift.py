@@ -1,13 +1,16 @@
-"""dispatch.terminal_commit's commit leg declares the run session's recorded fingerprints to
-``ceremony.commit_v2`` and refuses a path a peer rewrote after the run's last recorded write."""
+"""dispatch.terminal_commit's commit leg declares, per path, the newer of the run session's last
+recorded write and the run's newest review to ``ceremony.commit_v2`` (the delivery note: its own
+post-write bytes) and refuses a path a peer rewrote after that."""
 
 from __future__ import annotations
 
 import hashlib
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -15,6 +18,8 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
+from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as ask
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as ask_repo  # noqa: F401 -- fixture
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -62,7 +67,36 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _fire(repo: Path, monkeypatch) -> tuple[dict, list]:
+BASE = "a" * 40
+
+
+def _review(repo: Path, reviewed: dict, at: float) -> None:
+    """Store the run's review.prep reply the way review_prep does: a sidecar under the session's
+    share dir naming the bytes it read (``reviewed_sha256``) at ``recorded_at``."""
+    share = repo / ".coordinator-local" / "subagent-share" / SID
+    share.mkdir(parents=True, exist_ok=True)
+    fm = {
+        "agent_type": "engine:prep-freeze", "plan_id": "p", "share_dir": "x", "run_base_sha": BASE,
+        "verdict": "OK", "basis": "worktree", "whole_diff_path": "d", "product_files": len(reviewed),
+        "foreign_claims": [], "slices": [{"id": "s", "files": sorted(reviewed)}],
+        "whole_diff_sidecars": {}, "sidecar_path": "x", "head": None, "paths": sorted(reviewed),
+        "recorded_at": datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "reviewed_sha256": reviewed,
+    }
+    (share / f"manifest-run-1-{BASE[:12]}-prep.review-prep.md").write_text(
+        f"---\n{yaml.safe_dump(fm)}---\n\nbody\n", encoding="utf-8"
+    )
+
+
+def _record_at(repo: Path, rel: str, digest, at: float) -> None:
+    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID)
+    touch_record.append_event(
+        sink, session_id=SID, agent_id=None, verb="T", path=rel, content_hash=digest, kind="w",
+        timestamp=at,
+    )
+
+
+def _fire(repo: Path, monkeypatch, inline_review: dict = REVIEWED) -> tuple[dict, list]:
     from coordinator_core.ops.dispatch_emit import run_token
 
     script = _script(repo)
@@ -77,7 +111,7 @@ def _fire(repo: Path, monkeypatch) -> tuple[dict, list]:
 
     monkeypatch.setattr(terminal_commit, "reentrant_dispatch", spy)
     out = terminal_commit._handler(
-        {"script_path": script, "incomplete_chunks": [], "inline_review": REVIEWED,
+        {"script_path": script, "incomplete_chunks": [], "inline_review": inline_review,
          "session_id": SID, "run_id": "run-1", "run_token": token},
         repo_root=repo / ".git",
     )
@@ -136,3 +170,93 @@ def test_only_committed_declared_paths_enter_the_expectation_map(repo, monkeypat
     declared = set(seen[0]["expected_content_sha256"])
     assert declared == {"a.py"}
     assert declared.isdisjoint(out["receipts"])
+
+
+_WITH_BASE = {**REVIEWED, "prep": {"run_base_sha": BASE}}
+
+
+def test_a_review_of_the_current_bytes_supersedes_an_older_session_write(repo, monkeypatch):
+    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["committed"] is True, out
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("B\n")}
+
+
+def test_a_rewrite_after_the_review_still_refuses_with_the_reviewed_hash(repo, monkeypatch):
+    (repo / "a.py").write_text("C\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["committed"] is False
+    assert out["refused"] == "blob-drift"
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("B\n")}
+    assert out["blob_drift"][0]["path"] == "a.py"
+
+
+def test_a_session_write_after_the_review_wins(repo, monkeypatch):
+    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 3000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["refused"] == "blob-drift"
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}
+
+
+def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):
+    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 2000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["refused"] == "blob-drift"
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}
+
+
+def test_an_unparseable_review_stamp_is_no_review_basis(repo, monkeypatch):
+    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    sidecar = next((repo / ".coordinator-local").rglob("*-prep.review-prep.md"))
+    text = sidecar.read_text(encoding="utf-8")
+    assert "Z'" in text
+    sidecar.write_text(text.replace("Z'", "Z-garbage'"), encoding="utf-8")
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["refused"] == "blob-drift"
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}
+
+
+NOTE = "docs/delivery/run1.md"
+
+
+def test_the_delivery_note_is_declared_at_the_bytes_its_verdicts_append_left(ask_repo, monkeypatch):
+    ask._write(ask_repo, NOTE, "# delivered\n")
+    ask._request(ask_repo, docs=(NOTE,))
+    touch_record.append_event(
+        touch_record.sink_path(ask_repo / ".git" / "coordinator-sessions" / ask._SID),
+        session_id=ask._SID, agent_id=None, verb="T", path=NOTE,
+        content_hash=_sha("# delivered\n"), kind="w", timestamp=1000.0,
+    )
+    calls = ask._count_commit_v2(monkeypatch)
+    out = ask._call(ask_repo)
+    assert out["committed"] is True, out
+    final = (ask_repo / NOTE).read_bytes()
+    assert b"## Verdicts" in final
+    assert calls[0]["expected_content_sha256"][NOTE] == hashlib.sha256(final).hexdigest()
+
+
+def test_a_foreign_edit_of_the_note_after_the_expectation_still_refuses(ask_repo, monkeypatch):
+    ask._write(ask_repo, NOTE, "# delivered\n")
+    ask._request(ask_repo, docs=(NOTE,))
+    real = terminal_commit.reentrant_dispatch
+
+    def foreign_edit_then_commit(op, params, **kw):
+        if op == "ceremony.commit_v2":
+            (ask_repo / NOTE).write_text("# foreign\n", encoding="utf-8")
+        return real(op, params, **kw)
+
+    monkeypatch.setattr(terminal_commit, "reentrant_dispatch", foreign_edit_then_commit)
+    out = ask._call(ask_repo)
+    assert out["committed"] is False
+    assert out["refused"] == "blob-drift"
+    assert out["blob_drift"][0]["path"] == NOTE

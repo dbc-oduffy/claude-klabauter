@@ -425,6 +425,80 @@ def test_prep_block_unions_slice_files_in_order_and_copies_the_rest():
     }
 
 
+def _sidecar_fm(repo: Path, reply: dict) -> dict:
+    import yaml  # noqa: PLC0415
+
+    text = (repo / reply["sidecar_path"]).read_text(encoding="utf-8")
+    return yaml.safe_load(text.split("---\n")[1])
+
+
+def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo):
+    import hashlib  # noqa: PLC0415
+
+    _write(repo, ["a/one.py", "b/two.py"], 3)
+    first = _stored(repo, ["a/one.py", "b/two.py"])
+    expected = {
+        rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest() for rel in ("a/one.py", "b/two.py")
+    }
+    assert first["reviewed_sha256"] == expected
+    assert _sidecar_fm(repo, first)["reviewed_sha256"] == expected
+    assert _stored(repo, ["a/one.py", "b/two.py"]) == first
+
+    _write(repo, ["a/one.py"], 5)
+    second = _stored(repo, ["a/one.py", "b/two.py"])
+    assert second["error"] is None
+    assert second["reviewed_sha256"]["a/one.py"] == hashlib.sha256((repo / "a/one.py").read_bytes()).hexdigest()
+    assert second["reviewed_sha256"]["a/one.py"] != expected["a/one.py"]
+    assert second["reviewed_sha256"]["b/two.py"] == expected["b/two.py"]
+    assert list(Path(first["whole_diff_path"]).parent.glob("*.attempt1.diff"))
+
+
+def test_a_worktree_sidecar_without_reviewed_sha256_is_recomputed_but_range_is_served(repo):
+    import yaml  # noqa: PLC0415
+
+    base = _base(repo)
+    _write(repo, ["a/one.py"], 3)
+    wt = rp.review_prep(
+        repo, base=base, paths=["a/one.py"], slice_prefix="prep-w", plan_path="docs/plans/p.md",
+        session_id=SESSION,
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "work")
+    head = _base(repo)
+    rng = rp.review_prep(
+        repo, base=base, paths=["a/one.py"], slice_prefix="prep-r", plan_path="docs/plans/p.md",
+        session_id=SESSION, head=head,
+    )
+    for reply in (wt, rng):
+        path = repo / reply["sidecar_path"]
+        _, fm_text, rest = path.read_text(encoding="utf-8").split("---\n", 2)
+        fm = yaml.safe_load(fm_text)
+        fm.pop("reviewed_sha256")
+        path.write_text(f"---\n{yaml.safe_dump(fm, sort_keys=False)}---\n{rest}", encoding="utf-8")
+    served = rp._stored_reply(repo, repo / rng["sidecar_path"], base, ["a/one.py"], head)
+    assert served is not None and "reviewed_sha256" not in served
+    assert rp._stored_reply(repo, repo / wt["sidecar_path"], base, ["a/one.py"], None) is None
+
+
+def test_stored_reply_for_run_returns_reviewed_sha256_and_recorded_at_and_tolerates_their_absence(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    made = _stored(repo, ["a/b/one.py"])
+    got = rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1")
+    assert got["reviewed_sha256"] == made["reviewed_sha256"]
+    assert got["recorded_at"].endswith("Z")
+
+    import yaml  # noqa: PLC0415
+
+    path = repo / made["sidecar_path"]
+    _, fm_text, rest = path.read_text(encoding="utf-8").split("---\n", 2)
+    fm = yaml.safe_load(fm_text)
+    fm.pop("reviewed_sha256")
+    fm.pop("recorded_at")
+    path.write_text(f"---\n{yaml.safe_dump(fm, sort_keys=False)}---\n{rest}", encoding="utf-8")
+    old = rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1")
+    assert old is not None and "reviewed_sha256" not in old and "recorded_at" not in old
+
+
 def test_registered_in_every_op_set():
     from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass  # noqa: PLC0415
     from coordinator_core.op_scopes import _OP_KEY_SCOPE  # noqa: PLC0415

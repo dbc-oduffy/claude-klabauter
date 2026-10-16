@@ -83,9 +83,12 @@ Negative-spec:
     declared-only behaviour: a chain's claims split across child sessions, the other two have
     no commit of their own.
   - Does NOT write a receipt when there is nothing to commit.
-  - Declares ``expected_content_sha256`` only for paths the run's own session recorded writing
-    (never the receipts, allowlist, bookkeeping record or ask note this call writes); a drift
-    refuses the run's commit with ``blob_drift``, never drops paths.
+  - Declares ``expected_content_sha256`` per committed path from the newer of the run session's
+    last recorded write and the run's newest ``review.prep`` reply (``reviewed_sha256`` at
+    ``recorded_at``; a tie goes to the session write), never the receipts, allowlist or
+    bookkeeping record this call writes. The delivery note is declared at the sha256 of the bytes
+    this call just left after its ``## Verdicts`` append. A drift refuses the run's commit with
+    ``blob_drift``, never drops paths.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
     toward ``commit_paths``.
@@ -1109,17 +1112,43 @@ def _ship_cited_sizing(worktree_root: Path, repo_root: Path, plan_path: Optional
 def _recorded_fingerprints(
     worktree_root: Path, session_id: str, candidates: Sequence[str], all_paths: Sequence[str],
     deleted_paths: Sequence[str], *, excluded: set,
+    reviewed: Optional[dict] = None, reviewed_at: Optional[float] = None,
 ) -> dict:
-    """``{path: sha256}`` the run's own session last recorded writing, for the commit's candidate
-    paths; one batched sink read. A hashless newest event or an unrecorded path carries no entry."""
+    """``{path: sha256}`` the run's expectation for the commit's candidate paths; one batched sink
+    read. Per path the newer of the session's last recorded write and the run's newest review
+    (``reviewed`` -> sha256 of the bytes it read, ``reviewed_at`` epoch seconds) supplies the hash;
+    an exact tie goes to the session write. A hashless newest session event, or an unrecorded path
+    outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
     committed = set(all_paths) - set(deleted_paths)
     wanted = [p for p in dict.fromkeys(candidates) if p in committed and p not in excluded]
     if not wanted:
         return {}
-    seen = touch_record.last_seen_hashes(session_id, wanted, worktree_root)
-    return {p: h for p, h in seen.items() if h}
+    seen = touch_record.last_seen_events(session_id, wanted, worktree_root)
+    reviewed = reviewed if reviewed_at is not None and isinstance(reviewed, dict) else {}
+    out: dict = {}
+    for p in wanted:
+        event = seen.get(p)
+        review_hash = reviewed.get(p)
+        if review_hash and (event is None or reviewed_at > event[1]):
+            out[p] = review_hash
+        elif event is not None and event[0]:
+            out[p] = event[0]
+    return out
+
+
+def _epoch_of(stamp: object) -> Optional[float]:
+    """Epoch seconds of an ISO-8601 ``Z`` stamp, ``None`` when absent or unparseable."""
+    if not isinstance(stamp, str):
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
 
 
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
@@ -1140,16 +1169,20 @@ def _run_id_of(params: dict, ask_run_dir: Optional[Path], script_path_raw: str) 
 def _reconcile_prep(
     worktree_root: Path, session_id: Optional[str], run_id: Optional[str],
     request: CommitRequest, inline_review: object,
-) -> None:
+) -> tuple:
     """Replace the relayed ``inline_review["prep"]`` with the reply ``review.prep`` stored on disk
     for this run, in place, and point ``prep_sidecar`` at it.
 
     Disk truth the engine wrote wins over a review agent's copy of it, which may be trimmed
     (``product_files`` null, ``slice_files`` empty) and then reads as a zero-file diff. Does nothing
     when no base resolves or no single stored reply matches; the relay then stands.
+
+    Returns ``(reviewed_sha256, recorded_at_epoch)`` of the stored reply -- the bytes the run's
+    newest review read -- or ``({}, None)`` when there is no usable reply or timestamp.
     """
+    none: tuple = ({}, None)
     if not isinstance(inline_review, dict) or not session_id or not run_id:
-        return
+        return none
     prep = inline_review.get("prep")
     base = prep.get("run_base_sha") if isinstance(prep, dict) else None
     if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)):
@@ -1157,7 +1190,7 @@ def _reconcile_prep(
 
         base = recorded_run_base(worktree_root, run_id)
     if not base:
-        return
+        return none
     from coordinator_core.ops import review_prep
 
     reply = review_prep.stored_reply_for_run(
@@ -1165,7 +1198,7 @@ def _reconcile_prep(
         within=[p for c in request.chunks for p in c.paths],
     )
     if reply is None:
-        return
+        return none
     inline_review["prep"] = {
         "run_base_sha": reply["run_base_sha"],
         "product_files": reply["product_files"],
@@ -1173,6 +1206,8 @@ def _reconcile_prep(
         "slice_files": [f for s in reply["slices"] or [] if isinstance(s, dict) for f in s.get("files") or []],
     }
     inline_review["prep_sidecar"] = reply["sidecar_path"]
+    reviewed = reply.get("reviewed_sha256")
+    return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at"))
 
 
 def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: str) -> dict:
@@ -3115,7 +3150,7 @@ def _terminal_commit_inner(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     anchor_only = not request.chunks
-    _reconcile_prep(
+    reviewed_bytes, reviewed_at = _reconcile_prep(
         worktree_root, session_id, _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
     )
     # An ask run's product commit carries product, its delivery note and its record directory;
@@ -3530,6 +3565,7 @@ def _terminal_commit_inner(
             if seam_rel not in all_paths:
                 all_paths.append(seam_rel)
 
+    note_rel = ask_note_rel
     if (
         ask_note_rel is not None
         and ask_note_rel not in all_paths
@@ -3541,6 +3577,7 @@ def _terminal_commit_inner(
 
     if held_paths:
         all_paths = [p for p in all_paths if p not in held_paths]
+    note_committed = note_rel if note_rel is not None and note_rel in all_paths else None
 
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
@@ -3744,8 +3781,15 @@ def _terminal_commit_inner(
             worktree_root, session_id,
             [p for c in done_chunks for p in c.paths] + list(run_owned),
             all_paths, deleted_paths,
-            excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, ask_note_rel},
+            excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, note_committed},
+            reviewed=reviewed_bytes, reviewed_at=reviewed_at,
         )
+        if note_committed and note_committed not in deleted_paths:
+            from coordinator_core.session import touch_record
+
+            note_hash = touch_record.compute_content_hash(worktree_root / note_committed)
+            if note_hash:
+                expected[note_committed] = note_hash
         if expected:
             commit_params["expected_content_sha256"] = expected
     if snapshot is not None:

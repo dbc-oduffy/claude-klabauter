@@ -2432,7 +2432,7 @@ def _append_docs_and_commit(
     )
     b.append(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
-        "error: _commit?.error ?? null }; "
+        "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null }; "
         "_nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
         "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); }"
     )
@@ -2462,7 +2462,8 @@ def roadmap_commit_lines(*, head: str, anchor: str, repo_root: str, run_id: str)
         "    phase('commit');",
         f"    try {{ _commit = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}",
         "    if (!_halted && !(_commit && _commit.committed === true)) { _halted = { halted: 'commit', "
-        "refused: _commit?.refused ?? null, error: _commit?.error ?? null, sizing: _sizingRel, run_id: _runId }; }",
+        "refused: _commit?.refused ?? null, error: _commit?.error ?? null, "
+        "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; }",
         "  }",
     ]
 
