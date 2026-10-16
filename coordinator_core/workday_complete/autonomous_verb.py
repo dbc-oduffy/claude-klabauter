@@ -109,8 +109,8 @@ def main(argv: List[str]) -> int:
         rc = enable(mode="autonomous")
         if rc == 0:
             print(
-                "Autonomous mode enabled — context-pressure messages name this "
-                "session as an autonomous run. Use `/autonomous off` to disable."
+                "Autonomous mode enabled — the PM is away; drive every stage to "
+                "completion. Use `/autonomous off` to disable."
             )
         return _reported_exit(rc)
 

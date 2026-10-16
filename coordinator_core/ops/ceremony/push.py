@@ -1102,6 +1102,8 @@ def publish_day_branch(
       ``declined-not-day-branch`` -- *branch* is not a canonical day branch.
       ``declined-no-remote`` -- no `[remote "..."]` in `.git/config`.
       ``declined-unresolvable`` -- HEAD is detached or unnameable.
+      ``unconfirmed``        -- the publish timed out or stalled mid-flight;
+                                it may have landed, so it is never ``failed``.
       ``failed``             -- the publish ran and git refused it.
 
     NEGATIVE SPEC -- blast radius. The publish is gated on
@@ -1162,6 +1164,12 @@ def publish_day_branch(
     )
     if result.ok:
         return ("published", f"{name} -> {remote}/{name}")
+    if _is_indeterminate_push_result(result):
+        return (
+            "unconfirmed",
+            condense_git_diagnostic(result.stderr)
+            or f"push outcome unobserved (exit_code={result.returncode})",
+        )
     return (
         "failed",
         condense_git_diagnostic(result.stderr) or f"exit_code={result.returncode}",
@@ -1628,6 +1636,8 @@ def push_with_retry(
                     pushed_count=pushed_count,
                     landed_sha=new_sha,
                 )
+            if publish_outcome == "unconfirmed":
+                last_indeterminate = True
             last_reason = f"{reason} (publish declined: {publish_detail})"
             break
 

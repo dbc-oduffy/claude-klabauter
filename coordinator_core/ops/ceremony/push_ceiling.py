@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
+from coordinator_core.git.lfs_attributes import attributes_text_declares_lfs
 from coordinator_core.ops.ceremony.push import _read_git_config_text
 
 CONFIG_KEY = "coordinator.pushCeilingSecs"
@@ -22,7 +23,6 @@ LFS_PUSH_CEILING_FLOOR_SECS: float = 60.0
 #: ceiling exceeds it, so a progressing push cannot run unbounded.
 PUSH_CEILING_MAX_SECS: float = 120.0
 
-_LFS_FILTER_MARKER = "filter=lfs"
 _TRUTHY = frozenset({"true", "yes", "on", "1"})
 
 #: Keyed by the env that selects the global files, so a changed HOME/GIT_CONFIG_GLOBAL
@@ -37,11 +37,7 @@ def gitattributes_declares_lfs_filter(root: Path) -> bool:
         text = (Path(root) / ".gitattributes").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    for line in text.splitlines():
-        code = line.split("#", 1)[0]
-        if _LFS_FILTER_MARKER in code:
-            return True
-    return False
+    return attributes_text_declares_lfs(text)
 
 
 def _scan(text: str, section: str, subsection: Optional[str], key: str) -> Optional[str]:

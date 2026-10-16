@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.lfs_attributes import clone_declares_lfs
 from coordinator_core.git.hook_dispositions import HookDisposition, Match
 
 ENTRY_ID = "retired-lfs-pre-push-gate"
@@ -25,18 +25,8 @@ def _identify(text: str) -> Optional[Match]:
     return None
 
 
-def _declares_lfs(path: Path) -> bool:
-    try:
-        return "filter=lfs" in path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-
-
 def _tracks_no_lfs(repo_root: Path) -> bool:
-    return not (
-        _declares_lfs(repo_root / ".gitattributes")
-        or _declares_lfs(resolve_git_common_dir(repo_root) / "info" / "attributes")
-    )
+    return not clone_declares_lfs(repo_root)
 
 
 ENTRY = HookDisposition(

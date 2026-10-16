@@ -7,7 +7,10 @@ a day branch:
   `git branch <new-ref> [<start>]`, `git push <remote> <ref>|<src>:<dst>`
   (judged on the destination ref). `git -C <dir> ...` and other git global
   options are walked past; the repo judged is the one `-C`, or an earlier
-  top-level `cd` in the same command, enters. Listing, `-d`/`-D`/`-m`/`-c` and any other
+  top-level `cd` in the same command, enters. A `git commit` while the judged
+  repo's HEAD is `main` and a remote is configured is denied via
+  `git.main_commit_policy`; the same override admits it. Listing,
+  `-d`/`-D`/`-m`/`-c` and any other
   non-create `git branch` flag, tag pushes, ref deletions, and a push with no
   refspec are never denied.
 
@@ -66,6 +69,7 @@ MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 43
 
 OVERRIDE_KEY = "COORDINATOR_OVERRIDE_TOPIC_BRANCH"
+MAIN_COMMIT_OVERRIDE_KEY = "COORDINATOR_OVERRIDE_BRANCH"
 
 _PRE_FILTER_RE = re.compile(r"\bgit\b")
 _DAY_SHAPE_RE = re.compile(r"^work/([^/]+)/\d{4}-\d{2}-\d{2}(?:to\d{2})?(?:-\d+)?$")
@@ -272,8 +276,8 @@ def _is_publish_mirror_branch(git_root: Optional[str], ref: str) -> bool:
     return False
 
 
-def _inline_reason(raw_tokens: List[str]) -> str:
-    prefix = OVERRIDE_KEY + "="
+def _inline_reason(raw_tokens: List[str], key: str = OVERRIDE_KEY) -> str:
+    prefix = key + "="
     for tok in raw_tokens:
         if token_matches_binary(tok, "git"):
             break
@@ -404,6 +408,27 @@ def _held_push(tokens: List[str], cwd: Optional[str]) -> Optional[str]:
     return None
 
 
+def _main_commit(
+    tokens: List[str], raw_tokens: List[str], cwd: Optional[str]
+) -> Optional[str]:
+    """Refusal text when this `git commit` runs in a repo on a remote-backed `main`."""
+    parsed = _git_argv(tokens)
+    if parsed is None or parsed[0] != "commit":
+        return None
+    git_root = _git_root(cwd, parsed[2])
+    if not git_root:
+        return None
+    from coordinator_core.git.main_commit_policy import main_commit_refusal
+
+    override = _inline_reason(raw_tokens)
+    if _inline_reason(raw_tokens, MAIN_COMMIT_OVERRIDE_KEY) == "1":
+        override = "1"
+    refusal = main_commit_refusal(git_root, override_reason=override)
+    if refusal is None:
+        return None
+    return f"BLOCKED: {refusal}\n\nException: {OVERRIDE_KEY} with a non-empty reason, or {MAIN_COMMIT_OVERRIDE_KEY}=1, prefixed on the command."
+
+
 def _hold_reason(branch: Optional[str], note: str) -> str:
     where = f"branch `{branch}`" if branch else "repo"
     return (
@@ -515,6 +540,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         held = _held_push(resolved.tokens, cwd)
         if held is not None:
             return _deny(held)
+        main_commit = _main_commit(resolved.tokens, resolved.raw_tokens, cwd)
+        if main_commit is not None:
+            return _deny(main_commit)
         ref = _offending_ref(resolved.tokens, cwd, env)
         if ref is None:
             continue

@@ -1206,6 +1206,7 @@ def read_spine(
     plan_level_hold = unlanded_plan_edges(
         "plan frontmatter", plan_level_edges, plan_edge_root, plan_edge_cache
     )
+    discharges: Optional[dict] = None
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred") is True or bool(raw.get("deferred_until"))
@@ -1228,6 +1229,24 @@ def read_spine(
                 )
             memo_slug = slug
             memo_delivered = memo_receipt_exists(_repo_root_of(plan_path), slug)
+        em_discharged = None
+        if (
+            raw.get("performer") == "em"
+            and disposition not in NON_DISPATCHABLE_DISPOSITIONS
+            and deferred is not True
+            and not _is_memo_send_row(raw)
+            and not _is_operator_row(raw)
+            and not _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))
+        ):
+            if discharges is None:
+                from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+
+                discharges = read_em_discharges(Path(plan_path))
+            entry = discharges.get(raw.get("id"))
+            if entry is not None:
+                em_discharged = (
+                    entry.get("recorded_at") if isinstance(entry, dict) else None
+                ) or "(no timestamp)"
         plan_hold = None
         if not (
             disposition in NON_DISPATCHABLE_DISPOSITIONS
@@ -1258,6 +1277,8 @@ def read_spine(
                     "deferred",
                     "deferred: true" if raw.get("deferred") is True else "deferred_until hold",
                 )
+            elif em_discharged is not None:
+                _reason = ("em-discharged", "EM discharge recorded %s" % em_discharged)
             elif memo_delivered:
                 _reason = (
                     "memo-delivered",
@@ -1272,7 +1293,11 @@ def read_spine(
                     % (memo_slug, memo_slug, memo_slug),
                 )
             elif em_performed:
-                _reason = ("em-performed", "performer: em")
+                _reason = (
+                    "em-performed",
+                    "EM: perform it, then run `coordinator-invoke plan.tasks.mutate` "
+                    "(verb em-discharge, plan_path, id, text)",
+                )
             elif _is_operator_row(raw):
                 _reason = (
                     "operator",
@@ -1286,7 +1311,7 @@ def read_spine(
                     {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
                 )
 
-        if disposition in NON_DISPATCHABLE_DISPOSITIONS or memo_delivered:
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or memo_delivered or em_discharged is not None:
             satisfied_ids.add(raw.get("id"))
         elif em_performed:
             # Not dispatched, and not done: an open EM row (a premise probe, a

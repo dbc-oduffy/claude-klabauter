@@ -262,3 +262,174 @@ def test_trace_ok_false_for_paraphrase() -> None:
 def test_trace_ok_false_for_empty_trace() -> None:
     assert not pm_brief.trace_ok("", "some brief text")
     assert not pm_brief.trace_ok(None, "some brief text")
+
+
+# --- sizing pm_verbatims: resolve step 2, render helper, from-sizing CLI ---------------------
+
+_SIZING_REL = "state/sizings/s.yaml"
+
+
+def _sizing(tmp_path: Path, body: str, newline: str = "\n") -> Path:
+    path = tmp_path / _SIZING_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body.replace("\n", newline).encode("utf-8"))
+    return path
+
+
+_VERBATIMS = (
+    "intent: x\npm_verbatims:\n"
+    "  - turn: 4\n    text: |-\n      newest ask\n      second line\n"
+    "  - turn: 1\n    text: older ask\n    truncated: true\n"
+)
+
+
+def _plan(tmp_path: Path, extra_fm: str = "", body: str = "## Problem\n\ntext\n") -> Path:
+    return _write(
+        tmp_path / "plan.md",
+        f'---\ntitle: x\nsizing_object: "{_SIZING_REL}"\n{extra_fm}---\n\n{body}',
+    )
+
+
+def test_resolve_uses_sizing_verbatims_when_no_body_section(tmp_path: Path) -> None:
+    _sizing(tmp_path, _VERBATIMS)
+    brief = pm_brief.resolve(_plan(tmp_path), tmp_path)
+    assert brief.source == pm_brief.SOURCE_PM_VERBATIM
+    assert brief.ref == _SIZING_REL
+    assert brief.text == "newest ask\nsecond line\n\nolder ask\n...[truncated]"
+
+
+def test_resolve_sizing_order_is_file_order_and_crlf_normalised(tmp_path: Path) -> None:
+    _sizing(tmp_path, _VERBATIMS, newline="\r\n")
+    brief = pm_brief.resolve(_plan(tmp_path), tmp_path)
+    assert brief.text.index("newest ask") < brief.text.index("older ask")
+    assert "\r" not in brief.text
+
+
+def test_resolve_sizing_without_field_falls_through(tmp_path: Path) -> None:
+    _sizing(tmp_path, "intent: x\n")
+    plan = _plan(tmp_path, extra_fm="execution_authorized_note: fallback\n")
+    brief = pm_brief.resolve(plan, tmp_path)
+    assert brief.source == pm_brief.SOURCE_EXECUTION_UTTERANCE
+
+
+def test_resolve_missing_sizing_file_falls_through(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, extra_fm="execution_authorized_note: fallback\n")
+    assert pm_brief.resolve(plan, tmp_path).text == "fallback"
+
+
+def test_resolve_body_section_beats_sizing(tmp_path: Path) -> None:
+    _sizing(tmp_path, _VERBATIMS)
+    plan = _plan(tmp_path, body="## PM brief\n\n> body words\n\n## Problem\n")
+    brief = pm_brief.resolve(plan, tmp_path)
+    assert brief.text == "body words"
+    assert brief.ref is None
+
+
+def test_render_sizing_brief_blockquote_round_trips_through_extract(tmp_path: Path) -> None:
+    sizing = _sizing(tmp_path, _VERBATIMS)
+    rendered = pm_brief.render_sizing_brief(sizing)
+    assert rendered is not None
+    assert rendered.startswith("> newest ask\n> second line\n> \n> older ask\n> ...[truncated]")
+    plan_text = f"## PM brief\n\n{rendered}\n\n## Problem\n"
+    assert pm_brief.extract_brief_section(plan_text) == pm_brief.resolve(
+        _plan(tmp_path), tmp_path
+    ).text
+
+
+def test_render_sizing_brief_none_without_field(tmp_path: Path) -> None:
+    assert pm_brief.render_sizing_brief(_sizing(tmp_path, "intent: x\n")) is None
+    assert pm_brief.render_sizing_brief(tmp_path / "absent.yaml") is None
+
+
+def test_from_sizing_cli(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "pm_brief_cli", Path(__file__).resolve().parents[1] / "pm-brief.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+
+    sizing = _sizing(tmp_path, _VERBATIMS)
+    assert cli.main(["from-sizing", str(sizing)]) == 0
+    assert capsys.readouterr().out.startswith("> newest ask")
+
+    empty = _sizing(tmp_path, "intent: x\n")
+    assert cli.main(["from-sizing", str(empty)]) == 1
+    assert capsys.readouterr().out == ""
+
+
+# --- note_carries_pm_words: wordless typed-command notes -------------------------------------
+
+_TYPED = "PM authorized by typed command: /execute-plan (no accompanying words)"
+_SIZING = "authorized by accepted sizing (state/sizings/x.yaml)"
+
+
+@pytest.mark.parametrize(
+    "note,expected",
+    [
+        (_TYPED, False),
+        (_SIZING, False),
+        (f"{_TYPED}\n{_SIZING}", False),
+        ("", False),
+        ("handoff for execution", True),
+        ("go with your recs. we can execute after handoff", True),
+        (f"handoff for execution\n{_TYPED}", True),
+    ],
+)
+def test_note_carries_pm_words(note: str, expected: bool) -> None:
+    assert pm_brief.note_carries_pm_words(note) is expected
+
+
+def _note_plan(tmp_path: Path, note: str) -> Path:
+    return _write(
+        tmp_path / "docs" / "plans" / "p.md",
+        f'---\ntitle: x\nexecution_authorized_note: "{note}"\n---\n\n## Problem\n\ntext\n',
+    )
+
+
+def test_resolve_wordless_note_refuses_naming_utterance(tmp_path: Path) -> None:
+    plan = _note_plan(tmp_path, _TYPED)
+    with pytest.raises(pm_brief.NoPmBriefError) as excinfo:
+        pm_brief.resolve(plan, tmp_path)
+    assert "--utterance" in str(excinfo.value)
+
+
+def test_resolve_wordless_note_falls_through_to_baton(tmp_path: Path) -> None:
+    plan = _write(
+        tmp_path / "docs" / "plans" / "p.md",
+        f'---\ntitle: x\nexecution_authorized_note: "{_TYPED}"\n'
+        "predecessor_handoff: state/handoffs/h.md\n---\n\n## Problem\n\ntext\n",
+    )
+    _write(tmp_path / "state" / "handoffs" / "h.md", "---\nsummary: baton ask\n---\n")
+    brief = pm_brief.resolve(plan, tmp_path)
+    assert brief.source == pm_brief.SOURCE_BATON_ORIGINATING_ASK
+
+
+def test_resolve_bare_utterance_note_keeps_resolving(tmp_path: Path) -> None:
+    brief = pm_brief.resolve(_note_plan(tmp_path, "handoff for execution"), tmp_path)
+    assert brief.source == pm_brief.SOURCE_EXECUTION_UTTERANCE
+    assert brief.text == "handoff for execution"
+
+
+def test_resolve_multiline_note_keeps_only_pm_line(tmp_path: Path) -> None:
+    plan = _write(
+        tmp_path / "docs" / "plans" / "p.md",
+        f"---\ntitle: x\nexecution_authorized_note: |\n  handoff for execution\n  {_TYPED}\n"
+        "---\n\n## Problem\n\ntext\n",
+    )
+    assert pm_brief.resolve(plan, tmp_path).text == "handoff for execution"
+
+
+@pytest.mark.parametrize("kind", ["abs", "dotdot"])
+def test_resolve_ignores_uncontained_sizing_object(tmp_path: Path, kind: str) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = _write(tmp_path / "outside" / "s.yaml", _VERBATIMS)
+    ref = str(outside) if kind == "abs" else "../outside/s.yaml"
+    plan = _write(
+        repo / f"{kind}.md",
+        f'---\ntitle: x\nsizing_object: "{ref}"\n---\n\n## Problem\n\ntext\n',
+    )
+    with pytest.raises(pm_brief.NoPmBriefError):
+        pm_brief.resolve(plan, repo)

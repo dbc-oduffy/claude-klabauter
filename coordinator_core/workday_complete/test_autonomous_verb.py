@@ -90,7 +90,10 @@ def test_main_success_path_unaffected_by_remap(monkeypatch, capsys):
     rc = autonomous_verb.main(["on"])
 
     assert rc == 0
-    assert "Autonomous mode enabled" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Autonomous mode enabled" in out
+    assert "context-pressure" not in out
+    assert "context pressure" not in out
 
 
 def test_run_sentinel_cli_subprocess_launch_failure_still_reports_on_stderr(monkeypatch, capsys):

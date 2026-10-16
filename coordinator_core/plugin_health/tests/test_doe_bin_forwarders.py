@@ -43,6 +43,21 @@ def test_name_absent_from_engine_bin_is_ignored(tmp_path):
     assert mod.run(content_root=doe, engine_bin=eng) == (0, [])
 
 
+def test_doe_live_name_in_both_bins_is_not_listed(tmp_path):
+    doe, eng = _bins(tmp_path)
+    (doe / "coordinator/bin/group-em-box-notice.py").write_text(FORKED, encoding="utf-8")
+    (eng / "group-em-box-notice.py").write_text("x", encoding="utf-8")
+    assert mod.run(content_root=doe, engine_bin=eng) == (0, [])
+
+
+def test_derive_names_omits_doe_live_but_keeps_siblings(tmp_path):
+    doe, eng = _bins(tmp_path)
+    for n in ("group-em-box-notice.py", "a.py"):
+        (doe / "coordinator/bin" / n).write_text(CLEAN, encoding="utf-8")
+        (eng / n).write_text("x", encoding="utf-8")
+    assert mod.derive_names(doe / "coordinator/bin", eng) == ["a.py"]
+
+
 def test_unresolvable_doe_clone_is_a_note_not_a_crash(tmp_path):
     _, eng = _bins(tmp_path)
     rc, lines = mod.run(content_root=tmp_path / "missing", engine_bin=eng)

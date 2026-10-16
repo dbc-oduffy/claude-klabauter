@@ -85,6 +85,7 @@ from coordinator_core.git.eol_declared import (
 from functools import partial
 from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.main_commit_policy import main_commit_refusal
 from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.authoring_leaks import leak_gate
@@ -848,6 +849,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         structured refusal (an empty pathspec, a directory in `paths`, an unresolvable CAS ref, a lost
         CAS race, or a checkin conversion neither this module nor its `blob_fallback` can reproduce).
 
+    on_main_reason (str, optional) -- the one explicit door past the refusal of a commit while HEAD is
+    `main` and a remote is configured; a non-empty reason admits, never ambient. In-process callers of
+    `_handler` (bookkeeping commits) get the same refusal on a remote-backed `main` unless they pass it.
+
     skip_missing (bool, default false) drops `paths` absent from disk and HEAD, as `skipped_missing`.
     gone_tracked_as_deleted (bool, default false) reclassifies `paths` entries gone from the worktree
     but tracked at HEAD as declared deletions. For a caller whose `paths` is itself the declaration
@@ -940,6 +945,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error("params.gone_tracked_as_deleted must be a boolean")
 
     worktree_root = main_worktree_root(repo_root)
+
+    on_main_reason = params.get("on_main_reason")
+    if on_main_reason is not None and not isinstance(on_main_reason, str):
+        return _error("params.on_main_reason must be a string")
+    main_refusal = main_commit_refusal(worktree_root, override_reason=on_main_reason)
+    if main_refusal is not None:
+        return _error(main_refusal)
 
     reclassified: list = []
     if raw_gone_as_deleted and raw_paths:

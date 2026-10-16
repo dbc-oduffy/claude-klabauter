@@ -1039,6 +1039,106 @@ def _evidence_append(
     return _ok(True, f"evidence-append: recorded evidence for {row_id!r} in {sidecar.name}")
 
 
+EM_DISCHARGE_KEY = "em_discharged"
+
+
+def read_em_discharges(plan_file: Path) -> dict:
+    """``{row_id: {recorded_at, text}}`` recorded by ``em-discharge``.
+
+    Lives beside ``rows`` in the evidence sidecar. A missing or unparsable sidecar,
+    or a non-dict value, reads as ``{}``; this reader never raises.
+    """
+    try:
+        loaded = yaml.safe_load(evidence_sidecar_path(plan_file).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {}
+    entries = loaded.get(EM_DISCHARGE_KEY) if isinstance(loaded, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def _em_discharge(
+    plan_path: str, row_id: str, text: str, worktree: Path, repo_root: Path
+) -> dict:
+    """Apply the em-discharge verb: record that the EM performed ``performer: em`` row ``row_id``.
+
+    Writes only the evidence sidecar; the row's disposition and the plan body are untouched.
+    A second discharge of the same row is a no-op, never an overwrite.
+    """
+    try:
+        path = _resolve_path(plan_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"em-discharge: {exc}")
+    if not row_id:
+        return _err("em-discharge: 'id' is required")
+    if not isinstance(text, str) or not text.strip():
+        return _err("em-discharge: 'text' must be a non-empty string")
+    try:
+        plan_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return _err(f"em-discharge: plan not found: {plan_path}")
+    located = locate_fenced_block(plan_text)
+    row = None
+    if located.status is LocateStatus.LOCATED:
+        try:
+            for r in yaml.safe_load(located.body) or []:
+                if isinstance(r, dict) and r.get("id") == row_id:
+                    row = r
+                    break
+        except yaml.YAMLError:
+            row = None
+    if row is None:
+        return _err(f"em-discharge: task id not found: {row_id!r}")
+    if row.get("performer") != "em":
+        return _err(f"em-discharge: row {row_id!r} is not performer: em")
+
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
+
+    if _is_memo_send_row(row):
+        return _err(f"em-discharge: row {row_id!r} is a memo-send row; it discharges on its sent-receipt")
+    if _is_operator_row(row):
+        return _err(f"em-discharge: row {row_id!r} is execution_mode: operator; the operator releases it")
+    if (row.get("disposition") or "open") != "open":
+        return _err(f"em-discharge: row {row_id!r} disposition is {row.get('disposition')!r}, not open")
+
+    import datetime
+
+    from coordinator_core.repo_relative_text import relativize_text
+
+    entry = {
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "text": relativize_text(text, [(str(worktree), "")]),
+    }
+    state = {"applied": False}
+
+    def mutate(old_text: str) -> str:
+        try:
+            loaded = yaml.safe_load(old_text) if old_text.strip() else None
+        except yaml.YAMLError as exc:
+            raise MutateAbort(f"em-discharge: sidecar is not valid YAML: {exc}") from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict) or not isinstance(loaded.get(EM_DISCHARGE_KEY, {}), dict):
+            raise MutateAbort("em-discharge: sidecar has an unexpected shape")
+        discharged = loaded.setdefault(EM_DISCHARGE_KEY, {})
+        if row_id in discharged:
+            return old_text
+        discharged[row_id] = entry
+        state["applied"] = True
+        return yaml.safe_dump(loaded, sort_keys=False, allow_unicode=True, width=4096)
+
+    sidecar = evidence_sidecar_path(path)
+    try:
+        locked_rmw(sidecar, mutate, repo_root=repo_root, missing_ok=True)
+    except LockTimeout as exc:
+        return _err(f"em-discharge: timed out waiting for file lock on {sidecar.name}: {exc}")
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "em-discharge: mutation aborted")
+
+    if not state["applied"]:
+        return _ok(False, f"em-discharge: {row_id!r} already discharged")
+    return _ok(True, f"em-discharge: recorded discharge of {row_id!r} in {sidecar.name}")
+
+
 def _gate_matches(entry: object, owner_repo: str) -> bool:
     return (
         isinstance(entry, dict)
@@ -2199,6 +2299,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         clear-gate : id (str), owner_repo (str), evidence (str, non-empty) —
                    sets cleared: true + closure_evidence on the one matching
                    external_gate entry (row-level, or frontmatter with row: id).
+        em-discharge : id (str), text (str, non-empty) — records that the EM
+                   performed `performer: em` row `id` under `em_discharged` in
+                   the evidence sidecar; read back with `read_em_discharges`.
+                   Refuses unknown, non-em, memo-send, operator and non-open
+                   rows; a repeat is a no-op (applied false).
         evidence-append : id (str), text (str, non-empty) — appends a
                    {recorded_at, text} entry for row `id` to the sidecar
                    `<plan-stem>.evidence.yaml` beside the plan. Never touches
@@ -2271,7 +2376,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = (params.get("plan_path") or "").strip()
 
     if not verb:
-        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | clear-gate | evidence-append)")
+        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | clear-gate | evidence-append | em-discharge)")
     if not plan_path:
         return _err("plan.tasks.mutate: 'plan_path' is required")
 
@@ -2354,6 +2459,16 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             repo_root,
         )
 
+    if verb == "em-discharge":
+        return await asyncio.to_thread(
+            _em_discharge,
+            plan_path,
+            (params.get("id") or "").strip(),
+            params.get("text"),
+            worktree,
+            repo_root,
+        )
+
     if verb == "clear-gate":
         return await asyncio.to_thread(
             _clear_gate,
@@ -2366,5 +2481,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, clear-gate, evidence-append"
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, clear-gate, evidence-append, em-discharge"
     )

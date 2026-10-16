@@ -60,6 +60,13 @@ def test_lfs_tracking_gitattributes_leaves_hook_alone(tmp_path):
     assert _hook(root).read_bytes() == CURRENT_OURS.encode("utf-8")
 
 
+def test_commented_filter_lfs_does_not_keep_the_banner_hook(tmp_path):
+    root = _repo(tmp_path, CURRENT_OURS)
+    (root / ".gitattributes").write_text("# was: *.bin filter=lfs diff=lfs merge=lfs\n", encoding="utf-8")
+    assert hd.apply_repo(root, check_only=False) == [(entry.ENTRY_ID, "pre-push", "removed")]
+    assert not _hook(root).exists()
+
+
 def test_lfs_tracking_info_attributes_leaves_hook_alone(tmp_path):
     root = _repo(tmp_path, CURRENT_OURS)
     info = root / ".git" / "info"

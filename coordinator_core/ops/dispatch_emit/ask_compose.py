@@ -2153,7 +2153,7 @@ def _owed_handback_js(sizing_rel: Optional[str]) -> str:
     return (
         "(((_manifest && !_manifest.error ? _manifest.owed : null) ?? []).length "
         "? 'Owed to the EM, not run: ' + _manifest.owed.map((o) => o.id).join(', ') "
-        f"+ '. Perform them, then refire: ' + {_refire_js(sizing_rel)} : '')"
+        f"+ '. Perform them, record each with plan.tasks.mutate verb em-discharge, then refire: ' + {_refire_js(sizing_rel)} : '')"
     )
 
 

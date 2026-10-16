@@ -30,6 +30,7 @@ def test_owed_handback_names_rows_and_the_refire():
     assert "_manifest.owed.map((o) => o.id).join(', ')" in expr
     assert _REFIRE in expr
     assert "refire" in expr
+    assert "plan.tasks.mutate verb em-discharge" in expr
 
 
 def test_no_rows_halt_carries_the_owed_handback(monkeypatch):

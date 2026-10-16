@@ -378,9 +378,9 @@ def test_em_performed_open_row_is_excluded_with_reason(tmp_path):
     ids = {row.id for row in read_spine(plan_path, exclusions=exclusions)}
 
     assert ids == {"C2"}
-    assert exclusions == [
-        {"id": "C1", "reason": "em-performed", "detail": "performer: em"}
-    ]
+    assert len(exclusions) == 1
+    assert exclusions[0]["id"] == "C1" and exclusions[0]["reason"] == "em-performed"
+    assert "em-discharge" in exclusions[0]["detail"]
 
 
 def test_open_em_row_holds_its_dependents_until_resolved(tmp_path):
@@ -710,7 +710,9 @@ def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
     entry = _closure_detail(tmp_path, "  performer: em\n")
     assert entry["reason"] == "withheld_by_owed_dependency"
     assert (entry["root"], entry["root_reason"]) == ("C1", "em-performed")
-    assert entry["detail"].endswith("; root C1 is owed by the EM (performer: em), not gated")
+    assert "; root C1 is owed by the EM (" in entry["detail"]
+    assert "em-discharge" in entry["detail"]
+    assert entry["detail"].endswith("), not gated")
 
 
 def test_closure_detail_names_memo_send_root_not_gated(tmp_path):

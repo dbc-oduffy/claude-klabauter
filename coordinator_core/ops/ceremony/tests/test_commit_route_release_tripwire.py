@@ -332,20 +332,75 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": True,
     },
-    # VERIFIED INELIGIBLE, and a correction to this row's first draft, which
-    # read "release" on a measurement that counted the word "session_id" in
-    # the DOCSTRING (`ast.unparse` emits docstrings; the sweep did not strip
-    # them). The body has no session identity of any kind, and the docstring
-    # explains why that is deliberate: `--by` is rejected by `main()` before
-    # this path runs, precisely so an unauthenticated override cannot disarm
-    # `_refuse_if_live_foreign_holder`. There is no id here to release under.
-    "ops/plan_status_transition.py::_commit_plan_flip": {
-        "reason": "ineligible: has no caller-supplied session identity by "
-        "design (an unauthenticated --by override is refused upstream), so "
-        "there is no trusted id to release a claim under",
+    "architecture_survey/commit.py::commit_atlas": {
+        "reason": "ineligible: commits the survey atlas under its own run; carries no claim-bearing session id",
         "confirmed": True,
     },
-    "ops/ceremony/commit_v2.py::_handler": {
+    "ceremony_common/run/driver.py::_commit_filed_rows": {
+        "reason": "ineligible: commits run-filed rows for the ceremony run itself; no caller-supplied claim id",
+        "confirmed": True,
+    },
+    "ops/reconcile_merge_conclude.py::_commit_merge": {
+        "reason": "ineligible: concludes a merge in progress; no caller-supplied claim id",
+        "confirmed": True,
+    },
+    "percolate/publish_lease.py::_read_remote": {
+        "reason": "ineligible: lease probe on a scratch ref, not a claim-bearing worktree commit",
+        "confirmed": True,
+    },
+    "percolate/publish_lease.py::acquire": {
+        "reason": "ineligible: lease commit on a scratch ref, not a claim-bearing worktree commit",
+        "confirmed": True,
+    },
+    "session/claims.py::_first_commit_plan_if_untracked": {
+        "reason": "ineligible: claims bookkeeping commit; it is the claim store, not a claim holder",
+        "confirmed": True,
+    },
+    "benchmarks/close_background_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/close_review_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/close_without_script_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/engine_op_overhead_attribution.py::ensure_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/grind_terminal_commit_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/halted_record_commit_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/quick_wrap_brief_full_path.py::_build": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/terminal_commit_full_path.py::build_ask_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/terminal_commit_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/terminal_commit_full_path.py::build_mise_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/workstream_complete_brief_full_path.py::_build": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "ops/ceremony/commit_v2.py::_land": {
         "reason": "release",
         "confirmed": True,
     },

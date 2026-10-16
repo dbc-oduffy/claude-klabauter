@@ -2,8 +2,8 @@
 
 Engine-native port of DoE's `check-bin-forwarders.py`. The name set is derived, not frozen:
 each `*.py` in the DoE clone's `coordinator/bin` whose name is also an entry in the engine's
-`coordinator/bin`. Each must reference `_engine_forward` and carry exactly the canonical
-forwarder body. Exit 1 listing offenders, 0 when clean or when the DoE clone is unresolvable
+`coordinator/bin`, bar the names in `DOE_LIVE`. Each must reference `_engine_forward` and carry
+exactly the canonical forwarder body. Exit 1 listing offenders, 0 when clean or when the DoE clone is unresolvable
 (one note line, never a crash).
 """
 
@@ -16,6 +16,10 @@ from typing import List, Optional, Tuple
 from coordinator_core.plugin_health.forwarder_drift import _resolve_agent_bin, _resolve_content_root
 
 _PROG = "doe-bin-forwarders"
+
+# DoE's hooks/scripts/group-em-autofire.py loads this file by path and calls its functions, so a
+# forwarder cannot stand in for it. A name leaves this set only once the engine/DoE split is reconciled.
+DOE_LIVE = frozenset({"group-em-box-notice.py"})
 
 CANONICAL_CODE = (
     "import sys",
@@ -36,8 +40,12 @@ def _code_lines(text: str) -> Tuple[str, ...]:
 
 
 def derive_names(doe_bin: Path, engine_bin: Path) -> List[str]:
-    """Sorted `*.py` names present in both bins."""
-    return sorted(p.name for p in doe_bin.glob("*.py") if p.is_file() and (engine_bin / p.name).exists())
+    """Sorted `*.py` names present in both bins, excluding `DOE_LIVE`."""
+    return sorted(
+        p.name
+        for p in doe_bin.glob("*.py")
+        if p.name not in DOE_LIVE and p.is_file() and (engine_bin / p.name).exists()
+    )
 
 
 def offenders(doe_bin: Path, engine_bin: Path) -> List[str]:

@@ -110,6 +110,36 @@ def test_a_non_day_branch_is_never_published_by_this_path(tmp_path, monkeypatch)
     assert "not a canonical day branch" in outcome.failed[0]
 
 
+_TIMEOUT_RESULT = GitResult(
+    returncode=-1, stdout="", stderr="git push timed out after 15.97s"
+)
+
+
+def test_a_timed_out_set_upstream_publish_is_unconfirmed_not_failed(tmp_path, monkeypatch):
+    repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=False)
+    monkeypatch.setattr(git_native, "push_set_upstream", lambda *a, **kw: _TIMEOUT_RESULT)
+
+    outcome, _detail = push_mod.publish_day_branch(repo, branch=_DAY_BRANCH)
+    assert outcome == "unconfirmed"
+
+    _bare_push_always_refuses(monkeypatch, _NO_UPSTREAM_STDERR, [])
+    result = push_mod.push_with_retry(repo)
+    assert result.unconfirmed
+    assert not result.failed
+
+
+def test_a_git_reported_set_upstream_reject_stays_failed(tmp_path, monkeypatch):
+    repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=False)
+    monkeypatch.setattr(
+        git_native,
+        "push_set_upstream",
+        lambda *a, **kw: GitResult(returncode=1, stdout="", stderr="! [rejected] non-fast-forward"),
+    )
+
+    outcome, _detail = push_mod.publish_day_branch(repo, branch=_DAY_BRANCH)
+    assert outcome == "failed"
+
+
 def test_publish_day_branch_declines_every_shape_it_must(tmp_path):
     repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=True)
 

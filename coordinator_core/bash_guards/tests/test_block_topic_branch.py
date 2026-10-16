@@ -259,6 +259,54 @@ def test_main_and_nonbranch_git_skip_machine_lookup(repo, monkeypatch):
     assert _check(repo, "git status") is None
 
 
+def _on_main(root, remote=True):
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    if remote:
+        (root / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
+
+
+def test_commit_on_remote_backed_main_denied(repo):
+    _on_main(repo)
+    out = _check(repo, "git commit -m x")
+    assert _denied(out)
+    assert KEY in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_commit_dash_c_judged_on_that_repo(repo, tmp_path_factory):
+    other = tmp_path_factory.mktemp("other")
+    (other / ".git").mkdir()
+    _on_main(other)
+    assert _denied(_check(repo, f"git -C {other} commit -m x"))
+    assert _check(other, f"git -C {repo} commit -m x") is None
+
+
+def test_commit_after_cd_judged_on_that_repo(repo, tmp_path_factory):
+    other = tmp_path_factory.mktemp("other")
+    (other / ".git").mkdir()
+    _on_main(other)
+    assert _denied(_check(repo, f"cd {other} && git commit -m x"))
+
+
+def test_commit_override_prefix_allows(repo):
+    _on_main(repo)
+    assert _check(repo, f"{KEY}=merge git commit -m x") is None
+    assert _denied(_check(repo, f"{KEY}= git commit -m x"))
+
+
+def test_commit_on_main_inline_override_branch_marker(repo):
+    _on_main(repo)
+    assert _denied(_check(repo, "git commit -m x"))
+    assert _check(repo, "COORDINATOR_OVERRIDE_BRANCH=1 git commit -m x") is None
+    assert _denied(_check(repo, "COORDINATOR_OVERRIDE_BRANCH=0 git commit -m x"))
+    assert _denied(_check(repo, "git commit -m 'COORDINATOR_OVERRIDE_BRANCH=1'"))
+
+
+def test_commit_on_work_branch_or_remoteless_main_allows(repo):
+    assert _check(repo, "git commit -m x") is None
+    _on_main(repo, remote=False)
+    assert _check(repo, "git commit -m x") is None
+
+
 def test_non_bash_tool_allows(repo):
     assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
 

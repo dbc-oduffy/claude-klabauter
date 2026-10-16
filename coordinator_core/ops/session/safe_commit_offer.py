@@ -318,6 +318,7 @@ from coordinator_core.git.commit import (
 )
 from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.main_commit_policy import main_commit_refusal
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
@@ -2657,6 +2658,9 @@ def _handler(params: dict, repo_root=None) -> dict:
       dry_run    (bool, optional) — compute and return the offer WITHOUT
                                     committing, for inspection only. Never gate
                                     a real invocation behind it.
+      on_main_reason (str, optional) — the one explicit door past the refusal
+                                    of a commit on a remote-backed `main`;
+                                    never ambient.
 
     Returns the `CommitOfferReport` verbatim, plus `"rendered"`: the operator-
     facing text `_render_report` produces. The report stays the structured
@@ -2718,6 +2722,13 @@ def _handler(params: dict, repo_root=None) -> dict:
             "reconciliation": reconciliation,
             **offer,
         }
+
+    refusal = main_commit_refusal(
+        core.git_root(cwd) or cwd or ".",
+        override_reason=params.get("on_main_reason"),
+    )
+    if refusal:
+        return _error_envelope(refusal)
 
     resolved_groups: Optional[List[CommitGroup]] = None
     if message is not None:
