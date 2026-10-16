@@ -242,7 +242,7 @@ RECORD_DIR_ROOT = Path(home_dir(".", "warp")).as_posix()
 SPINE_SUFFIX = ".spine.md"
 #: Fixed record names a run's record directory holds, plus any `*SPINE_SUFFIX` file.
 RUN_RECORD_FILES = (
-    "requirements.jsonl",
+    "revisions.jsonl",
     "run.json",
     "requirements.md",
     "manifest.json",

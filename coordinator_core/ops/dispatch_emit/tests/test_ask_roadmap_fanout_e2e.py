@@ -69,3 +69,66 @@ def test_the_in_run_fan_out_survives_the_closeable_overwrite(repo):
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_both_scripts_lint_clean(repo, which):
     assert not [f for f in run_checks(_scripts(repo)[which]) if f.severity is Severity.ERROR]
+
+
+# --- the fan-out record reaches a sibling run that reviews and commits ----------------------------
+
+import yaml  # noqa: E402
+
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_fanout  # noqa: E402
+from coordinator_core.ops.dispatch_emit import ask_fanout_contract as _fc  # noqa: E402
+from coordinator_core.ops.dispatch_emit import roadmap_fanout_commit as rfc  # noqa: E402
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW  # noqa: E402
+from coordinator_core.ops.dispatch_emit.tests.test_ask_fanout_sizings_arm import _sizing  # noqa: E402
+
+_PLAN = "docs/plans/2026-10-16-a.md"
+
+
+@pytest.fixture
+def fan_repo(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(_fc, "concurrent_run_budget", lambda physical_cores=None: 4)
+    sizing = _sizing(tmp_path, "a", _PLAN)
+    (tmp_path / _PLAN).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / _PLAN).write_text(
+        f"---\nrun_id: fixture\nsizing_object: {sizing}\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: A1\n  title: T\n  disposition: open\n  writes:\n    - some/a.py\n```\n",
+        encoding="utf-8", newline="\n",
+    )
+    return tmp_path, sizing
+
+
+def _sibling_script(repo, sizing_rel, run_id):
+    doc = yaml.safe_load((repo / sizing_rel).read_text(encoding="utf-8"))
+    doc.update({"route": "plan", "status": "sized"})
+    (repo / sizing_rel).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8", newline="\n")
+    return ask_compose.compose_ask_script(
+        repo_root=repo.as_posix(), prompt=None, sizing_rel=sizing_rel, run_id=run_id, session_id=None,
+        wrap_stage=lambda t: ("  async function planBlitz(args) { return { ready: [] }; }", ["Plan"]),
+        plan_blitz_text="stub", in_run_commit=True, **REVIEW_KW,
+    )
+
+
+def _stages(script):
+    labels = [leg.label for leg in lr.emitted_legs(script)]
+    return {
+        "review": "phase('Review wave')" in script or "phase('Review prep')" in script,
+        "commit": "commit" in labels and "dispatch.terminal_commit --params-file" in script,
+    }
+
+
+def test_fanout_record_drives_a_sibling_whose_script_reviews_and_commits(fan_repo):
+    repo, sizing = fan_repo
+    params = {FANOUT_RECORD_PARAM: {"plans": [_PLAN], "waves": {_PLAN: 0}}}
+    assert rfc.is_fanout_record_call(params)
+    resolved, refusal = rfc._resolve_plans(repo, params[FANOUT_RECORD_PARAM]["plans"])
+    assert refusal is None and resolved[0][1] == sizing
+    plan, sz, _baton, writes = resolved[0]
+    out = ask_fanout.fanout({"sizings": [{"sizing": sz, "label": "a", "wave": 0, "writes": writes}]}, repo)
+    assert out["exit_code"] == 0, out
+    run = out["ready"][0]
+    script = _sibling_script(repo, run["sizing"], run["run_id"])
+    assert _stages(script) == {"review": True, "commit": True}
+    assert _stages(script.replace("dispatch.terminal_commit --params-file", "x")) == {"review": True, "commit": False}
+    stripped = script.replace("phase('Review wave')", "phase('x')").replace("phase('Review prep')", "phase('y')")
+    assert _stages(stripped)["review"] is False

@@ -87,7 +87,9 @@ and the Opus plan review do not. `pm-decision` is not a room: the engine
 resolves the route and sets the `pm_decision_pending` detent, but never
 picks among the PM's four XL exits (`split` / `shape` / `roadmap` /
 `accept_multi_session`) — that choice is recorded in the sizing-object's
-`xl_exit` field, engineered exactly like `fork` (see below).
+`xl_exit` field, engineered exactly like `fork` (see below). A bundle of 2+ independent
+initiatives at XL (`--initiatives`) sets the `bundle` detent and the PM question offers
+`split` first; it still never sets `xl_exit`.
 
 Design D5 (shape-entry conditions, PM directive 2026-07-24): `route=shape`
 is never a size threshold alone. It fires ONLY when (a) the resolved size is
@@ -502,6 +504,8 @@ DETENT_ENUM = (
     # never re-sorted — order is load-bearing against DoE's
     # EQUAL_VERSION_SHAPE_DRIFT gate, same as every prior append above.
     "exit_criterion_pending",
+    # APPENDED by C4c (multi-ask sibling runs): 2+ independent initiatives at XL.
+    "bundle",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
@@ -928,7 +932,7 @@ def dispositions(
 
 
 def pm_exit_question(
-    resized_tshirt: str, resolved_route: str, *, prompt_pending: bool
+    resized_tshirt: str, resolved_route: str, *, prompt_pending: bool, bundle: bool = False
 ) -> Optional[str]:
     """The question the PM answers when a sizing halts for them; None when none is owed.
     Lower-case lead on `pm-decision`, where it follows a framing clause in `next_move`.
@@ -940,12 +944,60 @@ def pm_exit_question(
         return _ROOM_ENTRY["shape"]
     if not prompt_pending:
         return None
+    if bundle:
+        return (
+            f"Looks like a {resized_tshirt} bundling independent initiatives: split them into "
+            "separate runs (recommended), or shape, roadmap, or accept it as one multi-session run?"
+        )
     return _post_size_question(resized_tshirt, resolved_route)
 
 
 def _post_size_question(resized_tshirt: str, resolved_route: str) -> str:
     lead = "looks like a" if resolved_route == "pm-decision" else "Looks like a"
     return f"{lead} {resized_tshirt}, shall we go with that or want to split it, cut it, what's up?"
+
+
+def bundle_labels(initiatives: list[dict[str, Any]]) -> Optional[list[str]]:
+    """Labels of `initiatives` when there are two or more and their `rows` are pairwise
+    disjoint; None otherwise (one initiative, or overlapping rows, is not a bundle)."""
+    if len(initiatives) < 2:
+        return None
+    seen: set[str] = set()
+    for item in initiatives:
+        rows = set(item["rows"])
+        if seen & rows:
+            return None
+        seen |= rows
+    return [item["label"] for item in initiatives]
+
+
+def parse_initiatives(raw: str) -> tuple[Optional[list[dict[str, Any]]], list[str]]:
+    """The `--initiatives` value as a list of `{label, rows}`, with one refusal
+    string per bad value. `label` is non-empty and `rows` a non-empty list of non-empty ids."""
+    import json
+
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        return None, [f"--initiatives is not valid JSON: {exc}"]
+    if not isinstance(data, list) or not data:
+        return None, ["--initiatives must be a non-empty JSON array"]
+    out: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for n, item in enumerate(data):
+        if not isinstance(item, dict):
+            errors.append(f"--initiatives item {n} is not an object")
+            continue
+        extra = sorted(set(item) - {"label", "rows"})
+        if extra:
+            errors.append(f"--initiatives item {n} has unknown keys {extra}")
+        label, rows = item.get("label"), item.get("rows")
+        if not (isinstance(label, str) and label.strip()):
+            errors.append(f"--initiatives item {n} needs a non-empty label")
+        if not (isinstance(rows, list) and rows and all(isinstance(r, str) and r.strip() for r in rows)):
+            errors.append(f"--initiatives item {n} needs rows: a non-empty list of non-empty ids")
+        out.append(item)
+    return (None, errors) if errors else (out, [])
 
 
 def route(
@@ -970,6 +1022,7 @@ def route(
     interaction_mode: str = "hands-on",
     interaction_mode_source: Optional[str] = None,
     premise_evidence: Optional[str] = None,
+    initiatives: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
@@ -1131,6 +1184,14 @@ def route(
     if resolved_route == "pm-decision":
         detents.append("pm_decision_pending")
 
+    # Advisory like every detent: marks the bundle so the gate offers `split` first; never
+    # alters `route` and never sets `xl_exit`. One initiative, or rows that overlap, is no bundle.
+    bundled_labels = (
+        bundle_labels(initiatives) if resized_tshirt == "XL" and initiatives else None
+    )
+    if bundled_labels:
+        detents.append("bundle")
+
     if resolved_route == "goal-setting":
         detents.append("goal_setting_pm_gated")
 
@@ -1201,7 +1262,8 @@ def route(
         )
     elif resolved_route == "pm-decision":
         next_move = (
-            "XL resolves to pm-decision, not a room. Surface the exits to the PM — "
+            ("The ask bundles independent initiatives: offer `split` first. " if bundled_labels else "")
+            + "XL resolves to pm-decision, not a room. Surface the exits to the PM — "
             "shape (JTBD unclear), roadmap (spans >=2 workstreams / needs an initiative "
             "FK), or accept_multi_session (one coherent job, simply large, PM assents). "
             "The choice is recorded in the sizing-object's xl_exit field; the engine does "
@@ -1379,6 +1441,7 @@ def route(
     return {
         "route": resolved_route,
         "detents": detents,
+        "initiatives": bundled_labels,
         "fork": fork,
         "xl_exit": xl_exit,
         "intent": intent,
@@ -1933,6 +1996,10 @@ def _write_back(
             text = write_fm_nested_field(text, "research", _render_block(research))
         if acceptance_rows:
             text = write_fm_nested_field(text, "acceptance_rows", _render_block(acceptance_rows))
+        if decision.get("initiatives"):
+            # Holds the bundle's free-form labels (route()'s `bundled_labels`), not the
+            # state/initiatives ids the vendored schema description names; the schema types only strings.
+            text = write_fm_nested_field(text, "initiatives", _render_block(decision["initiatives"]))
         if interaction_mode and not doc.get("interaction_mode"):
             text = _set_scalar(text, "interaction_mode", interaction_mode)
         # First write only: once present, the EM curates it by hand and a
@@ -2311,6 +2378,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-question-mode split|combine]\n"
         "    [--research-question-target <n>=<source>[:<ref>] ... (source web|repo|local; ref for repo/local)]\n"
         "    [--research-destination repo|local-only]\n"
+        "    [--initiatives '[{\"label\":..,\"rows\":[..]}]' (2+ with disjoint rows at XL sets the bundle detent)]\n"
         "    [--acceptance-rows-json '[{\"statement\":..,\"writes\":[..],\"check\":..}]' (requires --write)]\n"
         "    [--write <state/sizings/x.yaml> [--json (print the decision instead of 'written: <path>')]\n"
         "    [--verbatim-turns A-B | --no-verbatims]\n"
@@ -2474,6 +2542,7 @@ def main(argv: list[str]) -> int:
     research_question_targets: list[str] = []
     research_destination = None
     acceptance_rows_json = None
+    initiatives_json = None
     verbatim_turns_raw = None
     intent_turn_raw = None
     no_verbatims = False
@@ -2633,6 +2702,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-destination" and i + 1 < len(argv):
             research_destination = argv[i + 1]
+            i += 2
+        elif tok == "--initiatives" and i + 1 < len(argv):
+            initiatives_json = argv[i + 1]
             i += 2
         elif tok == "--acceptance-rows-json" and i + 1 < len(argv):
             acceptance_rows_json = argv[i + 1]
@@ -2853,6 +2925,14 @@ def main(argv: list[str]) -> int:
             print(f"{prog}: --acceptance-rows-json requires --write <state/sizings/x.yaml>", file=sys.stderr)
             return EXIT_USAGE
 
+    initiatives = None
+    if initiatives_json is not None:
+        initiatives, initiatives_errors = parse_initiatives(initiatives_json)
+        if initiatives_errors:
+            for message in initiatives_errors:
+                print(f"{prog}: {message}", file=sys.stderr)
+            return EXIT_USAGE
+
     interaction_mode, interaction_mode_source = _resolve_interaction_mode_and_source(
         interaction_mode_flag
     )
@@ -2879,6 +2959,7 @@ def main(argv: list[str]) -> int:
             interaction_mode=interaction_mode,
             interaction_mode_source=interaction_mode_source,
             premise_evidence=premise_evidence,
+            initiatives=initiatives,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
@@ -2944,6 +3025,7 @@ def main(argv: list[str]) -> int:
                 decision["resolved_estimate"]["tshirt"],
                 decision["route"],
                 prompt_pending="post_size_prompt_pending" in decision["detents"],
+                bundle="bundle" in decision["detents"],
             )
         else:
             _open_routed_obligation(write_path)

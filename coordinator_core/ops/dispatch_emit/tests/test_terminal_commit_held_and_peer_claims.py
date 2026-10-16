@@ -249,3 +249,64 @@ def test_the_runs_own_session_claim_still_commits(repo):
     assert out["committed"] is True, out
     assert _committed(repo) == ["a.py", "b.py"]
     assert "Absorbed-Peer-Claim" not in _git(["log", "-1", "--format=%B"], repo)
+
+
+def _plan_run(repo: Path, request: CommitRequest, emitted_at: float, **params) -> dict:
+    """A plan run mints no run token: its script's mtime is when it was minted."""
+    script = repo / "plan-run.workflow.mjs"
+    script.write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    os.utime(script, (emitted_at, emitted_at))
+    return terminal_commit._handler(
+        {"script_path": script.name, "incomplete_chunks": [], "inline_review": _REVIEWED, **params},
+        repo_root=repo / ".git",
+    )
+
+
+_SELF_UUID = "11111111-2222-3333-4444-555555555555"
+
+
+def _record_write(repo: Path, rel: str, text: str) -> None:
+    import hashlib
+
+    from coordinator_core.session import touch_record
+
+    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / _SELF_UUID)
+    touch_record.append_event(
+        sink, session_id=_SELF_UUID, agent_id=None, verb="T", path=rel,
+        content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(), kind="w",
+    )
+
+
+def test_a_tokenless_plan_run_emitted_before_a_junior_peer_run_commits(repo):
+    now = time.time()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),))
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _peer_run(repo, "run-junior", PEER, ["a.py"], minted_at=now - 10)
+    out = _plan_run(repo, request, now - 100)
+    assert out["committed"] is True, out
+
+
+def test_a_tokenless_plan_run_emitted_after_a_peer_run_still_refuses(repo):
+    now = time.time()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),))
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _peer_run(repo, "run-senior", PEER, ["a.py"], minted_at=now - 100)
+    out = _plan_run(repo, request, now - 10)
+    assert out["refused"] == "peer-claim", out
+
+
+def test_a_junior_runs_hunk_in_a_carried_file_still_refuses_on_blob_drift(repo, monkeypatch):
+    """Seniority drops the junior's declaration, never its bytes: a hunk it already wrote into a
+    file the senior commits whole differs from the senior's recorded write and refuses."""
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", _SELF_UUID)
+    now = time.time()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),))
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _record_write(repo, "a.py", "a\n")
+    _peer_run(repo, "run-junior", PEER, ["a.py"], minted_at=now - 10)
+    (repo / "a.py").write_text("a\njunior hunk\n", encoding="utf-8")
+    head = _git(["rev-parse", "HEAD"], repo)
+    out = _plan_run(repo, request, now - 100, session_id=_SELF_UUID)
+    assert out["committed"] is False, out
+    assert out["refused"] == "blob-drift", out
+    assert _git(["rev-parse", "HEAD"], repo) == head

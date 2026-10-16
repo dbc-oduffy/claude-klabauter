@@ -2000,16 +2000,25 @@ def _peer_held(
     return held | set(run_claims or ())
 
 
-def _own_run_seniority(worktree_root: Path, run_id: object) -> Optional[tuple]:
-    """`(minted_at, run_id)` of the committing run's claimed token, or None when it has none."""
+def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: object = None) -> Optional[tuple]:
+    """`(minted_at, run_id)` of the committing run's claimed token. A plan run mints no token: its
+    emitted script's mtime is then the moment it was minted, keyed by the script stem. None when
+    neither resolves. Seniority only drops a junior peer's declaration; blob-drift still refuses
+    any hunk that junior run already wrote into a file this commit carries."""
     from coordinator_core.ops.dispatch_emit import run_token
 
-    if not isinstance(run_id, str):
+    if isinstance(run_id, str):
+        record = run_token._read(run_token._record_path(worktree_root, run_id, claimed=True))
+        if record is not None and isinstance(record.get("minted_at"), (int, float)):
+            return (record["minted_at"], run_id)
+    if not isinstance(script_path_raw, str) or not script_path_raw:
         return None
-    record = run_token._read(run_token._record_path(worktree_root, run_id, claimed=True))
-    if record is None or not isinstance(record.get("minted_at"), (int, float)):
+    script = Path(script_path_raw)
+    script = script if script.is_absolute() else worktree_root / script
+    try:
+        return (script.stat().st_mtime, run_id if isinstance(run_id, str) else script.stem)
+    except OSError:
         return None
-    return (record["minted_at"], run_id)
 
 
 def _in_scope(path: str, request: CommitRequest) -> bool:
@@ -3712,7 +3721,7 @@ def _terminal_commit_inner(
         run_claims = warp_run_deliverable.live_run_write_claims(
             worktree_root, carried, exclude_session=session_id or "",
             cwd=str(worktree_root),
-            minted_before=_own_run_seniority(worktree_root, params.get("run_id")),
+            minted_before=_own_run_seniority(worktree_root, params.get("run_id"), script_path_raw),
             exclude_run=params.get("run_id") if isinstance(params.get("run_id"), str) else None,
         )
     except Exception:

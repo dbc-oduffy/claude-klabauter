@@ -154,6 +154,46 @@ def test_xl_route_sets_pm_decision_pending_detent():
     assert "pm_decision_pending" in decision["detents"]
 
 
+_TWO_DISJOINT = [
+    {"label": "alpha", "rows": ["R1", "R2"]},
+    {"label": "beta", "rows": ["R3"]},
+]
+
+
+def test_bundle_detent_for_two_disjoint_initiatives_at_xl():
+    decision = sa.route(estimate={"tshirt": "XL"}, initiatives=_TWO_DISJOINT)
+    assert "bundle" in decision["detents"]
+    assert decision["initiatives"] == ["alpha", "beta"]
+    assert decision["route"] == "pm-decision"
+    assert decision["xl_exit"] is None
+    assert "offer `split` first" in decision["next_move"]
+    question = sa.pm_exit_question("XL", "pm-decision", prompt_pending=True, bundle=True)
+    assert question.index("split") < min(question.index(w) for w in ("shape", "roadmap"))
+
+
+@pytest.mark.parametrize(
+    "initiatives,tshirt",
+    [
+        (_TWO_DISJOINT[:1], "XL"),
+        ([{"label": "a", "rows": ["R1"]}, {"label": "b", "rows": ["R1", "R2"]}], "XL"),
+        (_TWO_DISJOINT, "L"),
+        (None, "XL"),
+    ],
+)
+def test_no_bundle_detent_for_single_overlapping_non_xl_or_absent(initiatives, tshirt):
+    decision = sa.route(estimate={"tshirt": tshirt}, initiatives=initiatives)
+    assert "bundle" not in decision["detents"]
+    assert decision["initiatives"] is None
+    assert "split` first" not in decision["next_move"]
+
+
+def test_parse_initiatives_refuses_bad_shapes():
+    ok, errs = sa.parse_initiatives('[{"label":"a","rows":["R1"]},{"label":"b","rows":["R2"]}]')
+    assert errs == [] and len(ok) == 2
+    for bad in ("not json", "[]", '[{"label":"","rows":["R1"]}]', '[{"label":"a","rows":[]}]', '[{"label":"a","rows":["R1"],"z":1}]'):
+        assert sa.parse_initiatives(bad)[1]
+
+
 def test_d5_gate_still_wins_over_pm_decision():
     # XL + jtbd_unclear must still route shape — the D5 gate is unchanged
     # and wins over the new pm-decision base route exactly as it won over
@@ -1119,7 +1159,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # covers a refused or abandoned run with no successor and no decision record (sizing.supersede).
     # Moved 1.38.1 -> 1.39.0 (2026-10-15): DoE 6930997bb4, `spike` joins research.value_class.
     # Moved 1.39.0 -> 1.40.0: DoE 5c982f0e40, optional top-level `acceptance_rows`.
-    assert schema["x-schema-version"] == "1.40.0"
+    # Moved 1.40.0 -> 1.42.0: DoE 12069c34ba, optional top-level `initiatives` and the `bundle` detent.
+    assert schema["x-schema-version"] == "1.42.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1218,6 +1259,8 @@ def test_vendored_schema_widened_enums_order_exact():
         # Appended by C1 (1.23.0, pln-sizing-engine-carries-exit-cri-af770b).
         # Order-exact and append-at-end -- never re-sort.
         "exit_criterion_pending",
+        # 1.42.0: DoE 12069c34ba, the bundle detent.
+        "bundle",
     ]
 
     completion_schema = json.loads(

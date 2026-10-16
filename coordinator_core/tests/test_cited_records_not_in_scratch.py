@@ -45,7 +45,7 @@ def test_warp_run_records_land_under_record_root_not_run_root(tmp_path, monkeypa
     record_names = set(RUN_RECORD_FILES)
     in_records = [p for p in (tmp_path / RECORD_DIR_ROOT).rglob("*") if p.is_file()]
     assert in_records, f"the run wrote no record under {RECORD_DIR_ROOT}; cited records belong there"
-    assert {"requirements.jsonl", "requirements.md"} <= {p.name for p in in_records}
+    assert "requirements.md" in {p.name for p in in_records}
 
     run_root = tmp_path / RUN_DIR_ROOT
     stray = [

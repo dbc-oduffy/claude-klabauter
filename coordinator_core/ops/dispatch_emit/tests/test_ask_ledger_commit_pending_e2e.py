@@ -38,7 +38,7 @@ let _docs = null, _commit = null, _nextAction = null;
 let _incompleteChunks = [], _notStarted = [], _blockedChunks = [], _heldBy = [], _unansweredBriefs = [];
 let _stoppedBy = [], _verifications = [], _planHeld = {};
 let _reviewIntegration = { fixes_applied: 0, sidecar_path: 'x' }, _reviewPrep = { slices: [1] };
-let _reviewWave = [], _deliveryVerdict = null, _deliveryNotRun = null, _testResult = null;
+let _reviewWave = [], _deliveryVerdict = null, _deliveryNotRun = null, _waveNotRun = [], _testResult = null;
 let _haltCommit = null; const _commitHaltRecord = async () => null; const _terminalCommitParamsBlock = (p) => JSON.stringify(p);
 let _ledger = null, _falsifierResult = null, _falsifierSpec = null;
 const log = () => {};
