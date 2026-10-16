@@ -1113,12 +1113,16 @@ def _recorded_fingerprints(
     worktree_root: Path, session_id: str, candidates: Sequence[str], all_paths: Sequence[str],
     deleted_paths: Sequence[str], *, excluded: set,
     reviewed: Optional[dict] = None, reviewed_at: Optional[float] = None,
+    fixes_integrated_at: Optional[float] = None,
 ) -> dict:
     """``{path: sha256}`` the run's expectation for the commit's candidate paths; one batched sink
     read. Per path the newer of the session's last recorded write and the run's newest review
     (``reviewed`` -> sha256 of the bytes it read, ``reviewed_at`` epoch seconds) supplies the hash;
-    an exact tie goes to the session write. A hashless newest session event, or an unrecorded path
-    outside the review, carries no entry."""
+    an exact tie goes to the session write. When the review wave applied fixes
+    (``fixes_integrated_at``: epoch the wave's integration was recorded), a reviewed path whose
+    bytes were last written no later than that moment, after the newest session write, is declared
+    at those bytes; a later change keeps the older expectation and refuses. A hashless newest
+    session event, or an unrecorded path outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
     committed = set(all_paths) - set(deleted_paths)
@@ -1131,11 +1135,52 @@ def _recorded_fingerprints(
     for p in wanted:
         event = seen.get(p)
         review_hash = reviewed.get(p)
+        if review_hash and fixes_integrated_at is not None and (event is None or fixes_integrated_at > event[1]):
+            target = worktree_root / p
+            try:
+                settled = target.stat().st_mtime <= fixes_integrated_at
+            except OSError:
+                settled = False
+            post_fix = touch_record.compute_content_hash(target) if settled else None
+            if post_fix:
+                out[p] = post_fix
+                continue
         if review_hash and (event is None or reviewed_at > event[1]):
             out[p] = review_hash
         elif event is not None and event[0]:
             out[p] = event[0]
     return out
+
+
+def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> Optional[float]:
+    """Epoch the review wave's integration was recorded (its sidecar's mtime), ``None`` when the
+    wave applied no fixes or its sidecar does not resolve. The sidecar's mtime is the cutoff, so a
+    later rewrite of that sidecar moves it forward; ``integration.sidecar`` is tried before the
+    share-dir glob, which scans every session's directory."""
+    if not isinstance(inline_review, dict):
+        return None
+    fixes = inline_review.get("fixes")
+    if not (isinstance(fixes, int) and not isinstance(fixes, bool) and fixes > 0):
+        return None
+    integration = inline_review.get("integration")
+    sidecar = integration.get("sidecar") if isinstance(integration, dict) else None
+    candidates: list = []
+    if isinstance(sidecar, str) and sidecar:
+        candidates.append(worktree_root / sidecar)
+    stem = inline_review.get("integration_stem")
+    if isinstance(stem, str) and stem and "/" not in stem and "\\" not in stem:
+        share = worktree_root / ".coordinator-local" / "subagent-share"
+        try:
+            candidates.extend(share.glob(f"*/{stem}.md"))
+        except OSError:
+            pass
+    stamps: list = []
+    for c in candidates:
+        try:
+            stamps.append(c.stat().st_mtime)
+        except OSError:
+            continue
+    return max(stamps) if stamps else None
 
 
 def _epoch_of(stamp: object) -> Optional[float]:
@@ -3783,6 +3828,7 @@ def _terminal_commit_inner(
             all_paths, deleted_paths,
             excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, note_committed},
             reviewed=reviewed_bytes, reviewed_at=reviewed_at,
+            fixes_integrated_at=_fixes_integrated_at(worktree_root, inline_review),
         )
         if note_committed and note_committed not in deleted_paths:
             from coordinator_core.session import touch_record

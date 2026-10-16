@@ -226,6 +226,78 @@ def test_an_unparseable_review_stamp_is_no_review_basis(repo, monkeypatch):
     assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}
 
 
+def _integration(repo: Path, at: float) -> None:
+    """The review wave's integration sidecar, stamped at ``at`` (its mtime is the moment the
+    wave's applied fixes integrated)."""
+    import os
+
+    share = repo / ".coordinator-local" / "subagent-share" / SID
+    share.mkdir(parents=True, exist_ok=True)
+    f = share / "rev-stem.md"
+    f.write_text("integration\n", encoding="utf-8")
+    os.utime(f, (at, at))
+
+
+def _stamp(repo: Path, rel: str, at: float) -> None:
+    import os
+
+    os.utime(repo / rel, (at, at))
+
+
+_FIXED = {**_WITH_BASE, "fixes": 2}
+
+
+def test_reviewer_fixes_applied_in_the_wave_commit_without_drift(repo, monkeypatch):
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    _stamp(repo, "a.py", 2500.0)
+    _integration(repo, 3000.0)
+    out, seen = _fire(repo, monkeypatch, _FIXED)
+    assert out["committed"] is True, out
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("FIXED\n")}
+
+
+def test_a_change_after_the_waves_fixes_integrated_still_refuses(repo, monkeypatch):
+    (repo / "a.py").write_text("LATE\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    _stamp(repo, "a.py", 3500.0)
+    _integration(repo, 3000.0)
+    out, seen = _fire(repo, monkeypatch, _FIXED)
+    assert out["refused"] == "blob-drift"
+    assert seen[0]["expected_content_sha256"] == {"a.py": _sha("B\n")}
+
+
+def test_without_applied_fixes_the_post_review_bytes_still_refuse(repo, monkeypatch):
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    _stamp(repo, "a.py", 2500.0)
+    _integration(repo, 3000.0)
+    out, _ = _fire(repo, monkeypatch, {**_WITH_BASE, "fixes": 0})
+    assert out["refused"] == "blob-drift"
+
+
+def test_an_unresolved_integration_sidecar_keeps_the_review_expectation(repo, monkeypatch):
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    _stamp(repo, "a.py", 2500.0)
+    out, _ = _fire(repo, monkeypatch, _FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+def test_a_separator_bearing_integration_stem_does_not_resolve(repo, monkeypatch):
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    _stamp(repo, "a.py", 2500.0)
+    _integration(repo, 3000.0)
+    out, _ = _fire(repo, monkeypatch, {**_FIXED, "integration_stem": "../rev-stem"})
+    assert out["refused"] == "blob-drift"
+
+
 NOTE = "docs/delivery/run1.md"
 
 
