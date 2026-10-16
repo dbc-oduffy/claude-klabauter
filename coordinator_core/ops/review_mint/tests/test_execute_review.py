@@ -6,6 +6,7 @@ import pytest
 from coordinator_core.ops.review_mint.execute_review import (
     _PREP_BUSY_RETRIES,
     _wave_schema_literal,
+    PREP_MALFORMED_HALT,
     PREP_BUSY_HALT,
     REVIEW_MISSING_HALT,
     compose_execute_review,
@@ -142,7 +143,7 @@ def test_prep_phase_fails_closed_on_no_prep_or_no_slices():
     _, phases = _compose()
     _, prep_block = phases[0]
     guard = prep_block.splitlines()[-1]
-    assert guard.startswith("  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))")
+    assert guard.startswith("  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))")
     assert "product_files" not in guard
     assert "throw" not in guard and "return { halted:" in guard
 
@@ -152,7 +153,7 @@ def test_review_wave_is_one_parallel_with_slice_map_and_whole_diff_calls():
     _, wave_block = phases[1]
     assert wave_block.count("await parallel([") == 1
     assert (
-        "...(_reviewPrep?.slices ?? []).map(s => () => (async () => { try { return await agent(" in wave_block
+        "...(Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slices : []).map(s => () => (async () => { try { return await agent(" in wave_block
     )
     assert "JSON.stringify(s)" in wave_block
     # one whole-diff call per non-slice agent (overengineering-reviewer,
@@ -1026,7 +1027,7 @@ def _grouped_prompts(rows, slice_count):
 
 def test_ratio_slice_agent_groups_slices_instead_of_one_reviewer_per_slice():
     block = _wave_block(_ratio_review(), executor_rows=9)
-    assert "_groupSlices(_reviewPrep?.slices ?? [], 9, 3, 4).map(g => () =>" in block
+    assert "_groupSlices((Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slices : []), 9, 3, 4).map(g => () =>" in block
     assert "(_reviewPrep?.slices ?? []).map(s =>" not in block
     assert "Math.min(slices.length, Math.ceil(rows / maxRows), Math.floor(rows / minRows))" in block
 
@@ -1279,3 +1280,46 @@ def test_prep_in_wave_every_agent_rejecting_halts_as_a_failed_prep():
     result = _run_in_wave(_FULL, 4, fail_all=True)
     assert result["halted"] == "review prep returned no slices (prep verdict: none)"
     assert result["prep"] is None
+
+
+def test_wave_schema_declares_prep_slices_array_of_objects_and_error_string_or_null():
+    schema = json.loads(_wave_schema_literal("{}"))
+    prep = schema["properties"]["prep"]
+    assert prep["properties"]["slices"] == {"type": "array", "items": {"type": "object"}}
+    assert prep["properties"]["error"] == {"type": ["string", "null"]}
+    assert schema["required"] == ["prep"]
+
+
+def test_no_composed_slices_iteration_is_unguarded():
+    import re
+
+    blocks = [b for _, b in _in_wave()] + [b for _, b in _in_wave(executor_rows=1)]
+    script = "\n".join(blocks)
+    assert "slices" in script
+    assert not re.findall(r"\w+(?:\?)?\.slices \?\? \[\]", script)
+    assert not re.findall(r"\.slices\.length", script)
+
+
+@pytest.mark.parametrize("bad", [3, "3", None, {"n": 3}])
+def test_a_summarised_prep_reply_halts_instead_of_throwing(bad):
+    patch = f"(r, n) => n === 0 ? {{ ...r, prep: {{ ...r.prep, slices: {json.dumps(bad)} }} }} : r"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert "error" not in result
+    assert result["halted"].startswith(PREP_MALFORMED_HALT)
+    assert result["wave"] is None
+
+
+def test_empty_relayed_slices_do_not_halt_when_a_wave_review_names_slices():
+    patch = (
+        "(r, n) => n === 0 ? { prep: { ...r.prep, slices: [] }, "
+        "review: { v: 'x', slice_id: 'm-prep-1+m-prep-2', sidecar_path: 'p1.md' } } : { ...r, prep: { ...r.prep, slices: [] } }"
+    )
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert "error" not in result and "halted" not in result
+    assert [s["id"] for s in result["prep"]["slices"]] == ["m-prep-1", "m-prep-2"]
+
+
+def test_empty_relayed_slices_with_no_review_slice_id_still_halt():
+    patch = "(r, n) => ({ ...r, prep: { ...r.prep, slices: [] } })"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert result["halted"].startswith("review prep returned no slices")

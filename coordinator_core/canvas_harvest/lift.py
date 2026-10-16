@@ -52,6 +52,59 @@ def _is_read_call(name: str, inp: dict) -> bool:
     return "paths" in inp or "path" in inp
 
 
+_BEGIN_MARK = "=== BEGIN ARTIFACT COMMENTS "
+_END_MARK = "=== END ARTIFACT COMMENTS"
+_TOOL_ROWS = ("[on page]", "[location]", "[anchor detail]", "[presence when sent]")
+
+
+def _is_attribution(row: str) -> bool:
+    if not row.startswith("["):
+        return False
+    return not (row.startswith(_TOOL_ROWS) or "size cap" in row or "could not be read" in row)
+
+
+def _rendered_texts(text: str) -> dict:
+    """Per thread id, the comment texts one rendered comments result carries, in comment order.
+
+    Keyed on the `Thread <id>` header, the BEGIN marker's nonce and `<nonce>| ` lines; a result with no
+    nonce marker yields {}.
+    """
+    start = text.find(_BEGIN_MARK)
+    if start < 0:
+        return {}
+    tail = text[start + len(_BEGIN_MARK):].split(None, 1)
+    if not tail:
+        return {}
+    nonce = tail[0]
+    prefix = nonce + "|"
+    out: dict = {}
+    comments = None
+    cur = None
+    for raw in text[start:].splitlines():
+        if raw.startswith("Thread ") and len(raw.split()) == 2:
+            comments = out.setdefault(raw.split()[1], [])
+            cur = None
+            continue
+        if comments is None:
+            continue
+        if raw.startswith(_END_MARK):
+            comments = None
+            continue
+        row = raw.strip()
+        if row.startswith(prefix):
+            if cur is not None:
+                body = row[len(prefix):]
+                cur.append(body[1:] if body.startswith(" ") else body)
+        elif _is_attribution(row):
+            cur = []
+            comments.append(cur)
+    return {tid: ["\n".join(lines).rstrip("\n") for lines in blocks] for tid, blocks in out.items()}
+
+
+def _text_score(texts: list) -> tuple:
+    return (sum(1 for t in texts if t), len(texts))
+
+
 class _State:
     def __init__(self, artifact_id: str) -> None:
         self.artifact_id = artifact_id
@@ -65,6 +118,8 @@ class _State:
         self.session_id: Optional[str] = None
         self.read_dir: Optional[Path] = None
         self.last_dir: Optional[Path] = None
+        self.rendered: list = []
+        self.texts: dict = {}
 
     def bound(self, entry: dict, directory: Path) -> None:
         sid = entry.get("sessionId")
@@ -119,6 +174,12 @@ class _State:
         threads = result.get("threads")
         if not isinstance(threads, list):
             return
+        if text not in self.rendered:
+            self.rendered.append(text)
+        for tid, texts in _rendered_texts(text).items():
+            old = self.texts.get(tid)
+            if old is None or _text_score(texts) > _text_score(old):
+                self.texts[tid] = texts
         cursor = result.get("cursor")
         cursor = cursor if isinstance(cursor, str) and cursor else None
         if inp.get("thread_id") or "thread_filter" in result:
@@ -127,11 +188,10 @@ class _State:
             chain = self.chain
             if chain is not None and chain["next"] == inp["cursor"]:
                 chain["threads"].extend(threads)
-                chain["texts"].append(text)
                 chain["next"] = cursor
                 chain["at"] = at
             return
-        self.chain = {"threads": list(threads), "texts": [text], "next": cursor, "at": at}
+        self.chain = {"threads": list(threads), "next": cursor, "at": at}
 
 
 def lift(transcripts, artifact_id: str, *, reader_agent_id: Optional[str] = None) -> model.Lifted:
@@ -258,8 +318,28 @@ def _finish(state: _State) -> model.Lifted:
     if chain is not None:
         if chain["next"] is not None:
             raise model.HarvestError(model.COMMENTS_READ_INCOMPLETE, "cursor chain does not end")
+        threads, empty, first = [], 0, ""
+        for entry in chain["threads"]:
+            rendered = state.texts.get(entry.get("id")) if isinstance(entry, dict) else None
+            items = entry.get("comments") if isinstance(entry, dict) else None
+            if isinstance(items, list):
+                filled = []
+                fits = rendered is not None and len(rendered) == len(items)
+                for i, item in enumerate(items):
+                    if isinstance(item, dict) and not item.get("text") and fits and rendered[i]:
+                        item = {**item, "text": rendered[i]}
+                    if not (isinstance(item, dict) and item.get("text")):
+                        empty += 1
+                        first = first or str(entry.get("id"))
+                    filled.append(item)
+                entry = {**entry, "comments": filled}
+            threads.append(entry)
+        if empty:
+            raise model.HarvestError(
+                model.COMMENTS_TEXT_MISSING, f"{empty} comment(s) with no text; first in thread {first}"
+            )
         comments = model.CommentsRead(
-            threads=chain["threads"], rendered_text="\n".join(chain["texts"]), read_at=chain["at"]
+            threads=threads, rendered_text="\n".join(state.rendered), read_at=chain["at"]
         )
     elif state.comments_seen and state.error is None:
         raise model.HarvestError(model.COMMENTS_READ_INCOMPLETE, "no unfiltered comments read")

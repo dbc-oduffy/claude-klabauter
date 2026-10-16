@@ -374,7 +374,7 @@ def next_action_parts(
                 + f"({prep_var} ? {{ run_base_sha: {prep_var}.run_base_sha ?? null, "
                 + f"product_files: {prep_var}.product_files ?? null, "
                 + f"foreign_claims: {prep_var}.foreign_claims ?? [], "
-                + f"slice_files: ({prep_var}.slices ?? []).flatMap(s => (s && s.files) || []) }} : null)"
+                + f"slice_files: (Array.isArray({prep_var}.slices) ? {prep_var}.slices : []).flatMap(s => (s && s.files) || []) }} : null)"
                 + ", delivery: "
                 + f"({delivery_var} ? {{ verdict: {delivery_var}.verdict ?? null, "
                 + f"product_files: {delivery_var}.product_files ?? null, "
@@ -411,7 +411,7 @@ def next_action_parts(
                 "(" + integration_var + "?.sidecar_path ? "
                 "String(" + integration_var + ".sidecar_path).split('/').pop().replace(/\\.md$/, '') : null)"
             )
-            slices_count_expr = f"({prep_var} ? {prep_var}.slices.length : null)"
+            slices_count_expr = f"({prep_var} ? (Array.isArray({prep_var}.slices) ? {prep_var}.slices.length : 0) : null)"
             inline_review_expr = (
                 "(" + integration_var + " ? { integration_stem: " + integration_stem_expr + ", "
                 "slices: " + slices_count_expr + ", fixes: " + integration_var + ".fixes_applied"
@@ -709,7 +709,7 @@ def completion_return_js(
         "tests.per_row.unstructured": f"{RUNTIME_VARS[5]}.filter(v => v === null || v === undefined).map((v, i) => i)",
         "tests.per_row.skipped": _js_lit(list(skipped_rows)),
         "review.status": review_status_expr,
-        "review.slices": f"({prep_var} ? {prep_var}.slices.length : null)" if review_vars else "null",
+        "review.slices": f"({prep_var} ? (Array.isArray({prep_var}.slices) ? {prep_var}.slices.length : 0) : null)" if review_vars else "null",
         "review.fixes_applied": f"({integration_var} ? {integration_var}.fixes_applied : null)" if review_vars else "null",
         "review.em_may_think_differently[].line": (
             f"_cap(({integration_var}?.em_may_think_differently ?? []).map(x => x.line)[0], "

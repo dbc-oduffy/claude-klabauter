@@ -555,12 +555,39 @@ def last_seen_hash(
     silence source ``compute_content_hash`` and ``is_stale`` already treat
     as unprovable, not as evidence of an empty baseline.
     """
-    if not session_id or not rel_path or not root:
+    if not rel_path:
         return None
+    return last_seen_hashes(session_id, [rel_path], root)[rel_path]
+
+
+def last_seen_hashes(
+    session_id: str, rel_paths: "Iterable[str]", root: "Path | str"
+) -> "dict[str, Optional[str]]":
+    """Batched ``last_seen_hash``: ``{path: newest recorded fingerprint}`` for
+    every entry of ``rel_paths``, from one walk of this session's own sink
+    family.
+
+    The walk goes newest generation first and newest line first; the FIRST
+    event per wanted path decides, and its ``content_hash`` is returned
+    verbatim -- ``None`` for a hashless newest event, never an older hash.
+    Each family member is read at most once, and the walk stops once every
+    wanted path is decided. Never consults ``project_live_claims``: only this
+    session's own stream may supply its baseline.
+
+    Degrade contract is ``last_seen_hash``'s: an unreadable or malformed
+    member, or a malformed line, is skipped and the walk continues to older
+    members; a missing session dir or any other exception yields ``None`` for
+    every path. Every requested path is a key of the result.
+    """
+    requested = list(rel_paths)
+    wanted = {p for p in requested if p}
+    result: dict[str, Optional[str]] = {p: None for p in requested}
+    if not session_id or not root or not wanted:
+        return result
     try:
         sid_dir = os.path.join(str(root), ".git", "coordinator-sessions", session_id)
-        sink = sink_path(sid_dir)
-        family = discover_family(sink)
+        family = discover_family(sink_path(sid_dir))
+        pending = set(wanted)
         for member in reversed(family):
             try:
                 raw = member.read_bytes()
@@ -575,11 +602,14 @@ def last_seen_hash(
                     event = decode_line(line)
                 except MalformedRecordLine:
                     continue
-                if event.path == rel_path and event.session_id == session_id:
-                    return event.content_hash
-        return None
+                if event.path in pending and event.session_id == session_id:
+                    result[event.path] = event.content_hash
+                    pending.discard(event.path)
+                    if not pending:
+                        return result
+        return result
     except Exception:
-        return None
+        return {p: None for p in result}
 
 
 def encode_line(

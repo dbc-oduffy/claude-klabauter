@@ -64,7 +64,7 @@ def file_list(ver="v1", paths=("project/index.html",), kind="dashboard"):
 
 
 def thread(tid):
-    return {"id": tid, "comments": [{"id": tid + "c", "created_at": "2026-10-01T00:00:00Z"}]}
+    return {"id": tid, "comments": [{"id": tid + "c", "created_at": "2026-10-01T00:00:00Z", "text": "body " + tid}]}
 
 
 def read_artifact(t, tid="r1", **kw):
@@ -171,11 +171,12 @@ def test_thread_id_read_is_not_whole(tmp_path):
 def test_thread_id_read_after_whole_read_is_ignored(tmp_path):
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
-    t.result("c1", {"threads": [thread("t1"), thread("t2")]})
+    t.result("c1", {"threads": [thread("t1"), thread("t2")]}, text="WHOLE")
     t.call("ArtifactComments", {"action": "read", "url": URL, "thread_id": "t1"}, "c2")
-    t.result("c2", {"threads": [thread("t1")], "thread_filter": "t1"})
+    t.result("c2", {"threads": [thread("t1")], "thread_filter": "t1"}, text="ONE")
     got = lift_mod.lift([t.write()], AID)
     assert model.thread_ids(got.comments.threads) == ["t1", "t2"]
+    assert got.comments.rendered_text == "WHOLE\nONE"
 
 
 @pytest.mark.parametrize(

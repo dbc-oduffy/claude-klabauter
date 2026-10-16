@@ -194,6 +194,25 @@ class CommitOutcome(NamedTuple):
     sign_warning: Optional[str] = None
 
 
+class BlobDrift(NamedTuple):
+    path: str
+    #: "blob" (git blob sha) or "content-sha256" (sha256 of the bytes read).
+    basis: str
+    expected: str
+    #: None = unverifiable: the committed bytes were not worktree bytes read here.
+    actual: Optional[str]
+
+
+class BlobDriftRefused(CommitRefused):
+    """A path's blob or read bytes differ from the caller's declared
+    expectation. Nothing was written: no object, no ref move, no index write.
+    `drift` lists every failing path, not only the first."""
+
+    def __init__(self, message: str, drift: Tuple[BlobDrift, ...] = ()):
+        super().__init__(message)
+        self.drift = tuple(drift)
+
+
 class NothingToCommit(CommitRefused):
     """The assembled tree is byte-identical to HEAD's -- this commit would
     change zero files. Refused rather than landed, and it is `CommitRefused`
@@ -964,6 +983,8 @@ def commit_paths(
     detect_rollback: bool = False,
     declared_reverts: Sequence[str] = (),
     modes: Optional[Mapping[str, int]] = None,
+    expected_blobs: Optional[Mapping[str, str]] = None,
+    expected_content_sha256: Optional[Mapping[str, str]] = None,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
 
@@ -1030,6 +1051,21 @@ def commit_paths(
     legal ("at least one of `paths` / `deleted_paths`") -- reaches the empty-
     pathspec refusal below on its own terms instead of a missing-argument
     `TypeError` the caller reads the same wrong way.
+
+    `expected_blobs` ({path: git blob sha}, default None): the blob the caller
+    reviewed for each named path. The commit compares it with the blob it is
+    about to write (post `prefer_staged` / `prefer_deliberate_stage`
+    substitution) and raises `BlobDriftRefused` on any difference, before any
+    object, ref or index write. Compared in process off the assembled blobs:
+    no spawn, no index read.
+
+    `expected_content_sha256` ({path: sha256 hex}, default None): the sha256 of
+    the bytes the caller recorded for each path, compared with the bytes this
+    call read from the worktree. A path whose committed bytes are not
+    worktree bytes read here (`supplied_blobs`, `prefer_staged`, a
+    `prefer_deliberate_stage` substitution) refuses as unverifiable
+    (`actual` None). A key outside `paths`, a deleted or untracked path, or a
+    malformed hex value raises `CommitRefused` before the index read.
     """
     if repo is _REQUIRED:
         if repo_root is None:
@@ -1076,6 +1112,15 @@ def commit_paths(
                 "pathspec matches whatever lands inside it at commit time, "
                 "including a peer's file added after the caller computed it"
             )
+
+    exp_blobs = _normalise_expectations(
+        root, "expected_blobs", expected_blobs, (40, 64), path_list, delete_list, untrack_list
+    )
+    exp_content = _normalise_expectations(
+        root, "expected_content_sha256", expected_content_sha256, (64,),
+        path_list, delete_list, untrack_list,
+    )
+    content_digest: Dict[str, str] = {}
 
     # PHANTOM DELETION -- a declared deletion for a path the worktree still
     # has. The stale-shared-index shape this refuses (coordinator-content-repo's
@@ -1301,6 +1346,8 @@ def commit_paths(
                 raise CommitRefused(f"cannot read {p}: {exc}") from exc
             except OSError as exc:
                 raise CommitRefused(f"cannot read {p}: {exc}") from exc
+            if p in exp_content:
+                content_digest[p] = hashlib.sha256(data).hexdigest()
             try:
                 blob = _worktree_blob(gitdir, root, p, data, created_blobs)
             except FilterUnsupported:
@@ -1388,8 +1435,36 @@ def commit_paths(
                 assembled[p] = (entry.mode, entry.sha)
                 index_updates[p] = (entry.mode, entry.sha)
                 staged_preferred.append(p)
+                content_digest.pop(p, None)
             else:
                 worktree_over_staged.append(p)
+
+    # BLOB-DRIFT CHECK: `assembled` is final here and nothing is written yet.
+    # Compares in process; adds no spawn, no read, no index access.
+    if exp_blobs or exp_content:
+        drift = []
+        for p, want in exp_blobs.items():
+            got = assembled[p][1]
+            if got != want:
+                drift.append(BlobDrift(p, "blob", want, got))
+        for p, want in exp_content.items():
+            got = content_digest.get(p)
+            if got != want:
+                drift.append(BlobDrift(p, "content-sha256", want, got))
+        if drift:
+            shown = "; ".join(
+                f"{d.path} ({d.basis} {d.expected[:8]} -> "
+                f"{d.actual[:8] if d.actual else 'unverifiable'})"
+                for d in drift[:5]
+            )
+            if len(drift) > 5:
+                shown += "; ..."
+            raise BlobDriftRefused(
+                f"{len(drift)} path(s) changed since the expectation: {shown}. "
+                "Nothing committed. Re-review the current bytes and pass their "
+                "blob, or leave the path out.",
+                tuple(drift),
+            )
 
     # THE DELTA PASS, off the spine already in hand -- no extra spawn, no
     # extra object read, and it runs BEFORE any tree is written, so the
@@ -1626,6 +1701,39 @@ def commit_paths(
         no_delta=tuple(no_delta),
         sign_warning=sign_warning,
     )
+
+
+_HEX_RE = re.compile(r"[0-9a-f]+")
+
+
+def _normalise_expectations(
+    root: Path,
+    name: str,
+    expected: Optional[Mapping[str, str]],
+    lengths: Tuple[int, ...],
+    path_list: Sequence[str],
+    delete_list: Sequence[str],
+    untrack_list: Sequence[str],
+) -> Dict[str, str]:
+    """Key an expectation map through `_index_key` and refuse a caller error:
+    a key outside the pathspec or naming a removal, or a non-lowercase-hex
+    value of the wrong length."""
+    out: Dict[str, str] = {}
+    for raw, want in (expected or {}).items():
+        key = _index_key(root, raw)
+        if key not in path_list or key in delete_list or key in untrack_list:
+            raise CommitRefused(
+                f"{name} names {key}, which is not a committed path of this call"
+            )
+        if not (
+            isinstance(want, str) and len(want) in lengths and _HEX_RE.fullmatch(want)
+        ):
+            raise CommitRefused(
+                f"{name}[{key}] is not lowercase hex of length "
+                f"{' or '.join(map(str, lengths))}"
+            )
+        out[key] = want
+    return out
 
 
 def _index_key(root: Path, raw_path: str) -> str:

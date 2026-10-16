@@ -63,6 +63,7 @@ from typing import Callable, NamedTuple, Optional, Sequence, cast
 
 from coordinator_core.git.commit import (
     CommitOutcome,
+    BlobDriftRefused,
     CommitRefused,
     NothingToCommit,
     FilterUnsupported,
@@ -696,6 +697,20 @@ def _process_message(message: str) -> str:
     return subject.rstrip() + _PROCESS_SUBJECT_SUFFIX + sep + rest
 
 
+def _half_expectations(
+    expected: dict, h_paths: list, half_index: int, mixed: bool, all_paths: list
+) -> dict:
+    """The expectation keys one commit half owns. A key in no half's paths goes to the first,
+    where `commit_paths` refuses it as outside the pathspec."""
+    if not mixed or not expected:
+        return expected
+    own = {p.replace("\\", "/") for p in h_paths}
+    if half_index == 0:
+        known = {p.replace("\\", "/") for p in all_paths}
+        return {k: v for k, v in expected.items() if k in own or k not in known}
+    return {k: v for k, v in expected.items() if k in own}
+
+
 def _land(
     worktree_root: Path,
     paths: list,
@@ -706,6 +721,8 @@ def _land(
     prefer_staged: list,
     deliberate_stage: bool,
     declared_reverts: list,
+    expected_blobs: Optional[dict] = None,
+    expected_content_sha256: Optional[dict] = None,
 ) -> _Landing:
     try:
         outcome = commit_paths(
@@ -719,7 +736,18 @@ def _land(
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
             detect_rollback=True,
             declared_reverts=declared_reverts,
+            expected_blobs=expected_blobs or None,
+            expected_content_sha256=expected_content_sha256 or None,
         )
+    except BlobDriftRefused as exc:
+        return _Landing(None, None, [], _error(
+            str(exc),
+            refused="blob-drift",
+            blob_drift=[
+                {"path": d.path, "basis": d.basis, "expected": d.expected, "actual": d.actual}
+                for d in exc.drift
+            ],
+        ), None)
     except NothingToCommit as exc:
         # `already_landed_sha` names the commit when a recent one carries this exact message,
         # Session-Id trailer included, so a peer's commit cannot match: the retry of a call that
@@ -859,6 +887,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     (a wave's landed rows' writes); a caller with undeclared entries must not set it.
     Gitignored-untracked `paths` refuse; `force_ignored` (list) commits them, `drop_ignored` (bool) drops them.
 
+    expected_blobs ({path: git blob sha}, optional) -- the blob the caller reviewed for each path.
+    expected_content_sha256 ({path: sha256 of the file bytes}, optional) -- the bytes the caller
+    recorded writing. `commit_paths` compares both before any write. A path that drifted refuses
+    the call with {"committed": False, "sha": None, "error": str, "refused": "blob-drift",
+    "blob_drift": [{"path", "basis", "expected", "actual"}, ...]}; `actual` is null when the
+    committed bytes are not worktree bytes read here. A mixed process/product call gives each
+    half only the keys in its own paths. Absent, the reply is unchanged.
+
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
     caller's worktree is main_worktree_root(repo_root).
     """
@@ -928,6 +964,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         isinstance(p, str) for p in raw_declared_reverts
     ):
         return _error("params.declared_reverts must be a list of strings")
+
+    expectations: dict = {}
+    for name in ("expected_blobs", "expected_content_sha256"):
+        raw = params.get(name)
+        if raw is None:
+            expectations[name] = {}
+            continue
+        if not isinstance(raw, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+        ):
+            return _error(f"params.{name} must be an object of string path to string sha")
+        expectations[name] = {k.replace("\\", "/"): v for k, v in raw.items()}
 
     # A list copied from CRLF output carries a trailing CR no path can end in.
     raw_paths = [p.rstrip("\r") for p in raw_paths]
@@ -1125,6 +1173,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 [p for p in raw_declared_reverts if (p in proc_set) == is_process]
                 if mixed else raw_declared_reverts
             ),
+            **{
+                name: _half_expectations(exp, h_paths, half_index, mixed, [
+                    p for h in halves for p in h[0]
+                ])
+                for name, exp in expectations.items()
+            },
         )
         h_all = list(h_paths) + list(h_deleted) + list(h_untracked)
         if landing.error is None:
@@ -1148,6 +1202,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"these process paths did not: {unlanded}. Retry the same call to land them.",
                 landed_sha=landed_halves[0][3],
                 unlanded_paths=list(h_paths) + list(h_deleted) + list(h_untracked),
+                **{k: landing.error[k] for k in ("refused", "blob_drift") if k in landing.error},
             )
         else:
             return landing.error

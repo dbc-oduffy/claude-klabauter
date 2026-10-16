@@ -405,11 +405,15 @@ _ANCESTRY_RULE = (
 )
 
 
+#: `_reviewPrep.slices` as an array whatever the agent returned: a summarised prep reply carries
+#: a count there, and iterating it throws.
+REVIEW_PREP_SLICES_JS = "(Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slices : [])"
+
 _PREP_GUARDS_JS = (
     # A single-reviewer-ok verdict over product files is one slice of the
     # whole diff; prep that omitted it is synthesised here, never refused.
     "  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
-    "!(_reviewPrep.slices ?? []).length && (_reviewPrep.product_files ?? 0) > 0) { "
+    "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && (_reviewPrep.product_files ?? 0) > 0) { "
     "_reviewPrep.slices = [{ id: 'whole-diff', files: [], "
     "diff_path: _reviewPrep.whole_diff_path, "
     "sidecar_path: (_reviewPrep.whole_diff_sidecars?.personas ?? [])[0] ?? "
@@ -425,7 +429,7 @@ _PREP_GUARDS_JS = (
     "(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
     "(typeof _finished === 'undefined' || !_finished.size) && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
-    "!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) { "
+    "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length)) { "
     "return { halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
     "prep: _reviewPrep, wave: null, integration: null }; }\n"
     # Rows landed but changed no product file (a verification-only row):
@@ -437,14 +441,14 @@ _PREP_GUARDS_JS = (
     # with product files fails `product_files`, so both still throw.
     "  const _verifyOnly = !!(_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
-    "!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length));\n"
+    "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length));\n"
     # A failed or refused prep yields no slices -- a refusal reports
     # product_files 0, so the guard keys on the slices alone. The wave's
     # `?? []` would otherwise expand to no sliced reviewer and land the
     # run reviewed by the whole-diff tail alone. Declared paths are
     # non-empty here: the plan route always declares them, and the queue
     # route skips the wave before prep when no row committed.
-    "  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) { "
+    "  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly)) { "
     f"return {{ halted: {_js_string_literal(NO_SLICES_HALT)} + ' (prep verdict: ' + "
     f"String(_reviewPrep?.verdict ?? 'none') + ')', reason: {_js_string_literal(_NO_SLICES_REFUSAL)}, "
     "prep: _reviewPrep ?? null, wave: null, integration: null }; }"
@@ -452,10 +456,15 @@ _PREP_GUARDS_JS = (
 
 _PREP_BUSY_RETRIES = 5
 PREP_BUSY_HALT = "review.prep stayed busy after retries"
+PREP_MALFORMED_HALT = "review.prep reply carried a non-array slices"
 REVIEW_MISSING_HALT = "review wave reply carried no review beside a successful prep"
 _PREP_BUSY_REFUSAL = (
     "A review-wave agent's review.prep call stayed busy past its retries, so its slice group was "
     "not reviewed. Re-run the review wave."
+)
+_PREP_MALFORMED_REFUSAL = (
+    "A review-wave agent summarised its review.prep reply instead of returning it verbatim "
+    "(slices was not a list), so its slice group was not reviewed. Re-run the review wave."
 )
 _REVIEW_MISSING_REFUSAL = (
     "A review-wave agent returned a prep reply with a null error and no review. Re-run the review wave."
@@ -463,7 +472,7 @@ _REVIEW_MISSING_REFUSAL = (
 
 #: With `prep_in_wave` the review-wave block binds these after the wave, from the replies the
 #: agents returned beside their reviews. `_reviewPrep` is the first reply without an error with
-#: every reply's slices merged by id; when every reply errored it is the first reply, else null.
+#: every reply's slices merged by id (when the relayed slices are all empty, the slice ids the wave reviews name stand in -- the stored reply, not the relay, is authoritative); when every reply errored it is the first reply, else null.
 _PREP_FROM_WAVE_JS = (
     "  const _prepReplies = _waveRaw.map(r => (r && r.prep) ? r.prep : null).filter(p => p);\n"
     f"  const _busyPrefix = {_js_string_literal(REVIEW_PREP_BUSY_PREFIX)};\n"
@@ -471,10 +480,16 @@ _PREP_FROM_WAVE_JS = (
     "  if (_busyReplies.length) { "
     f"return {{ halted: {_js_string_literal(PREP_BUSY_HALT)} + ' (' + _busyReplies.length + ' of ' + "
     "_waveRaw.length + ' wave agents; reviewed slices: ' + "
-    "_prepReplies.filter(p => !p.error).flatMap(p => (p.slices ?? []).map(s => s.id)).join(', ') + ')', "
+    "_prepReplies.filter(p => !p.error).flatMap(p => (Array.isArray(p.slices) ? p.slices : []).map(s => s.id)).join(', ') + ')', "
     f"reason: {_js_string_literal(_PREP_BUSY_REFUSAL)}, "
     "prep: _busyReplies[0], wave: null, integration: null }; }\n"
-    "  if (_waveRaw.some(r => r && r.prep && !r.prep.error && (r.prep.slices ?? []).length && (r.review === undefined || r.review === null))) { "
+    "  const _malformed = _prepReplies.filter(p => !Array.isArray(p.slices) && !p.error);\n"
+    "  if (_malformed.length) { "
+    f"return {{ halted: {_js_string_literal(PREP_MALFORMED_HALT)} + ' (' + _malformed.length + ' of ' + "
+    "_waveRaw.length + ' wave agents)', "
+    f"reason: {_js_string_literal(_PREP_MALFORMED_REFUSAL)}, "
+    "prep: { ..._malformed[0], slices: [] }, wave: null, integration: null }; }\n"
+    "  if (_waveRaw.some(r => r && r.prep && !r.prep.error && (Array.isArray(r.prep.slices) ? r.prep.slices : []).length && (r.review === undefined || r.review === null))) { "
     f"return {{ halted: {_js_string_literal(REVIEW_MISSING_HALT)}, "
     f"reason: {_js_string_literal(_REVIEW_MISSING_REFUSAL)}, "
     "prep: _prepReplies[0] ?? null, wave: null, integration: null }; }\n"
@@ -483,8 +498,15 @@ _PREP_FROM_WAVE_JS = (
     "    if (!ok) return _prepReplies[0] ?? null;\n"
     "    const seen = new Set();\n"
     "    const merged = [];\n"
-    "    for (const p of _prepReplies) for (const s of (p.slices ?? [])) {\n"
+    "    for (const p of _prepReplies) for (const s of (Array.isArray(p.slices) ? p.slices : [])) {\n"
     "      if (!seen.has(s.id)) { seen.add(s.id); merged.push(s); }\n"
+    "    }\n"
+    "    if (!merged.length) for (const r of _waveRaw) {\n"
+    "      const id = r && r.review && typeof r.review.slice_id === 'string' ? r.review.slice_id : '';\n"
+    "      for (const sid of id.split('+').filter(Boolean)) if (!seen.has(sid)) {\n"
+    "        seen.add(sid);\n"
+    "        merged.push({ id: sid, files: [], diff_path: null, sidecar_path: r.review.sidecar_path ?? null, contract_blocks: 0 });\n"
+    "      }\n"
     "    }\n"
     "    return { ...ok, slices: merged };\n"
     "  })();\n"
@@ -529,7 +551,9 @@ def _wave_schema_literal(schema_literal: str) -> str:
     ``oneOf``. The wave consumer (``_PREP_FROM_WAVE_JS``) enforces that ``review`` is present
     unless ``prep.error`` is non-null."""
     return (
-        '{ "type": "object", "properties": { "prep": { "type": "object" }, '
+        '{ "type": "object", "properties": { "prep": { "type": "object", "properties": { '
+        '"slices": { "type": "array", "items": { "type": "object" } }, '
+        '"error": { "type": ["string", "null"] } } }, '
         f'"review": {schema_literal} }}, "required": ["prep"] }}'
     )
 
@@ -900,11 +924,11 @@ def compose_execute_review(
             single_suffix = f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + JSON.stringify(s), "
             grouped_call = spliced_call.replace(single_suffix, f"{suffix}, ", 1)
             slice_items = (
-                f"_groupSlices(_reviewPrep?.slices ?? [], {rows_expr}, "
+                f"_groupSlices({REVIEW_PREP_SLICES_JS}, {rows_expr}, "
                 f"{agent.executor_rows_per_reviewer[0]}, {agent.executor_rows_per_reviewer[1]}).map(g => () => {_degrading(grouped_call)})"
             )
         else:
-            slice_items = f"(_reviewPrep?.slices ?? []).map(s => () => {_degrading(spliced_call)})"
+            slice_items = f"{REVIEW_PREP_SLICES_JS}.map(s => () => {_degrading(spliced_call)})"
         gate = _agent_gate(agent)
         item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")
 

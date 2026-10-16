@@ -9,7 +9,7 @@ import pytest
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _REVIEW_SLICES_GUARD, compose_ask_script
-from coordinator_core.ops.review_mint.execute_review import PREP_BUSY_HALT, REVIEW_MISSING_HALT
+from coordinator_core.ops.review_mint.execute_review import PREP_BUSY_HALT, PREP_MALFORMED_HALT, REVIEW_MISSING_HALT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session.record_homes import record_path
 
@@ -123,7 +123,7 @@ def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritt
 def test_prep_busy_and_review_missing_exits_assign_halted_and_skip_the_prep_bind(monkeypatch):
     script = _m_plus_script(monkeypatch)
     assert "return { halted:" not in script
-    for halt in (PREP_BUSY_HALT, REVIEW_MISSING_HALT):
+    for halt in (PREP_BUSY_HALT, PREP_MALFORMED_HALT, REVIEW_MISSING_HALT):
         assert f"_halted = {{ halted: '{halt}'" in script
     assert "if (!_halted) _reviewPrep = (() => {" in script
     assert "if (!_halted && _waveRaw.some(" in script

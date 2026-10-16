@@ -62,6 +62,17 @@ def test_reader_not_named_is_distinct_from_every_other_reason():
     assert len(reasons) == len(set(reasons))
 
 
+def test_comments_text_missing_is_named_once_among_the_reasons():
+    reasons = [
+        value
+        for name, value in vars(model).items()
+        if name.isupper() and isinstance(value, str) and name not in {"SCHEMA", "PROJECT_PREFIX", "NOT_FOUND", "NEEDS_APPROVAL"}
+    ]
+    assert model.COMMENTS_TEXT_MISSING == "comments-text-missing"
+    assert reasons.count(model.COMMENTS_TEXT_MISSING) == 1
+    assert model.HarvestError(model.COMMENTS_TEXT_MISSING, "1 comment(s) with no text").reason == "comments-text-missing"
+
+
 def test_artifact_id_from_url():
     assert model.artifact_id_from_url("https://claude.ai/artifact/Qz7LmPx2NcVt9RkHdYw3Fe") == "Qz7LmPx2NcVt9RkHdYw3Fe"
     assert model.artifact_id_from_url("claude.ai/artifact/Qz7LmPx2NcVt9RkHdYw3Fe?x=1") == "Qz7LmPx2NcVt9RkHdYw3Fe"

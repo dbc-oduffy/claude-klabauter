@@ -2215,4 +2215,4 @@ def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path):
         plan_path, repo_root=tmp_path, review_roster_fragment=_sized_roster(),
         review_stage_schemas=_V5_STAGE_SCHEMAS,
     )
-    assert "_groupSlices(_reviewPrep?.slices ?? [], 9, 3, 4)" in script
+    assert "_groupSlices((Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slices : []), 9, 3, 4)" in script

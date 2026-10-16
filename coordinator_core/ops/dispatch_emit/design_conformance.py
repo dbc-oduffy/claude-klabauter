@@ -61,7 +61,9 @@ def brief_text(hits: Sequence[Mapping], registry_rel: Optional[str]) -> str:
         )
     out = [
         f"Design registry ({registry_rel}): the writes in scope are drawn on these boards. "
-        "Cite `<harvest>/harvest.json` for each entry or carry a ratified `design-deviation` block "
+        "Build from `<harvest>/harvest.json`, but never cite it or its directory as met_by evidence: "
+        "it is the source the row is judged against. Meet each entry with a senior-front-end review "
+        "or carry a ratified `design-deviation` block "
         "(`entry:`, `ratified_by:`), and declare `front-end` in review_signals. A senior-front-end "
         "reviewer writes one `Board: <url>` line in its sidecar for each board it checked."
     ]
@@ -161,6 +163,38 @@ def _in_plans(root: Path, target: Path) -> bool:
     return True
 
 
+_HARVEST_LINE = re.compile(r"(?m)^Harvest: (\S+)\s*$")
+HARVEST_RECORD_NAME = "harvest.json"
+
+
+def _judged_source(root: Path, row_text: str) -> Optional[Path]:
+    """The directory holding the row's `Harvest:` record, else None."""
+    m = _HARVEST_LINE.search(row_text)
+    if not m:
+        return None
+    try:
+        root = root.resolve()
+        parent = (root / m.group(1).replace("\\", "/")).resolve().parent
+        parent.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    # A root-level harvest record must not condemn the whole repo; the name check still applies.
+    return None if parent == root else parent
+
+
+def _is_judged_source(target: Path, harvest_dir: Optional[Path]) -> bool:
+    """Is `target` a harvest record, or inside the row's harvest directory?"""
+    if target.name == HARVEST_RECORD_NAME:
+        return True
+    if harvest_dir is None:
+        return False
+    try:
+        target.relative_to(harvest_dir)
+    except ValueError:
+        return False
+    return True
+
+
 def _frontmatter(text: str) -> dict[str, str]:
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 
@@ -250,11 +284,19 @@ def evidence_refusal(
     prefix = f"design row {row.get(rr.ROW_ID)} ({eid})"
     first = ""
 
+    judged = _judged_source(root, str(row.get(rr.ROW_TEXT) or ""))
+
     def passes(rel: str, label: str) -> bool:
         nonlocal first
         target = _contained_file(root, rel)
         if target is None:
             first = first or f"{label} {rel} is no file under the repo root"
+            return False
+        if _is_judged_source(target, judged):
+            first = first or (
+                f"{label} {rel} is the harvest/design source the row is judged against, "
+                "not conformance evidence"
+            )
             return False
         if target in cited_files and not _in_plans(root, target):
             return True

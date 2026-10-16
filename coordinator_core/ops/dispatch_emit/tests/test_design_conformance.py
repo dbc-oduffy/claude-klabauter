@@ -251,6 +251,27 @@ def test_brief_text_asks_for_board_line():
     assert "Board: <url>" in dc.brief_text([HIT], "docs/design/registry.yaml")
 
 
+def test_harvest_self_citation_refused_even_when_cited(repo):
+    row = _row(repo)
+    harvest = _write(repo, "docs/design/settings/harvest.json", "{}\n")
+    why = dc.evidence_refusal(repo, row, {"met_by": [harvest]}, _deviation(harvest))
+    assert why is not None and "judged against" in why
+    sibling = _write(repo, "docs/design/settings/notes.md", "x\n")
+    assert "judged against" in dc.evidence_refusal(repo, row, {"met_by": [sibling]}, _deviation(sibling))
+    other = _write(repo, "docs/design/root/harvest/harvest.json", "{}\n")
+    assert "judged against" in dc.evidence_refusal(repo, row, {"met_by": [other]}, _deviation(other))
+    assert "judged against" in dc.evidence_refusal(repo, row, {}, None, noted_paths=[harvest])
+
+
+def test_harvest_citation_does_not_block_a_review_or_ratifier(repo):
+    row = _row(repo)
+    harvest = _write(repo, "docs/design/settings/harvest.json", "{}\n")
+    rec = _record(repo, reviewer="senior-front-end")
+    pm = _write(repo, "state/pm/ratify.md", "PM: ok\n")
+    assert dc.evidence_refusal(repo, row, {"met_by": [harvest, rec]}, None) is None
+    assert dc.evidence_refusal(repo, row, {"met_by": [harvest, pm]}, _deviation(pm)) is None
+
+
 def test_refusal_is_one_sentence_naming_the_row(repo):
     row = _row(repo)
     why = dc.evidence_refusal(repo, row, {"met_by": []}, None)

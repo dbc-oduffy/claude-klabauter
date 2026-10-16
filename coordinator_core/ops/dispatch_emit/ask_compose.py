@@ -90,6 +90,7 @@ from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import (
     NO_SLICES_HALT,
     PREP_BUSY_HALT,
+    PREP_MALFORMED_HALT,
     REVIEW_MISSING_HALT,
     compose_execute_review,
     criterion_judge_brief,
@@ -840,7 +841,7 @@ _REVIEW_NOOP_EXIT = "return { halted: 'no-op',"
 _REVIEW_NOOP_TAIL = "wave: null, integration: null }; }"
 _REVIEW_MISSING_GUARD = "  if (_waveRaw.some(r => r && r.prep && !r.prep.error"
 _REVIEW_PREP_BIND = "  _reviewPrep = (() => {\n"
-_REVIEW_SLICES_GUARD = "  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {"
+_REVIEW_SLICES_GUARD = "  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly)) {"
 
 
 def _single_exit_review(blocks: list[str]) -> str:
@@ -854,19 +855,25 @@ def _single_exit_review(blocks: list[str]) -> str:
         raise AskComposeRefused("review prep block no longer has the no-op exit shape single-exit composition rewrites")
     busy_exit = f"return {{ halted: '{PREP_BUSY_HALT}'"
     missing_exit = f"return {{ halted: '{REVIEW_MISSING_HALT}'"
+    malformed_exit = f"return {{ halted: '{PREP_MALFORMED_HALT}'"
+    malformed_guard = "  if (_malformed.length) {"
     if (
-        prep.count(busy_exit) != 1
+        prep.count(malformed_exit) != 1
+        or prep.count(malformed_guard) != 1
+        or prep.count(busy_exit) != 1
         or prep.count(missing_exit) != 1
         or prep.count(_REVIEW_MISSING_GUARD) != 1
         or prep.count(_REVIEW_PREP_BIND) != 1
     ):
         raise AskComposeRefused("review prep block no longer has the prep-busy and review-missing exit shape single-exit composition rewrites")
     prep = prep.replace(busy_exit, busy_exit.replace("return ", "_halted = ", 1))
+    prep = prep.replace(malformed_exit, malformed_exit.replace("return ", "_halted = ", 1))
+    prep = prep.replace(malformed_guard, "  if (!_halted && _malformed.length) {", 1)
     prep = prep.replace(missing_exit, missing_exit.replace("return ", "_halted = ", 1))
     prep = prep.replace(_REVIEW_MISSING_GUARD, _REVIEW_MISSING_GUARD.replace("if (", "if (!_halted && ", 1), 1)
     prep = prep.replace(_REVIEW_PREP_BIND, "  if (!_halted) _reviewPrep = (() => {\n", 1)
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
-    prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))) {", 1)
+    prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))) {", 1)
     prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)
     rest = "\n\n".join(blocks[1:])
     return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
