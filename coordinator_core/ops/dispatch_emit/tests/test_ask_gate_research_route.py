@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RESEARCH_MIXED_REFUSAL
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
+from coordinator_core.warp_fire import fire_command
 
 REL = "state/sizings/2026-10-16-research-gate.yaml"
 RESEARCH = {"value_class": "scouts", "appetite": "small", "sources": ["web"], "questions": ["why?"]}
@@ -48,8 +49,10 @@ def test_research_sizing_hands_back_at_every_tshirt(repo, tshirt):
     _put(repo, tshirt, RESEARCH)
     v = gate(repo, REL)
     assert v.arm is None and v.baton is None
-    assert v.halt["kind"] == "room" and v.halt["route"] == "research"
-    assert "/coordinator:research" in v.halt["reason"] and REL in v.halt["reason"]
+    assert v.halt["kind"] == "research" and v.halt["route"] == "research"
+    assert v.halt["fire"] == [fire_command(REL)]
+    assert REL in v.halt["reason"] and "research door" not in v.halt["reason"]
+    assert "/coordinator:research" not in v.halt["reason"]
     assert "engine-ask" not in v.halt["reason"]
 
 
@@ -65,7 +68,7 @@ def test_research_plus_writes_is_refused_with_two_step_remedy(repo, tshirt):
 
 def test_pure_research_with_empty_writes_is_not_mixed(repo):
     _put(repo, "S", RESEARCH)
-    assert gate(repo, REL, writes=[]).halt["kind"] == "room"
+    assert gate(repo, REL, writes=[]).halt["kind"] == "research"
 
 
 @pytest.mark.parametrize("research", [None, {}])

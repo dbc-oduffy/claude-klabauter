@@ -15,8 +15,10 @@ from typing import Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_REFUSAL,
+    HALT_RESEARCH,
     HALT_ROOM,
     HALT_SPLIT,
     HALT_TOUCHPOINT,
@@ -164,9 +166,10 @@ def _arm_verdict(
         if writes:
             return _halt(HALT_REFUSAL, RESEARCH_MIXED_REFUSAL)
         return _halt(
-            HALT_ROOM,
-            f"research sizing {sizing_rel}: submit the ask at the research door, /coordinator:research",
+            HALT_RESEARCH,
+            f"research sizing {sizing_rel}: the run's `fire` entry is the one call",
             route=RESEARCH_HANDBACK_ROUTE,
+            fire=[fire_command(sizing_rel)],
         )
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         extra = {}

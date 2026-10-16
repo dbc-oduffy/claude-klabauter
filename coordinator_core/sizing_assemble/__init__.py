@@ -2255,7 +2255,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-question <text> ...]\n"
         "    [--research-destination repo|local-only]\n"
         "    [--acceptance-rows-json '[{\"statement\":..,\"writes\":[..],\"check\":..}]' (requires --write)]\n"
-        "    [--write <state/sizings/x.yaml> [--verbatim-turns A-B | --no-verbatims]\n"
+        "    [--write <state/sizings/x.yaml> [--json (print the decision instead of 'written: <path>')]\n"
+        "    [--verbatim-turns A-B | --no-verbatims]\n"
         "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block)\n"
         "or: --xl-exit shape|roadmap|accept_multi_session --pm-quote <str>\n"
@@ -2395,6 +2396,7 @@ def main(argv: list[str]) -> int:
     premise_evidence = None
     write_path = None
     no_plan_hand_off = False
+    json_out = False
     deliverable_id = None
     xl_exit_pick = None
     pm_resolution_key = None
@@ -2568,6 +2570,7 @@ def main(argv: list[str]) -> int:
             acceptance_rows_json = argv[i + 1]
             i += 2
         elif tok == "--json":
+            json_out = True
             i += 1
         elif tok == "--no-plan-hand-off":
             no_plan_hand_off = True
@@ -2882,6 +2885,15 @@ def main(argv: list[str]) -> int:
             and sizing_acceptance_skipped(decision["route"], decision["resolved_estimate"]["tshirt"])
         ):
             return _hand_to_engine_ask(write_path, decision)
+        if not json_out:
+            _wp = Path(write_path)
+            _root = _cli_repo_root(write_path)
+            try:
+                shown = _wp.resolve().relative_to(_root.resolve()).as_posix() if _wp.is_absolute() else _wp.as_posix()
+            except ValueError:
+                shown = _wp.as_posix()
+            print(f"written: {shown}")
+            return EXIT_OK
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK

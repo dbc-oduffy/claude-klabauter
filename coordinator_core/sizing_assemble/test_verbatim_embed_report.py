@@ -55,7 +55,7 @@ def _sizing(repo: Path, text: str = _DRAFT) -> Path:
 
 
 def _run(path: Path, capsys, *extra: str):
-    code = sizing_assemble.main([*_ARGS, "--write", str(path), *extra])
+    code = sizing_assemble.main([*_ARGS, "--write", str(path), "--json", *extra])
     out, err = capsys.readouterr()
     return code, out, err
 

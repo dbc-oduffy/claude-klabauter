@@ -132,4 +132,7 @@ def test_landed_close_job_carries_released_sibling_fire_calls(monkeypatch):
 
 def test_return_fire_falls_back_to_commit_released_list(monkeypatch):
     script = _script(monkeypatch)
-    assert "fire: _splitExit ? _splitExit.fire : (_commit?.close?.siblings?.released ?? [])," in script
+    assert (
+        "fire: _splitExit ? _splitExit.fire : (_halted && _halted.halted === 'research' && "
+        "Array.isArray(_halted.fire) ? _halted.fire : (_commit?.close?.siblings?.released ?? [])),"
+    ) in script

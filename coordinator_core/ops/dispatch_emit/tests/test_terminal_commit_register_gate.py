@@ -212,16 +212,80 @@ def _turns_sizing(repo, rows=_ROW_T, extra=""):
     )
 
 
+_CITE_TURN_2 = "intent_source: pm-verbatim\nintent: take a nap\n"
+
+
 def test_uncovered_turn_demotes_and_names_it(repo):
-    _turns_sizing(repo)
+    _turns_sizing(repo, extra=_CITE_TURN_2)
     review = _review([])
     reason = _register_gate(repo, _PLAN, review)
     assert reason is not None and "PM turn 2" in reason and "take a nap" in reason
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_unrelated_turns_clears_the_uncovered_turn(repo):
+def test_uncited_turn_is_not_owed(repo):
     _turns_sizing(repo)
+    review = _review([])
+    assert _register_gate(repo, _PLAN, review) is None
+    assert review["criterion"]["status"] == "met"
+
+
+_RUN = "ask-20261016T101500-abc123"
+_SUBMITTED = 1792146000.0  # 2026-10-16T10:20:00Z
+_ROW_ASK = "    - {id: R1, source_text: slice ask text, anchor: ask, surface: ui, status: met, wired: true, claimed_by: []}\n"
+
+
+def _replay_sizing(repo, ts, extra="", resolution=""):
+    (repo / _SIZING).write_text(
+        "status: routed\nintent_source: em-elaborated\nintent: elaborated slice ask\n"
+        f"pm_verbatims:\n  - {{turn: 19, ts: '{ts}', text: 'is the tree dirty'}}\n{resolution}"
+        "requirement_register:\n  rows:\n" + _ROW_ASK + extra,
+        encoding="utf-8",
+    )
+    run = repo / "scratch" / "warp" / _RUN
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "submission.json").write_text(f'{{"submitted_at": {_SUBMITTED}}}\n', encoding="utf-8")
+
+
+def test_pre_start_uncited_turn_leaves_criterion_met(repo):
+    _replay_sizing(repo, "2026-10-16T10:19:39Z")
+    review = _review([])
+    assert _register_gate(repo, _PLAN, review, run_id=_RUN) is None
+    assert review["criterion"]["status"] == "met"
+
+
+def test_post_start_turn_demotes_naming_it(repo):
+    _replay_sizing(repo, "2026-10-16T10:20:39Z")
+    review = _review([])
+    reason = _register_gate(repo, _PLAN, review, run_id=_RUN)
+    assert reason is not None and "PM turn 19" in reason
+    assert review["criterion"]["status"] == "not_met"
+
+
+def test_post_start_turn_in_unrelated_turns_is_cleared(repo):
+    _replay_sizing(repo, "2026-10-16T10:20:39Z")
+    (repo / _SIZING).write_text(
+        (repo / _SIZING).read_text(encoding="utf-8") + "  unrelated_turns:\n    - {turn: 19, reason: chat}\n",
+        encoding="utf-8",
+    )
+    review = _review([])
+    assert _register_gate(repo, _PLAN, review, run_id=_RUN) is None
+    assert review["criterion"]["status"] == "met"
+
+
+def test_run_id_defaults_to_the_sizings_resolution(repo):
+    _replay_sizing(repo, "2026-10-16T10:20:39Z", resolution=f"resolution:\n  sha: abcdef1\n  run_id: {_RUN}\n")
+    reason = _register_gate(repo, _PLAN, _review([]))
+    assert reason is not None and "PM turn 19" in reason
+
+
+def test_no_run_start_owes_only_cited_turns(repo):
+    _replay_sizing(repo, "2026-10-16T10:20:39Z")
+    assert _register_gate(repo, _PLAN, _review([])) is None
+
+
+def test_unrelated_turns_clears_the_uncovered_turn(repo):
+    _turns_sizing(repo, extra=_CITE_TURN_2)
     (repo / _SIZING).write_text(
         (repo / _SIZING).read_text(encoding="utf-8")
         + "  unrelated_turns:\n    - {turn: 2, reason: chat}\n",

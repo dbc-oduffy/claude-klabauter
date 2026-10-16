@@ -28,7 +28,8 @@ Negative-spec: a single-reviewer-ok verdict over product files returns ONE whole
 never an empty list; zero product files returns no slices. A refusal from either composed op is
 returned as ``error`` with no slices, never raised. ``basis`` is ``"worktree"`` in worktree
 mode and ``"range"`` in range mode. A group past the last populated one returns no slices; that
-is not an error.
+is not an error. ``stored_reply_for_run`` reads a run's stored reply back: it never computes, never
+spawns git and takes no lock.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import yaml
 
@@ -174,6 +175,49 @@ def _stored_reply(sidecar: Path, base: str, paths: List[str], head: Optional[str
     ):
         return None
     return {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
+
+
+def stored_reply_for_run(
+    repo_root: Path,
+    session_id: str,
+    base: str,
+    *,
+    run_key: Optional[str] = None,
+    within: Sequence[str] = (),
+) -> Optional[dict]:
+    """The reply ``review.prep`` stored for one run, found without its slice prefix, or ``None``.
+
+    Globs the session's share dir for ``*-<base[:12]>-prep.review-prep.md`` (the suffix shape of
+    ``execute_review.prep_slice_id_for``, not imported: that module is heavy). A file is kept when
+    its name contains ``run_key`` (if given), its ``agent_type`` is ``engine:prep-freeze``, its
+    ``run_base_sha`` is ``base`` and, when ``within`` is non-empty, every ``paths`` entry is in it.
+    Exactly one kept file returns; none, several or an unreadable one return ``None``."""
+    if not session_id or not base:
+        return None
+    share = Path(share_dir(str(repo_root), session_id))
+    allowed = set(within)
+    kept: List[dict] = []
+    try:
+        candidates = sorted(share.glob(f"*-{base[:12]}-prep.review-prep.md"))
+    except OSError:
+        return None
+    for sidecar in candidates:
+        if run_key and run_key not in sidecar.name:
+            continue
+        try:
+            split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
+            fm = yaml.safe_load(split.fm_text) if split else None
+        except (OSError, yaml.YAMLError):
+            return None
+        if not isinstance(fm, dict) or any(k not in fm for k in _STORED_KEYS):
+            continue
+        if fm.get("agent_type") != "engine:prep-freeze" or fm["run_base_sha"] != base:
+            continue
+        paths = fm.get("paths")
+        if allowed and not (isinstance(paths, list) and all(p in allowed for p in paths)):
+            continue
+        kept.append({**{k: fm[k] for k in _STORED_KEYS}, "error": None, "sidecar_path": _rel(sidecar, repo_root)})
+    return kept[0] if len(kept) == 1 else None
 
 
 def _claim(lock: Path) -> bool:

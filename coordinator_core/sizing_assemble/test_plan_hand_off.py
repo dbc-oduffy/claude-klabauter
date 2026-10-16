@@ -31,7 +31,7 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
 
 def _write(repo: Path, tshirt: str, capsys):
     path = Path(record_homes.record_path(str(repo), "sizings", "2026-10-12-x.yaml"))
-    code = sizing_assemble.main(["--tshirt", tshirt, *_COMMON, "--write", str(path)])
+    code = sizing_assemble.main(["--tshirt", tshirt, *_COMMON, "--write", str(path), "--json"])
     out, err = capsys.readouterr()
     return code, out, err, path
 
@@ -90,7 +90,7 @@ def _write_no_hand_off(repo: Path, tshirt: str, capsys, monkeypatch):
     monkeypatch.setattr(sizing_assemble, "_open_routed_obligation", lambda p: opened.append(p))
     path = Path(record_homes.record_path(str(repo), "sizings", "2026-10-12-x.yaml"))
     code = sizing_assemble.main(["--tshirt", tshirt, *_COMMON, "--write", str(path),
-                                  "--interaction-mode", "hands-on", NO_PLAN_HAND_OFF_FLAG])
+                                  "--interaction-mode", "hands-on", "--json", NO_PLAN_HAND_OFF_FLAG])
     out, _err = capsys.readouterr()
     return code, json.loads(out), path, opened
 

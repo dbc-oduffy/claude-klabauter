@@ -15,7 +15,7 @@ from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit import research_emit as re_
 from coordinator_core.ops.dispatch_emit.pipeline_contract import HaltCount, PipelineEmitRefused, PipelineInputs
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
-from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing
+from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing, repo  # noqa: F401
 
 CONTENT = Path(__file__).parent / "fixtures" / "pipeline_research"
 SCRATCH = "scratch/run-1"
@@ -83,6 +83,36 @@ def test_slug_is_filename_safe_and_capped():
     assert len(slug) <= re_.MAX_SLUG_LEN
     assert set(slug) <= set("abcdefghijklmnopqrstuvwxyz0123456789-")
     assert not slug.endswith("-") and not slug.startswith("-")
+
+
+def test_slug_cuts_on_a_word_boundary_not_mid_word():
+    ask = "supersplat f dev research example-game-repo supersplat plugin integration"
+    (slug,) = re_.scout_slugs([ask])
+    assert slug == "supersplat-f-dev-research-example-game-repo-supersplat"
+    assert ask.replace(" ", "-").startswith(slug + "-")
+
+
+def test_a_single_word_longer_than_the_cap_still_hard_cuts():
+    (slug,) = re_.scout_slugs(["x" * 100])
+    assert slug == "x" * re_.MAX_SLUG_LEN
+    assert re_.topic_slug("y" * 100) == "y" * re_.MAX_SLUG_LEN
+
+
+@pytest.mark.parametrize("bad", ["Has-Upper", "has space", "a" * 49, "../x", "", "-a", "a--b", "ok\n"])
+def test_given_slug_refusal_rejects_unsafe_slugs(bad):
+    assert re_.given_slug_refusal(bad)
+
+
+def test_given_slug_refusal_accepts_a_safe_slug():
+    assert re_.given_slug_refusal("my-topic-2") == ""
+
+
+def test_the_op_honours_a_given_topic_slug_and_refuses_an_unsafe_one(repo):
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "web")
+    ctx, _, _ = op_module._research_route_setup({"topic_slug": "my-topic"}, repo, rel, None)
+    assert ctx["next_action"]["params"]["topic_slug"] == "my-topic"
+    with pytest.raises(PipelineEmitRefused):
+        op_module._research_route_setup({"topic_slug": "Bad Slug"}, repo, rel, None)
 
 
 def test_notebooklm_and_web_corpus_yields_preflight_web_notebooklm_all_valid():

@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session import record_homes
+from coordinator_core.warp_fire import fire_command
 
 _NAME = "2026-10-16-research-ask.yaml"
 _DRAFT = """schema: sizing-object
@@ -108,8 +109,9 @@ def test_research_sizing_gets_a_research_hand_back_with_no_arm_and_no_baton(repo
     reply = _handler({"sizing_path": rel, "writes": []}, repo_root=repo / ".git")
     assert reply["arm"] is None and reply.get("baton") is None
     halt = reply["halt"]
-    assert halt["route"] == "research"
-    assert "/coordinator:research" in halt["reason"] and "sizing" in halt["reason"]
+    assert halt["kind"] == "research" and halt["route"] == "research"
+    assert halt["fire"] == [fire_command(rel)]
+    assert "sizing" in halt["reason"] and "/coordinator:research" not in halt["reason"]
     assert "engine-ask" not in halt["reason"]
 
 

@@ -266,13 +266,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     admission_record = admission.await_admission(
         Path.cwd(), hold_allowed=op_latency.execution_route() != op_latency.WARM_SERVER
     )
-    if admission_record.get("verdict") not in ("admitted", "disabled"):
-        print(
-            "emit-dispatch-workflow: admission — "
-            f"{admission_record.get('verdict')}; {admission_record.get('reasons')}; "
-            f"waited {admission_record.get('waited_s')}s",
-            file=sys.stderr,
-        )
+    notice = admission.notice_line(admission_record)
+    if notice:
+        print(notice, file=sys.stderr)
 
     try:
         regenerable_dirty = None

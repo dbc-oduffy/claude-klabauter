@@ -39,6 +39,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
     HALT_REFUSAL,
+    HALT_RESEARCH,
     HALT_ROOM,
     HALT_SPLIT,
     HALT_TOUCHPOINT,
@@ -1261,7 +1262,7 @@ def compose_ask_script(
             f"--exit-criterion <exit_criterion>{deliverable_flag} [--jtbd-unclear when jtbd_unclear is true] "
             "[--well-trodden-step-change when well_trodden_step_change is true] "
             "[--research-class/-appetite/-source/-depth/-target/-question from research when research is returned] "
-            f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
+            f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} --json {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
         )
         gate_template = (
             f"{_INVOKE} {OP_ASK_GATE} '"
@@ -1342,7 +1343,7 @@ def compose_ask_script(
             + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
             + research_assemble_flags_js("_asmFields", "_q")
             + acceptance_rows_assemble_flags_js("_asmFields", "_q")
-            + f" + ' --write ' + _q(_sizingPath) + ' ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
+            + f" + ' --write ' + _q(_sizingPath) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
             + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
         )
         _reword_sizing_js = "_sizingPath.slice(REPO_ROOT.length + 1)"
@@ -2247,7 +2248,9 @@ def compose_ask_script(
         _append_halt_record_commit(b)
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
-        "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : (_commit?.close?.siblings?.released ?? []), "
+        "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : "
+        f"(_halted && _halted.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) ? _halted.fire : "
+        "(_commit?.close?.siblings?.released ?? [])), "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "

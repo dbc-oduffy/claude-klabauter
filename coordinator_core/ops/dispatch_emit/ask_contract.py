@@ -52,6 +52,7 @@ ASK_VERIFY_RETURN_KEYS = ("test", "judge", *ASK_VERIFY_LEDGER_KEYS, *ASK_VERIFY_
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
 HALT_SPLIT = "split"
+HALT_RESEARCH = "research"
 STOP_AFTER_PLAN = "plan"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
@@ -154,7 +155,12 @@ RESEARCH_CLASSIFY_CLAUSE = (
     "only when the ask's deliverable is knowledge -- a question answered, a survey, a comparison, "
     "a diagnosis written up -- rather than a change to files; otherwise return it null. A pure "
     "research ask returns `writes` as []: the research route's findings artifact is not a write. "
-    "An ask that also asks for a build returns both `research` and its `writes`."
+    "An ask that also asks for a build returns both `research` and its `writes`. "
+    "Class: `scouts` for a bare question a few searches answer; `corpus` for a comprehension "
+    "ask -- understand a repo or topic, survey, compare or rank candidates -- at any target count; "
+    "`deep` only when the EM is stuck delivering something and needs the unblock team; `spike` "
+    "for a binary verdict on one unproven mechanism. More thoroughness is `depth` or "
+    "`appetite: large`, never `deep`."
 )
 #: `ask_gate` halt route for a research sizing: the hand-back to the sizing door.
 RESEARCH_HANDBACK_ROUTE = "research"
@@ -383,7 +389,8 @@ class ResumePlan(NamedTuple):
 @dataclass(frozen=True)
 class GateVerdict:
     """dispatch.ask_gate reply: an arm to run, or a halt dict
-    {"kind": HALT_*, "reason": str, "touchpoint"?: str, "route"?: str}; baton is the
+    {"kind": HALT_*, "reason": str, "touchpoint"?: str, "route"?: str,
+    "fire"?: list[str]} (a research halt's one ready Workflow call); baton is the
     minted {"id", "path"} at an M+ arm."""
 
     arm: str | None

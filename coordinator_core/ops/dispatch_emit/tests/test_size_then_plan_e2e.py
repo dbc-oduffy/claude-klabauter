@@ -104,7 +104,7 @@ def _sizing_args(scout: dict, write: str, flags: list[str]) -> list[str]:
     return [
         "--tshirt", scout["tshirt"], "--intent", scout["intent"], "--name", scout["name"],
         "--premise-provenance", scout["premise_provenance"], "--premise-evidence", scout["premise_evidence"],
-        "--exit-criterion", scout["exit_criterion"], *flags, "--write", write, NO_PLAN_HAND_OFF_FLAG,
+        "--exit-criterion", scout["exit_criterion"], *flags, "--write", write, "--json", NO_PLAN_HAND_OFF_FLAG,
     ]
 
 

@@ -61,10 +61,22 @@ def test_rejudge_script_lists_uncovered_pm_turns(tmp_path):
     sizing = tmp_path / "state" / "sizings" / "s.yaml"
     doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
     doc["pm_verbatims"] = [{"turn": 4, "text": "use the  shape\nthat comes back"}]
+    doc["intent_source"] = "pm-verbatim"
+    doc["intent"] = "use the shape that comes back"
     sizing.write_text(yaml.safe_dump(doc), encoding="utf-8")
     script = _script(tmp_path, plan)
     assert "PM turns no register row covers" in script
     assert "turn 4: use the shape that comes back" in script
+
+
+def test_rejudge_script_omits_uncited_pm_turns(tmp_path):
+    plan = _register_plan(tmp_path)
+    sizing = tmp_path / "state" / "sizings" / "s.yaml"
+    doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
+    doc["pm_verbatims"] = [{"turn": 4, "text": "use the shape that comes back"}]
+    sizing.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    script = _script(tmp_path, plan)
+    assert "turn 4: use the shape" not in script
 
 
 def test_plan_without_register_gets_pointer_tier_only(tmp_path):

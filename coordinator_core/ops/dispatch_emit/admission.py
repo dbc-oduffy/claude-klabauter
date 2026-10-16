@@ -335,6 +335,26 @@ def await_admission(
     )
 
 
+def notice_line(record: dict) -> Optional[str]:
+    """The one stderr line an emission prints for `record`, or None when the
+    verdict is `admitted`/`disabled`. An unconfigured admission names each
+    missing machine-local key once; every other verdict keeps verdict,
+    reasons and wait."""
+    verdict = record.get("verdict")
+    if verdict in ("admitted", "disabled"):
+        return None
+    if verdict == "admitted_unconfigured":
+        keys = ", ".join(_MACHINE_LOCAL_PREFIX + k for k in record.get("missing_keys") or ())
+        return (
+            "emit-dispatch-workflow: admission — unconfigured, not load-checked; "
+            f"unset: {keys}; machine-local set <key> <value>"
+        )
+    return (
+        "emit-dispatch-workflow: admission — "
+        f"{verdict}; {record.get('reasons')}; waited {record.get('waited_s')}s"
+    )
+
+
 def should_refuse_warm(
     start_dir: Optional[Path], *, read_load: Optional[Callable[[], dict]] = None
 ) -> Optional[dict]:

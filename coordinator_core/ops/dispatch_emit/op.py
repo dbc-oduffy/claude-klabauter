@@ -1068,6 +1068,11 @@ def _research_route_setup(
     from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
     from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
 
+    given_topic = params.get("topic_slug")
+    if given_topic is not None:
+        slug_refusal = research_emit.given_slug_refusal(given_topic)
+        if slug_refusal:
+            raise PipelineEmitRefused([slug_refusal])
     lists = dict(params.get("lists") or {})
     questions = [str(q) for q in lists.get("questions") or ()]
     if from_sizing:
@@ -1159,9 +1164,8 @@ def _research_route_setup(
         "scratch_dir": (root / scratch_rel).as_posix(),
         "tier": shape["tier"],
         "run_id": run_id,
-        "topic_slug": research_emit.topic_slug(
-            str(ask or ""), brief_rel if from_sizing else ""
-        ),
+        "topic_slug": given_topic
+        or research_emit.topic_slug(str(ask or ""), brief_rel if from_sizing else ""),
         "value_class": str(research["value_class"]),
     }
     if from_sizing:

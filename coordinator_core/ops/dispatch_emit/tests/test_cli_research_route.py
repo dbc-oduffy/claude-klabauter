@@ -154,6 +154,31 @@ def test_sizing_without_research_block_is_refused(repo, capsys):
     assert "no research block" in capsys.readouterr().err
 
 
+def test_slug_flag_carries_topic_slug_to_the_op(repo, monkeypatch):
+    seen = []
+
+    def _stub(params, repo_root=None):
+        seen.append(params)
+        return {"ok": True}
+
+    monkeypatch.setattr(cli_module, "_dispatch_emit", _stub)
+    assert cli_module.main(["--research", "--ask", "What is X?", "--slug", "my-topic"]) == cli_module.EXIT_OK
+    assert seen[0]["topic_slug"] == "my-topic"
+    seen.clear()
+    assert cli_module.main(["--research", "--ask", "What is X?"]) == cli_module.EXIT_OK
+    assert "topic_slug" not in seen[0]
+
+
+@pytest.mark.parametrize("slug", ["Bad Slug", "a_b", "-a", "a--b", "x" * 49])
+def test_an_unsafe_slug_is_refused_before_any_emit(repo, monkeypatch, slug):
+    monkeypatch.setattr(cli_module, "_dispatch_emit", lambda *a, **k: pytest.fail("emitted"))
+    assert cli_module.main(["--research", "--ask", "q", f"--slug={slug}"]) == cli_module.EXIT_USAGE
+
+
+def test_slug_off_the_research_route_is_a_usage_error(repo):
+    assert cli_module.main(["--pipeline", "p", "--brief", "b.md", "--slug", "x"]) == cli_module.EXIT_USAGE
+
+
 def test_research_without_ask_is_a_usage_error(repo):
     assert cli_module.main(["--research"]) == cli_module.EXIT_USAGE
     assert cli_module.main(["--research", "--ask"]) == cli_module.EXIT_USAGE

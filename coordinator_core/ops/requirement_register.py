@@ -564,40 +564,103 @@ def coverage_gaps(doc: Mapping[str, Any]) -> list[int]:
     turn's normalised text, or the turn is named in `unrelated_turns`. Coverage runs from turns
     to rows only: a row matching no turn is legal.
     """
-    turns = embedded_turns(doc)
-    if not turns:
-        return []
-    block = _register_block(doc)
-    rows = block.get(ROWS_KEY)
-    needles = [
+    return _gaps(doc, None)
+
+
+def _row_needles(doc: Mapping[str, Any]) -> list[str]:
+    rows = _register_block(doc).get(ROWS_KEY)
+    return [
         n
         for r in (rows if isinstance(rows, list) else [])
         if isinstance(r, Mapping) and (n := _norm(r.get(ROW_TEXT) or ""))
     ]
-    unrelated = block.get(UNRELATED_TURNS_KEY)
+
+
+def _gaps(doc: Mapping[str, Any], owed: Optional[set[int]]) -> list[int]:
+    """Turns in `owed` (every embedded turn when None) that no row covers and no
+    `unrelated_turns` entry names, ascending."""
+    turns = embedded_turns(doc)
+    if not turns:
+        return []
+    needles = _row_needles(doc)
+    unrelated = _register_block(doc).get(UNRELATED_TURNS_KEY)
     waived = {
         e["turn"]
         for e in (unrelated if isinstance(unrelated, list) else [])
         if isinstance(e, Mapping) and isinstance(e.get("turn"), int)
     }
     return [
-        t for t in sorted(turns) if t not in waived and not any(n in turns[t] for n in needles)
+        t for t in sorted(turns)
+        if (owed is None or t in owed) and t not in waived
+        and not any(n in turns[t] for n in needles)
     ]
 
 
-def uncovered_turns(sizing_text: str) -> list[tuple[int, str]]:
-    """`(turn, first 80 characters)` for each embedded PM turn of the sizing text that no register
-    row covers. Never raises; empty when the sizing embeds no turns or is unreadable."""
+def cited_turns(doc: Mapping[str, Any]) -> set[int]:
+    """Embedded PM turns the sizing's ask cites: a row's `source_text` is inside the turn, a
+    row's `anchor` is `pm_verbatims turn <t>`, or a `pm-verbatim` intent is inside the turn."""
+    turns = embedded_turns(doc)
+    if not turns:
+        return set()
+    needles = _row_needles(doc)
+    rows = _register_block(doc).get(ROWS_KEY)
+    anchors = {
+        str(r.get(ROW_ANCHOR)).strip()
+        for r in (rows if isinstance(rows, list) else [])
+        if isinstance(r, Mapping) and r.get(ROW_ANCHOR)
+    }
+    intent = _norm(doc.get("intent") or "") if doc.get("intent_source") == "pm-verbatim" else ""
+    return {
+        t for t, text in turns.items()
+        if f"pm_verbatims turn {t}" in anchors
+        or any(n in text for n in needles)
+        or (intent and intent in text)
+    }
+
+
+def _turn_epochs(doc: Mapping[str, Any]) -> dict[int, float]:
+    out: dict[int, float] = {}
+    verbatims = doc.get("pm_verbatims")
+    for v in verbatims if isinstance(verbatims, list) else []:
+        if not isinstance(v, Mapping):
+            continue
+        turn, ts = v.get("turn"), v.get("ts")
+        if not isinstance(turn, int) or isinstance(turn, bool) or not ts:
+            continue
+        try:
+            moment = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        out[turn] = moment.timestamp()
+    return out
+
+
+def uncovered_turns(
+    sizing_text: str, *, run_started_at: Optional[float] = None
+) -> list[tuple[int, str]]:
+    """`(turn, first 80 characters)` for each owed PM turn that no register row covers and
+    `unrelated_turns` does not name. Never raises; empty when the sizing embeds no turns or is
+    unreadable.
+
+    Write-time coverage (`coverage_gaps`) owes every embedded turn; this run-close read owes only
+    the turns the ask cites (`cited_turns`) and, when `run_started_at` (epoch seconds) is given,
+    turns timestamped at or after it. A turn with no parseable `ts` is never post-start.
+    """
     if "pm_verbatims" not in sizing_text:
         return []
     try:
         doc = _load(sizing_text)
+        if not isinstance(doc, Mapping):
+            return []
+        turns = embedded_turns(doc)
+        owed = cited_turns(doc)
+        if run_started_at is not None:
+            owed |= {t for t, at in _turn_epochs(doc).items() if at >= run_started_at}
+        return [(t, turns[t][:80]) for t in _gaps(doc, owed)]
     except Exception:  # noqa: BLE001 - tolerant reader
         return []
-    if not isinstance(doc, Mapping):
-        return []
-    turns = embedded_turns(doc)
-    return [(t, turns[t][:80]) for t in coverage_gaps(doc)]
 
 
 def unrelated_turn_errors(doc: Mapping[str, Any], register: Mapping[str, Any]) -> list[str]:

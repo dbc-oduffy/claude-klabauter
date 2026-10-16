@@ -160,6 +160,29 @@ def test_await_admission_unconfigured_never_calls_reader(monkeypatch):
     assert record["thresholds"] is None
 
 
+def test_notice_line_names_each_missing_key_once_with_the_remedy():
+    keys = ["cpu_load_max", "mem_avail_pct_min", "max_hold_s", "recheck_s"]
+    line = admission.notice_line({"verdict": "admitted_unconfigured", "missing_keys": keys})
+    for key in keys:
+        assert line.count(f"workflow_admission.{key}") == 1
+    assert "machine-local set" in line
+    assert "[]" not in line and "waited" not in line
+
+
+def test_notice_line_is_silent_for_admitted_and_disabled():
+    assert admission.notice_line({"verdict": "admitted"}) is None
+    assert admission.notice_line({"verdict": "disabled"}) is None
+
+
+def test_notice_line_keeps_verdict_reasons_and_wait_for_other_verdicts():
+    line = admission.notice_line(
+        {"verdict": "admitted_after_hold", "reasons": ["cpu_load 2 > 1"], "waited_s": 4.0}
+    )
+    assert line == (
+        "emit-dispatch-workflow: admission — admitted_after_hold; ['cpu_load 2 > 1']; waited 4.0s"
+    )
+
+
 def test_await_admission_unreadable_never_holds(monkeypatch):
     t = _thresholds()
     _fixed_load_thresholds(monkeypatch, t)

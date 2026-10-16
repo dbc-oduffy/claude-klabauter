@@ -218,6 +218,21 @@ def test_non_plain_verdict_prints_exactly_one_stderr_line(tmp_path, monkeypatch,
     assert "admitted_after_hold" in stderr_lines[0]
 
 
+def test_unconfigured_verdict_names_missing_keys_once_on_stderr(tmp_path, monkeypatch, capsys):
+    repo_root, plan_path, out_path = _plan_fixture(tmp_path)
+    monkeypatch.chdir(repo_root)
+    keys = ["cpu_load_max", "recheck_s"]
+    _install_fake_admission(
+        monkeypatch,
+        {"verdict": "admitted_unconfigured", "waited_s": 0.0, "reasons": [], "missing_keys": keys},
+    )
+    assert cli_module.main(["--plan", str(plan_path), "--out", str(out_path)]) == cli_module.EXIT_OK
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if "admission" in line]
+    assert len(lines) == 1
+    assert all(lines[0].count(f"workflow_admission.{k}") == 1 for k in keys)
+
+
 def test_admitted_and_disabled_verdicts_print_no_stderr_admission_line(tmp_path, monkeypatch, capsys):
     repo_root, plan_path, out_path = _plan_fixture(tmp_path)
     monkeypatch.chdir(repo_root)

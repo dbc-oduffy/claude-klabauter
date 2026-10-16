@@ -95,6 +95,7 @@ from coordinator_core.ops.dispatch_emit.op import (
     restamp,
 )
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.admission import notice_line
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     PipelineEmitRefused,
     subject_key,
@@ -534,6 +535,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --ask PROMPT: the scouts express lane -- write the ask to the run's record directory (state/warp/<run_id>/ask.md) and "
         "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
+    )
+    parser.add_argument(
+        "--slug",
+        default=None,
+        metavar="SLUG",
+        help="research route: the topic slug naming the run's archive and trail "
+        "([a-z0-9-], at most 48 characters); default is cut from the ask",
     )
     parser.add_argument(
         "--context",
@@ -1015,14 +1023,18 @@ def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
     """Print a --rejudge/--reverify-delivery emission; under --fire, fire it and print the
     handle. Trap: a close route that drops --fire returns no handle, and a headless caller
     reads that silence as a fire."""
-    print(json.dumps(result, indent=2, sort_keys=True))
     if not args.fire:
+        print(json.dumps(result, indent=2, sort_keys=True))
         print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
         return EXIT_OK
     from coordinator_core.ops.workflow_fire.fire import fire_workflow
 
-    fire_record = fire_workflow(result["path"], cwd=args.repo_root or None)
-    print(json.dumps(fire_record, indent=2, sort_keys=True))
+    try:
+        fire_record = fire_workflow(result["path"], cwd=args.repo_root or None)
+    except Exception:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        raise
+    print(json.dumps({**result, "fire": fire_record}, indent=2, sort_keys=True))
     return EXIT_OK
 
 
@@ -1183,6 +1195,19 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         except EmBriefRefused as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_DATA_ERROR
+    if args.slug is not None:
+        from coordinator_core.ops.dispatch_emit.research_emit import MAX_SLUG_LEN
+
+        if not is_research_route:
+            print("emit-dispatch-workflow: ERROR — --slug requires --from-sizing or --research", file=sys.stderr)
+            return EXIT_USAGE
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.slug) or len(args.slug) > MAX_SLUG_LEN:
+            print(
+                f"emit-dispatch-workflow: ERROR — --slug {args.slug!r} must be lowercase "
+                f"[a-z0-9-] words, at most {MAX_SLUG_LEN} characters",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
     if args.local_only and not is_research_route:
         print("emit-dispatch-workflow: ERROR — --local-only requires --from-sizing or --research", file=sys.stderr)
         return EXIT_USAGE
@@ -1540,6 +1565,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["scratch_dir"] = args.scratch_dir
         if args.local_only:
             params["local_only"] = True
+        if args.slug:
+            params["topic_slug"] = args.slug
         if args.context:
             params["context"] = args.context
         if repo_root is None:
@@ -1713,13 +1740,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     hold_allowed = op_latency.execution_route() != op_latency.WARM_SERVER
     admission_record = admission.await_admission(Path.cwd(), hold_allowed=hold_allowed)
-    if admission_record.get("verdict") not in ("admitted", "disabled"):
-        print(
-            "emit-dispatch-workflow: admission — "
-            f"{admission_record.get('verdict')}; {admission_record.get('reasons')}; "
-            f"waited {admission_record.get('waited_s')}s",
-            file=sys.stderr,
-        )
+    notice = notice_line(admission_record)
+    if notice:
+        print(notice, file=sys.stderr)
 
     regenerable_dirty = None
     try:
@@ -1771,7 +1794,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 raise
             return _emit_inventory_parts(params, repo_root, over, args.fire, admission_record)
     except SizingHandBack as hand_back:
-        print(hand_back.line)
+        print(json.dumps({"hand_back": hand_back.line}, indent=2, sort_keys=True))
+        print(hand_back.line, file=sys.stderr)
         return EXIT_OK
     except PipelineEmitRefused as exc:
         for reason in exc.reasons:
@@ -1787,7 +1811,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     printed = dict(result)
     if isinstance(printed.get("fire_args"), dict):
         printed["fire_args"] = {k: v for k, v in printed["fire_args"].items() if k != "runToken"}
-    print(json.dumps(printed, indent=2, sort_keys=True))
+    # stdout is one JSON document: the document is held back until --fire has run
+    # and carries the fire record under "fire".
+    pending_doc = printed
     split_research = bool(result.get("parts")) and not args.lanes
     if args.lanes or split_research:
         for emitted in result["parts"]:
@@ -1829,9 +1855,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
 
     if not result["ok"]:
+        print(json.dumps(pending_doc, indent=2, sort_keys=True))
         return EXIT_DATA_ERROR
 
     if args.fire and split_research:
+        print(json.dumps(pending_doc, indent=2, sort_keys=True))
         print(
             "emit-dispatch-workflow: ERROR — --fire fires one script; the emit was split into "
             f"{len(result['parts'])} parts, none fired",
@@ -1843,12 +1871,17 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
         from coordinator_core.ops.workflow_fire.fire import fire_workflow
 
-        guard_against_fired_drift(Path(result["path"]), result["sha256"])
-        fire_record = fire_workflow(
-            result["path"], cwd=str(repo_root) if repo_root else None
-        )
-        print(json.dumps(fire_record, indent=2, sort_keys=True))
+        try:
+            guard_against_fired_drift(Path(result["path"]), result["sha256"])
+            fire_record = fire_workflow(
+                result["path"], cwd=str(repo_root) if repo_root else None
+            )
+        except Exception:
+            print(json.dumps(pending_doc, indent=2, sort_keys=True))
+            raise
+        pending_doc = {**pending_doc, "fire": fire_record}
 
+    print(json.dumps(pending_doc, indent=2, sort_keys=True))
     return EXIT_OK
 
 

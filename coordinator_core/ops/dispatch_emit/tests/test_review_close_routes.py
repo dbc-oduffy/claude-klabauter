@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -288,7 +289,8 @@ def test_close_route_fire_fires_and_prints_the_handle(tmp_path, monkeypatch, cap
     code = cli.main([*route, "--plan", str(tmp_path / "p.md"), "--repo-root", str(tmp_path), "--fire"])
 
     assert code == 0 and fired == [str(script)]
-    assert '"fire_id": "f1"' in capsys.readouterr().out
+    document = json.loads(capsys.readouterr().out)
+    assert document["fire"] == {"fire_id": "f1"} and document["path"] == str(script)
 
 
 def test_box_terms_default_to_the_machine_local_path(tmp_path, monkeypatch):

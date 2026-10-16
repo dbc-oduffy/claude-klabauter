@@ -85,7 +85,11 @@ def test_split_never_reaches_roadmap_stage_or_execute():
     assert "if (!_viaRoadmap) {\n  if (!_halted) {" in after
     assert "_viaRoadmap = true;" not in _split_stage(script)
     ret = script[script.rindex("  return { arm:") :]
-    assert "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : (_commit?.close?.siblings?.released ?? [])" in ret
+    assert (
+        "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : "
+        "(_halted && _halted.halted === 'research' && Array.isArray(_halted.fire) ? _halted.fire : "
+        "(_commit?.close?.siblings?.released ?? []))"
+    ) in ret
     assert "sizing: _sizingRel" in ret and "run_id: _runId" in ret and "halt_commit: _haltCommit" in ret
     assert "if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true))" in script
 

@@ -82,8 +82,47 @@ def test_scouts_without_digests_refuses_with_no_commit(repo, tmp_path):
     assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
 
 
+def _write_sizing(repo: Path, rel: str = "state/sizings/x.yaml") -> Path:
+    p = repo / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("size: S\n", encoding="utf-8")
+    return p
+
+
+def test_a_cited_sizing_lands_in_the_trail_commit_and_is_tracked(repo, scratch):
+    _write_sizing(repo)
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 0, out
+    assert "state/sizings/x.yaml" in _trail_files(repo)
+    assert _git(repo, "ls-files", "state/sizings/x.yaml") == "state/sizings/x.yaml"
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_a_missing_sizing_is_refused_with_no_file_written(repo, scratch):
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "corpus", sizing="state/sizings/nope.yaml")
+    assert out["exit_code"] == 1 and out["committed"] is False and "nope.yaml" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+    assert not (repo / "state").exists()
+
+
+def test_a_sizing_escaping_the_repo_is_refused(repo, scratch):
+    out = _close(repo, scratch, "corpus", sizing="../outside.yaml")
+    assert out["exit_code"] == 1 and out["committed"] is False
+    assert not (repo / "docs").exists()
+
+
+def test_reclose_with_a_sizing_returns_the_landed_sha(repo, scratch):
+    _write_sizing(repo)
+    first = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    n = _count(repo)
+    second = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert second["committed"] is True and second["sha"] == first["sha"] and _count(repo) == n
+
+
 @pytest.mark.parametrize("tier", ["scouts", "corpus", "deep"])
 def test_trail_record_is_in_the_commit_with_repo_relative_paths(repo, scratch, tier):
+    _write_sizing(repo)
     out = _close(repo, scratch, tier, sizing="state/sizings/x.yaml")
     assert out["exit_code"] == 0, out
     assert "docs/research/trail/r1.yaml" in _trail_files(repo)

@@ -44,7 +44,7 @@ def _run(repo: Path, *extra: str) -> tuple[int, dict]:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(_DRAFT, encoding="utf-8")
     rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
-    code = sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, *extra])
+    code = sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, "--json", *extra])
     return code, yaml.safe_load(path.read_text(encoding="utf-8"))
 
 

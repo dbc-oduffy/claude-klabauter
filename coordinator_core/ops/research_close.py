@@ -10,7 +10,8 @@ and makes exactly one ``commit_paths`` call over the copied paths plus the trail
 Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
 ``topic_slug`` (both safe single path segments), ``value_class`` (optional, in
 ``rc.VALUE_CLASSES``, default ``tier``), ``sizing`` (optional repo-relative path named in the
-record), ``outputs`` (optional list of
+record; it must exist on disk, else the close is refused before any copy or commit, and it
+lands in the same commit as the trail record), ``outputs`` (optional list of
 scratch-relative file paths; default is every regular file directly in scratch_dir and
 directly in each ``segment_dirs`` subdirectory), ``segment_dirs`` (optional safe single
 path segments: a multi-pipeline run writes every segment after the first under
@@ -45,7 +46,8 @@ Negative-spec:
     ``commit_paths`` call or none.
   - Zero spawns on the clean path; one (``hash_worktree_blobs_via_spawn``) only on a
     CRLF-pinned path.
-  - A missing output is a structured refusal before any copy or commit.
+  - A missing output or a missing/escaping ``sizing`` is a structured refusal before any copy
+    or commit; the sizing rides the same single ``commit_paths`` call.
 """
 
 from __future__ import annotations
@@ -326,6 +328,8 @@ def _close_archived(
         if not trail_path.is_file():
             trail_path.write_bytes(trail_bytes)
         commit_rel = [*rel_paths, trail_rel]
+        if meta.get("sizing_rel") and meta["sizing_rel"] not in commit_rel:
+            commit_rel.append(meta["sizing_rel"])
         message = apply_missing_trailers(subject + "\n", worktree, commit_rel)
         try:
             outcome = commit_paths(
@@ -450,7 +454,15 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if problem:
             return _err(problem)
         outputs, segment_dirs = ["digest.md"], []
-    meta = {"tier": tier, "value_class": value_class, "sizing": sizing}
+    sizing_rel = None
+    if sizing is not None:
+        sized = contained_path(worktree / sizing, [worktree])
+        if sized is None:
+            return _err(f"trail record refused: sizing escapes the repo: {sizing!r}")
+        if not sized.is_file():
+            return _err(f"sizing is not on disk: {sizing!r}")
+        sizing_rel = sized.relative_to(worktree.resolve()).as_posix()
+    meta = {"tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel}
     local_root_raw = params.get("local_root")
     return _close_committed(
         worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta,

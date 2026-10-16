@@ -317,6 +317,60 @@ def test_group_slices_split_matches_the_js_helper():
     assert rp.group_slices([], 3) == []
 
 
+def _stored(repo: Path, paths: list[str], run: str = "run1", base: str | None = None) -> dict:
+    """Run review.prep for `paths` under the prefix shape execute_review.prep_slice_id_for makes."""
+    b = base or _base(repo)
+    return rp.review_prep(
+        repo, base=b, paths=paths, slice_prefix=f"p-{run}-{b[:12]}-prep",
+        plan_path="docs/plans/p.md", session_id=SESSION,
+    )
+
+
+def test_stored_reply_for_run_returns_the_one_matching_reply(repo):
+    _write(repo, ["a/b/one.py", "a/b/two.py"], 3)
+    made = _stored(repo, ["a/b/one.py", "a/b/two.py"])
+    got = rp.stored_reply_for_run(
+        repo, SESSION, made["run_base_sha"], run_key="run1", within=["a/b/one.py", "a/b/two.py"]
+    )
+    assert got is not None
+    assert got["product_files"] == 2
+    assert sorted(f for s in got["slices"] for f in s["files"]) == ["a/b/one.py", "a/b/two.py"]
+    assert got["sidecar_path"] == made["sidecar_path"]
+    assert not Path(got["sidecar_path"]).is_absolute() and "\\" not in got["sidecar_path"]
+
+
+def test_stored_reply_for_run_ignores_another_runs_sidecar(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    made = _stored(repo, ["a/b/one.py"], run="other")
+    assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1") is None
+
+
+def test_stored_reply_for_run_ignores_a_different_base(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    made = _stored(repo, ["a/b/one.py"])
+    other = made["run_base_sha"][:12] + "0" * 28
+    assert rp.stored_reply_for_run(repo, SESSION, other, run_key="run1") is None
+
+
+def test_stored_reply_for_run_ignores_paths_outside_within(repo):
+    _write(repo, ["a/b/one.py", "a/b/two.py"], 3)
+    made = _stored(repo, ["a/b/one.py", "a/b/two.py"])
+    assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], within=["a/b/one.py"]) is None
+    assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"]) is not None
+
+
+def test_stored_reply_for_run_returns_none_on_two_matches(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    made = _stored(repo, ["a/b/one.py"], run="run1")
+    _stored(repo, ["a/b/one.py"], run="run2")
+    assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"]) is None
+    assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1") is not None
+
+
+def test_stored_reply_for_run_returns_none_without_a_share_dir(repo):
+    assert rp.stored_reply_for_run(repo, "sess-none", _base(repo), run_key="run1") is None
+
+
 def test_registered_in_every_op_set():
     from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass  # noqa: PLC0415
     from coordinator_core.op_scopes import _OP_KEY_SCOPE  # noqa: PLC0415

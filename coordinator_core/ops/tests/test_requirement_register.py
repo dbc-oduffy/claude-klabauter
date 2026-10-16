@@ -383,6 +383,61 @@ def test_coverage_gaps_row_in_no_turn_is_legal_and_turnless_skipped():
     assert rr.coverage_gaps(doc) == []
 
 
+def _scoped(doc, **kw):
+    return [t for t, _ in rr.uncovered_turns(yaml.safe_dump(doc), **kw)]
+
+
+def test_cited_turns_by_row_text_anchor_and_pm_verbatim_intent():
+    doc = _cov(
+        [{"turn": 1, "text": "alpha beta"}, {"turn": 2, "text": "gamma"}, {"turn": 3, "text": "delta eps"},
+         {"turn": 4, "text": "unrelated chatter"}],
+        rows=[_row("a", source_text="alpha", anchor="x"), _row("b", source_text="zzz", anchor="pm_verbatims turn 2")],
+    )
+    doc["intent_source"] = "pm-verbatim"
+    doc["intent"] = "delta  eps"
+    assert rr.cited_turns(doc) == {1, 2, 3}
+
+
+def test_em_elaborated_intent_cites_nothing():
+    doc = _cov([{"turn": 1, "text": "alpha"}], rows=[_row("a", source_text="zzz")])
+    doc["intent_source"] = "em-elaborated"
+    doc["intent"] = "alpha"
+    assert rr.cited_turns(doc) == set()
+
+
+def test_uncited_turn_is_not_owed_without_a_run_start():
+    doc = _cov([{"turn": 7, "text": "box sequencing"}], rows=[_row("a", source_text="zzz")])
+    assert _scoped(doc) == []
+    assert rr.coverage_gaps(doc) == [7]
+
+
+def test_cited_but_uncovered_turn_is_owed():
+    doc = _cov([{"turn": 7, "text": "box sequencing"}], rows=[_row("a", source_text="zzz")])
+    doc["intent_source"] = "pm-verbatim"
+    doc["intent"] = "box sequencing"
+    assert _scoped(doc) == [7]
+
+
+def test_post_start_turn_is_owed_and_pre_start_is_not():
+    start = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc).timestamp()
+    doc = _cov(
+        [{"turn": 1, "text": "early", "ts": "2026-10-16T11:59:59Z"},
+         {"turn": 2, "text": "late", "ts": "2026-10-16T12:00:00Z"},
+         {"turn": 3, "text": "no ts"}, {"turn": 4, "text": "bad ts", "ts": "soon"}],
+        rows=[_row("a", source_text="zzz")],
+    )
+    assert _scoped(doc, run_started_at=start) == [2]
+    assert _scoped(doc) == []
+
+
+def test_unrelated_turns_waives_a_post_start_turn():
+    doc = _cov(
+        [{"turn": 2, "text": "late", "ts": "2026-10-16T12:00:00Z"}], rows=[_row("a", source_text="zzz")],
+        unrelated=[{"turn": 2, "reason": "chat"}],
+    )
+    assert _scoped(doc, run_started_at=0.0) == []
+
+
 def test_unrelated_turn_errors_refuses_unembedded_turn_and_empty_reason():
     doc = _cov([{"turn": 1, "text": "a"}, {"turn": 2, "text": "b"}])
     reg = {rr.UNRELATED_TURNS_KEY: [{"turn": 9, "reason": "r"}, {"turn": 1, "reason": "  "}, {"turn": 2, "reason": "ok"}]}

@@ -108,7 +108,22 @@ def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str
 
 
 def _slug(text: str) -> str:
-    return _NON_SLUG_RE.sub("-", text.lower()).strip("-")[:MAX_SLUG_LEN].strip("-")
+    """Slug of `text`, cut at the last `-` within MAX_SLUG_LEN; a single longer word hard-cuts."""
+    slug = _NON_SLUG_RE.sub("-", text.lower()).strip("-")
+    if len(slug) > MAX_SLUG_LEN:
+        cut = slug.rfind("-", 0, MAX_SLUG_LEN + 1)
+        slug = slug[:cut] if cut > 0 else slug[:MAX_SLUG_LEN]
+    return slug.strip("-")
+
+
+_GIVEN_SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+def given_slug_refusal(value: object) -> str:
+    """The reason an EM-named topic slug is unusable, or "" when it is lowercase [a-z0-9] words joined by single `-` within MAX_SLUG_LEN (same shape the CLI enforces)."""
+    if not isinstance(value, str) or not _GIVEN_SLUG_RE.fullmatch(value) or len(value) > MAX_SLUG_LEN:
+        return f"topic_slug must be [a-z0-9-] and at most {MAX_SLUG_LEN} characters"
+    return ""
 
 
 def topic_slug(ask: str = "", sizing_rel: str = "") -> str:

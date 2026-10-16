@@ -422,8 +422,25 @@ def _derive_judge_status(inline_review: object) -> Optional[str]:
     return note
 
 
+def _run_started_at(worktree_root: Path, run_id: Optional[str]) -> Optional[float]:
+    """Epoch seconds the run was submitted (``submitted_at`` of its ``submission.json``), else None."""
+    if not run_id or not _RESOLUTION_RUN_ID.match(run_id):
+        return None
+    from coordinator_core.ops.warp_run_deliverable import SUBMISSION_FILE
+
+    text = _read_rel(worktree_root, f"{RUN_DIR_ROOT}/{run_id}/{SUBMISSION_FILE}")
+    if text is None:
+        return None
+    try:
+        at = json.loads(text).get("submitted_at")
+    except (ValueError, AttributeError):
+        return None
+    return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and at > 0 else None
+
+
 def _register_gate(
     worktree_root: Path, plan_path: Optional[str], inline_review: dict, ledger_judged: Sequence[str] = (),
+    *, run_id: Optional[str] = None,
 ) -> Optional[str]:
     """Demote a ``met`` criterion to ``not_met`` when a row this plan claims in its
     cited register-bearing sizing is not judged met, wired, on its register surface
@@ -431,7 +448,8 @@ def _register_gate(
     or ``None`` when the gate does not apply or every claimed row passes. Reads the
     judge's returned ``criterion.register_rows`` and the register on disk; never inspects code.
     ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
-    not owed to a plan.
+    not owed to a plan. Embedded PM turns are owed only when cited or timestamped after the run's
+    submission; ``run_id`` (else the sizing's ``resolution.run_id``) locates that submission.
     """
     criterion = inline_review.get("criterion")
     if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
@@ -443,7 +461,15 @@ def _register_gate(
 
     sizing_text = _read_rel(worktree_root, sizing_rel)
     register = rr.read_register(sizing_text) if sizing_text is not None else None
-    gaps = rr.uncovered_turns(sizing_text) if is_own and sizing_text is not None else []
+    gaps: list = []
+    if is_own and sizing_text is not None and "pm_verbatims" in sizing_text:
+        if not run_id:
+            try:
+                resolution = rr._load(sizing_text).get("resolution")
+                run_id = resolution.get("run_id") if isinstance(resolution, dict) else None
+            except Exception:  # noqa: BLE001 -- no run start: only cited turns are owed
+                run_id = None
+        gaps = rr.uncovered_turns(sizing_text, run_started_at=_run_started_at(worktree_root, run_id))
     if register is None and not gaps:
         return None
     claimed = rr.claimed_rows(register, plan_path, claim_ids) if register is not None else []
@@ -1090,6 +1116,44 @@ def _run_id_of(params: dict, ask_run_dir: Optional[Path], script_path_raw: str) 
     if ask_run_dir is not None:
         return ask_run_dir.name
     return PurePosixPath(script_path_raw.replace("\\", "/")).stem
+
+
+def _reconcile_prep(
+    worktree_root: Path, session_id: Optional[str], run_id: Optional[str],
+    request: CommitRequest, inline_review: object,
+) -> None:
+    """Replace the relayed ``inline_review["prep"]`` with the reply ``review.prep`` stored on disk
+    for this run, in place, and point ``prep_sidecar`` at it.
+
+    Disk truth the engine wrote wins over a review agent's copy of it, which may be trimmed
+    (``product_files`` null, ``slice_files`` empty) and then reads as a zero-file diff. Does nothing
+    when no base resolves or no single stored reply matches; the relay then stands.
+    """
+    if not isinstance(inline_review, dict) or not session_id or not run_id:
+        return
+    prep = inline_review.get("prep")
+    base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+    if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)):
+        from coordinator_core.ops.dispatch_emit import op
+
+        base = op._recorded_run_base(worktree_root, run_id)
+    if not base:
+        return
+    from coordinator_core.ops import review_prep
+
+    reply = review_prep.stored_reply_for_run(
+        worktree_root, session_id, base, run_key=run_id,
+        within=[p for c in request.chunks for p in c.paths],
+    )
+    if reply is None:
+        return
+    inline_review["prep"] = {
+        "run_base_sha": reply["run_base_sha"],
+        "product_files": reply["product_files"],
+        "foreign_claims": reply["foreign_claims"],
+        "slice_files": [f for s in reply["slices"] or [] if isinstance(s, dict) for f in s.get("files") or []],
+    }
+    inline_review["prep_sidecar"] = reply["sidecar_path"]
 
 
 def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: str) -> dict:
@@ -2995,6 +3059,9 @@ def _terminal_commit_inner(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     anchor_only = not request.chunks
+    _reconcile_prep(
+        worktree_root, session_id, _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
+    )
     # An ask run's product commit carries product, its delivery note and its record directory;
     # a stageable plan gets the second, stamp commit.
     product_only = ask_run_dir is not None
@@ -3132,6 +3199,7 @@ def _terminal_commit_inner(
         None if anchor_only else _register_gate(
             worktree_root, request.plan_path, inline_review,
             [i.id for i in ledger.items] if ledger is not None else (),
+            run_id=_run_id_of(params, ask_run_dir, script_path_raw),
         )
     )
     record_abs: Optional[Path] = None
