@@ -53,12 +53,12 @@ def frame(path):
     return {"path": path, "saved_to": f"frames/{path}", "sha256": "ab" * 32}
 
 
-def files_read(ver="v1", paths=("index.html",), url=URL):
+def files_read(ver="v1", paths=("project/index.html",), url=URL):
     return {"files_read": {"url": url, "title": "Doc", "ver": ver, "files": [frame(p) for p in paths],
                            "type": {"url": "", "title": "plain"}}}
 
 
-def file_list(ver="v1", paths=("index.html",), kind="dashboard"):
+def file_list(ver="v1", paths=("project/index.html",), kind="dashboard"):
     return {"file_list": {"url": URL, "ver": ver, "files": [{"path": p} for p in paths],
                           "type": {"url": "", "title": kind}}}
 
@@ -74,11 +74,11 @@ def read_artifact(t, tid="r1", **kw):
 
 def test_whole_read(tmp_path):
     t = T(tmp_path)
-    read_artifact(t, paths=("index.html", "b.html"))
+    read_artifact(t, paths=("project/index.html", "project/b.html"))
     t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
     t.result("c1", {"threads": [thread("t1"), thread("t2")]}, text="THREADS")
     got = lift_mod.lift([t.write()], AID)
-    assert [f.path for f in got.artifact_read.frames] == ["index.html", "b.html"]
+    assert [f.path for f in got.artifact_read.frames] == ["project/index.html", "project/b.html"]
     assert got.artifact_read.version == "v1" and got.artifact_read.type == "plain"
     assert got.artifact_read.url == URL and got.artifact_read.read_at == "2026-10-13T10:00:02Z"
     assert model.thread_ids(got.comments.threads) == ["t1", "t2"]
@@ -91,19 +91,38 @@ def test_whole_read(tmp_path):
 def test_file_read_and_listing_type(tmp_path):
     t = T(tmp_path)
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
-    t.result("l1", file_list(paths=("index.html",)))
-    t.call("Artifact", {"action": "read", "url": URL, "path": "index.html"}, "r1")
-    t.result("r1", {"file_read": {**frame("index.html"), "url": URL, "title": "Doc", "ver": "v1"}})
+    t.result("l1", file_list(paths=("project/index.html",)))
+    t.call("Artifact", {"action": "read", "url": URL, "path": "project/index.html"}, "r1")
+    t.result("r1", {"file_read": {**frame("project/index.html"), "url": URL, "title": "Doc", "ver": "v1"}})
     got = lift_mod.lift([t.write()], AID)
     assert got.artifact_read.type == "dashboard"
-    assert [f.path for f in got.artifact_read.frames] == ["index.html"]
+    assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
+
+
+def test_unread_runtime_files_do_not_make_listing_incomplete(tmp_path):
+    t = T(tmp_path)
+    read_artifact(t, paths=("project/index.html", "app.js", "reference/x.md"))
+    t.call("Artifact", {"action": "list", "url": URL}, "l1")
+    t.result("l1", file_list(paths=("project/index.html", "app.js", "SKILL.md", "index.html")))
+    got = lift_mod.lift([t.write()], AID)
+    assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
+
+
+def test_unread_project_file_still_incomplete_beside_runtime_files(tmp_path):
+    t = T(tmp_path)
+    read_artifact(t, paths=("app.js",))
+    t.call("Artifact", {"action": "list", "url": URL}, "l1")
+    t.result("l1", file_list(paths=("app.js", "project/a.html")))
+    with pytest.raises(model.HarvestError) as err:
+        lift_mod.lift([t.write()], AID)
+    assert err.value.reason == model.FRAMES_READ_INCOMPLETE
 
 
 def test_listing_not_covered_is_incomplete(tmp_path):
     t = T(tmp_path)
     read_artifact(t)
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
-    t.result("l1", file_list(paths=("index.html", "missing.html")))
+    t.result("l1", file_list(paths=("project/index.html", "project/missing.html")))
     with pytest.raises(model.HarvestError) as err:
         lift_mod.lift([t.write()], AID)
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE
@@ -113,7 +132,7 @@ def test_newer_version_drops_older_reads(tmp_path):
     t = T(tmp_path)
     read_artifact(t, ver="v1")
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
-    t.result("l1", file_list(ver="v2", paths=("index.html",)))
+    t.result("l1", file_list(ver="v2", paths=("project/index.html",)))
     with pytest.raises(model.HarvestError) as err:
         lift_mod.lift([t.write()], AID)
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE

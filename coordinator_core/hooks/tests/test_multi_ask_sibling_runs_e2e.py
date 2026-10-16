@@ -259,6 +259,30 @@ def test_slices_arm_ledgers_union_exactly_to_the_parent_register(repo):
     assert sorted(seeded) == sorted(r[rr.ROW_TEXT] for r in parent_rows)
 
 
+def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
+    env = _submit(repo, {"asks": [{"ask": "relay job", "source": "relayed", "writes": ["a.py"]},
+                                  {"ask": "pm job", "writes": ["b.py"]}]})
+    assert _hso(env)["permissionDecision"] == "allow", env
+    parent = _parent(repo, _reply_json(env)["parent_id"])
+    relayed_run, pm_run = parent.runs
+    assert warp_fire.fire_command(pm_run.slice_sizing) in _all_text(env).replace("\\", "")
+
+    pm_fire = _fire_slice(repo, pm_run.slice_sizing)
+    assert _hso(pm_fire)["permissionDecision"] == "allow", pm_fire
+
+    relayed_dir, pm_dir = record_dir(repo, relayed_run.run_id), record_dir(repo, pm_run.run_id)
+    assert (relayed_dir / "relayed-ask.md").is_file() and not (relayed_dir / "ask.md").exists()
+    assert not (pm_dir / "relayed-ask.md").exists()
+
+    _bind(repo, relayed_run)
+    _bind(repo, pm_run)
+    anchors = {}
+    for run, text in ((relayed_run, "relay job"), (pm_run, "pm job")):
+        rows = ledger.read_ledger(repo, ledger.run_dir(repo, run.run_id)).items
+        anchors[text] = [i.anchor for i in rows if i.text == text]
+    assert anchors == {"relay job": [ledger.ORIGIN_RELAYED], "pm job": [ledger.ORIGIN_ASK]}
+
+
 def test_a_malformed_asks_element_is_denied_before_anything_is_written(repo):
     env = _submit(repo, {"asks": [{"ask": ""}, {"ask": "two"}]})
     assert _hso(env)["permissionDecision"] == "deny"

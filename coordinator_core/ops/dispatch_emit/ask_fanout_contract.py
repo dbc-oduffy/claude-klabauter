@@ -3,7 +3,9 @@
 Leaf module, stdlib only. ``ledger_partition`` answers whether every parent row is claimed by exactly
 one slice; ``after_edges`` which slice pairs must be sequenced; ``concurrent_run_budget`` how many
 sibling runs of one parent may run at once; ``admit`` which ready runs wait; ``release`` which runs a
-close frees. Reference: docs/reference/multi-ask-submission-contract.md.
+close frees. ``AskSlice.source`` is a slice's own ask source (None reads as ``pm``);
+``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
+reads it back. Reference: docs/reference/multi-ask-submission-contract.md.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ class AskSlice:
     rows: tuple[str, ...] = ()
     writes: Optional[tuple[str, ...]] = None
     wave: Optional[int] = None
+    source: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,18 @@ def parse_ask_parent(text: Any) -> Optional[tuple[str, str]]:
     if len(parts) != 2:
         return None
     return parts[0], parts[1]
+
+
+SLICE_SOURCE_KEY = "ask_source"
+
+
+def slice_ask_source(sizing: Mapping) -> Optional[str]:
+    """The slice sizing's ``em_analysis.ask_source`` string, else None (absent reads as ``pm``)."""
+    analysis = sizing.get("em_analysis") if isinstance(sizing, Mapping) else None
+    if not isinstance(analysis, Mapping):
+        return None
+    value = analysis.get(SLICE_SOURCE_KEY)
+    return value if isinstance(value, str) else None
 
 
 def ledger_partition(parent_row_ids: Sequence[str], slices: Sequence[AskSlice]) -> Optional[str]:

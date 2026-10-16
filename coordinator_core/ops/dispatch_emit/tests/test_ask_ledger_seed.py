@@ -174,6 +174,41 @@ def test_sibling_slices_sharing_one_verbatim_seed_disjoint_rows_unioning_to_the_
     assert seeded == [["fix the a thing"], ["fix the b thing"]]
 
 
+def _slice(repo, name, source):
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
+
+    rel = f"state/sizings/2026-10-01-{name}.yaml"
+    analysis = {"ask_parent": fc.ask_parent_marker("ask-parent-x", name)}
+    if source:
+        analysis[fc.SLICE_SOURCE_KEY] = source
+    doc = {
+        "schema": "sizing-object", "name": name, "intent": f"intent of {name}", "intent_source": "em-elaborated",
+        "estimate": {"tshirt": "XS", "provisional": True}, "route": "dispatch", "detents": [],
+        "fork": None, "xl_exit": None, "status": "draft",
+        "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+        "em_analysis": analysis,
+    }
+    (repo / rel).write_text(yaml.safe_dump(doc), encoding="utf-8")
+    run_dir = rl.start(repo, name)
+    rl.bind(repo, name, rel)
+    return rel, run_dir
+
+
+def test_a_relayed_slice_seeds_its_row_with_origin_relayed(repo):
+    rel, run_dir = _slice(repo, "rel-slice", "relayed")
+    rows = rr.read_register((repo / rel).read_text(encoding="utf-8")).rows
+    assert [(r["source_text"], r["anchor"]) for r in rows] == [("intent of rel-slice", "relayed")]
+    assert [(i.text, i.origin) for i in rl.read_ledger(repo, run_dir).items] == [("intent of rel-slice", "relayed")]
+    assert "relayed" in (run_dir / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
+
+
+def test_a_pm_slice_still_anchors_ask(repo):
+    rel, _ = _slice(repo, "pm-slice", "pm")
+    rel2, _ = _slice(repo, "bare-slice", None)
+    for r in (rel, rel2):
+        assert [x["anchor"] for x in rr.read_register((repo / r).read_text(encoding="utf-8")).rows] == ["ask"]
+
+
 def test_a_slice_holding_its_assigned_rows_seeds_nothing_more(repo):
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
 

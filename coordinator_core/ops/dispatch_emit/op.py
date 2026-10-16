@@ -258,6 +258,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     record_dir,
 )
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
@@ -1505,6 +1506,7 @@ def _dispatch_emit(
         if ask_source == ASK_SOURCE_RELAYED and sizing_path:
             raise ValueError("dispatch.emit ask_source 'relayed' marks a raw ask's text; sizing_path carries none")
         sizing_rel: Optional[str] = None
+        relayed_slice_text: Optional[str] = None
         if sizing_path:
             ask_root = _sizing_root(params, repo_root, str(sizing_path))
             sizing_rel = normalize_sizing_rel(ask_root, str(sizing_path))
@@ -1519,6 +1521,9 @@ def _dispatch_emit(
             if is_intake(intake_doc):
                 # Sized in-run: the gate and plan-blitz args are the run's, as for a raw ask.
                 ask_sizing = {"writes": list(params.get("writes") or []), "batons": []}
+                if slice_ask_source(intake_doc) == ASK_SOURCE_RELAYED:
+                    ask_source = ASK_SOURCE_RELAYED
+                    relayed_slice_text = str(intake_doc.get("intent") or "") or None
             else:
                 intake_doc = None
                 ask_sizing = _gate_sizing_at_emit(
@@ -1550,7 +1555,7 @@ def _dispatch_emit(
         ask_ctx = {
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "reserved_parent": reserved_parent, "rebound": rebound,
-            "ask_source": ask_source,
+            "ask_source": ask_source, "relayed_slice_text": relayed_slice_text,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }
         if ask_baton is not None:
@@ -1908,12 +1913,13 @@ def _dispatch_emit(
                 else None
             ),
         )
-        if ask_ctx["prompt"]:
+        ask_body = ask_ctx["prompt"] or ask_ctx["relayed_slice_text"]
+        if ask_body:
             # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
             ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
             ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
-            ask_file.write_text(ask_ctx["prompt"], encoding="utf-8")
+            ask_file.write_text(ask_body, encoding="utf-8")
         bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
         ask_ctx["revisions_inherited"] = [
             {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip()}

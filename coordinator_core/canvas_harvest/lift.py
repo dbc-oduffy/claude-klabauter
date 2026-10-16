@@ -87,7 +87,7 @@ class _State:
             return
         slot = self.reads.setdefault("frames", {})
         for item in files:
-            if isinstance(item, dict) and isinstance(item.get("path"), str):
+            if isinstance(item, dict) and model.is_project_file(item.get("path")):
                 slot[item["path"]] = model.FrameSource(
                     path=item["path"],
                     saved_to=str(item.get("saved_to", "")),
@@ -106,7 +106,9 @@ class _State:
             return
         kind = payload.get("type")
         self.listing = {
-            "paths": [f["path"] for f in payload.get("files", ()) if isinstance(f, dict) and "path" in f],
+            "paths": [
+                f["path"] for f in payload.get("files", ()) if isinstance(f, dict) and model.is_project_file(f.get("path"))
+            ],
             "type": str(kind.get("title", "")) if isinstance(kind, dict) else "",
         }
 

@@ -172,7 +172,7 @@ def test_artifact_mismatch_leaves_prior_record_whole(tmp_path):
 
 def _declared_equals_written(tmp_path, n_frames, n_threads):
     out = tmp_path / "out"
-    frames = {f"f{i}.html": f"{i}".encode() for i in range(n_frames)}
+    frames = {f"project/f{i}.html": f"{i}".encode() for i in range(n_frames)}
     lifted = _lifted(tmp_path, frames, [_thread(f"t{i}") for i in range(n_threads)])
     with declared_writes.collecting() as declared:
         result = record.write_record(lifted, out, NOW)
@@ -199,16 +199,24 @@ def test_record_of_exactly_the_ceiling_is_written_whole(tmp_path):
 
 def test_record_one_over_is_refused_over_an_empty_directory(tmp_path):
     out = tmp_path / "out"
-    err = _refusal(_lifted(tmp_path, {f"f{i}": b"x" for i in range(model.MAX_RECORD_FILES - 2)}, []), out, model.RECORD_TOO_LARGE)
+    err = _refusal(_lifted(tmp_path, {f"project/f{i}": b"x" for i in range(model.MAX_RECORD_FILES - 2)}, []), out, model.RECORD_TOO_LARGE)
     assert err.detail == f"{model.MAX_RECORD_FILES + 1} files, ceiling {model.MAX_RECORD_FILES}"
     assert not out.exists()
+
+
+def test_runtime_files_do_not_count_toward_the_ceiling(tmp_path):
+    out = tmp_path / "out"
+    frames = {f"project/f{i}": b"x" for i in range(model.MAX_RECORD_FILES - 5)}
+    frames.update({f"artifact-type/r{i}.js": b"y" for i in range(20)})
+    record.write_record(_lifted(tmp_path, frames, [_thread("t1"), _thread("t2")]), out, NOW)
+    assert (out / "harvest.json").is_file()
 
 
 def test_record_one_over_leaves_a_prior_record_whole(tmp_path):
     out = tmp_path / "out"
     record.write_record(_lifted(tmp_path, {"a.html": b"a"}), out, NOW)
     before = _snapshot(out)
-    _refusal(_lifted(tmp_path, {f"f{i}": b"x" for i in range(model.MAX_RECORD_FILES - 2)}, []), out, model.RECORD_TOO_LARGE)
+    _refusal(_lifted(tmp_path, {f"project/f{i}": b"x" for i in range(model.MAX_RECORD_FILES - 2)}, []), out, model.RECORD_TOO_LARGE)
     assert _snapshot(out) == before
 
 

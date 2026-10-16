@@ -991,8 +991,6 @@ def compose_ask_script(
     if ask_source not in ASK_SOURCES:
         raise AskComposeRefused(f"ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
     relayed = ask_source == ASK_SOURCE_RELAYED
-    if relayed and sizing_rel:
-        raise AskComposeRefused("a relayed ask is a raw prompt; a sizing carries no relayed text")
     ledger_clause_text = _RELAYED_LEDGER_CLAUSE if relayed else _LEDGER_CLAUSE
     if stop_after not in (None, STOP_AFTER_PLAN):
         raise AskComposeRefused(f"stop_after takes {STOP_AFTER_PLAN!r} or nothing, got {stop_after!r}")
@@ -1004,6 +1002,8 @@ def compose_ask_script(
     review = parse_execute_review(review_roster_fragment, required_reviewers=list(required_reviewers))
 
     intake = _intake_sizing(repo_root, sizing_rel)
+    if relayed and sizing_rel and intake is None:
+        raise AskComposeRefused("a relayed ask is a raw prompt or an intake slice; a planned sizing carries no relayed text")
     # An intake sizing's estimate and route are placeholders: the in-run size stage judges them.
     sized_in_run = not sizing_rel or intake is not None
     known_arm = None if intake is not None else _known_arm(repo_root, sizing_rel)
@@ -2167,7 +2167,7 @@ def compose_ask_script(
         f"{HALT_PLAN_FIELD}: _planRel, "
         "next_action: 'Ledger rows ' + (_blkIds.join(', ') || '(ledger unreadable)') + ' block the commit.' "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
-        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out, and a note stating scope (`note`, row-free).' : '') "
+        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' name no register row: re-run the ledger check.' : '') "
         "+ ' Once the rows are met out of band, re-fire the same sizing.' }; }"
     )

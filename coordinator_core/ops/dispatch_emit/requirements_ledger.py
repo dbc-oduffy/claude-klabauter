@@ -33,7 +33,8 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import MutateAbort
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, RECORD_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.session.declared_writes import declare_write
 
@@ -44,8 +45,10 @@ INBOX_FILE = "revisions.jsonl"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
-#: Prefix of the `ruling.ref` a `workflow.revise` out_of_scope stamps: `<REVISE_REF>:<run_id>:<revision row id>`.
+#: Prefix of the `ruling.ref` a `workflow.revise` out_of_scope stamps: `<REVISE_REF>:<run_id>:<OUT_OF_SCOPE_REF>`.
+#: Rulings written before the ruling stopped minting a row end in a revision row id instead.
 REVISE_REF = "workflow.revise"
+OUT_OF_SCOPE_REF = "out_of_scope"
 STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
 #: Acts that can only exist after the terminal commit; a `post_commit` item names which remain.
 POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo")
@@ -217,7 +220,8 @@ def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str],
         if row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
             revision = _withheld_revision(row, run_id)
             if revision:
-                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": f"withheld by revision {revision}"})
+                reason = "withheld by out-of-scope ruling" if revision == OUT_OF_SCOPE_REF else f"withheld by revision {revision}"
+                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": reason})
             continue
         origin, at = _origin(row.get(rr.ROW_ANCHOR))
         anchor = row.get(rr.ROW_ANCHOR)
@@ -384,8 +388,9 @@ def _append_rows(
     (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
     removes the open, unclaimed rows derived from those PM turns and lists them in
     `unrelated_turns`. `withhold` (`{"ids": [...], "run_id", "verbatim"}`) defers the named rows
-    with a ruling that cites the row this call appends, in the same register write; an unknown
-    id or a met/waived row refuses the whole write."""
+    with a ruling quoting the verbatim, in the same register write; it appends no row itself, and
+    when every named row is already deferred and no entry is added the write is skipped. An
+    unknown id or a met/waived row refuses the whole write."""
 
     drop_turns = drop_turns or {}
 
@@ -422,10 +427,9 @@ def _append_rows(
                 rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
             })
         if named:
-            revision = str(rows[-1].get(rr.ROW_ID))
             ruling = {
                 rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: str(withhold["verbatim"]),
-                rr.RULING_REF: f"{REVISE_REF}:{withhold['run_id']}:{revision}", rr.RULING_ON: _now()[:10],
+                rr.RULING_REF: f"{REVISE_REF}:{withhold['run_id']}:{OUT_OF_SCOPE_REF}", rr.RULING_ON: _now()[:10],
             }
             for rid in dict.fromkeys(named):
                 row = by_id[rid]
@@ -541,12 +545,14 @@ def _is_sibling_slice(sizing: Mapping) -> bool:
 
 def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
     """A sibling slice shares its `pm_verbatims` with every other slice, so it seeds none of them:
-    its register already holds the rows the split assigned it, else its `intent` is its one row."""
+    its register already holds the rows the split assigned it, else its `intent` is its one row,
+    anchored `relayed` when the slice's `em_analysis.ask_source` is relayed and `ask` otherwise."""
     register = sizing.get(rr.REGISTER_KEY)
     if isinstance(register, Mapping) and register.get(rr.ROWS_KEY):
         return []
     intent = sizing.get("intent")
-    return [(intent, ORIGIN_ASK)] if isinstance(intent, str) and intent.strip() else []
+    origin = ORIGIN_RELAYED if slice_ask_source(sizing) == ASK_SOURCE_RELAYED else ORIGIN_ASK
+    return [(intent, origin)] if isinstance(intent, str) and intent.strip() else []
 
 
 def bind(
@@ -607,7 +613,8 @@ def revise(
     not a requirement: it is accepted and adds no row or queued revision. Any non-empty `verbatim`
     is a requirement and always adds a row: free text belongs in `note`. `out_of_scope` ids are deferred
     in the same register write as the revision row, the verbatim being their ruling; it needs that
-    verbatim and a bound sizing. Returns (ledger, run dir, the new row id or None)."""
+    verbatim and a bound sizing; that verbatim is only the ruling's quote and adds no row, and a
+    repeated call changes nothing. Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
     has_note = isinstance(note, str) and bool(note.strip())
@@ -630,7 +637,9 @@ def revise(
         _write_run(dir_, run)
         declare_write(dir_ / RUN_FILE)
     added: Optional[str] = None
-    if text:
+    if named:
+        _append_rows(root, run["sizing_rel"], [], withhold=withhold)
+    elif text:
         at = _now()
         if run.get("sizing_rel"):
             rows = _append_rows(root, run["sizing_rel"], [(text, f"{ORIGIN_REVISION}@{at}")], withhold=withhold)

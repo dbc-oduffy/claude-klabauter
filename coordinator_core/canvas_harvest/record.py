@@ -64,7 +64,8 @@ def write_record(lifted: model.Lifted, out_dir, now: datetime) -> model.RecordWr
     rendered = comments.rendered_text if comments is not None else ""
     frames = list(read.frames)
 
-    count = len(frames) + len(threads) + _EXTRA_FILES
+    # Ceiling counts project/** only; lift drops type runtime files, so frames holds none in production.
+    count = sum(model.is_project_file(f.path) for f in frames) + len(threads) + _EXTRA_FILES
     if count > model.MAX_RECORD_FILES:
         raise model.HarvestError(model.RECORD_TOO_LARGE, f"{count} files, ceiling {model.MAX_RECORD_FILES}")
 

@@ -72,5 +72,13 @@ def test_thread_ids_and_latest_comment_at():
     assert model.latest_comment_at([]) is None
 
 
+@pytest.mark.parametrize(
+    "path,expected",
+    [("project/a.html", True), ("project/", False), ("project", False), ("xproject/a", False), ("app.js", False), (None, False)],
+)
+def test_is_project_file(path, expected):
+    assert model.is_project_file(path) is expected
+
+
 def test_record_file_ceiling():
     assert model.MAX_RECORD_FILES == 48

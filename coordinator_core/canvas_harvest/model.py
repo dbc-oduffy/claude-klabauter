@@ -22,6 +22,14 @@ SCHEMA = "canvas-harvest-record/1"
 # The most files one record may hold; a larger record is refused before any write.
 MAX_RECORD_FILES = 48
 
+PROJECT_PREFIX = "project/"
+
+
+def is_project_file(path: object) -> bool:
+    """True iff the canvas-relative `path` is a file under project/**; type runtime files answer False."""
+    return isinstance(path, str) and path.startswith(PROJECT_PREFIX) and len(path) > len(PROJECT_PREFIX)
+
+
 CANVAS_UNREADABLE = "canvas-unreadable"
 READ_ERROR_UNCLASSIFIED = "read-error-unclassified"
 NO_TRANSCRIPT = "no-transcript"

@@ -12,12 +12,12 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str}` | `{sizing: str}` | `{asks: [{ask, label?, writes?}], confirm_split?}` (each ask a
+`args` shape: `{ask: str}` | `{sizing: str}` | `{asks: [{ask, source?, label?, writes?}], confirm_split?}` (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (ask only; absent is `pm`; a relayed ask is
-forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (absent is `pm`; on `asks` it is the default for items naming
+no `source` of their own; a relayed ask is forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
 (`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
 op's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the
 PM's local cross-repo assent; implied on a remote venue). A bare string `args` is the ask.
@@ -50,7 +50,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_su
 GUARD_NAME = "submit-engine-ask"
 SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
 
-_ARGS_SHAPE = 'args: {ask: "<words>"} | {sizing: "<path>"} | {asks: [{ask}]}, brief: "<text>" | brief_file'
+_ARGS_SHAPE = 'args: {ask: "<words>"} | {sizing: "<path>"} | {asks: [{ask, source?}]}, brief: "<text>" | brief_file'
 
 EmitFn = Callable[[dict, Path], dict]
 FanoutFn = Callable[[dict, Path], dict]  # the contract's FANOUT_OP signature (ask_fanout_contract.FanoutFn)
@@ -187,10 +187,15 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         return None, None
     asks = args["asks"]
     if not isinstance(asks, list) or not asks:
-        return None, "asks must be a non-empty list of {ask, label?, writes?}."
+        return None, "asks must be a non-empty list of {ask, source?, label?, writes?}."
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES
+
     for i, item in enumerate(asks):
         if not isinstance(item, dict) or not isinstance(item.get("ask"), str) or not item["ask"].strip():
             return None, f"asks[{i}] carries no ask text."
+        item_source = item.get("source")
+        if item_source is not None and item_source not in ASK_SOURCES:
+            return None, f"asks[{i}].source must be one of: {', '.join(ASK_SOURCES)}."
         label = item.get("label")
         if label is not None and not isinstance(label, str):
             return None, f"asks[{i}].label must be a string."
@@ -300,8 +305,6 @@ def evaluate(
         return _refuse(asks_refusal)
     if sum(x is not None for x in (ask, sizing_rel, asks)) != 1:
         return _refuse("Submit exactly one of ask, sizing, asks.")
-    if asks is not None and len(asks) == 1:
-        ask, asks = asks[0]["ask"], None
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
 
     if source is not None:
@@ -309,6 +312,13 @@ def evaluate(
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
         if sizing_rel is not None:
             return _refuse("source marks an ask's text; a sizing submission carries none.")
+    if asks is not None:
+        asks = [
+            {**item, "source": item.get("source", source)} if item.get("source", source) is not None else dict(item)
+            for item in asks
+        ]
+        if len(asks) == 1:
+            ask, source, asks = asks[0]["ask"], asks[0].get("source"), None
 
     brief, brief_refusal = _brief_params(payload["tool_input"])
     if brief_refusal:
@@ -316,8 +326,6 @@ def evaluate(
     if asks is not None:
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
-        if source == ASK_SOURCE_RELAYED:
-            return _refuse("source: relayed marks one ask's text; submit relayed asks one call each.")
 
     root = _repo_root(repo_arg, payload.get("cwd"))
     if root is None:

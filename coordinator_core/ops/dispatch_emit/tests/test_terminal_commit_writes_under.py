@@ -51,6 +51,10 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
+def _reviewed(*slice_files: str) -> dict:
+    return {**_REVIEWED, "prep": {"slice_files": list(slice_files)}}
+
+
 def _run(repo: Path, **params) -> dict:
     request = CommitRequest(
         chunks=(ChunkCommit(id="C1", title="t1", prefixes=("out/",), report="report.md"),)
@@ -70,7 +74,7 @@ def _committed(repo: Path) -> list:
 def test_a_new_file_under_the_prefix_lands_without_a_report_claim(repo):
     (repo / "out" / "new.txt").write_text("new\n", encoding="utf-8")
     session_scope.touch(SELF, "out/new.txt", cwd=str(repo))
-    out = _run(repo, session_id=SELF)
+    out = _run(repo, session_id=SELF, inline_review=_reviewed("out/new.txt"))
     assert out["committed"] is True, out
     assert "out/new.txt" in _committed(repo)
 
@@ -87,7 +91,9 @@ def test_a_peer_claimed_file_under_the_prefix_is_not_landed(repo):
     session_scope.touch(SELF, "out/mine.txt", cwd=str(repo))
     session_scope.touch(SELF, "out/theirs.txt", cwd=str(repo))
     session_scope.touch(PEER, "out/theirs.txt", cwd=str(repo))
-    out = _run(repo, session_id=SELF)
+    out = _run(
+        repo, session_id=SELF, inline_review=_reviewed("out/mine.txt", "out/theirs.txt")
+    )
     assert out["committed"] is True, out
     landed = _committed(repo)
     assert "out/mine.txt" in landed

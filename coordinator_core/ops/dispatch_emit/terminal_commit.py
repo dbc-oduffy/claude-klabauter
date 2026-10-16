@@ -1419,26 +1419,27 @@ def _own_prefix_files(worktree_root: Path, chunk, report_cache: dict) -> Optiona
 
 
 def _expanded_prefix_files(
-    worktree_root: Path, chunk, snapshot: Optional["_Snapshot"], session_id: Optional[str]
+    worktree_root: Path, chunk, snapshot: Optional["_Snapshot"], session_id: Optional[str],
+    touched: frozenset,
 ) -> list:
-    """Existing changed files under ``chunk``'s own ``writes_under`` prefixes that the run's
-    session claims and no live peer contests, read from the pre-commit ``snapshot`` (no git
-    spawn). Empty with no snapshot, no session id or no prefixes. Admission is the session claim,
-    not the run's touched set: a sibling run of one session sharing a prefix is not excluded."""
+    """Existing changed files under ``chunk``'s own ``writes_under`` prefixes that ``touched``
+    (this run's own touched set) names and no live peer contests, read from the pre-commit
+    ``snapshot`` (no git spawn). Empty with no snapshot, no session id or no prefixes. Admission
+    is the run's touched set, never a session claim: a sibling run's file under a shared prefix
+    is not staged and surfaces in ``undeclared_dirty``. ``session_id`` only keys the live-peer
+    contest."""
     if snapshot is None or not session_id or not chunk.prefixes:
         return []
     found = sorted(
-        p for p in snapshot.changed_among(list(chunk.prefixes)) if (worktree_root / p).is_file()
+        p
+        for p in snapshot.changed_among(list(chunk.prefixes))
+        if p in touched and (worktree_root / p).is_file()
     )
     if not found:
         return []
     from coordinator_core.session import scope as session_scope
 
     root_str = str(worktree_root)
-    owned = set(session_scope.own_path_claims(session_id, cwd=root_str))
-    found = [p for p in found if p in owned]
-    if not found:
-        return []
     contested = session_scope.contested_by_live_peers(found, session_id, cwd=root_str)
     if contested is None:
         return []
@@ -3331,10 +3332,16 @@ def _terminal_commit_inner(
     all_paths: list = []
     prefix_files: list = []
 
+    from coordinator_core.ops.dispatch_emit import run_touched
+
+    touched = run_touched.touched_paths(
+        request, inline_review, artifacts.paths() if artifacts is not None else ()
+    )
+
     for chunk in done_chunks:
         own_prefix_files = _with_expansion(
             _own_prefix_files(worktree_root, chunk, report_cache),
-            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id),
+            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched),
         )
         if own_prefix_files is None:
             return _error(
@@ -3351,7 +3358,7 @@ def _terminal_commit_inner(
     for chunk in partial_chunks:
         own_prefix_files = _with_expansion(
             _own_prefix_files(worktree_root, chunk, report_cache),
-            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id),
+            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched),
         ) or []
         all_paths.extend(list(chunk.paths) + own_prefix_files)
         prefix_files.extend(own_prefix_files)
@@ -3442,13 +3449,8 @@ def _terminal_commit_inner(
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    from coordinator_core.ops.dispatch_emit import run_touched
-
     run_owned, owned_deletions = _run_owned_dirt(
-        worktree_root, request, snapshot, session_id, all_paths, deleted_paths,
-        run_touched.touched_paths(
-            request, inline_review, artifacts.paths() if artifacts is not None else ()
-        ),
+        worktree_root, request, snapshot, session_id, all_paths, deleted_paths, touched,
     )
     all_paths.extend(run_owned)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))

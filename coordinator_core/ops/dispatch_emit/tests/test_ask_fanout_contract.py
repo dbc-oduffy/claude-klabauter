@@ -167,3 +167,22 @@ def test_parent_record_roundtrip_and_schema_guard():
     assert c.ParentRecord.from_json(data) == rec
     with pytest.raises(ValueError):
         c.ParentRecord.from_json({"schema": "other", "version": 1})
+
+
+def test_ask_slice_source_defaults_none():
+    assert c.AskSlice(label="a", ask="a").source is None
+    assert c.AskSlice(label="a", ask="a", source="relayed").source == "relayed"
+
+
+def test_slice_source_key_and_reader():
+    assert c.SLICE_SOURCE_KEY == "ask_source"
+    assert c.slice_ask_source({"em_analysis": {"ask_source": "relayed"}}) == "relayed"
+
+
+@pytest.mark.parametrize(
+    "sizing",
+    [{}, {"em_analysis": None}, {"em_analysis": "x"}, {"em_analysis": {}},
+     {"em_analysis": {"ask_source": 3}}, None, []],
+)
+def test_slice_ask_source_none_for_absent_or_malformed(sizing):
+    assert c.slice_ask_source(sizing) is None

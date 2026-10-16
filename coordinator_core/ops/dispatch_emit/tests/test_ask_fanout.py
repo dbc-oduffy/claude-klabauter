@@ -63,6 +63,21 @@ def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo):
         assert "parent_id" not in doc
 
 
+def test_mixed_sources_stamp_only_the_relayed_slice(repo):
+    out = _go(repo, {"asks": [
+        {"ask": "fix a", "source": "relayed", "writes": ["a"]},
+        {"ask": "fix b", "source": "pm", "writes": ["b"]},
+        {"ask": "fix c", "writes": ["c"]},
+    ]})
+    assert out["exit_code"] == 0, out
+    paths = sorted((repo / "state" / "sizings").glob("*.yaml"))
+    docs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in paths]
+    assert len(docs) == 3
+    assert docs[0]["em_analysis"][c.SLICE_SOURCE_KEY] == "relayed"
+    assert c.slice_ask_source(docs[0]) == "relayed"
+    assert all(c.SLICE_SOURCE_KEY not in d["em_analysis"] for d in docs[1:])
+
+
 def test_overlapping_and_no_hint_slices_are_sequenced(repo):
     out = _go(repo, {"asks": [
         {"ask": "one", "writes": ["pkg"]},
@@ -142,6 +157,7 @@ def test_doubled_and_unclaimed_rows_refuse_before_any_write(repo):
     {"asks": []},
     {"asks": [{"ask": ""}]},
     {"asks": [{"ask": "x", "writes": "a.py"}]},
+    {"asks": [{"ask": "x"}, {"ask": "y", "source": "operator"}]},
     {"asks": [{"ask": "x"}], "slices": [{"ask": "y", "rows": []}], "parent_sizing": "p"},
     {"asks": [{"ask": "x"}], "confirm_split": "yes"},
     {"slices": [{"ask": "y", "rows": ["R1"]}]},

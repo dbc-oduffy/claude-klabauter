@@ -1091,11 +1091,14 @@ def _em_discharge(
     if row.get("performer") != "em":
         return _err(f"em-discharge: row {row_id!r} is not performer: em")
 
-    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        _is_memo_send_row,
+        _is_operator_row,
+        memo_close_route,
+        memo_row_slug,
+    )
 
     if _is_memo_send_row(row):
-        from coordinator_core.ops.dispatch_emit.spine_read import memo_close_route, memo_row_slug
-
         return _err(
             f"em-discharge: row {row_id!r} is a memo-send row; "
             f"{memo_close_route(row_id, memo_row_slug(row))}"

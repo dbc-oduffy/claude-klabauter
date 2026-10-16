@@ -239,6 +239,86 @@ def test_guard_kira_verdict_routed_passes_when_answered(tmp_path) -> None:
     assert _guard_kira_verdict_routed(payload) == {}
 
 
+_RUN_OWNED_REVIEW_SIDECARS = [
+    ("ask-20261016T140005-a68c92.review-wave-bookkeeping.md", ["agent_type: engine:review-wave-bookkeeping"]),
+    ("manifest-ask-x-prep.review-prep.md", ["agent_type: engine:prep-freeze"]),
+    (
+        "2026-10-16-codereview-slicewhole-diff.md",
+        ["agent_type: review-findings", "spawned_at: 2026-10-16T13:04:26Z", "plan_id: pln-x"],
+    ),
+]
+
+
+def _write_run_owned_review_sidecars(share_dir: str) -> None:
+    for name, lines in _RUN_OWNED_REVIEW_SIDECARS:
+        _write_sidecar(share_dir, name, lines)
+
+
+@pytest.mark.spawns_process
+def test_guard_kira_verdict_routed_allows_run_owned_review_without_authored_diff(tmp_path) -> None:
+    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
+
+    session_id = "sess-no-diff"
+    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, "some-other-session")
+    _write_run_owned_review_sidecars(_share_dir(repo_root, session_id))
+
+    assert _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id}) == {}
+
+
+@pytest.mark.spawns_process
+def test_guard_kira_verdict_routed_still_blocks_session_review_with_authored_diff(tmp_path) -> None:
+    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
+
+    session_id = "sess-with-diff"
+    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, session_id)
+    _write_sidecar(
+        _share_dir(repo_root, session_id),
+        "coordinatorcode-reviewer.abc.md",
+        ["agent_type: coordinator:code-reviewer", "spawned_at: 2026-10-16T13:04:26Z"],
+    )
+
+    result = _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "unrouted Kira" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.spawns_process
+def test_guard_kira_verdict_routed_run_owned_sidecars_do_not_mask_diff_session_review(tmp_path) -> None:
+    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
+
+    session_id = "sess-mixed"
+    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, session_id)
+    share_dir = _share_dir(repo_root, session_id)
+    _write_run_owned_review_sidecars(share_dir)
+    _write_sidecar(
+        share_dir,
+        "coordinatorcode-reviewer.abc.md",
+        ["agent_type: coordinator:code-reviewer", "spawned_at: 2026-10-16T13:04:26Z"],
+    )
+
+    result = _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.spawns_process
+def test_guard_kira_verdict_routed_allows_run_owned_kira_findings_without_authored_diff(tmp_path) -> None:
+    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
+
+    session_id = "sess-run-kira"
+    repo_root = _git_repo_with_unreviewed_code_commit(tmp_path, "some-other-session")
+    _write_sidecar(
+        _share_dir(repo_root, session_id),
+        "manifest-ask-x-prep.kira.md",
+        [
+            "agent_type: coordinator:overengineering-reviewer",
+            "spawned_at: 2026-10-16T13:04:26Z",
+            "findings_count: 2",
+        ],
+    )
+
+    assert _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id}) == {}
+
+
 def test_stop_em_report_altitude_wrapper_suppresses_on_subagent_stop() -> None:
     from coordinator_core.hooks.stop_dispatch import _stop_em_report_altitude_handler
 

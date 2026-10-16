@@ -186,12 +186,45 @@ def _kira_is_review_activity(filename: str, meta: dict) -> bool:
     return "review" in filename.lower()
 
 
+def _kira_is_run_owned(filename: str, meta: dict) -> bool:
+    """True for a review sidecar written by an engine-ask Workflow run's own
+    review stage (prep-freeze, wave bookkeeping, per-slice findings): its
+    reviewer is the run's, so it is not this session's review activity.
+    Reads only the sidecar's filename and flat frontmatter."""
+    agent_type = meta.get("agent_type")
+    if isinstance(agent_type, str) and agent_type.startswith("engine:"):
+        return True
+    if filename.startswith(("ask-", "manifest-ask-")):
+        return True
+    return (
+        _kira_normalize_agent_type(agent_type) == "review-findings"
+        and "plan_id" in meta
+        and "review_receipt" not in meta
+    )
+
+
+def _kira_session_authored_diff(repo_root: str, session_id: str) -> bool:
+    """True when a code commit in the recent walk carries this session's
+    `Session-Id` trailer (doc-only and bookkeeping commits are not a diff to
+    review). One `git log` spawn; any git failure reads False (a guard that
+    cannot prove a diff must not block on it)."""
+    from coordinator_core.hooks.guard_terminal_review import _session_commits
+
+    try:
+        return any(c.is_code for c in _session_commits(repo_root, session_id))
+    except Exception:
+        return False
+
+
 def _kira_block_condition_1(in_scope: list) -> bool:
     kira_present = any(_kira_is_kira(f, m) for f, m in in_scope)
     if kira_present:
         return False
     return any(
-        _kira_is_review_activity(f, m) and not _kira_is_kira(f, m) for f, m in in_scope
+        _kira_is_review_activity(f, m)
+        and not _kira_is_kira(f, m)
+        and not _kira_is_run_owned(f, m)
+        for f, m in in_scope
     )
 
 
@@ -355,14 +388,20 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
 
     reasons: list = []
 
-    if _kira_block_condition_1(in_scope):
+    authored_diff = _kira_session_authored_diff(repo_root, session_id)
+
+    if _kira_block_condition_1(in_scope) and authored_diff:
         reasons.append(
             "- Other review activity ran this session, but no Kira "
             "(overengineering-reviewer) sidecar is present. Kira fires on "
             "every close (SKILL.md); dispatch her before closing."
         )
 
-    kira_entries = [(f, m) for f, m in in_scope if _kira_is_kira(f, m)]
+    kira_entries = [
+        (f, m)
+        for f, m in in_scope
+        if _kira_is_kira(f, m) and (authored_diff or not _kira_is_run_owned(f, m))
+    ]
     for kira_file, kira_meta in kira_entries:
         findings_count = _kira_to_int(kira_meta.get("findings_count"))
         if findings_count is None or findings_count <= 0:

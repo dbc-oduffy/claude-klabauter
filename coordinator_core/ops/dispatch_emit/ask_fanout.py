@@ -7,7 +7,7 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Two arms:
-  - asks:   {asks: [{ask, label?, writes?}], confirm_split?} -- the parent register is one row
+  - asks:   {asks: [{ask, source?, label?, writes?}], confirm_split?} -- the parent register is one row
             (R1..Rn) per ask, each slice claims its own.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
@@ -42,6 +42,7 @@ from coordinator_core.ops import baton_pm_turns
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.ops.sizing_intake_contract import intake_record
@@ -95,14 +96,18 @@ def _read_slices(params: Mapping) -> tuple[list[contract.AskSlice], Optional[str
         if label is not None and not isinstance(label, str):
             raise _Refused(f"{where}: label must be a string")
         label = (label or "").strip() or f"slice-{i + 1}"
+        source = None
         if asks is not None:
+            source = item.get("source")
+            if source is not None and source not in ASK_SOURCES:
+                raise _Refused(f"{where}: source must be one of {', '.join(ASK_SOURCES)}")
             rows: tuple[str, ...] = (f"R{i + 1}",)
         else:
             row_ids = item.get("rows")
             if not isinstance(row_ids, list) or not all(isinstance(r, str) for r in row_ids):
                 raise _Refused(f"{where}: rows must be a list of register row ids")
             rows = tuple(row_ids)
-        out.append(contract.AskSlice(label, ask.strip(), rows, _writes(item.get("writes"), where)))
+        out.append(contract.AskSlice(label, ask.strip(), rows, _writes(item.get("writes"), where), source=source))
     parent_sizing = None
     if slices is not None:
         parent_sizing = params.get("parent_sizing")
@@ -156,6 +161,8 @@ def _slice_record(
         for t in turns
     ]
     record["em_analysis"][ASK_PARENT_KEY] = marker
+    if sl.source == ASK_SOURCE_RELAYED:
+        record["em_analysis"][contract.SLICE_SOURCE_KEY] = ASK_SOURCE_RELAYED
     if parent_rows is not None:
         record[rr.REGISTER_KEY] = {
             rr.SOURCES_KEY: sources,

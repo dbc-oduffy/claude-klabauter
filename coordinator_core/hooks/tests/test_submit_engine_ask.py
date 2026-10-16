@@ -257,7 +257,7 @@ def test_repo_arg_selects_the_repo_from_a_non_repo_cwd(tmp_path):
         ({"ask": "a", "sizing": "s.yaml"}, True, "Submit exactly one of"),
         ({"ask": "a", "asks": [{"ask": "b"}]}, True, "Submit exactly one of"),
         ({"asks": [{"ask": "a"}, {"ask": "b"}], "brief": "x"}, True, "rides one run"),
-        ({"asks": [{"ask": "a"}, {"ask": "b"}], "source": "relayed"}, True, "one call each"),
+        ({"asks": [{"ask": "a"}, {"ask": "b", "source": "peer"}]}, True, "asks[1].source must be one of"),
         ({"asks": []}, True, "non-empty list"),
         ({"asks": [{"ask": " "}]}, True, "carries no ask text"),
         ({"asks": [{"ask": "a", "writes": "x"}, {"ask": "b"}]}, True, "writes must be a list"),
@@ -725,6 +725,39 @@ def test_a_one_element_asks_array_is_an_ask(tmp_path):
     mod.evaluate(_payload(root, _asks("a")), emit=emit, fanout=fan)
     assert fan.calls == []
     assert emit.calls[0][0] == {"session_id": "sess-1", "ask": "ask a"}
+
+
+def _sources(fan):
+    return [a.get("source") for a in fan.calls[0][0]["asks"]]
+
+
+def test_call_level_relayed_source_reaches_the_fanout_on_every_item(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    out = mod.evaluate(_payload(root, _asks("a", "b", source="relayed")), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert _sources(fan) == ["relayed", "relayed"]
+
+
+def test_per_item_source_wins_over_the_call_level_default(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    args = {"asks": [{"ask": "a", "source": "relayed"}, {"ask": "b"}]}
+    assert _hso(mod.evaluate(_payload(root, args), emit=_Emit(), fanout=fan))["permissionDecision"] == "allow"
+    assert _sources(fan) == ["relayed", None]
+    fan2 = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    args = {"asks": [{"ask": "a", "source": "pm"}, {"ask": "b"}], "source": "relayed"}
+    mod.evaluate(_payload(_repo(tmp_path / "two"), args), emit=_Emit(), fanout=fan2)
+    assert _sources(fan2) == ["pm", "relayed"]
+
+
+def test_a_one_item_relayed_asks_array_collapses_to_a_relayed_ask(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"asks": [{"ask": "a", "source": "relayed"}]}), emit=emit, fanout=_Fanout([]))
+    assert emit.calls[0][0]["ask_source"] == "relayed"
+    mod.evaluate(_payload(root, {"asks": [{"ask": "a"}], "source": "relayed"}), emit=emit, fanout=_Fanout([]))
+    assert emit.calls[1][0]["ask_source"] == "relayed"
 
 
 def test_a_fanout_refusal_is_the_deny_text_verbatim(tmp_path):

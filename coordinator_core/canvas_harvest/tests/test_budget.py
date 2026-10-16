@@ -157,7 +157,7 @@ def _synthetic_pairs(directory: Path, frames: int, threads: int, minute: int) ->
         (directory / "frames" / name).write_bytes(data)
         files.append(
             {
-                "path": name,
+                "path": f"project/{name}",
                 "saved_to": f"frames/{name}",
                 "size_bytes": len(data),
                 "content_type": "text/html",

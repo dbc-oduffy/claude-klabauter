@@ -95,3 +95,47 @@ def test_the_size_stage_keeps_a_two_word_turns_minted_verbatim(repo, capsys):
     assert code == 0
     assert [v["text"] for v in doc["pm_verbatims"]] == ["ship it"]
     assert re.search(r"[MS]", doc["estimate"]["tshirt"]) and doc["status"] == "routed"
+
+
+def _mark_relayed(repo):
+    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
+    doc["em_analysis"]["ask_source"] = "relayed"
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    return doc["intent"] if "intent" in doc else None
+
+
+def test_a_relayed_intake_slice_writes_relayed_ask_and_no_ask_md(repo):
+    _put(repo, text="relay me")
+    intent = _mark_relayed(repo)
+    script = _script(repo)
+    (relayed_file,) = list((repo / "state").rglob("relayed-ask.md"))
+    assert relayed_file.read_text(encoding="utf-8") == intent
+    assert not list((repo / "state").rglob("ask.md"))
+    assert "--relayed-ask-file" in script
+    assert "Relayed ask" in script
+
+
+def test_a_pm_intake_slice_is_unchanged(repo):
+    _put(repo)
+    script = _script(repo)
+    assert "--relayed-ask-file" not in script
+    assert not list((repo / "state").rglob("relayed-ask.md"))
+
+
+def test_em_passed_relayed_beside_a_sizing_path_still_refuses(repo, capsys):
+    _put(repo)
+    code = cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo), "--ask-source", "relayed"])
+    assert code != 0
+    assert "sizing_path carries none" in capsys.readouterr().err
+
+
+def test_compose_refuses_relayed_on_a_planned_sizing(repo):
+    _put(repo)
+    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
+    doc["status"] = "routed"
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    with pytest.raises(ask_compose.AskComposeRefused, match="planned sizing"):
+        ask_compose.compose_ask_script(
+            repo_root=str(repo), prompt=None, sizing_rel=REL, run_id="r1", session_id=None,
+            ask_source="relayed",
+        )
