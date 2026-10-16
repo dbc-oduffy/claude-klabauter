@@ -1,0 +1,38 @@
+# Fixture shaped after a route table, an auth-states table and a gating-treatments table.
+schema: design-registry/1
+entries:
+  - id: settings
+    board: https://claude.ai/artifact/fixture-canvas-001
+    artboards: [route-settings-390, route-settings-1440, route-settings-3840]
+    harvest: docs/design/x/harvest/
+    sources:
+      - "src/app/settings/page.tsx"
+      - "src/components/settings/**"
+    status: designed
+    ratification: null
+    tranche: "2"
+    web_gate: in place
+  - id: exec-decisions-detail
+    board: https://claude.ai/artifact/fixture-canvas-001
+    artboards: [route-exec-decisions-detail-390, route-exec-decisions-detail-1440]
+    harvest: docs/design/x/harvest/
+    sources:
+      - 'src/app/(dashboard)/exec/decisions/[decisionId]/page.tsx'
+    status: implemented
+  - id: auth-sign-in
+    board: https://claude.ai/artifact/fixture-canvas-001
+    artboards:
+      - auth-sign-in-default
+      - auth-sign-in-error
+    harvest: docs/design/x/harvest/
+    sources:
+      - src/app/sign-in/page.tsx
+      - src/components/auth/*.tsx
+    status: implemented
+  - id: gate-in-place
+    board: https://claude.ai/artifact/fixture-canvas-001
+    artboards: [gating-in-place]
+    harvest: docs/design/x/harvest/
+    sources: [src/components/gate/**]
+    status: deviated
+    ratification: docs/design/x/ratification.md

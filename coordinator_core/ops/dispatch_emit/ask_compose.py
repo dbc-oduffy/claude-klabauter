@@ -61,6 +61,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     research_assemble_flags_js,
     scout_assemble_flags_js,
 )
+from coordinator_core.ops.dispatch_emit.design_conformance import DESIGN_BRIEF_KEY
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
@@ -193,6 +194,7 @@ _GATE_SCHEMA = _obj(
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
         RESUME_LEDGER_KEY: {"type": ["object", "null"]},
+        DESIGN_BRIEF_KEY: {"type": ["string", "null"]},
     },
 )
 _ONLY_ROWS_JS = (
@@ -408,6 +410,8 @@ _PLAN_STAGED_SCHEMA = _obj(["plan_rel", "manifest"], {"plan_rel": _STR, "manifes
 
 
 _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
+#: JS expression: the gate's design brief ahead of an agent's task text; '' when the gate carried none.
+_DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KEY}) + '\\n\\n' : '')"
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
 #: script's bytes never hold it (any agent or peer can read the script).
@@ -443,7 +447,7 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
     return (
         "  const _outerAgent = agent;\n"
         f"  const {_PLAN_BLITZ_FN} = (() => {{\n"
-        f"    const agent = (p, o) => _outerAgent({_LEDGER_PREFIX_VAR} + {_AGENT_DEFS_FN}() + p, o);\n"
+        f"    const agent = (p, o) => _outerAgent({_DESIGN_PREFIX_JS} + {_LEDGER_PREFIX_VAR} + {_AGENT_DEFS_FN}() + p, o);\n"
         f"{rebind}{blitz_fn}\n"
         f"    return {_PLAN_BLITZ_FN};\n"
         "  })();"
@@ -1212,7 +1216,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and spine_plan; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and spine_plan, plus design_brief when present; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -1275,7 +1279,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, "
-            f"resume_rows, resume_ledger and spine_plan; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger and spine_plan, plus design_brief when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1350,8 +1354,8 @@ def compose_ask_script(
             "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. "
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and "
-            "spine_plan; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, "
+            "spine_plan and design_brief; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -1405,6 +1409,7 @@ def compose_ask_script(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
             "baton: _reworded.baton ?? null, tshirt: _reworded.tshirt, route: _reworded.route, "
             "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             "manifest: _reworded.manifest ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
@@ -1435,7 +1440,8 @@ def compose_ask_script(
             "  let _gate = _halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
-            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null };"
+            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null, "
+            f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null }};"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -1636,6 +1642,7 @@ def compose_ask_script(
         )
 
     plan_author = _cat(
+        "js:" + _DESIGN_PREFIX_JS,
         f"{head}\n\n{anchor}\n\n",
         "Author the plan for the sizing at ",
         "js:_sizingRel",
@@ -1681,6 +1688,7 @@ def compose_ask_script(
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
         signal_selects = load_review_signal_selects()
         review_prompt = _cat(
+            "js:" + _DESIGN_PREFIX_JS,
             f"{head}\n\n{anchor}\n\n",
             "The ask gate minted a dispatch spine from the sizing's concrete acceptance rows at ",
             "js:_gate.spine_plan",

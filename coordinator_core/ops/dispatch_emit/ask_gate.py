@@ -80,14 +80,60 @@ def _load_doc_new():
     return mod
 
 
+def _design_scope(sizing: dict, writes: Sequence[str]) -> list[str]:
+    """The paths the gate can see: the scouted writes plus each acceptance row's writes."""
+    scope = [w for w in writes if isinstance(w, str) and w.strip()]
+    for row in sizing.get("acceptance_rows") or []:
+        if isinstance(row, dict):
+            scope += [w for w in row.get("writes") or [] if isinstance(w, str) and w.strip()]
+    return list(dict.fromkeys(scope))
+
+
 def gate(
-    repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None
+    repo_root: Path,
+    sizing_rel: str,
+    *,
+    writes: Sequence[str] = (),
+    baton: Optional[str] = None,
+    mint_design_rows: bool = False,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
     `baton` (repo-relative) goes to the mint at M+, which owns the baton checks; any other arm mints
-    no baton, so it refuses one.
+    no baton, so it refuses one. A non-halted verdict carries the design-registry brief for the
+    sizing's scope; a malformed registry with a non-empty scope halts `registry-unparseable`.
+    `mint_design_rows` (a run-bound call) also appends one design row per hit to the register.
     """
+    from coordinator_core import design_registry as dr
+    from coordinator_core.ops.dispatch_emit import design_conformance as dc
+
+    root = Path(repo_root)
+    try:
+        scope = _design_scope(load_sizing(root, sizing_rel), writes)
+    except SizingFireRefused:
+        scope = []
+    hits, error = dr.lookup(root, scope) if scope else ([], None)
+    registry = dr.registry_path(root)
+    try:
+        shown = registry.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        shown = None
+    if error:
+        return _halt(HALT_REFUSAL, f"{error}: repair {shown or registry}")
+    verdict = _arm_verdict(root, sizing_rel, writes=writes, baton=baton)
+    if verdict.halt is not None or not scope:
+        return verdict
+    registry_rel = shown if registry.is_file() else None
+    brief = dc.brief_text(hits or [], registry_rel)
+    if mint_design_rows and hits:
+        dc.mint_rows(root, sizing_rel, hits)
+    return replace(verdict, design_brief=brief) if brief else verdict
+
+
+def _arm_verdict(
+    repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None
+) -> GateVerdict:
+    """The arm-or-halt verdict, before the design-registry leg."""
     from coordinator_core import sizing_assemble as sa
 
     repo_root = Path(repo_root)
@@ -338,7 +384,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if refused is not None:
             return _halt(HALT_REFUSAL, refused).to_json()
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
-    verdict = gate(root, sizing_rel, writes=writes, baton=params.get("baton"))
+    verdict = gate(
+        root, sizing_rel, writes=writes, baton=params.get("baton"),
+        mint_design_rows=bool(params.get("run_id")),
+    )
     return (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
 
 

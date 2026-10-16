@@ -126,19 +126,22 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
         return _error(f"record dir for {run_id!r} escapes {RECORD_DIR_ROOT}", refused="record-dir-escapes")
     record_dir_rel = f"{RECORD_DIR_ROOT}/{run_id}"
 
+    from coordinator_core.ops.dispatch_emit.run_close import sibling_release
+
+    siblings = sibling_release(worktree_root, run_id, None)
     token = params.get("run_token")
     script_path = params.get("script_path")
     if token is not None and not run_token.redeem(worktree_root, run_id, token, script_path):
-        return _error(
+        refusal = _error(
             "params.run_token does not match a live, unspent token minted for params.run_id and "
             "this script (a token admits one landed commit)",
             refused="run-token",
         )
+        if siblings is not None:
+            refusal["siblings"] = siblings
+        return refusal
     try:
         reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
-        from coordinator_core.ops.dispatch_emit.run_close import sibling_release
-
-        siblings = sibling_release(worktree_root, run_id, None)
         if siblings is not None:
             reply["siblings"] = siblings
         return reply

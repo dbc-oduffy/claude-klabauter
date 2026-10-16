@@ -59,6 +59,19 @@ def test_over_cap_chain_splits_one_part_per_pipeline(monkeypatch):
     assert "next_action" in parts[1].script
 
 
+def test_over_cap_split_groups_a_shared_leg_into_one_part(monkeypatch):
+    segments = [_segment("pre"), _segment("nb"), _segment("web")]
+    legs = {"pre": "nb"}
+    whole = len(compose_chain_script(segments, legs=legs, **KW).encode("utf-8"))
+    monkeypatch.setattr(pipeline_compose, "WORKFLOW_SCRIPT_CAP_BYTES", whole - 1)
+    parts = compose_chain_parts(segments, next_action={"op": "research.close"}, legs=legs, **KW)
+    assert [p.pipelines for p in parts] == [("pre", "nb"), ("web",)]
+    assert "state/scratch/y/nb" in parts[0].script and "state/scratch/y/web" in parts[1].script
+    assert "state/scratch/y/nb/nb" not in parts[0].script
+    assert "break segment2" in parts[0].script and "segment_halts" in parts[1].script
+    assert "next_action" not in parts[0].script and "next_action" in parts[1].script
+
+
 def test_lone_over_cap_segment_still_raises_naming_the_cap():
     big = _segment("alpha", template="x" * (WORKFLOW_SCRIPT_CAP_BYTES + 10))
     with pytest.raises(PipelineEmitRefused) as err:

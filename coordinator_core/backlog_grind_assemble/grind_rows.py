@@ -61,6 +61,11 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   `grind_settle_run.py`; lands an already-ended run's finished rows through the
   grind terminal commit, re-running no other stage.
 
+- `size-chain --profile P --row-id R --digest D --sizing S --run-stamp T --repo-root D
+  -- <sizing-assemble flags>`: implemented in `grind_size_chain.py`; skips when a
+  superseded predecessor already carries route-to-plan, else runs sizing-assemble,
+  coordinator-doc-new and the ledger mark.
+
 - `undo --paths-urlenc E --repo-root R`: implemented in `grind_undo.py` (the
   one verb here that spawns git): puts each named path back to HEAD when this
   session declared it and no live peer holds it.
@@ -1110,6 +1115,12 @@ def _cmd_settle_run(rest: list[str]) -> int:
     return cmd_settle_run(rest)
 
 
+def _cmd_size_chain(rest: list[str]) -> int:
+    from coordinator_core.backlog_grind_assemble.grind_size_chain import cmd_size_chain
+
+    return cmd_size_chain(rest)
+
+
 _VERBS = {
     "check": cmd_check,
     "append": cmd_append,
@@ -1119,12 +1130,13 @@ _VERBS = {
     "run-record": cmd_run_record,
     "undo": cmd_undo,
     "settle-run": _cmd_settle_run,
+    "size-chain": _cmd_size_chain,
 }
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo|settle-run [...]")
+        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo|settle-run|size-chain [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

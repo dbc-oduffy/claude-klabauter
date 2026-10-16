@@ -90,6 +90,11 @@ def test_gate_verdict_to_json_omits_acceptance_when_unset():
     assert c.GateVerdict("s", None, acceptance=stamp).to_json()["acceptance"] == stamp
 
 
+def test_design_brief_absent_from_json_when_empty_and_present_when_set():
+    assert "design_brief" not in c.GateVerdict("s", None).to_json()
+    assert c.GateVerdict("s", None, design_brief="b").to_json()["design_brief"] == "b"
+
+
 def test_resume_rows_absent_from_json_when_unset_and_ordered_when_set():
     assert "resume_rows" not in c.GateVerdict("s", None, resume_plan="p.md").to_json()
     out = c.GateVerdict("s", None, resume_plan="p.md", resume_rows=["M1", "A1"]).to_json()

@@ -61,6 +61,7 @@ def test_split_research_reply_prints_every_part_and_the_fire_order(tmp_path, mon
     err = capsys.readouterr().err
     assert all(p in err for p in paths)
     assert "split into 2 parts" in err
+    assert "does not stop the next part" in err and "next_action.params.halted_segments" in err
     assert no_fire == []
 
 

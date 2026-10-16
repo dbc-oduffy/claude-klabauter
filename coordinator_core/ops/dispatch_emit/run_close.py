@@ -448,7 +448,8 @@ def sibling_release(
     that file (``landed`` with *landed_sha*, or ``halted`` when it is ``None``), reads the write-once
     parent record and every sibling's status file, and returns ``{parent_id, released: [fire call],
     blocked: [{run_id, slice_sizing}]}``. A halted run frees its budget slot but releases no ``after``
-    successor; ``blocked`` names each waiting run behind a halted or blocked predecessor.
+    successor; ``blocked`` names each waiting run behind a halted or blocked predecessor. A ``landed``
+    status is never rewritten as halted: that call returns ``None`` and writes nothing.
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
     from coordinator_core.session import claimed_write
@@ -459,6 +460,8 @@ def sibling_release(
     prior = _read_json(own)
     if prior is None:
         return None
+    if not landed_sha and prior.get("status") == contract.STATUS_LANDED:
+        return None  # invariant: a landed run is never halted
     entry: dict[str, Any] = {"status": contract.STATUS_HALTED}
     if landed_sha:
         entry = {"status": contract.STATUS_LANDED, "sha": landed_sha}

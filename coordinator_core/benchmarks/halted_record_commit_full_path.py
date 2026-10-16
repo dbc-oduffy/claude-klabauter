@@ -73,6 +73,7 @@ def main(argv: list[str]) -> int:
     declare_benchmark_origin()
     repo = build_fixture(Path(args[0]))
     from coordinator_core.ops.dispatch_emit import terminal_commit
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     if "--setup-only" in argv:
         return 0
@@ -83,7 +84,8 @@ def main(argv: list[str]) -> int:
         },
         repo_root=repo / ".git",
     )
-    if out.get("committed") is not True or len(out.get("paths") or []) != len(RECORD_FILES) + 1:
+    expected = {f"{RECORD_DIR_ROOT}/{RUN_ID}/{n}" for n in (*RECORD_FILES, "halted.json")} | {"product.py"}
+    if out.get("committed") is not True or set(out.get("paths") or []) != expected:
         print(f"halted-record commit did not complete: {out!r}", file=sys.stderr)
         return 1
     return 0

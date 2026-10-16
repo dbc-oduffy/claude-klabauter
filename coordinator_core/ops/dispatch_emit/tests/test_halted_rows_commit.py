@@ -125,3 +125,89 @@ def test_unknown_row_is_rejected(repo):
     out = _call(repo, ["r9"])
 
     assert out["ok"] is False and "r9" in out["error"]
+
+
+RUN = "ask-run-20261016T000000-aaaaaa"
+SUCC = "ask-run-20261016T000001-bbbbbb"
+PARENT = "ask-parent-20261016T000000-cccccc"
+
+
+def _halt_fixture(root: Path) -> None:
+    """Every row clean, an ask script under scratch/warp, RUN at running with SUCC waiting after it."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "rows landed"], root)
+    script = root / "scratch" / "warp" / f"{RUN}.workflow.mjs"
+    script.parent.mkdir(parents=True)
+    script.write_text((root / "run.mjs").read_text(encoding="utf-8"), encoding="utf-8")
+    runs = (
+        c.SiblingRun(RUN, RUN, (), "state/sizings/a.yaml", c.STATUS_READY),
+        c.SiblingRun(SUCC, SUCC, (RUN,), "state/sizings/b.yaml", c.STATUS_AFTER),
+    )
+    rec = root / c.parent_record_rel(PARENT)
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps(c.ParentRecord(PARENT, runs).to_json()), encoding="utf-8")
+    st = root / c.status_rel(RUN)
+    st.parent.mkdir(parents=True, exist_ok=True)
+    st.write_text(json.dumps({"status": c.STATUS_RUNNING, "parent_id": PARENT}), encoding="utf-8")
+
+
+def _status(root: Path, rid: str = RUN) -> str:
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+
+    return json.loads((root / c.status_rel(rid)).read_text(encoding="utf-8"))["status"]
+
+
+def _halt_call(root: Path, **extra) -> dict:
+    params = {"script_path": f"scratch/warp/{RUN}.workflow.mjs", "delivered": ["r1", "r2"], **extra}
+    return halted_rows_commit._handler(params, repo_root=root / ".git")
+
+
+def test_all_noop_rows_still_settle_the_run_halted(repo):
+    _halt_fixture(repo)
+
+    out = _halt_call(repo)
+
+    assert out["noop"] == ["r1", "r2"] and out["landed"] == []
+    assert _status(repo) == "halted"
+
+
+def test_successor_is_told_the_predecessor_halted(repo):
+    from coordinator_core.hooks.submit_engine_ask import _slice_deny
+
+    _halt_fixture(repo)
+    _halt_call(repo)
+
+    deny = _slice_deny(repo, (PARENT, SUCC))
+
+    assert deny is not None and "halted" in deny and "has not landed" not in deny
+
+
+def test_explicit_run_id_wins_over_script_stem(repo):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+
+    _halt_fixture(repo)
+    other = repo / c.status_rel("other-run")
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_text(json.dumps({"status": c.STATUS_RUNNING}), encoding="utf-8")
+
+    _halt_call(repo, run_id="other-run")
+
+    assert _status(repo, "other-run") == "halted"
+    assert _status(repo) == "running"
+
+
+def test_parameter_failure_writes_no_status(repo):
+    _halt_fixture(repo)
+
+    out = _halt_call(repo, delivered=[])
+
+    assert out["ok"] is False
+    assert _status(repo) == "running"

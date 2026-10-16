@@ -60,8 +60,8 @@ Negative spec — what this module must never grow:
   edit the base set and the derived set follows by construction.
 - **No move into a package with a non-trivial ``__init__``.** See the table
   above: the same file under ``ops/`` costs 7x more and breaches the bound.
-- **No logic.** Data only. A predicate belongs with its caller, where the
-  namespace-stripping convention that caller uses is visible.
+- **No logic beyond ``bare_agent_type``.** Data only. A predicate belongs with its
+  caller, where the namespace-stripping convention that caller uses is visible.
 
 Membership in ``DELEGATE_REVIEWERS`` is load-bearing twice over, and the
 second one is easy to miss: admitting an agent type HERE admits it to
@@ -90,6 +90,20 @@ prefix before testing membership (``review_trail_write.normalize_reviewer``,
 _bare_type`` all do this for the identical purpose).
 """
 
+#: The bare agent type of the front-end delivery reviewer; the design-conformance
+#: evidence rule compares a review record's reviewer against it.
+SENIOR_FRONT_END = "senior-front-end"
+
+
+def bare_agent_type(agent_type: object) -> "str | None":
+    """`agent_type` namespace-stripped (`coordinator:senior-front-end` ->
+    `senior-front-end`), or None when it is not a string. The one public spelling;
+    the stdlib-only, import-free body is the only logic this module carries."""
+    if not isinstance(agent_type, str):
+        return None
+    return agent_type.rpartition(":")[2]
+
+
 #: The closed set of agent types whose dispatch counts as a delegate review.
 #: Re-exported by ``review_trail_write`` as ``_DELEGATE_REVIEWERS`` for every
 #: existing by-name consumer; new consumers should import it from here.
@@ -99,7 +113,7 @@ DELEGATE_REVIEWERS = frozenset(
         "staff-eng",
         "code-reviewer+staff-eng",
         "eng-director",
-        "senior-front-end",
+        SENIOR_FRONT_END,
         "staff-ux",
         "staff-data-sci",
         "ubt-compile",

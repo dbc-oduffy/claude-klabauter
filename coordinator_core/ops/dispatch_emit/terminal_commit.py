@@ -1549,6 +1549,7 @@ def _awaiting_operator(open_rows: Sequence[dict]) -> list:
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
+    plan_text: Optional[str] = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -1576,7 +1577,8 @@ def _ledger_gate(
             refused="ledger-unjudged",
         ), ledger, []
     result = requirements_ledger.judge(
-        ledger, verdict, _routed_from_manifest(manifest_path), gated=gated, operator=operator
+        ledger, verdict, _routed_from_manifest(manifest_path), gated=gated, operator=operator,
+        repo_root=worktree_root, plan_text=plan_text,
     )
     if result["pass"]:
         return None, ledger, result.get("open") or []
@@ -2527,10 +2529,13 @@ def _close_block(ctx: dict, reply: dict) -> dict:
         legs.update(ctx["presets"])
     block = build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"])
     sha = reply.get("sha")
-    if ctx["applies"] and reply.get("committed") is True and isinstance(sha, str) and sha:
+    if ctx["applies"]:
         from coordinator_core.ops.dispatch_emit.run_close import sibling_release
 
-        siblings = sibling_release(Path(ctx["root"]), ctx.get("sibling_run_id") or ctx["run_id"], sha)
+        landed = reply.get("committed") is True and isinstance(sha, str) and bool(sha)
+        siblings = sibling_release(
+            Path(ctx["root"]), ctx.get("sibling_run_id") or ctx["run_id"], sha if landed else None
+        )
         if siblings is not None:
             block["siblings"] = siblings
     return block
@@ -3037,6 +3042,7 @@ def _terminal_commit_inner(
             worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated],
             {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
+            _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
         )
         if unmet is not None:
             return unmet

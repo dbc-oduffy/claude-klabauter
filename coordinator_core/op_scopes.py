@@ -47,6 +47,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.transition":                       "show_top",
     "memo.correct_note":                     "show_top",
     "canvas.harvest":                        "show_top",
+    "design.registry.lookup":                "show_top",
     "ping":                                  "none",
     "invoke.from_argv":                      "none",
     "hooks.suggest_sonnet_research":         "none",

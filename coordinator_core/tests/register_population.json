@@ -1,6 +1,10 @@
 {
   "candidate_ids": [
     [
+      "coordinator/tests/guards/test_collab_no_gh_invocation.py",
+      "SURFACE"
+    ],
+    [
       "coordinator/tests/guards/test_no_decorative_test_assertions.py",
       "ACCUMULATOR_METHODS"
     ],
@@ -1027,6 +1031,10 @@
     [
       "coordinator_core/bash_guards/tests/test_blanket_disarm.py",
       "SUBAGENT_PAYLOAD"
+    ],
+    [
+      "coordinator_core/bash_guards/tests/test_block_drive_root_new_dir_bash_write_spawn_budget.py",
+      "_SPAWNERS"
     ],
     [
       "coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist.py",
@@ -2321,6 +2329,10 @@
       "_STUB_KEYS"
     ],
     [
+      "coordinator_core/benchmarks/tests/test_emit_plan_route_byte_parity.py",
+      "_HOST_CAP_RES"
+    ],
+    [
       "coordinator_core/benchmarks/tests/test_import_budget.py",
       "_ENTRYPOINTS"
     ],
@@ -3437,6 +3449,10 @@
       "_FLEET_VALUE_CASES"
     ],
     [
+      "coordinator_core/hooks/tests/test_guard_handoff_cockpit_required_fields.py",
+      "FULL"
+    ],
+    [
       "coordinator_core/hooks/tests/test_guard_policy_tool_legs.py",
       "_ENTER"
     ],
@@ -3447,6 +3463,14 @@
     [
       "coordinator_core/hooks/tests/test_lazy_hooks_channel.py",
       "_KNOWN_PREEXISTING_OP_KEY_SCOPE_GAP"
+    ],
+    [
+      "coordinator_core/hooks/tests/test_nudge_hand_written_plan.py",
+      "MINTED"
+    ],
+    [
+      "coordinator_core/hooks/tests/test_nudge_hand_written_plan.py",
+      "MINTED_BAD_STATUS"
     ],
     [
       "coordinator_core/hooks/tests/test_orientation_banner_remedy_performable.py",
@@ -4093,12 +4117,32 @@
       "_BATON"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_m_spine_direct.py",
+      "_FIXTURE"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_no_silent_end.py",
+      "_ARMS"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_no_silent_end.py",
+      "_TAIL_PREFIXES"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_wave_barrier.py",
+      "_ROADMAP_TEXT"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_ask_gate.py",
       "ACCEPTED"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_ask_gate.py",
       "CONCRETE_ROWS"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_gate_design_registry.py",
+      "SCOPE"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_ask_gate_records_ruling.py",
@@ -4161,12 +4205,20 @@
       "_REVIEWED"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_stage_pm_intent_excludes_resume_relay.py",
+      "_SIZING"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_ask_zero_headless.py",
       "_ACCEPTED"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_ask_zero_headless.py",
       "_ROUTE"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_check_leg_cut.py",
+      "WAVES"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_cli_mark_landed.py",
@@ -4209,6 +4261,10 @@
       "_FAIL"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_design_conformance.py",
+      "HIT"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_emit.py",
       "_REAL_TEST_MAPPED_PATHS"
     ],
@@ -4219,6 +4275,18 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_emit_predispatch_gating.py",
       "WAVES"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_emit_verify_leg.py",
+      "_FALSIFIER"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_emit_verify_leg.py",
+      "_PROSE"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_emit_verify_leg.py",
+      "_TESTABLE"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_emit_wake_digest.py",
@@ -4350,6 +4418,10 @@
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_leg_register_ratchet.py",
+      "_GOLDEN_SCRIPT"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_leg_register_ratchet.py",
       "_JUDGMENT_ON_MECHANICAL_TYPE"
     ],
     [
@@ -4359,6 +4431,10 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_leg_register_ratchet.py",
       "_RETIRED_ASK_LEGS"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_leg_register_ratchet.py",
+      "_RETIRED_EMIT_LEGS"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_leg_register_ratchet.py",
@@ -4387,6 +4463,14 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_multi_turn_register_excludes_swept_turns.py",
       "TURNS"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_no_run_leaves_a_dirty_tree.py",
+      "MODES"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_no_run_leaves_a_dirty_tree.py",
+      "_REVIEWED"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_no_tree_survey.py",
@@ -4425,6 +4509,10 @@
       "_ROUTE"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_operator_row_detail_names_resolve_route.py",
+      "_BODY"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_partial_row_releases_named_dependent.py",
       "_FAN"
     ],
@@ -4439,6 +4527,14 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_pipeline_compose_brief_and_halt.py",
       "GATE_SCHEMA"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_compose_segment_halt.py",
+      "KW"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_compose_split.py",
+      "KW"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_pipeline_doe_manifests.py",
@@ -4505,8 +4601,16 @@
       "SPEC"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_requirements_ledger_design_rows.py",
+      "HIT"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_requirements_ledger_operator_rows.py",
       "_REVIEWED"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_research_emit_split.py",
+      "_SOURCES"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_reserved_run_refire.py",
@@ -4741,6 +4845,10 @@
       "_REVIEWED"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_run_artifacts.py",
+      "_REVIEWED"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_run_close.py",
       "CONTRACT"
     ],
@@ -4759,6 +4867,10 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_writes_under.py",
       "_REVIEWED"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_typecheck_criterion_routing.py",
+      "_PY_WAVES"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_unverifiable_enricher_row.py",
@@ -4821,6 +4933,22 @@
       "NON_EDGE_FIELDS"
     ],
     [
+      "coordinator_core/ops/emit/tests/test_cross_repo_memos_kind_widen.py",
+      "_NAMED"
+    ],
+    [
+      "coordinator_core/ops/emit/tests/test_cross_repo_memos_kind_widen.py",
+      "_OPEN"
+    ],
+    [
+      "coordinator_core/ops/emit/tests/test_cross_repo_memos_status_widen.py",
+      "_NAMED"
+    ],
+    [
+      "coordinator_core/ops/emit/tests/test_cross_repo_memos_status_widen.py",
+      "_OBSERVED"
+    ],
+    [
       "coordinator_core/ops/emit/tests/test_emit_context_dag_memo.py",
       "_FAKE_DAG_ALPHA"
     ],
@@ -4869,12 +4997,20 @@
       "_ROLLUP_PRE_FIX_REVIEW_KEYS"
     ],
     [
+      "coordinator_core/ops/emit/tests/test_handoffs_closure_note_not_emitted.py",
+      "_FM"
+    ],
+    [
       "coordinator_core/ops/emit/tests/test_human_axis_stays_off_the_wire.py",
       "_FLAG_NAMES"
     ],
     [
       "coordinator_core/ops/emit/tests/test_human_axis_stays_off_the_wire.py",
       "_OWNER_PASSTHROUGH_RECORD_TYPES"
+    ],
+    [
+      "coordinator_core/ops/emit/tests/test_owned_records_conform.py",
+      "_SECTIONS"
     ],
     [
       "coordinator_core/ops/emit/tests/test_plan_review_verified_is_emitted.py",
@@ -5137,6 +5273,10 @@
       "_PM_OK"
     ],
     [
+      "coordinator_core/ops/review_mint/tests/test_brief_conformance_reaches_stamp.py",
+      "_ROWS"
+    ],
+    [
       "coordinator_core/ops/review_mint/tests/test_criterion_judge_brief_passthrough.py",
       "_BASE"
     ],
@@ -5183,6 +5323,10 @@
     [
       "coordinator_core/ops/review_mint/tests/test_share_stages_test_verdict.py",
       "JUDGE"
+    ],
+    [
+      "coordinator_core/ops/review_mint/tests/test_wave_bookkeeping.py",
+      "_FIRING_KEYS"
     ],
     [
       "coordinator_core/ops/session/tests/test_emit_effective_delivery_bash_carrier.py",
@@ -5873,6 +6017,14 @@
       "RULING"
     ],
     [
+      "coordinator_core/ops/tests/test_research_close.py",
+      "_CLAIMS"
+    ],
+    [
+      "coordinator_core/ops/tests/test_research_close.py",
+      "_SEGS"
+    ],
+    [
       "coordinator_core/ops/tests/test_research_shape.py",
       "TABLE"
     ],
@@ -5895,6 +6047,14 @@
     [
       "coordinator_core/ops/tests/test_review_stamp.py",
       "_NOT_RUN"
+    ],
+    [
+      "coordinator_core/ops/tests/test_review_stamp_cured_test_verdict.py",
+      "_FAIL"
+    ],
+    [
+      "coordinator_core/ops/tests/test_review_stamp_cured_test_verdict.py",
+      "_PASS"
     ],
     [
       "coordinator_core/ops/tests/test_review_stamp_pm_acceptance.py",
@@ -6243,6 +6403,10 @@
     [
       "coordinator_core/percolate/tests/test_guards.py",
       "_GIT_WALK_PARAMS"
+    ],
+    [
+      "coordinator_core/percolate/tests/test_identity_headline.py",
+      "_REAL"
     ],
     [
       "coordinator_core/percolate/tests/test_klabauter_scrub_gap_exercised.py",
@@ -6783,6 +6947,14 @@
     [
       "coordinator_core/session_ledger/test_aggregate_chain_loe.py",
       "_TWO_CEREMONY_ROWS"
+    ],
+    [
+      "coordinator_core/sizing_assemble/test_acceptance_rows.py",
+      "_ROWS"
+    ],
+    [
+      "coordinator_core/sizing_assemble/test_acceptance_rows.py",
+      "_SCHEMA"
     ],
     [
       "coordinator_core/sizing_assemble/test_intent_turn.py",
@@ -8641,6 +8813,14 @@
       "_STDIN_SPELLING_PATTERNS"
     ],
     [
+      "coordinator_core/warm/door/tests/test_stdin_reading_table_parity.py",
+      "_ENGINE_SOURCES"
+    ],
+    [
+      "coordinator_core/warm/door/tests/test_stdin_reading_table_parity.py",
+      "_NON_STDIN_PATH_FLAGS"
+    ],
+    [
       "coordinator_core/warm/door/tests/test_windows_door_cold_leg_route.py",
       "_BUILT_DOOR"
     ],
@@ -9329,7 +9509,7 @@
       "_VALID_FM"
     ]
   ],
-  "candidate_ids_sha256": "e19a48bee7a839b6731226578f862345aac4899ebdf0e414cbc5c5c2a991c4fd",
+  "candidate_ids_sha256": "33b5ad75c524c3a99f9c96d62e256aed696d403c1c41891065946217daff4796",
   "candidate_roots": [
     "coordinator/tests",
     "coordinator_core"

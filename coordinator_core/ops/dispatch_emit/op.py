@@ -522,17 +522,39 @@ def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizi
     """(run_id, parent_id) for a fan-out slice's reserved run id; ValueError when the id is not the
     sizing's own `em_analysis.ask_parent` run or is bound to a run that has not halted.
 
-    A halted slice rebinds: its refire is the only way the siblings held `after` it release."""
-    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent, status_rel
+    A halted slice rebinds: its refire is the only way the siblings held `after` it release.
+    A non-landed status with no live run for the sizing is settled `halted` here (a write, made
+    before the caller's later checks); a landed or live run is refused by name."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+        STATUS_HALTED, STATUS_LANDED, parse_ask_parent, status_rel,
+    )
 
     if not sizing_rel or sizing_doc is None:
         raise ValueError("dispatch.emit reserved_run_id takes a slice sizing_path, not a raw ask")
     marker = parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent"))
     if marker is None or marker[1] != reserved:
         raise ValueError(f"dispatch.emit reserved_run_id {reserved!r} is not the run {sizing_rel} reserves")
-    if (root / status_rel(marker[1])).exists() and not _halted(root / status_rel(marker[1])):
-        raise ValueError(f"dispatch.emit reserved_run_id {reserved!r} is already bound to a run")
-    return marker[1], marker[0]
+    run_id = marker[1]
+    status = root / status_rel(run_id)
+    try:
+        prior = json.loads(status.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return run_id, marker[0]
+    except (OSError, ValueError):
+        prior = {}
+    prior = prior if isinstance(prior, dict) else {}
+    if prior.get("status") != STATUS_HALTED:
+        if prior.get("status") == STATUS_LANDED:
+            raise ValueError(f"run {run_id} already landed at {prior.get('sha')}; residue is a new sizing")
+        from coordinator_core import warp_live
+
+        live = warp_live.live_run_for_sizing(root, sizing_rel)
+        if live is not None:
+            raise ValueError(f"Run {live} is already working {sizing_rel}; its completion is your one wake.")
+        from coordinator_core.ops.dispatch_emit import run_close
+
+        run_close.sibling_release(root, run_id, None)
+    return run_id, marker[0]
 
 
 def _halted(status: Path) -> bool:
@@ -1167,6 +1189,7 @@ def _research_route_setup(
             ],
         },
         "next_action": {"op": "research.close", "params": close_params},
+        "legs": research_emit.halt_legs([m.pipeline for m, _, _ in segments]),
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
     return research_ctx, pipeline_ctx, params
@@ -1796,6 +1819,7 @@ def _dispatch_emit(
             run_id=research_ctx["run_id"],
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
+            legs=research_ctx["legs"],
         )
         script = chain_parts[0].script
         receipt_extras = {

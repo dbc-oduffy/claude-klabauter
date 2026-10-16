@@ -193,6 +193,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "commit.anchors":                         "coordinator_core.ops.commit_anchors",
     "memo.transition":                        "coordinator_core.ops.memo_transition",
     "canvas.harvest":                         "coordinator_core.ops.canvas_harvest",
+    "design.registry.lookup":                 "coordinator_core.ops.design_registry_lookup",
     "memo.correct_note":                      "coordinator_core.ops.memo_correct_note",
     "handoff.transition":                     "coordinator_core.ops.handoff_transition",
     "handoff.stamp":                          "coordinator_core.ops.handoff_stamp",

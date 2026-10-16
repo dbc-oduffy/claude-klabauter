@@ -92,7 +92,7 @@ def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
         "sizing": rel,
         "require_claims": ["notebooklm/merged-claims.json"],
     }
-    assert f"next_action: {json.dumps(close, sort_keys=True)}" in script
+    assert f"const NEXT_ACTION = {json.dumps(close, sort_keys=True)};" in script
 
 
 def test_from_sizing_honours_a_given_list(repo, capsys):

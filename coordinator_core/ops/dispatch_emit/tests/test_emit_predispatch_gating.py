@@ -166,7 +166,7 @@ def test_completion_return_without_predispatch_references_no_pre_phase_binding()
 def test_run_row_helper_carries_the_skip_clauses():
     helper = emit._run_row_helper_js()
     assert "const _depResults = await Promise.all(deps);" in helper
-    assert "ROUTED-OUT:" in helper and "ALREADY-DONE:" in helper
+    assert "ROUTED-OUT:" in helper and "ALREADY-DONE:" not in helper
     assert helper.count("async function _runRow") == 1
 
 

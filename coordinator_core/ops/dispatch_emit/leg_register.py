@@ -106,7 +106,6 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("emit", "seam:wave-", "relays the wave's seam record and runs reachability over its landed range; "
           "runs the landed python test files when any landed"),
     _earns("emit", "verify:", "runs a row's scoped tests and reports"),
-    _earns("emit", "check:", "runs a row's pre-dispatch command and judges its baseline"),
     _earns("emit", "falsifier-integrity:", "judges whether the falsifier can report red; absorbed the verdict-cache write"),
     _earns("emit", "chatty-overseer", "oversees the chatty roster"),
     _earns("emit", "chatty-survey", "surveys the chatty roster"),

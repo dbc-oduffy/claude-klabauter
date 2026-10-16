@@ -36,7 +36,7 @@ _ARM_SIZING = {
     ARM_ROADMAP: ("XL", "roadmap"),
 }
 #: Labels whose suffix names a row, a wave or a reviewer index: one declaration covers the family.
-_FAMILY_PREFIXES = ("work:", "check:", "falsifier-integrity:", "seam:wave-", "verify:", "continue:")
+_FAMILY_PREFIXES = ("work:", "falsifier-integrity:", "seam:wave-", "verify:", "continue:")
 
 #: Op-wrapper legs with no preceding agent to fold into, haiku-bound. Shrink-only.
 _RUNTIME_FLOOR: frozenset[Key] = frozenset(
@@ -274,7 +274,7 @@ def test_the_composed_set_reaches_every_workflow_and_the_hidden_legs(tmp_path):
 _PASSED_THROUGH_TITLES = frozenset({"Size", "Plan", "Synthesize", "roadmap-blitz"})
 _RETIRED_ASK_LEGS = ("test:terminal", "docs", "ledger-check", "review:coordinator:review-prep")
 #: The push belongs to the DR-329 cadence, never to a leg.
-_RETIRED_EMIT_LEGS = ("checkpoint-push:",)
+_RETIRED_EMIT_LEGS = ("checkpoint-push:", "check:")
 
 
 def test_no_emit_script_composes_a_retired_leg():
@@ -282,7 +282,8 @@ def test_no_emit_script_composes_a_retired_leg():
         labels = {leg.label for leg in lr.emitted_legs(script)}
         assert not any(label.startswith(_RETIRED_EMIT_LEGS) for label in labels), labels
         assert "checkpoint-push" not in script
-    assert lr.lookup("emit", "checkpoint-push:") is None
+    for retired in _RETIRED_EMIT_LEGS:
+        assert lr.lookup("emit", retired) is None, retired
 
 
 def _meta_titles(script: str) -> list[str]:

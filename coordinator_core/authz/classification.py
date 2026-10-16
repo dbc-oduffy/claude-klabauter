@@ -510,6 +510,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "memo.transition": OpClass.MUTATING,
     # canvas.harvest — MUTATING: writes the harvest record (harvest.json, frames/, threads/, SETTLED.md) under `out`.
     "canvas.harvest": OpClass.MUTATING,
+    # design.registry.lookup — COMPUTE_ONLY: reads the design registry file and harvest.json existence under the repo root; writes nothing.
+    "design.registry.lookup": OpClass.COMPUTE_ONLY,
     # ---------------------------------------------------------------------------
     # fleet.* DR-211 archival-writer sub-category — all three ops classified MUTATING
     # (DR-211 five-bound affirmed per handler code; DR-208 § 5 per-op affirmation below)

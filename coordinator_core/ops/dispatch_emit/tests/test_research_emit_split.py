@@ -1,4 +1,4 @@
-"""A multi-source research emit over the Workflow script cap splits into one script and receipt per pipeline."""
+"""A multi-source research emit over the Workflow script cap splits into one script and receipt per leg (preflight and notebooklm share one)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ def test_over_the_cap_it_emits_one_script_per_pipeline(monkeypatch, tmp_path, ca
     _, reply = _emit(monkeypatch, tmp_path / "split", capsys, VENDORED, _SOURCES, 2)
 
     parts = reply["parts"]
-    assert [p["pipeline"] for p in parts] == list(whole_reply["pipelines"])
+    assert list(whole_reply["pipelines"]) == ["nlm-preflight", "web", "notebooklm"]
+    assert [p["pipeline"] for p in parts] == ["nlm-preflight+notebooklm", "web"]
     assert [p["part"] for p in parts] == [f"{i}/{len(parts)}" for i in range(1, len(parts) + 1)]
     assert len(parts) > 1
     assert reply["path"] == parts[0]["path"] and reply["sha256"] == parts[0]["sha256"]

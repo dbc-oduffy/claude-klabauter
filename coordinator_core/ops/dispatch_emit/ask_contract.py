@@ -403,9 +403,14 @@ class GateVerdict:
     recorded: dict | None = None
     # Set when a ledger-halted run's row was satisfied out of band: the halt pointer's JSON.
     resume_ledger: dict | None = None
+    # The design-registry brief the plan author owes (design_conformance.brief_text); emitted
+    # under DESIGN_BRIEF_KEY only when non-empty.
+    design_brief: str = ""
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
+        if self.design_brief:
+            out["design_brief"] = self.design_brief
         if self.resume_ledger is not None:
             out[RESUME_LEDGER_KEY] = self.resume_ledger
         if self.recorded is not None:

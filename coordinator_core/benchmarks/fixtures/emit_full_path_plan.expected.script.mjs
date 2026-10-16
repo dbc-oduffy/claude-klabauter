@@ -201,7 +201,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       const t = JSON.stringify(r ?? null);
-      const settled = typeof r === 'string' && (r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));
+      const settled = typeof r === 'string' && r.startsWith('ROUTED-OUT:');
       const _o = r != null ? _gateOwedOf(t) : null;
       if (_o && _owedReleases(_o, id)) continue;
       if (r == null || _DEP_NON_DONE_RE.test(t) || (!settled && !_DEP_ANY_STATUS_RE.test(t))) {

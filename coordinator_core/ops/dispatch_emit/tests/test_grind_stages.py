@@ -20,7 +20,6 @@ COMPOSED script -- this module tests each composer in isolation only.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 
@@ -929,19 +928,10 @@ def test_size_stages_are_in_the_table_driven_model_helper():
 
 def test_size_assemble_js_commands():
     js = grind_stages.SIZE_ASSEMBLE_JS
-    assemble = js.split("const _sizeMarkCmd")[0]
-    for token in ("sizing-assemble", "--write", "--no-plan-hand-off", "--no-verbatims", "--intent-source em-elaborated"):
-        assert token in assemble
-    assert "--repo-root" not in assemble
-    mark = js.split("const _sizeMarkCmd")[1].split("const _sizeBatonCmd")[0]
-    for token in ("grind-row append", "--stage size", "--outcome route-to-plan"):
-        assert token in mark
-    baton = js.split("const _sizeBatonCmd")[1].split("const _sizeChainCmd")[0]
-    for token in ("coordinator-doc-new", "--type spinoff", "--from-sizing"):
-        assert token in baton
-    chain = js.split("const _sizeChainCmd")[1]
-    assert "'cd '" in chain
-    assert chain.index("_sizeAssembleCmd") < chain.index("_sizeBatonCmd") < chain.index("_sizeMarkCmd")
+    chain = js.split("const _sizeChainCmd")[1].split("const _SIZE_SLOTS")[0]
+    assert "grind-row size-chain" in chain
+    for gone in ("_sizeSupersededTest", "_sizeMarkCmd", "_sizeBatonCmd", "_sizeAssembleCmd", "grep", "/dev/null", "'cd '"):
+        assert gone not in js, gone
 
 
 _SCOUTED = {
@@ -950,96 +940,33 @@ _SCOUTED = {
 }
 
 
-def _run_size_chain(tmp_path, row_id: str, marked_ledgers: tuple[str, ...], unmarked_ledgers: tuple[str, ...] = ()):
-    """Evaluate the chain with node and run it under bash against stub tools; returns (stdout, tools_run)."""
-    node, bash = shutil.which("node"), shutil.which("bash")
-    if node is None or bash is None:
-        pytest.skip("node or bash absent")
-    repo = tmp_path / "repo"
-    ledgers = repo / "state" / "queue-grind" / "bug"
-    ledgers.mkdir(parents=True)
-    for rid in marked_ledgers:
-        (ledgers / f"{rid}.jsonl").write_text(
-            json.dumps({"outcome": "route-to-plan", "row_id": rid}, sort_keys=True) + "\n", encoding="utf-8"
-        )
-    for rid in unmarked_ledgers:
-        (ledgers / f"{rid}.jsonl").write_text(
-            json.dumps({"outcome": "fix", "row_id": rid}, sort_keys=True) + "\n", encoding="utf-8"
-        )
-    home = tmp_path / "settings-home"
-    (home / "bin").mkdir(parents=True)
-    log = tmp_path / "tools.log"
-    for tool in ("sizing-assemble", "coordinator-doc-new", "backlog-grind-assemble"):
-        stub = home / "bin" / tool
-        stub.write_text(f'#!/bin/sh\necho {tool} >> "{log}"\n', encoding="utf-8", newline="\n")
-        stub.chmod(0o755)
-    js = (
-        grind_stages.SHQ_JS + "\n" + grind_stages.SIZE_ASSEMBLE_JS
-        + f"\nconst REPO_ROOT = {json.dumps(repo.as_posix())}, PROFILE_NAME = 'bug', RUN_ID = '20261015T000000Z';"
-        + f"\nconsole.log(_sizeChainCmd({json.dumps(_SCOUTED)}, {json.dumps({'row_id': row_id, 'path': 'p', 'digest': 'd'})}, 'state/sizings/x.yaml'));"
-    )
-    cmd = subprocess.run(
-        [node, "-e", js], capture_output=True, text=True, check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert cmd.returncode == 0, cmd.stderr
-    out = subprocess.run(
-        [bash, "-c", cmd.stdout.strip()], capture_output=True, text=True, check=False,
-        env={**os.environ, "COORDINATOR_SETTINGS_HOME": home.as_posix()},
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert out.returncode == 0, out.stderr
-    ran = log.read_text(encoding="utf-8").split() if log.exists() else []
-    return out.stdout, ran
-
-
-_OLD = "2026-10-14-tf-coordinator-tests-test-x-0123456789ab"
-_NEW = "2026-10-15-tf-coordinator-tests-test-x-fedcba987654"
-_FULL_CHAIN = ["sizing-assemble", "coordinator-doc-new", "backlog-grind-assemble"]
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_size_chain_skips_a_reminted_row_whose_predecessor_carries_route_to_plan(tmp_path):
-    stdout, ran = _run_size_chain(tmp_path, _NEW, marked_ledgers=(_OLD,))
-    assert ran == []
-    assert "size skipped" in stdout
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_size_chain_still_runs_for_a_row_without_a_marked_predecessor(tmp_path):
-    _, ran = _run_size_chain(tmp_path, _NEW, marked_ledgers=(), unmarked_ledgers=(_OLD,))
-    assert ran == _FULL_CHAIN
-    other = "2026-10-14-tf-coordinator-tests-test-y-0123456789ab"
-    _, ran = _run_size_chain(tmp_path / "other", _NEW, marked_ledgers=(other,))
-    assert ran == _FULL_CHAIN
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_size_chain_does_not_skip_on_its_own_marked_ledger(tmp_path):
-    _, ran = _run_size_chain(tmp_path, _NEW, marked_ledgers=(_NEW,))
-    assert ran == _FULL_CHAIN
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_size_chain_for_a_row_id_without_a_remint_shape_is_the_plain_chain():
+def _size_chain_command(row_id: str) -> str:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node absent")
     js = (
         grind_stages.SHQ_JS + "\n" + grind_stages.SIZE_ASSEMBLE_JS
         + "\nconst REPO_ROOT = '/r', PROFILE_NAME = 'bug', RUN_ID = 'x';"
-        + f"\nconsole.log(_sizeChainCmd({json.dumps(_SCOUTED)}, {{row_id: 'plain-row', path: 'p', digest: 'd'}}, 's.yaml'));"
+        + f"\nconsole.log(_sizeChainCmd({json.dumps(_SCOUTED)}, {json.dumps({'row_id': row_id, 'path': 'p', 'digest': 'd'})}, 's.yaml'));"
     )
     out = subprocess.run(
         [node, "-e", js], capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr
-    assert "size skipped" not in out.stdout and "grep" not in out.stdout and "; fi" not in out.stdout
+    return out.stdout.strip()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_size_chain_is_one_plain_engine_command_for_a_reminted_and_a_plain_row():
+    for row_id in ("2026-10-15-tf-coordinator-tests-test-x-fedcba987654", "plain-row"):
+        cmd = _size_chain_command(row_id)
+        assert "grind-row size-chain" in cmd
+        for flag in ("--profile", "--row-id", "--digest", "--sizing", "--run-stamp", "--repo-root", " -- ", "--tshirt", "--exit-criterion"):
+            assert flag in cmd, flag
+        for banned in ("|", "2>", "/dev/null", "if ", "; fi", "&&", "cd ", ";"):
+            assert banned not in cmd, banned
 
 
 def test_the_commit_agent_is_haiku_in_every_emitter():

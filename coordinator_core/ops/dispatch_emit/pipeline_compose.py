@@ -319,6 +319,7 @@ def _level_lines(
     agent_type_host: str | None,
     indent: str,
     tag: str = "",
+    segment: tuple[str, str] | None = None,
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
@@ -339,16 +340,21 @@ def _level_lines(
                 lines.append(f"{indent}  {target}[{_js_string_literal(stage_id)}] = level[{k}];")
             lines.append(f"{indent}}}")
         for stage_id in level:
-            lines += _halt_lines(stages[stage_id], scope, manifest.pipeline, inputs, indent, tag)
+            lines += _halt_lines(stages[stage_id], scope, manifest.pipeline, inputs, indent, tag, segment)
         lines.append("")
     return lines
 
 
-def _halt_lines(stage: Stage, scope: str, pipeline: str, inputs: PipelineInputs, indent: str, tag: str) -> list[str]:
-    """The early returns of a stage's halts, each ending the run before the next stage.
+def _halt_lines(
+    stage: Stage, scope: str, pipeline: str, inputs: PipelineInputs, indent: str, tag: str,
+    segment: tuple[str, str] | None = None,
+) -> list[str]:
+    """The early exits of a stage's halts, each ending the run (or, given `segment`, its leg) before the next stage.
 
     `halts_unless` trusts the stage's own boolean; `halts_unless_nonempty` and `halts_unless_count`
     compare structured return fields against the emit-time roster, with a remedy composed here.
+    `segment` is (block label, leg name): the halt records itself in `segment_halts` and breaks
+    to the label instead of returning.
     """
     ref = f"{_RETURN_NAME[scope]}[{_js_string_literal(stage.id)}]"
     push = (
@@ -359,6 +365,16 @@ def _halt_lines(stage: Stage, scope: str, pipeline: str, inputs: PipelineInputs,
     halted = _js_string_literal(f"{pipeline}.{stage.id}")
 
     def block(condition: str, remedy: str) -> list[str]:
+        if segment is not None:
+            label, leg = segment
+            return [
+                f"{indent}if ({condition}) {{",
+                f"{indent}  {push}",
+                f"{indent}  segment_halts.push({{ segment: {_js_string_literal(pipeline)}, "
+                f"leg: {_js_string_literal(leg)}, halted: {halted}, decision_required: {remedy} }});",
+                f"{indent}  break {label};",
+                f"{indent}}}",
+            ]
         return [
             f"{indent}if ({condition}) {{",
             f"{indent}  {push}",
@@ -417,8 +433,14 @@ def _segment(
     errors: list[str],
     *,
     chained: bool,
+    segment: tuple[str, str] | None = None,
+    skip_guard: bool = False,
 ) -> tuple[list[str], list[str], list[Stage]]:
-    """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline."""
+    """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline.
+
+    `segment` is (block label, leg) for a scoped segment; `skip_guard` opens it with the check that
+    skips it once an earlier segment of its leg has halted.
+    """
     stages = {stage.id: stage for stage in manifest.stages}
     if (
         ITEM_MARK in inputs.brief
@@ -496,7 +518,15 @@ def _segment(
     roster_names = sorted({
         s.agent_type_from.split(".", 1)[1] for s in active if s.agent_type_from is not None
     })
-    data = [f"const subjects = {json.dumps(subject_data, ensure_ascii=True, indent=1)};"]
+    data = []
+    if skip_guard:
+        label, leg = segment
+        data.append(
+            f"if (segment_halts.some((h) => h.leg === {_js_string_literal(leg)})) {{ "
+            f"segment_halts.push({{ segment: {_js_string_literal(manifest.pipeline)}, "
+            f"leg: {_js_string_literal(leg)}, skipped: true }}); break {label}; }}"
+        )
+    data.append(f"const subjects = {json.dumps(subject_data, ensure_ascii=True, indent=1)};")
     if has_common:
         merged = {
             "prompts": {**common[SCOPE_PRE]["prompts"], **common[SCOPE_POST]["prompts"]},
@@ -515,9 +545,9 @@ def _segment(
     if not chained:
         body.append("const results = [];")
     body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag)
+    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment)
     body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag)
+    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment)
     body += [
         f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
         "  } catch (err) {",
@@ -526,7 +556,7 @@ def _segment(
         "}",
         "",
     ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag)
+    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment)
     for scope in (SCOPE_PRE, SCOPE_POST):
         if schedule.levels.get(scope):
             body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
@@ -539,21 +569,32 @@ def compose_chain_script(
     run_id: str,
     agent_type_host: str | None,
     next_action: Mapping | None = None,
+    legs: Mapping[str, str] | None = None,
+    nest_scratch: bool = True,
 ) -> str:
     """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first writes under `{{scratch_dir}}/<pipeline>/`.
 
-    With `next_action`, a completed run returns `{results, next_action}` naming the op that closes it.
+    Scoped means more than one segment or `legs` given: a halt then ends only its leg (the segment
+    plus later segments sharing the leg name `legs` maps, default the pipeline's own name), recorded
+    in `segment_halts`. A scoped run returns `{results, segment_halts}`, plus `next_action` while any
+    leg did not halt; with halts its `params.halted_segments` names every segment of every halted
+    leg. A one-segment script without `legs` returns at the halt, byte-identical to the plain script.
+    `nest_scratch=False` takes each segment's `scratch_dir` as final (split parts).
     """
     if not segments:
         raise PipelineEmitRefused(["a chain needs at least one segment"])
     chained = len(segments) > 1
+    scoped = chained or legs is not None
+    leg_of = [(legs or {}).get(m.pipeline, m.pipeline) for m, _, _ in segments]
     errors: list[str] = []
     parts = []
     for index, (manifest, inputs, schedule) in enumerate(segments):
-        if chained and index > 0:
+        if nest_scratch and chained and index > 0:
             inputs = replace(inputs, scratch_dir=f"{inputs.scratch_dir.rstrip('/')}/{manifest.pipeline}")
+        label = (f"segment{index + 1}", leg_of[index]) if scoped else None
         parts.append((manifest, inputs, _segment(
-            manifest, inputs, schedule, agent_type_host, errors, chained=chained,
+            manifest, inputs, schedule, agent_type_host, errors, chained=scoped,
+            segment=label, skip_guard=scoped and leg_of[index] in leg_of[:index],
         )))
     if errors:
         raise PipelineEmitRefused(sorted(set(errors)))
@@ -574,7 +615,7 @@ def compose_chain_script(
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
         _RELAY_DECL,
     ]
-    if not chained:
+    if not scoped:
         out += parts[0][2][0]
     fanned = [(m, s) for m, _, (_, _, act) in parts for s in act if s.fan_out.kind == FAN_OUT_OVER]
     if any(s.max_concurrent is None for _, s in fanned):
@@ -584,16 +625,35 @@ def compose_chain_script(
     if any(s.fan_out.emit_time or _uses_item(s, m) for m, s in fanned):
         out += ["", _WITH_ITEM]
     out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
-    if chained:
-        out += ["const results = [];", ""]
-        for _, _, (data, body, _) in parts:
-            out += ["{"] + data + body + ["}", ""]
+    if scoped:
+        out += ["const results = [];", "const segment_halts = [];", ""]
+        for index, (_, _, (data, body, _)) in enumerate(parts):
+            out += [f"segment{index + 1}: {{"] + data + body + ["}", ""]
     else:
         out += parts[0][2][1]
-    if next_action is None:
-        out += ["return results;", ""]
+    if not scoped:
+        if next_action is None:
+            out += ["return results;", ""]
+        else:
+            out += [f"return {{ results, next_action: {json.dumps(dict(next_action), sort_keys=True)} }};", ""]
+    elif next_action is None:
+        out += ["return { results, segment_halts };", ""]
     else:
-        out += [f"return {{ results, next_action: {json.dumps(dict(next_action), sort_keys=True)} }};", ""]
+        pairs = json.dumps([[m.pipeline, leg] for (m, _, _), leg in zip(segments, leg_of)])
+        out += [
+            f"const NEXT_ACTION = {json.dumps(dict(next_action), sort_keys=True)};",
+            f"const SEGMENT_LEGS = {pairs};",
+            "const haltedLegs = new Set(segment_halts.map((h) => h.leg));",
+            "const delivered = SEGMENT_LEGS.some(([, leg]) => !haltedLegs.has(leg));",
+            "const haltedSegments = SEGMENT_LEGS.filter(([, leg]) => haltedLegs.has(leg)).map(([name]) => name);",
+            "return {",
+            "  results,",
+            "  segment_halts,",
+            "  ...(delivered ? { next_action: haltedLegs.size === 0 ? NEXT_ACTION : "
+            "{ ...NEXT_ACTION, params: { ...NEXT_ACTION.params, halted_segments: [...new Set(haltedSegments)] } } } : {}),",
+            "};",
+            "",
+        ]
     text = "\n".join(out)
     size = len(text.encode("utf-8"))
     if size > WORKFLOW_SCRIPT_CAP_BYTES:
@@ -626,31 +686,41 @@ def compose_chain_parts(
     run_id: str,
     agent_type_host: str | None,
     next_action: Mapping | None = None,
+    legs: Mapping[str, str] | None = None,
 ) -> tuple[ChainPart, ...]:
-    """The chain as one script when it fits the cap, else one script per segment in chain order.
+    """The chain as one script when it fits the cap, else one script per leg, ordered by each leg's first segment.
 
-    A split segment after the first keeps the `<scratch>/<pipeline>` layout the chained script uses;
-    only the last part carries `next_action`. A segment still over the cap raises PipelineEmitRefused.
+    A split segment after the first keeps the `<scratch>/<pipeline>` layout the chained script uses,
+    set by its index in the full chain; every split part is scoped, so a halt ends only its leg and
+    a part returns `segment_halts`. Only the last part carries `next_action`. A part still over the
+    cap raises PipelineEmitRefused.
     """
     try:
         script = compose_chain_script(
-            segments, run_id=run_id, agent_type_host=agent_type_host, next_action=next_action,
+            segments, run_id=run_id, agent_type_host=agent_type_host, next_action=next_action, legs=legs,
         )
     except _ScriptCapRefused:
         if len(segments) < 2:
             raise
     else:
         return (ChainPart(tuple(m.pipeline for m, _, _ in segments), script),)
-    last = len(segments) - 1
-    parts = []
-    for index, (manifest, inputs, schedule) in enumerate(segments):
-        if index > 0:
-            inputs = replace(inputs, scratch_dir=f"{inputs.scratch_dir.rstrip('/')}/{manifest.pipeline}")
-        parts.append(ChainPart((manifest.pipeline,), compose_chain_script(
-            [(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host,
-            next_action=next_action if index == last else None,
-        )))
-    return tuple(parts)
+    nested = [
+        (manifest, replace(inputs, scratch_dir=f"{inputs.scratch_dir.rstrip('/')}/{manifest.pipeline}")
+         if index > 0 else inputs, schedule)
+        for index, (manifest, inputs, schedule) in enumerate(segments)
+    ]
+    by_leg: dict[str, list[Segment]] = {}
+    for segment in nested:
+        by_leg.setdefault((legs or {}).get(segment[0].pipeline, segment[0].pipeline), []).append(segment)
+    groups = list(by_leg.values())
+    return tuple(
+        ChainPart(tuple(m.pipeline for m, _, _ in group), compose_chain_script(
+            group, run_id=run_id, agent_type_host=agent_type_host,
+            next_action=next_action if index == len(groups) - 1 else None,
+            legs=legs or {}, nest_scratch=False,
+        ))
+        for index, group in enumerate(groups)
+    )
 
 
 def compose_pipeline_script(

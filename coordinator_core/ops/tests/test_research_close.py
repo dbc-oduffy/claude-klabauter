@@ -299,6 +299,91 @@ def test_require_claims_with_a_claim_closes_deliverable(repo, scratch):
     assert out["exit_code"] == 0 and out["committed"] is True and out["deliverable"] is True
 
 
+def _three_segment_run(scratch: Path) -> None:
+    for seg in ("web", "repo"):
+        (scratch / seg).mkdir()
+        (scratch / seg / "claims.json").write_text('[{"id": 1}]')
+        (scratch / seg / "synthesis.md").write_text(f"{seg} synthesis\n")
+
+
+_SEGS = ["nlm-preflight", "web", "notebooklm", "repo"]
+_CLAIMS = ["web/claims.json", "notebooklm/merged-claims.json", "repo/claims.json"]
+
+
+def test_halted_segment_is_excused_and_named_in_the_reply(repo, scratch):
+    _three_segment_run(scratch)
+    for seg in ("nlm-preflight", "notebooklm"):
+        assert not (scratch / seg).exists()
+    out = _close(
+        repo, scratch, "corpus", segment_dirs=_SEGS, require_claims=_CLAIMS,
+        halted_segments=["nlm-preflight", "notebooklm"],
+    )
+    assert out["exit_code"] == 0 and out["committed"] is True and out["deliverable"] is True, out
+    assert out["halted_segments"] == ["nlm-preflight", "notebooklm"]
+    names = {p.split("/", 3)[-1] for p in out["paths"]}
+    assert {"web/synthesis.md", "repo/synthesis.md"} <= names
+    assert not any(n.startswith("notebooklm/") for n in names)
+
+
+def test_same_run_without_halted_segments_is_refused(repo, scratch):
+    _three_segment_run(scratch)
+    out = _close(repo, scratch, "corpus", segment_dirs=_SEGS, require_claims=_CLAIMS)
+    assert out["exit_code"] == 1 and out["deliverable"] is False
+    assert "notebooklm/merged-claims.json" in out["error"] and "halted_segments" not in out
+
+
+def test_a_non_halted_segment_with_empty_claims_is_still_refused(repo, scratch):
+    _three_segment_run(scratch)
+    (scratch / "web" / "claims.json").write_text("[]")
+    out = _close(
+        repo, scratch, "corpus", segment_dirs=_SEGS, require_claims=_CLAIMS,
+        halted_segments=["nlm-preflight", "notebooklm"],
+    )
+    assert out["exit_code"] == 1 and out["deliverable"] is False
+    assert "web/claims.json" in out["error"]
+    assert out["halted_segments"] == ["nlm-preflight", "notebooklm"]
+
+
+def test_a_present_halted_segment_dir_is_archived_as_evidence(repo, scratch):
+    _three_segment_run(scratch)
+    (scratch / "notebooklm").mkdir()
+    (scratch / "notebooklm" / "halt.md").write_text("halted\n")
+    out = _close(
+        repo, scratch, "corpus", segment_dirs=["web", "notebooklm", "repo"],
+        require_claims=_CLAIMS, halted_segments=["notebooklm"],
+    )
+    assert out["exit_code"] == 0, out
+    assert any(p.endswith("notebooklm/halt.md") for p in out["paths"])
+
+
+def test_a_root_level_claims_entry_is_never_excused(repo, scratch):
+    out = _close(
+        repo, scratch, "corpus", require_claims=["claims.json"], halted_segments=["claims.json"],
+    )
+    assert out["exit_code"] == 1 and out["deliverable"] is False
+
+
+def test_a_halted_name_outside_segment_dirs_is_only_reported(repo, scratch):
+    out = _close(repo, scratch, "corpus", halted_segments=["notebooklm"])
+    assert out["exit_code"] == 0 and out["halted_segments"] == ["notebooklm"]
+
+
+def test_halted_segments_is_echoed_on_a_local_only_close(repo, scratch, tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    out = _close(repo, scratch, "corpus", local_root=local.as_posix(), halted_segments=["x"])
+    assert out["exit_code"] == 0 and out["halted_segments"] == ["x"]
+
+
+@pytest.mark.parametrize("bad", ["notebooklm", ["../x"], [1], ["a/b"]])
+def test_an_unsafe_halted_segments_is_refused(repo, scratch, bad):
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _close(repo, scratch, "corpus", halted_segments=bad)
+    assert out["exit_code"] == 1 and out["committed"] is False
+    assert "halted_segments must be a list" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head
+
+
 def test_require_claims_escape_is_refused(repo, scratch):
     out = _close(repo, scratch, "corpus", require_claims=["../x.json"])
     assert out["exit_code"] == 1 and "escapes" in out["error"]

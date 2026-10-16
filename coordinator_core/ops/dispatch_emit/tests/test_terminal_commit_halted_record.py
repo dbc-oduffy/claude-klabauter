@@ -162,6 +162,76 @@ def test_token_stays_live_after_landed_record_commit_and_wrong_token_refuses(rep
     assert run_token.admits(repo, RUN, token, "run.mjs")
 
 
+def _seed_siblings(root: Path) -> str:
+    """Parent record naming RUN and a successor `after` it; RUN's status reads running."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+
+    parent = "ask-parent-20261015T000000-abcdef"
+    runs = (
+        c.SiblingRun(RUN, RUN, (), "state/sizings/a.yaml", c.STATUS_READY),
+        c.SiblingRun(OTHER, OTHER, (RUN,), "state/sizings/b.yaml", c.STATUS_AFTER),
+    )
+    rec = root / c.parent_record_rel(parent)
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps(c.ParentRecord(parent, runs).to_json()), encoding="utf-8")
+    st = root / c.status_rel(RUN)
+    st.parent.mkdir(parents=True, exist_ok=True)
+    st.write_text(json.dumps({"status": c.STATUS_RUNNING, "parent_id": parent}), encoding="utf-8")
+    return parent
+
+
+def _status_text(root: Path) -> str:
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+
+    return (root / c.status_rel(RUN)).read_text(encoding="utf-8")
+
+
+def _assert_successor_told_halted(root: Path, parent: str) -> None:
+    from coordinator_core.hooks.submit_engine_ask import _slice_deny
+
+    assert '"halted"' in _status_text(root)
+    deny = _slice_deny(root, (parent, OTHER))
+    assert deny and "halted" in deny and "has not landed" not in deny
+
+
+def test_wrong_token_refusal_still_settles_status_halted(repo):
+    _write_record(repo, RUN)
+    parent = _seed_siblings(repo)
+    token = run_token.mint(repo, RUN, "run.mjs")
+    assert '"running"' in _status_text(repo)
+
+    refused = _call(repo, run_token="0" * 32)
+
+    assert refused["refused"] == "run-token"
+    assert refused["siblings"]["blocked"] == [{"run_id": OTHER, "slice_sizing": "state/sizings/b.yaml"}]
+    _assert_successor_told_halted(repo, parent)
+    assert run_token.admits(repo, RUN, token, "run.mjs")
+
+
+def test_land_error_still_settles_status_halted(repo, monkeypatch):
+    _write_record(repo, RUN)
+    parent = _seed_siblings(repo)
+    monkeypatch.setattr(terminal_commit, "_worktree_snapshot", lambda *a, **k: None)
+
+    out = _call(repo)
+
+    assert out["committed"] is False and "failed" in out["error"]
+    _assert_successor_told_halted(repo, parent)
+
+
+def test_landed_halt_settles_status_halted_and_names_siblings(repo):
+    _write_record(repo, RUN)
+    parent = _seed_siblings(repo)
+
+    out = _call(repo)
+
+    assert out["committed"] is True
+    assert out["siblings"]["parent_id"] == parent
+    _assert_successor_told_halted(repo, parent)
+
+
 def _marker_script(root: Path, chunks, report_texts=None) -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 

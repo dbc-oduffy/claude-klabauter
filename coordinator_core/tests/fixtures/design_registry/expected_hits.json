@@ -1,0 +1,137 @@
+{
+  "doe_sha": "5eba5f50de",
+  "produced_by": "coordinator-content-repo 5eba5f50de coordinator/hooks/scripts/_design_registry_gate.py: load(root) and _intersects(glob, path), run over the vendored fixtures by git archive + a script outside the repo",
+  "fixture_sha256": {
+    "registry.yaml": "00ba9121c1c8c8982d30e03b9f0b5539836f7889712f66b29a94716ed440b18f",
+    "malformed.yaml": "29a3ca01ce7185227d591faab6bc0dc1ca03433803ebc96086d59797db33a5ac"
+  },
+  "malformed": {"entries": null, "code": "registry-unparseable"},
+  "registry": {
+    "paths": [
+      "src/app/settings/page.tsx",
+      "src/components/settings/a/b.tsx",
+      "src/components/settings/a.tsx",
+      "src/components/other/a.tsx",
+      "src/app/(dashboard)/exec/decisions/[decisionId]/page.tsx",
+      "src/app/(dashboard)/exec/decisions/x/page.tsx",
+      "src/app/dashboard/exec/decisions/d/page.tsx",
+      "src/app/sign-in/page.tsx",
+      "src/components/auth/form.tsx",
+      "src/components/auth/deep/form.tsx",
+      "src/Components/auth/form.tsx",
+      "src\\components\\settings\\a.tsx",
+      "src\\app\\(dashboard)\\exec\\decisions\\[decisionId]\\page.tsx",
+      "src/components/gate/x/y.ts",
+      "docs/readme.md",
+      "src/app/settings/",
+      "src/components/",
+      "src/components/settings/",
+      "src/app/",
+      "src/",
+      "lib/"
+    ],
+    "entries": [
+      {
+        "id": "settings",
+        "board": "claude.ai/artifact/fixture-canvas-001",
+        "artboards": ["route-settings-390", "route-settings-1440", "route-settings-3840"],
+        "harvest": "docs/design/x/harvest",
+        "sources": ["src/app/settings/page.tsx", "src/components/settings/**"],
+        "status": "designed",
+        "ratification": null
+      },
+      {
+        "id": "exec-decisions-detail",
+        "board": "claude.ai/artifact/fixture-canvas-001",
+        "artboards": ["route-exec-decisions-detail-390", "route-exec-decisions-detail-1440"],
+        "harvest": "docs/design/x/harvest",
+        "sources": ["src/app/(dashboard)/exec/decisions/[decisionId]/page.tsx"],
+        "status": "implemented",
+        "ratification": null
+      },
+      {
+        "id": "auth-sign-in",
+        "board": "claude.ai/artifact/fixture-canvas-001",
+        "artboards": ["auth-sign-in-default", "auth-sign-in-error"],
+        "harvest": "docs/design/x/harvest",
+        "sources": ["src/app/sign-in/page.tsx", "src/components/auth/*.tsx"],
+        "status": "implemented",
+        "ratification": null
+      },
+      {
+        "id": "gate-in-place",
+        "board": "claude.ai/artifact/fixture-canvas-001",
+        "artboards": ["gating-in-place"],
+        "harvest": "docs/design/x/harvest",
+        "sources": ["src/components/gate/**"],
+        "status": "deviated",
+        "ratification": "docs/design/x/ratification.md"
+      }
+    ],
+    "pairs": [
+      ["settings", "src/app/settings/page.tsx"],
+      ["settings", "src/components/settings/a/b.tsx"],
+      ["settings", "src/components/settings/a.tsx"],
+      ["settings", "src\\components\\settings\\a.tsx"],
+      ["settings", "src/app/settings/"],
+      ["settings", "src/components/"],
+      ["settings", "src/components/settings/"],
+      ["settings", "src/app/"],
+      ["settings", "src/"],
+      ["exec-decisions-detail", "src/app/(dashboard)/exec/decisions/[decisionId]/page.tsx"],
+      ["exec-decisions-detail", "src\\app\\(dashboard)\\exec\\decisions\\[decisionId]\\page.tsx"],
+      ["exec-decisions-detail", "src/app/"],
+      ["exec-decisions-detail", "src/"],
+      ["auth-sign-in", "src/app/sign-in/page.tsx"],
+      ["auth-sign-in", "src/components/auth/form.tsx"],
+      ["auth-sign-in", "src/components/"],
+      ["auth-sign-in", "src/app/"],
+      ["auth-sign-in", "src/"],
+      ["gate-in-place", "src/components/gate/x/y.ts"],
+      ["gate-in-place", "src/components/"],
+      ["gate-in-place", "src/"]
+    ]
+  },
+  "extra": {
+    "text": "﻿schema: design-registry/1\r\nentries:\r\n  - id: any-depth\r\n    board: https://claude.ai/artifact/extra-001\r\n    artboards: [a-390]\r\n    harvest: docs/design/e/harvest\r\n    sources: [\"src/**/x.ts\"]\r\n    status: partial\r\n  - id: one-char\r\n    board: https://claude.ai/artifact/extra-001\r\n    artboards: [b-390]\r\n    harvest: docs/design/e/harvest/\r\n    sources: [src/a?.ts]\r\n    status: designed\r\n  - id: no-sources\r\n    board: https://claude.ai/artifact/extra-001\r\n    artboards: [c-390]\r\n    harvest: docs/design/e/harvest/\r\n    sources: []\r\n    status: designed\r\n",
+    "paths": ["src/x.ts", "src/a/b/x.ts", "src/ab.ts", "src/abc.ts", "src/a/.ts", "src/a/", "src/", "other/"],
+    "entries": [
+      {
+        "id": "any-depth",
+        "board": "claude.ai/artifact/extra-001",
+        "artboards": ["a-390"],
+        "harvest": "docs/design/e/harvest",
+        "sources": ["src/**/x.ts"],
+        "status": "partial",
+        "ratification": null
+      },
+      {
+        "id": "one-char",
+        "board": "claude.ai/artifact/extra-001",
+        "artboards": ["b-390"],
+        "harvest": "docs/design/e/harvest",
+        "sources": ["src/a?.ts"],
+        "status": "designed",
+        "ratification": null
+      },
+      {
+        "id": "no-sources",
+        "board": "claude.ai/artifact/extra-001",
+        "artboards": ["c-390"],
+        "harvest": "docs/design/e/harvest",
+        "sources": [],
+        "status": "designed",
+        "ratification": null
+      }
+    ],
+    "pairs": [
+      ["any-depth", "src/x.ts"],
+      ["any-depth", "src/a/b/x.ts"],
+      ["any-depth", "src/a/"],
+      ["any-depth", "src/"],
+      ["one-char", "src/ab.ts"],
+      ["one-char", "src/a/"],
+      ["one-char", "src/"]
+    ]
+  }
+}

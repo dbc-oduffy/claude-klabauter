@@ -1,19 +1,21 @@
 """``dispatch.commit_halted_rows``: lands the delivered rows of an already-halted run, one commit per row.
 
-Params: ``{script_path, delivered: [row id], open_rows?: [{id, reason}], row_diffs?: {path: unified diff}}``.
+Params: ``{script_path, delivered: [row id], open_rows?: [{id, reason}], row_diffs?: {path: unified diff},
+run_id?}``. The op also settles the run's sibling status to ``halted`` (``run_id``, else the script stem),
+whatever landed, and puts the close's result in the reply as ``siblings`` when there is one.
 Rows and their declared paths come from the run script's commit-request marker; ``delivered`` names the
 rows to land and ``open_rows`` the withheld ones, each carried as a ``Requirement-Open`` trailer so the
 ledger stays open for them. A path a withheld row also declares is overlapped: it lands only through
 ``row_diffs[path]`` (``git apply --cached``, then ``prefer_staged``), never as the whole file; an
 overlapped path with no recorded diff refuses that row. A row whose paths are already clean, or whose
 diff is already in HEAD, is a no-op, so a second call changes nothing.
-Reply: ``{ok, landed: [{row, sha, paths}], noop: [row], refused: [{row, reason}]}``.
+Reply: ``{ok, landed: [{row, sha, paths}], noop: [row], refused: [{row, reason}], siblings?}``.
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from coordinator_core.git.run import run_git
@@ -51,6 +53,18 @@ def _stage_hunks(root: Path, path: str, diff: str) -> Optional[str]:
     if run_git([*args[:-1], "--reverse", "--check", "-"], input=data).ok:
         return "noop"
     return run_git(args, input=data).stderr.strip() or "git apply --cached failed"
+
+
+def _run_id(params: dict, script_rel: str) -> str:
+    """The run this op halts: a safe ``params.run_id``, else the script stem minus ``.workflow``
+    (an ask script is ``<run_id>.workflow.mjs``). Backslashes normalised so a Windows path names the same run."""
+    from coordinator_core.ops._path_guard import safe_id
+
+    rid = params.get("run_id")
+    if isinstance(rid, str) and safe_id(rid):
+        return rid
+    stem = PurePosixPath(script_rel.replace("\\", "/")).stem
+    return stem[: -len(".workflow")] if stem.endswith(".workflow") else stem
 
 
 def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
@@ -157,6 +171,11 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
             out["refused"].append({"row": rid, "reason": str(reply.get("error") if isinstance(reply, dict) else reply)})
             continue
         out["landed"].append({"row": rid, "sha": reply.get("sha"), "paths": paths + deleted})
+    from coordinator_core.ops.dispatch_emit.run_close import sibling_release
+
+    siblings = sibling_release(root, _run_id(params, script_rel), None)
+    if siblings is not None:
+        out["siblings"] = siblings
     out["ok"] = not out["refused"]
     return out
 

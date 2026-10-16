@@ -26,7 +26,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -234,6 +234,13 @@ _SCOUT_SCHEMA = {
     },
     "required": ["usable_sources"],
 }
+
+
+def halt_legs(pipelines: Sequence[str]) -> dict[str, str]:
+    """Leg map for the chained script: the preflight shares notebooklm's leg, so its halt skips notebooklm and nothing else."""
+    if rc.PREFLIGHT_PIPELINE in pipelines and "notebooklm" in pipelines:
+        return {rc.PREFLIGHT_PIPELINE: "notebooklm"}
+    return {}
 
 
 def gate_notebooklm(manifest: Manifest) -> Manifest:

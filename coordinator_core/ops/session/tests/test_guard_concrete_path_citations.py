@@ -917,6 +917,12 @@ def test_warp_nested_verbatim_name_is_still_scanned() -> None:
     assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))
 
 
+def test_warp_near_miss_basename_is_still_scanned() -> None:
+    for name in ("ask.md.bak", "Ask.md", "my-ask.md"):
+        path = f"state/warp/ask-2026-x/{name}"
+        assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))
+
+
 def test_warp_verbatim_name_outside_run_dir_is_still_scanned() -> None:
     for path in ("state/warp/ask.md", "state/other/run/ask.md"):
         assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))

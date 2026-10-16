@@ -1799,7 +1799,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             print(
                 f"emit-dispatch-workflow: the emit was split into {len(result['parts'])} parts; "
                 "fire them in order, each after the previous run has landed, "
-                "then run next_action.",
+                "a part that returns segment_halts does not stop the next part. Put the union of "
+                "the halted segments (segment_halts[].segment plus the rest of its leg) into "
+                "next_action.params.halted_segments, then run next_action.",
                 file=sys.stderr,
             )
     else:

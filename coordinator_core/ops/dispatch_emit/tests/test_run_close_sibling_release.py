@@ -68,6 +68,28 @@ def test_queued_run_stays_while_budget_full(tmp_path):
     assert out["released"] == [] and out["blocked"] == []
 
 
+def test_halt_never_rewrites_a_landed_status(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    own = tmp_path / c.status_rel("A")
+    own.write_text(json.dumps({"status": "landed", "sha": SHA}), encoding="utf-8")
+    before = own.read_bytes()
+    assert run_close.sibling_release(tmp_path, "A", None, budget=2) is None
+    assert own.read_bytes() == before
+
+
+def test_halt_of_running_status_keeps_parent_id(tmp_path):
+    _seed(tmp_path, [_run("A")], bound=["A"])
+    own = tmp_path / c.status_rel("A")
+    own.write_text(json.dumps({"status": "running", "parent_id": PARENT}), encoding="utf-8")
+    run_close.sibling_release(tmp_path, "A", None, budget=2)
+    assert _status(tmp_path, "A") == {"status": "halted", "parent_id": PARENT}
+
+
+def test_halt_with_no_status_file_writes_nothing(tmp_path):
+    assert run_close.sibling_release(tmp_path, "solo", None, budget=1) is None
+    assert not (tmp_path / "scratch").exists()
+
+
 def test_non_sibling_run_returns_none(tmp_path):
     assert run_close.sibling_release(tmp_path, "solo", SHA, budget=1) is None
     assert not (tmp_path / "scratch").exists()

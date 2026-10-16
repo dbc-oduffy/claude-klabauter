@@ -1,0 +1,13 @@
+schema: design-registry/1
+entries:
+  - id: no-sources
+    board: https://claude.ai/artifact/fixture-canvas-001
+    artboards: [a-390]
+    harvest: docs/design/x/harvest/
+    status: designed
+  - id: deviated-without-ratification
+    board: https://claude.ai/artifact/fixture-canvas-001
+    artboards: [b-390]
+    harvest: docs/design/x/harvest/
+    sources: [src/b/**]
+    status: deviated

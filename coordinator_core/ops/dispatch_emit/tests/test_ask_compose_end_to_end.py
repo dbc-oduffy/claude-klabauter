@@ -280,8 +280,11 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start():
         assert view in call[call.rindex("agent(") :], label
     rows = script[script.index("phase('Execute');", script.index("phase('stage')")) :]
     assert view in rows[: rows.index("stallMs")]
-    # plan-blitz is shadowed: every prompt it composes opens with the ledger clause.
-    assert "const agent = (p, o) => _outerAgent(_LEDGER_PREFIX + _agentDefsClause() + p, o);" in script
+    # plan-blitz is shadowed: every prompt it composes opens with the design brief, then the ledger clause.
+    assert (
+        f"const agent = (p, o) => _outerAgent({ask_compose._DESIGN_PREFIX_JS} + _LEDGER_PREFIX + _agentDefsClause() + p, o);"
+        in script
+    )
     assert script.index("const _LEDGER_PREFIX = ") < script.index("const planBlitz = (() => {")
 
 

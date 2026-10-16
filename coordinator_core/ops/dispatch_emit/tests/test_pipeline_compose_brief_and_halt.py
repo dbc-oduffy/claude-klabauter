@@ -106,7 +106,7 @@ def test_two_segment_chain_keeps_distinct_stores_and_scratch(tmp_path):
     script = _compose([first, second])
     assert script.count("const results = [];") == 1
     assert script.count("const pre = {};") == 2
-    assert script.count("\n{\n") == 2
+    assert script.count("\nsegment1: {\n") == 1 and script.count("\nsegment2: {\n") == 1
     assert "scratch/run/a.md" in script and "scratch/run/two/b.md" in script
     assert "scratch/run/one/" not in script
     assert "pipeline: 'one'" in script and "pipeline: 'two'" in script

@@ -80,6 +80,40 @@ def test_terminal_commit_lands_status_and_names_released_sibling(env):
     assert not (env / "scratch/warp/A.workflow").exists()
 
 
+def _fail_review() -> dict:
+    """A review the commit refuses after the close context is populated (no integration stem)."""
+    review = copy.deepcopy(driver.INLINE_REVIEW)
+    review["integration_stem"] = ""
+    return review
+
+
+def _status(repo: Path) -> dict:
+    return json.loads((repo / c.status_rel("A")).read_text(encoding="utf-8"))
+
+
+def test_refused_terminal_commit_writes_halted_and_names_blocked_successor(env):
+    out = _fire(env, run_id="A", inline_review=_fail_review())
+
+    assert out["committed"] is not True
+    assert _status(env)["status"] == "halted"
+    assert out["close"]["siblings"] == {
+        "parent_id": PARENT,
+        "released": [],
+        "blocked": [{"run_id": "B", "slice_sizing": "state/sizings/B.yaml"}],
+    }
+
+
+def test_refused_then_landed_terminal_commit_ends_landed(env):
+    refused = _fire(env, run_id="A", inline_review=_fail_review())
+    assert refused["committed"] is not True and _status(env)["status"] == "halted"
+
+    out = _fire(env, run_id="A")
+
+    assert out["committed"] is True
+    assert _status(env) == {"status": "landed", "sha": out["sha"], "parent_id": PARENT}
+    assert out["close"]["siblings"]["released"] == [fire_command("state/sizings/B.yaml")]
+
+
 def test_run_without_status_file_gets_no_siblings_block(env):
     (env / c.status_rel("A")).unlink()
     out = _fire(env, run_id="A")

@@ -19,7 +19,13 @@ path segments: a multi-pipeline run writes every segment after the first under
 outside every git checkout and commits only its trail record, which carries no paths and no
 content; the reply's ``claims_out`` is the ``claims-emit --out`` stem there), ``require_claims`` (optional list of non-empty scratch-relative paths, each of
 which must hold a non-empty JSON array; otherwise the close is refused with
-``deliverable: false`` before any copy or commit).
+``deliverable: false`` before any copy or commit), ``halted_segments`` (optional list of safe
+path segments naming pipelines whose leg halted: an entry that is also in ``segment_dirs``
+has its ``require_claims`` entries dropped and may have no dir; an entry outside
+``segment_dirs`` is only echoed; the reply carries the list, success and refusal alike).
+Only a named segment is excused: a root-level ``require_claims`` entry has no segment prefix
+and is never excused (the research route puts ``nlm-preflight`` ahead of notebooklm, so the
+root never holds notebooklm's claims).
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -113,13 +119,16 @@ def _build_digest(scratch: Path) -> Optional[str]:
 
 
 def _resolve_outputs(
-    scratch: Path, outputs: Optional[list], segment_dirs: list[str]
+    scratch: Path, outputs: Optional[list], segment_dirs: list[str],
+    halted: frozenset = frozenset(),
 ) -> tuple[list[Path], Optional[str]]:
     if outputs is None:
         found = sorted(p for p in scratch.iterdir() if p.is_file())
         for name in segment_dirs:
             seg = scratch / name
             if not seg.is_dir():
+                if name in halted:
+                    continue
                 return [], f"segment output dir missing: {name!r}"
             found.extend(sorted(p for p in seg.iterdir() if p.is_file()))
         if not found:
@@ -215,12 +224,34 @@ def _close_committed(
     segment_dirs: list[str],
     meta: dict,
     local_root_raw: Optional[str] = None,
+    halted_segments: Optional[list] = None,
 ) -> dict:
     """Archive the outputs and commit the trail record: the one commit site of this op.
 
     A repo run commits the copies and the record in one ``commit_paths`` call; a local-only
-    run archives under its ``local_root`` and commits only the record.
+    run archives under its ``local_root`` and commits only the record. ``halted_segments``
+    is echoed in the reply when given.
     """
+    result = _close_archived(
+        worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta, local_root_raw,
+        frozenset(halted_segments or ()),
+    )
+    if halted_segments is not None:
+        result["halted_segments"] = halted_segments
+    return result
+
+
+def _close_archived(
+    worktree: Path,
+    scratch: Path,
+    run_id: str,
+    topic_slug: str,
+    outputs: Optional[list],
+    segment_dirs: list[str],
+    meta: dict,
+    local_root_raw: Optional[str],
+    halted: frozenset,
+) -> dict:
     local = bool(local_root_raw)
     if local:
         from coordinator_core.ops import _research_local
@@ -231,7 +262,7 @@ def _close_committed(
             return _err(str(exc))
     else:
         archive_root = worktree / _RESEARCH_DIR
-    sources, problem = _resolve_outputs(scratch, outputs, segment_dirs)
+    sources, problem = _resolve_outputs(scratch, outputs, segment_dirs, halted)
     if problem:
         return _err(problem)
     hits = _secret_hits(sources, scratch)
@@ -395,8 +426,24 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         isinstance(d, str) and safe_id(d) for d in segment_dirs
     ):
         return _err(f"segment_dirs must be a list of safe path segments: {segment_dirs!r}")
-    problem = _missing_claims(scratch, params.get("require_claims"))
+    halted_segments = params.get("halted_segments")
+    if halted_segments is not None and (
+        not isinstance(halted_segments, list)
+        or not all(isinstance(h, str) and safe_id(h) for h in halted_segments)
+    ):
+        return _err(f"halted_segments must be a list of safe path segments: {halted_segments!r}")
+    require_claims = params.get("require_claims")
+    if halted_segments and isinstance(require_claims, list):
+        excused = set(halted_segments) & set(segment_dirs)
+        require_claims = [
+            r for r in require_claims
+            if not (isinstance(r, str) and r.replace("\\", "/").split("/", 1)[0] in excused
+                    and "/" in r.replace("\\", "/"))
+        ]
+    problem = _missing_claims(scratch, require_claims)
     if problem:
+        if halted_segments is not None:
+            problem["halted_segments"] = halted_segments
         return problem
     if tier == "scouts":
         problem = _build_digest(scratch)
@@ -407,7 +454,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
     local_root_raw = params.get("local_root")
     return _close_committed(
         worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta,
-        str(local_root_raw) if local_root_raw else None,
+        str(local_root_raw) if local_root_raw else None, halted_segments,
     )
 
 
@@ -420,6 +467,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail}``;
     local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
     ``{committed: false, error}``; a ``require_claims`` refusal adds ``deliverable: false``.
+    ``halted_segments`` is echoed in every reply when the param was given.
     """
     if repo_root is None:
         return _err("repo_root (engine common_dir) is required for research.close")

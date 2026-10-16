@@ -77,6 +77,7 @@ class Item:
     text: str
     origin: str
     at: str
+    anchor: str = ""
 
     def to_json(self) -> dict:
         return {"id": self.id, "text": self.text, "origin": self.origin, "at": self.at}
@@ -107,6 +108,28 @@ def run_dir(repo_root: Path, run_id: str) -> Path:
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _is_design(anchor: object) -> bool:
+    """Is this a design-conformance row (anchor carries `design_conformance.ANCHOR_PREFIX`)?"""
+    from coordinator_core.ops.dispatch_emit.design_conformance import ANCHOR_PREFIX
+
+    return isinstance(anchor, str) and anchor.startswith(ANCHOR_PREFIX)
+
+
+def _design_failure(
+    item: Item, row: Mapping, repo_root: Optional[Path], plan_text: Optional[str]
+) -> Optional[str]:
+    """Why a `met` design row fails: evidence_refusal's sentence, else None."""
+    from coordinator_core.ops.dispatch_emit.design_conformance import evidence_refusal
+
+    if repo_root is None:
+        return f"design row {item.id}: no repo root to check its evidence against"
+    return evidence_refusal(
+        Path(repo_root),
+        {rr.ROW_ID: item.id, rr.ROW_ANCHOR: item.anchor, rr.ROW_TEXT: item.text},
+        row, plan_text,
+    )
 
 
 def _origin(anchor: object) -> tuple[str, str]:
@@ -197,7 +220,11 @@ def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str],
                 withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": f"withheld by revision {revision}"})
             continue
         origin, at = _origin(row.get(rr.ROW_ANCHOR))
-        items.append(Item(str(row.get(rr.ROW_ID)), str(row.get(rr.ROW_TEXT) or ""), origin, at))
+        anchor = row.get(rr.ROW_ANCHOR)
+        items.append(Item(
+            str(row.get(rr.ROW_ID)), str(row.get(rr.ROW_TEXT) or ""), origin, at,
+            anchor if isinstance(anchor, str) else "",
+        ))
     return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
 
 
@@ -425,7 +452,8 @@ def render(ledger: Ledger, run_id: str) -> str:
         "",
     ]
     for item in ledger.items:
-        tag = ", ".join(p for p in (item.origin or "source document", item.at) if p)
+        default_origin = "design registry" if _is_design(item.anchor) else "source document"
+        tag = ", ".join(p for p in (item.origin or default_origin, item.at) if p)
         lines.append(f"## {item.id} ({tag})")
         lines.append("")
         lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
@@ -659,6 +687,7 @@ def _misrouted(row: Mapping, owed: str) -> Optional[str]:
 def judge(
     ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
     gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
+    repo_root: Optional[Path] = None, plan_text: Optional[str] = None,
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -687,7 +716,11 @@ def judge(
     `superseded` passes only when it names a later revision row; `not_met` fails when
     `all_of_pm_ask` is set or the row is essential (the default), else it passes listed open as
     `non-essential`; `post_commit` passes only when
-    `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`."""
+    `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`.
+
+    A design-conformance row (anchor `design-registry:<id>`) is always essential: `essential: false`
+    is ignored, `post_commit` fails, and `met` passes only when `design_conformance.evidence_refusal`
+    (given `repo_root` and the run's `plan_text`) returns None."""
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
@@ -716,6 +749,11 @@ def judge(
             failures.append({"id": item.id, "reason": "unjudged (arrived after the check, or skipped)"})
             continue
         status = row.get("status")
+        design = _is_design(item.anchor)
+        if design and status == "met":
+            why = _design_failure(item, row, repo_root, plan_text)
+            if why is not None:
+                failures.append({"id": item.id, "reason": why})
         if routed and item.id in routed and status in ("met", "not_met", "post_commit"):
             reason = _misrouted(row, routed[item.id])
             if reason is not None:
@@ -731,7 +769,9 @@ def judge(
                 failures.append({"id": item.id, "reason": f"superseded_by {later!r} names no later revision"})
         elif status == "post_commit":
             acts = row.get("post_commit_acts")
-            if not isinstance(acts, list) or not acts:
+            if design:
+                failures.append({"id": item.id, "reason": "a design row is met only on its evidence, never post_commit"})
+            elif not isinstance(acts, list) or not acts:
                 failures.append({"id": item.id, "reason": "post_commit names no post-commit act"})
             else:
                 bad = next((a for a in acts if a not in POST_COMMIT_ACTS), None)
@@ -752,7 +792,7 @@ def judge(
                         "id": item.id,
                         "reason": f"withheld_by {withheld} names no gated chunk of the run's manifest",
                     })
-            elif ledger.all_of_pm_ask or row.get("essential", True) is not False:
+            elif design or ledger.all_of_pm_ask or row.get("essential", True) is not False:
                 failures.append({
                     "id": item.id,
                     "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask else ""),
