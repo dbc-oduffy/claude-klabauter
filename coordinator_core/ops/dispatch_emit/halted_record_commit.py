@@ -178,25 +178,46 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
             run_token.release(worktree_root, run_id, token, script_path)
 
 
+#: Evidence kept per blocking item, in UTF-8 bytes, so the marker stays small.
+_EVIDENCE_CAP_BYTES = 2000
+
+
+def _capped(text: str) -> str:
+    return text.encode("utf-8")[:_EVIDENCE_CAP_BYTES].decode("utf-8", "ignore")
+
+
+def _blocking_items(items: list) -> list:
+    out = []
+    for i in items:
+        if not isinstance(i, dict) or not isinstance(i.get("id"), str):
+            continue
+        rem = i.get("remaining")
+        evidence = i.get("evidence")
+        out.append({
+            "id": i["id"],
+            "remaining": [r for r in rem if isinstance(r, str)] if isinstance(rem, list) else [],
+            "evidence": _capped(evidence) if isinstance(evidence, str) else "",
+        })
+    return out
+
+
 def _ledger_halt_plan_and_blocking(repo_root: Path, halted: dict) -> tuple:
-    """(plan_rel, blocking ids) of a halt naming a relative, contained plan; (None, ()) otherwise."""
+    """(plan_rel, blocking ids, blocking items) of a halt naming a relative, contained plan;
+    (None, (), []) otherwise. Each item is `{id, remaining, evidence}` with strings only."""
     plan_rel = halted.get(HALT_PLAN_FIELD)
     if not isinstance(plan_rel, str) or not plan_rel or Path(plan_rel).is_absolute():
-        return None, ()
+        return None, (), []
     if contained_path(repo_root / plan_rel, [repo_root]) is None:
-        return None, ()
-    items = halted.get("items")
-    blocking = tuple(
-        i["id"] for i in (items if isinstance(items, list) else [])
-        if isinstance(i, dict) and isinstance(i.get("id"), str)
-    )
-    return plan_rel, blocking
+        return None, (), []
+    raw = halted.get("items")
+    items = _blocking_items(raw if isinstance(raw, list) else [])
+    return plan_rel, tuple(i["id"] for i in items), items
 
 
 def _settle_ledger_pointer(repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str]) -> None:
     """A landed ledger-check halt writes its plan's ledger-halt pointer; any other landed halt for
     a known plan unlinks a stale one. A halt without a relative, contained plan touches nothing."""
-    plan_rel, blocking = _ledger_halt_plan_and_blocking(repo_root, halted)
+    plan_rel, blocking, _items = _ledger_halt_plan_and_blocking(repo_root, halted)
     if plan_rel is None:
         return
     path = ledger_halt_path(repo_root, plan_rel)
@@ -280,8 +301,9 @@ def _land(
         declared.append(sizing_rel)
 
     if (worktree_root / record_dir_rel).is_dir():
-        plan_rel, blocking = (
-            _ledger_halt_plan_and_blocking(repo_root, halted) if halted["halted"] == "ledger-check" else (None, ())
+        plan_rel, blocking, blocking_items = (
+            _ledger_halt_plan_and_blocking(repo_root, halted)
+            if halted["halted"] == "ledger-check" else (None, (), [])
         )
         write_halt_marker(
             worktree_root / record_dir_rel,
@@ -289,6 +311,7 @@ def _land(
             sizing_rel=sizing_rel,
             plan_rel=plan_rel,
             blocking=blocking if plan_rel else None,
+            blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base,
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)

@@ -31,6 +31,9 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
+    RESUME_LEDGER_HALT_SHA_FIELD,
+    RESUME_LEDGER_NOTES_FIELD,
+    RESUME_LEDGER_REMAINING_FIELD,
     GateVerdict,
     rulable_ids,
 )
@@ -297,7 +300,7 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
     row (neither met nor waived), so rows recorded or left unjudged after the halt are judged too."""
     if halt is None:
         return None
-    from coordinator_core.ops.dispatch_emit.requirements_ledger import ruled_out_ids
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import read_notes, ruled_out_ids, run_dir
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
     rows = (sizing.get("requirement_register") or {}).get("rows") or []
@@ -308,12 +311,16 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         for row_id, entry in read_em_discharges(Path(repo_root) / halt.plan_rel).items()
         if isinstance(entry, dict) and isinstance(entry.get("text"), str)
     }
+    blocking = [*(b for b in halt.blocking if b not in out), *(r for r in rulable if r not in halt.blocking)]
     return {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
-        "blocking": [*(b for b in halt.blocking if b not in out), *(r for r in rulable if r not in halt.blocking)],
+        "blocking": blocking,
         RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged,
         "rulable_ids": rulable,
+        RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
+        RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
+        RESUME_LEDGER_NOTES_FIELD: read_notes(run_dir(Path(repo_root), halt.run_id)),
     }
 
 

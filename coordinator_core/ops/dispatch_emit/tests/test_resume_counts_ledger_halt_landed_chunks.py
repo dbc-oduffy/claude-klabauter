@@ -175,3 +175,42 @@ def test_open_row_path_spends_one_git_process(repo, monkeypatch):  # noqa: F811
     plan = resumable_plan(_load(repo), REL, repo, "s")
     assert plan.incomplete == ("C2",)
     assert len(calls) == 1 and "log" in calls[0]
+
+
+def _head(repo):
+    """The full sha of HEAD."""
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def test_ledger_sha_is_the_halt_commit(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    _init(repo)
+    _run_halt(repo, "run-old")
+    _run_halt(repo, "run-new")
+    expected = _head(repo)
+    _run_halt(repo, "run-refusal", halted_by="refusal")
+    assert resume_landed_state(repo, PLAN_REL).ledger_sha == expected
+
+
+def test_ledger_sha_is_none_without_a_halt_commit(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    _init(repo)
+    _checkpoint(repo, ["C1"])
+    assert resume_landed_state(repo, PLAN_REL).ledger_sha is None
+
+
+def test_resumable_plan_carries_halt_sha_on_record_and_pointer_paths(repo):  # noqa: F811
+    _init(repo)
+    _halt_commit(repo, ["C1"])
+    _pointer(repo)
+    sha = _head(repo)
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == ("C2",)
+    _checkpoint(repo, ["C2"])
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.ledger is not None and plan.ledger.halt_sha == sha

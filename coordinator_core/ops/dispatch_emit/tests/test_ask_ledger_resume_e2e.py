@@ -1,5 +1,6 @@
-"""A ledger-halted run whose row is met out of band: the same sizing re-fires as resume_ledger, a new run's
-terminal commit lands and codes the plan, and a still-unmet row re-halts at the ledger gate."""
+"""A ledger-halted run whose owed work lands before the refire (out of band, or by the resume's remaining-work
+leg): the same sizing re-fires as resume_ledger, a new run's terminal commit lands and codes the plan, and a
+still-unmet row re-halts at the ledger gate."""
 
 from __future__ import annotations
 

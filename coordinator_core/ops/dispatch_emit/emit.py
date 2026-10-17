@@ -6142,10 +6142,11 @@ def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
 
 class ResumeLanded(NamedTuple):
     """``rows``: ids of the plan already landed. ``ledger_run``: run id of the newest ledger-check
-    halt commit naming the plan, else None."""
+    halt commit naming the plan, else None. ``ledger_sha``: that same commit's full 40-hex sha."""
 
     rows: frozenset
     ledger_run: Optional[str]
+    ledger_sha: Optional[str] = None
 
 
 def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
@@ -6157,7 +6158,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     """Row ids of ``plan`` already landed: checkpoint commits (as ``checkpoint_landed_state``) plus
     the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
     ``Halted-By:`` is ``ledger-check``; and the run id parsed from the newest such halt commit's
-    subject. One ``git log`` spawn; empty when git cannot answer."""
+    subject, with its sha. One ``git log`` spawn; empty when git cannot answer."""
     from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
     from coordinator_core.git.run import run_git
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
@@ -6168,7 +6169,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
             "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
             f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1e",
+            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1f%H\x1e",
         ],
         cwd=str(repo_root),
     )
@@ -6176,11 +6177,12 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
         return ResumeLanded(frozenset(), None)
     ids: set = set()
     ledger_run: Optional[str] = None
+    ledger_sha: Optional[str] = None
     for record in result.stdout.split("\x1e"):
         parts = record.strip("\r\n").split("\x1f")
-        if len(parts) < 5:
+        if len(parts) < 6:
             continue
-        subject, checkpoint, halt_plan, halted_by, chunks = parts[:5]
+        subject, checkpoint, halt_plan, halted_by, chunks, sha = parts[:6]
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
             ids.update(plan_commit_row_ids(subject))
         if any(v.strip() == "ledger-check" for v in halted_by.split("\x1d")) and any(
@@ -6189,7 +6191,8 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
             ids.update(i for i in re.split(r"[,\s\x1d]+", chunks) if i)
             if ledger_run is None:
                 ledger_run = halted_run_id(subject)
-    return ResumeLanded(frozenset(ids), ledger_run)
+                ledger_sha = sha.strip() or None
+    return ResumeLanded(frozenset(ids), ledger_run, ledger_sha)
 
 
 def deleted_in_range(

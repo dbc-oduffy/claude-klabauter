@@ -7,6 +7,7 @@ writes, spawns, or reroutes: a sizing whose route disagrees with its arm is refu
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
@@ -189,7 +190,8 @@ def _ledger_halt_for(
     if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
         pointer = None
     if pointer is not None and not open_ids:
-        return pointer
+        # This path spent no git spawn before the sha was needed; the call below is its one `git log`.
+        return replace(pointer, halt_sha=_halt_run_landed(root, pointer.run_id, plan_rel)[1])
     if state is None:
         from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
@@ -197,8 +199,10 @@ def _ledger_halt_for(
     if state.ledger_run is None:
         # A halt commit without a `Halt-Plan:` trailer is invisible to `resume_landed_state`; the
         # pointer's run then resumes when that run's halt commit landed every open row.
-        if pointer is not None and set(open_ids) <= _halt_run_landed_chunks(root, pointer.run_id, plan_rel):
-            return pointer
+        if pointer is not None:
+            landed, sha = _halt_run_landed(root, pointer.run_id, plan_rel)
+            if set(open_ids) <= landed:
+                return replace(pointer, halt_sha=sha)
         return None
     record = read_halt_record(root, state.ledger_run)
     if (
@@ -212,13 +216,17 @@ def _ledger_halt_for(
         blocking = pointer.blocking
     else:
         blocking = record.blocking or ()
-    return LedgerHalt(state.ledger_run, plan_rel, sizing_rel, tuple(blocking))
+    return LedgerHalt(
+        state.ledger_run, plan_rel, sizing_rel, tuple(blocking),
+        halt_sha=state.ledger_sha, remaining=record.remaining,
+    )
 
 
-def _halt_run_landed_chunks(root: Path, run_id: str, plan_rel: str) -> frozenset:
-    """`Lands-Chunks:` ids of `ledger-check` halt commits whose subject names `run_id`: covers a
-    halt commit that carries no `Halt-Plan:` trailer (one naming another plan is skipped).
-    One `git log`; empty when git cannot answer."""
+def _halt_run_landed(root: Path, run_id: str, plan_rel: str) -> tuple[frozenset, str | None]:
+    """`(Lands-Chunks: ids, newest sha)` of `ledger-check` halt commits whose subject names
+    `run_id`: covers a halt commit that carries no `Halt-Plan:` trailer (one naming another plan
+    is skipped). The sha is None when no such commit exists. One `git log`; empty when git cannot
+    answer."""
     from coordinator_core.git.run import run_git
 
     result = run_git(
@@ -226,13 +234,14 @@ def _halt_run_landed_chunks(root: Path, run_id: str, plan_rel: str) -> frozenset
             "log", "-n", "50", f"--grep=^warp: record halted {run_id} run artifacts",
             "--format=%s\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Halt-Plan,valueonly,separator=%x1d)\x1e",
+            "\x1f%(trailers:key=Halt-Plan,valueonly,separator=%x1d)\x1f%H\x1e",
         ],
         cwd=str(root),
     )
     if result.returncode != 0:
-        return frozenset()
+        return frozenset(), None
     ids: set = set()
+    sha: str | None = None
     for record in result.stdout.split("\x1e"):
         parts = record.strip("\r\n").split("\x1f")
         if len(parts) < 4 or not parts[0].startswith(f"warp: record halted {run_id} run artifacts"):
@@ -242,8 +251,9 @@ def _halt_run_landed_chunks(root: Path, run_id: str, plan_rel: str) -> frozenset
             continue
         if any(v.strip() == "ledger-check" for v in parts[1].split("\x1d")):
             ids.update(i for i in re.split(r"[,\s\x1d]+", parts[2]) if i)
-    return frozenset(ids)
-
+            if sha is None and len(parts) > 4:
+                sha = parts[4].strip() or None
+    return frozenset(ids), sha
 
 
 def _acceptance_skipped(sizing: Mapping) -> bool:

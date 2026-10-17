@@ -21,7 +21,7 @@ from typing import Optional
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    HALT_BLOCKING_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
+    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 
@@ -62,11 +62,12 @@ def write_halt_marker(
     plan_rel: Optional[str] = None,
     blocking: Optional[tuple] = None,
     run_base_sha: Optional[str] = None,
+    blocking_items: Optional[list] = None,
 ) -> Path:
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
-    `plan`, the blocking key and the base are written only when given (the base only when 40-hex),
-    so other halts' markers are unchanged.
+    `plan`, the blocking key, the blocking items and the base are written only when given (the base
+    only when 40-hex), so other halts' markers are unchanged.
     """
     payload = {
         "status": STATUS_HALTED,
@@ -77,6 +78,8 @@ def write_halt_marker(
         payload[HALT_PLAN_FIELD] = _norm(plan_rel)
     if blocking is not None:
         payload[HALT_BLOCKING_FIELD] = list(blocking)
+    if blocking_items is not None:
+        payload[HALT_BLOCKING_ITEMS_FIELD] = list(blocking_items)
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
     return _write(Path(record_dir), payload)

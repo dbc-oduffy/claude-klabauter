@@ -6,6 +6,9 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
+    RESUME_LEDGER_HALT_SHA_FIELD,
+    RESUME_LEDGER_NOTES_FIELD,
+    RESUME_LEDGER_REMAINING_FIELD,
     LedgerHalt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _resume_ledger
@@ -74,6 +77,31 @@ def test_em_discharged_projects_text(tmp_path):
     )
     out = _resume_ledger(SIZING, _halt(["R2"]), tmp_path)
     assert out[RESUME_LEDGER_EM_DISCHARGED_FIELD] == {"V1": "checked by hand"}
+
+
+def test_halt_sha_remaining_and_notes_ride_the_verdict_and_ruled_out_rows_carry_nothing(tmp_path):
+    sizing = {"requirement_register": {"rows": [
+        {"id": "R1", "status": "not_met"},
+        {"id": "R2", "status": "deferred", "ruling": {"ref": "workflow.revise:run-1:out_of_scope"}},
+    ]}}
+    notes = tmp_path / "state/warp/run-1/notes.jsonl"
+    notes.parent.mkdir(parents=True)
+    notes.write_text('{"note": "first"}\nnot json\n{"note": 3}\n{"note": "second"}\n', encoding="utf-8")
+    sha = "a" * 40
+    halt = LedgerHalt(
+        run_id="run-1", plan_rel=PLAN, sizing_rel="state/sizings/s.yaml", blocking=("R1", "R2"),
+        halt_sha=sha,
+        remaining={"R1": {"remaining": ["do x"], "evidence": "e"}, "R2": {"remaining": ["y"], "evidence": ""}},
+    )
+    out = _resume_ledger(sizing, halt, tmp_path)
+    assert out[RESUME_LEDGER_HALT_SHA_FIELD] == sha
+    assert out[RESUME_LEDGER_REMAINING_FIELD] == {"R1": {"remaining": ["do x"], "evidence": "e"}}
+    assert out[RESUME_LEDGER_NOTES_FIELD] == ["first", "second"]
+    assert "R2" not in out["blocking"]
+
+
+def test_no_notes_file_gives_empty_notes(tmp_path):
+    assert _resume_ledger(SIZING, _halt(["R2"]), tmp_path)[RESUME_LEDGER_NOTES_FIELD] == []
 
 
 def test_no_sidecar_gives_empty_discharges(tmp_path):

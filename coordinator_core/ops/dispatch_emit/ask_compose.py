@@ -34,7 +34,11 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
     PM_INTENT_FILE,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
+    RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KEY,
+    RESUME_LEDGER_NOTES_FIELD,
+    RESUME_LEDGER_REMAINING_FIELD,
+    TERMINAL_RESUME_LEDGER_PARAM,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
     HALT_DESIGN_REVIEW,
@@ -74,6 +78,7 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, ru
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
     LEDGER_VIEW_FILE,
+    NOTES_FILE,
     POST_COMMIT_ACTS,
     STATUSES as LEDGER_STATUSES,
 )
@@ -2378,6 +2383,35 @@ def compose_ask_script(
         "  }",
     ]
     verify_lines[-1:-1] = [_test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", test_guard)]
+    _rl = f"_gate.{RESUME_LEDGER_KEY}"
+    # The "writes are exactly these paths" clause below is prompt-only; the terminal commit's declared-path
+    # check bounds what counts as met, not what the leg touches.
+    remaining_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "Ledger-resume remaining-work leg. An earlier run halted at the ledger check; these requirement rows "
+        "stayed not_met and the revise did not rule them out_of_scope: ",
+        f"js:{_rl}.blocking.join(', ')",
+        f". Read each row's register text in {ledger_rel}. Work still owed, by row: ",
+        f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
+        ". Revise notes, oldest first: ",
+        f"js:JSON.stringify({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? [])",
+        f". Also read {record_dir}/{NOTES_FILE} when it exists: the notes of this refire, newer than the ones above. "
+        "Do the owed work now. Your writes are exactly these declared paths: ",
+        "js:(_manifest?.rows ?? []).flatMap((r) => r.writes ?? []).join(', ')",
+        ". A row whose work you cannot finish, or whose owed work lies on a path outside those writes, stays "
+        "not_met: write nothing for it and say so in `summary`. Commit and stage nothing."
+        f"{session_tail}",
+    )
+    remaining_call = _agent(
+        remaining_prompt, label="ledger-remaining", phase=ASK_VERIFY_PHASE,
+        agent_type=_emit._EXECUTOR_AGENT_TYPE, schema=_obj(["summary"], {"summary": _STR}),
+    )
+    verify_lines[2:2] = [
+        f"    if (_resumeLedger && ({_rl}.blocking ?? []).length) {{\n"
+        f"      try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } }\n"
+        "    }"
+    ]
     b.extend(verify_lines)
     b.append(no_target)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
@@ -2445,7 +2479,8 @@ def compose_ask_script(
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check.' : '') "
-        "+ ' Once the rows are met out of band, re-fire the same sizing.' }; }"
+        "+ ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
+        "+ 'and a row is met only on work changed since this halt.' }; }"
     )
     b.append("  }")
     b.append("  }")
@@ -2514,6 +2549,11 @@ def compose_ask_script(
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.met_by ? { met_by: i.met_by } : {}), "
         "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
+    )
+    b.append(
+        f"  if (_nextAction.params && _resumeLedger) {{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM} = "
+        f"{{ run_id: _runId, {RESUME_LEDGER_HALT_SHA_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? null, "
+        f"blocking: _gate.{RESUME_LEDGER_KEY}.blocking ?? [] }}; }}"
     )
     # A review agent may return a sidecar as an absolute Windows path; the commit command must carry
     # repo-relative forward slashes only, or a re-escaping commit agent corrupts the JSON.
@@ -2642,10 +2682,13 @@ _SFE_WAVE_SIDECARS_JS = (
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.
 _RESUME_LEDGER_CLAUSE_JS = (
-    "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check and its rows already ran: landed, "
-    "or left in the tree by the halt. ' + "
+    "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check; a remaining-work leg then ran "
+    "against the rows it kept. ' + "
     f"(_gate.{RESUME_LEDGER_KEY}.blocking.length ? 'Judge only these requirement rows, now, against the current tree: ' + "
-    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. Return an item for each of them and no other item.' "
+    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. A blocking row is met only on work changed since the halt "
+    f"commit ' + (_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? '(unknown)') + '; the diff the halt already judged is not_met. "
+    f"Revise notes: ' + JSON.stringify(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []) + "
+    "'. Return an item for each of them and no other item.' "
     ": 'No requirement row is left to judge. Return items: [].') + "
     f"(Object.keys(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_EM_DISCHARGED_FIELD} ?? {{}}).length "
     "? ' EM-discharged rows (performed by the EM, recorded via em-discharge): ' + "

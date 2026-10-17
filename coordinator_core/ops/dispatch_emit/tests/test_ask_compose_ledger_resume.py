@@ -51,10 +51,47 @@ def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch):
     assert script.index("_gate.resume_ledger.blocking.join") < script.index("label: 'verify'")
 
 
-def test_the_clause_says_rows_ran_not_landed(monkeypatch):
+def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monkeypatch):
     script = _script(monkeypatch)
-    assert "its rows already ran: landed, or left in the tree by the halt" in script
-    assert "its rows already landed" not in script
+    assert "already ran" not in script and "already landed" not in script
+    assert "met only on work changed since the halt commit" in script
+    assert "JSON.stringify(_gate.resume_ledger.revise_notes ?? [])" in script
+
+
+def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypatch):
+    script = _script(monkeypatch)
+    guard = "if (_resumeLedger && (_gate.resume_ledger.blocking ?? []).length) {"
+    assert script.count("label: 'ledger-remaining'") == 1
+    assert script.index(guard) < script.index("label: 'ledger-remaining'") < script.index("label: 'verify'")
+    label_at = script.index("label: 'ledger-remaining'")
+    leg = script[script.rindex("Ledger-resume remaining-work leg", 0, label_at) : label_at]
+    assert "_gate.resume_ledger.remaining ?? {}" in leg
+    assert "_gate.resume_ledger.revise_notes ?? []" in leg
+    assert "notes.jsonl" in leg
+    assert "flatMap((r) => r.writes ?? [])" in leg
+    assert "agentType: 'coordinator:executor'" in script[script.index("label: 'ledger-remaining'"):][:200]
+
+
+def test_no_leg_runs_when_blocking_is_empty_by_the_guard(monkeypatch):
+    # The leg is only reachable through the blocking.length guard, so blocking: [] skips it.
+    script = _script(monkeypatch)
+    guard = "if (_resumeLedger && (_gate.resume_ledger.blocking ?? []).length) {"
+    assert script.index("label: 'ledger-remaining'") > script.index(guard)
+    assert script.count(guard) == 1
+
+
+def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch):
+    script = _script(monkeypatch)
+    assert (
+        "_nextAction.params.resume_ledger = { run_id: _runId, halt_sha: _gate.resume_ledger.halt_sha ?? null, "
+        "blocking: _gate.resume_ledger.blocking ?? [] }"
+    ) in script
+
+
+def test_the_ledger_halt_next_action_no_longer_asks_for_an_out_of_band_fix(monkeypatch):
+    script = _script(monkeypatch)
+    assert "met out of band" not in script
+    assert "executes the remaining work of the rows it keeps" in script
 
 
 def test_the_clause_names_em_discharged_rows_from_the_pinned_key(monkeypatch):

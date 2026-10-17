@@ -143,6 +143,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
     SPINE_SUFFIX as _SPINE_SUFFIX,
+    TERMINAL_RESUME_LEDGER_PARAM,
+    UNCHANGED_SINCE_HALT_REASON,
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -172,6 +174,7 @@ _PARAM_FIELDS = (
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
+    Field(TERMINAL_RESUME_LEDGER_PARAM, "dict"),
     Field("doc_paths", "str_list"),
 )
 
@@ -1826,6 +1829,65 @@ def _routed_from_manifest(manifest_path: Optional[Path]) -> dict:
         return {}
 
 
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _declared_product_paths(manifest_path: Optional[Path]) -> list:
+    """The `writes` of the manifest's rows, minus run-record and state paths; ``[]`` when the
+    manifest is unreadable or declares none."""
+    if manifest_path is None:
+        return []
+    try:
+        rows = json.loads(Path(manifest_path).read_text(encoding="utf-8")).get("rows")
+    except (OSError, ValueError, AttributeError):
+        return []
+    skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/", "state/")
+    paths: list = []
+    for row in rows if isinstance(rows, list) else ():
+        writes = row.get("writes") if isinstance(row, dict) else None
+        for w in writes if isinstance(writes, list) else ():
+            if isinstance(w, str) and w and not w.startswith(skip) and w not in paths:
+                paths.append(w)
+    return paths
+
+
+def _unchanged_since_halt_failures(
+    worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
+) -> list:
+    """``[{id, reason}]`` for each blocking row of a ledger resume that ``verdict`` judges met or
+    post_commit while no declared product path differs from the halt commit. One ``git diff
+    --quiet`` against the worktree, run only when such a row exists; a bad halt sha, an empty
+    declared set or any git exit other than 1 refuses the same rows."""
+    blocking = resume.get("blocking") if isinstance(resume, dict) else None
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    if not isinstance(blocking, list) or not isinstance(items, list):
+        return []
+    judged = [
+        str(i["id"]) for i in items
+        if isinstance(i, dict) and i.get("id") in blocking and i.get("status") in ("met", "post_commit")
+    ]
+    if not judged:
+        return []
+    halt_sha = resume.get("halt_sha")
+    paths = _declared_product_paths(manifest_path)
+    changed = False
+    if isinstance(halt_sha, str) and _FULL_SHA_RE.fullmatch(halt_sha) and paths:
+        result = run_git(
+            ["--literal-pathspecs", "diff", "--quiet", halt_sha, "--", *paths], cwd=str(worktree_root)
+        )
+        changed = result.returncode == 1
+        if result.returncode == 0:
+            # `git diff` cannot see a file the remaining-work leg created and left unstaged.
+            created = run_git(
+                ["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "--", *paths],
+                cwd=str(worktree_root),
+            )
+            changed = created.returncode == 0 and bool(created.stdout.strip())
+    if changed:
+        return []
+    return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
+
+
 _VERDICTS_HEADING = "## Verdicts"
 
 
@@ -1900,6 +1962,7 @@ def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
     plan_text: Optional[str] = None, inline_review: Optional[dict] = None,
+    resume_ledger: object = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -1932,6 +1995,10 @@ def _ledger_gate(
         wave_reviews=[w for w in (inline_review or {}).get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(worktree_root, run_dir),
     )
+    if resume_ledger is not None:
+        stale = _unchanged_since_halt_failures(worktree_root, resume_ledger, verdict, manifest_path)
+        if stale:
+            result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:
         return None, ledger, result.get("open") or []
     foreign = [
@@ -3529,6 +3596,7 @@ def _terminal_commit_inner(
             {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
             _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
             inline_review,
+            params.get(TERMINAL_RESUME_LEDGER_PARAM),
         )
         if unmet is not None:
             return unmet

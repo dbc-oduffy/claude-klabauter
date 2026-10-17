@@ -80,3 +80,44 @@ def test_verdict_resume_ledger_only_when_set():
 
 def test_resume_plan_ledger_defaults_none():
     assert c.ResumePlan("p.md", ("C1",)).ledger is None
+
+
+def _write_record(tmp_path, halted_extra):
+    base = tmp_path / "state" / "warp" / "run-1"
+    base.mkdir(parents=True)
+    halted = {"halted": "ledger-check", "sizing_rel": "state/sizings/s.yaml", "blocking": ["R1"], **halted_extra}
+    (base / "halted.json").write_text(json.dumps(halted), encoding="utf-8")
+    (base / "manifest.json").write_text(json.dumps({"rows": [{"id": "C1"}]}), encoding="utf-8")
+
+
+def test_read_halt_record_reads_remaining(tmp_path):
+    items = [{"id": "R1", "remaining": ["fix x", 3], "evidence": "falsifier failed"}, {"id": 4}, "junk"]
+    _write_record(tmp_path, {c.HALT_BLOCKING_ITEMS_FIELD: items})
+    rec = c.read_halt_record(tmp_path, "run-1")
+    assert rec.remaining == {"R1": {"remaining": ["fix x"], "evidence": "falsifier failed"}}
+
+
+def test_read_halt_record_without_key_has_empty_remaining(tmp_path):
+    _write_record(tmp_path, {})
+    assert dict(c.read_halt_record(tmp_path, "run-1").remaining) == {}
+
+
+def test_ledger_halt_defaults_keep_four_arg_constructor():
+    halt = _halt()
+    assert halt.halt_sha is None
+    assert dict(halt.remaining) == {}
+    assert c.HALT_BLOCKING_ITEMS_FIELD not in halt.to_json()
+    sha = "a" * 40
+    assert c.LedgerHalt("r", "p.md", "s.yaml", (), sha).halt_sha == sha
+
+
+def test_resume_field_names_are_distinct():
+    names = {
+        c.RESUME_LEDGER_HALT_SHA_FIELD,
+        c.RESUME_LEDGER_REMAINING_FIELD,
+        c.RESUME_LEDGER_NOTES_FIELD,
+        c.RESUME_LEDGER_EM_DISCHARGED_FIELD,
+    }
+    assert len(names) == 4
+    assert c.TERMINAL_RESUME_LEDGER_PARAM == "resume_ledger"
+    assert c.UNCHANGED_SINCE_HALT_REASON

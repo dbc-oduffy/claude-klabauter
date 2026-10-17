@@ -218,15 +218,13 @@ def _inbox(dir_: Path) -> list[dict]:
     return out
 
 
-def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
-    """Repo-relative, forward-slash paths of the files the run's stored notes name, first-seen order."""
-    from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
-
+def read_notes(dir_: Path) -> list[str]:
+    """The `note` strings of the run's `NOTES_FILE`, oldest first; malformed lines and non-string
+    notes are skipped, a missing file yields []."""
     try:
         raw = (Path(dir_) / NOTES_FILE).read_text(encoding="utf-8")
     except OSError:
         return []
-    root = Path(repo_root).resolve()
     out: list[str] = []
     for line in raw.splitlines():
         try:
@@ -234,8 +232,18 @@ def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
         except ValueError:
             continue  # a torn tail line from a crashed writer; the rest stands
         note = entry.get("note") if isinstance(entry, dict) else None
-        if not isinstance(note, str):
-            continue
+        if isinstance(note, str):
+            out.append(note)
+    return out
+
+
+def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
+    """Repo-relative, forward-slash paths of the files the run's stored notes name, first-seen order."""
+    from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
+
+    root = Path(repo_root).resolve()
+    out: list[str] = []
+    for note in read_notes(dir_):
         for token in note.split():
             token = token.strip("`'\"[]<>(").rstrip(".,;:)").strip("`'\"[]<>(")
             found = _contained_file(root, token)

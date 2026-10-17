@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NamedTuple
 
@@ -342,6 +343,18 @@ def record_dir(repo_root: Path, run_id: str) -> Path:
 HALT_BLOCKING_FIELD = "blocking"
 #: `resume_ledger` verdict key carrying the plan's em-discharged rows as `{row_id: text}`.
 RESUME_LEDGER_EM_DISCHARGED_FIELD = "em_discharged"
+#: `resume_ledger` verdict key carrying the halt commit's full 40-hex sha.
+RESUME_LEDGER_HALT_SHA_FIELD = "halt_sha"
+#: `resume_ledger` verdict key carrying `{row_id: {remaining: [str], evidence: str}}` for blocking rows.
+RESUME_LEDGER_REMAINING_FIELD = "remaining"
+#: `resume_ledger` verdict key carrying the revise note texts, oldest first.
+RESUME_LEDGER_NOTES_FIELD = "revise_notes"
+#: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
+HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
+#: `dispatch.terminal_commit` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
+TERMINAL_RESUME_LEDGER_PARAM = "resume_ledger"
+#: Ledger failure reason for a blocking row judged met when no declared product path changed since the halt.
+UNCHANGED_SINCE_HALT_REASON = "no declared product path changed since the halt commit"
 _HALT_SUBJECT_RE = re.compile(r"^warp: record halted (\S+) run artifacts(?: \(process files\))?\s*$")
 
 
@@ -365,6 +378,26 @@ class HaltRecord:
     sizing_rel: str
     staged: frozenset[str]
     blocking: tuple[str, ...] | None
+    #: `{row_id: {remaining: [str], evidence: str}}`; empty when halted.json predates the key.
+    remaining: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+
+
+#: Mirrors `halted_record_commit._blocking_items`, which writes this shape; change both together.
+def _read_remaining(halted: dict) -> dict[str, dict[str, Any]]:
+    items = halted.get(HALT_BLOCKING_ITEMS_FIELD)
+    out: dict[str, dict[str, Any]] = {}
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        rem = item.get("remaining")
+        evidence = item.get("evidence")
+        out[item["id"]] = {
+            "remaining": [r for r in rem if isinstance(r, str)] if isinstance(rem, list) else [],
+            "evidence": evidence if isinstance(evidence, str) else "",
+        }
+    return out
 
 
 def _read_json_object(path: Path) -> dict | None:
@@ -403,6 +436,7 @@ def read_halt_record(repo_root: Path, run_id: str) -> HaltRecord | None:
         sizing_rel=sizing_rel,
         staged=frozenset(staged),
         blocking=tuple(blocking) if isinstance(blocking, list) and all(isinstance(b, str) for b in blocking) else None,
+        remaining=_read_remaining(halted),
     )
 
 
@@ -442,6 +476,9 @@ class LedgerHalt:
     plan_rel: str
     sizing_rel: str
     blocking: tuple[str, ...]
+    #: The halt commit's full sha; filled from git at resume, never persisted in the pointer.
+    halt_sha: str | None = None
+    remaining: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
