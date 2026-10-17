@@ -2635,7 +2635,10 @@ def _undone_summary(text: str) -> str:
     if not picked:
         picked = _cause_section(lines)
     if not picked:
-        picked = [ln.strip() for ln in lines if re.match(r'\s*"?[*_`]{0,2}PARTIAL', ln)]
+        picked = [
+            ln.strip() for ln in lines
+            if re.match(r'\s*"?[*_`]{0,2}PARTIAL', ln) or re.match(_STATUS_FIELD + "PARTIAL", ln, re.I)
+        ]
     return " | ".join(picked)[:_UNDONE_CAP]
 
 
@@ -2711,6 +2714,95 @@ def _regradable_chunks(
         if files and files <= reviewed:
             out[chunk.id] = f"outside-footprint{blocker[1].rstrip()}"[:_UNDONE_CAP]
     return out
+
+
+_BLOCKED_REPORT_RE = re.compile(
+    r'^\s*"?[*_`]{0,2}BLOCKED[*_`]{0,2}:|<exit-status>BLOCKED</exit-status>'
+    rf'|(?i:{_STATUS_FIELD}BLOCKED\b)',
+    re.MULTILINE,
+)
+
+
+def _is_delivered_report(text: str) -> bool:
+    """True for a DONE/DONE_WITH_CONCERNS report: ``_partial_chunks`` lands that row, not a regrade."""
+    return bool(_DELIVERED_REPORT_RE.search(text)) and not _UNDELIVERED_REPORT_RE.search(text)
+
+
+def _clean_review_files(inline_review: dict) -> Optional[set]:
+    """``prep.slice_files`` when the review has no unresolved finding and no confinement
+    violation, else ``None``. Unlike ``_reviewed_files_if_passed`` the delivery verdict is not read."""
+    prep = inline_review.get("prep")
+    integration = inline_review.get("integration")
+    if not (isinstance(prep, dict) and isinstance(integration, dict)):
+        return None
+    files = prep.get("slice_files")
+    if integration.get("unresolved") or integration.get("confinement_violations") or not isinstance(files, list):
+        return None
+    return {f for f in files if isinstance(f, str)}
+
+
+def _ledger_met_regrades(
+    worktree_root: Path, request: CommitRequest, incomplete: set, inline_review: dict,
+    report_cache: dict, ledger_verdict: object, held: set,
+) -> dict:
+    """``{chunk id: "ledger-met: <met item ids>"}`` for incomplete chunks a passed requirements
+    ledger plus a clean review cover: the report is readable and not BLOCKED, the chunk is not held,
+    and every declared and own-prefix file sits in ``prep.slice_files``. Call only once the ledger
+    gate passed. The ledger is run-wide, not mapped to chunks: a PARTIAL report's undone text is not
+    weighed."""
+    items = ledger_verdict.get("items") if isinstance(ledger_verdict, dict) else None
+    met = [
+        str(i["id"]) for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None
+    ]
+    blocked = set(held)
+    files: dict = {}
+    candidates = []
+    for chunk in request.chunks:
+        if chunk.id not in incomplete or not chunk.report:
+            continue
+        text = _read_rel(worktree_root, chunk.report)
+        if text is not None and _is_delivered_report(text):
+            continue
+        candidates.append(chunk)
+        prefix_files = _own_prefix_files(worktree_root, chunk, report_cache)
+        if text is None or _BLOCKED_REPORT_RE.search(text) or prefix_files is None:
+            blocked.add(chunk.id)
+            continue
+        files[chunk.id] = set(chunk.paths) | set(prefix_files)
+    ids = credit_gate.ledger_regradable(
+        [c.id for c in candidates], blocked, files, _clean_review_files(inline_review)
+    )
+    reason = ("ledger-met: " + ", ".join(met))[:_UNDONE_CAP]
+    return {cid: reason for cid in ids}
+
+
+def _credit_regrades(
+    worktree_root: Path, artifacts, record_dir_rel: Optional[str], request: CommitRequest,
+    incomplete: set, held: set, run_dir: Optional[Path] = None,
+) -> dict:
+    """``{chunk id: "credited: <evidence>"}`` for incomplete chunks the EM credited through
+    ``workflow.revise credit_chunks`` (this run's record dir and its superseded predecessors'). A credit overrides a BLOCKED report; a hold still bars it."""
+    from coordinator_core.ops.dispatch_emit import run_credit
+
+    dirs = list(artifacts.record_dirs) if artifacts is not None else []
+    if record_dir_rel and record_dir_rel not in dirs:
+        dirs.insert(0, record_dir_rel)
+    paths = [worktree_root / d for d in reversed(dirs)]
+    if run_dir is not None:
+        paths.append(run_dir)
+    credits = run_credit.read(paths)
+    if not credits:
+        return {}
+    known = []
+    for chunk in request.chunks:
+        if chunk.id not in incomplete or chunk.id not in credits:
+            continue
+        text = _read_rel(worktree_root, chunk.report) if chunk.report else None
+        if text is None or not _is_delivered_report(text):
+            known.append(chunk.id)
+    got = credit_gate.credit_regradable(known, credits, held)
+    return {cid: f"credited: {evidence}"[:_UNDONE_CAP] for cid, evidence in got.items()}
 
 
 def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
@@ -3343,8 +3435,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``blockers`` (present only when non-empty) maps each executor-PARTIAL row, whose
     files stay uncommitted, to the undone work its report names.
     ``regraded`` (present only when non-empty) maps each executor-PARTIAL row, re-graded
-    complete, to its blocker: the report's ``gate-blocker: outside-footprint`` line, every
-    file of the row in the passed review's ``prep.slice_files``. It commits with the run,
+    complete, to why. Three sources: ``outside-footprint...`` (the report's ``gate-blocker:
+    outside-footprint`` line, every file of the row in the passed review's ``prep.slice_files``);
+    ``ledger-met: <item ids>`` (a ledger-bearing run whose ledger passed, a non-BLOCKED readable
+    report, every file in a review slice with no unresolved finding or confinement violation; the
+    delivery verdict is not read); ``credited: <evidence>`` (``workflow.revise credit_chunks``).
+    A held chunk is never re-graded. It commits with the run,
     leaves ``incomplete_chunks``, and is coded like a DONE row.
     Once the run reaches its commit (every refusal and no-op before that omits it),
     the reply also carries ``undeclared_dirty`` -- the
@@ -4029,6 +4125,21 @@ def _terminal_commit_inner(
         incomplete_chunks = incomplete_chunks - set(regraded_here)
         if regraded is not None:
             regraded.update(regraded_here)
+    held_now = _held_ids(params)
+    more_regraded: dict = {}
+    if ledger is not None:
+        more_regraded.update(_ledger_met_regrades(
+            worktree_root, request, incomplete_chunks, inline_review, report_cache,
+            params.get("ledger_verdict"), held_now,
+        ))
+    credited_regraded = _credit_regrades(
+        worktree_root, artifacts, record_dir_rel, request, incomplete_chunks, held_now, ask_run_dir
+    )
+    more_regraded.update({k: v for k, v in credited_regraded.items() if k not in more_regraded})
+    if more_regraded:
+        incomplete_chunks = incomplete_chunks - set(more_regraded)
+        if regraded is not None:
+            regraded.update(more_regraded)
     # The wake digest lists every unfinished row, including rows that never
     # started and so never reached the marker; those carry no paths to hold
     # back, so they are reported, not refused.
@@ -4385,9 +4496,12 @@ def _terminal_commit_inner(
         if close_ctx is not None:
             close_ctx.clear()
         shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(stranded.items()))
+        why = "".join(f" {cid} blocker: {text}." for cid, text in sorted(withheld_partial.items()) if cid in stranded)
         return _error(
-            f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}. "
-            "Finish or land the stranded chunks, then re-fire",
+            f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
+            "Finish or land the stranded chunks, then re-fire; or credit one: workflow.revise "
+            f"run_id={_run_id_of(params, ask_run_dir, script_path_raw)} "
+            "credit_chunks=[{chunk, evidence}], then re-fire",
             refused=credit_gate.REFUSED_NO_CREDITED_LANDING,
         )
 

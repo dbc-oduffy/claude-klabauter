@@ -1,4 +1,4 @@
-"""sizing.supersede: routed -> superseded with a superseded_note, idempotent, routed-only."""
+"""sizing.supersede: routed/draft -> superseded with a superseded_note, idempotent, routed/draft-only."""
 
 from __future__ import annotations
 
@@ -62,6 +62,16 @@ def test_routed_becomes_superseded(repo):
     assert sup_mod._validate_sizing_fm(text) == []
 
 
+def test_draft_becomes_superseded(repo):
+    p = _seed(repo, status="draft")
+    r = _run(repo)
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    text = p.read_text(encoding="utf-8")
+    assert read_fm_field_unquoted(text, "status") == "superseded"
+    assert "draft -> superseded" in r["message"]
+    assert sup_mod._validate_sizing_fm(text) == []
+
+
 def test_trailing_enum_comment_on_status_line(repo):
     p = _seed(repo, _sizing_body().replace("status: routed", f"status: routed{_COMMENT}"))
     r = _run(repo)
@@ -101,7 +111,7 @@ def test_applied_call_changes_exactly_two_keys(repo):
     assert changed == {"status", "superseded_note"}
 
 
-@pytest.mark.parametrize("status", ["draft", "sized", "shipped", "declined"])
+@pytest.mark.parametrize("status", ["sized", "shipped", "declined"])
 def test_refuses_non_routed_status(repo, status):
     p = _seed(repo, status=status)
     before = p.read_bytes()

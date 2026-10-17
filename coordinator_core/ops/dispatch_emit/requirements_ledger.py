@@ -69,6 +69,7 @@ _PARAMS = (
     Field("all_of_pm_ask", "bool"),
     Field("out_of_scope", "str_list"),
     Field("withhold_paths", "list"),
+    Field("credit_chunks", "list"),
     Field("from", "str"),
 )
 #: Separator between a revision anchor's UTC stamp and the peer session that sent it.
@@ -722,7 +723,7 @@ def bind(
 def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
-    withhold_paths: Sequence = (),
+    withhold_paths: Sequence = (), credit_chunks: Sequence = (),
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -738,6 +739,9 @@ def revise(
     `withhold_paths` (`[{path, reason}]`, `run_withhold.validate` before any write) rules product paths
     out of the run's terminal commit: it is recorded to the run's `withhold.jsonl`, needs no bound
     sizing, adds no register row and no inbox entry, and alone satisfies the non-empty precondition.
+    `credit_chunks` (`[{chunk, evidence}]`, `run_credit.validate` before any write) marks stranded
+    chunks complete: recorded to the run's `credit.jsonl`, same preconditions and effects as
+    `withhold_paths`; the re-fired terminal commit re-grades the named chunks.
     Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
@@ -750,9 +754,18 @@ def revise(
             withheld_entries = run_withhold.validate(withhold_paths)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
-    if not text and all_of_pm_ask is None and not has_note and not withheld_entries:
+    credit_entries: list[dict] = []
+    if credit_chunks:
+        from coordinator_core.ops.dispatch_emit import run_credit
+
+        try:
+            credit_entries = run_credit.validate(credit_chunks)
+        except ValueError as exc:
+            raise LedgerRefused(str(exc)) from exc
+    if not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries:
         raise LedgerRefused(
-            "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, or a combination"
+            "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
+            "credit_chunks, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -762,7 +775,7 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     if run is None:
-        if named or all_of_pm_ask is not None or withheld_entries:
+        if named or all_of_pm_ask is not None or withheld_entries or credit_entries:
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
                 "(a held run takes only a verbatim revision)"
@@ -802,6 +815,8 @@ def revise(
         declare_write(dir_ / NOTES_FILE)
     if withheld_entries:
         run_withhold.record(dir_, withheld_entries, _now())
+    if credit_entries:
+        run_credit.record(dir_, credit_entries, _now())
     if named:
         _append_rows(root, run["sizing_rel"], [], withhold=withhold)
     elif text:
@@ -1072,7 +1087,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `verbatim`: each is deferred with the verbatim as
     its ruling, carried open on the commit, and replied as `withheld`), `withhold_paths` (list of
     `{path, reason}`: product paths the run's terminal commit leaves out, recorded to the run's
-    `withhold.jsonl`; needs an emitted run, no sizing, adds no row; replied as `withhold_paths`).
+    `withhold.jsonl`; needs an emitted run, no sizing, adds no row; replied as `withhold_paths`),
+    `credit_chunks` (list of `{chunk, evidence}`: stranded chunks the EM rules complete, recorded to
+    the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
+    sizing, adds no row; replied as `credit_chunks`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -1093,6 +1111,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
+            credit_chunks=params.get("credit_chunks") or (),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1119,6 +1138,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import run_withhold
 
         out["withhold_paths"] = run_withhold.validate(params["withhold_paths"])
+    if params.get("credit_chunks"):
+        from coordinator_core.ops.dispatch_emit import run_credit
+
+        out["credit_chunks"] = run_credit.validate(params["credit_chunks"])
     named = set(params.get("out_of_scope") or ())
     if named:
         out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]

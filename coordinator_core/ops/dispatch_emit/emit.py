@@ -2013,6 +2013,19 @@ def _build_gate_clause(commands: list) -> str:
     )
 
 
+def _footprint_miss_clause() -> str:
+    """The outside-footprint marker for a row with no build gate: the regrade reads
+    the report line, so the executor must be taught it here too."""
+    return (
+        "Footprint check: when every test and check inside your footprint passes and "
+        "the only failures are in files outside it, your row is delivered: return "
+        "PARTIAL with the report line "
+        f"`{report_line(KIND_OUTSIDE_FOOTPRINT, '<first failing test>')}` in your "
+        "summary and nothing else undone. A failure inside your footprint is never "
+        "this case."
+    )
+
+
 def _slot_row_clause(commands: list) -> str:
     """A `needs_slot` row's process (build, compiler, editor) is scheduled by
     the Group EM against box load and never launched by the executor unless the
@@ -2780,6 +2793,8 @@ def _row_prompt(
             body += f"\n\n{_slot_row_clause(gate_commands)}"
         elif gate_commands:
             body += f"\n\n{_build_gate_clause(gate_commands)}"
+        else:
+            body += f"\n\n{_footprint_miss_clause()}"
         if criterion_routed:
             body += f"\n\n{CRITERION_TYPECHECK_CLAUSE}"
     body += sidecar

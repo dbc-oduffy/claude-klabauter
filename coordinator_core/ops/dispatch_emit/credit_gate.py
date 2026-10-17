@@ -55,6 +55,36 @@ def uncommitted_credited(
     return out
 
 
+def ledger_regradable(
+    candidates: Iterable[str],
+    blocked: AbstractSet[str],
+    files: Mapping[str, AbstractSet[str]],
+    reviewed: Optional[AbstractSet[str]],
+) -> list[str]:
+    """Candidate ids, in input order, a clean review covers (caller has already passed the ledger).
+
+    A candidate qualifies when it is not in ``blocked`` and has a non-empty file set wholly
+    inside ``reviewed``. Empty when no clean review exists.
+    """
+    if reviewed is None:
+        return []
+    out: list[str] = []
+    for cid in candidates:
+        if cid in blocked:
+            continue
+        own = files.get(cid)
+        if own and set(own) <= set(reviewed):
+            out.append(cid)
+    return out
+
+
+def credit_regradable(
+    candidates: Iterable[str], credits: Mapping[str, str], held: AbstractSet[str]
+) -> dict[str, str]:
+    """``{id: evidence}`` for each candidate the EM credited and no hold bars."""
+    return {cid: credits[cid] for cid in candidates if cid in credits and cid not in held}
+
+
 def no_credited_landing(
     stranded_ids: AbstractSet[str],
     contributing_ids: AbstractSet[str],

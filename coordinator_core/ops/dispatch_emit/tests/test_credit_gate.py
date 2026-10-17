@@ -72,6 +72,35 @@ def test_nothing_stranded_never_refuses():
     assert cg.no_credited_landing(set(), {"docs"}, set()) is False
 
 
+LEDGER_FILES = {"C1": {"a.py", "t.py"}, "C2": {"b.py"}, "C3": set()}
+
+
+def test_ledger_regradable_covers_clean_candidates_in_order():
+    got = cg.ledger_regradable(["C2", "C1"], set(), LEDGER_FILES, {"a.py", "t.py", "b.py"})
+    assert got == ["C2", "C1"]
+
+
+def test_ledger_regradable_empty_when_no_review():
+    assert cg.ledger_regradable(["C1"], set(), LEDGER_FILES, None) == []
+
+
+def test_ledger_regradable_excludes_blocked_empty_and_outside():
+    reviewed = {"a.py", "t.py"}
+    assert cg.ledger_regradable(["C1"], {"C1"}, LEDGER_FILES, reviewed) == []
+    assert cg.ledger_regradable(["C3"], set(), LEDGER_FILES, reviewed) == []
+    assert cg.ledger_regradable(["C2"], set(), LEDGER_FILES, reviewed) == []
+    assert cg.ledger_regradable(["C9"], set(), LEDGER_FILES, reviewed) == []
+
+
+def test_credit_regradable_returns_evidence_for_credited():
+    assert cg.credit_regradable(["C1", "C2"], {"C1": "ok"}, set()) == {"C1": "ok"}
+
+
+def test_credit_regradable_excludes_held_and_uncredited():
+    assert cg.credit_regradable(["C1"], {"C1": "ok"}, {"C1"}) == {}
+    assert cg.credit_regradable(["C2"], {"C1": "ok"}, set()) == {}
+
+
 def test_module_is_stdlib_pure():
     tree = ast.parse(Path(cg.__file__).read_text(encoding="utf-8"))
     mods = set()
