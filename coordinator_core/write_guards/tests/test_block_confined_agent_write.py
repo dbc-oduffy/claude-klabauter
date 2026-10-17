@@ -119,6 +119,37 @@ class TestInSandboxAllowed:
         assert result is None
 
 
+class TestWorkflowSidecarsRoot:
+
+    def _arm(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+
+    def test_write_under_root_allowed(self, tmp_path, monkeypatch):
+        self._arm(tmp_path, monkeypatch)
+        target = str(
+            tmp_path / ".coordinator-local" / "workflow-sidecars" / "lbl" / "x.md"
+        )
+        assert guard.check(_payload(tmp_path, target)) is None
+
+    @pytest.mark.parametrize(
+        "rel",
+        [
+            ".coordinator-local/workflow-sidecars-evil/x.md",
+            "coordinator_core/write_guards/engine.py",
+        ],
+    )
+    def test_prefix_sibling_and_tracked_path_denied(self, tmp_path, monkeypatch, rel):
+        self._arm(tmp_path, monkeypatch)
+        result = guard.check(_payload(tmp_path, str(tmp_path / rel)))
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 class TestOutOfSandboxDenied:
 
     @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])

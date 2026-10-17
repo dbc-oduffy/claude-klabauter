@@ -28,21 +28,31 @@ def test_footprint_constraint_template_pinned_bytes():
         "You MUST NOT create or modify any file outside this footprint: "
         "[list]. If you discover you need to, STOP and report back via the "
         "DONE summary with status BLOCKED. Create and edit each of those files "
-        "with Write/Edit, never with a Bash heredoc, sed, tee or redirection: "
-        "only the write tools record a session write claim, and a file produced "
-        "through Bash reaches the committer as an orphan it must refuse. Bash "
-        "stays correct for reading, searching and running tests. If a Bash write "
-        "already happened, name those paths in your report."
+        "with Write/Edit: the write tools record the content fingerprint the "
+        "commit checks. Only when the harness itself denies the Write tool on a "
+        "path in this footprint, write that path with a quoted Bash heredoc, "
+        "never skip it, and name it in your report. A path already written with "
+        "Write is never overwritten through Bash: the commit refuses that as "
+        "blob drift. A coordinator guard's denial stays a stop. Never use sed, "
+        "tee or redirection to edit. Bash stays correct for reading, searching "
+        "and running tests. If a Bash write already happened, name those paths "
+        "in your report."
     )
 
 
-def test_footprint_constraint_names_the_write_tools_and_forbids_bash_writes():
+def test_footprint_constraint_names_the_write_tools_and_admits_harness_denied_heredoc():
     text = FOOTPRINT_CONSTRAINT_TEMPLATE
+    assert "[list]" in text
+    assert "MUST NOT create or modify any file outside this footprint" in text
     assert "Write/Edit" in text
-    assert "never with a Bash heredoc, sed, tee or redirection" in text
-    assert "record a session write claim" in text
-    assert "reaches the committer as an orphan it must refuse" in text
+    assert "the harness itself denies the Write tool" in text
+    assert "quoted Bash heredoc, never skip it" in text
+    assert "content fingerprint the commit checks" in text
+    assert "blob drift" in text
+    assert "A coordinator guard's denial stays a stop" in text
+    assert "orphan" not in text
     assert "Bash stays correct for reading, searching and running tests" in text
+    assert "If a Bash write already happened, name those paths in your report." in text
 
 
 def test_self_verify_constraint_reproduces_mise_hand_dispatch_bytes():

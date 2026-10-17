@@ -83,6 +83,10 @@ Allow conditions (pass through):
   (7) The resolved target path equals a registered review target for the
       firing payload's own ``session_id`` — see the module docstring's
       2026-09-26 re-scope note above.
+  (8) The resolved target path is contained under
+      ``<git_root>/<agent_sidecar.SIDECAR_ROOT>`` (the gitignored
+      workflow-sidecars root) — the guard cannot see the agent's label, and
+      nothing there reaches a commit.
 
 Negative-spec:
   - Does NOT admit a review target by containment — the equality check in
@@ -144,6 +148,7 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.dispatch_emit.agent_sidecar import SIDECAR_ROOT
 from coordinator_core.session.machinery_paths import legacy_share_dir, share_dir
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
@@ -269,6 +274,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     sandbox_roots = [
         Path(casefold_path(share_dir(git_root, session_id))),
         Path(casefold_path(legacy_share_dir(git_root, session_id))),
+        Path(casefold_path(str(Path(git_root, SIDECAR_ROOT)))),
     ]
     # A tool-supplied file_path is contractually absolute (every MATCHERS
     # tool requires it), but a relative string is joined against git_root

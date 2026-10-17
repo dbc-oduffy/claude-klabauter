@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     subject_key,
     subject_slug,
 )
+from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause_js
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
@@ -218,7 +219,8 @@ def _agent_call(
     prompt: str, label: str, slug: str,
 ) -> str:
     """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type. Every prompt resolves to the script's `RELAY` clause plus its template."""
-    prompt = f"(RELAY + '\\n\\n' + {prompt})"
+    sidecar = sidecar_clause_js("pipeline", manifest.pipeline, label)
+    prompt = f"(RELAY + '\\n\\n' + {prompt} + {sidecar})"
     if stage.agent_type_from is None:
         call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, stage.agent_type, agent_type_host)} }})"
         return f"produced({label}, {call})"

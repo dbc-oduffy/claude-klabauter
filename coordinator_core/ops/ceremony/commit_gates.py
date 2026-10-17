@@ -862,9 +862,19 @@ def residue_gate(
 ) -> GateOutcome:
     """Refuse a commit carrying `scratch/` paths (never committed anywhere).
 
-    Zero spawns: prefix classification over `gate_paths`.
+    Prefix classification over `gate_paths`; a never-commit path that `.gitignore` already
+    excludes (and the index does not track) is dropped, decided by ONE batched
+    `git check-ignore` that runs only when a never-commit path is present. A check-ignore
+    that cannot answer leaves the path refused.
     """
     bad = [p for p in gate_paths if is_never_commit(p)]
+    if bad:
+        from coordinator_core.ops.ceremony.git_native import check_ignore, parse_check_ignore_stdin_z
+
+        res = check_ignore(worktree_root, [_norm(p) for p in bad])
+        if res.returncode in (0, 1):
+            ignored = {_norm(m[3]) for m in parse_check_ignore_stdin_z(res.stdout)}
+            bad = [p for p in bad if _norm(p) not in ignored]
     if not bad:
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
     diagnostics = [f"{p}: scratch in a commit" for p in bad[:5]]

@@ -29,7 +29,7 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.delivery_credit import ancestor_refs, coded_row_landings
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.ops.review_mint.compose import _agent_call_literal
+from coordinator_core.ops.review_mint.compose import _agent_call_literal, with_sidecar_clause
 from coordinator_core.ops.review_mint.execute_review import (
     _DELIVERY_VERIFIER_AGENT_TYPE,
     _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
@@ -79,6 +79,11 @@ _CRITERION_FIELD = (
     ", criterion: _judge ? { status: _judge.status ?? null, "
     "observation: _judge.observation ?? null } : null"
 )
+
+
+def _sidecar(call: str, plan_path: str, label: str) -> str:
+    """Append the reverify sidecar clause, keyed by the plan stem, to one finished agent call."""
+    return with_sidecar_clause(call, "reverify", Path(plan_path.replace("\\", "/")).stem or "run", label)
 
 
 def _tests_prompt(head_sha: str, plan_path: str, base: str, *, write_record: bool = False) -> str:
@@ -375,14 +380,18 @@ def compose_reverify_script(
     engine_rows = _engine_rows(plan_path, repo_root)
     if owner_rows or engine_rows:
         prompt += owner_repo_clause(owner_rows + engine_rows, owner_repo_roots())
-    call = agent and _agent_call_literal(
-        _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
-        prompt,
-        _PHASE,
-        schema=True,
-        as_arrow=False,
-        agent_opts=_agent_opts_for(agent, emitted_agent_type=_DELIVERY_VERIFIER_HOST_NATIVE_TYPE),
-        schema_literal=_schema_literal(agent.schema, stage_schemas),
+    call = agent and _sidecar(
+        _agent_call_literal(
+            _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
+            prompt,
+            _PHASE,
+            schema=True,
+            as_arrow=False,
+            agent_opts=_agent_opts_for(agent, emitted_agent_type=_DELIVERY_VERIFIER_HOST_NATIVE_TYPE),
+            schema_literal=_schema_literal(agent.schema, stage_schemas),
+        ),
+        plan_path,
+        f"delivery-{_DELIVERY_VERIFIER_HOST_NATIVE_TYPE}",
     )
     judge_kwargs = dict(
         stage_schemas=stage_schemas,
@@ -396,7 +405,7 @@ def compose_reverify_script(
         evidence=_register_evidence(plan_path, repo_root),
         em_owned_rows=owned,
     )
-    judge_call = compose_criterion_judge(review, **judge_kwargs)
+    judge_call = compose_criterion_judge(review, sidecar_workflow="reverify", **judge_kwargs)
     phases = [_js_string_literal(_PHASE)] if call else []
     tests_lines = ""
     tests_field = ""
@@ -423,14 +432,18 @@ def compose_reverify_script(
             "Return the verdict under `judge`.\n\n"
             + parts.prompt
         )
-        verify_call = _agent_call_literal(
-            parts.agent_type,
-            verify_prompt,
-            _VERIFY_PHASE,
-            schema=True,
-            as_arrow=False,
-            agent_opts=_agent_opts_for(review.judge, emitted_agent_type=parts.agent_type),
-            schema_literal=json.dumps(verify_schema, sort_keys=True),
+        verify_call = _sidecar(
+            _agent_call_literal(
+                parts.agent_type,
+                verify_prompt,
+                _VERIFY_PHASE,
+                schema=True,
+                as_arrow=False,
+                agent_opts=_agent_opts_for(review.judge, emitted_agent_type=parts.agent_type),
+                schema_literal=json.dumps(verify_schema, sort_keys=True),
+            ),
+            plan_path,
+            f"verify-{parts.agent_type}",
         )
         phases.append(_js_string_literal(_VERIFY_PHASE))
         tests_lines = (
@@ -447,14 +460,18 @@ def compose_reverify_script(
         tests_prompt = _tests_prompt(head_sha, plan_path, base, write_record=True)
         tests_type, tests_role = _host_native(review.prep.agent_type, host_degraded)
         tests_ident["tests_agent_type"] = tests_type
-        tests_call = _agent_call_literal(
-            tests_type,
-            tests_role + tests_prompt,
-            _TESTS_PHASE,
-            schema=True,
-            as_arrow=False,
-            agent_opts=_agent_opts_for(review.prep),
-            schema_literal=stage_schema_literal("test_result"),
+        tests_call = _sidecar(
+            _agent_call_literal(
+                tests_type,
+                tests_role + tests_prompt,
+                _TESTS_PHASE,
+                schema=True,
+                as_arrow=False,
+                agent_opts=_agent_opts_for(review.prep),
+                schema_literal=stage_schema_literal("test_result"),
+            ),
+            plan_path,
+            f"tests-{tests_type}",
         )
         tests_lines = (
             f"  phase({_js_string_literal(_TESTS_PHASE)});\n"

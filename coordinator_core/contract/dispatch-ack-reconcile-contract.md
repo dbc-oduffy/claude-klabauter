@@ -35,8 +35,13 @@ independently-started interpreters, else `time.time_ns()` — see
 `monotonic_ns()`; Windows/Darwin readings recorded as owed). The key is never the JSON-RPC `id`,
 and the `id` field's current value is unchanged by this contract.
 
-An unkeyed frame (an old door build, or an old client caught in a rollout skew window) is
-dispatched exactly as before this contract existed, and is recorded nowhere.
+An unkeyed MUTATING frame (the door build mints none; an old client in a rollout skew window
+sends none) is keyed by the accept process: `_serve_line` calls `dispatch_ack.mint_key()`
+(`f"{os.getpid()}-{time.time_ns()}"`) before `admit`, so the door path is recorded and its -32004
+can name the key. The server-minted key rides `error.data.dispatch_key` on every MUTATING -32004.
+`mint_key` uses `time.time_ns()`, which is far above any `boot_ns` taken from `monotonic_ns()` on
+the same engine, so a minted key always sorts after `boot_ns`. A COMPUTE_ONLY unkeyed frame is
+dispatched as before and recorded nowhere.
 
 ## 2. Where the record lives (D2)
 
@@ -53,9 +58,13 @@ holds three operations a caller-facing reader must understand:
   eviction. Only non-COMPUTE_ONLY methods are admitted, matching `_op_may_mutate`'s fail-closed
   rule. If `admit` raises, the frame is refused as provably undispatched and is never dispatched
   unacknowledged — there is no swallowed-failure path here, unlike `telemetry/op_latency.py`.
-- **`stamp(key, outcome)`** — "did the handler return, and how?" Called by whichever leg
-  actually sees the handler return (the pool done-callback, or the in-process synchronous
-  return).
+- **`stamp(key, outcome, *, error_code=None, result=None)`** — "did the handler return, and
+  how?" Called by whichever leg actually sees the handler return (the pool done-callback, or
+  the in-process synchronous return). For a `result` outcome, `result` is retained (§ 3a).
+- **`wait(key, timeout_secs) -> dict`** — blocks on a `threading.Condition` until the key leaves
+  `executing` or `timeout_secs` passes, then answers `status(key)`. It never polls and names no
+  settle interval. An unknown or tombstoned key answers at once. The caller bounds
+  `timeout_secs`.
 - **`status(key) -> dict`** — "what does the engine know of this key?", returning one of the
   four poll states in § 4. Its tombstone insert for an absent, non-evicted key happens in the
   same critical section as its lookup (D3, § 5) — this is what closes the pipe-buffer race.
@@ -86,6 +95,14 @@ directly; a refusal there marks the worker's own returned envelope with a privat
 field (the same rides-the-returned-dict shape `_stderr` already uses). The accept-process
 done-callback pops that field and stamps `not-dispatched` from it. **The field never reaches the
 wire** — it is consumed before the response is written to the connection.
+
+### 3a. Result retention
+
+A `finished/result` stamp may carry the handler's JSON-serialisable `result`. The store keeps the
+most recent `RESULT_RETAIN_COUNT = 64` of them, up to `RESULT_RETAIN_BYTES = 4 MiB` in total, in an
+LRU separate from the 4000-key state ring. A single result over `RESULT_RETAIN_BYTES // 4` or one
+that is not JSON-serialisable is not kept. Evicting a result never changes the key's state: the
+key is still `finished`. `status()` then reports `result_retained: false`.
 
 ## 4. Poll states and the outcome → state mapping
 
@@ -162,9 +179,13 @@ door has no basis for.
 
 ## 9. `warm.request_status` wire shape (D5)
 
-`{"key": str}` in, COMPUTE_ONLY, scope `none`. `_serve_line` intercepts and answers it from
-`AckStore` in the accept process — it is never submitted to the pool (a pool worker cannot see
-the accept process's memory and would answer from an empty store). The registered handler itself
+`{"key": str, "wait_secs": number (optional)}` in, COMPUTE_ONLY, scope `none`. `_serve_line`
+intercepts and answers it from `AckStore` in the accept process — it is never submitted to the
+pool (a pool worker cannot see the accept process's memory and would answer from an empty
+store). The intercept matches both the bare `warm.request_status` frame and the door's frame
+shape: `invoke.from_argv` with no `entrypoint` and `argv[0] == "warm.request_status"`, whose
+`argv[1]` is parsed only as this op's JSON params. `wait_secs` calls `AckStore.wait` on the
+connection thread, clamped to `_POOL_RESULT_DEADLINE_SECS`; absent, the answer is immediate. The registered handler itself
 runs only on the cold or pool path, where no store is visible, and always returns
 `unknowable(no-resident-engine)`.
 
@@ -175,6 +196,8 @@ Every answer carries:
 | `state` | always | One of `not_received`, `executing`, `finished`, `unknowable` (§ 4). |
 | `reason` | `state == unknowable` | `engine-restarted`, `expired`, or `no-resident-engine` (§ 6). |
 | `outcome` | `state == finished` | `result` or `error`, plus the error code for `error` (§ 3). Names the sibling contract's evidence class for the method; makes no claim of its own about the mutation. |
+| `result` | `state == finished`, outcome `result`, and the result was retained (§ 3a) | The handler's original reply. For an `invoke.from_argv` dispatch, a door-form poll replays its `{stdout, stderr, exit_code}`. |
+| `result_retained` | `state == finished`, a result was stamped but not kept | `false`. The op landed; its reply is gone. |
 | `engine_boot_ns` | always | This engine's `boot_ns`, letting a caller detect a restart it hasn't otherwise noticed. |
 | `engine_pid` | always | This engine's pid. |
 
@@ -191,4 +214,6 @@ Every answer carries:
 - **The door legs' key-minting and rebuild.** Built in C7; this contract's key format (§ 1) and
   refusal code (§ 8) are what C7 must match.
 - **Reading side effects, or naming a settle interval.** The 2026-09-09 ruling rejects both
-  outright, and this contract prescribes neither.
+  outright, and this contract prescribes neither. DR-442 (completion evidence is the engine's
+  record, not the side effect) keeps it so: a `finished` stamp is the evidence an op landed, and
+  HEAD, `git log` and `git status` are never read back to decide it.

@@ -26,7 +26,7 @@ from coordinator_core.ops.review_mint.roster import (
     RosterFragmentError,
     VALID_TIERS,
 )
-from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal
+from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal, with_sidecar_clause
 from coordinator_core.ops.review_mint.wave_not_run import (
     NO_REVIEW as _WAVE_NO_REVIEW,
     REJECTED as _WAVE_REJECTED,
@@ -716,6 +716,14 @@ def compose_execute_review(
     prep_phase = "Review prep"
     if slice_key_js and run_key:
         raise ValueError("compose_execute_review takes at most one of run_key / slice_key_js")
+    sidecar_key = run_key or Path(plan_path.replace("\\", "/")).stem or "run"
+
+    def _sc(call: str, stage: str, agent_type: str, label_js: Optional[str] = None) -> str:
+        """Append this run's sidecar clause to one finished agent call."""
+        label = f"{stage}-{agent_type}"
+        full_js = None if label_js is None else f"{_js_string_literal(label + '-')} + {label_js}"
+        return with_sidecar_clause(call, "review", sidecar_key, label, label_js=full_js)
+
     prep_slice_id = prep_slice_id_for(
         plan_path,
         slice_identity_sha if slice_identity_sha is not None else run_base_sha,
@@ -809,6 +817,7 @@ def compose_execute_review(
             + ", "
             + prep_call[len(prep_prefix):]
         )
+    prep_call = _sc(prep_call, "prep", prep_type)
     if not prep_in_wave:
         phases.append(
             (
@@ -903,6 +912,7 @@ def compose_execute_review(
                 f"{_js_string_literal(chr(10) + 'group_index: ')} + i + "
                 f"{_js_string_literal(chr(10) + 'group_count: ')} + n, " + slice_call[len(slice_prefix):]
             )
+            grouped_call = _sc(grouped_call, "slice", slice_type, "i")
             count_js = (
                 f"Math.max(1, Math.min({MAX_SLICES}, Math.ceil({rows_expr} / {max_rows}), "
                 f"Math.floor({rows_expr} / {min_rows})))"
@@ -954,13 +964,14 @@ def compose_execute_review(
                 f"JSON.stringify(g) + {_js_string_literal(_GROUPED_SLICES_CLAUSE)})"
             )
             single_suffix = f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + JSON.stringify(s), "
-            grouped_call = spliced_call.replace(single_suffix, f"{suffix}, ", 1)
+            grouped_call = _sc(spliced_call.replace(single_suffix, f"{suffix}, ", 1), "slice", slice_type)
             slice_items = (
                 f"_groupSlices({REVIEW_PREP_SLICES_JS}, {rows_expr}, "
                 f"{agent.executor_rows_per_reviewer[0]}, {agent.executor_rows_per_reviewer[1]}).map(g => () => {_degrading(grouped_call)})"
             )
         else:
-            slice_items = f"{REVIEW_PREP_SLICES_JS}.map(s => () => {_degrading(spliced_call)})"
+            single_call = _sc(spliced_call, "slice", slice_type, "s.slice_id")
+            slice_items = f"{REVIEW_PREP_SLICES_JS}.map(s => () => {_degrading(single_call)})"
         gate = _agent_gate(agent)
         item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")
 
@@ -1049,6 +1060,7 @@ def compose_execute_review(
                 else ""
             )
             call = f"() => agent({_prompt_literal(wave_prompt)}{wave_tail_js}{owner}, " + call[len(prefix):]
+            call = _sc(call, "whole", emitted_agent_type)
             line = _degrading(call, degrade_on_error)
             gate = _agent_gate(agent)
             if gate:
@@ -1094,6 +1106,7 @@ def compose_execute_review(
             )
         )
         call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
+        call = _sc(call, "whole", emitted_agent_type)
         degraded = _degrading(call, degrade_on_error)
         line = (
             degraded
@@ -1221,6 +1234,7 @@ def compose_execute_review(
             agent_opts=_agent_opts_for(review.integration, emitted_agent_type=integration_type),
             schema_literal=_schema_literal(review.integration.schema, stage_schemas),
         )
+        integration_call = _sc(integration_call, "integration", integration_type)
         phases.append(
             (
                 integration_phase,
@@ -1613,6 +1627,8 @@ def compose_criterion_judge(
     em_owned_rows: Optional[List[str]] = None,
     ledger_charter: Optional[str] = None,
     ledger_schema: Optional[dict] = None,
+    sidecar_workflow: str = "review",
+    sidecar_run_key: Optional[str] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. ``evidence_path`` names the
@@ -1649,5 +1665,10 @@ def compose_criterion_judge(
         if not call.startswith(prefix):
             raise ValueError("judge agent call does not open with its prompt literal")
         call = f"{prefix} + {prompt_suffix_js}{call[len(prefix):]}"
-    return call
+    return with_sidecar_clause(
+        call,
+        sidecar_workflow,
+        sidecar_run_key or Path(plan_path.replace("\\", "/")).stem or "run",
+        f"judge-{parts.agent_type}",
+    )
 

@@ -179,6 +179,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import faulthandler
+import inspect
 from concurrent.futures.process import BrokenProcessPool
 import json
 import multiprocessing
@@ -510,7 +511,11 @@ def _stamp_dispatch_outcome(dispatch_key: str, response: Any) -> None:
         else:
             _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_ERROR, error_code=error.get("code"))
     else:
-        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_RESULT)
+        _ack_store.stamp(
+            dispatch_key,
+            dispatch_ack.OUTCOME_RESULT,
+            result=response.get("result") if isinstance(response, dict) else None,
+        )
 
 
 def _run_dispatch(
@@ -746,7 +751,90 @@ def _run_joining_handler(coro):
             )
 
 
-def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
+#: A task running longer than this leaves every thread's stack in its worker's
+#: stderr log (`faulthandler.dump_traceback_later`, which works on every OS).
+#: Well under `_POOL_RESULT_DEADLINE_SECS` so a hung op is on disk before the
+#: caller's -32004 is minted.
+STALL_DUMP_SECS = 10.0
+
+_CLAIMS_DIRNAME = "dispatch-claims"
+
+
+def _claim_path(claim_dir, key: Optional[str]) -> Optional[Path]:
+    """`<claim_dir>/<key>`, or None when the key cannot be a safe file name
+    (a client-supplied key is arbitrary text)."""
+    if not claim_dir or not _is_safe_dispatch_key(key):
+        return None
+    return Path(claim_dir) / key
+
+
+def _is_safe_dispatch_key(key: Optional[str]) -> bool:
+    """Alphanumerics, `-`, `_`, `.`, not dot-leading: safe as a file name and as
+    text inside the shell command `_with_reconcile_route` hands an agent."""
+    return bool(key) and not key.startswith(".") and all(c.isalnum() or c in "-_." for c in key)
+
+
+def _take_claim(path: Path, owner_pid: int, on_error: bool = True) -> bool:
+    """Atomic O_CREAT|O_EXCL create (NTFS, APFS, ext4). True iff this caller
+    created the file. The owner pid is written so the loser of the race can name
+    the worker that holds the request. An unusable dir answers `on_error`: the
+    worker side keeps the default True (the claim is never a reason to refuse an
+    op); the accept side passes False, because a withdrawal it cannot record
+    would claim "never ran" about an op a worker may be running."""
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return on_error
+    try:
+        os.write(fd, str(owner_pid).encode("ascii"))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+    return True
+
+
+def _prune_dispatch_claims(claim_dir) -> None:
+    try:
+        Path(claim_dir).mkdir(parents=True, exist_ok=True)
+        for stale in Path(claim_dir).iterdir():
+            stale.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _pool_dispatch_worker(
+    msg: dict,
+    caller: Optional[CallerContext],
+    dispatch_key: Optional[str] = None,
+    claim_dir: Optional[str] = None,
+    stall_secs: float = STALL_DUMP_SECS,
+) -> dict:
+    """Claim the request, arm the stall dump, then `_pool_dispatch_worker_body`.
+
+    The claim is the first act: if the accept process already withdrew this
+    key (it won the same O_EXCL create at its deadline), the op does not run.
+    """
+    claim = _claim_path(claim_dir, dispatch_key)
+    if claim is not None and not _take_claim(claim, os.getpid()):
+        return {_NOT_DISPATCHED_MARKER: True}
+    armed = False
+    if _WORKER_STDERR_FILE is not None and stall_secs > 0:
+        try:
+            faulthandler.dump_traceback_later(stall_secs, repeat=False, file=_WORKER_STDERR_FILE)
+            armed = True
+        except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+            pass
+    try:
+        return _pool_dispatch_worker_body(msg, caller)
+    finally:
+        if armed:
+            faulthandler.cancel_dump_traceback_later()
+
+
+def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> dict:
     """The `DISPATCH_PROCESS_POOL_SIZE` worker-process target -- identical
     body to `_run_dispatch`, factored out as its own top-level (picklable)
     function because `concurrent.futures.ProcessPoolExecutor.submit` needs
@@ -886,22 +974,96 @@ _POOL_NOT_STARTED_MESSAGE = (
 ).format(_POOL_RESULT_DEADLINE_SECS)
 
 
-def _pool_not_started_envelope(msg: dict) -> dict:
+def _pool_not_started_envelope(msg: dict, occupancy: Optional[dict] = None) -> dict:
     """The envelope for a request cancelled before it started.
 
     INTERNAL_ERROR, never WARM_DISPATCH_INDETERMINATE: the whole value of the
     successful cancel is that it PROVES the op did not run, and an indeterminate
     code would throw that proof away and tell a caller to reconcile a write that
     cannot exist.
+
+    `occupancy` (`pool_size`, `outstanding`) tells the single re-run whether the
+    queue was saturated: outstanding >= pool_size means every worker was taken.
     """
+    diagnosis: dict = {"phase": "queued", "op": msg.get("method")}
+    if occupancy:
+        diagnosis.update(occupancy)
     return {
         "jsonrpc": "2.0",
         "id": msg.get("id"),
-        "error": {"code": INTERNAL_ERROR, "message": _POOL_NOT_STARTED_MESSAGE},
+        "error": {
+            "code": INTERNAL_ERROR,
+            "message": _POOL_NOT_STARTED_MESSAGE,
+            "data": {"diagnosis": diagnosis},
+        },
     }
 
 
-def _stamp_pool_future(dispatch_key: str, future: "concurrent.futures.Future") -> None:
+def _running_phase_diagnosis(claim: Optional[Path], stderr_dir) -> dict:
+    """`phase: running` plus the holding worker's stderr log, read from the pid
+    its claim file records. Falls back to the log directory when the claim
+    carries no pid yet. Never raises."""
+    diagnosis: dict = {"phase": "running"}
+    pid = None
+    try:
+        if claim is not None:
+            pid = int(claim.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        pid = None
+    if stderr_dir:
+        diagnosis["stall_dump"] = str(
+            _worker_stderr_log(stderr_dir, pid) if pid is not None else stderr_dir
+        )
+    return diagnosis
+
+
+_RECONCILE_COMMAND_TEMPLATE = (
+    '"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke" '
+    "{method} '{{\"key\":\"{key}\",\"wait_secs\":{wait}}}' --bare"
+)
+
+
+def _with_reconcile_route(envelope: dict, dispatch_key: Optional[str]) -> dict:
+    """Name the poll on a keyed -32004: `error.data` gains `dispatch_key`,
+    `reconcile` and the runnable door-form `reconcile_command`. A keyless
+    envelope is returned untouched (nothing to poll)."""
+    error = envelope.get("error") if isinstance(envelope, dict) else None
+    if dispatch_key is None or not isinstance(error, dict) or not _is_safe_dispatch_key(dispatch_key):
+        return envelope
+    data = error.get("data")
+    if not isinstance(data, dict):
+        data = {}
+        error["data"] = data
+    data["dispatch_key"] = dispatch_key
+    data["reconcile"] = _REQUEST_STATUS_METHOD
+    data["reconcile_command"] = _RECONCILE_COMMAND_TEMPLATE.format(
+        method=_REQUEST_STATUS_METHOD, key=dispatch_key, wait=int(_POOL_RESULT_DEADLINE_SECS)
+    )
+    return envelope
+
+
+def _stamp_pool_future(
+    dispatch_key: str,
+    future: "concurrent.futures.Future",
+    claim: Optional[Path] = None,
+) -> None:
+    """Stamp from the resolved future; with `claim`, then release that file."""
+    try:
+        _stamp_pool_future_outcome(dispatch_key, future)
+    finally:
+        _release_claim(claim)
+
+
+def _release_claim(claim: Optional[Path]) -> None:
+    if claim is None:
+        return
+    try:
+        claim.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _stamp_pool_future_outcome(dispatch_key: str, future: "concurrent.futures.Future") -> None:
     """`_pool_dispatch`'s done-callback stamp leg (contract § 3). Fires once
     the pool future actually resolves -- normal return, a raised
     `BrokenProcessPool`, or a successful pre-dispatch cancel -- covering the
@@ -1555,6 +1717,82 @@ def _settings_home_refusal(request_id, claim: str, resolved: str) -> dict:
     }
 
 
+def _clamped_wait_secs(params: Mapping) -> float:
+    raw = params.get("wait_secs")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw != raw:
+        return 0.0
+    return min(max(float(raw), 0.0), float(_POOL_RESULT_DEADLINE_SECS))
+
+
+def _store_poll(params: Mapping) -> Optional[dict]:
+    """The poll answered from this process's `AckStore`, optionally waiting
+    (clamped to `_POOL_RESULT_DEADLINE_SECS`) for the stamp. None when `params`
+    carries no usable key."""
+    key = params.get("key")
+    if not isinstance(key, str) or not key:
+        return None
+    wait_secs = _clamped_wait_secs(params)
+    status = _ack_store.wait(key, wait_secs) if wait_secs > 0 else _ack_store.status(key)
+    return {**status, "engine_boot_ns": _ack_store.boot_ns, "engine_pid": os.getpid()}
+
+
+def _accepts_dispatch_key(dispatch: Callable[..., dict]) -> bool:
+    """Whether `dispatch` takes `dispatch_key=`. A caller-injected `dispatch=`
+    predating the contract does not, and is called unkeyed (contract § 1)."""
+    try:
+        params = inspect.signature(dispatch).parameters
+    except (TypeError, ValueError):
+        return False
+    return "dispatch_key" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
+def _door_poll_argv(method: Any, params: Any) -> Optional[list]:
+    """argv of an `invoke.from_argv` frame that is the door-form reconcile
+    poll: no `entrypoint`, `argv[0]` exactly `warm.request_status`."""
+    if method != "invoke.from_argv" or not isinstance(params, Mapping):
+        return None
+    argv = params.get("argv")
+    if params.get("entrypoint") or not isinstance(argv, list) or not argv:
+        return None
+    return argv if argv[0] == _REQUEST_STATUS_METHOD else None
+
+
+def _is_from_argv_result(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("stdout"), str)
+        and isinstance(value.get("stderr"), str)
+        and isinstance(value.get("exit_code"), int)
+        and not isinstance(value.get("exit_code"), bool)
+    )
+
+
+def _door_poll_reply(argv: list) -> dict:
+    """The `invoke.from_argv` result for a door-form poll. A finished key whose
+    retained result is a from_argv reply is replayed verbatim (the landed op's
+    own stdout, stderr and exit code); every other state prints the status
+    JSON with exit 0. Only a malformed key exits 1."""
+    params: Any = None
+    if len(argv) > 1 and isinstance(argv[1], str):
+        try:
+            params = json.loads(argv[1])
+        except ValueError:
+            params = None
+    status = _store_poll(params) if isinstance(params, Mapping) else None
+    if status is None:
+        return {
+            "stdout": "",
+            "stderr": f"{_REQUEST_STATUS_METHOD} requires 'key' (non-empty string)\n",
+            "exit_code": 1,
+        }
+    retained = status.get("result")
+    if status.get("state") == dispatch_ack.STATE_FINISHED and _is_from_argv_result(retained):
+        return dict(retained)
+    return {"stdout": json.dumps(status) + "\n", "stderr": "", "exit_code": 0}
+
+
 def _serve_line(
     raw_line: bytes,
     *,
@@ -1739,23 +1977,33 @@ def _serve_line(
     # the four states, never a -32004.
     if method == _REQUEST_STATUS_METHOD:
         params = msg.get("params")
-        poll_key = params.get("key") if isinstance(params, Mapping) else None
-        if isinstance(poll_key, str) and poll_key:
-            status = _ack_store.status(poll_key)
-        else:
-            status = {"state": dispatch_ack.STATE_UNKNOWABLE, "reason": dispatch_ack.REASON_NO_RESIDENT_ENGINE}
-        response = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                **status,
+        status = _store_poll(params if isinstance(params, Mapping) else {})
+        if status is None:
+            status = {
+                "state": dispatch_ack.STATE_UNKNOWABLE,
+                "reason": dispatch_ack.REASON_NO_RESIDENT_ENGINE,
                 "engine_boot_ns": _ack_store.boot_ns,
                 "engine_pid": os.getpid(),
-            },
-        }
+            }
         record_invocation(True)
-        _write_and_release(response)
+        _write_and_release({"jsonrpc": "2.0", "id": request_id, "result": status})
         return
+
+    # DOOR-FORM POLL: the native door sends the poll as `invoke.from_argv`
+    # with `argv[0] == "warm.request_status"`. Answered here for the same
+    # reason as the bare form -- a pool worker cannot see this process's store.
+    door_poll_argv = _door_poll_argv(method, msg.get("params"))
+    if door_poll_argv is not None:
+        record_invocation(True)
+        _write_and_release(
+            {"jsonrpc": "2.0", "id": request_id, "result": _door_poll_reply(door_poll_argv)}
+        )
+        return
+
+    # An unkeyed MUTATING frame (every door frame) is keyed here, so a later
+    # -32004 can name a key the poll resolves (contract § 1).
+    if dispatch_key is None and method and _accepts_dispatch_key(dispatch) and _op_may_mutate(method):
+        dispatch_key = dispatch_ack.mint_key()
 
     # ADMIT (D2, D3). Only non-COMPUTE_ONLY methods are recorded, matching
     # `_op_may_mutate`'s own fail-closed rule -- a COMPUTE_ONLY dispatch is
@@ -2157,6 +2405,8 @@ class _ServerContext:
                     stderr_dir = breadcrumb.svc_dir(self.engine_root) / _WORKER_STDERR_DIRNAME
                     _prune_worker_stderr_logs(stderr_dir)
                     self._worker_stderr_dir = stderr_dir
+                    self._claim_dir = breadcrumb.svc_dir(self.engine_root) / _CLAIMS_DIRNAME
+                    _prune_dispatch_claims(self._claim_dir)
                     self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
                         max_workers=DISPATCH_PROCESS_POOL_SIZE,
                         initializer=_worker_process_init,
@@ -2189,22 +2439,49 @@ class _ServerContext:
         called; this method only stamps.
         """
         try:
-            future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, caller)
+            pool = self._ensure_dispatch_pool()
+            claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
+            if claim is None:
+                future = pool.submit(_pool_dispatch_worker, msg, caller)
+            else:
+                future = pool.submit(
+                    _pool_dispatch_worker, msg, caller, dispatch_key, str(claim.parent), STALL_DUMP_SECS
+                )
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:
                 future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
             try:
-                return future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
+                out = future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
+                _release_claim(claim)
+                return out
             except concurrent.futures.TimeoutError:
                 # NEGATIVE SPEC: CANCEL FIRST. `Future.cancel()` succeeds only
                 # on a task no worker has picked up, so a successful cancel
-                # proves the op never ran -- a determinate answer, not the
-                # outcome-unknown shape.
-                if future.cancel():
+                # proves the op never ran. It cannot be trusted alone:
+                # CPython marks a call-queue item running before any worker
+                # takes it, so a queued request fails cancel(). The claim
+                # file decides: winning the O_EXCL create here withdraws the
+                # request, and the worker that later dequeues it finds the
+                # claim taken and runs nothing.
+                # The claim is released only AFTER this decision (never from the
+                # stamp callback): a file unlinked by an op that just finished
+                # would let this create succeed and misreport a landed op as
+                # never run.
+                withdrawn = future.cancel() or (
+                    claim is not None and _take_claim(claim, os.getpid(), on_error=False)
+                )
+                future.add_done_callback(lambda _f: _release_claim(claim))
+                if withdrawn:
                     if dispatch_key is not None:
                         _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
-                    return _pool_not_started_envelope(msg)
+                    return _pool_not_started_envelope(
+                        msg,
+                        {
+                            "pool_size": DISPATCH_PROCESS_POOL_SIZE,
+                            "outstanding": self._pool_outstanding(),
+                        },
+                    )
                 # The task STARTED and is still running: genuinely
                 # indeterminate. `ipc._timeout_error_envelope` classifies via
                 # the same fail-closed `_op_may_mutate` the BrokenProcessPool
@@ -2214,9 +2491,15 @@ class _ServerContext:
                 # mid-mutation, and killing it converts a slow op into a
                 # half-applied one. This bounds how long THIS connection
                 # thread is held, not how long the op runs.
-                return _timeout_error_envelope(
+                envelope = _timeout_error_envelope(
                     msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
                 )
+                data = (envelope.get("error") or {}).get("data")
+                if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):
+                    data["diagnosis"].update(
+                        _running_phase_diagnosis(claim, getattr(self, "_worker_stderr_dir", None))
+                    )
+                return _with_reconcile_route(envelope, dispatch_key)
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
             # every later submit() on that instance raises, so without this
@@ -2252,7 +2535,9 @@ class _ServerContext:
             if _op_may_mutate(msg.get("method")):
                 if dispatch_key is not None:
                     _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
-                return _pool_broken_indeterminate_envelope(msg, diagnosis)
+                return _with_reconcile_route(
+                    _pool_broken_indeterminate_envelope(msg, diagnosis), dispatch_key
+                )
             # `isolated=False`, explicitly: this fallback runs the op IN
             # THIS process, on this connection's own accept-thread -- the
             # exact threaded, unisolated shape the spike measured 8/8

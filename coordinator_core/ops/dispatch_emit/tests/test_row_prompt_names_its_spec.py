@@ -73,7 +73,10 @@ def test_prompt_is_more_than_id_and_title():
 
 
 def test_absent_plan_path_still_composes():
-    assert _row_prompt(_ROW).endswith(f"\n\nExecute {_ROW.id}: {_ROW.title}")
+    prompt = _row_prompt(_ROW)
+    head, tail = prompt.split(f"\n\nExecute {_ROW.id}: {_ROW.title}")
+    assert head
+    assert tail.endswith(f"sidecar_dir: .coordinator-local/workflow-sidecars/emit/no-plan/{_ROW.id}/")
 
 
 def test_emitted_script_carries_the_spec_pointer_for_every_row():

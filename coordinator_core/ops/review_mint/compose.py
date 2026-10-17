@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 from typing import Dict, Optional
 
+from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_clause_js, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 #: Delimits a script-scope JS expression spliced into prompt text (the run base, resolved at
@@ -79,6 +80,28 @@ def _validate_agent_opts_entry(agent_type: str, entry: Dict[str, str]) -> None:
             f"agent_opts[{agent_type!r}]['effort'] {effort!r} is not one of "
             f"{sorted(_VALID_EFFORTS)!r}"
         )
+
+
+_OPTS_OPEN = ", { label: "
+
+
+def with_sidecar_clause(
+    call: str, workflow: str, run_key: str, label: str, *, label_js: Optional[str] = None
+) -> str:
+    """Append the sidecar clause to the prompt of one finished ``agent(...)`` call.
+
+    The clause lands after the whole prompt expression (static text and spliced runtime tails),
+    just before the opts object, so the ``sidecar_dir:`` marker stays its last line. ``label_js``
+    names a JS expression for a label known only at fire time.
+    """
+    at = call.rfind(_OPTS_OPEN)
+    if at < 0 or "agent(" not in call[:at]:
+        raise ValueError("agent call carries no opts object to splice a sidecar clause before")
+    if label_js is None:
+        clause = _js_string_literal(sidecar_clause(sidecar_dir(workflow, run_key, label)))
+    else:
+        clause = sidecar_clause_js(workflow, run_key, label_js)
+    return f"{call[:at]} + {clause}{call[at:]}"
 
 
 def _agent_call_literal(

@@ -1189,6 +1189,7 @@ def _run_close_block(
     profile_name: str,
     queue_dirs: Sequence[str],
     agent_type_host: Optional[str],
+    run_key: str,
     models: Optional[Mapping[str, str]] = None,
     preamble_expr: Optional[str] = None,
 ) -> str:
@@ -1204,7 +1205,7 @@ def _run_close_block(
         record_js="JSON.stringify(_runCostRecord())",
         declared_js="_declaredWrites()",
         decisions_js="args.decisions_file || ''",
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, run_key=run_key,
     )
     record_path = f"state/queue-grind/{profile_name}/runs/${{RUN_ID}}.json"
     sweep_dead = f"{contract.SWEEP_FAILED_HEAD}: {record_path}"
@@ -1361,6 +1362,7 @@ def compose_grind_script(
     )
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
+    run_key = Path(run_dir).name
     grouped = _group_into_batches(manifest, knobs)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
@@ -1526,7 +1528,7 @@ def compose_grind_script(
         verdicts=profile.verdicts,
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
-        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner,
     )
     lines.append(
@@ -1547,7 +1549,7 @@ def compose_grind_script(
         label="size", phase_title="Grind",
         row_js="{ row_id: row.rowId, path: row.path, digest: row.digest }",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
-        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
     )
     lines.append("async function _sizeCall(row) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
 
@@ -1556,7 +1558,7 @@ def compose_grind_script(
             models=stage_models,
             label="close", phase_title="Grind", profile=profile.name,
             profile_dir_js="PROFILE_DIR",
-            proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host,
+            proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host, run_key=run_key,
             preamble_expr=preamble_expr,
         )
         lines.append(
@@ -1576,7 +1578,7 @@ def compose_grind_script(
             "row.refuteNote) : '')"
         ),
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
-        run_id_js="RUN_ID", agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        run_id_js="RUN_ID", agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner,
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
@@ -1592,7 +1594,7 @@ def compose_grind_script(
     reject_raw = stages.compose_verify_op_call(
         models=stage_models,
         label="verify-op", phase_title="Grind", run_dir=run_dir_s,
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, run_key=run_key,
         reject_paths_js="_undoPaths(row)",
         reject_reason_js="row.undoReason",
     )
@@ -1636,7 +1638,7 @@ def compose_grind_script(
         label="verify-agent", phase_title="Grind",
         row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
-        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
+        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
     )
@@ -1655,7 +1657,7 @@ def compose_grind_script(
     verify_op_raw = stages.compose_verify_op_call(
         models=stage_models,
         label="verify-op", phase_title="Grind", run_dir=run_dir_s, op_js="spec.op", batch_id_js="row.batchId",
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, run_key=run_key,
         row_id_js="row.rowId", row_path_js="row.path",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
     )
@@ -1688,7 +1690,7 @@ def compose_grind_script(
         models=stage_models,
         label="commit", phase_title="Grind",
         params_file_js="_paramsFile", params_js="params",
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, run_key=run_key,
     )
     lines.append(
         "async function _terminalCommitCall(params) {\n"
@@ -1932,7 +1934,7 @@ def compose_grind_script(
     )
 
     lines.append(
-        _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, models=stage_models)
+        _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
     )
     lines.append(
         "const _admitted = {};\n"
@@ -1992,7 +1994,7 @@ def compose_grind_script(
     review_fix_raw = stages.compose_review_fix_commit_call(
         models=stage_models,
         touched_files_js="_reviewPaths", label="review-fix-commit", phase_title=_REVIEW_FIX_PHASE,
-        profile=profile.name, agent_type_host=agent_type_host, trailers=commit_trailers,
+        profile=profile.name, agent_type_host=agent_type_host, run_key=run_key, trailers=commit_trailers,
     )
     review_fix_call = _capture(review_fix_raw, "review-fix-commit")
     lines.append(
@@ -2008,7 +2010,7 @@ def compose_grind_script(
         + "\n  })();\n}"
     )
 
-    lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, models=stage_models))
+    lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, run_key=run_key, models=stage_models))
     lines.append(
         "await _adjudicatePmBound();\n"
         "} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"

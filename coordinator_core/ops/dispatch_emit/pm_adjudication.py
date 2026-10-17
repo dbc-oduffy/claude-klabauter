@@ -56,7 +56,10 @@ _PROMPT_TAIL = (
 
 
 def compose_adjudicate_block(
-    *, agent_type_host: Optional[str], models: Optional[Mapping[str, str]] = None
+    *,
+    agent_type_host: Optional[str],
+    models: Optional[Mapping[str, str]] = None,
+    run_key: str = stages.DEFAULT_RUN_KEY,
 ) -> str:
     """JS text defining ``_adjudicatePmBound()``; the caller awaits it after the grind loop.
 
@@ -74,6 +77,7 @@ def compose_adjudicate_block(
         effort="high",
         schema=_ADJUDICATION_SCHEMA,
         is_expr=True,
+        run_key=run_key,
     )
     prefix, suffix = "  await agent(", ");"
     assert call.startswith(prefix) and call.endswith(suffix)

@@ -18,6 +18,7 @@ from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
+from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
@@ -157,6 +158,9 @@ def _cat(*parts: str) -> str:
     return " + ".join(p[3:] if p.startswith("js:") else _emit._resolve_markers_plus(p) for p in parts)
 
 
+_UNKEYED_RUN = "unkeyed"
+
+
 def _agent(
     prompt_expr: str,
     *,
@@ -164,12 +168,21 @@ def _agent(
     phase: str,
     agent_type: str,
     schema: dict,
+    run_id: str = _UNKEYED_RUN,
     agent_model: Optional[str] = None,
     effort: Optional[str] = None,
 ) -> str:
+    """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
+
+    Trap: a composer call site that omits ``run_id`` files its sidecar under ``_UNKEYED_RUN``;
+    ``test_ask_prompts_name_sidecar_dir`` pins that no composed ask script does.
+    """
     effort_opt = f"effort: {_lit(effort)}, " if effort else ""
+    clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
+    if "bin/coordinator-invoke" in prompt_expr and _emit._INDETERMINATE_RECONCILE_CLAUSE not in prompt_expr:
+        clause = _lit(" " + _emit._INDETERMINATE_RECONCILE_CLAUSE) + " + " + clause
     return (
-        f"agent({prompt_expr}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
+        f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, {effort_opt}"
         f"schema: {json.dumps(schema, sort_keys=True)} }})"
     )
@@ -743,6 +756,7 @@ def _verify_call(
     verdict_parts: Sequence[str],
     judged: bool,
     schema: dict,
+    run_id: str,
 ) -> str:
     """The merged tail's one `agent(...)` call EXPRESSION: scoped tests, declared docs, then the
     criterion and ledger verdict, in that order inside one coordinator:executor agent.
@@ -774,7 +788,7 @@ def _verify_call(
     )
     return _agent(
         prompt, label=ASK_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=schema,
+        schema=schema, run_id=run_id,
     )
 
 
@@ -1022,14 +1036,22 @@ def _single_exit_review(blocks: list[str]) -> str:
     return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
 
 
-def _reviewer_row_js(anchor: str, label_prefix: str) -> list[str]:
+def _row_sidecar_js(run_id: str, label_prefix: str) -> str:
+    """JS expression for the sidecar clause of a per-row leg whose label is ``label_prefix + r.id`` at fire time."""
+    return _sidecar.sidecar_clause_js("ask", run_id, f"{label_prefix} + r.id")
+
+
+def _reviewer_row_js(anchor: str, label_prefix: str, run_id: str) -> list[str]:
     """The execute-loop branch for a blinded falsifier-integrity reviewer row: the agent is given
     only the repo anchor and its brief path (no preamble, no ledger clause -- the brief is the
     phase's own spec prompt); its structured verdict is queued in `_verdictReports` as JSON for
     the row's dispatch report path, and the closing verify agent writes it. `_runRow` reads the
     returned `DONE:` line.
     Trap: the read-only reviewer never holds the Write; the verify agent does."""
-    prompt = _cat(f"{anchor}\n\n", "Your brief is the file ", "js:r.brief_path", " -- read it completely, then execute it as written.")
+    prompt = _cat(
+        f"{anchor}\n\n", "Your brief is the file ", "js:r.brief_path",
+        " -- read it completely, then execute it as written.", "js:" + _row_sidecar_js(run_id, label_prefix),
+    )
     report = (
         f"{_lit(_emit._DISPATCH_REPORT_DIR + '/')} + {_RUNTIME_PLAN_PATH_JS}.split('/').pop().slice(0, -3)"
         " + '/' + r.id + '.md'"
@@ -1414,7 +1436,7 @@ def compose_ask_script(
             gate_prompt, label=label, phase=phase_title, agent_type=_MECHANICAL_AGENT_TYPE,
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
-            effort=_MECHANICAL_EFFORT,
+            effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
 
     if sized_in_run:
@@ -1498,13 +1520,13 @@ def compose_ask_script(
             + (prompt or str((intake or {}).get("intent") or ""))
         )
         b.append(
-            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA)};"
+            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)};"
         )
         # One re-dispatch when the scout never ran sizing-assemble (no integer exit_code); a second
         # miss falls through to the did-not-run halt below.
         b.append(
             "  const _scouted = Number.isInteger(_scoutedFirst.exit_code) ? _scoutedFirst : await "
-            f"{_agent(scout_prompt + ' + ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY), label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA)};"
+            f"{_agent(scout_prompt + ' + ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY), label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)};"
         )
         b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
@@ -1585,7 +1607,7 @@ def compose_ask_script(
         b.append("    const _asmFields = { ..._scouted, exit_criterion: '<your reworded exit_criterion>' };")
         b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
         b.append(
-            f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA)};"
+            f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA, run_id=run_id)};"
         )
         b.append(
             "    _scouted.exit_criterion = _reworded.exit_criterion; _scouted.exit_code = _reworded.exit_code; "
@@ -1718,7 +1740,7 @@ def compose_ask_script(
         )
         apm_call = _agent(
             apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ruling_schema(_ACCEPT_SCHEMA),
+            schema=_ruling_schema(_ACCEPT_SCHEMA), run_id=run_id,
         )
         xl_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -1760,7 +1782,7 @@ def compose_ask_script(
         )
         xl_call = _agent(
             xl_prompt, label="xl-exit", phase="xl-exit", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT,
+            schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
         take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
@@ -1879,7 +1901,7 @@ def compose_ask_script(
         )
         replan_call = _agent(
             replan_prompt, label="ledger-replan", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
-            schema=_REPLAN_STAGED_SCHEMA, effort=_PLAN_AUTHOR_EFFORT,
+            schema=_REPLAN_STAGED_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
         )
         b.append(
             "  if (_ledgerOwes && !_stageRefusal) { const _gateStaged = _stagedManifest; const _gateGap = _relayGap; "
@@ -1914,6 +1936,7 @@ def compose_ask_script(
             blitz_read_call = _agent(
                 blitz_read_prompt, label="blitz-stage-read", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
                 agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
+                run_id=run_id,
             )
             b.append("  const _blitzStageRead = async (entry) => {")
             b.append(f"    const _r = await {blitz_read_call};")
@@ -1994,7 +2017,7 @@ def compose_ask_script(
     plan_call = _agent(
         plan_author, label="plan", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
         schema=_PLAN_STAGED_SCHEMA if fold_stage else _PLAN_SCHEMA,
-        effort=_PLAN_AUTHOR_EFFORT,
+        effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
     )
     if fold_stage:
         b.append(f"    const _authored = await {plan_call};")
@@ -2039,7 +2062,7 @@ def compose_ask_script(
         review_call = _agent(
             review_prompt, label="plan-review", phase="plan", agent_type=_PLAN_REVIEW_AGENT_TYPE,
             schema=_SPINE_REVIEW_STAGED_SCHEMA if fold_stage else _SPINE_REVIEW_SCHEMA,
-            effort=_PLAN_REVIEW_EFFORT,
+            effort=_PLAN_REVIEW_EFFORT, run_id=run_id,
         )
         b.append("    let _spineFallback = null;")
         b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
@@ -2133,7 +2156,7 @@ def compose_ask_script(
             ),
         )
         b.append(
-            f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA, effort=_PLAN_AUTHOR_EFFORT)};"
+            f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id)};"
         )
         b.append(
             "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
@@ -2328,8 +2351,9 @@ def compose_ask_script(
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.{ledger_clause}{session_tail}",
+        "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
-    b.extend(_reviewer_row_js(anchor, _lit(build_work_label(''))))
+    b.extend(_reviewer_row_js(anchor, _lit(build_work_label('')), run_id))
     b.append(
         f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
         f"{{ label: {_lit(build_work_label(''))} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
@@ -2442,6 +2466,7 @@ def compose_ask_script(
         verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS),
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
+        run_id=run_id,
     )
     unjudged = (
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
@@ -2501,6 +2526,7 @@ def compose_ask_script(
     remaining_call = _agent(
         remaining_prompt, label="ledger-remaining", phase=ASK_VERIFY_PHASE,
         agent_type=_emit._EXECUTOR_AGENT_TYPE, schema=_obj(["summary"], {"summary": _STR}),
+        run_id=run_id,
     )
     verify_lines[2:2] = [
         f"    if (_resumeLedger && !_ledgerExec && ({_rl}.blocking ?? []).length) {{\n"
@@ -2649,6 +2675,7 @@ def compose_ask_script(
         "...(i.withheld_by ? { withheld_by: i.withheld_by } : {}), "
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.met_by ? { met_by: i.met_by } : {}), "
+        "...(i.root_read != null ? { root_read: i.root_read } : {}), "
         "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
     )
     b.append(
@@ -2944,7 +2971,7 @@ def _commit_stage_call(
     # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
     return _agent(
         commit_prompt, label="commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
-        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
+        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
 
 
@@ -2981,7 +3008,7 @@ def _halt_record_commit_fn(
     )
     call = _agent(
         prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
-        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT,
+        schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
     return f"  async function _commitHaltRecord() {{ return await {call}; }}"
 

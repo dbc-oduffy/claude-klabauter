@@ -357,6 +357,11 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     stage_schema_literal,
 )
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
+from coordinator_core.ops.dispatch_emit.agent_sidecar import (
+    sidecar_clause as _sidecar_clause,
+    sidecar_clause_js as _sidecar_clause_js,
+    sidecar_dir as _sidecar_dir,
+)
 from coordinator_core.git.git_state import head_branch, head_sha, resolve_git_common_dir
 from coordinator_core.executor_return_contract import (
     FOOTPRINT_CONSTRAINT_TEMPLATE,
@@ -444,6 +449,18 @@ _ENRICHER_AGENT_TYPE = "coordinator:enricher"
 _EXECUTION_TIER_CHANGE_KINDS = frozenset({"verification"})
 _TEST_AGENT_TYPE = "coordinator:test-runner"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
+
+#: Appended once to every emitted agent prompt that names a ``bin/coordinator-invoke`` command;
+#: ``tests/test_invoke_prompts_carry_reconcile_clause.py`` pins it. Names the engine's
+#: ``error.data.reconcile_command`` and the ``not_received`` / ``finished`` status states.
+_INDETERMINATE_RECONCILE_CLAUSE = (
+    "If a coordinator-invoke command replies with error code -32004 and its error.data carries "
+    "reconcile_command, do not report failure and do not re-run the command: run reconcile_command "
+    "exactly once and treat its output and exit code as the original command's. If that output is a "
+    "status object whose state is not_received, run the original command once more. If its state is "
+    "finished with outcome result, the op landed: continue the run and report its reply as not "
+    "retained. On any other status, report it verbatim as the failure."
+)
 
 #: The one table of DoE-defined agent types the engine dispatches, each mapped to
 #: the ``model:`` frontmatter of coordinator-content-repo's ``coordinator/agents/<name>.md``.
@@ -1380,6 +1397,36 @@ def _agent_type_host_degraded_narration() -> str:
 _TEST_PHASE_TITLE = "Scoped test run"
 _EXECUTE_PHASE_TITLE = "Execute"
 
+_SIDECAR_WORKFLOW = "emit"
+_VERIFY_LABEL_JS = "'verify:' + id"
+_COMMIT_LABEL_JS = "'commit:wave-' + n"
+_SEAM_LABEL_JS = "'seam:wave-' + n"
+#: Run key of a composition that has no plan path.
+_SIDECAR_NO_PLAN_KEY = "no-plan"
+
+
+def _sidecar_run_key(plan_path: Optional[str]) -> str:
+    """The plan file's stem, or ``_SIDECAR_NO_PLAN_KEY`` when the composition has no plan."""
+    return Path(plan_path.replace("\\", "/")).stem if plan_path else _SIDECAR_NO_PLAN_KEY
+
+
+def _emit_sidecar_clause(plan_path: Optional[str], label: str) -> str:
+    """Prompt-tail text for an agent whose label is known at compose time."""
+    return _sidecar_clause(_sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), label))
+
+
+def _emit_sidecar_clause_js(
+    plan_path: Optional[str],
+    label_js: str,
+    *,
+    workflow: str = _SIDECAR_WORKFLOW,
+    run_key: Optional[str] = None,
+) -> str:
+    """JS expression for an agent whose label is a fire-time JS expression (``label_js``).
+
+    ``workflow``/``run_key`` let a sibling composer (ask) that reuses an emit helper name its own dir."""
+    return _sidecar_clause_js(workflow, run_key or _sidecar_run_key(plan_path), label_js)
+
 
 @dataclass(frozen=True)
 class PlanContext:
@@ -1612,20 +1659,24 @@ _LIVE_PM_DIRECTION_CLAUSE = (
     "a file another chunk owns); quote what you applied in your report."
 )
 
-#: Leads every row prompt, after the precedence clause. A Bash write (sed,
-#: a heredoc, a script) leaves no session claim, because ``track_touched_files`` records only
-#: Write/Edit/MultiEdit/NotebookEdit calls. The dispatched commit agent then
-#: reads the path as an orphan and refuses it, halting the whole wave
-#: (klabauter#24). Reading through Bash is unaffected and stays fine. A CLI a
-#: row legitimately runs (a memo send, a probe, a record writer) writes its
-#: output the same unclaimed way, so the clause names the re-save that claims it.
+#: Leads every row prompt, after the precedence clause. Write stays the first
+#: tool because only ``track_touched_files`` (Write/Edit/MultiEdit/NotebookEdit)
+#: records the content fingerprint ``dispatch.terminal_commit`` checks; a path
+#: Write has touched and Bash then overwrites reads as blob drift. The terminal
+#: commit lands a declared path with no touch record, so the one exception, a
+#: path the harness itself denies Write on, is written by the heredoc fallback
+#: ``agent_sidecar.sidecar_clause`` closes every prompt with. A CLI a row
+#: legitimately runs (a memo send, a probe, a record writer) writes its output
+#: with no record either, so the clause names the re-save that records it.
 _WRITE_TOOL_ONLY_CLAUSE = (
     "Make every file change with the Write, Edit, MultiEdit or NotebookEdit "
     "tools, never through Bash (no `sed -i`, heredoc redirection, or script "
-    "that edits a file) -- a Bash write leaves no session claim and the "
-    "commit phase will refuse it as an orphan. Reading files through Bash is "
-    "fine. A file a CLI you run writes into your footprint is unclaimed the "
-    "same way: Read it, then Write it back unchanged with the Write tool."
+    "that edits a file): only the write tools record the content fingerprint "
+    "the commit checks. The one exception is a path the harness itself "
+    "denies the Write tool on, handled as the sidecar line at the end of this "
+    "prompt says. Reading files through Bash is fine. A file a CLI you run "
+    "writes into your footprint is unclaimed (it carries no recorded write): "
+    "Read it, then Write it back unchanged with the Write tool."
 )
 
 #: Every dispatched agent's heavy UE launch is hard-denied
@@ -1891,7 +1942,9 @@ def _gate_baseline_prompt(command: str) -> str:
     )
 
 
-def _gate_baseline_blocks(commands: list, agent_type_host: Optional[str]) -> list[str]:
+def _gate_baseline_blocks(
+    commands: list, agent_type_host: Optional[str], plan_path: Optional[str] = None
+) -> list[str]:
     """Pre-dispatch blocks running each distinct row-gate command once at run_base.
 
     One read-only agent per command, in parallel, before the first row registers: the
@@ -1901,7 +1954,7 @@ def _gate_baseline_blocks(commands: list, agent_type_host: Optional[str]) -> lis
     """
     thunks = ",\n".join(
         "    async () => { try { return await agent("
-        f"{_js_string_literal(_gate_baseline_prompt(c))}, {{ "
+        f"{_js_string_literal(_gate_baseline_prompt(c) + _emit_sidecar_clause(plan_path, f'gatebase:{i}'))}, {{ "
         f"label: {_js_string_literal(f'gatebase:{i}')}, "
         f"phase: {_js_string_literal(_GATE_BASELINE_PHASE_TITLE)}, "
         f"{_model_opt('', 'sonnet')}, "
@@ -2503,7 +2556,11 @@ def _row_return_contract(
             FOOTPRINT_CONSTRAINT_TEMPLATE.replace(
                 "[list]",
                 _shared_pathspec_text(
-                    _fenced_paths(footprint, row.writes_under, row.surface),
+                    _fenced_paths(
+                        [*footprint, _sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), row.id)],
+                        row.writes_under,
+                        row.surface,
+                    ),
                     shared,
                     ", ",
                 ),
@@ -2671,8 +2728,9 @@ def _row_prompt(
     """
     head = f"Execute {row.id}: {row.title}"
     prompt_head = _prompt_head(preamble, _is_verification_row(row))
+    sidecar = _emit_sidecar_clause(plan_path, row.id)
     if not plan_path:
-        return f"{prompt_head}\n\n{head}"
+        return f"{prompt_head}\n\n{head}{sidecar}"
     gate_commands = (
         _row_build_gate_commands(row, plan_context.row_build_gates)
         if plan_context is not None
@@ -2724,6 +2782,7 @@ def _row_prompt(
             body += f"\n\n{_build_gate_clause(gate_commands)}"
         if criterion_routed:
             body += f"\n\n{CRITERION_TYPECHECK_CLAUSE}"
+    body += sidecar
     if predecessor_state:
         body += f"\n\n{predecessor_state}"
     if plan_context is not None:
@@ -3143,6 +3202,7 @@ def _verify_agent_call_expr(
         "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
         "Return the verdict under `judge`.\n\n"
         + judge_prompt
+        + _emit_sidecar_clause(plan_path, _VERIFY_LABEL)
     )
     opts = (
         f"label: {_js_string_literal(_VERIFY_LABEL)}, "
@@ -3194,6 +3254,7 @@ def _test_agent_call_expr(
     )
     if plan_path:
         prompt += f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}."
+    prompt += _emit_sidecar_clause(plan_path, "test:terminal")
     return (
         "agent("
         f"{_resolve_markers_plus(prompt)}, "
@@ -3348,7 +3409,9 @@ def _no_test_scope_narration() -> str:
     return f"  log({_js_string_literal(message)});"
 
 
-def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] = None) -> str:
+def _falsifier_agent_call_expr(
+    falsifier: dict, agent_type_host: Optional[str] = None, plan_path: Optional[str] = None
+) -> str:
     """The plan's own ``prime_exit_criterion.falsifier`` run as one
     ``agent(...)`` call EXPRESSION — never a full statement (see
     ``_test_agent_call_expr``'s docstring for why). Runs whenever the plan
@@ -3385,6 +3448,7 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
         f"when `differs_from_baseline` is true, 'not_met' when it is false, "
         f"'indeterminate' if you could not run the observation. Do not gate "
         f"on exit code alone."
+        + _emit_sidecar_clause(plan_path, "test:terminal-falsifier")
     )
     return (
         "agent("
@@ -3779,6 +3843,8 @@ def _run_row_helper_js(
     agent_type_host: Optional[str] = None,
     default_plan: Optional[str] = None,
     verify_wanted_js: str = "true",
+    sidecar_workflow: str = _SIDECAR_WORKFLOW,
+    sidecar_run_key: Optional[str] = None,
 ) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
@@ -3823,7 +3889,8 @@ def _run_row_helper_js(
             "      _verifications.push(agent(\n"
             "        `Run and report on the scoped test target(s) for ${id}: ` + "
             "verifyScope.join(', ') + '. ' + "
-            f"{_js_string_literal(_test_runner_clause())},\n"
+            f"{_js_string_literal(_test_runner_clause())} + "
+            f"{_emit_sidecar_clause_js(None, _VERIFY_LABEL_JS, workflow=sidecar_workflow, run_key=sidecar_run_key)},\n"
             "        { "
             f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
             f"agentType: {verify_agent_type}, {_model_opt(_TEST_AGENT_TYPE)}, "
@@ -4154,6 +4221,7 @@ def _seam_leg_js(
     js,
     head: str,
     repo_flag: str,
+    sidecar_js: str,
 ) -> list:
     """Script-scope seam machinery: per-wave gates the held rows await, and
     ``_seamLeg``, one ``plan.seam_record`` agent dispatch per landed wave commit."""
@@ -4175,7 +4243,8 @@ def _seam_leg_js(
         "`findings`, `sidecars` with step 1's reply and step 2's findings merged. "
         "Judge nothing, edit nothing, commit nothing. "
         "If either op refuses or errors, put its verbatim output in `findings` as one object with "
-        "`class` `op-error` and report `verdict` REFUSED for any op refusal or error."
+        "`class` `op-error` and report `verdict` REFUSED for any op refusal or error. "
+        + _INDETERMINATE_RECONCILE_CLAUSE
     )
     tests_step = (
         " Step 3, only when tests are listed: run `python -m pytest <tests> -q` once with exactly "
@@ -4208,7 +4277,7 @@ def _seam_leg_js(
         "    try {",
         "      r = await agent(",
         f"        {js(head)} + 'You run the seam check for wave ' + n + '. Params, verbatim: `' + JSON.stringify(params) + '`. Reach params, verbatim: `' + JSON.stringify(reach) + '`.' + "
-        f"{js(route)} + (tests.length ? ' Tests: ' + JSON.stringify(tests) + '.' + {js(tests_step)} : ''),",
+        f"{js(route)} + (tests.length ? ' Tests: ' + JSON.stringify(tests) + '.' + {js(tests_step)} : '') + {sidecar_js},",
         f"        {{ label: 'seam:wave-' + n, phase: {phase}, agentType: {exec_type}, "
         f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _SEAM_REPLY_SCHEMA }}",
         "      );",
@@ -4312,6 +4381,8 @@ def _checkpoint_commit_js(
     seam: Optional[SeamLeg] = None,
     prior_run_base: Optional[str] = None,
     runtime_plan_js: Optional[str] = None,
+    sidecar_workflow: str = _SIDECAR_WORKFLOW,
+    sidecar_run_key: Optional[str] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -4330,6 +4401,7 @@ def _checkpoint_commit_js(
     )
     repo_flag = " --repo \0" if repo_root else ""
     head = _BRIEF_PRECEDENCE_CLAUSE + "\n\n" + root_clause
+    sidecar_key = {"workflow": sidecar_workflow, "run_key": sidecar_run_key}
 
     def _js(text: str) -> str:
         # \0 marks the repo root, spliced as the run-time `_repoRoot` binding, never as text.
@@ -4352,9 +4424,9 @@ def _checkpoint_commit_js(
         "'{\"paths\":[...],\"skip_missing\":true,\"gone_tracked_as_deleted\":true,\"message\":\"<message>\"}'` -- the only committer route. "
         "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
         "If every listed path already matches HEAD, commit nothing and report outcome "
-        "committed without a sha. If the outcome is indeterminate, reconcile it against "
-        "`git log` and `git status` before doing anything else -- never retry blind. "
-        "On commit-failed, put the verbatim refusal in `reason`."
+        "committed without a sha. "
+        + _INDETERMINATE_RECONCILE_CLAUSE
+        + " On commit-failed, put the verbatim refusal in `reason`."
         + _dispatching_session_id_paragraph(session_id)
     )
     commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
@@ -4400,7 +4472,7 @@ def _checkpoint_commit_js(
         "'). Commit message, verbatim as the `message` param with its newlines "
         "JSON-escaped: `' + message + '`.' + "
         f"{_js_string_literal(commit_tail)} + paths.join(', ') + "
-        f"{_js(route)},",
+        f"{_js(route)} + {_emit_sidecar_clause_js(plan_path, _COMMIT_LABEL_JS, **sidecar_key)},",
         f"        {{ label: 'commit:wave-' + n, phase: {phase}, agentType: {commit_type}, "
         f"{_model_opt(_COMMIT_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_COMMIT_SCHEMA }}",
         "      );",
@@ -4427,6 +4499,7 @@ def _checkpoint_commit_js(
             js=_js,
             head=head,
             repo_flag=repo_flag,
+            sidecar_js=_emit_sidecar_clause_js(plan_path, _SEAM_LABEL_JS, **sidecar_key),
         )
     return "\n".join(lines)
 
@@ -4471,6 +4544,7 @@ def _spec_thunk_js(
     spec: AgentSpec,
     agent_type_host: Optional[str],
     repo_root: Optional[Path] = None,
+    plan_path: Optional[str] = None,
 ) -> str:
     if spec.schema == CACHED_SCHEMA:
         return f"async () => ({spec.prompt})"
@@ -4488,6 +4562,7 @@ def _spec_thunk_js(
     cache_tail = _verdict_cache_instruction(spec, repo_root)
     if cache_tail:
         prompt += " + " + _js_string_literal(cache_tail)
+    prompt += " + " + _js_string_literal(_emit_sidecar_clause(plan_path, spec.label))
     return (
         "async () => { try { return await agent("
         f"{prompt}, {{ {', '.join(opts)} }}); "
@@ -4499,6 +4574,7 @@ def _pre_phase_blocks(
     review_specs: Sequence[AgentSpec],
     agent_type_host: Optional[str],
     repo_root: Optional[Path] = None,
+    plan_path: Optional[str] = None,
 ) -> list[str]:
     """The script blocks for the falsifier-integrity phase: one ``parallel([...])`` of
     every review thunk, then the fold into ``_reviews`` / ``_falsifierBroken``. Emitted
@@ -4508,7 +4584,7 @@ def _pre_phase_blocks(
         for name in sorted({spec.schema for spec in review_specs if spec.schema != CACHED_SCHEMA})
     )
     thunks = ",\n".join(
-        f"    {_spec_thunk_js(spec, agent_type_host, repo_root)}" for spec in review_specs
+        f"    {_spec_thunk_js(spec, agent_type_host, repo_root, plan_path)}" for spec in review_specs
     )
     return [
         f"  const {_PRE_SCHEMAS_VAR} = {{ {schemas} }};",
@@ -5031,7 +5107,11 @@ def compose_script(
             )
         )
         row_helper_index = len(body_blocks)
-        body_blocks.append(_run_row_helper_js(agent_type_host, plan_path if seam_leg else None))
+        body_blocks.append(
+            _run_row_helper_js(
+                agent_type_host, plan_path if seam_leg else None, sidecar_run_key=_sidecar_run_key(plan_path)
+            )
+        )
 
     gate_commands_all = _distinct_gate_commands(flat_rows, plan_context)
     if (gate_commands_all or carried_gate_owed) and not review_only:
@@ -5039,10 +5119,10 @@ def compose_script(
     if predispatch:
         if gate_commands_all and not review_only:
             phase_titles.append(_GATE_BASELINE_PHASE_TITLE)
-            body_blocks.extend(_gate_baseline_blocks(gate_commands_all, agent_type_host))
+            body_blocks.extend(_gate_baseline_blocks(gate_commands_all, agent_type_host, plan_path))
         if review_specs:
             phase_titles.append(REVIEW_PHASE_TITLE)
-            body_blocks.extend(_pre_phase_blocks(review_specs, agent_type_host, repo_root))
+            body_blocks.extend(_pre_phase_blocks(review_specs, agent_type_host, repo_root, plan_path))
 
     runtime_cap = _runtime_cap_on_host()
     if not review_only:
@@ -5061,7 +5141,7 @@ def compose_script(
             overseer_type = _EXECUTOR_AGENT_TYPE
             body_blocks.append(
                 "  await agent("
-                f"{_js_string_literal(_chatty.overseer_prompt(roster))}, "
+                f"{_js_string_literal(_chatty.overseer_prompt(roster) + _emit_sidecar_clause(plan_path, 'chatty-overseer'))}, "
                 "{ "
                 f"label: {_js_string_literal('chatty-overseer')}, "
                 f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
@@ -5163,7 +5243,7 @@ def compose_script(
             )
             body_blocks.append(
                 "  const _survey = await agent("
-                f"{_js_string_literal(_chatty.survey_prompt(_chatty.new_nonce()))}, "
+                f"{_js_string_literal(_chatty.survey_prompt(_chatty.new_nonce()) + _emit_sidecar_clause(plan_path, 'chatty-survey'))}, "
                 f"{overseer_opts}, label: 'chatty-survey', schema: {json.dumps(_CHATTY_SURVEY_SCHEMA)} "
                 "});"
             )
@@ -5191,7 +5271,7 @@ def compose_script(
             )
             body_blocks.append(
                 "  await agent("
-                f"{_js_string_literal(_chatty.summary_prompt(_chatty.new_nonce()))}, "
+                f"{_js_string_literal(_chatty.summary_prompt(_chatty.new_nonce()) + _emit_sidecar_clause(plan_path, 'chatty-summary'))}, "
                 f"{overseer_opts}, label: 'chatty-summary' "
                 "});"
             )
@@ -5417,7 +5497,7 @@ def compose_script(
     # The criterion leg: the roster's judge when DoE declares one (it runs any
     # recorded falsifier itself), else the plan's falsifier on the test runner.
     criterion_expr: Optional[str] = judge_expr or (
-        _falsifier_agent_call_expr(falsifier, agent_type_host=agent_type_host)
+        _falsifier_agent_call_expr(falsifier, agent_type_host=agent_type_host, plan_path=plan_path)
         if falsifier is not None
         else None
     )

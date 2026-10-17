@@ -28,9 +28,11 @@ _CLAUSE_HEAD = (
     "If the harness denies the Write tool on a file your task declares or on a file in this dir "
     "(\"Subagents should return findings as text\"), write it with a Bash heredoc, "
     "`cat > <path> <<'EOF'` -- never skip it -- and name the path in your report. "
+    "Use the heredoc only for a path the Write tool refused; once Write has written a path, "
+    "keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). "
     "A coordinator guard's denial stays a stop; the cat-heredoc advisory is not a denial. "
-    "Quote the delimiter so the body is literal; a frontmatter-bearing file written this way "
-    "skips the frontmatter write guard, so report it as unvalidated. "
+    "Quote the delimiter; a frontmatter file written this way skips the write guard, "
+    "so report it as unvalidated. "
     "No Bash tool: put the content in your reply. "
     "A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\n"
 )

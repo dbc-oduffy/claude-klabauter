@@ -58,11 +58,15 @@ FOOTPRINT_CONSTRAINT_TEMPLATE = (
     "You MUST NOT create or modify any file outside this footprint: "
     "[list]. If you discover you need to, STOP and report back via the "
     "DONE summary with status BLOCKED. Create and edit each of those files "
-    "with Write/Edit, never with a Bash heredoc, sed, tee or redirection: "
-    "only the write tools record a session write claim, and a file produced "
-    "through Bash reaches the committer as an orphan it must refuse. Bash "
-    "stays correct for reading, searching and running tests. If a Bash write "
-    "already happened, name those paths in your report."
+    "with Write/Edit: the write tools record the content fingerprint the "
+    "commit checks. Only when the harness itself denies the Write tool on a "
+    "path in this footprint, write that path with a quoted Bash heredoc, "
+    "never skip it, and name it in your report. A path already written with "
+    "Write is never overwritten through Bash: the commit refuses that as "
+    "blob drift. A coordinator guard's denial stays a stop. Never use sed, "
+    "tee or redirection to edit. Bash stays correct for reading, searching "
+    "and running tests. If a Bash write already happened, name those paths "
+    "in your report."
 )
 
 

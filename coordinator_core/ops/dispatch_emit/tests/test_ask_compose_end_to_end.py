@@ -278,6 +278,14 @@ def test_ledger_check_admits_post_commit_items():
     assert "post_commit_acts: i.post_commit_acts" in script
 
 
+def test_ledger_verdict_carries_root_read_per_item():
+    script = _compose(in_run_commit=True)
+    start = script.index("_nextAction.params.ledger_verdict = ")
+    mapped = script[start : script.index("\n", start)]
+    assert "root_read: i.root_read" in mapped
+    assert "i.root_read != null" in mapped
+
+
 def test_every_judgment_stage_reads_the_ledger_at_its_start():
     script = _compose()
     view = f"{RECORD_DIR_ROOT}/run-1/requirements.md"

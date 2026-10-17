@@ -33,6 +33,8 @@ def test_memo_send_row_is_narrated_as_an_em_step():
 
 def test_verification_row_head_drops_the_write_tool_only_rule():
     assert emit._WRITE_TOOL_ONLY_CLAUSE in emit._prompt_head(None)
+    assert "harness itself denies the Write tool" in emit._WRITE_TOOL_ONLY_CLAUSE
+    assert "orphan" not in emit._WRITE_TOOL_ONLY_CLAUSE
     head = emit._prompt_head(None, verification=True)
     assert emit._WRITE_TOOL_ONLY_CLAUSE not in head
     assert emit._VERIFICATION_ROW_CLAUSE in head

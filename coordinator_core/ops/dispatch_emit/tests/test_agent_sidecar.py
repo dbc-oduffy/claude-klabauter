@@ -45,7 +45,8 @@ def test_clause_content_and_marker_is_last_line():
     assert c.splitlines()[-1] == f"sidecar_dir: {d}"
     assert c.count(a.SIDECAR_DIR_MARKER_PREFIX) == 1
     for needle in ("Subagents should return findings as text", "Bash heredoc", "never skip it",
-                   "guard's denial stays a stop", "mkdir -p", "sidecar_path:"):
+                   "guard's denial stays a stop", "mkdir -p", "sidecar_path:",
+                   "only for a path the Write tool refused", "never overwrite it by heredoc"):
         assert needle in c
 
 

@@ -22,8 +22,8 @@ This module owns the trap text every stage-kind prompt must carry:
   ``coordinator-invoke dispatch.terminal_commit --params-file`` segment and the
   params block, never JSON typed by the agent; the review-fix committer never
   names a ``state/queue-grind/`` ledger in either path list;
-- trap 4: the review-fix committer's prompt reconciles an indeterminate outcome
-  against ``git log``/``git status`` before any retry, never retrying blind;
+- trap 4: the review-fix committer's prompt carries the -32004 reconcile clause
+  (run ``reconcile_command`` once) and never retries blind;
 - trap 5: the fix composer's prompt pre-checks its locked files for peer
   dirt (``PEER_DIRTY``) before doing any work;
 - the triage schema carries the t-shirt size and tradeoff-statement fields
@@ -79,11 +79,13 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _COMMIT_AGENT_TYPE,
+    _INDETERMINATE_RECONCILE_CLAUSE,
     _TEST_AGENT_TYPE,
     _degrade_agent_type,
     resolve_agent_model,
 )
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
+from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 #: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the op-runner type.
@@ -131,6 +133,12 @@ _JUDGE_AGAINST_HEAD_CLAUSE = (
 )
 
 
+SIDECAR_WORKFLOW = "grind"
+
+#: Run key for a caller that supplies none; ``compose_grind_script`` always passes the run dir's name.
+DEFAULT_RUN_KEY = "grind"
+
+
 def _schema_opt(schema: dict) -> str:
     return f"schema: {json.dumps(schema, sort_keys=True)}"
 
@@ -147,6 +155,7 @@ def _agent_call(
     effort: str,
     schema: dict,
     is_expr: bool = False,
+    run_key: str = DEFAULT_RUN_KEY,
 ) -> str:
     """Compose one ``const ... = await agent(...)`` call's text. Shared by
     every ``compose_*`` function below -- the only thing that varies per
@@ -177,7 +186,8 @@ def _agent_call(
         model = resolve_agent_model(agent_type, override)
     else:
         model = override or STAGE_MODELS[stage]
-    prompt_text = prompt if is_expr else _js_string_literal(prompt)
+    clause = sidecar_clause(sidecar_dir(SIDECAR_WORKFLOW, run_key, label))
+    prompt_text = f"{prompt} + {_js_string_literal(clause)}" if is_expr else _js_string_literal(prompt + clause)
     return (
         "  await agent("
         f"{prompt_text}, "
@@ -330,6 +340,7 @@ def compose_triage_call(
     script_path_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
     targeted_runner: bool = False,
@@ -450,6 +461,7 @@ def compose_triage_call(
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="medium",
         schema=schema,
         is_expr=True,
@@ -467,6 +479,7 @@ def compose_refute_close_call(
     proposals_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
 ) -> str:
@@ -555,6 +568,7 @@ def compose_refute_close_call(
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="medium",
         schema=schema,
         is_expr=True,
@@ -569,6 +583,7 @@ def compose_size_call(
     evidence_js: str,
     fix_plan_js: str,
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
     models: Optional[Mapping[str, str]] = None,
@@ -623,6 +638,7 @@ def compose_size_call(
         phase_title=phase_title,
         agent_type=SIZING_SCOUT_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="medium",
         schema=SIZE_SCOUT_SCHEMA,
         is_expr=True,
@@ -672,6 +688,7 @@ def compose_fix_call(
     run_id_js: Optional[str] = None,
     repo_root_js: str = "REPO_ROOT",
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     preamble_expr: Optional[str] = None,
     targeted_runner: bool = False,
 ) -> str:
@@ -820,6 +837,7 @@ def compose_fix_call(
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="high",
         schema=schema,
         is_expr=True,
@@ -837,6 +855,7 @@ def compose_verify_agent_call(
     evidence_js: Optional[str] = None,
     fix_plan_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     preamble_expr: Optional[str] = None,
     targeted_runner: bool = False,
     profile: str = "",
@@ -923,6 +942,7 @@ def compose_verify_agent_call(
         phase_title=phase_title,
         agent_type=_TEST_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="high",
         schema=schema,
         is_expr=True,
@@ -940,6 +960,7 @@ def compose_verify_op_call(
     batch_id: str = "",
     batch_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     row_id_js: Optional[str] = None,
     row_path_js: Optional[str] = None,
     final_js: Optional[str] = None,
@@ -980,6 +1001,7 @@ def compose_verify_op_call(
             phase_title=phase_title,
             agent_type=OP_RUNNER_AGENT_TYPE,
             agent_type_host=agent_type_host,
+            run_key=run_key,
             effort="low",
             is_expr=True,
             schema={"type": "object", "required": ["undo"], "properties": {"undo": _UNDO_SCHEMA}},
@@ -1029,6 +1051,7 @@ def compose_verify_op_call(
         phase_title=phase_title,
         agent_type=OP_RUNNER_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="low",
         is_expr=True,
         schema=schema,
@@ -1061,8 +1084,9 @@ _COMMIT_TAIL_PARTS: tuple[tuple[str, str], ...] = (
         "is refused by the block-subagent-commit guard and is NOT a route."
         " `drop_ignored` drops gitignored scratch paths from the list and commits the rest; "
         "put any `dropped_ignored` paths the result names in `reason`."
-        " If the outcome is indeterminate, reconcile it against "
-        "`git log` and `git status` before doing anything else -- never retry blind."
+        " " + _INDETERMINATE_RECONCILE_CLAUSE
+        + " When an indeterminate reply carries no reconcile_command, read `git log` and "
+        "`git status` before anything else -- never retry blind."
         " On commit-failed, put the verbatim refusal or the divergence you found in `reason`.",
     ),
 )
@@ -1076,6 +1100,7 @@ def _compose_commit_agent_call(
     agent_type_host: Optional[str],
     models: Optional[Mapping[str, str]] = None,
     schema: Optional[dict] = None,
+    run_key: str = DEFAULT_RUN_KEY,
 ) -> str:
     return _agent_call(
         _join_prompt_parts(parts),
@@ -1085,6 +1110,7 @@ def _compose_commit_agent_call(
         phase_title=phase_title,
         agent_type=COMMIT_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="low",
         schema=schema or _COMMIT_SCHEMA,
         is_expr=True,
@@ -1133,6 +1159,7 @@ def compose_grind_terminal_commit_call(
     params_file_js: str,
     params_js: str,
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
 ) -> str:
     """The grind's one terminal `commit` (`coordinator:git-commit-agent`, haiku, low): runs
     `dispatch.terminal_commit --params-file <path>` and returns its reply verbatim.
@@ -1168,6 +1195,7 @@ def compose_grind_terminal_commit_call(
         agent_type_host=agent_type_host,
         models=models,
         schema=_TERMINAL_COMMIT_SCHEMA,
+        run_key=run_key,
     )
 
 
@@ -1179,6 +1207,7 @@ def compose_review_fix_commit_call(
     phase_title: str,
     profile: str = "",
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     trailers: Sequence[str] = (),
 ) -> str:
     """`commit` for reviewer edits: stages exactly the run-time
@@ -1205,7 +1234,8 @@ def compose_review_fix_commit_call(
         )
     parts.extend(_COMMIT_TAIL_PARTS)
     return _compose_commit_agent_call(
-        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host, models=models
+        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host, models=models,
+        run_key=run_key,
     )
 
 
@@ -1219,6 +1249,7 @@ def compose_ledger_sweep_call(
     repo_root_js: str = "REPO_ROOT",
     profile_dir_js: str = "PROFILE_DIR",
     agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
     run_id_js: str,
     record_js: str,
     declared_js: str,
@@ -1279,6 +1310,7 @@ def compose_ledger_sweep_call(
         phase_title=phase_title,
         agent_type=OP_RUNNER_AGENT_TYPE,
         agent_type_host=agent_type_host,
+        run_key=run_key,
         effort="low",
         schema=schema,
         is_expr=True,

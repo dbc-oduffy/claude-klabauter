@@ -1,3 +1,5 @@
+import pytest
+
 from coordinator_core.ops.ceremony.commit_gates import (
     is_never_commit,
     residue_gate,
@@ -10,6 +12,48 @@ MIXED = ["src/app.py", "state/handoffs/x.md"]
 def test_never_commit_refused(tmp_path):
     out = residue_gate(tmp_path, ["src/app.py", "scratch/x.py"])
     assert not out.passed and "scratch/x.py" in out.diagnostics[0]
+
+
+def _repo(tmp_path, gitignore):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    (tmp_path / ".gitignore").write_text(gitignore)
+
+
+@pytest.mark.spawns_process
+def test_ignored_scratch_passes(tmp_path):
+    _repo(tmp_path, "scratch/\n")
+    assert residue_gate(tmp_path, ["scratch/a.py", "scratch\\b.py"]).passed
+
+
+@pytest.mark.spawns_process
+def test_unignored_scratch_still_refused_in_repo(tmp_path):
+    _repo(tmp_path, "other/\n")
+    out = residue_gate(tmp_path, ["scratch/a.py"])
+    assert not out.passed and "scratch/a.py" in out.diagnostics[0]
+
+
+@pytest.mark.spawns_process
+def test_tracked_scratch_matching_gitignore_still_refused(tmp_path):
+    import subprocess
+
+    _repo(tmp_path, "")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch" / "a.py").write_text("x")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.run(["git", "add", "-f", "scratch/a.py"], cwd=tmp_path, check=True, creationflags=flags)
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    out = residue_gate(tmp_path, ["scratch/a.py"])
+    assert not out.passed and "scratch/a.py" in out.diagnostics[0]
+
+
+@pytest.mark.spawns_process
+def test_mixed_ignored_and_unignored_refuses_only_unignored(tmp_path):
+    _repo(tmp_path, "scratch/ign/\n")
+    out = residue_gate(tmp_path, ["scratch/ign/a.py", "scratch/keep.py"])
+    assert not out.passed
+    assert "scratch/keep.py" in out.diagnostics[0] and not any("ign/a.py" in d for d in out.diagnostics)
 
 
 def test_is_never_commit_matches_scratch_under_either_separator():
