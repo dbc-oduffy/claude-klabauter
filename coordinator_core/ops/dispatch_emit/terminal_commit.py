@@ -136,6 +136,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
 from coordinator_core.git.git_state import head_branch
+from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
@@ -4180,6 +4181,10 @@ def _terminal_commit_inner(
     all_paths.extend(run_owned)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
+    # A session's own `.git/` scratch (review-targets.txt) reaches the touched set but never a
+    # tree: commit_paths refuses the whole commit on it.
+    all_paths = [p for p in all_paths if canonical_repo_relative_path_refusal(p) is None]
+    deleted_paths = [p for p in deleted_paths if canonical_repo_relative_path_refusal(p) is None]
 
     wh_reasons = _withhold_reasons(worktree_root, artifacts, record_dir_rel)
     wh_map: dict = {}
