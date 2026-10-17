@@ -140,6 +140,61 @@ def test_sequential_closes_write_only_own_status_and_leave_parent_copies(tmp_pat
     assert results["A"]["released"] == [fire] and results["B"]["released"] == [fire]
 
 
+def test_closed_by_halted_predecessor_releases_successor_and_persists(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    out = run_close.sibling_release(tmp_path, "A", None, budget=2, closed_by="docs/plans/p.md")
+    assert out["released"] == [fire_command("state/sizings/B.yaml")]
+    assert out["blocked"] == [] and "superseded" not in out
+    assert _status(tmp_path, "A") == {"status": "halted", "closed_by": "docs/plans/p.md"}
+    run_close.sibling_release(tmp_path, "A", None, budget=2)
+    assert _status(tmp_path, "A")["closed_by"] == "docs/plans/p.md"
+
+
+def test_superseded_successor_is_reported_not_released_or_blocked(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    marker = tmp_path / c.superseded_rel("B")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"superseded_by": "N"}), encoding="utf-8")
+    out = run_close.sibling_release(tmp_path, "A", None, budget=2, closed_by="docs/plans/p.md")
+    assert out["released"] == [] and out["blocked"] == []
+    assert out["superseded"] == [{"run_id": "B", "superseded_by": "N"}]
+    plain = run_close.sibling_release(tmp_path, "A", None, budget=2)
+    assert plain["blocked"] == [] and plain["superseded"] == out["superseded"]
+
+
+def test_superseded_halted_open_successor_is_not_blocked(tmp_path):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    marker = tmp_path / c.superseded_rel("B")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"superseded_by": "N"}), encoding="utf-8")
+    out = run_close.sibling_release(tmp_path, "A", None, budget=2)
+    assert out["blocked"] == [] and out["released"] == []
+
+
+def test_close_halted_runs_for_plan_closes_named_run(tmp_path, monkeypatch):
+    _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    monkeypatch.setattr(halted_run, "halted_ask_run_for", lambda root, s: "A")
+    monkeypatch.setattr(halted_run, "halted_run_for", lambda root, s: None)
+    out = run_close.close_halted_runs_for_plan(tmp_path, "docs/plans/p.md", "state/sizings/A.yaml")
+    assert out == {
+        "closed": ["A"],
+        "released": [fire_command("state/sizings/B.yaml")],
+        "superseded": [],
+    }
+    assert _status(tmp_path, "A")["closed_by"] == "docs/plans/p.md"
+
+
+def test_close_halted_runs_for_plan_skips_run_without_status(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    monkeypatch.setattr(halted_run, "halted_ask_run_for", lambda root, s: "Z")
+    monkeypatch.setattr(halted_run, "halted_run_for", lambda root, s: None)
+    out = run_close.close_halted_runs_for_plan(tmp_path, "docs/plans/p.md", "state/sizings/Z.yaml")
+    assert out == {"closed": [], "released": [], "superseded": []}
+
+
 def test_details_carry_no_absolute_path(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
     out = run_close.sibling_release(tmp_path, "A", SHA, budget=2)

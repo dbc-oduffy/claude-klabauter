@@ -59,6 +59,7 @@ from typing import Optional
 import pytest
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
+import coordinator_core.execute_plan_assemble.goal_gate as goal_gate
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -2330,7 +2331,7 @@ class TestVerifyBaselineRef:
         sibling_sha = _head_sha(sibling)
 
         monkeypatch.setattr(
-            coas,
+            goal_gate,
             "registry_get",
             lambda key: str(sibling) if key == "repos.klabauter" else None,
         )
@@ -2364,7 +2365,7 @@ class TestVerifyBaselineRef:
         sibling_sha = _head_sha(sibling)
 
         monkeypatch.setattr(
-            coas,
+            goal_gate,
             "registry_get",
             lambda key: str(sibling) if key == "repos.klabauter" else None,
         )
@@ -2380,7 +2381,7 @@ class TestVerifyBaselineRef:
         (root / "seed.txt").write_text("seed")
         _run_git(["add", "seed.txt"], root)
         _run_git(["commit", "-q", "-m", "seed"], root)
-        monkeypatch.setattr(coas, "registry_get", lambda key: None)
+        monkeypatch.setattr(goal_gate, "registry_get", lambda key: None)
 
         sha, reason = coas._verify_baseline_ref(root, "klabauter:eb6be84a")
 
@@ -2394,7 +2395,7 @@ class TestVerifyBaselineRef:
         _run_git(["add", "seed.txt"], root)
         _run_git(["commit", "-q", "-m", "seed"], root)
         monkeypatch.setattr(
-            coas, "registry_get", lambda key: str(tmp_path / "does-not-exist")
+            goal_gate, "registry_get", lambda key: str(tmp_path / "does-not-exist")
         )
 
         sha, reason = coas._verify_baseline_ref(root, "klabauter:eb6be84a")
@@ -2418,7 +2419,7 @@ class TestVerifyBaselineRef:
         _run_git(["commit", "-q", "-m", "seed"], sibling)
 
         monkeypatch.setattr(
-            coas,
+            goal_gate,
             "registry_get",
             lambda key: str(sibling) if key == "repos.klabauter" else None,
         )
@@ -2439,7 +2440,7 @@ class TestVerifyBaselineRef:
         (root / "seed.txt").write_text("seed")
         _run_git(["add", "seed.txt"], root)
         _run_git(["commit", "-q", "-m", "seed"], root)
-        monkeypatch.setattr(coas, "registry_get", lambda key: str(root))
+        monkeypatch.setattr(goal_gate, "registry_get", lambda key: str(root))
 
         sha, reason = coas._verify_disposition_ref(root, "klabauter:eb6be84a")
 

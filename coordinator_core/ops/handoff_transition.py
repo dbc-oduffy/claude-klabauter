@@ -270,7 +270,6 @@ Negative-spec:
 from __future__ import annotations
 import sys
 
-import asyncio
 import datetime
 import re
 import time
@@ -969,6 +968,8 @@ def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root
     # Live-children guard — edge_kinds={"forked_from"} narrows out succession
     # children (the successor this call just named), never an arbitrary one.
     # See docstring above.
+    import asyncio
+
     guard_result = asyncio.run(_handoff_has_live_children(
         {"candidate": str(path), "edge_kinds": {"forked_from"}}, repo_root
     ))
@@ -1120,6 +1121,28 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
     return mutate, state
 
 
+def _ship_text(text: str, handoff_path: str) -> "tuple[str, dict]":
+    """Run the ship mutation on `text`; return `(new_text, {applied, message})`.
+
+    A refusal raises `MutateAbort(<reply dict>)`, the shape `ship_apply` documents.
+    """
+    mutate, state = build_ship_mutate(handoff_path)
+    try:
+        return mutate(text), state
+    except MutateAbort as exc:
+        raise MutateAbort(_err(exc.args[0] if exc.args else "ship: mutation aborted")) from None
+
+
+def ship_apply(text: str, params: dict, *, repo_root: Optional[Path] = None) -> str:
+    """Result text of the `ship` verb on `text`; never writes.
+
+    Refuses by raising `MutateAbort(<the error reply dict>)`. Returns `text`
+    unchanged on the idempotent no-op. `repo_root` is accepted for the pinned
+    text-form signature; ship reads nothing else from disk.
+    """
+    return _ship_text(text, (params.get("handoff_path") or "").strip())[0]
+
+
 def _ship(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
     """Apply ship transition (deployment_state→shipped, pickup_ready→false,
     status untouched — see `build_ship_mutate`'s docstring, AC12, for why
@@ -1138,7 +1161,12 @@ def _ship(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
     except _PathNotContained as exc:
         return _err(f"ship: {exc}")
 
-    mutate, _state = build_ship_mutate(handoff_path)
+    _state: dict = {"applied": False, "message": ""}
+
+    def mutate(old_text: str) -> str:
+        new_text, state = _ship_text(old_text, handoff_path)
+        _state.update(state)
+        return new_text
 
     try:
         locked_rmw(path, mutate, repo_root=repo_root)
@@ -1147,7 +1175,8 @@ def _ship(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
     except LockTimeout as exc:
         return _err(f"ship: timed out waiting for file lock on {handoff_path}: {exc}")
     except MutateAbort as exc:
-        return _err(exc.args[0] if exc.args else "ship: mutation aborted")
+        reply = exc.args[0] if exc.args else "ship: mutation aborted"
+        return reply if isinstance(reply, dict) else _err(reply)
 
     return _ok(_state["applied"], _state["message"])
 
@@ -3957,7 +3986,16 @@ def _record_disposition(
 async def _handler(
     params: dict, repo_root: Optional[Path] = None
 ) -> dict:
-    """JSON-RPC 'handoff.transition' handler — atomic handoff-lifecycle frontmatter mutations.
+    """JSON-RPC 'handoff.transition' handler: `transition_sync` on a worker thread (DR-212 D3)."""
+    import asyncio
+
+    return await asyncio.to_thread(transition_sync, params, repo_root)
+
+
+def transition_sync(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """Synchronous 'handoff.transition' core — atomic handoff-lifecycle frontmatter mutations.
+
+    Runs in-process without an event loop; `_handler` is its async IPC wrapper.
 
     MUTATING: writes to state/handoffs/ frontmatter files in-place. Does NOT git-commit.
 
@@ -4045,7 +4083,7 @@ async def _handler(
         # Wrap blocking file read+write in asyncio.to_thread
         # to satisfy DR-212 D3 async-loop mandate; prevents event-loop stall.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(_claim, handoff_path, session_id, at, worktree, repo_root)
+        return _claim(handoff_path, session_id, at, worktree, repo_root)
 
     if verb == "supersede":
         continued_into = (params.get("continued_into") or "").strip()
@@ -4078,12 +4116,12 @@ async def _handler(
             )
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(_supersede, handoff_path, continued_into, worktree, repo_root)
+        return _supersede(handoff_path, continued_into, worktree, repo_root)
 
     if verb == "ship":
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(_ship, handoff_path, worktree, repo_root)
+        return _ship(handoff_path, worktree, repo_root)
 
     if verb == "close":
         reason = (params.get("reason") or "").strip()
@@ -4091,12 +4129,12 @@ async def _handler(
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
         # _close itself validates reason against the closed_reason enum (empty
         # included) and fails loud with no write on an invalid value.
-        return await asyncio.to_thread(_close, handoff_path, reason, worktree, repo_root)
+        return _close(handoff_path, reason, worktree, repo_root)
 
     if verb == "repark":
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(_repark, handoff_path, worktree, repo_root)
+        return _repark(handoff_path, worktree, repo_root)
 
     if verb in ("unclaim", "unconsume"):
         # "unconsume" is a deprecated alias of "unclaim" (mirrors claim/consume above).
@@ -4114,9 +4152,7 @@ async def _handler(
         session_id = session_id_param.strip() if isinstance(session_id_param, str) else None
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(
-            _unclaim, handoff_path, note, worktree, repo_root, reaped_from, session_id
-        )
+        return _unclaim(handoff_path, note, worktree, repo_root, reaped_from, session_id)
 
     if verb == "gate-recheck":
         at = (params.get("at") or "").strip()
@@ -4125,9 +4161,7 @@ async def _handler(
         cleared = bool(params.get("cleared", False))
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(
-            _gate_recheck, handoff_path, at, cleared, worktree, repo_root
-        )
+        return _gate_recheck(handoff_path, at, cleared, worktree, repo_root)
 
     if verb == "gate-cascade-clear":
         blocker_ids = params.get("blocker_ids") or []
@@ -4138,9 +4172,7 @@ async def _handler(
             )
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(
-            _gate_cascade_clear, handoff_path, blocker_ids, blocker_shas, worktree, repo_root
-        )
+        return _gate_cascade_clear(handoff_path, blocker_ids, blocker_shas, worktree, repo_root)
 
     if verb == "gate-add-blocker":
         blocker_ids = params.get("blocker_ids") or []
@@ -4149,9 +4181,7 @@ async def _handler(
         gate_dependency = (params.get("gate_dependency") or "").strip()
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(
-            _gate_add_blocker, handoff_path, blocker_ids, gate_dependency, worktree, repo_root
-        )
+        return _gate_add_blocker(handoff_path, blocker_ids, gate_dependency, worktree, repo_root)
 
     if verb == "record-disposition":
         disposition = (params.get("disposition") or "").strip()
@@ -4162,9 +4192,7 @@ async def _handler(
             return _err("record-disposition: 'reason' is required")
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return await asyncio.to_thread(
-            _record_disposition, handoff_path, disposition, reason, worktree, repo_root
-        )
+        return _record_disposition(handoff_path, disposition, reason, worktree, repo_root)
 
     return _err(
         f"handoff.transition: unknown verb {verb!r} — "

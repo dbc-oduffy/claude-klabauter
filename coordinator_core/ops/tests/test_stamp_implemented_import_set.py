@@ -28,7 +28,11 @@ pytestmark = pytest.mark.spawns_process
 
 # cwd pins which checkout the child imports; an installed twin elsewhere on sys.path would be measured otherwise.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_ABSENT = ("coordinator_core.workstream_complete",)
+_ABSENT = (
+    "coordinator_core.workstream_complete",
+    "coordinator_core.ops.fleet.archive_plans",
+    "coordinator_core.execute_plan_assemble.close_out_and_stamp",
+)
 
 _CHILD = textwrap.dedent(
     """
@@ -86,6 +90,23 @@ def test_open_spine_row_refusal_names_the_row_without_workstream_complete(tmp_pa
     assert "1 spine row(s) still open: C3" in out["stderr"]
     assert out["status"] == ["status: executing"]
     assert out["loaded"] == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_evaluate_goal_falsifier_gate",
+        "_goal_refusal_next_move",
+        "_ac_table_desync_finding",
+        "_ac_advisory_text",
+        "_verify_baseline_ref",
+        "_read_status_override",
+    ],
+)
+def test_close_out_re_exports_the_goal_gate_definitions(name: str) -> None:
+    from coordinator_core.execute_plan_assemble import close_out_and_stamp, goal_gate
+
+    assert getattr(close_out_and_stamp, name) is getattr(goal_gate, name)
 
 
 @pytest.mark.parametrize("disposition", ["coded", "open", "waived-nonsense"])

@@ -65,19 +65,26 @@ def _existing_entry(root: Path, run_id: str, title: str) -> Optional[str]:
     return None
 
 
-def _stamp_run_id(root: Path, entry_rel: str, run_id: str) -> bool:
+def _stamp_apply(text: str, entry_rel: str, run_id: str) -> str:
     from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
+    from coordinator_core.locked_write import MutateAbort
+
+    split = split_frontmatter(text)
+    if split is None:
+        raise MutateAbort(f"no frontmatter in {entry_rel}")
+    fm = split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n"
+    return rebuild(split, fm + f"run_id: {run_id}\n")
+
+
+def _stamp_run_id(root: Path, entry_rel: str, run_id: str) -> bool:
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 
-    def _mutate(text: str) -> str:
-        split = split_frontmatter(text)
-        if split is None:
-            raise MutateAbort(f"no frontmatter in {entry_rel}")
-        fm = split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n"
-        return rebuild(split, fm + f"run_id: {run_id}\n")
-
     try:
-        locked_rmw(Path(root) / entry_rel, _mutate, repo_root=Path(root))
+        locked_rmw(
+            Path(root) / entry_rel,
+            lambda text: _stamp_apply(text, entry_rel, run_id),
+            repo_root=Path(root),
+        )
     except (LockTimeout, MutateAbort, OSError):
         return False
     return True
@@ -108,38 +115,48 @@ def completion_entry_leg(
     if existing:
         return LegResult("discharged", f"entry {existing}"), []
 
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
     from coordinator_core.ops.ceremony.completion_entry import (
+        _COMPLETION_NATURE_DEFAULT,
         AuthoredSurfaceMissing,
-        fill_authored_surfaces,
-        fill_completion_entry_residues,
-        scaffold_completion_entry,
+        _completion_entry_rel_path,
+        _scaffold_text,
+        authored_surfaces_mutator,
+        residue_mutator,
+        scaffold_apply,
     )
 
-    scaffold = scaffold_completion_entry(Path(root), title)
-    entry_rel = _posix(scaffold["completion_entry_path"])
-    if scaffold["failed"] or not entry_rel:
-        return LegResult("failed", "entry scaffold failed"), []
-    if not scaffold["acted"]:
+    entry_rel = _posix(str(_completion_entry_rel_path(title)))
+    entry_abs = Path(root) / entry_rel
+    if entry_abs.exists():
         return LegResult("failed", f"entry path {entry_rel} taken by another run"), []
 
-    def _fail(reason: str) -> tuple[LegResult, list[str]]:
-        try:
-            (Path(root) / entry_rel).unlink()
-        except OSError:
-            pass
-        return LegResult("failed", reason), []
-
-    try:
-        filled = fill_authored_surfaces(
-            Path(root), entry_rel, title=title, nature=None, prose=summary
-        )
-    except AuthoredSurfaceMissing as exc:
-        return _fail(str(exc))
-    if not filled["prose"]:
-        return _fail("entry prose not written")
-    fill_completion_entry_residues(
+    authored, filled = authored_surfaces_mutator(
+        entry_rel, title=title, nature=None, prose=summary
+    )
+    residues, _ = residue_mutator(
         Path(root), entry_rel, "", chain_terminal=False, sid=AUTHORED_BY
     )
-    if not _stamp_run_id(root, entry_rel, run_id):
-        return _fail("entry run_id not stamped")
+    scaffold = _scaffold_text(title, _COMPLETION_NATURE_DEFAULT, None)
+
+    def _compose(old: str) -> str:
+        text = scaffold_apply(old, scaffold)
+        text = authored(text)
+        if not filled["prose"]:
+            raise MutateAbort("entry prose not written")
+        try:
+            text = residues(text)
+        except MutateAbort:
+            pass
+        return _stamp_apply(text, entry_rel, run_id)
+
+    try:
+        entry_abs.parent.mkdir(parents=True, exist_ok=True)
+        locked_rmw(entry_abs, _compose, repo_root=Path(root), missing_ok=True)
+    except AuthoredSurfaceMissing as exc:
+        return LegResult("failed", str(exc)), []
+    except MutateAbort as exc:
+        return LegResult("failed", str(exc)), []
+    except (LockTimeout, OSError):
+        return LegResult("failed", "entry scaffold failed"), []
     return LegResult("ran", f"entry {entry_rel}"), [entry_rel]

@@ -150,7 +150,9 @@ from coordinator_core.loe_thresholds import compute_tshirt
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import handoff_archive_dest, main_worktree_root
 from coordinator_core.ops.handoff_correct_body import _MAX_OLD_STRING_LEN
-from coordinator_core.ops.handoff_correct_body import _handler as _correct_body_handler
+from coordinator_core.locked_write import MutateAbort
+from coordinator_core.ops.handoff_correct_body import _success_reply as _correct_body_success_reply
+from coordinator_core.ops.handoff_correct_body import correct_body_apply, correct_body_sync
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session import core as _session_core
 from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE, row_identity
@@ -417,6 +419,67 @@ async def _handler(
     measured zero from a read one), and `tshirt` naming the resolved values
     actually written.
     """
+    import asyncio
+
+    return await asyncio.to_thread(append_sync, params, repo_root)
+
+
+def append_sync(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """The blocking core of `handoff.append_session_ledger`: same reply dict as
+    `_handler`. The write is `correct_body_sync`'s."""
+    prepared = _prepare(params, repo_root)
+    if "correct_body_params" not in prepared:
+        return prepared
+    result = correct_body_sync(prepared["correct_body_params"], repo_root)
+    return _with_row_fields(result, prepared)
+
+
+def append_apply(
+    text: str, params: dict, *, repo_root: Optional[Path], info: Optional[dict] = None
+) -> str:
+    """Text form of `handoff.append_session_ledger`: every check, run against
+    *text*, composed with `correct_body_apply` in process. Returns the new text
+    and never writes the target. A refusal raises `MutateAbort` carrying the
+    reply dict `_handler` would return. When *info* is given it receives what
+    `append_reply` needs once the caller has written the text."""
+    prepared = _prepare(params, repo_root, text)
+    if "correct_body_params" not in prepared:
+        raise MutateAbort(prepared)
+    cb_info: dict = {}
+    new_text = correct_body_apply(
+        text, prepared["correct_body_params"], repo_root=repo_root, info=cb_info
+    )
+    if info is not None:
+        info["plan"] = cb_info["plan"]
+        info["prepared"] = prepared
+    return new_text
+
+
+def append_reply(info: dict, repo_root: Optional[Path]) -> dict:
+    """The applied reply for an `append_apply` call, once its text is on disk."""
+    return _with_row_fields(_correct_body_success_reply(info["plan"], repo_root), info["prepared"])
+
+
+def _with_row_fields(result: dict, prepared: dict) -> dict:
+    if result.get("exit_code") != 0:
+        return result
+    result = dict(result)
+    result["row"] = prepared["row_line"]
+    result["ledger_session_id"] = prepared["session_id"]
+    result["agent_dispatches"] = prepared["agent_dispatches"]
+    result["opus_dispatches"] = prepared["opus_dispatches"]
+    result["dispatch_source"] = prepared["dispatch_source"]
+    result["tshirt"] = prepared["tshirt"]
+    return result
+
+
+def _prepare(
+    params: dict, repo_root: Optional[Path] = None, text: Optional[str] = None
+) -> dict:
+    """Every precondition owned by this verb. Returns a refusal reply (a dict
+    with ``exit_code``) or the prepared row: ``correct_body_params``,
+    ``row_line``, ``session_id``, the resolved counts, ``dispatch_source`` and
+    ``tshirt``. Reads the target from disk unless *text* is given."""
     unknown_keys = sorted(
         k for k in params if k not in _KNOWN_PARAM_KEYS and not k.startswith("_")
     )
@@ -530,10 +593,11 @@ async def _handler(
     if p is None:
         return _err(resolve_err)
 
-    try:
-        text = p.read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        return _err(f"cannot read handoff file: {exc}")
+    if text is None:
+        try:
+            text = p.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return _err(f"cannot read handoff file: {exc}")
 
     split = split_frontmatter(text)
     if split is None:
@@ -583,13 +647,12 @@ async def _handler(
     if "override_reason" in params:
         correct_body_params["override_reason"] = params.get("override_reason")
 
-    result = await _correct_body_handler(correct_body_params, repo_root=repo_root)
-    if result.get("exit_code") == 0:
-        result = dict(result)
-        result["row"] = row_line
-        result["ledger_session_id"] = session_id
-        result["agent_dispatches"] = agent_dispatches
-        result["opus_dispatches"] = opus_dispatches
-        result["dispatch_source"] = dispatch_source
-        result["tshirt"] = tshirt
-    return result
+    return {
+        "correct_body_params": correct_body_params,
+        "row_line": row_line,
+        "session_id": session_id,
+        "agent_dispatches": agent_dispatches,
+        "opus_dispatches": opus_dispatches,
+        "dispatch_source": dispatch_source,
+        "tshirt": tshirt,
+    }

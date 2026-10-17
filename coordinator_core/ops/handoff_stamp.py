@@ -111,7 +111,6 @@ Negative-spec (repair verb, hard-won):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -354,20 +353,26 @@ async def _handler(
         param; an omitted/empty ``kind`` is rejected (exit_code 1, no write)
         exactly like a missing ``sha``. See the ``kind`` param doc above.
     """
+    import asyncio
+
+    return await asyncio.to_thread(stamp_sync, params, repo_root)
+
+
+def _param_refusal(params: dict, repo_root: Optional[Path]) -> "tuple[Optional[str], Optional[dict]]":
+    """Return ``(kind, refusal_reply)``; the reply is None when params are acceptable."""
     handoff_path_raw: str = params.get("handoff_path") or ""
     sha: str = params.get("sha") or ""
-    force: bool = bool(params.get("force", False))
     kind_raw = params.get("kind")
     kind: Optional[str] = kind_raw.strip() if isinstance(kind_raw, str) else None
     if kind == "":
         kind = None
 
     if not handoff_path_raw:
-        return _err("missing required param: handoff_path", kind=kind)
+        return kind, _err("missing required param: handoff_path", kind=kind)
     if not sha:
-        return _err("missing required param: sha", kind=kind)
+        return kind, _err("missing required param: sha", kind=kind)
     if kind is None:
-        return _err(
+        return kind, _err(
             "missing required param: kind (DR-096) — must be one of "
             f"{sorted(_SHIPPED_IN_KIND_ENUM)}; a caller that does not say "
             "which kind it is writing is exactly how this field acquired "
@@ -375,7 +380,7 @@ async def _handler(
             kind=kind,
         )
     if kind not in _SHIPPED_IN_KIND_ENUM:
-        return _err(
+        return kind, _err(
             f"rejected unknown kind {kind!r} — must be one of "
             f"{sorted(_SHIPPED_IN_KIND_ENUM)}",
             kind=kind,
@@ -383,18 +388,53 @@ async def _handler(
 
     # P9: repo_root is required to derive the worktree root (common_dir scope
     # keying guarantees the command-type invoker always supplies --repo; see
-    # ipc.py's _OP_KEY_SCOPE["handoff.stamp"] = "common_dir"). Rejecting up
-    # front here — mirroring handoff_transition.py's repo_root-required gate —
-    # makes worktree always derivable below and removes the permissive
-    # no-containment fallback that previously existed for the
-    # absolute-path-with-no-repo_root branch (Review: op-family
-    # path-containment sweep, 2026-07-08, Finding 1).
+    # ipc.py's _OP_KEY_SCOPE["handoff.stamp"] = "common_dir"). No permissive
+    # no-containment fallback exists for a missing repo_root.
     if repo_root is None:
-        return _err(
+        return kind, _err(
             "handoff.stamp: repo_root is required "
             "(no founding root available — handler called without socket-authoritative common_dir)",
             kind=kind,
         )
+    return kind, None
+
+
+def _stamp_text(text: str, params: dict, repo_root: Optional[Path]) -> "tuple[str, dict]":
+    """Shared text transform: ``(new_text, state)``; raises MutateAbort(reply dict) on refusal."""
+    kind, refusal = _param_refusal(params, repo_root)
+    if refusal is not None:
+        raise MutateAbort(refusal)
+    handoff_path_raw: str = params.get("handoff_path") or ""
+    mutate, state = build_stamp_mutate(
+        handoff_path_raw, params.get("sha") or "", kind, force=bool(params.get("force", False))
+    )
+    try:
+        return mutate(text), state
+    except MutateAbort as exc:
+        raise MutateAbort(
+            _err(str(exc.args[0]) if exc.args else "mutate aborted", kind=kind)
+        ) from exc
+
+
+def stamp_apply(text: str, params: dict, *, repo_root: Optional[Path]) -> str:
+    """Return ``text`` with ``shipped_in`` stamped per ``params``; never writes.
+
+    Refuses by raising ``MutateAbort(<the reply dict stamp_sync would return>)``.
+    An idempotent skip returns ``text`` unchanged.
+    """
+    return _stamp_text(text, params, repo_root)[0]
+
+
+def stamp_sync(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """Synchronous core of ``handoff.stamp``; returns the reply ``_handler`` returns.
+
+    Loads no asyncio. Same contract as ``_handler`` (see its docstring).
+    """
+    handoff_path_raw: str = params.get("handoff_path") or ""
+    sha: str = params.get("sha") or ""
+    kind, refusal = _param_refusal(params, repo_root)
+    if refusal is not None:
+        return refusal
 
     worktree = main_worktree_root(repo_root)
 
@@ -420,18 +460,25 @@ async def _handler(
         return _err(f"handoff not found on disk: {handoff_path_raw}", kind=kind)
 
     # RMW via locked_rmw — single flock-protected read→mutate→write cycle (DR-212 C1).
-    # asyncio.to_thread offloads the blocking I/O + flock off the event loop (DR-212 D3).
-    mutate, state = build_stamp_mutate(handoff_path_raw, sha, kind, force=force)
+    holder: dict = {}
+
+    def _compose(old_text: str) -> str:
+        new_text, holder["state"] = _stamp_text(old_text, params, repo_root)
+        return new_text
 
     try:
-        await asyncio.to_thread(locked_rmw, p, mutate, repo_root=repo_root)
+        locked_rmw(p, _compose, repo_root=repo_root)
     except LockTimeout as exc:
         return _err(f"lock timeout acquiring file lock: {exc}", kind=kind)
     except MutateAbort as exc:
+        if exc.args and isinstance(exc.args[0], dict):
+            return exc.args[0]
         return _err(str(exc.args[0]) if exc.args else "mutate aborted", kind=kind)
     except OSError as exc:
         return _err(f"cannot read/write handoff file: {exc}", kind=kind)
 
+    state = holder["state"]
+    force = bool(params.get("force", False))
     _applied = state["applied"]
     _replaced = state["replaced"]
     _prior_value = state["prior_value"]
@@ -613,6 +660,8 @@ async def _repair_archived_shipped_in_handler(
     field set); every other archived-lifecycle verb is unaffected by this
     addition.
     """
+    import asyncio
+
     handoff_path_raw: str = params.get("handoff_path") or ""
     reason: str = (params.get("reason") or "").strip()
     sha_raw = params.get("sha")
@@ -1259,6 +1308,8 @@ async def _repair_deployment_state_impl(
         live door's records were never archived in the first place, so this
         point is a no-op for it, not a gap.)
     """
+    import asyncio
+
     handoff_path_raw: str = params.get("handoff_path") or ""
     reason: str = (params.get("reason") or "").strip()
     target_state: str = (params.get("deployment_state") or "").strip()

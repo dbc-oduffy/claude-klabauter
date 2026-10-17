@@ -63,10 +63,11 @@ NEGATIVE SPEC:
     predicate that shells out; see the module docstring of `commit.py` for
     the plan that killed `run_commit_pipeline` at 1513ms/31 procs for
     exactly that shape of cost).
-  - Does NOT re-implement `_pathspec_element_is_sweeping`, `_repo_
-    relativize_pathspec`, or the SC-DR-022 orphan-adoption block --
-    `assert_pathspec_shape_permitted` calls the extracted
-    `block_subagent_commit._pathspec_shape_permitted` directly.
+  - Does NOT import `block_subagent_commit` (a heavy module). The
+    shape-only legs are mirrored in `_pathspec_shape_permitted` here and
+    pinned to `block_subagent_commit._pathspec_shape_permitted` by
+    `test_action_guard_shape_parity`; the bash-route guard keeps its own
+    copy as the single home for command-string callers.
 
 `assert_no_undeclared_staged_deletion` closes the op-route leg of
 `state/bug-backlog/2026-08-31-four-bug-blitz-commits-deleted-five-file-
@@ -81,15 +82,16 @@ never says so anywhere in its body is refused rather than landed.
 
 from __future__ import annotations
 
+import os
+import posixpath
 import re
 from typing import Sequence
 
 #: Same word list `bash_guards.commit_tripwires._DELETION_VERBS` validates
 #: (0 false positives over the 699-commit measurement recorded in the row
 #: above) -- kept as its own copy rather than imported, since this module's
-#: own negative spec is zero cross-module coupling beyond the two lazy
-#: `commit.py`/`block_subagent_commit` imports it already carries, and this
-#: predicate needs neither of those.
+#: own negative spec is zero cross-module coupling beyond the lazy
+#: `commit.py` import it already carries, and this predicate needs neither.
 _DELETION_VERBS = re.compile(
     r"\b("
     r"delet\w*|remov\w*|rm|retir\w*|drop(s|ped|ping)?|gravestone\w*|"
@@ -102,14 +104,123 @@ _DELETION_VERBS = re.compile(
 )
 
 
+_LEG_NO_PATHSPEC = "leg:no-pathspec"
+_LEG_SWEEPING_PATHSPEC = "leg:sweeping-pathspec"
+_LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
+_SWEEPING_FLAG_TOKENS = frozenset({"-A", "-a", "--all"})
+_GLOB_CHARS = frozenset("*?[")
+_LITERAL_PATHSPEC_PREFIX = ":(literal)"
+_DRIVE_ABSOLUTE_PATHSPEC_RE = re.compile(r"^[A-Za-z]:/")
+
+
+def _literal_inner(candidate: str):
+    if candidate.startswith(_LITERAL_PATHSPEC_PREFIX):
+        inner = candidate[len(_LITERAL_PATHSPEC_PREFIX):]
+        if inner:
+            return inner
+    return None
+
+
+def _is_absolute(candidate_posix: str) -> bool:
+    return bool(
+        posixpath.isabs(candidate_posix) or _DRIVE_ABSOLUTE_PATHSPEC_RE.match(candidate_posix)
+    )
+
+
+def _drive_key(path_posix: str) -> str:
+    if _DRIVE_ABSOLUTE_PATHSPEC_RE.match(path_posix):
+        return path_posix[0].lower() + path_posix[1:]
+    return path_posix
+
+
+def _bracket_exists_literally(candidate: str, git_root: str) -> bool:
+    if not git_root:
+        return False
+    fs_path = candidate if _is_absolute(candidate.replace("\\", "/")) else os.path.join(git_root, candidate)
+    try:
+        return os.path.exists(fs_path)
+    except OSError:
+        return False
+
+
+def _element_is_sweeping(path, git_root: str) -> bool:
+    if not isinstance(path, str):
+        return True
+    candidate = path.strip()
+    if not candidate or candidate in (".", "./"):
+        return True
+    literal_inner = _literal_inner(candidate)
+    if literal_inner is not None:
+        candidate = literal_inner
+    elif candidate.startswith(":"):
+        return True
+    if candidate in _SWEEPING_FLAG_TOKENS:
+        return True
+    if literal_inner is None and any(ch in candidate for ch in _GLOB_CHARS):
+        if not (
+            "[" in candidate
+            and "*" not in candidate
+            and "?" not in candidate
+            and _bracket_exists_literally(candidate, git_root)
+        ):
+            return True
+    if not git_root:
+        return True
+    root = posixpath.normpath(git_root.replace("\\", "/"))
+    candidate_posix = candidate.replace("\\", "/")
+    resolved = (
+        candidate_posix
+        if posixpath.isabs(candidate_posix)
+        else posixpath.normpath(posixpath.join(root, candidate_posix))
+    )
+    resolved = posixpath.normpath(resolved)
+    if resolved == root:
+        return True
+    parent = root
+    while True:
+        next_parent = posixpath.dirname(parent)
+        if next_parent == parent:
+            return False
+        if next_parent == resolved:
+            return True
+        parent = next_parent
+
+
+def _has_out_of_repo_absolute(paths, git_root: str) -> bool:
+    root_prefix = _drive_key(posixpath.normpath(git_root.replace("\\", "/")))
+    if not root_prefix.endswith("/"):
+        root_prefix += "/"
+    for path in paths:
+        path = _literal_inner(path) or path
+        candidate_posix = path.replace("\\", "/")
+        if _is_absolute(candidate_posix) and not _drive_key(
+            posixpath.normpath(candidate_posix)
+        ).startswith(root_prefix):
+            return True
+    return False
+
+
+def _pathspec_shape_permitted(paths, include_orphans: bool, git_root: str):
+    """Mirror of ``block_subagent_commit._pathspec_shape_permitted`` (the
+    identity-free shape legs), kept in step by
+    ``test_action_guard_shape_parity``. ``block_subagent_commit`` is a
+    multi-thousand-line module whose import dominated the commit landing,
+    and it stays the single home for the bash-route guard.
+    """
+    if not paths:
+        return False, _LEG_NO_PATHSPEC
+    if any(_element_is_sweeping(p, git_root) for p in paths):
+        return False, _LEG_SWEEPING_PATHSPEC
+    if _has_out_of_repo_absolute(list(paths), git_root):
+        return False, _LEG_ABSOLUTE_OUT_OF_REPO
+    return True, ""
+
+
 def assert_pathspec_shape_permitted(
     paths,
     include_orphans: bool,
     git_root: str,
 ) -> None:
-    from coordinator_core.bash_guards.block_subagent_commit import (
-        _pathspec_shape_permitted,
-    )
     from coordinator_core.git.commit import CommitDeniedByActionGuard
 
     allowed, reason = _pathspec_shape_permitted(paths, include_orphans, git_root)

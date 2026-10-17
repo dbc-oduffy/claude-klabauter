@@ -326,6 +326,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),
     ),
+    "dispatch.supersede_slice": (
+        "coordinator_core/ops/dispatch_emit/slice_supersede.py",
+        ("_handler",),
+    ),
     "workflow.revise": (
         "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
         ("_handler",),
@@ -7068,7 +7072,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # _hash_object_stdin_bytes, git/run.py::run_git, commit_signing) plus the one detached launch of
     # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
     # on it. The launch is a single site; a second one is a budget increase.
-    "dispatch.terminal_commit": 6,
+    "dispatch.terminal_commit": 5,
     "dispatch.reap_abandoned_runs": 1,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
@@ -7114,7 +7118,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #   push.outstanding 5->6: _range_touches_lfs_paths -> _run_git -> run_git
     # Enrolled 2026-10-15: new ops, pinned at their measured reachable counts (a ratchet, not execution evidence).
     "plan.readiness_verdict": 1,
-    "review.prep": 3,
+    "review.prep": 1,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

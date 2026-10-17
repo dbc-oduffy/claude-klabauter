@@ -141,6 +141,7 @@ from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed  # noqa: E
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
+    RESUMED_RUN_ID_KEY,
     RUN_DIR_ROOT,
     SPINE_SUFFIX as _SPINE_SUFFIX,
     TERMINAL_RESUME_LEDGER_PARAM,
@@ -248,7 +249,7 @@ def _error(message: str, **extra: object) -> dict:
 
 def _landing_integrity_gate(
     worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
-    params: dict, run_id: Optional[str],
+    params: dict, run_id: Optional[str], plan: Optional[str] = None,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, and a
     blob dropping lines a foreign commit added since the run base). Returns ``{}``-like extras:
@@ -269,7 +270,7 @@ def _landing_integrity_gate(
     if base is None:
         extra["since_base_check"] = "no-base"
     else:
-        findings += li.since_base_findings(worktree_root, paths, base, run_id=run_id)
+        findings += li.since_base_findings(worktree_root, paths, base, run_id=run_id, plan=plan)
     if findings:
         extra["refused"] = findings[0].reason
         extra["integrity"] = [
@@ -720,12 +721,6 @@ def _source_rows_by_plan(
     if not plan_path or not chunk_ids:
         return {}
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-    from coordinator_core.ops.dispatch_emit.inventory_mint import (
-        InventoryMintError,
-        _bare_plan_row_id,
-        _resolve_spec_plan_path,
-        parse_chunk_table,
-    )
 
     marker_text = _read_rel(worktree_root, plan_path)
     if marker_text is None:
@@ -736,6 +731,13 @@ def _source_rows_by_plan(
     origin = read_fm_field_unquoted(split.fm_text, "derived_from") if split else None
     if origin != _MINTED_SPINE_ORIGIN:
         return {plan_path: set(chunk_ids)}
+
+    from coordinator_core.ops.dispatch_emit.inventory_mint import (
+        InventoryMintError,
+        _bare_plan_row_id,
+        _resolve_spec_plan_path,
+        parse_chunk_table,
+    )
 
     found = _inventory_record_rel(worktree_root, plan_path)
     if found is None:
@@ -2378,6 +2380,29 @@ def _review_since(
     return float(epoch) if isinstance(epoch, int) and not isinstance(epoch, bool) else None
 
 
+def _resumed_review_source(
+    worktree_root: Path, inline_review: object, run_id: Optional[str], session_id: Optional[str]
+) -> tuple:
+    """``(run_id, session_id)`` whose review writes this landing reads: the halted run named by
+    ``inline_review[RESUMED_RUN_ID_KEY]`` with its recorded emitter, when that id is safe and its
+    record dir exists; else the caller's own pair."""
+    from coordinator_core.ops._path_guard import safe_id
+
+    resumed = inline_review.get(RESUMED_RUN_ID_KEY) if isinstance(inline_review, dict) else None
+    if not (isinstance(resumed, str) and resumed and safe_id(resumed)):
+        return run_id, session_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        if not record_dir(worktree_root, resumed).is_dir():
+            return run_id, session_id
+    except ValueError:
+        return run_id, session_id
+    from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
+
+    return resumed, recorded_emitter(worktree_root, resumed) or session_id
+
+
 def _review_edit_verdict(
     worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
     session_id: Optional[str], run_id: Optional[str], committed: set,
@@ -2703,9 +2728,6 @@ def _entangled_chunks(
     already resolves. Returns ``{chunk id: sorted ids of the stranded chunks it
     needs}``; a chunk needing only another entangled chunk names that chain's root.
     """
-    from coordinator_core.authoring_leaks.import_closure import _needed_paths
-    from coordinator_core.pyimports import collect_imports
-
     by_id = {c.id: c for c in request.chunks}
     declared: dict = {}
     prefix_roots: list = []
@@ -2735,6 +2757,9 @@ def _entangled_chunks(
                     break
     if not blocked_files:
         return {}
+
+    from coordinator_core.authoring_leaks.import_closure import _needed_paths
+    from coordinator_core.pyimports import collect_imports
 
     files_of: dict = {}
     imports_of: dict = {}
@@ -3783,9 +3808,12 @@ def _terminal_commit_inner(
     if review_checked:
         from coordinator_core.ops.dispatch_emit import review_edits
 
+        read_run_id, read_session = _resumed_review_source(
+            worktree_root, inline_review, review_run_id, session_id
+        )
         try:
             review_writes = review_edits.review_writes(
-                worktree_root, session_id, _review_since(worktree_root, review_run_id, inline_review)
+                worktree_root, read_session, _review_since(worktree_root, read_run_id, inline_review)
             )
         except Exception:  # noqa: BLE001 -- an unreadable source is unanswerable, never "no edits"
             review_writes = None
@@ -4336,7 +4364,7 @@ def _terminal_commit_inner(
 
     integrity_extra = _landing_integrity_gate(
         worktree_root, all_paths, deleted_paths, record_abs, params,
-        _run_id_of(params, ask_run_dir, script_path_raw),
+        _run_id_of(params, ask_run_dir, script_path_raw), request.plan_path,
     )
     if integrity_extra.get("refused"):
         _remove(worktree_root, receipt_paths)

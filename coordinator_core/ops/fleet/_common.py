@@ -1019,23 +1019,10 @@ _CLAIM_SUBDIRS: tuple = ("handoff-claims", "memo-claims", "plan-claims", "row-cl
 from coordinator_core.claim_state import _sessions_dir, handoff_claim_dir  # noqa: E402,F401
 
 
-def plan_claim_dir(common_dir: Path, plan_path: Path) -> Path:
-    """Derive the plan-execution claim-lock dir for a given plan path.
-
-    <common_dir>/coordinator-sessions/plan-claims/<stem> — _CLAIM_SUBDIRS[2],
-    the SAME key session.reap._reap_orphaned_claims sweeps and
-    coordinator_core.session.claims.claim_plan/claim_artifact("plan", slug, ...)
-    writes.  Keyed on ``plan_path.stem`` (filename MINUS the ``.md`` suffix),
-    NOT the full filename — this is the one divergence from
-    ``handoff_claim_dir`` (which keys on the full ``handoff_path.name``):
-    plan claims drop the extension to match ``cs_claim_plan``'s slug contract
-    (execute-plan/SKILL.md: ``slug="$(basename "$ARGUMENTS" .md)"``) and its
-    Python port (``claims.claim_plan(slug, ...)``).  Single source of truth for
-    archive_plans.py's claim-liveness guard (T1/T3) — do NOT hand-roll this
-    path convention at a second call site (mirrors the handoff_claim_dir
-    code-reviewer F1 rationale above).
-    """
-    return _sessions_dir(common_dir) / _CLAIM_SUBDIRS[2] / plan_path.stem
+# `plan_claim_dir` is defined in `coordinator_core.session.claims` (a light leaf,
+# so `session.claimed_plan` reaches it without loading this module) and
+# re-exported here unchanged for existing importers.
+from coordinator_core.session.claims import plan_claim_dir  # noqa: E402,F401
 
 
 def handoff_archive_dest(worktree_root: Path, handoff_path: Path) -> Path:

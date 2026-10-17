@@ -89,12 +89,31 @@ def _estimate(worktree_root: Path, sizing_rel: Optional[str]) -> Optional[str]:
     return tshirt if tshirt in TSHIRTS else None
 
 
+def _count_session_dispatches(agents_file: Path):
+    """``(agent_dispatches, opus_dispatches)`` of a dispatched-agents ledger; ``(None, None)``
+    when it is absent or unreadable. Mirrors ``coordinator_complete_entry._count_session_dispatches``
+    (that module's import closure is heavy); test_receipt_and_request_import_set pins parity."""
+    if not agents_file.is_file():
+        return None, None
+    try:
+        text = agents_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    od = sum(
+        1 for line in lines
+        if "opus" in (line.split("\t", 1)[1] if "\t" in line else line).lower()
+    )
+    return text.count("\n"), od
+
+
 def _actual_loe(worktree_root: Path, session_id: Optional[str]) -> Optional[str]:
     """T-shirt from the session's dispatch ledger; ``None`` when it does not resolve."""
     if not session_id:
         return None
     from coordinator_core.loe_thresholds import compute_tshirt_nullable
-    from coordinator_core.ops.coordinator_complete_entry import _count_session_dispatches
     from coordinator_core.session import core as session_core
 
     base = session_core.sessions_dir(str(worktree_root))

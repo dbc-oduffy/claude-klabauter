@@ -41,6 +41,11 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 _DELIVERABLE_ID_PLACEHOLDER_PREFIX = "dlv-placeholder-replace-with"
 
 
+# Mirrors inventory_mint._LITERAL_PATHSPEC_PREFIX (that module's import closure is heavy);
+# test_receipt_and_request_import_set pins parity.
+_LITERAL_PATHSPEC_PREFIX = ":(literal)"
+
+
 def valid_deliverable_id(value: object) -> Optional[str]:
     """The stripped ``value`` when it is a ``dlv-``-prefixed string that is
     not the scaffolded placeholder, else ``None``."""
@@ -181,9 +186,7 @@ def _bare_path(path: str) -> str:
     ``ChunkCommit.paths`` keys the filesystem or a tree with them, where a
     pathspec prefix reads as a missing file. Any other pathspec magic names
     no single file and is refused."""
-    from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
-
-    bare = strip_literal_pathspec(path)
+    bare = path[len(_LITERAL_PATHSPEC_PREFIX):] if path.startswith(_LITERAL_PATHSPEC_PREFIX) else path
     if bare.startswith(":("):
         raise MalformedCommitRequestError(
             f"chunk path {path!r} carries pathspec magic other than `:(literal)`"

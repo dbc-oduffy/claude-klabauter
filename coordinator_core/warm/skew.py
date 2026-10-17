@@ -75,7 +75,10 @@ the primary signal -- no separate `engine.target` handling belongs here.
 
 from __future__ import annotations
 
-import hashlib
+try:
+    from _sha1 import sha1 as _sha1  # CPython's builtin SHA-1: no _hashlib/OpenSSL load
+except ImportError:  # pragma: no cover
+    from hashlib import sha1 as _sha1
 import json
 import os
 import subprocess
@@ -85,8 +88,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
-
-from coordinator_core import engine_version, lifecycle
 
 __all__ = [
     "ENGINE_SKEW",
@@ -208,6 +209,12 @@ def __getattr__(name: str):
         from coordinator_core.warm.client import ENGINE_SKEW
 
         return ENGINE_SKEW
+    if name in ("engine_version", "lifecycle"):
+        # Server-side axis-2 modules: kept reachable as `skew.<name>` (tests patch
+        # through it) but loaded only when the server state or a caller asks.
+        import importlib
+
+        return importlib.import_module("coordinator_core." + name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -331,7 +338,7 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
         raise UnstampedEngineRootError(
             _no_stamp_message(root), root=root, root_exists=root.is_dir()
         )
-    return hashlib.sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
+    return _sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
 
 
 def write_engine_stamp(repo_root: Path, identity: str) -> Path:
@@ -788,6 +795,8 @@ def _source_pkg_dir() -> Path:
     `Path(__file__).parent` (i.e. this running process's `coordinator_core`
     package dir), so the axis-2 stamp below walks the same directory
     rather than an arbitrary `repo_root`."""
+    from coordinator_core import lifecycle
+
     return Path(lifecycle.__file__).resolve().parent
 
 
@@ -833,7 +842,7 @@ def _source_stamp(pkg_dir: Path) -> str:
                 except OSError:
                     continue
     rows.sort()
-    return hashlib.sha1(repr(rows).encode("utf-8")).hexdigest()
+    return _sha1(repr(rows).encode("utf-8")).hexdigest()
 
 
 class ServerVersionState:
@@ -850,6 +859,8 @@ class ServerVersionState:
         *,
         clock: Callable[[], float] = time.monotonic,
     ):
+        from coordinator_core import engine_version, lifecycle
+
         self._root = Path(repo_root) if repo_root is not None else _default_engine_clone()
         self._clock = clock
         self.server_sha = engine_version.resolve_engine_sha()
@@ -875,6 +886,8 @@ class ServerVersionState:
         if not force and (now - self._last_refresh) < _REFRESH_INTERVAL_SECS:
             return
         self._last_refresh = now
+
+        from coordinator_core import lifecycle
 
         stamp = _source_stamp(_source_pkg_dir())
         if stamp == self._last_stamp:

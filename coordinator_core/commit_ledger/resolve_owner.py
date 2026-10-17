@@ -18,19 +18,14 @@ TWO-HOP resolution, in order:
      identity ladder -- two disagreeing copies of this resolution is a
      named break-class incident in this repo (KS-6).
 
-  2. BATON HOP. Given the resolved (EM-or-plain) session id, reuses
+  2. BATON HOP. Given the resolved (EM-or-plain) session id, applies
      ``coordinator_core.baton_assemble._resolve_held_handoff_for_session``'s
      THREE-outcome resolution (one held claim / zero held claims / multiple
      held claims, see that function's own docstring for the full four-leg
-     ordering key) rather than reimplementing it. That function resolves
-     against the CURRENT process's session identity (an env-var chain) and
-     takes no explicit-session-id parameter -- this module reuses it as-is
-     by scoping ``COORDINATOR_SESSION_ID`` (that chain's own highest-
-     precedence, explicit-override tier -- see
-     ``coordinator_core.session.core.SESSION_ENV_PRECEDENCE``) to the
-     resolved sid for the duration of the call, then restoring whatever was
-     there before. This is the sanctioned override tier, not a private
-     monkeypatch of internal state.
+     ordering key) through ``_primary_held_handoff``, a mirror that takes the
+     resolved sid explicitly. The original is not imported: ``baton_assemble``
+     is a heavy module the commit landing does not otherwise need. Parity is
+     pinned by ``test_resolve_owner_parity``.
 
 Returns the resolved ``handoff_id`` -- the store's own keying unit (C1) --
 NOT the ``state/handoffs/<basename>.md`` path
@@ -71,8 +66,6 @@ from typing import Optional, Tuple
 
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
-
-_SESSION_OVERRIDE_ENV = "COORDINATOR_SESSION_ID"
 
 
 def _resolve_target_session_id(committer_id: str, root: Path, sessions_dir: Optional[str]) -> str:
@@ -124,21 +117,69 @@ def resolve_owner_handoff_id(
 
     target_sid = _resolve_target_session_id(committer_id, root, sessions_dir)
 
-    from coordinator_core.baton_assemble import _resolve_held_handoff_for_session
-
-    prior = os.environ.get(_SESSION_OVERRIDE_ENV)
-    os.environ[_SESSION_OVERRIDE_ENV] = target_sid
-    try:
-        primary, _additional, degraded = _resolve_held_handoff_for_session(
-            Path(root), allow_standalone=True
-        )
-    finally:
-        if prior is None:
-            os.environ.pop(_SESSION_OVERRIDE_ENV, None)
-        else:
-            os.environ[_SESSION_OVERRIDE_ENV] = prior
-
+    primary, degraded = _primary_held_handoff(Path(root), target_sid)
     if primary is None:
         return None, False
 
     return _handoff_id_from_path(primary), degraded
+
+
+_SENTINEL = chr(0xFFFF)
+
+
+def _primary_held_handoff(root: Path, session_id: str) -> Tuple[Optional[str], bool]:
+    """Mirror of ``baton_assemble._resolve_held_handoff_for_session`` with
+    ``allow_standalone=True`` and an explicit ``session_id``, reduced to the
+    ``(primary, degraded)`` pair this module reads. Kept in step by
+    ``test_resolve_owner_parity``; ``baton_assemble`` is a multi-thousand-line
+    module whose import dominated the commit landing, so it is not imported.
+
+    The composite ordering key is ``(stage_rank, claimed_at_or_sentinel,
+    claim_mtime, basename)``; see the original's docstring for the legs.
+    """
+    from coordinator_core.session.claims import (
+        CLAIM_STAGE_APPLY,
+        claim_stamped,
+        list_claims_by_session,
+    )
+
+    matches = list_claims_by_session(session_id, cwd=str(root))
+    held = sorted(b for class_, b in matches if class_ == "handoff-claims")
+    if not held:
+        return None, False
+    if len(held) == 1:
+        return "state/handoffs/" + held[0], False
+
+    sessions_dir = session_core.sessions_dir(str(root))
+    ordering = []
+    for basename in held:
+        stage_rank = 2
+        claimed_at_key = _SENTINEL
+        mtime_key = float("inf")
+        if sessions_dir:
+            claim_dir = Path(sessions_dir) / "handoff-claims" / basename
+            try:
+                stage_raw = (claim_dir / "stage").read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError):
+                stage_raw = None
+            if stage_raw == CLAIM_STAGE_APPLY:
+                stage_rank = 0 if claim_stamped(claim_dir) else 1
+            claimed_at_file = claim_dir / "claimed_at"
+            try:
+                claimed_at = claimed_at_file.read_text(encoding="utf-8").strip() or None
+            except (OSError, UnicodeDecodeError):
+                claimed_at = None
+            if claimed_at:
+                claimed_at_key = claimed_at
+            try:
+                mtime_key = claimed_at_file.stat().st_mtime
+            except OSError:
+                try:
+                    mtime_key = claim_dir.stat().st_mtime
+                except OSError:
+                    mtime_key = float("inf")
+        ordering.append((stage_rank, claimed_at_key, mtime_key, basename))
+
+    ordering.sort()
+    degraded = any(ordering[i][:3] == ordering[i + 1][:3] for i in range(len(ordering) - 1))
+    return "state/handoffs/" + ordering[0][3], degraded

@@ -62,10 +62,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.content_root import read_content_root
-from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
+from coordinator_core.subagent_sandbox.plugin_root import (
+    resolve_plugin_root as _resolve_plugin_root_impl,
+)
 from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
 from coordinator_core.session.machinery_paths import plan_sidecars_dir as _plan_sidecars_dir
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
@@ -1054,47 +1056,9 @@ def resolve_plugin_root() -> Optional[str]:
     (empty contract-block assembly / "" role-append path), never raise.
     """
 
-    def _has_content(candidate: Path) -> bool:
-        return (candidate / "snippets").is_dir()
-
-    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if env_root:
-        candidate = Path(env_root)
-        if _has_content(candidate):
-            return str(candidate)
-
-    plugin_base = claude_config_dir() / "plugins" / "coordinator-claude"
-    for candidate in (plugin_base / "coordinator", plugin_base):
-        if _has_content(candidate):
-            return str(candidate)
-
-    # The harness's own install registry: a cloud or marketplace install records the plugin's
-    # real `installPath`, which need not sit under `plugins/coordinator-claude` at all.
-    try:
-        registry = json.loads(
-            (claude_config_dir() / "plugins" / "installed_plugins.json").read_text(encoding="utf-8")
-        )
-        entries = registry.get("plugins", {}) if isinstance(registry, dict) else {}
-    except (OSError, ValueError):
-        entries = {}
-    for key, installs in entries.items():
-        if not key.startswith("coordinator@") or not isinstance(installs, list):
-            continue
-        for install in installs:
-            install_path = install.get("installPath") if isinstance(install, dict) else None
-            if not install_path:
-                continue
-            for candidate in (Path(install_path) / "coordinator", Path(install_path)):
-                if _has_content(candidate):
-                    return str(candidate)
-
-    content_root = read_content_root().strip()
-    if content_root:
-        candidate = content_root_for(content_root)
-        if candidate is not None and _has_content(candidate):
-            return str(candidate)
-
-    return None
+    return _resolve_plugin_root_impl(
+        config_dir=claude_config_dir, content_root_reader=read_content_root
+    )
 
 
 def _extract_contract_block_body(

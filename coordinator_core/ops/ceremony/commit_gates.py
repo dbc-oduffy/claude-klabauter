@@ -85,11 +85,15 @@ from coordinator_core.git.git_state import (
     read_index,
     read_tree_spine,
 )
-from coordinator_core.ops.ceremony.git_native import (
-    _git,
-    diff_cached_name_status,
-)
 from coordinator_core.ops.handoff_carry_gate import CarryGateError, evaluate_gate, read_carried_items
+
+def __getattr__(name: str):
+    if name in ("_git", "diff_cached_name_status"):
+        from coordinator_core.ops.ceremony import git_native
+
+        return getattr(git_native, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 #: U+2014 EM DASH, surrounded by single spaces -- matches
 #: `commit_message.EM_DASH_SEPARATOR`; duplicated here (not imported) since
@@ -361,6 +365,8 @@ def deletion_block_gate(
                       empty `gate_paths` must NOT short-circuit past the
                       Assertion-3 inverse check.
     """
+    from coordinator_core.ops.ceremony.git_native import diff_cached_name_status
+
     has_block = has_step267_block(msg_text)
     # Index/HEAD keys are forward-slash; normalize once here, as commit_paths does.
     gate_paths = [p.replace("\\", "/") for p in gate_paths]
@@ -1275,6 +1281,8 @@ def main(argv: Sequence[str]) -> int:
         2 -- usage error (missing arg, msg_file unreadable)
         3 -- environment error (not in a git repo)
     """
+    from coordinator_core.ops.ceremony.git_native import _git
+
     parsed = _parse_cli_args(argv)
     if parsed is None:
         print(

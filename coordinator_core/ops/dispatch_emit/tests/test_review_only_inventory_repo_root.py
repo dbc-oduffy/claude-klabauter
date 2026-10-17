@@ -1,6 +1,6 @@
-"""``--review-only`` honours ``--repo-root``: a review-only emission expands no plan spec, so its
-inventory record may live anywhere under the repo's ``state/`` (a ``state/warp/<run>/`` record
-included); every other emission still needs ``state/mise-inventory/``."""
+"""An inventory record must live in the repo's ``state/mise-inventory/``. A warp run's JSON
+manifest is no inventory record (``mint_spine`` finds no chunk table in it), so it is refused
+with the route that reviews a run's rows: ``--plan ... --review-only --rows ... --run-base``."""
 
 from __future__ import annotations
 
@@ -16,23 +16,15 @@ def _record(tmp_path, *parts):
     return str(f)
 
 
-def test_a_warp_record_is_accepted_for_review_only_with_a_repo_root(tmp_path):
+def test_a_warp_run_manifest_is_refused_naming_the_plan_route(tmp_path):
     rec = _record(tmp_path, "state", "warp", "run-1", "manifest.json")
-    _refuse_inventory_outside_repo(rec, tmp_path, review_only=True)
-
-
-def test_the_same_record_still_refuses_for_a_non_review_emission(tmp_path):
-    rec = _record(tmp_path, "state", "warp", "run-1", "manifest.json")
-    with pytest.raises(InventoryOutsideRepoError):
+    with pytest.raises(InventoryOutsideRepoError, match="--plan <plan.md> --review-only --rows"):
         _refuse_inventory_outside_repo(rec, tmp_path)
 
 
-def test_review_only_outside_the_repos_state_still_refuses(tmp_path):
-    elsewhere = tmp_path / "other"
-    elsewhere.mkdir()
-    rec = _record(elsewhere, "stuff", "inv.md")
-    with pytest.raises(InventoryOutsideRepoError):
-        _refuse_inventory_outside_repo(rec, tmp_path / "repo", review_only=True)
+def test_a_record_in_mise_inventory_is_accepted(tmp_path):
+    rec = _record(tmp_path, "state", "mise-inventory", "inv.md")
+    _refuse_inventory_outside_repo(rec, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -40,11 +32,11 @@ def test_review_only_outside_the_repos_state_still_refuses(tmp_path):
     [
         ("state", "warp", "run-1", "notes.json"),
         ("state", "warp", "manifest.json"),
-        ("state", "warp", "run-1", "deeper", "manifest.json"),
         ("state", "other", "run-1", "manifest.json"),
+        ("stuff", "inv.md"),
     ],
 )
-def test_review_only_accepts_only_a_warp_runs_manifest_under_state(tmp_path, parts):
+def test_a_record_outside_mise_inventory_is_refused(tmp_path, parts):
     rec = _record(tmp_path, *parts)
-    with pytest.raises(InventoryOutsideRepoError):
-        _refuse_inventory_outside_repo(rec, tmp_path, review_only=True)
+    with pytest.raises(InventoryOutsideRepoError, match="is not under"):
+        _refuse_inventory_outside_repo(rec, tmp_path)

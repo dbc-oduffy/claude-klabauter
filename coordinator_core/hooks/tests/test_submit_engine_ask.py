@@ -970,7 +970,100 @@ def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path)
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
     _status(root, "r1", "halted")
     out, _ = _submit_slice(root, "r2")
-    assert "fresh {ask}" in _hso(out)["permissionDecisionReason"] and "r1" in _hso(out)["permissionDecisionReason"]
+    reason = _hso(out)["permissionDecisionReason"]
+    assert 'fresh {ask, supersedes: "r2"}' in reason and "r1" in reason
+
+
+def _halt_record(root, run_id, plan_rel, plan_status):
+    plan = root / plan_rel
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(f"---\nstatus: {plan_status}\n---\n# p\n", encoding="utf-8")
+    record = root / "state" / "warp" / run_id / "halted.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"plan": plan_rel}), encoding="utf-8")
+
+
+def test_a_halted_predecessor_whose_plan_is_implemented_releases_the_slice(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "halted")
+    _halt_record(root, "r1", "docs/plans/p.md", "implemented")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert emit.calls[0][0]["reserved_run_id"] == "r2"
+
+
+def test_a_halted_predecessor_whose_plan_is_not_implemented_still_holds_the_slice(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "halted")
+    _halt_record(root, "r1", "docs/plans/p.md", "reviewed")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "deny" and emit.calls == []
+
+
+def test_a_superseded_slice_is_denied_naming_its_superseding_run(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "landed")
+    marker = root / contract.superseded_rel("r2")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"superseded_by": "r9"}), encoding="utf-8")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert "r2 is superseded by r9" in _hso(out)["permissionDecisionReason"] and emit.calls == []
+
+
+def test_supersedes_on_a_held_slice_writes_the_marker_with_the_emitted_run_id(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "halted")
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "redo b", "supersedes": "r2"}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert contract.read_superseded_by(root, "r2") == "ask-20261013T000000-abcdef"
+    assert "Marked r2 superseded by ask-20261013T000000-abcdef." in _hso(out)["additionalContext"]
+
+
+def test_supersedes_on_a_sizing_submission_marks_too(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/new.yaml", "supersedes": "r2"}), emit=_Emit())
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert contract.read_superseded_by(root, "r2") == "ask-20261013T000000-abcdef"
+
+
+@pytest.mark.parametrize("held_status", ["landed", "running"])
+def test_supersedes_naming_a_landed_or_running_run_is_denied_before_emit(tmp_path, held_status):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r2", held_status)
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "redo b", "supersedes": "r2"}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "deny" and emit.calls == []
+    assert contract.read_superseded_by(root, "r2") is None
+
+
+def test_supersedes_over_an_existing_mark_is_denied_before_emit(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    marker = root / contract.superseded_rel("r2")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"superseded_by": "r9"}), encoding="utf-8")
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "redo b", "supersedes": "r2"}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "deny" and emit.calls == []
+    assert "r9" in _hso(out)["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"asks": [{"ask": "a"}, {"ask": "b"}], "supersedes": "r2"},
+        {"asks": [{"ask": "a"}], "supersedes": "r2"},
+        {"ask": "x", "supersedes": 7},
+        {"ask": "x", "supersedes": " "},
+    ],
+)
+def test_supersedes_is_refused_on_asks_and_on_a_non_string(tmp_path, args):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, args), emit=emit, fanout=_Fanout([]))
+    assert _hso(out)["permissionDecision"] == "deny" and emit.calls == []
+    assert "supersedes" in _hso(out)["permissionDecisionReason"]
 
 
 def test_a_queued_slice_is_denied_while_the_parent_is_at_budget(tmp_path, monkeypatch):

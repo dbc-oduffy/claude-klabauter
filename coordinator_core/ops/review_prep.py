@@ -61,9 +61,6 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.review_freeze_diff import freeze_diff
-from coordinator_core.ops.review_partition_slices import partition_slices
-from coordinator_core.ops.review_stamp import product_files as diff_product_files
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -72,6 +69,31 @@ from coordinator_core.session.touch_record import compute_content_hash
 
 _SHA_RE = re.compile(r"^[0-9a-f]{4,64}$")
 _GIT_TIMEOUT_SECS = 5.0
+
+_LAZY_HEAVY = {
+    "freeze_diff": ("coordinator_core.ops.review_freeze_diff", "freeze_diff"),
+    "partition_slices": ("coordinator_core.ops.review_partition_slices", "partition_slices"),
+    "diff_product_files": ("coordinator_core.ops.review_stamp", "product_files"),
+}
+
+
+def _heavy(name: str):
+    """The freeze/partition/product-files callable, imported on first use and cached as a module
+    global. A module global already set (a test patch) wins; `import review_prep` alone, as
+    `stored_reply_for_run` callers do, never loads their closure."""
+    got = globals().get(name)
+    if got is None:
+        import importlib
+
+        module, attr = _LAZY_HEAVY[name]
+        got = globals()[name] = getattr(importlib.import_module(module), attr)
+    return got
+
+
+def __getattr__(name: str):
+    if name in _LAZY_HEAVY:
+        return _heavy(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _fail(message: str) -> dict:
@@ -386,23 +408,23 @@ def _compute(
     rev_range = f"{base}..{head or 'HEAD'}"
     try:
         if head:
-            whole = freeze_diff(repo_root, rev_range, slice_prefix, paths)
+            whole = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
         else:
-            whole = freeze_diff(repo_root, base, slice_prefix, paths, worktree=True)
+            whole = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
     except ValueError as exc:
         whole = {"error": str(exc)}
     if whole.get("error"):
         out["error"] = f"freeze of {slice_prefix} failed: {whole['error']}"
         return out
     out["whole_diff_path"] = whole["diff_path"]
-    product = diff_product_files(Path(whole["diff_path"]))
+    product = _heavy("diff_product_files")(Path(whole["diff_path"]))
     out["product_files"] = len(product)
     # Trap: hashed after the freeze, so a write landing between the two is recorded as reviewed
     # though the frozen diff lacks it; the moved-bytes check then serves that stale freeze.
     hashes = {rel: compute_content_hash(repo_root / rel) for rel in product}
     out["reviewed_sha256"] = {rel: h for rel, h in hashes.items() if h is not None}
 
-    part = partition_slices(repo_root, base, paths, slice_prefix, head=head or None)
+    part = _heavy("partition_slices")(repo_root, base, paths, slice_prefix, head=head or None)
     if part["error"]:
         out["error"] = part["error"]
         return out

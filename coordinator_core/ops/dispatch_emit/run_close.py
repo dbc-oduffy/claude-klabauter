@@ -448,6 +448,7 @@ def sibling_release(
     landed_sha: Optional[str],
     budget: Optional[int] = None,
     rows_committed: bool = False,
+    closed_by: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Close *run_id*'s sibling status and name what the close frees.
 
@@ -455,9 +456,12 @@ def sibling_release(
     that file (``landed`` with *landed_sha*, or ``halted`` when it is ``None``), reads the write-once
     parent record and every sibling's status file, and returns ``{parent_id, released: [fire call],
     blocked: [{run_id, slice_sizing}]}``. A halted run frees its budget slot but releases no ``after``
-    successor, unless it halted with *rows_committed* (every row's work landed): that mark is stored in
-    its status file and such a predecessor releases its successors as a landed one does. ``blocked`` names
-    each waiting run behind a halted-with-open-rows or blocked predecessor. A ``landed``
+    successor, unless it halted with *rows_committed* (every row's work landed) or *closed_by* (the plan
+    or other evidence that closed it outside the engine): either mark is stored in its status file, survives
+    a later halted rewrite, and such a predecessor releases its successors as a landed one does. ``blocked``
+    names each waiting run behind a halted-with-open-rows or blocked predecessor. A waiting run carrying a
+    supersession marker is never released and never blocked; it is reported under ``superseded:
+    [{run_id, superseded_by}]``, a key present only when non-empty. A ``landed``
     status is never rewritten as halted: that call returns ``None`` and writes nothing.
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
@@ -478,6 +482,12 @@ def sibling_release(
         prior.get("status") == contract.STATUS_HALTED and prior.get(ROWS_COMMITTED_KEY) is True
     ):
         entry[ROWS_COMMITTED_KEY] = True
+    if not landed_sha:
+        kept = closed_by or (
+            prior.get(contract.CLOSED_BY_KEY) if prior.get("status") == contract.STATUS_HALTED else None
+        )
+        if isinstance(kept, str) and kept:
+            entry[contract.CLOSED_BY_KEY] = kept
     if isinstance(prior.get("parent_id"), str):
         entry["parent_id"] = prior["parent_id"]
     claimed_write.replace_text(own, json.dumps(entry, sort_keys=True) + "\n")
@@ -496,25 +506,63 @@ def sibling_release(
         data = _read_json(base / contract.status_rel(run.run_id))
         status = data.get("status") if data else None
         statuses[run.run_id] = status if status in contract.RUN_STATUSES else run.status
-        if status == contract.STATUS_HALTED and data.get(ROWS_COMMITTED_KEY) is True:
+        if status == contract.STATUS_HALTED and (
+            data.get(ROWS_COMMITTED_KEY) is True or data.get(contract.CLOSED_BY_KEY)
+        ):
             complete.add(run.run_id)
     budget = contract.concurrent_run_budget() if budget is None else budget
     as_landed = {rid: (contract.STATUS_LANDED if rid in complete else st) for rid, st in statuses.items()}
-    freed = contract.release(parent, as_landed, budget)
+    waiting = (contract.STATUS_AFTER, contract.STATUS_QUEUED)
+    superseded: list[dict[str, str]] = []
+    for run in parent.runs:
+        if statuses[run.run_id] in waiting:
+            by = contract.read_superseded_by(base, run.run_id)
+            if by is not None:
+                superseded.append({"run_id": run.run_id, "superseded_by": by})
+    skip = frozenset(item["run_id"] for item in superseded)
+    freed = contract.release(parent, as_landed, budget, skip)
     by_id = {r.run_id: r for r in parent.runs}
     dead = {rid for rid, st in statuses.items() if st == contract.STATUS_HALTED and rid not in complete}
     blocked: list[dict[str, str]] = []
     for run in parent.runs:
-        if statuses[run.run_id] not in (contract.STATUS_AFTER, contract.STATUS_QUEUED):
+        if statuses[run.run_id] not in waiting or run.run_id in skip:
             continue
         if any(p in dead for p in run.after):
             dead.add(run.run_id)
             blocked.append({"run_id": run.run_id, "slice_sizing": run.slice_sizing})
-    return {
+    reply: dict[str, Any] = {
         "parent_id": parent.parent_id,
         "released": [fire_command(by_id[rid].slice_sizing) for rid in freed],
         "blocked": blocked,
     }
+    if superseded:
+        reply["superseded"] = superseded
+    return reply
+
+
+def close_halted_runs_for_plan(root: Path, plan_rel: str, sizing_rel: str) -> dict[str, Any]:
+    """Close the halted run(s) naming *sizing_rel* under *plan_rel* and gather what each close frees.
+
+    Returns ``{closed: [run_id], released: [fire call], superseded: [{run_id, superseded_by}]}``. The
+    status file is the one a run's own close writes; a halted run with none (never bound) is skipped.
+    No subprocess, no git.
+    """
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    base = Path(root)
+    out: dict[str, Any] = {"closed": [], "released": [], "superseded": []}
+    found = (
+        halted_run.halted_ask_run_for(base, sizing_rel),
+        halted_run.halted_run_for(base, sizing_rel),
+    )
+    for rid in dict.fromkeys(r for r in found if r):
+        reply = sibling_release(base, rid, None, closed_by=plan_rel)
+        if reply is None:
+            continue
+        out["closed"].append(rid)
+        out["released"].extend(x for x in reply["released"] if x not in out["released"])
+        out["superseded"].extend(reply.get("superseded", ()))
+    return out
 
 
 def _own_parent_id(base: Path, run_id: str, contract: Any) -> Optional[str]:

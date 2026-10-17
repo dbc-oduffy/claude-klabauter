@@ -34,7 +34,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
+    RESUMED_RUN_ID_KEY,
+    RUN_OUTCOME_FILE,
     GateVerdict,
+    read_run_outcome,
     rulable_ids,
 )
 from coordinator_core.ops.sizing_acceptance import (
@@ -48,6 +51,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     ARM_ROADMAP,
     STATEMENT_ABSENT_PREFIX,
+    COMMIT_HALT_KIND,
     SizingFireRefused,
     collect_fire_refusals,
     effective_route,
@@ -255,7 +259,10 @@ def _arm_verdict(
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
-    resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root) if resume else None
+    try:
+        resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root) if resume else None
+    except SizingFireRefused as exc:
+        return _halt(HALT_REFUSAL, "; ".join(exc.fields))
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
 
@@ -312,7 +319,7 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         if isinstance(entry, dict) and isinstance(entry.get("text"), str)
     }
     blocking = [*(b for b in halt.blocking if b not in out), *(r for r in rulable if r not in halt.blocking)]
-    return {
+    verdict = {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
         "blocking": blocking,
@@ -322,6 +329,14 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
         RESUME_LEDGER_NOTES_FIELD: read_notes(run_dir(Path(repo_root), halt.run_id)),
     }
+    if halt.halted == COMMIT_HALT_KIND:
+        outcome = read_run_outcome(Path(repo_root), halt.run_id)
+        if outcome is None:
+            raise SizingFireRefused(
+                [f"commit halt of run {halt.run_id} has no readable {RUN_OUTCOME_FILE}; its review verdict is unrecorded"]
+            )
+        verdict["inline_review"] = {**outcome["inline_review"], RESUMED_RUN_ID_KEY: halt.run_id}
+    return verdict
 
 
 def _spine_plan(repo_root: Path, sizing: dict, sizing_rel: str) -> tuple[Optional[str], Optional[str]]:

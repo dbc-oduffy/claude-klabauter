@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
+import coordinator_core.execute_plan_assemble.goal_gate as goal_gate
 from coordinator_core.execute_plan_assemble.falsifier_shape import (
     _DISPOSITION_REF_QUALIFIED_RE,
     _DISPOSITION_REF_SHA_RE,
@@ -43,7 +44,7 @@ def two_repos(tmp_path, monkeypatch):
     here_sha = _repo(here, "a.txt")
     sibling_sha = _repo(sibling, "b.txt")
     monkeypatch.setattr(
-        coas, "registry_get", lambda key: str(sibling) if key == "repos.klabauter" else None
+        goal_gate, "registry_get", lambda key: str(sibling) if key == "repos.klabauter" else None
     )
     return here, sibling, here_sha, sibling_sha
 
@@ -76,7 +77,7 @@ def test_unregistered_or_missing_clone_is_unresolvable(two_repos, tmp_path, monk
         coas._verify_disposition_ref(here, f"nokey:{sibling_sha}")[1]
         == coas.DISPOSITION_REF_UNRESOLVABLE
     )
-    monkeypatch.setattr(coas, "registry_get", lambda key: str(tmp_path / "gone"))
+    monkeypatch.setattr(goal_gate, "registry_get", lambda key: str(tmp_path / "gone"))
     assert (
         coas._verify_disposition_ref(here, f"klabauter:{sibling_sha}")[1]
         == coas.DISPOSITION_REF_UNRESOLVABLE

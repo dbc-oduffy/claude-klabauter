@@ -649,6 +649,63 @@ async def _predicate_refusal(
     which is the freshness contract the fixpoint loop exists to honour, not
     a snapshot from the corpus read at collection time.
     """
+    early = _legs_c_a_refusal(candidate_path, fm, repo_root, kind, caller_session_id)
+    if early is not None:
+        return early
+
+    if kind.predicate_legs["b"].applies:
+        children_result = await _leg_b_children_result(
+            candidate_path, repo_root, exclude_children_check, kind, corpus_metas
+        )
+        refusal_b = _leg_b_refusal(children_result)
+        if refusal_b is not None:
+            return refusal_b
+
+    return _leg_d_refusal(fm, kind)
+
+
+def _predicate_refusal_sync(
+    candidate_path: Path,
+    fm: dict,
+    repo_root: Path,
+    exclude_children_check: Optional[List[str]] = None,
+    kind: _KindDescriptor = _HANDOFF_KIND,
+    corpus_metas: Optional[Dict[str, dict]] = None,
+    caller_session_id: str = "",
+) -> Optional[str]:
+    """`_predicate_refusal` for a caller with no event loop. Same legs, same order.
+
+    Only leg (b)'s live-successor check is async (`handoff_children`), so only a
+    candidate that reaches leg (b) pays for an event loop; a candidate refused by
+    leg (c) or (a), or a kind with no leg (b), never loads asyncio.
+    """
+    early = _legs_c_a_refusal(candidate_path, fm, repo_root, kind, caller_session_id)
+    if early is not None:
+        return early
+
+    if kind.predicate_legs["b"].applies:
+        import asyncio
+
+        children_result = asyncio.run(
+            _leg_b_children_result(
+                candidate_path, repo_root, exclude_children_check, kind, corpus_metas
+            )
+        )
+        refusal_b = _leg_b_refusal(children_result)
+        if refusal_b is not None:
+            return refusal_b
+
+    return _leg_d_refusal(fm, kind)
+
+
+def _legs_c_a_refusal(
+    candidate_path: Path,
+    fm: dict,
+    repo_root: Path,
+    kind: _KindDescriptor,
+    caller_session_id: str,
+) -> Optional[str]:
+    """Legs (c) then (a) of the per-target predicate; None when both clear."""
     # Leg (c) — own work-state consistent with live-and-advanceable. Review:
     # staff-eng — Finding 1: a POSITIVE check against `kind.live_values` for
     # every kind, uniformly — the prior `kind is _HANDOFF_KIND` branch made
@@ -695,59 +752,73 @@ async def _predicate_refusal(
             live_sids = resolve_live_session_ids()
             if claimant in live_sids:
                 return f"claimed by live session {claimant!r} — refusing to advance out from under it"
+    return None
 
-    # Leg (b) — has a live successor/continuation. EXEMPT for a kind whose
-    # descriptor names no successor-edge vocabulary (sizing) — short-circuits
-    # to pass, per the recorded `reason`, never a silent omission.
-    leg_b = kind.predicate_legs["b"]
-    if leg_b.applies:
-        # Function-local import: composes the existing resolver rather than re-deriving
-        # reverse-membership; mirrors ops/handoff_children.py's own function-local-import
-        # discipline note for a sibling case (avoid pulling its transitive import set into
-        # every eager-registration pass just for a defensive edge that today is acyclic).
-        from coordinator_core.ops.handoff_children import (
-            CONCLUSION_EDGE_KINDS,
-            _handoff_has_live_children,
-            has_live_children_from_metas,
+
+async def _leg_b_children_result(
+    candidate_path: Path,
+    repo_root: Path,
+    exclude_children_check: Optional[List[str]],
+    kind: _KindDescriptor,
+    corpus_metas: Optional[Dict[str, dict]],
+) -> dict:
+    """Leg (b) — has a live successor/continuation. EXEMPT for a kind whose
+    descriptor names no successor-edge vocabulary (sizing) — the caller skips
+    this when `kind.predicate_legs["b"].applies` is false."""
+    # Function-local import: composes the existing resolver rather than re-deriving
+    # reverse-membership; mirrors ops/handoff_children.py's own function-local-import
+    # discipline note for a sibling case (avoid pulling its transitive import set into
+    # every eager-registration pass just for a defensive edge that today is acyclic).
+    from coordinator_core.ops.handoff_children import (
+        CONCLUSION_EDGE_KINDS,
+        _handoff_has_live_children,
+        has_live_children_from_metas,
+    )
+
+    # This leg is conclusion-shaped, not archival-shaped: the write it gates is
+    # `deployment_state -> shipped` with `status` untouched and NO file move
+    # (`build_ship_mutate`'s "status untouched" contract, above). Nothing is
+    # archived here, so no origin pointer can be stranded — see
+    # dag.CONTINUATION_EDGE_KINDS for the general archival-vs-conclusion
+    # rationale (example-cockpit-repo-em, 2026-08-05, cross-repo/inbox/2026-08-05-
+    # example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
+    # Narrowed here explicitly rather than taking the op's archival-shaped
+    # default (`_DEFAULT_EDGE_KINDS`).
+    if corpus_metas is None:
+        children_params: Dict[str, Any] = {
+            "candidate": str(candidate_path),
+            "edge_kinds": CONCLUSION_EDGE_KINDS,
+        }
+        if exclude_children_check:
+            children_params["exclude"] = list(exclude_children_check)
+        return await _handoff_has_live_children(children_params, repo_root)
+    return await has_live_children_from_metas(
+        str(candidate_path),
+        repo_root,
+        edge_kinds=CONCLUSION_EDGE_KINDS,
+        exclude=list(exclude_children_check) if exclude_children_check else None,
+        metas=corpus_metas,
+    )
+
+
+def _leg_b_refusal(children_result: dict) -> Optional[str]:
+    """Refusal reason for a leg (b) result, or None when no live successor exists."""
+    children_exit = children_result.get("exit_code")
+    if children_exit == 0:
+        children = children_result.get("children") or []
+        return f"has a live successor/continuation (referenced by: {children})"
+    if children_exit != 1:
+        # 2 (indeterminate) or any other unexpected value — fail-closed, never
+        # treat "cannot tell" as a green light.
+        return (
+            "live-successor check indeterminate: "
+            f"{children_result.get('error', 'unknown error')} — refusing (fail-closed)"
         )
+    return None
 
-        # This leg is conclusion-shaped, not archival-shaped: the write it gates is
-        # `deployment_state -> shipped` with `status` untouched and NO file move
-        # (`build_ship_mutate`'s "status untouched" contract, above). Nothing is
-        # archived here, so no origin pointer can be stranded — see
-        # dag.CONTINUATION_EDGE_KINDS for the general archival-vs-conclusion
-        # rationale (example-cockpit-repo-em, 2026-08-05, cross-repo/inbox/2026-08-05-
-        # example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
-        # Narrowed here explicitly rather than taking the op's archival-shaped
-        # default (`_DEFAULT_EDGE_KINDS`).
-        if corpus_metas is None:
-            children_params: Dict[str, Any] = {
-                "candidate": str(candidate_path),
-                "edge_kinds": CONCLUSION_EDGE_KINDS,
-            }
-            if exclude_children_check:
-                children_params["exclude"] = list(exclude_children_check)
-            children_result = await _handoff_has_live_children(children_params, repo_root)
-        else:
-            children_result = await has_live_children_from_metas(
-                str(candidate_path),
-                repo_root,
-                edge_kinds=CONCLUSION_EDGE_KINDS,
-                exclude=list(exclude_children_check) if exclude_children_check else None,
-                metas=corpus_metas,
-            )
-        children_exit = children_result.get("exit_code")
-        if children_exit == 0:
-            children = children_result.get("children") or []
-            return f"has a live successor/continuation (referenced by: {children})"
-        if children_exit != 1:
-            # 2 (indeterminate) or any other unexpected value — fail-closed, never
-            # treat "cannot tell" as a green light.
-            return (
-                "live-successor check indeterminate: "
-                f"{children_result.get('error', 'unknown error')} — refusing (fail-closed)"
-            )
 
+def _leg_d_refusal(fm: dict, kind: _KindDescriptor) -> Optional[str]:
+    """Leg (d) of the per-target predicate; None when it clears."""
     # Leg (d) — kind policy (AC1/AC2/AC3, this chunk): a `kind: spinoff`
     # candidate is never advanced through this join, even when its
     # `deliverable_id` exact-matches the query. A spinoff is not the same
@@ -1142,8 +1213,13 @@ def _commit_mutated_paths(
 # The lazy import is why removing this body left the module importable: it would
 # have failed only when a plan actually reached a terminal state. Re-adding
 # `@register_op` puts a deleted op back over the bar.
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "deliverable.cascade_terminal" handler — the shared cascade entrypoint.
+def cascade_terminal_sync(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """The shared cascade entrypoint, synchronous; `_handler` delegates here.
+
+    Runs with no event loop of its own, so an in-process caller with none
+    (`plan_status_transition._run_cascade`) never loads asyncio on a cascade that
+    finds no candidate. Leg (b), the only async step, opens a loop per candidate that
+    reaches it.
 
     Precondition on `repo_root`: this MUST be the git COMMON dir (the directory
     ending in `.git`), never the worktree root — `main_worktree_root(repo_root)`
@@ -1233,8 +1309,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     predicate refusal — folding it into `refused` made the two indistinguishable to a
     caller reading AC6e's provenance/explainability contract).
     """
-    import asyncio  # deferred: see _advance_one call site below for why it's needed
-
     deliverable_id: str = (params.get("deliverable_id") or "").strip()
     source_kind: str = (params.get("source_kind") or "").strip()
     source_path: str = (params.get("source_path") or "").strip()
@@ -1407,7 +1481,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             except Exception:  # noqa: BLE001 — fall back to the snapshot read at collection time
                 fm = candidate["fm"]
 
-            refusal = await _predicate_refusal(
+            refusal = _predicate_refusal_sync(
                 candidate_path,
                 fm,
                 repo_root,
@@ -1421,23 +1495,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 still_pending.append(candidate)
                 continue
 
-            # asyncio.to_thread: _advance_one composes archive_stamp.stamp_shipped_in,
-            # which itself does its own asyncio.run(...) internally (see that module's
-            # existing convention) — calling it directly from inside this coroutine's
-            # already-running event loop would raise RuntimeError. Off-loading to a
-            # thread also keeps the event loop live during the blocking git-log/file-lock
-            # work, per DR-212 D3.
             if target_kind is _SIZING_KIND:
                 # C3's per-kind write side -- never routed through _advance_one
                 # (see module docstring / _advance_one_sizing's own docstring
                 # for why: it composes ship-commit resolution that has no
                 # sizing-schema analogue and would refuse every sizing).
-                did_advance, write_refusal = await asyncio.to_thread(
-                    _advance_one_sizing, candidate_path, sizing_plan_fk, repo_root
+                did_advance, write_refusal = _advance_one_sizing(
+                    candidate_path, sizing_plan_fk, repo_root
                 )
             else:
-                did_advance, write_refusal = await asyncio.to_thread(
-                    _advance_one, candidate_path, deliverable_id, at, repo_root, source_path,
+                did_advance, write_refusal = _advance_one(
+                    candidate_path, deliverable_id, at, repo_root, source_path,
                     source_kind, fallback_sha,
                 )
             if did_advance:
@@ -1468,8 +1536,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     # resolution only ever runs for a candidate already decided.
                     # Handoff-kind only: a sizing-object has no baton-row body to
                     # scan, and AC6g's join is defined over roadmap-baton handoffs.
-                    baton_rows = await asyncio.to_thread(
-                        resolve_baton_rows, candidate_path, deliverable_id, at, repo_root
+                    baton_rows = resolve_baton_rows(
+                        candidate_path, deliverable_id, at, repo_root
                     )
                     entry["baton_rows_advanced"] = baton_rows["advanced"]
                     entry["baton_rows_unresolved"] = baton_rows["unresolved"]
@@ -1521,8 +1589,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     commit_error: Optional[str] = None
     commit_notice: Optional[str] = None
     if mutated_paths:
-        commit_error, commit_notice = await asyncio.to_thread(
-            _commit_mutated_paths, mutated_paths, worktree_root, deliverable_id
+        commit_error, commit_notice = _commit_mutated_paths(
+            mutated_paths, worktree_root, deliverable_id
         )
 
     result = {
@@ -1559,3 +1627,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"deliverable_id={deliverable_id!r} but every one was refused — see 'refused'"
             )
     return result
+
+
+async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """Awaitable form of `cascade_terminal_sync` (see its docstring for params and result).
+
+    Off-loaded to a thread: the sync core runs blocking git and file-lock work, and
+    opens its own event loop for leg (b), which cannot nest inside a running one.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(cascade_terminal_sync, params, repo_root)

@@ -62,10 +62,6 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional
 
-from coordinator_core.subagent_sandbox.provision_report import (
-    resolve_plugin_root as _resolve_plugin_root_ambient,
-)
-
 __all__ = ["CallerContext", "resolve_caller_context", "merge_env_axis"]
 
 
@@ -178,6 +174,12 @@ def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> Calle
             pid = candidate
 
     if plugin_root is None:
+        # Deferred: provision_report's module closure (session.scope, claim_index, ...)
+        # is paid only by a caller whose payload carries no plugin_root.
+        from coordinator_core.subagent_sandbox.provision_report import (
+            resolve_plugin_root as _resolve_plugin_root_ambient,
+        )
+
         plugin_root = _resolve_plugin_root_ambient()
 
     if cwd is None:

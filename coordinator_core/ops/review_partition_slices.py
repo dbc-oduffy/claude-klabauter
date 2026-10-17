@@ -30,8 +30,7 @@ from coordinator_core.ops.review_brightline_gate import (
     worktree_measure,
 )
 from coordinator_core.ops.review_freeze_diff import freeze_diff
-
-MAX_SLICES = 6
+from coordinator_core.ops.review_slice_limits import MAX_SLICES
 
 
 def _group_key(path: str) -> str:

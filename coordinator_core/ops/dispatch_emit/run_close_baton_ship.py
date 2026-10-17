@@ -8,8 +8,8 @@ spawn, so the baton files can ride the coded-stamp commit's ``also_commit``.
 Negative-spec:
   - ``sha`` is the landed work commit, never the stamp commit (a file cannot name the commit
     that contains it).
-  - Calls the ``handoff.stamp``, ``handoff.transition`` and ``handoff.append_session_ledger``
-    handlers directly, never their CLIs.
+  - Calls the verbs' sync text forms (``stamp_apply``, ``ship_apply``, ``append_apply``)
+    directly, never their CLIs or IPC; the owed verbs compose inside one ``locked_rmw`` write.
   - A baton already stamped ``shipped_in`` this sha with this run's ledger row is
     ``discharged``; a rerun appends no second ledger row.
   - The ledger row's summary is the fixed ``run <run_id> shipped in <sha8>`` text: it names the
@@ -18,10 +18,8 @@ Negative-spec:
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from pathlib import Path
-from typing import Any, Awaitable, Optional, Sequence
+from typing import Optional, Sequence
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
@@ -31,28 +29,6 @@ _CEREMONY = "run-close"
 
 def _marker(run_id: str, sha: str) -> str:
     return f"run {run_id} shipped in {sha[:8]}"
-
-
-def _run(coro: Awaitable[Any]) -> Any:
-    """Run *coro* to completion from sync code, on a helper thread when a loop is already running."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)  # type: ignore[arg-type]
-    box: dict[str, Any] = {}
-
-    def target() -> None:
-        try:
-            box["value"] = asyncio.run(coro)  # type: ignore[arg-type]
-        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread
-            box["error"] = exc
-
-    thread = threading.Thread(target=target)
-    thread.start()
-    thread.join()
-    if "error" in box:
-        raise box["error"]
-    return box["value"]
 
 
 def _read(root: Path, rel: str) -> Optional[str]:
@@ -83,30 +59,46 @@ def _has_ledger_row(text: str, run_id: str, sha: str) -> bool:
     return False
 
 
-def _stamp(root: Path, rel: str, sha: str) -> Optional[str]:
-    from coordinator_core.ops.handoff_stamp import _handler as stamp_handler
-    from coordinator_core.ops.handoff_transition import _handler as transition_handler
+def _ship_baton(root: Path, rel: str, run_id: str, sha: str, text: str) -> Optional[str]:
+    """Apply the owed stamp / ship / ledger-row verbs in one locked write; return the refusal text."""
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 
-    stamped = _run(stamp_handler({"handoff_path": rel, "sha": sha[:8], "kind": "ship-commit"}, repo_root=root))
-    if stamped.get("exit_code") != 0:
-        return f"stamp refused: {stamped.get('error')}"
-    shipped = _run(transition_handler({"handoff_path": rel, "verb": "ship"}, repo_root=root))
-    if shipped.get("exit_code") != 0:
-        return f"ship refused: {shipped.get('error')}"
-    return None
+    need_stamp = not _stamped(text, sha)
+    need_row = not _has_ledger_row(text, run_id, sha)
+    if not (need_stamp or need_row):
+        return None
+    stage = ["stamp"]
 
+    def compose(old: str) -> str:
+        from coordinator_core.ops.handoff_append_session_ledger import append_apply
+        from coordinator_core.ops.handoff_stamp import stamp_apply
+        from coordinator_core.ops.handoff_transition import ship_apply
 
-def _append_row(root: Path, rel: str, run_id: str, sha: str) -> Optional[str]:
-    from coordinator_core.ops.handoff_append_session_ledger import _handler as ledger_handler
+        new = old
+        if need_stamp:
+            stage[0] = "stamp"
+            new = stamp_apply(
+                new, {"handoff_path": rel, "sha": sha[:8], "kind": "ship-commit"}, repo_root=root
+            )
+            stage[0] = "ship"
+            new = ship_apply(new, {"handoff_path": rel, "verb": "ship"}, repo_root=root)
+        if need_row:
+            stage[0] = "ledger row"
+            new = append_apply(
+                new,
+                {"handoff_path": rel, "summary": _marker(run_id, sha), "closing_ceremony": _CEREMONY},
+                repo_root=root,
+            )
+        return new
 
-    reply = _run(
-        ledger_handler(
-            {"handoff_path": rel, "summary": _marker(run_id, sha), "closing_ceremony": _CEREMONY},
-            repo_root=root,
-        )
-    )
-    if reply.get("exit_code") != 0:
-        return f"ledger row refused: {reply.get('error')}"
+    try:
+        locked_rmw(root / rel, compose, repo_root=root)
+    except MutateAbort as exc:
+        reply = exc.args[0] if exc.args else None
+        error = reply.get("error") if isinstance(reply, dict) else reply
+        return f"{stage[0]} refused: {error}"
+    except (LockTimeout, OSError) as exc:
+        return f"{stage[0]} refused: {exc}"
     return None
 
 
@@ -128,17 +120,12 @@ def baton_ship_leg(
         text = _read(root, rel)
         if text is None:
             return LegResult("failed", f"{rel}: baton not readable")
-        if not _stamped(text, sha):
-            error = _stamp(root, rel, sha)
-            if error is not None:
-                return LegResult("failed", f"{rel}: {error}")
-            wrote = True
-            text = _read(root, rel) or ""
-        if not _has_ledger_row(text, run_id, sha):
-            error = _append_row(root, rel, run_id, sha)
-            if error is not None:
-                return LegResult("failed", f"{rel}: {error}")
-            wrote = True
+        if _stamped(text, sha) and _has_ledger_row(text, run_id, sha):
+            continue
+        error = _ship_baton(root, rel, run_id, sha, text)
+        if error is not None:
+            return LegResult("failed", f"{rel}: {error}")
+        wrote = True
     names = ", ".join(claimed_batons)
     if not wrote:
         return LegResult("discharged", f"already shipped at {sha[:8]}: {names}")

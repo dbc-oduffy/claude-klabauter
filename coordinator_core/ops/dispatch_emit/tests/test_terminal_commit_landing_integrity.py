@@ -68,7 +68,7 @@ def test_a_stubbed_overlap_finding_is_refused_and_the_token_is_released(repo, mo
     head = _git(["rev-parse", "HEAD"], repo)
     seen = {}
 
-    def stub(root, paths, base, *, run_id):
+    def stub(root, paths, base, *, run_id, plan=None):
         seen["base"] = base
         return [landing_integrity.Finding("ok.py", landing_integrity.SINCE_BASE_OVERLAP, "drops abc1234")]
 

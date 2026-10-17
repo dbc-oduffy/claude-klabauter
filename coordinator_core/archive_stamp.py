@@ -180,7 +180,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import subprocess
@@ -244,6 +243,14 @@ _NO_CONSOLE = no_console_creationflags()
 _KIND_REQUIRES_OVERRIDE = frozenset({"ship-commit", "successor", "no-commit"})
 
 _SUBPROCESS_TIMEOUT_SEC = 15
+
+
+def _run_async(coro):
+    """`asyncio.run`, imported on call: only the op handlers without a sync core need
+    an event loop, and the module-level import taxed every importer of this module."""
+    import asyncio
+
+    return asyncio.run(coro)
 
 
 def handoff_archive_dest(worktree: Path, src: Path) -> Path:
@@ -1187,7 +1194,7 @@ def stamp_shipped_in(
             )
             return StampOutcome(exit_code=0)
 
-    from coordinator_core.ops.handoff_stamp import _handler as _stamp_handler
+    from coordinator_core.ops.handoff_stamp import stamp_sync as _stamp_sync
 
     stamp_params = {
         "handoff_path": handoff_path,
@@ -1196,7 +1203,7 @@ def stamp_shipped_in(
     }
     if force:
         stamp_params["force"] = True
-    result = asyncio.run(_stamp_handler(stamp_params, repo_root=repo_root))
+    result = _stamp_sync(stamp_params, repo_root=repo_root)
     rc = int(result.get("exit_code", 1))
     prior_value = result.get("prior_value")
     if rc == 0 and not result.get("applied") and prior_value is None:
@@ -1226,9 +1233,7 @@ def stamp_shipped_in(
         # left unarchivable while the matching verb reported success).
         current_kind = _read_current_shipped_in_kind(handoff_path)
         if current_kind is None and prior_value and prior_value == _final_stamp_value(resolved):
-            repair = asyncio.run(
-                _stamp_handler({**stamp_params, "force": True}, repo_root=repo_root)
-            )
+            repair = _stamp_sync({**stamp_params, "force": True}, repo_root=repo_root)
             rc = int(repair.get("exit_code", 1))
             outcome = StampOutcome(
                 exit_code=rc,
@@ -1373,10 +1378,10 @@ def _call_handoff_transition(handoff_path: str, params: dict) -> dict:
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
         return {"exit_code": 1, "error": f"could not resolve git worktree for {handoff_path}"}
-    from coordinator_core.ops.handoff_transition import _handler as _transition_handler
+    from coordinator_core.ops.handoff_transition import transition_sync
 
     full_params = {"handoff_path": handoff_path, **params}
-    return asyncio.run(_transition_handler(full_params, repo_root=repo_root))
+    return transition_sync(full_params, repo_root=repo_root)
 
 
 def cs_gate_recheck_handoff(handoff_path: str, at: str, cleared: bool = False) -> int:
@@ -1510,7 +1515,7 @@ def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
 
     from coordinator_core.ops.handoff_archive_transition import _handler as _transition_handler
 
-    return asyncio.run(_transition_handler({"handoff_path": handoff_path, **params}, repo_root))
+    return _run_async(_transition_handler({"handoff_path": handoff_path, **params}, repo_root))
 
 
 def cs_ship_handoff(
@@ -2241,7 +2246,7 @@ def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> b
         params = {"sid": sid, "handoff_relpath": hp_rec, "repo_root": str(worktree)}
         if deliverable_id:
             params["deliverable_id"] = deliverable_id
-        result = asyncio.run(
+        result = _run_async(
             _pickup_handler(
                 params,
                 repo_root=common_dir,
@@ -2449,7 +2454,7 @@ def _call_memo_transition(memo_path: str, params: dict) -> dict:
     full_params = {"memo": memo_path, **params}
     # memo.transition is scope "show_top" — repo_root is received but unused by the
     # handler (memo location comes from params["memo"], consumer-agnostic design).
-    return asyncio.run(_memo_handler(full_params, repo_root=None))
+    return _run_async(_memo_handler(full_params, repo_root=None))
 
 
 def cs_claim_memo_stamp(memo_path: str, *, return_result: bool = False) -> "int | dict":
@@ -3056,7 +3061,7 @@ def cs_repair_archived_shipped_in(
     if clear_advancement:
         params["clear_advancement"] = True
 
-    result = asyncio.run(_repair_handler(params, repo_root=repo_root))
+    result = _run_async(_repair_handler(params, repo_root=repo_root))
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_repair_archived_shipped_in: {result.get('error', 'unknown error')}", file=sys.stderr)
@@ -3151,7 +3156,7 @@ def cs_repair_archived_deployment_state(
     if closed_reason:
         params["closed_reason"] = closed_reason
 
-    result = asyncio.run(_repair_handler(params, repo_root=repo_root))
+    result = _run_async(_repair_handler(params, repo_root=repo_root))
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(
@@ -3235,7 +3240,7 @@ def cs_repair_deployment_state(
     if closed_reason:
         params["closed_reason"] = closed_reason
 
-    result = asyncio.run(_repair_handler(params, repo_root=repo_root))
+    result = _run_async(_repair_handler(params, repo_root=repo_root))
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(
@@ -3300,7 +3305,7 @@ def cs_correct_handoff_body(handoff_path: str, old_string: str, new_string: str)
         "old_string": old_string,
         "new_string": new_string,
     }
-    result = asyncio.run(_correct_body_handler(params, repo_root=repo_root))
+    result = _run_async(_correct_body_handler(params, repo_root=repo_root))
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_correct_handoff_body: {result.get('error', 'unknown error')}", file=sys.stderr)
@@ -3332,7 +3337,7 @@ def cs_correct_memo_note(memo_path: str, decision_note: str) -> int:
     from coordinator_core.ops.memo_correct_note import _handler as _correct_note_handler
 
     params = {"memo": memo_path, "decision_note": decision_note}
-    result = asyncio.run(_correct_note_handler(params, repo_root=None))
+    result = _run_async(_correct_note_handler(params, repo_root=None))
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_correct_memo_note: {result.get('error', 'unknown error')}", file=sys.stderr)

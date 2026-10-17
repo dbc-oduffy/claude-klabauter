@@ -1834,7 +1834,7 @@ class TestHandoffTransitionWrappers:
         # the underlying op handler, not pattern-matched on message content)
         hp_reject = _seed_handoff(repo, "rr-reject.md", "open", "ready_to_fire")
 
-        async def _fake_transition(params, repo_root=None):
+        def _fake_transition(params, repo_root=None):
             return {
                 "exit_code": 1,
                 "error": "handoff frontmatter validation failed: some other "
@@ -1842,7 +1842,7 @@ class TestHandoffTransitionWrappers:
             }
 
         monkeypatch.setattr(
-            "coordinator_core.ops.handoff_transition._handler", _fake_transition
+            "coordinator_core.ops.handoff_transition.transition_sync", _fake_transition
         )
         result3 = arstamp.cs_claim_handoff(str(hp_reject), return_result=True)
         assert result3["exit_code"] == 1

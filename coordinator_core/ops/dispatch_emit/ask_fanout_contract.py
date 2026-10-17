@@ -3,7 +3,9 @@
 Leaf module, stdlib only. ``ledger_partition`` answers whether every parent row is claimed by exactly
 one slice; ``after_edges`` which slice pairs must be sequenced; ``concurrent_run_budget`` how many
 sibling runs of one parent may run at once; ``admit`` which ready runs wait; ``release`` which runs a
-close frees. ``AskSlice.source`` is a slice's own ask source (None reads as ``pm``);
+close frees (never one in ``skip``). ``CLOSED_BY_KEY`` is the halted status-file key naming the
+evidence that closed the run; ``superseded_rel`` / ``read_superseded_by`` are a held slice's
+write-once supersession marker. ``AskSlice.source`` is a slice's own ask source (None reads as ``pm``);
 ``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
 reads it back. Reference: docs/reference/multi-ask-submission-contract.md.
 """
@@ -156,6 +158,27 @@ def status_rel(run_id: str) -> str:
     return f"scratch/warp/{run_id}/sibling-status.json"
 
 
+CLOSED_BY_KEY = "closed_by"
+SUPERSEDED_BY_KEY = "superseded_by"
+
+
+def superseded_rel(run_id: str) -> str:
+    """Runtime-only write-once ``{superseded_by, at}`` marker of a slice a later run replaced."""
+    return f"scratch/warp/{run_id}/superseded.json"
+
+
+def read_superseded_by(root: Any, run_id: str) -> Optional[str]:
+    """The run id *run_id*'s supersession marker names, None when absent or unreadable."""
+    import json
+
+    try:
+        data = json.loads((root / superseded_rel(run_id)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get(SUPERSEDED_BY_KEY) if isinstance(data, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
 def ask_parent_marker(parent_id: str, run_id: str) -> str:
     """The ``em_analysis.ask_parent`` string: ``"<parent_id> <run_id>"``."""
     return f"{parent_id} {run_id}"
@@ -279,12 +302,17 @@ def _with_status(run: SiblingRun, status: str) -> SiblingRun:
     return SiblingRun(run.run_id, run.label, run.after, run.slice_sizing, status)
 
 
-def release(parent: ParentRecord, statuses: Mapping[str, str], budget: int) -> tuple[str, ...]:
+def release(
+    parent: ParentRecord,
+    statuses: Mapping[str, str],
+    budget: int,
+    skip: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
     """Run ids a close frees, in submission order.
 
     A run is released when it is waiting (`after` or `queued`), every `after`
     predecessor reads `landed`, and a budget slot is free. A halted predecessor never releases its
-    successors.
+    successors. A run in *skip* is never freed and occupies no slot.
     """
     def status_of(run: SiblingRun) -> str:
         return statuses.get(run.run_id, run.status)
@@ -292,7 +320,7 @@ def release(parent: ParentRecord, statuses: Mapping[str, str], budget: int) -> t
     slots = budget - sum(1 for r in parent.runs if status_of(r) == STATUS_RUNNING)
     freed = []
     for run in parent.runs:
-        if status_of(run) not in (STATUS_AFTER, STATUS_QUEUED):
+        if status_of(run) not in (STATUS_AFTER, STATUS_QUEUED) or run.run_id in skip:
             continue
         if any(statuses.get(p) != STATUS_LANDED for p in run.after):
             continue

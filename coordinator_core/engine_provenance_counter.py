@@ -88,10 +88,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core import machine_profile, repo_standing
-from coordinator_core.session.claimed_write import append_claimed_line
-from coordinator_core.subagent_sandbox import resolve_git_root_cheap
-
 _COUNTS_FILENAME = "engine-provenance-counts.jsonl"
 
 _OWN_REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -99,10 +95,24 @@ _OWN_REPO_ROOT = Path(__file__).resolve().parents[1]
 MUTATES = ["state/engine-provenance-counts.jsonl"]
 
 
+def resolve_git_root_cheap(cwd: Optional[str] = None) -> Optional[str]:
+    """Lazy forwarder: keeps `subagent_sandbox` out of the module-import closure."""
+    from coordinator_core.subagent_sandbox import resolve_git_root_cheap as _resolve
+
+    return _resolve(cwd)
+
+
 def _may_write(git_root: str) -> bool:
-    """Counts land only in a registered or onboarded repo, or on an author box."""
+    """Counts land only in a registered or onboarded repo, or on an author box.
+
+    `repo_standing` is imported only on the non-author branch; the author box never loads it.
+    """
+    from coordinator_core import machine_profile
+
     if machine_profile.machine_profile() == "author":
         return True
+    from coordinator_core import repo_standing
+
     standing = repo_standing.repo_standing(git_root)
     return standing.registered_key is not None or standing.onboarded
 
@@ -180,4 +190,6 @@ def record_engine_provenance(
         "engine_root": engine_root,
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    from coordinator_core.session.claimed_write import append_claimed_line
+
     append_claimed_line(path, (json.dumps(record) + "\n").encode("utf-8"))

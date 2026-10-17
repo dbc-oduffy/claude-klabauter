@@ -131,7 +131,6 @@ Negative-spec (hard-won, DR-247 D2 + plan C2 anti-scope):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
@@ -583,6 +582,145 @@ async def _handler(
 
     Negative-spec: see module docstring.
     """
+    import asyncio
+
+    return await asyncio.to_thread(correct_body_sync, params, repo_root)
+
+
+class _Plan:
+    """A correction that passed every check: what `_build` needs to write it and
+    what the success reply reports."""
+
+    __slots__ = (
+        "p", "handoff_path_raw", "old_string", "new_string", "note_line",
+        "frontmatter_full_raw", "session_id", "session_source", "basis",
+        "holder",
+    )
+
+
+def correct_body_sync(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """The blocking core of `handoff.correct_body`: same reply dict as `_handler`.
+
+    Checks run on a pre-lock read; the locked read-modify-write re-asserts the
+    frontmatter and `old_string` occurrence so a concurrent mutation between the
+    two aborts rather than applies against a moving target.
+    """
+    plan = _check(params, repo_root)
+    if isinstance(plan, dict):
+        return plan
+
+    def _mutate(old_text: str) -> str:
+        try:
+            raw_text_inner = plan.p.read_bytes().decode("utf-8")
+        except OSError as exc:
+            raise MutateAbort(
+                f"cannot re-read handoff file for byte-identity check: {exc}"
+            )
+        return _build(old_text, plan, raw_text_inner)
+
+    try:
+        locked_rmw(plan.p, _mutate, repo_root=repo_root)
+    except LockTimeout as exc:
+        return _err(f"lock timeout acquiring file lock: {exc}")
+    except MutateAbort as exc:
+        return _abort_reply(exc)
+    except OSError as exc:
+        return _err(f"cannot read/write handoff file: {exc}")
+    return _success_reply(plan, repo_root)
+
+
+def correct_body_apply(
+    text: str, params: dict, *, repo_root: Optional[Path], info: Optional[dict] = None
+) -> str:
+    """Text form of `handoff.correct_body`: run every check against *text* and
+    return the corrected text. Never writes the target. A refusal raises
+    `MutateAbort` carrying the reply dict `_handler` would return. When *info*
+    is given it receives ``info["plan"]``, which `_success_reply` turns into the
+    success reply once the caller has written the text."""
+    plan = _check(params, repo_root, text)
+    if isinstance(plan, dict):
+        raise MutateAbort(plan)
+    new_text = _build(text, plan, text)
+    if info is not None:
+        info["plan"] = plan
+    return new_text
+
+
+def _abort_reply(exc: MutateAbort) -> dict:
+    if exc.args and isinstance(exc.args[0], dict):
+        return exc.args[0]
+    return _err(str(exc.args[0]) if exc.args else "mutate aborted")
+
+
+def _build(old_text: str, plan: "_Plan", raw_text: str) -> str:
+    """The corrected text for *old_text*. *raw_text* is the same file's true
+    bytes (no newline translation) — the source of the byte-identity check."""
+    handoff_path_raw = plan.handoff_path_raw
+    old_string = plan.old_string
+    split_inner = split_frontmatter(old_text)
+    if split_inner is None:
+        raise MutateAbort(f"no valid YAML frontmatter block in: {handoff_path_raw}")
+    raw_inner = _split_frontmatter_raw_bytes(raw_text)
+    if raw_inner is None:
+        raise MutateAbort(f"no valid YAML frontmatter block in: {handoff_path_raw}")
+    frontmatter_full_raw_inner, _ = raw_inner
+    if frontmatter_full_raw_inner != plan.frontmatter_full_raw:
+        raise MutateAbort(
+            f"{handoff_path_raw}'s frontmatter changed between read and lock "
+            "acquisition — refusing to apply a body correction against a "
+            "moving target"
+        )
+    inner_body = split_inner.body_with_leading_newline
+    if inner_body.count(old_string) != 1:
+        raise MutateAbort(
+            f"{handoff_path_raw}'s body changed between read and lock "
+            "acquisition (old_string no longer occurs exactly once) — "
+            "refusing to apply a body correction against a moving target"
+        )
+    new_body = inner_body.replace(old_string, plan.new_string, 1)
+    new_body = _append_correction_note(new_body, plan.note_line)
+    # Rebuild from the RAW, byte-preserved frontmatter, never `fm_text`'s
+    # CRLF-normalized copy, so a CRLF-authored handoff keeps its line endings.
+    new_text = frontmatter_full_raw_inner + new_body
+    final_raw = _split_frontmatter_raw_bytes(new_text)
+    if final_raw is None or final_raw[0] != frontmatter_full_raw_inner:
+        raise MutateAbort(
+            f"{handoff_path_raw}: post-mutation frontmatter is not "
+            "byte-identical to pre-mutation frontmatter — refusing to write"
+        )
+    return new_text
+
+
+def _success_reply(plan: "_Plan", repo_root: Optional[Path]) -> dict:
+    """Log, notify the claim holder, and return the applied reply. Call only
+    after the corrected text has reached disk."""
+    _LOG.info(
+        "handoff.correct_body: applied correction to %s (session %s via %s)",
+        plan.p, plan.session_id, plan.session_source,
+    )
+    holder_notice = _notify_holder(
+        holder=plan.holder,
+        corrector=plan.session_id,
+        handoff_path_raw=plan.handoff_path_raw,
+        new_string=plan.new_string,
+        repo_root=repo_root,
+    )
+    return {
+        "exit_code": 0,
+        "applied": True,
+        "session_id": plan.session_id,
+        "session_source": plan.session_source,
+        "ownership_basis": plan.basis,
+        "holder_notice": holder_notice,
+        "message": f"applied body correction to {plan.handoff_path_raw}",
+    }
+
+
+def _check(
+    params: dict, repo_root: Optional[Path] = None, text: Optional[str] = None
+) -> "dict | _Plan":
+    """Every precondition of the verb. Returns a refusal reply dict, or the
+    `_Plan` to write. Reads the target from disk unless *text* is given."""
     handoff_path_raw: str = params.get("handoff_path") or ""
     old_string_raw = params.get("old_string")
     new_string_raw = params.get("new_string")
@@ -769,15 +907,16 @@ async def _handler(
             "risk gating on divergent values"
         )
 
-    try:
-        # Finding 2 (security-audit, 2026-07-31): read raw BYTES and decode,
-        # never `Path.read_text()` — text-mode reads apply Python's universal-
-        # newline translation (CRLF->LF) BEFORE any of this module's own code
-        # ever sees the content, which would silently defeat byte-identical
-        # preservation at the read step regardless of anything done below.
-        text = p.read_bytes().decode("utf-8")
-    except OSError as exc:
-        return _err(f"cannot read handoff file: {exc}")
+    if text is None:
+        try:
+            # Finding 2 (security-audit, 2026-07-31): read raw BYTES and decode,
+            # never `Path.read_text()` — text-mode reads apply Python's universal-
+            # newline translation (CRLF->LF) BEFORE any of this module's own code
+            # ever sees the content, which would silently defeat byte-identical
+            # preservation at the read step regardless of anything done below.
+            text = p.read_bytes().decode("utf-8")
+        except OSError as exc:
+            return _err(f"cannot read handoff file: {exc}")
 
     split = split_frontmatter(text)
     if split is None:
@@ -1035,96 +1174,18 @@ async def _handler(
         basis, disagreement, override_reason,
     )
 
-    def _mutate(old_text: str) -> str:
-        split_inner = split_frontmatter(old_text)
-        if split_inner is None:
-            raise MutateAbort(f"no valid YAML frontmatter block in: {handoff_path_raw}")
-        # Finding 2 (security-audit, 2026-07-31): frontmatter must be
-        # byte-identical before/after — assert against the TRUE raw bytes
-        # (`_split_frontmatter_raw_bytes`), never `split_frontmatter`'s
-        # CRLF-normalized `fm_text`. Comparing two equally-normalized copies
-        # can never detect an actual on-disk frontmatter change, and the
-        # prior rebuild silently downgraded a CRLF-authored frontmatter to
-        # LF on every write — contradicting DR-247 D2(iv)'s literal
-        # byte-identical requirement.
-        #
-        # `old_text` itself (locked_rmw's own read) has ALREADY been through
-        # `Path.read_text()`'s universal-newline translation by the time it
-        # reaches this function — it cannot be used to recover the true raw
-        # bytes. Re-read the file directly (safe: still inside the flock
-        # locked_rmw is holding for this whole read-mutate-write span) to get
-        # the actual on-disk bytes for the byte-identity check and rebuild.
-        try:
-            raw_text_inner = p.read_bytes().decode("utf-8")
-        except OSError as exc:
-            raise MutateAbort(
-                f"cannot re-read handoff file for byte-identity check: {exc}"
-            )
-        raw_inner = _split_frontmatter_raw_bytes(raw_text_inner)
-        if raw_inner is None:
-            raise MutateAbort(
-                f"no valid YAML frontmatter block in: {handoff_path_raw}"
-            )
-        frontmatter_full_raw_inner, _ = raw_inner
-        if frontmatter_full_raw_inner != frontmatter_full_raw:
-            raise MutateAbort(
-                f"{handoff_path_raw}'s frontmatter changed between read and lock "
-                "acquisition — refusing to apply a body correction against a "
-                "moving target"
-            )
-        inner_body = split_inner.body_with_leading_newline
-        if inner_body.count(old_string) != 1:
-            raise MutateAbort(
-                f"{handoff_path_raw}'s body changed between read and lock "
-                "acquisition (old_string no longer occurs exactly once) — "
-                "refusing to apply a body correction against a moving target"
-            )
-        new_body = inner_body.replace(old_string, new_string, 1)
-        new_body = _append_correction_note(new_body, note_line)
-        # Rebuild using the RAW, byte-preserved frontmatter (never
-        # `split.fm_text`'s normalized copy — Finding 2) so a CRLF-authored
-        # handoff's frontmatter survives a correction with its original line
-        # endings intact.
-        new_text = frontmatter_full_raw_inner + new_body
-        # Byte-identical frontmatter assertion, re-derived from the freshly
-        # rebuilt text (never assumed from the pre-lock read above).
-        final_raw = _split_frontmatter_raw_bytes(new_text)
-        if final_raw is None or final_raw[0] != frontmatter_full_raw_inner:
-            raise MutateAbort(
-                f"{handoff_path_raw}: post-mutation frontmatter is not "
-                "byte-identical to pre-mutation frontmatter — refusing to write"
-            )
-        return new_text
-
-    try:
-        await asyncio.to_thread(locked_rmw, p, _mutate, repo_root=repo_root)
-    except LockTimeout as exc:
-        return _err(f"lock timeout acquiring file lock: {exc}")
-    except MutateAbort as exc:
-        return _err(str(exc.args[0]) if exc.args else "mutate aborted")
-    except OSError as exc:
-        return _err(f"cannot read/write handoff file: {exc}")
-
-    _LOG.info(
-        "handoff.correct_body: applied correction to %s (session %s via %s)",
-        p, session_id, session_source,
-    )
-    holder_notice = _notify_holder(
-        holder=(resolved_holder or claimed_by or "").strip(),
-        corrector=session_id,
-        handoff_path_raw=handoff_path_raw,
-        new_string=new_string,
-        repo_root=repo_root,
-    )
-    return {
-        "exit_code": 0,
-        "applied": True,
-        "session_id": session_id,
-        "session_source": session_source,
-        "ownership_basis": basis,
-        "holder_notice": holder_notice,
-        "message": f"applied body correction to {handoff_path_raw}",
-    }
+    plan = _Plan()
+    plan.p = p
+    plan.handoff_path_raw = handoff_path_raw
+    plan.old_string = old_string
+    plan.new_string = new_string
+    plan.note_line = note_line
+    plan.frontmatter_full_raw = frontmatter_full_raw
+    plan.session_id = session_id
+    plan.session_source = session_source
+    plan.basis = basis
+    plan.holder = (resolved_holder or claimed_by or "").strip()
+    return plan
 
 
 def _notify_holder(

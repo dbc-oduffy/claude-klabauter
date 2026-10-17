@@ -3859,6 +3859,22 @@ def list_claims_by_session_checked(
     return matches, []
 
 
+def plan_claim_dir(common_dir: Path, plan_path: Path) -> Path:
+    """Derive the plan-execution claim-lock dir for a given plan path.
+
+    <common_dir>/coordinator-sessions/plan-claims/<stem> — the SAME key
+    session.reap._reap_orphaned_claims sweeps and ``claim_plan`` /
+    ``claim_artifact("plan", slug, ...)`` writes. Keyed on ``plan_path.stem``
+    (filename MINUS ``.md``), NOT the full filename — the one divergence from
+    ``handoff_claim_dir``. Single source of truth: ``ops.fleet._common``
+    re-exports this name; do NOT hand-roll this path convention at a second
+    call site.
+    """
+    from coordinator_core.claim_state import _sessions_dir
+
+    return _sessions_dir(common_dir) / "plan-claims" / plan_path.stem
+
+
 #: session_id file path -> ((size, mtime_ns), recorded session id).
 _CLAIM_HOLDER_CACHE: dict = {}
 _CLAIM_HOLDER_CACHE_MAX = 8192

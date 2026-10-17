@@ -20,7 +20,9 @@ cwd's repo, or for an ask whose absolute `context` lies in another registered re
 no `source` of their own; a relayed ask is forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
 (`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
 op's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the
-PM's local cross-repo assent; implied on a remote venue). A bare string `args` is the ask.
+PM's local cross-repo assent; implied on a remote venue), optional `supersedes: "<held run id>"` (on `ask` / `sizing`
+only: the new run replaces that held slice, which is marked superseded after the emit and never starts; refused
+for a landed or running run). A bare string `args` is the ask.
 A sizing carrying a non-empty `research` block is emitted on the research route (`from_sizing`,
 with `context` paths as the route's `context`; `brief`/`brief_file` are refused there); any other
 sizing takes the plan chain (`ask` + `sizing_path`); only the plan chain echoes inherited revisions.
@@ -257,7 +259,13 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
         STATUS_AFTER, STATUS_HALTED, STATUS_LANDED, STATUS_QUEUED, STATUS_RUNNING, concurrent_run_budget,
     )
 
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import read_superseded_by
+    from coordinator_core.ops.dispatch_emit.sibling_hold import predecessor_closed
+
     parent_id, run_id = marker
+    by = read_superseded_by(root, run_id)
+    if by:
+        return f"Run {run_id} is superseded by {by}; it does not start."
     parent = _read_parent(root, parent_id)
     mine = next((r for r in (parent.runs if parent else ()) if r.run_id == run_id), None)
     if mine is None:
@@ -267,15 +275,31 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
         if state == STATUS_LANDED:
             continue
         if state == STATUS_HALTED:
-            if _rows_committed(root, pred):
+            if _rows_committed(root, pred) or predecessor_closed(root, pred):
                 continue
-            return f"Predecessor {pred} halted, so {run_id} cannot start. Resubmit the slice as a fresh {{ask}}."
+            return (
+                f"Predecessor {pred} halted, so {run_id} cannot start. "
+                f'Resubmit the slice as a fresh {{ask, supersedes: "{run_id}"}}.'
+            )
         return f"Predecessor {pred} has not landed ({state or 'not started'}); its close names this run's fire call."
     if mine.status in (STATUS_QUEUED, STATUS_AFTER):
         running = [r.run_id for r in parent.runs if r.run_id != run_id and _status_of(root, r.run_id) == STATUS_RUNNING]
         if len(running) >= concurrent_run_budget():
             return f"Parent {parent_id} is at its run budget; running: {', '.join(running)}. A close names this run's fire call."
     return None
+
+
+def _supersedes(tool_input: Mapping[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """(held run id, refusal) from `args.supersedes`; valid on `{ask}` / `{sizing}` only."""
+    args = tool_input.get("args")
+    if not isinstance(args, dict) or "supersedes" not in args:
+        return None, None
+    value = args["supersedes"]
+    if "asks" in args:
+        return None, "supersedes rides an {ask} or {sizing} submission, not asks."
+    if not isinstance(value, str) or not value.strip():
+        return None, "supersedes must be the held run id (a string)."
+    return value.strip(), None
 
 
 def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
@@ -376,6 +400,9 @@ def evaluate(
         if len(asks) == 1:
             ask, source, asks = asks[0]["ask"], asks[0].get("source"), None
 
+    supersedes, supersedes_refusal = _supersedes(payload["tool_input"])
+    if supersedes_refusal:
+        return _refuse(supersedes_refusal)
     brief, brief_refusal = _brief_params(payload["tool_input"])
     if brief_refusal:
         return _refuse(brief_refusal)
@@ -393,6 +420,13 @@ def evaluate(
     missing = _missing_context(root, brief.get("ask_context", []))
     if missing:
         return _refuse(f"context {missing}: no such file. Pass inline prose as brief or context text, or fix the path.")
+
+    if supersedes:
+        from coordinator_core.ops.dispatch_emit.sibling_hold import supersede_refusal
+
+        refusal = supersede_refusal(root, supersedes, "pending-supersessor")
+        if refusal:
+            return _refuse(refusal)
 
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
@@ -512,6 +546,16 @@ def evaluate(
     except OSError:
         pass  # liveness then reads the run token alone
 
+    marked = ""
+    if supersedes:
+        from coordinator_core.ops.dispatch_emit.sibling_hold import SupersedeRefused, mark_superseded
+
+        try:
+            mark_superseded(root, supersedes, str(run_id))
+            marked = f" Marked {supersedes} superseded by {run_id}."
+        except SupersedeRefused as exc:
+            marked = f" Not marked superseded: {exc}"
+
     new_input: dict = {"scriptPath": str(script)}
     if result.get("fire_args"):
         new_input["args"] = result["fire_args"]
@@ -540,7 +584,7 @@ def evaluate(
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"{lead}Submitted to the engine as run {run_id}.{carries} {tail}",
+        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries} {tail}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"

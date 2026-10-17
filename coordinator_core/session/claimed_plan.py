@@ -62,18 +62,18 @@ Negative-spec:
     - Do NOT re-derive the ``plan-claims/`` path convention (a literal
       ``"plan-claims"`` join, or a hand-rolled ``<common_dir>/coordinator-sessions/
       plan-claims"``) — import and reuse
-      ``coordinator_core.ops.fleet._common.plan_claim_dir`` instead. A second
+      ``coordinator_core.session.claims.plan_claim_dir`` instead (its canonical
+      home; ``ops.fleet._common`` only re-exports it). A second
       hand-rolled copy of that convention is exactly the class of bug
       ``plan_claim_dir``'s own docstring warns against.
-    - Do NOT hoist that ``plan_claim_dir`` import to module scope. Anything
-      under ``coordinator_core.ops`` triggers that package's eager import of
-      all ~161 op modules, four of which import back into this one
+    - Do NOT import ``plan_claim_dir`` from ``coordinator_core.ops`` (e.g.
+      ``ops.fleet._common``). Anything under that package triggers its eager
+      import of all ~161 op modules, four of which import back into this one
       (``handoff_normalize``, ``handoff_author_fork``, ``handoff_correct_body``,
-      ``queue_scaffold_baton``). At module scope the cycle leaves this module
-      partially initialized mid-sweep and those four ops silently fail to
-      register — the failure is a warning on stderr, not an exception, so it
-      is easy to ship. Keep the import inside the function body that needs it
-      (``list_held_plan_claims``, the only place in this module that imports it).
+      ``queue_scaffold_baton``); the cycle leaves this module partially
+      initialized mid-sweep and those four ops silently fail to register — a
+      stderr warning, not an exception. Keep the ``session.claims`` import
+      inside ``list_held_plan_claims``, the only place that uses it.
     - Do NOT raise when no plan is claimed — that is an ordinary, legitimate
       state (a handoff genuinely unattached to a plan), not an error. Every
       failure edge (unresolvable session id, unresolvable git root, missing/
@@ -251,15 +251,14 @@ def list_held_plan_claims(
         return []
     common_dir = Path(common).parent
 
-    # Imported HERE, not at module scope — see the module docstring's
-    # negative-spec. ``plan_claim_dir`` returns
+    # Imported HERE, not at module scope (claims imports back into this
+    # package's siblings). ``plan_claim_dir`` returns
     # ``<...>/plan-claims/<plan_path.stem>``; a throwaway stem's ``.parent``
     # recovers the ``plan-claims/`` base dir without re-deriving that
     # convention by hand.
-    from coordinator_core.ops.fleet._common import plan_claim_dir
+    from coordinator_core.session.claims import claim_holders, plan_claim_dir
 
     plan_claims_dir = plan_claim_dir(common_dir, Path("placeholder")).parent
-    from coordinator_core.session.claims import claim_holders
     own = [plan_claims_dir / name for name, held_sid in claim_holders(plan_claims_dir) if held_sid == sid]
     if not own:
         return []

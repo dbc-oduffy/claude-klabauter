@@ -642,12 +642,10 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = 
         )
         target_kinds = ("sizing",)
 
-    import asyncio
-
     # Function-local imports: archive_stamp.py imports this module at module level
     # (cs_stamp_plan_implemented), so a module-level import here would cycle.
     from coordinator_core.archive_stamp import _resolve_repo_root_for
-    from coordinator_core.ops.deliverable_cascade import _handler as _cascade_handler
+    from coordinator_core.ops.deliverable_cascade import cascade_terminal_sync
 
     # `_resolve_repo_root_for` returns (worktree_root, git_common_dir) -- the SECOND
     # element, bound here, is the git common dir (<worktree>/.git), never the
@@ -681,18 +679,16 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = 
     results: List["tuple[str, dict]"] = []
     any_advanced = False
     for target_kind in target_kinds:
-        result = asyncio.run(
-            _cascade_handler(
-                {
-                    "deliverable_id": deliverable_id,
-                    "source_kind": "plan",
-                    "source_path": plan_path,
-                    "target_kind": target_kind,
-                    "ship_sha": ship_sha,
-                    "caller_session_id": attributable_session_id() or "",
-                },
-                repo_root=git_common_dir,
-            )
+        result = cascade_terminal_sync(
+            {
+                "deliverable_id": deliverable_id,
+                "source_kind": "plan",
+                "source_path": plan_path,
+                "target_kind": target_kind,
+                "ship_sha": ship_sha,
+                "caller_session_id": attributable_session_id() or "",
+            },
+            repo_root=git_common_dir,
         )
         results.append((target_kind, result))
         advanced = result.get("advanced", [])
@@ -1319,22 +1315,16 @@ def _ac_open_rows_warning(plan_path: str, plan_text: str) -> None:
     -- see that memo's other binding constraint, quoted at this module's
     own `--override-reason` paragraph.
 
-    Coupling decision: reuses `close_out_and_stamp`'s existing AC-table
-    parser (`_ac_table_desync_finding` and its own helpers) rather than
-    hand-rolling a second, divergent AC oracle. Imported FUNCTION-LOCALLY,
-    not at module scope: `execute_plan_assemble.close_out_and_stamp`
-    already imports THIS module (`plan_status_transition`) at ITS OWN
-    module scope (`from coordinator_core.ops.plan_status_transition import
-    ...`), so a module-level import here in the other direction would be a
-    genuine import cycle, not merely a new `ops` -> `execute_plan_assemble`
-    edge. A function-local import resolves cleanly at call time (both
-    modules are always fully loaded by the time a real `stamp-implemented`
-    flip runs) -- mirrors `_run_cascade`'s own identical function-local
-    avoidance of the sibling `archive_stamp` cycle already documented at
-    that call site in this same file.
+    Coupling decision: reuses the AC-table parser
+    (`goal_gate._ac_table_desync_finding` and its own helpers, which
+    `close_out_and_stamp` re-exports) rather than hand-rolling a second,
+    divergent AC oracle. Imported from `goal_gate`, never from
+    `close_out_and_stamp`: that module's heavy closure would load on every
+    flip, and it imports THIS module at module scope. The import stays
+    FUNCTION-LOCAL so a flip with nothing to warn about loads no AC parser.
     """
     try:
-        from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+        from coordinator_core.execute_plan_assemble.goal_gate import (
             _ac_advisory_text,
             _ac_table_desync_finding,
         )
@@ -1523,6 +1513,33 @@ def _with_register_tally(fm_text: str, worktree_root: Path, plan_display: str) -
         stamp, default_flow_style=False, sort_keys=False, allow_unicode=True, width=10**6
     )
     return write_fm_nested_field(fm_text, "review_stamp", "".join("  " + l + "\n" for l in dumped.splitlines()))
+
+
+def _close_halted_sibling_runs(plan_path: Path, worktree_root: Optional[Path]) -> None:
+    """Close the halted run of *plan_path*'s cited sizing and report what the close frees.
+
+    Never raises and never changes the stamp's exit code: the mark is runtime scratch,
+    a failure is one stderr line.
+    """
+    if worktree_root is None:
+        return
+    try:
+        split = split_frontmatter(plan_path.read_text(encoding="utf-8"))
+        sizing_rel = (read_fm_field_unquoted(split.fm_text, "sizing_object") or "").strip() if split else ""
+        if not sizing_rel or sizing_rel == "null":
+            return
+        plan_rel = rel_id(plan_path.resolve(), Path(worktree_root).resolve())
+        from coordinator_core.ops.dispatch_emit.run_close import close_halted_runs_for_plan
+
+        result = close_halted_runs_for_plan(Path(worktree_root), plan_rel, sizing_rel)
+        if result["closed"]:
+            print(
+                f"{_PROG}: closed halted run(s) {', '.join(result['closed'])}; "
+                f"released: {result['released'] or 'none'}; "
+                f"superseded: {result['superseded'] or 'none'}"
+            )
+    except Exception as exc:  # noqa: BLE001 -- advisory leg; the stamp already landed
+        print(f"{_PROG}: halted-run close failed: {exc.__class__.__name__}: {exc}", file=sys.stderr)
 
 
 def _stamp_implemented(opts: _Opts) -> int:
@@ -1761,12 +1778,11 @@ def _stamp_implemented(opts: _Opts) -> int:
         # into `status: implemented` (`/workstream-complete`'s `d-stamp-
         # plan-implemented` -> `archive_stamp.cs_stamp_plan_implemented` ->
         # this verb), and until now it never consulted the goal observation
-        # `close_out_and_stamp._evaluate_goal_falsifier_gate` already gates
-        # on -- see this module's own docstring "Design, pinned where an
-        # executor would otherwise choose" section. Function-local import:
-        # `close_out_and_stamp` imports THIS module at module scope, so a
-        # module-level import here would cycle (mirrors `_ac_open_rows_
-        # warning`'s identical avoidance immediately above in this file).
+        # `goal_gate._evaluate_goal_falsifier_gate` (re-exported by
+        # `close_out_and_stamp`) already gates on -- see this module's own
+        # docstring "Design, pinned where an executor would otherwise
+        # choose" section. Imported from the light `goal_gate` leaf, never
+        # from `close_out_and_stamp`, so the flip does not load that closure.
         # Skipped entirely when `worktree_root is None` (close-out's own
         # `--dry-run` scratch copy, or any plan outside a git worktree):
         # close-out has already evaluated this exact text, and the gate's
@@ -1796,7 +1812,7 @@ def _stamp_implemented(opts: _Opts) -> int:
             gate_text = rebuild(split, recorded_fm)
 
         if worktree_root is not None:
-            from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+            from coordinator_core.execute_plan_assemble.goal_gate import (
                 _evaluate_goal_falsifier_gate,
                 _goal_refusal_next_move,
             )
@@ -2023,8 +2039,11 @@ def _stamp_implemented(opts: _Opts) -> int:
                 f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" was already flipped "
                 "on disk by a prior run but never committed — committed the stranded write now"
             )
+            _close_halted_sibling_runs(plan_path, worktree_root)
             return _cascade_if_implemented(opts.plan, _state)
         print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is terminal/deferred — no-op")
+        if _state["prior_status"] == "implemented":
+            _close_halted_sibling_runs(plan_path, worktree_root)
         return _cascade_if_implemented(opts.plan, _state)
 
     stamp_sha = ""
@@ -2080,6 +2099,8 @@ def _stamp_implemented(opts: _Opts) -> int:
         )
 
     print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → implemented")
+
+    _close_halted_sibling_runs(plan_path, worktree_root)
 
     # Under --no-commit no stamp sha exists; without the caller's sha the cascade refuses
     # every baton and the flip reports as failed while the baton strands at ready_to_fire.

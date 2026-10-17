@@ -450,6 +450,13 @@ HALT_PLAN_FIELD = "plan"
 #: Commit trailer naming the plan a halt commit landed chunks for; `resume_landed_rows` reads it.
 HALT_PLAN_TRAILER = "Halt-Plan"
 RESUME_LEDGER_KEY = "resume_ledger"
+#: `LedgerHalt.halted` of a ledger-check pointer (the default); a commit-halt pointer says "commit".
+LEDGER_HALT_KIND = "ledger-check"
+#: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.
+RUN_OUTCOME_FILE = "run-outcome.json"
+RUN_OUTCOME_KEYS = ("inline_review", "incomplete_chunks", "landed_chunks", "ledger_verdict", "plan_path")
+#: `inline_review` key naming the halted run whose review a resumed landing reuses.
+RESUMED_RUN_ID_KEY = "resumed_run_id"
 
 
 def rulable_ids(rows: Any) -> tuple[str, ...]:
@@ -479,25 +486,40 @@ class LedgerHalt:
     #: The halt commit's full sha; filled from git at resume, never persisted in the pointer.
     halt_sha: str | None = None
     remaining: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    halted: str = LEDGER_HALT_KIND
+    outcome: str | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "run_id": self.run_id,
             HALT_PLAN_FIELD: self.plan_rel,
             "sizing": self.sizing_rel,
             "blocking": list(self.blocking),
         }
+        if self.halted != LEDGER_HALT_KIND:
+            out["halted"] = self.halted
+        if self.outcome is not None:
+            out["outcome"] = self.outcome
+        return out
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "LedgerHalt":
         blocking = data["blocking"]
         if not isinstance(blocking, list) or not all(isinstance(b, str) for b in blocking):
             raise ValueError("blocking is not a list of str")
+        halted = data.get("halted", LEDGER_HALT_KIND)
+        outcome = data.get("outcome")
+        if not isinstance(halted, str) or not halted:
+            raise ValueError("halted is not a non-empty str")
+        if outcome is not None and not isinstance(outcome, str):
+            raise ValueError("outcome is not a str")
         return cls(
             run_id=data["run_id"],
             plan_rel=data[HALT_PLAN_FIELD],
             sizing_rel=data["sizing"],
             blocking=tuple(blocking),
+            halted=halted,
+            outcome=outcome,
         )
 
 
@@ -526,7 +548,32 @@ def read_ledger_halt(path: Path) -> LedgerHalt | None:
     for rel in (halt.plan_rel, halt.sizing_rel):
         if not isinstance(rel, str) or not _relative_inside(rel):
             return None
+    if halt.outcome is not None and not _relative_inside(halt.outcome):
+        return None
     return halt
+
+
+def write_run_outcome(repo_root: Path, run_id: str, outcome: dict[str, Any]) -> Path:
+    """Atomically write the admitted keys of ``outcome`` to `<record_dir>/run-outcome.json` and
+    return the path. Raises ValueError on an unsafe run id or an `inline_review` that is not a dict."""
+    if not isinstance(outcome.get("inline_review"), dict):
+        raise ValueError("run outcome needs an inline_review dict")
+    path = record_dir(repo_root, run_id) / RUN_OUTCOME_FILE
+    kept = {k: outcome[k] for k in RUN_OUTCOME_KEYS if k in outcome}
+    atomic_write_bytes(path, (json.dumps(kept, indent=2) + "\n").encode("utf-8"))
+    return path
+
+
+def read_run_outcome(repo_root: Path, run_id: str) -> dict[str, Any] | None:
+    """The run's recorded outcome (admitted keys only), or None on an unsafe run id, an unreadable
+    or malformed file, or a missing `inline_review` dict. One read."""
+    try:
+        data = _read_json_object(record_dir(repo_root, run_id) / RUN_OUTCOME_FILE)
+    except ValueError:
+        return None
+    if data is None or not isinstance(data.get("inline_review"), dict):
+        return None
+    return {k: data[k] for k in RUN_OUTCOME_KEYS if k in data}
 
 
 def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:

@@ -1194,9 +1194,12 @@ def _try_warm_dispatch_inner(
     from coordinator_core.warm import caller_context as _caller_context
 
     caller_sid = _caller_session_id()
-    caller = _caller_context.resolve_caller_context(
-        {"session_id": caller_sid} if caller_sid else None
-    )
+    from coordinator_core.subagent_sandbox.plugin_root import resolve_plugin_root as _plugin_root
+
+    caller_payload = {"plugin_root": _plugin_root()}
+    if caller_sid:
+        caller_payload["session_id"] = caller_sid
+    caller = _caller_context.resolve_caller_context(caller_payload)
     request["_caller"] = {
         "plugin_root": caller.plugin_root,
         "cwd": caller.cwd,

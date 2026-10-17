@@ -63,7 +63,7 @@ import sys
 import re
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from coordinator_core.completion_record_integrity import (
     PLACEHOLDER_TITLE,
@@ -188,6 +188,13 @@ def _scaffold_text(title: str, nature: str, chain: str | None) -> str:
     return "\n".join(lines)
 
 
+def scaffold_apply(old_text: str, content: str) -> str:
+    """Text form of the scaffold write: *content* over an absent entry, MutateAbort over a present one."""
+    if old_text:
+        raise MutateAbort("completion entry created concurrently")
+    return content
+
+
 def scaffold_completion_entry(
     worktree_root: Path,
     title: str,
@@ -224,14 +231,14 @@ def scaffold_completion_entry(
 
     content = _scaffold_text(title, nature, chain)
 
-    def _mutate(old_text: str) -> str:
-        if old_text:
-            raise MutateAbort("completion entry created concurrently")
-        return content
-
     try:
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-        locked_rmw(abs_path, _mutate, repo_root=worktree_root, missing_ok=True)
+        locked_rmw(
+            abs_path,
+            lambda old: scaffold_apply(old, content),
+            repo_root=worktree_root,
+            missing_ok=True,
+        )
     except MutateAbort:
         print(f"skip: scaffold_completion_entry: abs_path.parent.mkdir(parents=True, exist_ok=True) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return {
@@ -303,7 +310,31 @@ def fill_completion_entry_residues(
         else Path(completion_entry_path)
     )
 
-    filled = dict(empty_result)
+    mutate, filled = residue_mutator(
+        worktree_root, completion_entry_path, prose, chain_terminal=chain_terminal, sid=sid
+    )
+    try:
+        locked_rmw(entry_abs, mutate, repo_root=worktree_root)
+    except (LockTimeout, MutateAbort, OSError):
+        return dict(empty_result)
+
+    return filled
+
+
+def residue_mutator(
+    worktree_root: Path,
+    completion_entry_path: str,
+    prose: str,
+    *,
+    chain_terminal: bool,
+    sid: str,
+) -> tuple[Callable[[str], str], Dict[str, bool]]:
+    """Text form of ``fill_completion_entry_residues``: ``(mutate, filled)``.
+
+    ``mutate(text) -> str`` raises MutateAbort where the locked form degrades to all-False;
+    ``filled`` is populated by the call to ``mutate``.
+    """
+    filled: Dict[str, bool] = {"prose": False, "chain_terminal": False, "authored_by": False}
 
     def _mutate(text: str) -> str:
         split = split_frontmatter(text)
@@ -381,12 +412,7 @@ def fill_completion_entry_residues(
 
         return new_text
 
-    try:
-        locked_rmw(entry_abs, _mutate, repo_root=worktree_root)
-    except (LockTimeout, MutateAbort, OSError):
-        return dict(empty_result)
-
-    return filled
+    return _mutate, filled
 
 
 class AuthoredSurfaceMissing(Exception):
@@ -421,6 +447,30 @@ def fill_authored_surfaces(
     entry_abs = Path(completion_entry_path)
     if not entry_abs.is_absolute():
         entry_abs = worktree_root / completion_entry_path
+    mutate, filled = authored_surfaces_mutator(
+        completion_entry_path, title=title, nature=nature, prose=prose
+    )
+    try:
+        locked_rmw(entry_abs, mutate, repo_root=worktree_root)
+    except AuthoredSurfaceMissing:
+        raise
+    except (LockTimeout, MutateAbort, OSError):
+        return {"title": False, "nature": False, "prose": False}
+    return filled
+
+
+def authored_surfaces_mutator(
+    completion_entry_path: str,
+    *,
+    title: str | None,
+    nature: str | None,
+    prose: str | None,
+) -> tuple[Callable[[str], str], Dict[str, bool]]:
+    """Text form of ``fill_authored_surfaces``: ``(mutate, filled)``.
+
+    ``mutate(text) -> str`` raises MutateAbort / AuthoredSurfaceMissing where the locked form
+    does; ``filled`` is populated by the call to ``mutate``.
+    """
     filled = {"title": False, "nature": False, "prose": False}
 
     def _mutate(text: str) -> str:
@@ -462,10 +512,4 @@ def fill_authored_surfaces(
             return text
         return rebuild(split._replace(body_with_leading_newline=body), fm)
 
-    try:
-        locked_rmw(entry_abs, _mutate, repo_root=worktree_root)
-    except AuthoredSurfaceMissing:
-        raise
-    except (LockTimeout, MutateAbort, OSError):
-        return {"title": False, "nature": False, "prose": False}
-    return filled
+    return _mutate, filled

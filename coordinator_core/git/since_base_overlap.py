@@ -4,8 +4,9 @@ For each landed path whose HEAD blob differs from its base blob, every HEAD line
 bytes remove is attributed by position to the first-parent commit that introduced it; a line
 introduced by a commit that is not the run's own is a finding. Zero spawns: objects are read
 through ``git_objects``. A run's own commits are those whose message carries ``Checkpoint-Base:``
-(or ``Checkpoint-Review-Base:``) equal to the run base and, when the plan is known,
-``Checkpoint-Plan:`` equal to it; ``Session-Id`` cannot discriminate (concurrent runs share it).
+(or ``Checkpoint-Review-Base:``) equal to the run base; when the plan is known, those carrying
+``Checkpoint-Plan:`` equal to it with a stamped base anywhere on the walked chain. ``Session-Id``
+cannot discriminate (concurrent runs share it).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches
 from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.git_objects import read_object, read_ref_loose_or_packed
@@ -30,14 +32,20 @@ _PLAN_RE = re.compile(r"^Checkpoint-Plan: (\S.*?)\s*$", re.M)
 _BASE_RE = re.compile(r"^Checkpoint-(?:Review-)?Base: ([0-9a-f]{7,40})\s*$", re.M)
 
 
-def is_own_commit(message: str, plan: Optional[str], base_sha: str) -> bool:
-    """True when the message's checkpoint trailers name this run's base (and plan, if given)."""
-    bases = [b for b in _BASE_RE.findall(message) if base_sha.startswith(b) or b.startswith(base_sha)]
-    if not bases:
-        return False
+def is_own_commit(message: str, plan: Optional[str], base_sha: str, chain: Sequence[str] = ()) -> bool:
+    """True when the message's checkpoint trailers name this run's plan and base.
+
+    With ``plan`` a stamped base is accepted when it prefix-matches ``base_sha`` or any sha in
+    ``chain`` (every re-fire of a run stamps a new base, so the run base alone under-matches);
+    without ``plan`` only a stamped base prefix-matching ``base_sha`` (either direction) counts.
+    """
+    stamped = _BASE_RE.findall(message)
     if plan is None:
-        return True
-    return any(p == plan for p in _PLAN_RE.findall(message))
+        return any(base_sha.startswith(b) or b.startswith(base_sha) for b in stamped)
+    if not any(checkpoint_plan_matches(p, plan) for p in _PLAN_RE.findall(message)):
+        return False
+    anchors = (base_sha, *chain)
+    return any(a.startswith(b) for b in stamped for a in anchors)
 
 
 def _head_sha(worktree_root: Path) -> Optional[str]:
@@ -139,7 +147,7 @@ def check(
     own = {
         sha
         for sha in newest_first
-        if is_own_commit((commit_meta(common_dir, sha) or {}).get("message", ""), plan, base_sha)
+        if is_own_commit((commit_meta(common_dir, sha) or {}).get("message", ""), plan, base_sha, newest_first)
     }
     oldest_first = list(reversed(newest_first))
     for path in paths:

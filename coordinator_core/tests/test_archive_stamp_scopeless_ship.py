@@ -10,12 +10,12 @@ from coordinator_core import archive_stamp
 def captured(monkeypatch, tmp_path):
     calls = []
 
-    async def fake_handler(params, repo_root=None):
+    def fake_handler(params, repo_root=None):
         calls.append(params)
         return {"exit_code": 0, "applied": True}
 
     monkeypatch.setattr(archive_stamp, "_resolve_repo_root_for", lambda p: (tmp_path, tmp_path))
-    monkeypatch.setattr("coordinator_core.ops.handoff_stamp._handler", fake_handler)
+    monkeypatch.setattr("coordinator_core.ops.handoff_stamp.stamp_sync", fake_handler)
     return calls
 
 

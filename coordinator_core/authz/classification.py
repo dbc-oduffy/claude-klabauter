@@ -2316,6 +2316,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commits.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.commit_halted_rows": OpClass.MUTATING,
+    # dispatch.supersede_slice — MUTATING: writes one write-once scratch marker naming the run that
+    # supersedes a held sibling slice (ops/dispatch_emit/slice_supersede.py).
+    # DR-208 five-question affirmation (citing dispatch.supersede_slice handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One scratch/warp/<run_id>/superseded.json; no git object, no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The marker, through the atomic writer.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The marker the sibling-hold check and sibling close read.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The marker persists on disk.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.supersede_slice": OpClass.MUTATING,
     # dispatch.release_run_token — MUTATING: deletes one warp run's unclaimed token record
     # (ops/dispatch_emit/release_run_token.py).
     # DR-208 five-question affirmation (citing dispatch.release_run_token handler):

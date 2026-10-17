@@ -2023,7 +2023,7 @@ def test_run_cascade_prints_commit_notice_with_distinct_framing(tmp_path, monkey
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(tmp_path, "docs/plans/2026-09-11-notice-test.md", "---\ntitle: T\nstatus: executing\n---\n\nBody.\n")
 
-    async def _fake_handler(params, repo_root=None):
+    def _fake_handler(params, repo_root=None):
         return {
             "exit_code": 0,
             "advanced": [{"path": "state/handoffs/x.md", "handoff_path": "state/handoffs/x.md"}],
@@ -2031,7 +2031,7 @@ def test_run_cascade_prints_commit_notice_with_distinct_framing(tmp_path, monkey
             "commit_notice": "worktree edits to feature.txt were NOT included",
         }
 
-    monkeypatch.setattr(cascade_mod, "_handler", _fake_handler)
+    monkeypatch.setattr(cascade_mod, "cascade_terminal_sync", _fake_handler)
 
     rc = pst._run_cascade(str(p), "dlv-c3-cli-print-000")
     err = capsys.readouterr().err
@@ -2051,14 +2051,14 @@ def test_run_cascade_no_commit_notice_key_prints_nothing(tmp_path, monkeypatch, 
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(tmp_path, "docs/plans/2026-09-11-no-notice-test.md", "---\ntitle: T\nstatus: executing\n---\n\nBody.\n")
 
-    async def _fake_handler(params, repo_root=None):
+    def _fake_handler(params, repo_root=None):
         return {
             "exit_code": 0,
             "advanced": [{"path": "state/handoffs/x.md", "handoff_path": "state/handoffs/x.md"}],
             "refused": [],
         }
 
-    monkeypatch.setattr(cascade_mod, "_handler", _fake_handler)
+    monkeypatch.setattr(cascade_mod, "cascade_terminal_sync", _fake_handler)
 
     rc = pst._run_cascade(str(p), "dlv-c3-cli-print-001")
     err = capsys.readouterr().err

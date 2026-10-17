@@ -1954,9 +1954,12 @@ def _op_timeout_map_cache_key(claude_klabauter_root: str, env: dict[str, str] | 
 
 
 def _op_timeout_map_cache_path(key: list) -> str:
-    import hashlib  # noqa: PLC0415
+    try:
+        from _sha1 import sha1  # noqa: PLC0415 -- CPython's builtin SHA-1: no _hashlib/OpenSSL load
+    except ImportError:
+        from hashlib import sha1  # noqa: PLC0415
 
-    digest = hashlib.sha1(str(key[0]).encode("utf-8")).hexdigest()[:12]
+    digest = sha1(str(key[0]).encode("utf-8")).hexdigest()[:12]
     return os.path.join(
         _route_unreachable_runtime_base(), "coordinator", f"op-timeouts-{digest}.json"
     )

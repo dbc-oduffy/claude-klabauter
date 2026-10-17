@@ -1605,10 +1605,6 @@ def commit_paths(
             "deliberate marker commit."
         )
 
-    # Every blob and tree lands here as one pack: signing spawns git, and the
-    # ref below must point at objects already on disk.
-    flush_object_batch()
-
     name, email = _identity(repo)
     when = _stamp()
     who = f"{name} <{email}> {when}"
@@ -1625,11 +1621,16 @@ def commit_paths(
         # The ONE conditional spawn on this route, gated behind a zero-spawn
         # config read -- `commit.gpgsign` unset (the default) costs nothing
         # extra, matching claude-klabauter#34's "zero cost when unset".
+        # Signing spawns git, which must find the tree on disk: flush first.
+        flush_object_batch()
         commit_sha, sign_warning = _sign_commit_tree(
             repo, root_tree, old_head, name, email, when, message,
         )
     if commit_sha is None:
+        # Unsigned: the commit object is queued into the batch, so blobs, trees
+        # and commit land as ONE pack. The flush precedes the ref CAS below.
         commit_sha = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
+    flush_object_batch()
 
     target = _cas_target(repo)
     if target is None:

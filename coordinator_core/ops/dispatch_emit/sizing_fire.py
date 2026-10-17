@@ -15,6 +15,8 @@ import yaml
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt, ResumePlan, ledger_halt_path, read_ledger_halt
+
+COMMIT_HALT_KIND = "commit"
 from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.session import record_homes
 
@@ -116,7 +118,7 @@ def resumable_plan(
     neither closed by disposition (`coded`, `delivered_elsewhere`, ...) nor landed by a checkpoint
     commit of this plan or a `ledger-check` halt commit whose `Halt-Plan:` names it; row reports
     on disk are stale history and do not refuse. A plan with rows, every one landed, raises SizingFireRefused ("already ran") unless a ledger-halt pointer
-    names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it. A plan with
+    (`ledger-check` or `commit` halt) names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it. A plan with
     no readable spine or no rows is not resumable (None). One file read, plus one more on the
     already-ran path; one `git log` only when a row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
@@ -171,7 +173,8 @@ def _ledger_halt_for(
     root: Path, plan_rel: str, sizing_rel: str, rows: Sequence, open_ids: Sequence[str], state=None
 ) -> LedgerHalt | None:
     """The ledger halt a refire resumes at, else None. None when a row is `coded` (the terminal
-    commit landed). Otherwise the halt is the newest `ledger-check` halt commit naming the plan
+    commit landed). A commit-halt pointer resumes only with no open id, so an open row takes the
+    ordinary row resume. Otherwise the halt is the newest `ledger-check` halt commit naming the plan
     (`state.ledger_run`) whose committed record names this sizing (and this plan when it records
     one) and staged every id in `open_ids`; its blocking ids come from the pointer when the pointer
     names that run, else the record. With no open id the pointer alone also suffices. `state` is the
@@ -189,6 +192,8 @@ def _ledger_halt_for(
         pointer = read_ledger_halt(ledger_halt_path(resolve_git_common_dir(root), plan_rel))
     if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
         pointer = None
+    if pointer is not None and pointer.halted == COMMIT_HALT_KIND and open_ids:
+        return None
     if pointer is not None and not open_ids:
         # This path spent no git spawn before the sha was needed; the call below is its one `git log`.
         return replace(pointer, halt_sha=_halt_run_landed(root, pointer.run_id, plan_rel)[1])

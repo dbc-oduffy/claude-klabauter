@@ -104,17 +104,28 @@ from coordinator_core.ops.ceremony.commit_gates import (
 )
 from coordinator_core.ops.ceremony.commit_admission import skill_weight_check_worktree
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
-from coordinator_core.ops.ceremony.commit_companion import untracked_companions
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session import claim_index as session_claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
-from coordinator_core.write_guards.guard_class_relay import (
-    detect_class_transition,
-    stage_class_transition_memo,
-)
+
+
+def detect_class_transition(old_source, new_source):
+    """Lazy seam over `guard_class_relay.detect_class_transition`; loads `write_guards.engine`
+    only when a guard module is in the landing."""
+    from coordinator_core.write_guards.guard_class_relay import detect_class_transition as _impl
+
+    return _impl(old_source, new_source)
+
+
+def stage_class_transition_memo(entry, repo_root=None):
+    """Lazy seam over `guard_class_relay.stage_class_transition_memo`."""
+    from coordinator_core.write_guards.guard_class_relay import stage_class_transition_memo as _impl
+
+    return _impl(entry, repo_root=repo_root)
+
 
 #: Prefix filter for the guard-class-relay step below. ONLY paths under this
 #: directory can carry a `write_guards` CLASS constant -- this string compare
@@ -397,6 +408,8 @@ def _peer_claim_warnings(
                 )
     if live_peers:
         try:
+            from coordinator_core.ops.ceremony.commit_companion import untracked_companions
+
             companions = untracked_companions(
                 worktree_root, lookup_result.held_by or {}, live_peers, list(paths)
             )
@@ -573,6 +586,8 @@ def _expand_untracked_dirs(worktree_root: Path, untracked: list) -> list:
     ]
     if not dirs:
         return untracked
+    # DR-344 per-use: runs only for a declared untracked directory (never on the terminal_commit
+    # path); one batched spawn, since the HEAD tree under a directory has no in-process reader here.
     result = run_git(
         ["-C", str(worktree_root), "--no-optional-locks", "ls-tree", "-r", "-z",
          "--name-only", "HEAD", "--", *[d.replace("\\", "/") for d in dirs]]
@@ -614,6 +629,9 @@ def _ignored_untracked(worktree_root: Path, paths: list) -> list:
     if partition is None or not partition[1]:
         return []
     candidates = partition[1]
+    # DR-344 per-use: ignore rules (.gitignore stack, info/exclude, core.excludesFile) have no
+    # in-process evaluator; one batched spawn for all candidates, skipped when the caller supplies
+    # `ignored_untracked` (terminal_commit does, from its status snapshot).
     result = run_git(
         ["-C", str(worktree_root), "--no-optional-locks", "check-ignore", "-z", "--stdin"],
         input=b"\0".join(p.replace("\\", "/").encode("utf-8") for p in candidates),
@@ -652,6 +670,8 @@ def _landed_by_predecessor(worktree_root: Path, message: str) -> Optional[str]:
     """Sha of a recent commit whose message equals `message`, else None; never raises."""
     want = _message_identity(message)
     try:
+        # DR-344 per-use: runs only after NothingToCommit (a retried landing), where one bounded
+        # `git log` message read is the sole way to find the predecessor commit.
         result = run_git(
             ["log", f"-n{_RETRY_LANDED_WINDOW_COMMITS}", "--format=%x1e%H%x1f%ct%x1f%B", "HEAD"],
             cwd=str(worktree_root),

@@ -30,6 +30,26 @@ watch can be run as a single blocking wait.
   continue unrelated work and raise the wait as an ask, or ask what it is waiting on.
 - **Reviewer scaling.** A review roster honours rows-per-reviewer and minimum-size bounds
   per agent, and an unrostered agent counts as not run.
+- **Design-route halt.** `sizing-assemble --design-route` writes the route block, and an
+  unapproved canvas route halts the run for design review after plan and before stage. A
+  `design_approval` record on `dispatch.ask_gate` resumes it.
+- **Split exit for oversized asks.** Sizing marks a bundle of independent initiatives, and the
+  gate and record admit a `split` exit that halts with the slices named.
+- **Research asks.** A free-text research ask sizes to a research hand-back and composes no
+  plan or execute. Scout targets, split and combine modes, per-question Target lines and a cap
+  of eight are supported.
+- **`design.registry.lookup` and `dispatch.release_run_token`** join the spawn-free ops.
+- **`dispatch.supersede_slice`** (`{run_id, by}`) marks a held sibling slice superseded by a
+  named run, so it is never released or fired. Spawn-free.
+- **A reviews mode on `criterion_evidence.record`**, appending five-field rows.
+- **A size-chain verb for grind rows**, looking up the superseded predecessor in Python.
+- **Drive-root guard.** A shell write that creates a new top-level entry at a drive root or
+  home directory is refused.
+- **Percolate-round import check.** The round import-checks its engine modules at the
+  destination before pushing.
+- **`reap_abandoned_runs` ends a tokenless run** that has been quiet for an hour, and an
+  ownerless run token reads as ended past the unlaunched grace.
+- **`review_stamp` judge-only mint** writes the judged register rows back to the sizing.
 
 ### Changed
 
@@ -39,6 +59,34 @@ watch can be run as a single blocking wait.
 - **Memory-cap resolution is strict by default**, so a box-wide warn no longer opens it.
 - **The ask workflow has fewer serial phases:** no readiness gate, no standalone stage or
   review-prep agent, and the criterion judge and docs run as one verify agent.
+- **`terminal_commit` is faster:** the full path drops from 565.6ms to 214-294ms net process
+  time, with `asyncio` off the commit path: the handoff, cascade, archive-stamp and baton-ship
+  legs run synchronous cores, the completion entry is one write and each commit is one pack. Reviewer-applied fixes are re-expected rather than counted as drift, a warp run
+  manifest passed as `--inventory` is refused with the `--plan --review-only` route, and the
+  stranded map lists each chunk's paths sorted.
+- **The op-CLI warm hop** drops from 323-375ms and 6 processes to about 250ms and 4. The
+  child's caller-context leg drops from 53.3ms to 32.5ms, and the parent's provenance sink,
+  `cc_invoke` per-call work and `cross-repo-memo list` sender lookup are cut.
+- **A refire inherits the halted run's recorded base**, so chunks that already landed are
+  credited. Checkpoint commits carry the plan and base trailers whenever a plan path exists.
+- **Ledger halts are stricter and resumable.** A chunk lands only when its full declared write
+  set is committed; a halt commit never lands a partial chunk; the in-run halt names only
+  rulable ids.
+- **Blob-drift checks account for review fixes**, take the newest of the last write and the
+  reviewed bytes as the expectation, and skip a path the commit leaves equal to HEAD.
+- **Peer-claim checks cover only the paths a commit carries**, count live-run manifest writes,
+  and ignore a halted run's declarations. A token-less plan run takes its seniority from its
+  emitted script.
+- **The falsifier folds into the plan author** on every path, and its rubric identity joins
+  the verdict cache key, so a rubric change misses a cached verdict.
+- **The check leg and its skip are removed**, as is the standalone stage fallback; a missing
+  fold now halts. Plan scaffolds drop the commented optional-keys block.
+- **Halts name the refire**, not journal replay, and the owed handback shows each row's own
+  route.
+- **Vendored contracts refreshed:** cockpit contract 4.13.0, plan schema 2.39.0 and
+  sizing-object 1.42.0.
+- **`commit_paths` refuses a path** whose assembled blob or read bytes differ from the
+  caller's declaration.
 
 ### Fixed
 
@@ -46,6 +94,24 @@ watch can be run as a single blocking wait.
   `<name>-e4`). The handle now resolves at runtime, so it survives the publish scrub.
 - **Run-close and publish stamps** name the root's own source head rather than another
   repo's.
+- **`sizing-assemble --register -` and `--scout-register -`** route cold so piped stdin
+  reaches the engine.
+- **`gate_clear` clears `blocked_by` to an empty list** instead of deleting it, and a halted
+  all-rows commit frees held siblings.
+- **A slice held behind a halted predecessor starts** once that predecessor's plan is stamped
+  implemented: the stamp closes the halted sibling run. A fresh `{ask, supersedes}`
+  submission marks the held slice superseded instead of releasing it.
+- **A run's own checkpoint commits no longer refuse its landing** as a since-base overlap, and
+  an all-landed commit-halted run closes on refire through the resume ledger.
+- **A lossy relayed prep** never crashes or falsely halts a review wave, and
+  `read_spawn_prompt` reads the task record behind a relayed user-request record.
+- **A review target refuses a non-repo root** instead of creating a stray `.git`.
+- **The destructive-command guard** no longer reads a POSIX argv0 as a spaced Windows path.
+- **Text-mode file opens** in POSIX exec use explicit UTF-8.
+- **A revise on a reused sizing** lands its origin revision, and a revision invalidates the
+  cache.
+- **A null `run_base_sha`** is dropped at assembly rather than stamped into plans.
+- **A no-commit plan stamp** ships its baton on the product sha.
 
 ## [0.3.0] — 2026-10-01
 

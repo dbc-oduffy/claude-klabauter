@@ -76,9 +76,11 @@ def run_base_for(worktree_root: Path, run_id: Optional[str], params: Mapping) ->
 
 
 def since_base_findings(
-    worktree_root: Path, paths: Sequence[str], base_sha: str, *, run_id: Optional[str]
+    worktree_root: Path, paths: Sequence[str], base_sha: str, *, run_id: Optional[str],
+    plan: Optional[str] = None,
 ) -> list[Finding]:
-    """Findings for landing blobs that drop lines a foreign commit added since ``base_sha``."""
+    """Findings for landing blobs that drop lines a foreign commit added since ``base_sha``;
+    ``plan`` lets the run's own re-fire checkpoints read as own."""
     from coordinator_core.git import since_base_overlap
 
-    return list(since_base_overlap.find_overlaps(worktree_root, paths, base_sha, run_id=run_id))
+    return list(since_base_overlap.find_overlaps(worktree_root, paths, base_sha, run_id=run_id, plan=plan))

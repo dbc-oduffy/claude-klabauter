@@ -186,3 +186,28 @@ def test_slice_source_key_and_reader():
 )
 def test_slice_ask_source_none_for_absent_or_malformed(sizing):
     assert c.slice_ask_source(sizing) is None
+
+
+def test_release_skip_frees_nothing_skipped_and_leaves_slot_free():
+    parent = c.ParentRecord(
+        "p",
+        (
+            c.SiblingRun("r1", "b", status=c.STATUS_QUEUED),
+            c.SiblingRun("r2", "c", status=c.STATUS_QUEUED),
+        ),
+    )
+    statuses = {"r1": "queued", "r2": "queued"}
+    assert c.release(parent, statuses, 1, frozenset({"r1"})) == ("r2",)
+    assert c.release(parent, statuses, 1) == ("r1",)
+
+
+def test_superseded_marker_path_and_reader(tmp_path):
+    assert c.superseded_rel("r") == "scratch/warp/r/superseded.json"
+    assert c.read_superseded_by(tmp_path, "r") is None
+    path = tmp_path / c.superseded_rel("r")
+    path.parent.mkdir(parents=True)
+    path.write_text("{bad", encoding="utf-8")
+    assert c.read_superseded_by(tmp_path, "r") is None
+    path.write_text('{"superseded_by": "n"}', encoding="utf-8")
+    assert c.read_superseded_by(tmp_path, "r") == "n"
+    assert (c.CLOSED_BY_KEY, c.SUPERSEDED_BY_KEY) == ("closed_by", "superseded_by")

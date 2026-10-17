@@ -59,6 +59,7 @@ import pytest
 import yaml
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
+import coordinator_core.execute_plan_assemble.goal_gate as goal_gate
 from coordinator_core.frontmatter.primitives import canonical_body_sha
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -553,7 +554,7 @@ class TestGoalGateEndToEnd:
         sibling_sha = _head_sha(sibling)
 
         monkeypatch.setattr(
-            coas,
+            goal_gate,
             "registry_get",
             lambda key: str(sibling) if key == "repos.klabauter" else None,
         )
@@ -579,7 +580,7 @@ class TestGoalGateEndToEnd:
         root = tmp_path
         _init_repo(root)
         shipping_sha = _land_the_shipping_chunk(root)
-        monkeypatch.setattr(coas, "registry_get", lambda key: None)
+        monkeypatch.setattr(goal_gate, "registry_get", lambda key: None)
         goal_fm = _prime_exit_criterion_block(
             baseline_ref="klabauter:eb6be84a",
             exit_criterion_met=_asserted_pass_block(),

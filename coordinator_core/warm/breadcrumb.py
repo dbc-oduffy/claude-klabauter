@@ -68,7 +68,10 @@ Negative-spec:
 from __future__ import annotations
 
 import calendar
-import hashlib
+try:
+    from _sha1 import sha1 as _sha1  # CPython's builtin SHA-1: no _hashlib/OpenSSL load
+except ImportError:  # pragma: no cover
+    from hashlib import sha1 as _sha1
 import json
 import os
 import time
@@ -199,7 +202,7 @@ def svc_dir(engine_root: Optional[Path] = None) -> Path:
     as before.
     """
     root = Path(engine_root) if engine_root is not None else _default_engine_clone()
-    clone_hash = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    clone_hash = _sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
     return _runtime_base() / "coordinator" / "warm" / clone_hash
 
 

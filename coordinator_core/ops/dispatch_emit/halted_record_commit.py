@@ -33,10 +33,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
+    RUN_OUTCOME_FILE,
     LedgerHalt,
     halted_record_message,
     ledger_halt_path,
     write_ledger_halt,
+    write_run_outcome,
 )
 
 
@@ -214,13 +216,32 @@ def _ledger_halt_plan_and_blocking(repo_root: Path, halted: dict) -> tuple:
     return plan_rel, tuple(i["id"] for i in items), items
 
 
-def _settle_ledger_pointer(repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str]) -> None:
-    """A landed ledger-check halt writes its plan's ledger-halt pointer; any other landed halt for
+def _persist_run_outcome(repo_root: Path, run_id: str, halted: dict, params: dict) -> Optional[str]:
+    """Write the run's review outcome into its record dir for an all-landed commit halt (a dict
+    ``params.run_outcome`` with a dict ``inline_review`` and no incomplete chunk); returns its
+    repo-relative posix path, else None."""
+    outcome = params.get("run_outcome")
+    if halted.get("halted") != "commit" or not isinstance(outcome, dict):
+        return None
+    if not isinstance(outcome.get("inline_review"), dict) or outcome.get("incomplete_chunks"):
+        return None
+    write_run_outcome(repo_root, run_id, outcome)
+    return f"{RECORD_DIR_ROOT}/{run_id}/{RUN_OUTCOME_FILE}"
+
+
+def _settle_ledger_pointer(
+    repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str] = None
+) -> None:
+    """A landed ledger-check halt writes its plan's ledger-halt pointer; a commit halt with a
+    persisted outcome writes a ``halted="commit"`` pointer naming it; any other landed halt for
     a known plan unlinks a stale one. A halt without a relative, contained plan touches nothing."""
     plan_rel, blocking, _items = _ledger_halt_plan_and_blocking(repo_root, halted)
     if plan_rel is None:
         return
     path = ledger_halt_path(repo_root, plan_rel)
+    if halted["halted"] == "commit" and outcome_rel and sizing_rel:
+        write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, (), halted="commit", outcome=outcome_rel))
+        return
     if halted["halted"] != "ledger-check":
         path.unlink(missing_ok=True)
         return
@@ -252,14 +273,18 @@ def _review_written(worktree_root: Path, session_id: Optional[str], run_id: str)
         return None
 
 
-def _integrity_findings(worktree_root: Path, run_id: str, base: Optional[str], paths: list) -> list:
+def _integrity_findings(
+    worktree_root: Path, run_id: str, base: Optional[str], paths: list, plan: Optional[str] = None
+) -> list:
     """Parse and since-base-overlap findings over ``paths``; the overlap arm is skipped when the
     run has no recorded ``base``."""
     from coordinator_core.ops.dispatch_emit import landing_integrity
 
     found = landing_integrity.unparseable_py(worktree_root, paths)
     if base is not None and paths:
-        found += landing_integrity.since_base_findings(worktree_root, paths, base, run_id=run_id)
+        found += landing_integrity.since_base_findings(
+            worktree_root, paths, base, run_id=run_id, plan=plan
+        )
     return found
 
 
@@ -300,6 +325,7 @@ def _land(
     ):
         declared.append(sizing_rel)
 
+    outcome_rel = _persist_run_outcome(worktree_root, run_id, halted, params)
     if (worktree_root / record_dir_rel).is_dir():
         plan_rel, blocking, blocking_items = (
             _ledger_halt_plan_and_blocking(repo_root, halted)
@@ -405,8 +431,12 @@ def _land(
             worktree_root, owner, product + gone + art_paths, (import_closure, ts_import_closure)
         )
         withheld.update({p: "import-closure-open" for p in product + gone if owner.get(p) in closure_open})
+        plan = halted.get("plan") if isinstance(halted.get("plan"), str) else None
+        if not plan:
+            marker, _ = _run_request(worktree_root, params.get("script_path"))
+            plan = getattr(marker, "plan_path", None)
         integrity = _integrity_findings(
-            worktree_root, run_id, run_base, [p for p in product if p not in withheld]
+            worktree_root, run_id, run_base, [p for p in product if p not in withheld], plan
         )
         if integrity:
             bad_chunks = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}
@@ -439,7 +469,7 @@ def _land(
     review_reply["review_edits_unlanded"] = unlanded
 
     if not paths and not deleted:
-        _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
+        _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **review_reply, **base,
@@ -470,7 +500,7 @@ def _land(
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
     extra: dict = dict(review_reply)
     if not reply.get("error"):
-        _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel)
+        _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         left = run_artifacts.residue(
             artifacts, set(snapshot.changed) - set(paths) - set(deleted), paths + deleted, withheld
         )

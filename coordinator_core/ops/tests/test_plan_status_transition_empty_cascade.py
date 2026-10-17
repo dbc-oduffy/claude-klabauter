@@ -20,7 +20,7 @@ both into exit_code 2.
 Mirrors this file's sibling `test_plan_status_transition.py`'s own
 `_run_cascade`-level test shape (`test_run_cascade_prints_commit_notice_with_
 distinct_framing` et al.) — same `_write` helper, same
-`cascade_mod._handler` monkeypatch seam, called directly rather than through
+`cascade_mod.cascade_terminal_sync` monkeypatch seam, called directly rather than through
 the full CLI, since `_run_cascade` is the unit this item's fix touches.
 """
 
@@ -49,7 +49,7 @@ def test_empty_cascade_for_every_kind_exits_0_with_note(tmp_path, monkeypatch, c
         "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
     )
 
-    async def _fake_handler(params, repo_root=None):
+    def _fake_handler(params, repo_root=None):
         return {
             "exit_code": 1,
             "candidates_matched": 0,
@@ -61,7 +61,7 @@ def test_empty_cascade_for_every_kind_exits_0_with_note(tmp_path, monkeypatch, c
             ),
         }
 
-    monkeypatch.setattr(cascade_mod, "_handler", _fake_handler)
+    monkeypatch.setattr(cascade_mod, "cascade_terminal_sync", _fake_handler)
 
     rc = pst._run_cascade(str(p), "dlv-empty-cascade-000")
     err = capsys.readouterr().err
@@ -84,7 +84,7 @@ def test_matched_but_all_refused_still_exits_2(tmp_path, monkeypatch, capsys) ->
         "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
     )
 
-    async def _fake_handler(params, repo_root=None):
+    def _fake_handler(params, repo_root=None):
         if params["target_kind"] == "handoff":
             return {
                 "exit_code": 1,
@@ -101,7 +101,7 @@ def test_matched_but_all_refused_still_exits_2(tmp_path, monkeypatch, capsys) ->
             "error": "deliverable.cascade_terminal: no live sizing carries this deliverable_id",
         }
 
-    monkeypatch.setattr(cascade_mod, "_handler", _fake_handler)
+    monkeypatch.setattr(cascade_mod, "cascade_terminal_sync", _fake_handler)
 
     rc = pst._run_cascade(str(p), "dlv-refused-cascade-000")
     err = capsys.readouterr().err

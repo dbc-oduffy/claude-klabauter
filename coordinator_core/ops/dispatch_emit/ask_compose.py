@@ -2531,6 +2531,11 @@ def compose_ask_script(
         f": (_halted?.next_action?.kind === 'repin_register' ? _halted.next_action : {stopped_na});"
     )
     b.append("  let _reviseAndRefire = _closeable ? null : _mkRevise();")
+    b.append(
+        f"  if (_resumeLedger && _nextAction && _nextAction.params && _gate.{RESUME_LEDGER_KEY}.inline_review "
+        f"&& typeof _gate.{RESUME_LEDGER_KEY}.inline_review === 'object') "
+        f"{{ _nextAction.params.inline_review = {{ ..._gate.{RESUME_LEDGER_KEY}.inline_review }}; }}"
+    )
     # An end that is not closeable and carries no halt would return with neither a commit nor a
     # halted_by; it halts here so the halt-record commit lands the run record.
     unclosable_kind = (
@@ -2766,9 +2771,11 @@ def _append_docs_and_commit(
     )
     b.append(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
-        "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null }; "
-        "_nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
-        "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); }"
+        "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
+        "plan: _planRel ?? null, sizing: _sizingRel ?? null }; "
+        "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
+        "else { _nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
+        "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); } }"
     )
     b.append("  }")
 
@@ -2862,7 +2869,13 @@ def _halt_record_commit_fn(
         f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
-        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS} }})",
+        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS}, "
+        "...(_nextAction && _nextAction.kind === 'terminal_commit' && _nextAction.params && _nextAction.params.inline_review "
+        "? { run_outcome: { inline_review: _nextAction.params.inline_review, "
+        "incomplete_chunks: _nextAction.params.incomplete_chunks ?? [], "
+        "landed_chunks: _nextAction.params.landed_chunks ?? [], "
+        "ledger_verdict: _nextAction.params.ledger_verdict ?? null, "
+        "plan_path: _nextAction.params.plan_path ?? _planRel ?? null } } : {}) })",
         "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, error, refused, "
         "run_artifacts and run_artifact_residue, verbatim (null where absent). Run nothing else.",

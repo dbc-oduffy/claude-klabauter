@@ -64,11 +64,11 @@ def test_plan_cascade_entry_passes_attributable_session_as_caller(tmp_path, monk
     )
     seen = []
 
-    async def spy(*args, **kwargs):
+    def spy(*args, **kwargs):
         seen.append(kwargs.get("caller_session_id"))
         return "stop here"
 
     monkeypatch.setattr(session_core, "attributable_session_id", lambda: _CALLER)
-    monkeypatch.setattr(cascade_mod, "_predicate_refusal", spy)
+    monkeypatch.setattr(cascade_mod, "_predicate_refusal_sync", spy)
     pst._run_cascade(str(plan), "dlv-self-000000")
     assert seen and set(seen) == {_CALLER}

@@ -34,7 +34,7 @@ from coordinator_core.ops.review_mint.wave_not_run import (
     WAVE_NOT_RUN_VAR,
     not_run_entry_js as _not_run_entry_js,
 )
-from coordinator_core.ops.review_partition_slices import MAX_SLICES
+from coordinator_core.ops.review_slice_limits import MAX_SLICES
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
