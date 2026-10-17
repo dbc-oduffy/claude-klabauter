@@ -127,3 +127,15 @@ def test_clean_session_reply_has_no_key(repo):
     )
 
     assert "own_left_behind" not in result
+
+
+def test_a_session_git_scratch_touch_is_never_carried(repo):
+    scratch = f".git/coordinator-sessions/{SELF}/review-targets.txt"
+    (repo / scratch).parent.mkdir(parents=True, exist_ok=True)
+    (repo / scratch).write_text("a.py\n", encoding="utf-8")
+    session_scope.touch(SELF, scratch, cwd=str(repo))
+
+    result = _call(repo, {"paths": ["a.py"], "message": "m", "carry_own_left_behind": True})
+
+    assert result["committed"] is True, result
+    assert _files(repo) == {"a.py", "b.py", "new.py"}

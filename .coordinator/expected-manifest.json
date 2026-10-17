@@ -2089,8 +2089,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "2b7ed2c1d82ff07754da45548f82d81aab901449",
-    "coordinator_core/_engine_stamp": "2d5ef4746e1c1494d4d79ae92c49625c817ca3dc",
+    "coordinator_core/_engine_published_at": "e0e283cd3a211658bd2ceb42e89768258fc798e4",
+    "coordinator_core/_engine_stamp": "fab5411353e74357729af766ca3e4a97ee09c559",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4174,7 +4174,7 @@
     "coordinator_core/ops/ceremony/commit_path_legality.py": "4b376635d7f26b7e368177d45ed409bb9c6c2a4c",
     "coordinator_core/ops/ceremony/commit_reconcile.py": "63c7e6843b4a074377d6254855176f9dfe91057a",
     "coordinator_core/ops/ceremony/commit_source.py": "aa56a808c7280ec42d34ad641b0acf1ae9f92a12",
-    "coordinator_core/ops/ceremony/commit_v2.py": "24d2d4d9a2c24b6756ac841ab5007a9126126455",
+    "coordinator_core/ops/ceremony/commit_v2.py": "d417bf95e46242a646000b5dd66ac9016c21bbd9",
     "coordinator_core/ops/ceremony/completion_entry.py": "e08c5f65db9fadf02adbee59e3eb4c19277af460",
     "coordinator_core/ops/ceremony/detached_render_commit.py": "846ec7428103f5bbf9e1956ba15b6d2ebf38b696",
     "coordinator_core/ops/ceremony/detached_spawn.py": "932b5284fb22ee5b957e3c6b2f8274ea7d15c8f7",
@@ -4240,7 +4240,7 @@
     "coordinator_core/ops/ceremony/tests/test_commit_v2_ignored_paths.py": "37af14bb83ea3d8144f9babe443f62f8edc6fdd1",
     "coordinator_core/ops/ceremony/tests/test_commit_v2_import_set.py": "736933aec0edef4f79949eac2e96c9feffb24f4d",
     "coordinator_core/ops/ceremony/tests/test_commit_v2_ledger_row.py": "ea91046a2ea18c6831174266c9ce8844b5830cca",
-    "coordinator_core/ops/ceremony/tests/test_commit_v2_own_left_behind.py": "4746f66d699c1abacea9e18cbafef85c8ae42a33",
+    "coordinator_core/ops/ceremony/tests/test_commit_v2_own_left_behind.py": "8eb2004108ae0f06d7fde2de892dde77d5f45325",
     "coordinator_core/ops/ceremony/tests/test_commit_v2_peer_claim_warn.py": "b0692255f0e45b215fcf4e9ef9a3e0fa8c06f2e6",
     "coordinator_core/ops/ceremony/tests/test_commit_v2_pre_commit_gates.py": "9639ba576f021fca6789c6ffa37efd5bc9c9d524",
     "coordinator_core/ops/ceremony/tests/test_commit_v2_prefer_deliberate_stage.py": "af707e5362c3fc66d1a8194bf77d925deeafdeaa",
@@ -8256,5 +8256,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "9f7a2132f2ecae850b47e2eec8a776671cc97d27"
+  "source_head": "aef38fdba209c1f86eb004daf0cf9e8bd6fba383"
 }

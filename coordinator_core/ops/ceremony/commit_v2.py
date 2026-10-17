@@ -111,6 +111,7 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
+from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 
 
 def detect_class_transition(old_source, new_source):
@@ -1225,6 +1226,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         except Exception as exc:  # noqa: BLE001
             stopped_carried, stopped_withheld = {}, {}
             stopped_error = f"stopped-run residue unavailable ({type(exc).__name__}); nothing carried"
+    # The session's own `.git/` scratch (review-targets.txt) sits in its touch list but never
+    # in a tree: carrying it makes commit_paths refuse the whole commit.
+    free = [p for p in free if canonical_repo_relative_path_refusal(p) is None]
+    stopped_carried = {
+        rid: [p for p in ps if canonical_repo_relative_path_refusal(p) is None]
+        for rid, ps in stopped_carried.items()
+    }
     stopped_flat = list(dict.fromkeys(p for ps in stopped_carried.values() for p in ps))
     carried: list = []
     if (raw_carry and free) or stopped_flat:
