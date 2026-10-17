@@ -134,3 +134,14 @@ def test_not_met_verdict_is_not_touched_by_the_diff(run, monkeypatch):
     verdict = {"items": [{"id": "R1", "status": "not_met", "remaining": ["wire it"]}]}
     refusal = _gate(run, _resume(run), verdict)
     assert all(f["reason"] != UNCHANGED_SINCE_HALT_REASON for f in refusal["ledger_failures"])
+
+
+def test_verified_only_with_executed_evidence_passes(run):
+    resume = {**_resume(run), "verified_only": {"R1": {"command": "python gate20.py", "observed": "20/20, 0 -32004"}}}
+    assert _gate(run, resume) is None
+
+
+@pytest.mark.parametrize("ev", [{}, {"command": "python gate20.py"}, {"observed": "ok"}, {"command": " ", "observed": "ok"}, True])
+def test_verified_only_without_evidence_is_refused(run, ev):
+    resume = {**_resume(run), "verified_only": {"R1": ev}}
+    assert _gate(run, resume)["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]

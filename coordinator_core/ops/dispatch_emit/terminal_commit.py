@@ -1929,6 +1929,21 @@ def _declared_product_paths(manifest_path: Optional[Path]) -> list:
     return paths
 
 
+def verified_only_rows(resume: object) -> dict:
+    """``{row_id: {command, observed}}`` from a ledger resume's ``verified_only``: rows whose only
+    remainder was a check, discharged by one that ran. An entry missing either string is no
+    exemption -- a bare claim is what the unchanged-since-halt guard exists to refuse."""
+    raw = resume.get("verified_only") if isinstance(resume, dict) else None
+    out: dict = {}
+    for row_id, ev in (raw.items() if isinstance(raw, dict) else ()):
+        if not isinstance(ev, dict):
+            continue
+        command, observed = ev.get("command"), ev.get("observed")
+        if isinstance(command, str) and command.strip() and isinstance(observed, str) and observed.strip():
+            out[str(row_id)] = {"command": command.strip(), "observed": observed.strip()}
+    return out
+
+
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
 ) -> list:
@@ -1944,6 +1959,8 @@ def _unchanged_since_halt_failures(
         str(i["id"]) for i in items
         if isinstance(i, dict) and i.get("id") in blocking and i.get("status") in ("met", "post_commit")
     ]
+    exempt = verified_only_rows(resume)
+    judged = [i for i in judged if i not in exempt]
     if not judged:
         return []
     halt_sha = resume.get("halt_sha")
@@ -4443,6 +4460,10 @@ def _terminal_commit_inner(
     trailers.extend(
         "Requirement-Open: " + " ".join((str(row["id"]) + " " + str(row["reason"])).split())
         for row in open_rows
+    )
+    trailers.extend(
+        f"Verified-Only: {rid} -- {' '.join(ev['command'].split())} -> {' '.join(ev['observed'].split())}"
+        for rid, ev in sorted(verified_only_rows(params.get(TERMINAL_RESUME_LEDGER_PARAM)).items())
     )
     trailers.append(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
