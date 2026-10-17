@@ -103,6 +103,13 @@ watch can be run as a single blocking wait.
   submission marks the held slice superseded instead of releasing it.
 - **A run's own checkpoint commits no longer refuse its landing** as a since-base overlap, and
   an all-landed commit-halted run closes on refire through the resume ledger.
+- **A re-fire after a re-plan dispatches the rows the re-plan added** on that same fire, in
+  dependency order, instead of only the previously incomplete row and then halting at
+  ledger-check. The gate records a resume snapshot and the stage keeps every row outside it.
+- **A refire after a ledger-check halt** carries each blocking row's remaining work and
+  evidence, and refuses when nothing changed since the halt.
+- **A watched task reads as gone** only on the harness's own `No task found with ID: <id>`
+  result, never on quoted prose.
 - **A lossy relayed prep** never crashes or falsely halts a review wave, and
   `read_spawn_prompt` reads the task record behind a relayed user-request record.
 - **A review target refuses a non-repo root** instead of creating a stray `.git`.

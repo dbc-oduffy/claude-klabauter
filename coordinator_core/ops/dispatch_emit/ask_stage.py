@@ -77,7 +77,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit import requirements_ledger, sibling_split
+from coordinator_core.ops.dispatch_emit import requirements_ledger, resume_snapshot, sibling_split
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
@@ -354,13 +354,18 @@ def _engine_rows(
     return tuple(engine_owner_rows(plan_rows, [r for r in register if isinstance(r, Mapping)], evidence, root))
 
 
-def _only_rows(rows: list, exclusions: list, keep: frozenset) -> tuple[list, list]:
+def _only_rows(
+    rows: list, exclusions: list, keep: frozenset, not_to_run: Optional[frozenset] = None
+) -> tuple[list, list]:
     """The resume subset of a spine read: `keep` rows only, edges onto the dropped (landed) rows
-    stripped, and only `keep` rows among the owed/gated exclusions."""
+    stripped, and only `keep` rows among the owed/gated exclusions. With `not_to_run` (the gate's
+    snapshot), every known row outside it is kept, rows a re-plan added included."""
     known = {r.id for r in rows} | {e.get("id") for e in exclusions}
     unknown = keep - known
     if unknown:
         raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(unknown)}")
+    if not_to_run is not None:
+        keep = frozenset(known - not_to_run)
     landed = known - keep
     kept = []
     for row in rows:
@@ -549,7 +554,9 @@ def stage(
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     if only_rows is not None:
-        rows, exclusions = _only_rows(rows, exclusions, frozenset(only_rows))
+        rows, exclusions = _only_rows(
+            rows, exclusions, frozenset(only_rows), resume_snapshot.read(root, run_id, plan_posix)
+        )
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []

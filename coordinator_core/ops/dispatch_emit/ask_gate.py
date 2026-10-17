@@ -458,7 +458,30 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")),
     )
+    if params.get("run_id"):
+        _record_resume_snapshot(root, params["run_id"], verdict)
     return (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+
+
+def _record_resume_snapshot(root: Path, run_id: str, verdict: GateVerdict) -> None:
+    """Write the run's resume snapshot (the plan's row ids minus `resume_rows`) for a row resume,
+    else clear it, so a snapshot from an earlier gate call never outlives its verdict. Every spine
+    entry counts, owed and gated rows included. One plan read, no git spawn."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit import resume_snapshot
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
+
+    if verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
+        plan = root / verdict.resume_plan
+        try:
+            result = load_rows_memo(plan.read_text(encoding="utf-8"))
+        except OSError:
+            result = None
+        if result is not None and result.status is LocateStatus.LOCATED:
+            ids = {r["id"] for r in result.rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
+            resume_snapshot.write(root, run_id, verdict.resume_plan, ids - set(verdict.resume_rows))
+            return
+    resume_snapshot.clear(root, run_id)
 
 
 def _bind_run(root: Path, run_id: str, sizing_rel: str) -> Optional[str]:
