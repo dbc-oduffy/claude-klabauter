@@ -4,7 +4,8 @@ Lands the union of the finished rows' declared product paths as one ``ceremony.c
 with a ``Grind-Row:`` trailer per landed row. A path the commit cannot land (a ledger-root path, a
 deletion git never saw) is dropped and reported, never a reason to refuse the call. A landed row's
 ledger is settled afterwards. The run token is redeemed, consumed on a landed commit and released
-on every other return.
+on every other return. A repeat call after a landing is answered from the run token's spent
+receipt and lands nothing.
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ from typing import Optional
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
+    ALREADY_LANDED_KEY,
     DROP_LEDGER_ROOT,
     DROP_UNSEEN_DELETION,
     GRIND_COMMIT_PARAM,
+    UNLANDED_KEY,
     partition_ledger_paths,
     render_row_trailer,
     validate_grind_params,
@@ -42,22 +45,47 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict) -> dict:
     token = params.get("run_token")
     script_path = params.get("script_path")
     if token is not None and not run_token.redeem(main_root, run_id, token, script_path):
+        receipt = run_token.spent_receipt(main_root, run_id, token, script_path)
+        if receipt is not None:
+            return _already_landed(receipt, grind)
         return _error(
             "params.run_token does not match a live, unspent token minted for params.run_id and "
             "this script (a token admits one landed commit)",
             refused="run-token",
         )
-    landed = False
+    landed = None
     try:
         reply = _land(main_root, repo_root, params, grind)
-        landed = reply.get("committed") is True
+        if reply.get("committed") is True:
+            landed = {"sha": reply.get("sha"), "rows": reply.get("rows") or [], "paths": reply.get("paths") or []}
         return reply
     finally:
         if token is not None:
-            if landed:
-                run_token.consume(main_root, run_id)
+            if landed is not None:
+                run_token.consume(main_root, run_id, landed=landed)
             else:
                 run_token.release(main_root, run_id, token, script_path)
+
+
+def _already_landed(receipt: dict, grind: dict) -> dict:
+    """Answer a repeat call from the spent receipt: nothing lands, nothing settles."""
+    sha = receipt.get("sha")
+    landed_rows = {r.get("row_id"): r for r in receipt.get("rows") or [] if isinstance(r, dict)}
+    requested = [r["row_id"] for r in grind["rows"]]
+    return {
+        "committed": True,
+        "sha": sha,
+        "rows": [landed_rows[i] for i in requested if i in landed_rows],
+        "dropped": [],
+        ALREADY_LANDED_KEY: True,
+        UNLANDED_KEY: [
+            {
+                "row_id": i,
+                "reason": f"row {i} is not in the commit {sha} this run already landed; it needs a new run",
+            }
+            for i in requested if i not in landed_rows
+        ],
+    }
 
 
 def _land(main_root: Path, repo_root: Path, params: dict, grind: dict) -> dict:

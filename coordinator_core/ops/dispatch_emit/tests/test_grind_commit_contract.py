@@ -22,6 +22,12 @@ def _good() -> dict:
     }
 
 
+def test_reply_keys_are_pinned_and_documented():
+    assert gcc.ALREADY_LANDED_KEY == "already_landed"
+    assert gcc.UNLANDED_KEY == "unlanded"
+    assert gcc.ALREADY_LANDED_KEY in gcc.__doc__ and gcc.UNLANDED_KEY in gcc.__doc__
+
+
 def test_accepts_well_formed_params():
     assert gcc.validate_grind_params(_good()) is None
 

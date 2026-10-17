@@ -4,8 +4,12 @@ Shared by the op that lands a grind's finished rows and by the emitter that comp
 imports nothing beyond the standard library.
 
 Handler reply shape: ``{committed, sha, rows: [{row_id, outcome, sha}],
-dropped: [{row_id, path, reason}], error, refused}``. A path the commit cannot land is dropped with
-a ``DROP_*`` reason, never refused; only a malformed path refuses the call.
+dropped: [{row_id, path, reason}], error, refused, already_landed, unlanded}``. A path the commit
+cannot land is dropped with a ``DROP_*`` reason, never refused; only a malformed path refuses the call.
+``already_landed`` (``ALREADY_LANDED_KEY``) is true only on a repeat call answered from the run
+token's spent receipt: ``sha`` and ``rows`` are the first landing's, nothing landed again.
+``unlanded`` (``UNLANDED_KEY``) is ``[{row_id, reason}]`` for each requested row the landed commit
+did not carry; the reason names the landed sha. Both keys are absent on a first landing.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ from typing import Optional
 from urllib.parse import quote, unquote
 
 GRIND_COMMIT_PARAM = "grind"
+ALREADY_LANDED_KEY = "already_landed"
+UNLANDED_KEY = "unlanded"
 ROW_TRAILER_KEY = "Grind-Row"
 LEDGER_ROOT = "state/queue-grind/"
 DROP_LEDGER_ROOT = "ledger-root"

@@ -70,11 +70,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     scout_assemble_flags_js,
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
+    ALREADY_LANDED_KEY,
     DECISIONS_FLAG,
     DECLARED_FLAG,
     HISTORICAL_RECORD_PREFIXES,
     QUEUE_FLAG,
     SWEEP_FLAG,
+    UNLANDED_KEY,
 )
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
@@ -1147,6 +1149,17 @@ _TERMINAL_COMMIT_SCHEMA = {
         },
         "error": {"type": ["string", "null"]},
         "refused": {"type": ["string", "null"]},
+        ALREADY_LANDED_KEY: {"type": ["boolean", "null"]},
+        UNLANDED_KEY: {
+            "type": ["array", "null"],
+            "items": {
+                "type": "object",
+                "properties": {
+                    "row_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
     },
 }
 
@@ -1184,8 +1197,8 @@ def compose_grind_terminal_commit_call(
         ("expr", f"_terminalCommitParamsBlock({params_js})"),
         (
             "lit",
-            "\n\nReturn from its JSON reply committed, sha, rows, dropped, error and refused, "
-            "verbatim (null where absent). Run nothing else.",
+            "\n\nReturn from its JSON reply committed, sha, rows, dropped, error, refused, "
+            f"{ALREADY_LANDED_KEY} and {UNLANDED_KEY}, verbatim (null where absent). Run nothing else.",
         ),
     ]
     return _compose_commit_agent_call(
@@ -1239,6 +1252,27 @@ def compose_review_fix_commit_call(
     )
 
 
+#: Percent-encodes the characters `encodeURIComponent` leaves that a shell reads (`!'()*~`), so an
+#: urlenc payload is a shell-inert word that needs no quoting.
+_URLENC_SHELL_INERT_JS = ".replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())"
+
+#: Windows Git Bash cuts a `bash -c` command string at ~8191 characters, so a run record past that
+#: arrives as "unexpected EOF while looking for matching `''". Every Bash call stays under this cap.
+BASH_COMMAND_CAP = 8000
+
+_PIECE_CHARS = 5000
+
+
+def _piece_blocks_part(enc_js: str, file_js: str) -> tuple[str, str]:
+    """A prompt part: one fenced `printf %s <piece> >> file` Bash call per ``_PIECE_CHARS`` of the
+    shell-inert payload ``enc_js``, so no single command nears ``BASH_COMMAND_CAP``."""
+    return (
+        "expr",
+        f"({enc_js}).replace(/.{{1,{_PIECE_CHARS}}}/g, "
+        f"c => '```\\nprintf %s ' + c + ' >> ' + ({file_js}) + '\\n```\\n')",
+    )
+
+
 def compose_ledger_sweep_call(
     *,
     models: Optional[Mapping[str, str]] = None,
@@ -1255,41 +1289,65 @@ def compose_ledger_sweep_call(
     declared_js: str,
     decisions_js: str,
 ) -> str:
-    """The drain's `ledger-sweep` op-runner call, and the run close: ONE `grind-row run-record --sweep`
-    command that settles, out of band, every ledger whose row left the named queues, then writes the
+    """The drain's `ledger-sweep` op-runner call, and the run close: the record and declared paths are
+    appended to scratch files in sub-``BASH_COMMAND_CAP`` Bash calls, then ONE `grind-row run-record --sweep`
+    command that reads them settles, out of band, every ledger whose row left the named queues, then writes the
     run record whole and lands it -- the verb records a failed sweep instead of skipping the record.
     ``record_js``/``declared_js`` name runtime expressions for the record object and the declared-paths
     array; ``decisions_js`` names the decisions.json path, and the `--decisions-file` flag is omitted
     when it evaluates empty. ``queue_dirs`` must be the FULL queue set the manifest was selected from:
     a queue left out reads as closed and its live rows' ledgers are settled. With no ``queue_dirs`` the
     sweep flag is omitted and the reply reports ``swept: true``. Returns `recorded` or `record-failed`
-    plus ``swept`` and ``sweep_reason``. This op-runner stages and commits nothing."""
+    plus ``swept`` and ``sweep_reason``. This op-runner stages and commits nothing. Trap: the final
+    command expands the whole urlenc record into argv, so a record past the host's command-line limit
+    (~32K chars on Windows) still fails there; only the Bash-call cap is enforced."""
     queue_flags = "".join(f" --{QUEUE_FLAG} {q}" for q in queue_dirs)
     sweep_flags = f" --{SWEEP_FLAG} --profile-dir " if queue_dirs else ""
+    rec_file: list[tuple[str, str]] = [("lit", "scratch/run-record-"), ("expr", run_id_js), ("lit", ".rec")]
+    dec_file: list[tuple[str, str]] = [("lit", "scratch/run-record-"), ("expr", run_id_js), ("lit", ".dec")]
+    rec_file_js = f"'scratch/run-record-' + ({run_id_js}) + '.rec'"
+    dec_file_js = f"'scratch/run-record-' + ({run_id_js}) + '.dec'"
     parts: list[tuple[str, str]] = [
         *_REPO_ANCHOR_PARTS,
-        ("lit", "Run this exactly as written, as ONE Bash call:\n```\n"),
-        ("lit", f"{ASSEMBLE_CMD} grind-row run-record{sweep_flags}"),
+        (
+            "lit",
+            f"The Bash tool drops any command longer than {BASH_COMMAND_CAP} characters, so the run record "
+            "travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call:\n```\n"
+            "mkdir -p scratch && : > ",
+        ),
+        *rec_file,
+        ("lit", " && : > "),
+        *dec_file,
+        ("lit", "\n```\n"),
+        _piece_blocks_part(f"encodeURIComponent({record_js}){_URLENC_SHELL_INERT_JS}", rec_file_js),
+        _piece_blocks_part(
+            f"encodeURIComponent(JSON.stringify({{paths: {declared_js}}})){_URLENC_SHELL_INERT_JS}", dec_file_js
+        ),
+        ("lit", f"```\n{ASSEMBLE_CMD} grind-row run-record{sweep_flags}"),
     ]
     if queue_dirs:
         parts.append(_shq_part(profile_dir_js))
     parts += [
         ("lit", f" --profile {profile}{queue_flags} --run-id "),
         ("expr", run_id_js),
-        ("lit", " --record-urlenc '"),
-        ("expr", f"encodeURIComponent({record_js}).replace(/'/g, '%27')"),
-        ("lit", f"' --{DECLARED_FLAG} '"),
-        ("expr", f"encodeURIComponent(JSON.stringify({{paths: {declared_js}}})).replace(/'/g, '%27')"),
-        ("lit", "'"),
+        ("lit", ' --record-urlenc "$(cat '),
+        *rec_file,
+        ("lit", f')" --{DECLARED_FLAG} "$(cat '),
+        *dec_file,
+        ("lit", ')"'),
         ("expr", f"({decisions_js}) ? ' --{DECISIONS_FLAG} ' + _shq({decisions_js}) : ''"),
         ("lit", " --repo-root "),
         _shq_part(repo_root_js),
+        ("lit", " && rm -f "),
+        *rec_file,
+        ("lit", " "),
+        *dec_file,
         (
             "lit",
-            "\n```\nThe command's JSON output carries `swept` and `sweep_reason`. Return `recorded` when "
-            "it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and "
-            "`sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints "
-            "none). " + _NO_STAGING_CLAUSE,
+            "\n```\nThe last command's JSON output carries `swept` and `sweep_reason`. Return "
+            "`recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return "
+            "`swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it "
+            "prints none). " + _NO_STAGING_CLAUSE,
         ),
     ]
     schema = {

@@ -8,9 +8,11 @@ carries it. The run's final stage hands it to `dispatch.terminal_commit` through
 caller wins (a racing second invocation passes the guard and is refused there). After commit_v2
 the op `consume`s the claim when a commit landed, else `release`s it back to live. A token
 admits one landed product commit, never two; a halted run's record-only commit redeems and
-releases it. Accepted residual: an op process killed between `redeem`
-and `release` strands the claim; recovery is a re-mint through workflow.revise. Every other
-subagent commit stays denied.
+releases it. A landed grind commit passes `landed` to `consume`, which leaves a spent receipt
+(`spent/<run_id>.json`: the record's digest, script and mint time plus the landed sha, rows and
+paths); `spent_receipt` answers a repeat call from it and lands nothing. Accepted residual: an op
+process killed between `redeem` and `release` strands the claim; recovery is a re-mint through
+workflow.revise. Every other subagent commit stays denied.
 
 Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
 it); only a sha256 of the token is stored; the record names the run's script and a token admits
@@ -20,8 +22,9 @@ I/O only: no spawn.
 Removal rule: only a landed commit, an ended or refused run, or a sanctioned peer release
 removes a record. `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
 caller with its condition. This module's own unlinks are the protocol and are outside that walk:
-`mint` unlinks a stale claimed record, `redeem` unlinks the live record it claims, and
-`consume` / `discard` unlink their targets.
+`mint` unlinks a stale claimed record and a stale spent receipt, `redeem` unlinks the live record
+it claims, and `consume` / `discard` unlink their targets. A receipt is never removed otherwise;
+it ages out by `TTL_SECONDS` and `live_records` / `held_records` (non-recursive) never list it.
 """
 
 from __future__ import annotations
@@ -40,6 +43,8 @@ TTL_SECONDS = 24 * 3600
 _DIR = "coordinator-warp-run-tokens"
 #: Where `redeem` creates the claim record; `consume` or `release` ends it.
 _CLAIMED = "claimed"
+#: Where `consume(landed=...)` leaves the receipt of a landed commit; `mint` removes a stale one.
+_SPENT = "spent"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -63,14 +68,17 @@ def _common_dir(repo_root: Path) -> Optional[Path]:
     return None
 
 
-def _record_path(repo_root: Path, run_id: str, *, claimed: bool = False) -> Optional[Path]:
+def _record_path(
+    repo_root: Path, run_id: str, *, claimed: bool = False, spent: bool = False
+) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
     common = _common_dir(repo_root)
     if common is None:
         return None
     base = common / _DIR
-    return (base / _CLAIMED if claimed else base) / f"{run_id}.json"
+    sub = _SPENT if spent else _CLAIMED if claimed else None
+    return (base / sub if sub else base) / f"{run_id}.json"
 
 
 def _digest(token: str) -> str:
@@ -120,9 +128,9 @@ def mint(
         "session_id": session_id,
         "sizing_rel": sizing_rel,
     }
-    stale = _record_path(repo_root, run_id, claimed=True)
-    if stale is not None:
-        stale.unlink(missing_ok=True)
+    for stale in (_record_path(repo_root, run_id, claimed=True), _record_path(repo_root, run_id, spent=True)):
+        if stale is not None:
+            stale.unlink(missing_ok=True)
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     return token
 
@@ -240,9 +248,38 @@ def held_records(repo_root: Path) -> list[dict]:
     return records
 
 
-def consume(repo_root: Path, run_id: str) -> None:
+def spent_receipt(repo_root: Path, run_id: object, token: object, script_path: object) -> Optional[dict]:
+    """Read-only: the `landed` dict (sha, rows, paths) that `consume(landed=...)` recorded for this
+    run, when `token` and `script_path` match the receipt and it is inside its TTL; else None
+    (wrong token or script, expired, re-minted since, never landed). Claims nothing, lists nothing."""
+    if not _well_formed(run_id, token, script_path):
+        return None
+    receipt = _read(_record_path(repo_root, run_id, spent=True))
+    if not _matches(receipt, run_id, token, script_path):
+        return None
+    landed = receipt.get("landed")
+    return landed if isinstance(landed, dict) else None
+
+
+def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> None:
     """Remove the run's live and claimed records (the commit landed, or the run ended); a
-    missing record is already consumed, and nothing is left for `release` to restore."""
+    missing record is already consumed, and nothing is left for `release` to restore.
+
+    `landed` (a dict: sha, rows, paths) first writes the spent receipt `spent_receipt` reads, from
+    the claimed record (else the live one). No record to copy, no receipt."""
+    if landed is not None:
+        record = _read(_record_path(repo_root, run_id, claimed=True)) or _read(_record_path(repo_root, run_id))
+        spent = _record_path(repo_root, run_id, spent=True)
+        if record is not None and spent is not None:
+            from coordinator_core.atomic_replace import atomic_write_bytes
+
+            receipt = {k: record.get(k) for k in ("run_id", "sha256", "script_path", "minted_at")}
+            receipt["landed"] = landed
+            try:
+                spent.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(spent, json.dumps(receipt, sort_keys=True).encode("utf-8"), preserve_mode=False)
+            except OSError:  # the commit already landed; a missing receipt only costs the repeat-call answer
+                pass
     for claimed in (False, True):
         path = _record_path(repo_root, run_id, claimed=claimed)
         if path is not None:

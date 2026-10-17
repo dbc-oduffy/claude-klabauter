@@ -139,3 +139,21 @@ def test_a_session_git_scratch_touch_is_never_carried(repo):
 
     assert result["committed"] is True, result
     assert _files(repo) == {"a.py", "b.py", "new.py"}
+
+
+def test_a_gitignored_untracked_left_behind_path_is_not_carried_under_a_supplied_ignore_set(repo):
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    _git(["add", ".gitignore"], repo)
+    _git(["commit", "-q", "-m", "ignore"], repo)
+    (repo / "scratch").mkdir()
+    (repo / "scratch" / "x.txt").write_text("s\n", encoding="utf-8")
+    session_scope.touch(SELF, "scratch/x.txt", cwd=str(repo))
+
+    result = _call(
+        repo,
+        {"paths": ["a.py"], "message": "m", "carry_own_left_behind": True, "ignored_untracked": []},
+    )
+
+    assert result["committed"] is True, result
+    assert _files(repo) == {"a.py", "b.py", "new.py"}
+    assert _git(["ls-files", "scratch"], repo).strip() == ""

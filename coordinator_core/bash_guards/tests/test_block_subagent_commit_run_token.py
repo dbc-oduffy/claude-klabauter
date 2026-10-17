@@ -104,6 +104,44 @@ def test_redeemed_token_no_longer_admits(repo):
     assert _check(_cmd(_params(token))) is not None
 
 
+def _land(repo, token: str, run_id: str = "ask-1") -> None:
+    assert run_token.redeem(repo, run_id, token, _SCRIPT)
+    run_token.consume(repo, run_id, landed={"sha": "abc123", "rows": [], "paths": []})
+
+
+def test_spent_token_with_a_receipt_admits_the_inline_form(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    _land(repo, token)
+    assert _check(_cmd(_params(token))) is None
+
+
+def test_spent_token_with_a_receipt_admits_the_params_file_form(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    _land(repo, token)
+    assert _check_t(_file_cmd(repo), _spawn(repo, _params(token))) is None
+
+
+@pytest.mark.parametrize("case", ["wrong_token", "wrong_run", "wrong_script", "no_receipt", "expired"])
+def test_spent_receipt_does_not_admit_a_mismatched_invocation(repo, monkeypatch, case):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    if case == "no_receipt":
+        assert run_token.redeem(repo, "ask-1", token, _SCRIPT)
+        run_token.consume(repo, "ask-1")
+    else:
+        _land(repo, token)
+    params = _params(token)
+    if case == "wrong_token":
+        params = _params("f" * 32)
+    elif case == "wrong_run":
+        params = _params(token, run_id="ask-2")
+    elif case == "wrong_script":
+        params["script_path"] = "scratch/warp/other.mjs"
+    elif case == "expired":
+        monkeypatch.setattr(run_token, "TTL_SECONDS", -1)
+    assert _check(_cmd(params)) is not None
+    assert _check_t(_file_cmd(repo), _spawn(repo, params, name=f"{case}.jsonl")) is not None
+
+
 def test_params_without_the_script_are_denied(repo):
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     params = {k: v for k, v in _params(token).items() if k != "script_path"}

@@ -171,6 +171,7 @@ const _pendingCommit = [];
 const _runDirty = new Set();
 let _grindErr = null;
 let _terminalCommitDropped = [];
+let _waveNotRun = [];
 function _haltReason() {
   if (_exhausted) return 'budget-exhausted';
   return _grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null;
@@ -254,7 +255,7 @@ async function _handBackRow(rowId, type, reason, tradeoff) {
   }
   row.undoReason = `the row was handed back ${type}: ${reason}`;
   let _undone;
-  try { _undone = ((await withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row))) || {}).undo || {}; }
+  try { _undone = ((await _issue(row.batchId, rowId, () => withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row)))) || {}).undo || {}; }
   catch (err) { _undone = { outcome: 'undo-failed', reason: err && err.message ? err.message : String(err) }; }
   if (_undone.outcome !== 'undone') {
     _handBack(rowId, 'stage-dead', 'undo-failed: the row was handed back ' + type + ' and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand');
@@ -290,7 +291,7 @@ async function _verifyCall(row) {
 
 async function _terminalCommitCall(params) {
   const _paramsFile = REPO_ROOT.replace(/\/+$/, '') + '/scratch/warp/' + RUN_ID + '/terminal-commit-params.json';
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This is a queue grind\'s one terminal commit stage. Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the grind\'s finished rows, so no `paths` array is owed.\n\ncoordinator-invoke dispatch.terminal_commit --params-file ' + (_paramsFile) + '\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n' + (_terminalCommitParamsBlock(params)) + '\n\nReturn from its JSON reply committed, sha, rows, dropped, error and refused, verbatim (null where absent). Run nothing else.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/commit/', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"committed": {"type": "boolean"}, "dropped": {"items": {"properties": {"path": {"type": "string"}, "reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": "array"}, "error": {"type": ["string", "null"]}, "refused": {"type": ["string", "null"]}, "rows": {"items": {"properties": {"outcome": {"type": "string"}, "row_id": {"type": "string"}, "sha": {"type": ["string", "null"]}}, "type": "object"}, "type": "array"}, "sha": {"type": ["string", "null"]}}, "required": ["committed"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'This is a queue grind\'s one terminal commit stage. Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the grind\'s finished rows, so no `paths` array is owed.\n\ncoordinator-invoke dispatch.terminal_commit --params-file ' + (_paramsFile) + '\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n' + (_terminalCommitParamsBlock(params)) + '\n\nReturn from its JSON reply committed, sha, rows, dropped, error, refused, already_landed and unlanded, verbatim (null where absent). Run nothing else.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/commit/', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'haiku', effort: 'low', schema: {"properties": {"already_landed": {"type": ["boolean", "null"]}, "committed": {"type": "boolean"}, "dropped": {"items": {"properties": {"path": {"type": "string"}, "reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": "array"}, "error": {"type": ["string", "null"]}, "refused": {"type": ["string", "null"]}, "rows": {"items": {"properties": {"outcome": {"type": "string"}, "row_id": {"type": "string"}, "sha": {"type": ["string", "null"]}}, "type": "object"}, "type": "array"}, "sha": {"type": ["string", "null"]}, "unlanded": {"items": {"properties": {"reason": {"type": "string"}, "row_id": {"type": "string"}}, "type": "object"}, "type": ["array", "null"]}}, "required": ["committed"], "type": "object"} })) || {};
     _recordCall('commit');
     return _result;
 }
@@ -381,8 +382,15 @@ async function _terminalCommit() {
   const _landed = {};
   const _hasRows = Array.isArray(reply.rows);
   for (const r of (_hasRows ? reply.rows : [])) { _landed[r.row_id] = r; }
+  const _unlanded = {};
+  for (const u of (Array.isArray(reply.unlanded) ? reply.unlanded : [])) { _unlanded[u.row_id] = u; }
   for (const q of queued) {
     const hit = _hasRows ? _landed[q.row_id] : { sha: reply.sha };
+    if (!hit && _unlanded[q.row_id]) {
+      _unsettle(q.row_id);
+      _handBack(q.row_id, 'commit-failed', (_unlanded[q.row_id].reason || 'the already-landed commit did not carry this row') + SETTLE_HINT);
+      continue;
+    }
     if (!hit) {
       const drops = _terminalCommitDropped.filter((d) => d.row_id === q.row_id).map((d) => d.path + ' (' + d.reason + ')');
       _unsettle(q.row_id);
@@ -405,7 +413,7 @@ function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }
 async function _triageBatch(batchState) {
   const batch = BATCHES.find((b) => b.id === batchState.id);
   const rowsMeta = batch.rows.map((r) => ({ row_id: r, path: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).path }));
-  const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);
+  const _out = await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, batch.rows));
   batchState.triaged = true;
   const _seen = new Set();
   const _toSize = [];
@@ -444,7 +452,7 @@ async function _triageBatch(batchState) {
   }
   for (const rid of _toSize) {
     const row = _rows[rid];
-    const scouted = await _sizeCall(row);
+    const scouted = await _issue(batchState.id, rid, () => _sizeCall(row));
     if (!scouted.tshirt) {
       row.done = true;
       _handBack(rid, 'baton', 'size scout returned no size' + (scouted.reason ? ': ' + scouted.reason : ''));
@@ -473,7 +481,7 @@ async function _closeBatch(batchState) {
     const row = _rows[r];
     return { row_id: r, path: row.path, digest: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).digest, evidence: row.evidence, origin: row.origin };
   });
-  const result = await _closeCall(proposals);
+  const result = await _issue(batchState.id, '', () => _closeCall(proposals));
   batchState.closeCalled = true;
   for (const item of (result.confirmed || [])) {
     const itemRow = _normalizeRowRef(proposals, item.row);
@@ -519,7 +527,7 @@ async function _fixStage(rowId) {
   if (_overlap.length) { row.done = true; _handBack(rowId, 'overlap-deferred', 'declared files overlap rows queued for the terminal commit: ' + _overlap.join(', ') + '; its ledger is left for the next grind'); return; }
   const lockKeys = _lockKeysFor(row, rowId);
   const _priorNode = row.node;
-  const result = await withLock(lockKeys, async () => _fixCall(row));
+  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _fixCall(row)));
   const tradeoff = result.has_tradeoff ? (result.tradeoff || '') : '';
   const outcome = result.outcome;
   row.lastOutcome = outcome;
@@ -547,7 +555,7 @@ async function _fixStage(rowId) {
   if (_historical.length) {
     row.done = true;
     row.undoReason = 'the fix wrote historical records';
-    const _undone = ((await withLock(lockKeys, async () => _rejectUndoCall(row))) || {}).undo || {};
+    const _undone = ((await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _rejectUndoCall(row)))) || {}).undo || {};
     if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', 'undo-failed: the fix wrote historical records and its edits may remain in the tree' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + ' -- the row stays open; restore the touched files by hand'); return; }
     _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;
   }
@@ -560,7 +568,7 @@ async function _fixStage(rowId) {
 async function _verifyStage(rowId) {
   const row = _rows[rowId];
   const lockKeys = _lockKeysFor(row, rowId);
-  const result = await withLock(lockKeys, async () => _verifyCall(row));
+  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));
   if (result.outcome === 'fail') {
     if (!row.verifyRetried) {
       row.verifyRetried = true;
@@ -595,7 +603,7 @@ async function _dispatchRow(rowId, batchState) {
 }
 
 async function _drainCall() {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'Run this exactly as written, as ONE Bash call:\n```\n' + '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --run-id ' + (RUN_ID) + ' --record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --declared-urlenc \'' + (encodeURIComponent(JSON.stringify({paths: _declaredWrites()})).replace(/'/g, '%27')) + '\'' + ((args.decisions_file || '') ? ' --decisions-file ' + _shq(args.decisions_file || '') : '') + ' --repo-root ' + (_shq(REPO_ROOT)) + '\n```\nThe command\'s JSON output carries `swept` and `sweep_reason`. Return `recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints none). You do not stage or commit anything. Only the committer stage does that.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/ledger-sweep-drain/', { label: 'ledger-sweep:drain', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"outcome": {"enum": ["recorded", "record-failed"], "type": "string"}, "reason": {"type": "string"}, "sweep_reason": {"type": "string"}, "swept": {"type": "boolean"}}, "required": ["outcome"], "type": "object"} })) || {};
+    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'The Bash tool drops any command longer than 8000 characters, so the run record travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call:\n```\nmkdir -p scratch && : > ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ' && : > ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + '\n```\n' + ((encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())).replace(/.{1,5000}/g, c => '```\nprintf %s ' + c + ' >> ' + ('scratch/run-record-' + (RUN_ID) + '.rec') + '\n```\n')) + ((encodeURIComponent(JSON.stringify({paths: _declaredWrites()})).replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())).replace(/.{1,5000}/g, c => '```\nprintf %s ' + c + ' >> ' + ('scratch/run-record-' + (RUN_ID) + '.dec') + '\n```\n')) + '```\n${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --run-id ' + (RUN_ID) + ' --record-urlenc "$(cat ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ')" --declared-urlenc "$(cat ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + ')"' + ((args.decisions_file || '') ? ' --decisions-file ' + _shq(args.decisions_file || '') : '') + ' --repo-root ' + (_shq(REPO_ROOT)) + ' && rm -f ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ' ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + '\n```\nThe last command\'s JSON output carries `swept` and `sweep_reason`. Return `recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints none). You do not stage or commit anything. Only the committer stage does that.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/ledger-sweep-drain/', { label: 'ledger-sweep:drain', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'haiku', effort: 'low', schema: {"properties": {"outcome": {"enum": ["recorded", "record-failed"], "type": "string"}, "reason": {"type": "string"}, "sweep_reason": {"type": "string"}, "swept": {"type": "boolean"}}, "required": ["outcome"], "type": "object"} })) || {};
     _recordCall('ledger-sweep');
     return _result;
 }
@@ -623,6 +631,56 @@ const _queue = BATCHES.map((b) => b.id);
 function _anyAdmittedHasPendingDownstream() {
   return Object.values(_admitted).some((bs) => !_batchDone(BATCHES.find((b) => b.id === bs.id)) && _pendingRow(BATCHES.find((b) => b.id === bs.id)) !== null);
 }
+const _gateWaiting = [];
+let _gateHold = 0;
+let _gateResolve = null;
+let _grindOpen = false;
+let _workerFailure = null;
+function _gateKey(batchId, rowId) {
+  const i = BATCHES.findIndex((b) => b.id === batchId);
+  return String(i < 0 ? 999999 : i).padStart(6, '0') + ':' + (rowId || '');
+}
+function _issue(batchId, rowId, fn) {
+  return new Promise((resolve, reject) => {
+    _gateWaiting.push({ key: _gateKey(batchId, rowId), fn, resolve, reject });
+    _gateTick();
+  });
+}
+function _admit() {
+  while (_grindOpen && _queue.length && Object.keys(_admitted).length < WINDOW && !_anyAdmittedHasPendingDownstream()) {
+    if (MAX_AGENT_CALLS !== null && _callCount >= MAX_AGENT_CALLS) { _exhausted = true; }
+    else {
+      const _spentDelta = budget.spent() - _startSpent;
+      if (BUDGET_TOKENS !== null && _spentDelta + RESERVE > BUDGET_TOKENS) { _exhausted = true; }
+      else if (budget.total !== undefined && budget.total !== null && (budget.remaining() ?? 0) <= RESERVE) { _exhausted = true; }
+    }
+    if (_exhausted) break;
+    const bid = _queue.shift();
+    const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closeCalled: false };
+    _admitted[bid] = batchState;
+    _runBatchWorker(batchState).catch((err) => {
+      if (!_workerFailure) { _workerFailure = { err }; }
+      delete _admitted[bid];
+      _gateTick();
+    });
+  }
+}
+function _gateTick() {
+  if (_gateHold > 0) return;
+  if (_gateWaiting.length < Object.keys(_admitted).length) return;
+  _gateHold += 1;
+  try { _admit(); } finally { _gateHold -= 1; }
+  if (_gateWaiting.length < Object.keys(_admitted).length) return;
+  if (_gateWaiting.length === 0) {
+    if (_gateResolve) { const done = _gateResolve; _gateResolve = null; done(); }
+    return;
+  }
+  const round = _gateWaiting.splice(0, _gateWaiting.length).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  for (const e of round) {
+    try { Promise.resolve(e.fn()).then(e.resolve, e.reject); } catch (err) { e.reject(err); }
+  }
+}
+
 async function _runBatchWorker(batchState) {
   const batch = BATCHES.find((b) => b.id === batchState.id);
   try {
@@ -639,29 +697,13 @@ async function _runBatchWorker(batchState) {
     }
   }
   delete _admitted[batchState.id];
+  _gateTick();
 }
 async function runGrind() {
-  const workers = [];
-  while (_queue.length || workers.length) {
-    if (_queue.length && workers.length < WINDOW && !_anyAdmittedHasPendingDownstream()) {
-      if (MAX_AGENT_CALLS !== null && _callCount >= MAX_AGENT_CALLS) { _exhausted = true; }
-      else {
-        const _spentDelta = budget.spent() - _startSpent;
-        if (BUDGET_TOKENS !== null && _spentDelta + RESERVE > BUDGET_TOKENS) { _exhausted = true; }
-        else if (budget.total !== undefined && budget.total !== null && (budget.remaining() ?? 0) <= RESERVE) { _exhausted = true; }
-      }
-      if (!_exhausted) {
-        const bid = _queue.shift();
-        const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closeCalled: false };
-        _admitted[bid] = batchState;
-        workers.push(_runBatchWorker(batchState));
-        continue;
-      }
-    }
-    if (!workers.length) break;
-    const idx = await Promise.race(workers.map((w, i) => w.then(() => i)));
-    workers.splice(idx, 1);
-  }
+  _grindOpen = true;
+  try { await new Promise((resolve) => { _gateResolve = resolve; _gateTick(); }); }
+  finally { _grindOpen = false; }
+  if (_workerFailure) { throw _workerFailure.err; }
   if (_exhausted) {
     for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) _handBack(r, 'budget-exhausted', 'emit-admitted row; runtime ceiling reached (per-row cost above the measured admission cost, or runtime budget bound)'); }
   }

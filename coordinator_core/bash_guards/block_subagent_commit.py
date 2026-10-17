@@ -6874,7 +6874,8 @@ def _prompt_sourced_params_admit(
             return _LEG_PARAMS_PATH
     except (OSError, ValueError):
         return _LEG_PARAMS_PATH
-    if not run_token.admits(git_root, params["run_id"], params["run_token"], params["script_path"]):
+    rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
+    if not (run_token.admits(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
         return _LEG_PARAMS_TOKEN
     return None if chan.materialize(canonical, params) else _LEG_PARAMS_WRITE
 
@@ -6984,8 +6985,9 @@ def _warp_run_token_admits(
         return _prompt_sourced_params_admit(params_file, git_root, transcript_path)
 
     params = run_token.token_params_from_command(raw_cmd)
-    admitted = params is not None and run_token.admits(
-        git_root, params["run_id"], params["run_token"], params["script_path"]
+    admitted = params is not None and (
+        run_token.admits(git_root, params["run_id"], params["run_token"], params["script_path"])
+        or run_token.spent_receipt(git_root, params["run_id"], params["run_token"], params["script_path"]) is not None
     )
     return None if admitted else refused
 

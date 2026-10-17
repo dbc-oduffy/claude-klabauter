@@ -980,6 +980,32 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[d
     return plan_text[:start] + new_body + plan_text[end:], sorted(targets)
 
 
+_LANDS_CHUNKS_LINE = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)\s*$", re.M)
+
+
+def _predecessor_rows(worktree_root: Path, plan_path: Optional[str], resume: object) -> dict:
+    """``{halt sha: {plan: {row id}}}`` of the rows a ledger resume's halt commit landed.
+
+    Reads the one commit ``resume_ledger.halt_sha`` names, in-process (zero spawns), and maps
+    its ``Lands-Chunks:`` ids to plan rows. Empty for a non-resume close, a bad sha or an
+    unreadable commit.
+    """
+    halt_sha = resume.get("halt_sha") if isinstance(resume, dict) else None
+    if not plan_path or not isinstance(halt_sha, str) or not _FULL_SHA_RE.fullmatch(halt_sha):
+        return {}
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    meta = commit_meta(resolve_git_common_dir(worktree_root), halt_sha)
+    message = (meta or {}).get("message") or ""
+    ids = sorted({
+        i for m in _LANDS_CHUNKS_LINE.finditer(message)
+        for i in re.split(r"[,\s]+", m.group("v")) if i
+    })
+    by_plan = _source_rows_by_plan(worktree_root, plan_path, ids)
+    return {halt_sha: by_plan} if by_plan else {}
+
+
 _CHECKPOINT_SUBJECT = re.compile(r"^checkpoint\(wave [^)]*\): \d+ rows? — (?P<ids>.+)$")
 _CHECKPOINT_PLAN_LINE = re.compile(r"^Checkpoint-Plan: (?P<v>\S.*?)\s*$", re.M)
 
@@ -4609,6 +4635,16 @@ def _terminal_commit_inner(
                     checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
             if review_no_delta:
                 reply["review_uncoded_no_delta"] = review_no_delta
+        predecessor = {} if rows_untouched else _predecessor_rows(
+            worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
+        )
+        landed_before = {
+            (plan_rel, rid)
+            for by_plan in predecessor.values() for plan_rel, ids in by_plan.items() for rid in ids
+        }
+        for csha, by_plan in predecessor.items():
+            for plan_rel, ids in by_plan.items():
+                checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
         noop_rows = (
             {} if rows_untouched
             else _source_rows_by_plan(
@@ -4616,6 +4652,10 @@ def _terminal_commit_inner(
                 [c.id for c in noop_chunks if c.id not in checkpoint_of],
             )
         )
+        noop_rows = {
+            plan_rel: {rid for rid in ids if (plan_rel, rid) not in landed_before}
+            for plan_rel, ids in noop_rows.items()
+        }
         source_rows = (
             {request.plan_path: set()}
             if rows_untouched

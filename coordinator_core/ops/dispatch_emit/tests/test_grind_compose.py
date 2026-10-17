@@ -193,6 +193,36 @@ def test_no_banned_tokens_and_zero_error_findings():
     assert errors == []
 
 
+_STMT_ASSIGN = re.compile(r"(?:^|[;{}])[ \t]*([A-Za-z_$][\w$]*)[ \t]*=(?![=>])", re.M)
+_DECL = re.compile(r"\b(?:let|const|var|function|class)\s+([A-Za-z_$][\w$]*)")
+_DECL_LIST = re.compile(r"\b(?:let|const|var)\s+([^;=]*?=[^;]*?);")
+
+
+_PARAMS = re.compile(r"\bfunction\b[^(\n]*\(([^)]*)\)|\(([^()]*)\)\s*=>")
+
+
+def _undeclared_assignments(script: str) -> set[str]:
+    """Identifiers assigned bare at statement start with no let/const/var/function/class decl."""
+    declared = set(_DECL.findall(script))
+    for m in _DECL_LIST.finditer(script):
+        declared.update(re.findall(r"(?:^|,)\s*([A-Za-z_$][\w$]*)\s*=", m.group(1), re.M))
+    for m in _PARAMS.finditer(script):
+        declared.update(re.findall(r"[A-Za-z_$][\w$]*", m.group(1) or m.group(2) or ""))
+    assigned = set(_STMT_ASSIGN.findall(script))
+    return assigned - declared
+
+
+def test_every_bare_assigned_identifier_is_declared_in_the_emitted_script():
+    script = _compose()
+    assert "let _waveNotRun = [];" in script
+    assert _undeclared_assignments(script) == set()
+
+
+def test_undeclared_assignment_guard_fails_on_the_prefix_golden():
+    pre_fix = _GOLDEN_PATH.read_text(encoding="utf-8").replace("let _waveNotRun = [];\n", "")
+    assert _undeclared_assignments(pre_fix) == {"_waveNotRun"}
+
+
 def test_no_lock_global_only_the_inscript_mutex_object():
     """The first attempt called `lock.acquire`/`lock.release` -- no such
     runtime global exists. This module defines its own mutex object
@@ -303,7 +333,7 @@ def test_no_leg_labelled_undo_or_run_record_close_is_emitted():
 def test_commit_failed_hand_back_names_the_runnable_settle_run_command():
     script = _compose()
     assert "SWEEP_HINT" not in script
-    assert script.count("+ SETTLE_HINT") == 5
+    assert script.count("+ SETTLE_HINT") == 6
     hint = script[script.index("const SETTLE_HINT"):]
     hint = hint[: hint.index("\n")]
     assert "backlog-grind-assemble grind-row settle-run --profile-dir " in hint
@@ -414,8 +444,9 @@ def test_triage_declared_files_never_overwrites_touched_files():
 def test_real_bounded_concurrency_not_serial_pipeline():
     script = _compose()
     assert "runGrind" in script
-    assert "Promise.race(workers" in script
-    assert "workers.length < WINDOW" in script
+    assert "Promise.race" not in script
+    assert "Object.keys(_admitted).length < WINDOW" in script
+    assert "_runBatchWorker(batchState).catch(" in script
 
 
 def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
@@ -1030,7 +1061,8 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
     script = _compose()
-    assert r"""--record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --declared-urlenc \'""" in script
+    assert "encodeURIComponent(JSON.stringify(_runCostRecord()))" in script
+    assert "--record-urlenc \"$(cat " in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",
@@ -1525,7 +1557,7 @@ def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply():
     assert "_sizeAssembleCall" not in script and "_sizePending" not in script
     assert "_recordCall('size-assemble')" not in script and "_recordCall('size')" in script
     assert "label: 'size-assemble'" not in script
-    to_size = script[script.index("const scouted = await _sizeCall(row);"):]
+    to_size = script[script.index("const scouted = await _issue(batchState.id, rid, () => _sizeCall(row));"):]
     to_size = to_size[:to_size.index("async function _closeBatch")]
     assert "scouted.exit_code === 0" in to_size
     assert "row.sizingPath = _sizingPath(scouted, rid);" in to_size
@@ -2360,3 +2392,146 @@ def test_a_thrown_runs_unfinished_row_whose_only_write_is_a_removed_file_is_undo
     assert isinstance(err, RuntimeError)
     assert undo_sink and set(undo_sink[0]["paths"]) == {"state/bug-backlog/r0.yaml", "state/archive/r0.yaml"}
     assert kinds.count("verify") == 2
+
+
+# ---------------------------------------------------------------------------
+# Replay-stable issue order and the already-landed terminal commit reply
+# ---------------------------------------------------------------------------
+
+_REPLAY_HARNESS_JS = r"""
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+const [,, scriptPath, order] = process.argv;
+const src = fs.readFileSync(scriptPath, 'utf8').replace(/\r\n/g, '\n').replace(/export const meta = \{[\s\S]*?\n\};\n/, '');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const canon = (o) => JSON.stringify(o, Object.keys(o || {}).sort());
+let chain = '';
+const keys = [];
+let ledgerPrompt = '';
+const rowNo = (prompt) => { const m = /row(\d+)/.exec(prompt); return m ? Number(m[1]) : 0; };
+const delayFor = (prompt) => ((rowNo(prompt) < 4 ? 0 : 1) === (order === 'fwd' ? 0 : 1) ? 1 : 25);
+const reply = (opts, prompt) => {
+  const label = opts.label || '';
+  const rows = [...new Set([...prompt.matchAll(/"row_id":"(row\d+)"/g)].map((m) => m[1]))];
+  if (label === 'triage') return { rows: rows.map((r) => ({ row: r, verdict: 'confirmed-bug', tshirt_size: 'S', has_tradeoff: false, evidence: 'e', fix_plan: 'p' })), stale: [] };
+  if (label === 'fix') return { outcome: 'done', touched_files: ['f' + rowNo(prompt) + '.py'] };
+  if (label.startsWith('verify')) return { outcome: 'pass', exit_code: 0, output: {} };
+  if (label === 'commit') {
+    return {
+      committed: true, sha: 'abc123', already_landed: true,
+      rows: rows.filter((r) => r !== 'row6').map((r) => ({ row_id: r, outcome: 'settled', sha: 'abc123' })),
+      unlanded: rows.includes('row6') ? [{ row_id: 'row6', reason: 'row6 is not in landed commit abc123; it needs a new run' }] : [],
+    };
+  }
+  return {};
+};
+const agent = (prompt, opts = {}) => {
+  const h = crypto.createHash('sha256').update(chain).update('\0').update(prompt).update('\0')
+    .update(canon({ schema: opts.schema, model: opts.model, effort: opts.effort, agentType: opts.agentType })).digest('hex');
+  if ((opts.label || '').startsWith('ledger-sweep')) ledgerPrompt = prompt;
+  chain = h;
+  keys.push(opts.label + ':' + h);
+  return new Promise((res) => setTimeout(() => res(reply(opts, prompt)), delayFor(prompt)));
+};
+const budget = { spent: () => 0, remaining: () => null, total: null };
+const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'budget', 'parallel', src);
+await fn(
+  { run_stamp: '20261017T000000Z', script_path: 'x.mjs', profile_dir: 'pd', repo_root: '/r', run_token: 'tok' },
+  agent, () => {}, () => {}, budget, async (xs) => Promise.all(xs),
+);
+const record = decodeURIComponent([...ledgerPrompt.matchAll(/printf %s (\S+) >> \S+\.rec/g)].map((m) => m[1]).join(''));
+console.log(JSON.stringify({ keys, unlanded_reason_in_record: record.includes('it needs a new run'), landed_sha_in_record: record.includes('abc123') }));
+"""
+
+
+def _run_replay_harness(tmp_path, order: str) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    script = tmp_path / "grind.mjs"
+    script.write_bytes(_compose().encode("utf-8"))
+    harness = tmp_path / "harness.mjs"
+    harness.write_text(_REPLAY_HARNESS_JS, encoding="utf-8")
+    out = subprocess.run(
+        [node, str(harness), str(script), order], capture_output=True, text=True, check=False, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_emitted_grind_issues_the_same_agent_call_keys_in_either_completion_order(tmp_path):
+    """The runner chains every replay key on the call before it; one recorded result set delivered
+    with batch 0 first and with batch 1 first must therefore yield one key sequence."""
+    forward = _run_replay_harness(tmp_path, "fwd")["keys"]
+    reverse = _run_replay_harness(tmp_path, "rev")["keys"]
+    kinds = [k.split(":")[0] for k in forward]
+    assert "commit" in kinds and kinds.count("fix") == 7 and kinds[0] == kinds[1] == "triage"
+    assert forward == reverse
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_emitted_terminal_commit_settles_an_already_landed_reply_and_hands_back_unlanded(tmp_path):
+    seen = _run_replay_harness(tmp_path, "fwd")
+    assert seen["landed_sha_in_record"] is True
+    assert seen["unlanded_reason_in_record"] is True
+
+
+def test_every_agent_call_issued_by_a_batch_worker_goes_through_the_issue_gate():
+    script = _compose()
+    worker_half = script[script.index("function _gateTick()"): script.index("const HANDBACK")]
+    for call in ("_triageCall(", "_sizeCall(", "_closeCall(", "_fixCall(", "_rejectUndoCall(", "_verifyCall("):
+        for m in re.finditer(re.escape("await " + call), worker_half):
+            raise AssertionError(f"ungated worker call at {worker_half[m.start() - 40: m.end() + 40]!r}")
+    assert script.count("_issue(") >= 8
+    gate = script[script.index("function _issue("): script.index("async function _runBatchWorker")]
+    assert "withLock" not in gate
+
+
+def test_the_issue_gate_sits_outside_the_lock_it_would_otherwise_deadlock_against():
+    script = _compose()
+    assert "_issue(row.batchId, rowId, () => withLock(lockKeys, async () => _fixCall(row)))" in script
+    assert "_issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)))" in script
+    assert "withLock(lockKeys, async () => _issue(" not in script
+
+
+def test_the_terminal_commit_prompt_and_schema_carry_already_landed_and_unlanded():
+    script = _compose()
+    call = script[script.index("async function _terminalCommitCall"): script.index("function _counts()")]
+    assert grind_commit_contract.ALREADY_LANDED_KEY in call and grind_commit_contract.UNLANDED_KEY in call
+    assert f"{grind_commit_contract.ALREADY_LANDED_KEY} and {grind_commit_contract.UNLANDED_KEY}, verbatim" in call
+
+
+def test_the_emitted_terminal_commit_reads_unlanded_rows_with_the_engines_reason():
+    script = _compose()
+    body = script[script.index("async function _terminalCommit()"):]
+    body = body[: body.index("\n}\n")]
+    assert f"reply.{grind_commit_contract.UNLANDED_KEY}" in body
+    unlanded_branch = body[body.index("if (!hit && _unlanded[q.row_id])"):]
+    unlanded_branch = unlanded_branch[: unlanded_branch.index("continue;")]
+    assert "_unlanded[q.row_id].reason" in unlanded_branch
+    assert "'commit-failed'" in unlanded_branch and "_unsettle(q.row_id)" in unlanded_branch
+    assert "every path of this row was dropped" not in unlanded_branch
+
+
+def test_the_twin_terminal_commit_hands_an_unlanded_row_back_with_the_engines_reason():
+    batches = [("b0", ["r0", "r1"])]
+    verdicts = _all_fix_batches(["r0", "r1"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
+        "commit": lambda _unit: {
+            "committed": True, "sha": "abc123", "already_landed": True,
+            "rows": [{"row_id": "r0", "outcome": "settled", "sha": "abc123"}],
+            "unlanded": [{"row_id": "r1", "reason": "r1 is not in landed commit abc123"}],
+        },
+    }
+    result, _budget = _run(batches, script_by_kind, batch_size=2)
+    handed = {h["row"]: h for h in result["handed_back"]}
+    assert "r0" not in handed
+    assert handed["r1"]["type"] == "commit-failed" and handed["r1"]["reason"].startswith("r1 is not in landed commit abc123")
+    assert [s["sha"] for s in result["settled"] if s["row"] == "r0"] == ["abc123"]

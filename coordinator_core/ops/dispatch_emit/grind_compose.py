@@ -581,9 +581,15 @@ def run_admission(
         terminal_commit_dropped = list(reply.get("dropped") or [])
         has_rows = isinstance(reply.get("rows"), list)
         landed = {r["row_id"]: r for r in reply["rows"]} if has_rows else {}
+        unlanded = {u["row_id"]: u for u in (reply.get(contract.UNLANDED_KEY) or [])}
         for q in queued:
             hit = landed.get(q["row_id"]) if has_rows else {"sha": reply.get("sha")}
             row = rows[q["row_id"]]
+            if hit is None and q["row_id"] in unlanded:
+                _unsettle(q["row_id"])
+                why_unlanded = unlanded[q["row_id"]].get("reason") or "the already-landed commit did not carry this row"
+                _handback(row, "commit-failed", why_unlanded + _SETTLE_HINT_TWIN)
+                continue
             if hit is None:
                 drops = [f"{d['path']} ({d['reason']})" for d in terminal_commit_dropped if d["row_id"] == q["row_id"]]
                 _unsettle(q["row_id"])
@@ -1069,6 +1075,64 @@ _ROUTING_HELPERS = (
     "function _commitReason(result) { return result && result.reason ? `: ${result.reason}` : ''; }"
 )
 
+#: The runner chains each `agent()` call's replay key on the call issued before it, so a resume
+#: serves its cached prefix only while the script issues calls in the same order. `_issue` makes
+#: that order a function of results alone: a call waits at the gate until every live worker is
+#: at the gate (or finished), new batches are admitted only at that quiescent point, and the
+#: waiting calls are then issued in (batch rank, row id) order. The gate sits outside `withLock`
+#: so a lock holder is never parked at it. Twin: `run_admission` runs one batch at a time.
+_ISSUE_GATE_JS = (
+    "const _gateWaiting = [];\n"
+    "let _gateHold = 0;\n"
+    "let _gateResolve = null;\n"
+    "let _grindOpen = false;\n"
+    "let _workerFailure = null;\n"
+    "function _gateKey(batchId, rowId) {\n"
+    "  const i = BATCHES.findIndex((b) => b.id === batchId);\n"
+    "  return String(i < 0 ? 999999 : i).padStart(6, '0') + ':' + (rowId || '');\n"
+    "}\n"
+    "function _issue(batchId, rowId, fn) {\n"
+    "  return new Promise((resolve, reject) => {\n"
+    "    _gateWaiting.push({ key: _gateKey(batchId, rowId), fn, resolve, reject });\n"
+    "    _gateTick();\n"
+    "  });\n"
+    "}\n"
+    "function _admit() {\n"
+    "  while (_grindOpen && _queue.length && Object.keys(_admitted).length < WINDOW && !_anyAdmittedHasPendingDownstream()) {\n"
+    "    if (MAX_AGENT_CALLS !== null && _callCount >= MAX_AGENT_CALLS) { _exhausted = true; }\n"
+    "    else {\n"
+    "      const _spentDelta = budget.spent() - _startSpent;\n"
+    "      if (BUDGET_TOKENS !== null && _spentDelta + RESERVE > BUDGET_TOKENS) { _exhausted = true; }\n"
+    "      else if (budget.total !== undefined && budget.total !== null && (budget.remaining() ?? 0) <= RESERVE) { _exhausted = true; }\n"
+    "    }\n"
+    "    if (_exhausted) break;\n"
+    "    const bid = _queue.shift();\n"
+    "    const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closeCalled: false };\n"
+    "    _admitted[bid] = batchState;\n"
+    "    _runBatchWorker(batchState).catch((err) => {\n"
+    "      if (!_workerFailure) { _workerFailure = { err }; }\n"
+    "      delete _admitted[bid];\n"
+    "      _gateTick();\n"
+    "    });\n"
+    "  }\n"
+    "}\n"
+    "function _gateTick() {\n"
+    "  if (_gateHold > 0) return;\n"
+    "  if (_gateWaiting.length < Object.keys(_admitted).length) return;\n"
+    "  _gateHold += 1;\n"
+    "  try { _admit(); } finally { _gateHold -= 1; }\n"
+    "  if (_gateWaiting.length < Object.keys(_admitted).length) return;\n"
+    "  if (_gateWaiting.length === 0) {\n"
+    "    if (_gateResolve) { const done = _gateResolve; _gateResolve = null; done(); }\n"
+    "    return;\n"
+    "  }\n"
+    "  const round = _gateWaiting.splice(0, _gateWaiting.length).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));\n"
+    "  for (const e of round) {\n"
+    "    try { Promise.resolve(e.fn()).then(e.resolve, e.reject); } catch (err) { e.reject(err); }\n"
+    "  }\n"
+    "}\n"
+)
+
 #: The queue-and-land half of the run: finished rows queue on `_pendingCommit`, one
 #: `_terminalCommit` lands them after the grind. `_runDirty` is the union of queued
 #: rows' paths; a fix that collides with it is undone together with the rows it
@@ -1136,8 +1200,15 @@ _TERMINAL_COMMIT_JS = (
     "  const _landed = {};\n"
     "  const _hasRows = Array.isArray(reply.rows);\n"
     "  for (const r of (_hasRows ? reply.rows : [])) { _landed[r.row_id] = r; }\n"
+    "  const _unlanded = {};\n"
+    "  for (const u of (Array.isArray(reply." + contract.UNLANDED_KEY + ") ? reply." + contract.UNLANDED_KEY + " : [])) { _unlanded[u.row_id] = u; }\n"
     "  for (const q of queued) {\n"
     "    const hit = _hasRows ? _landed[q.row_id] : { sha: reply.sha };\n"
+    "    if (!hit && _unlanded[q.row_id]) {\n"
+    "      _unsettle(q.row_id);\n"
+    "      _handBack(q.row_id, 'commit-failed', (_unlanded[q.row_id].reason || 'the already-landed commit did not carry this row') + SETTLE_HINT);\n"
+    "      continue;\n"
+    "    }\n"
     "    if (!hit) {\n"
     "      const drops = _terminalCommitDropped.filter((d) => d.row_id === q.row_id).map((d) => d.path + ' (' + d.reason + ')');\n"
     "      _unsettle(q.row_id);\n"
@@ -1480,6 +1551,7 @@ def compose_grind_script(
         "const _runDirty = new Set();\n"
         "let _grindErr = null;\n"
         "let _terminalCommitDropped = [];\n"
+        "let _waveNotRun = [];\n"
         "function _haltReason() {\n"
         "  if (_exhausted) return 'budget-exhausted';\n"
         "  return _grindErr ? (String(_grindErr && _grindErr.message ? _grindErr.message : _grindErr) || 'error') : null;\n"
@@ -1612,7 +1684,7 @@ def compose_grind_script(
         "  }\n"
         "  row.undoReason = `the row was handed back ${type}: ${reason}`;\n"
         "  let _undone;\n"
-        "  try { _undone = ((await withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row))) || {}).undo || {}; }\n"
+        "  try { _undone = ((await _issue(row.batchId, rowId, () => withLock(_lockKeysFor(row, rowId), async () => _rejectUndoCall(row)))) || {}).undo || {}; }\n"
         "  catch (err) { _undone = { outcome: 'undo-failed', reason: err && err.message ? err.message : String(err) }; }\n"
         "  if (_undone.outcome !== 'undone') {\n"
         "    _handBack(rowId, 'stage-dead', 'undo-failed: the row was handed back ' + type + ' and its edits may remain in the tree'"
@@ -1733,7 +1805,7 @@ def compose_grind_script(
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
         "  const rowsMeta = batch.rows.map((r) => "
         "({ row_id: r, path: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).path }));\n"
-        "  const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);\n"
+        "  const _out = await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, batch.rows));\n"
         "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
         "  const _toSize = [];\n"
@@ -1772,7 +1844,7 @@ def compose_grind_script(
         "  }\n"
         "  for (const rid of _toSize) {\n"
         "    const row = _rows[rid];\n"
-        "    const scouted = await _sizeCall(row);\n"
+        "    const scouted = await _issue(batchState.id, rid, () => _sizeCall(row));\n"
         "    if (!scouted.tshirt) {\n"
         "      row.done = true;\n"
         "      _handBack(rid, 'baton', 'size scout returned no size' + (scouted.reason ? ': ' + scouted.reason : ''));\n"
@@ -1803,7 +1875,7 @@ def compose_grind_script(
         "    const row = _rows[r];\n"
         "    return { row_id: r, path: row.path, digest: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).digest, evidence: row.evidence, origin: row.origin };\n"
         "  });\n"
-        "  const result = await _closeCall(proposals);\n"
+        "  const result = await _issue(batchState.id, '', () => _closeCall(proposals));\n"
         "  batchState.closeCalled = true;\n"
         "  for (const item of (result.confirmed || [])) {\n"
         "    const itemRow = _normalizeRowRef(proposals, item.row);\n"
@@ -1851,7 +1923,7 @@ def compose_grind_script(
         "  if (_overlap.length) { row.done = true; _handBack(rowId, 'overlap-deferred', 'declared files overlap rows queued for the terminal commit: ' + _overlap.join(', ') + '; its ledger is left for the next grind'); return; }\n"
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const _priorNode = row.node;\n"
-        "  const result = await withLock(lockKeys, async () => _fixCall(row));\n"
+        "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _fixCall(row)));\n"
         "  const tradeoff = result.has_tradeoff ? (result.tradeoff || '') : '';\n"
         "  const outcome = result.outcome;\n"
         "  row.lastOutcome = outcome;\n"
@@ -1879,7 +1951,7 @@ def compose_grind_script(
         "  if (_historical.length) {\n"
         "    row.done = true;\n"
         "    row.undoReason = 'the fix wrote historical records';\n"
-        "    const _undone = ((await withLock(lockKeys, async () => _rejectUndoCall(row))) || {}).undo || {};\n"
+        "    const _undone = ((await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _rejectUndoCall(row)))) || {}).undo || {};\n"
         "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _HISTORICAL_UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
         "    _handBack(rowId, 'needs-judgment', 'fix wrote historical records, undone: ' + _historical.join(', ')); return;\n"
         "  }\n"
@@ -1894,7 +1966,7 @@ def compose_grind_script(
         "async function _verifyStage(rowId) {\n"
         "  const row = _rows[rowId];\n"
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
-        "  const result = await withLock(lockKeys, async () => _verifyCall(row));\n"
+        "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));\n"
         "  if (result.outcome === 'fail') {\n"
         "    if (!row.verifyRetried) {\n"
         "      row.verifyRetried = true;\n"
@@ -1943,6 +2015,8 @@ def compose_grind_script(
         "  return Object.values(_admitted).some((bs) => !_batchDone(BATCHES.find((b) => b.id === bs.id)) && "
         "_pendingRow(BATCHES.find((b) => b.id === bs.id)) !== null);\n"
         "}\n"
+        + _ISSUE_GATE_JS
+        + "\n"
         "async function _runBatchWorker(batchState) {\n"
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
         "  try {\n"
@@ -1959,29 +2033,13 @@ def compose_grind_script(
         "    }\n"
         "  }\n"
         "  delete _admitted[batchState.id];\n"
+        "  _gateTick();\n"
         "}\n"
         "async function runGrind() {\n"
-        "  const workers = [];\n"
-        "  while (_queue.length || workers.length) {\n"
-        "    if (_queue.length && workers.length < WINDOW && !_anyAdmittedHasPendingDownstream()) {\n"
-        "      if (MAX_AGENT_CALLS !== null && _callCount >= MAX_AGENT_CALLS) { _exhausted = true; }\n"
-        "      else {\n"
-        "        const _spentDelta = budget.spent() - _startSpent;\n"
-        "        if (BUDGET_TOKENS !== null && _spentDelta + RESERVE > BUDGET_TOKENS) { _exhausted = true; }\n"
-        "        else if (budget.total !== undefined && budget.total !== null && (budget.remaining() ?? 0) <= RESERVE) { _exhausted = true; }\n"
-        "      }\n"
-        "      if (!_exhausted) {\n"
-        "        const bid = _queue.shift();\n"
-        "        const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closeCalled: false };\n"
-        "        _admitted[bid] = batchState;\n"
-        "        workers.push(_runBatchWorker(batchState));\n"
-        "        continue;\n"
-        "      }\n"
-        "    }\n"
-        "    if (!workers.length) break;\n"
-        "    const idx = await Promise.race(workers.map((w, i) => w.then(() => i)));\n"
-        "    workers.splice(idx, 1);\n"
-        "  }\n"
+        "  _grindOpen = true;\n"
+        "  try { await new Promise((resolve) => { _gateResolve = resolve; _gateTick(); }); }\n"
+        "  finally { _grindOpen = false; }\n"
+        "  if (_workerFailure) { throw _workerFailure.err; }\n"
         "  if (_exhausted) {\n"
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
         "_handBack(r, 'budget-exhausted', " + repr(_EXHAUSTED_REASON) + "); }\n"

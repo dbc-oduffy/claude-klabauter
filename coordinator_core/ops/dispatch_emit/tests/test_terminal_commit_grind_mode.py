@@ -152,3 +152,31 @@ def test_landed_row_ledger_is_gone_and_unlanded_run_keeps_it(repo):
     assert (ledger_dir / "r9.jsonl").exists()
     _call(repo, [_row("r1", ["a.py"])])
     assert not (ledger_dir / "r1.jsonl").exists()
+
+
+def test_repeat_call_returns_the_landed_result_without_a_second_commit(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    first = _call(repo, [_row("r1", ["a.py"])], run_token=token)
+    assert first["committed"] is True
+    head = _git(["rev-parse", "HEAD"], repo)
+    ledger_dir = repo / "state" / "queue-grind" / PROFILE
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "r1.jsonl").write_text("{}\n", encoding="utf-8")
+    second = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], run_token=token)
+    assert second["committed"] is True and second["already_landed"] is True
+    assert second["sha"] == first["sha"]
+    assert [r["row_id"] for r in second["rows"]] == ["r1"]
+    assert second["dropped"] == []
+    assert [u["row_id"] for u in second["unlanded"]] == ["r2"]
+    assert first["sha"] in second["unlanded"][0]["reason"]
+    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert _status(repo)["b.py"] == " M"
+    assert (ledger_dir / "r1.jsonl").exists()
+
+
+def test_repeat_call_with_a_wrong_token_is_still_refused(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    _call(repo, [_row("r1", ["a.py"])], run_token=token)
+    out = _call(repo, [_row("r1", ["a.py"])], run_token="not-the-token")
+    assert out["refused"] == "run-token"
+    assert "already_landed" not in out

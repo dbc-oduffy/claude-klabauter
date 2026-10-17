@@ -190,6 +190,68 @@ def test_racing_redeems_yield_exactly_one_true(tmp_path):
     assert results.count(True) == 1 and len(results) == workers
 
 
+_LANDED = {"sha": "abc123", "rows": [{"row_id": "r1", "outcome": "committed", "sha": "abc123"}], "paths": ["a.py"]}
+
+
+def _landed_run(repo, run_id="ask-1", script="a.mjs"):
+    token = run_token.mint(repo, run_id, script)
+    assert run_token.redeem(repo, run_id, token, script)
+    run_token.consume(repo, run_id, landed=_LANDED)
+    return token
+
+
+def test_spent_receipt_returns_landed_for_the_matching_token_and_script(tmp_path):
+    repo = _repo(tmp_path)
+    token = _landed_run(repo)
+    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") == _LANDED
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_spent_receipt_refuses_wrong_token_script_and_malformed(tmp_path):
+    repo = _repo(tmp_path)
+    token = _landed_run(repo)
+    assert run_token.spent_receipt(repo, "ask-1", "f" * 32, "a.mjs") is None
+    assert run_token.spent_receipt(repo, "ask-1", token, "b.mjs") is None
+    assert run_token.spent_receipt(repo, "ask-2", token, "a.mjs") is None
+    assert run_token.spent_receipt(repo, "../x", token, "a.mjs") is None
+    assert run_token.spent_receipt(repo, "ask-1", "short", "a.mjs") is None
+
+
+def test_an_expired_receipt_answers_nothing(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = _landed_run(repo)
+    later = time.time() + run_token.TTL_SECONDS + 5
+    monkeypatch.setattr(run_token.time, "time", lambda: later)
+    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is None
+
+
+def test_a_remint_removes_the_receipt(tmp_path):
+    repo = _repo(tmp_path)
+    token = _landed_run(repo)
+    run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is None
+
+
+def test_consume_without_landed_or_without_a_record_writes_no_receipt(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.consume(repo, "ask-1")
+    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is None
+    run_token.consume(repo, "ask-9", landed=_LANDED)
+    assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
+
+
+def test_spent_receipts_are_never_listed_as_held(tmp_path):
+    repo = _repo(tmp_path)
+    _landed_run(repo)
+    assert (repo / ".git" / "coordinator-warp-run-tokens" / "spent" / "ask-1.json").is_file()
+    assert list(run_token.live_records(repo)) == []
+    assert run_token.held_records(repo) == []
+    assert not run_token.is_live(repo, "ask-1")
+    assert run_token.discard(repo, "ask-1") is None
+
+
 def test_command_params_parse_inline_and_heredoc():
     inline = "coordinator-invoke dispatch.terminal_commit '{\"run_id\": \"a\", \"run_token\": \"t\", \"x\": \"it'\\''s\"}'"
     assert run_token.token_params_from_command(inline)["run_id"] == "a"

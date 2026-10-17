@@ -20,6 +20,7 @@ COMPOSED script -- this module tests each composer in isolation only.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 
@@ -139,47 +140,74 @@ def test_ledger_sweep_names_every_queue_and_never_commits():
     assert "coordinator:git-commit-agent" not in call_text
 
 
-def _js_encode_uri_component(text: str) -> str:
-    """JS `encodeURIComponent`: UTF-8 percent-encoding, unreserved set
-    `A-Z a-z 0-9 - _ . ! ~ * ' ( )`."""
-    from urllib.parse import quote
-
-    return quote(text, safe="-_.!~*'()")
+def _no_console() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
-    """The `grind-row run-record` argv the op-runner is told to run, with each
-    `' + (EXPR) + '` splice evaluated from ``bindings`` -- the verb onward.
-    The record splice is evaluated the way the Workflow runtime would."""
+def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str, repo_root: str,
+                             profile_dir: str, queue_dirs=("q",)) -> list:
+    """The `grind-row run-record` argv the op-runner's Bash calls deliver to the verb.
+
+    The sweep prompt is evaluated by node (the Workflow runtime's stand-in), every fenced block is
+    run as its own `bash -c` in ``cwd`` -- each under ``BASH_COMMAND_CAP`` -- and the final block's
+    assemble command is swapped for a NUL-delimited printf so the verb's argv comes back as parsed.
+    Skips when node or bash cannot run on the host."""
     import re
-    import shlex
 
-    def _eval(expr: str) -> str:
-        m = re.fullmatch(r"encodeURIComponent\((\w+)\)\.replace\(/'/g, '%27'\)", expr)
-        if m:
-            return _js_encode_uri_component(bindings[m.group(1)]).replace("'", "%27")
-        m = re.fullmatch(r"encodeURIComponent\(JSON\.stringify\(\{paths: (\w+)\}\)\)\.replace\(/'/g, '%27'\)", expr)
-        if m:
-            paths = json.dumps({"paths": bindings[m.group(1)]}, separators=(",", ":"))
-            return _js_encode_uri_component(paths).replace("'", "%27")
-        m = re.fullmatch(r"\((\w+)\) \? ' --decisions-file ' \+ _shq\(\1\) : ''", expr)
-        if m:
-            value = bindings[m.group(1)]
-            return f" --decisions-file {shlex.quote(value)}" if value else ""
-        m = re.fullmatch(r"_shq\((\w+)\)", expr)
-        if m:
-            return shlex.quote(str(bindings[m.group(1)]))
-        return str(bindings[expr])
-
-    flat = re.sub(r"' \+ \((.+?)\) \+ '", lambda m: _eval(m.group(1)), call_text)
-    flat = flat.replace("' + '", "").replace("\\'", "'")
-    start = flat.index(grind_stages.ASSEMBLE_CMD + " grind-row run-record")
-    command = flat[start : flat.index("\\n```", start)]
-    argv = shlex.split(command[len(grind_stages.ASSEMBLE_CMD) :])
+    # Trap: on Windows `which("bash")` can be the WSL launcher, whose paths differ from Git Bash.
+    node, bash = shutil.which("node"), shutil.which("bash")
+    if node is None or bash is None:
+        pytest.skip("node or bash not on PATH")
+    probe = subprocess.run(
+        [bash, "-c", "echo ok"], capture_output=True, text=True, check=False, creationflags=_no_console(),
+    )
+    if probe.stdout.strip() != "ok":
+        pytest.skip("bash not runnable")
+    sweep = grind_stages.compose_ledger_sweep_call(
+        label="s", phase_title="p", profile="p1", queue_dirs=list(queue_dirs),
+        run_id_js="RUN_ID", record_js="REC", declared_js="DECLARED", decisions_js="DEC",
+    )
+    script = (
+        grind_stages.SHQ_JS
+        + "\nconst E = JSON.parse(process.env.T_BINDINGS);"
+        + "\nconst PROFILE_DIR = E.profile_dir, REPO_ROOT = E.repo_root, RUN_ID = E.run_id,"
+        + " REC = E.record, DECLARED = E.declared, DEC = E.decisions;"
+        + f"\n(async () => {{ const agent = async (p) => console.log(p);\n{sweep}; }})();"
+    )
+    bindings = {
+        "profile_dir": profile_dir, "repo_root": repo_root, "run_id": "20261017T161125Z",
+        "record": record, "declared": declared, "decisions": decisions,
+    }
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=False,
+        env={**os.environ, "T_BINDINGS": json.dumps(bindings)}, creationflags=_no_console(),
+    )
+    assert out.returncode == 0, out.stderr
+    blocks = re.findall(r"```\n(.*?)\n```", out.stdout, re.S)
+    assert len(blocks) >= 3, out.stdout
+    argv: list = []
+    for i, block in enumerate(blocks):
+        assert len(block) < grind_stages.BASH_COMMAND_CAP, (i, len(block))
+        last = i == len(blocks) - 1
+        if last:
+            block = block.replace(grind_stages.ASSEMBLE_CMD, r"printf '%s\0'", 1)
+        ran = subprocess.run(
+            [bash, "-n", "-c", block], capture_output=True, text=True, check=False, creationflags=_no_console(),
+        )
+        assert ran.returncode == 0, ran.stderr
+        ran = subprocess.run(
+            [bash, "-c", block], capture_output=True, text=True, check=False, cwd=str(cwd),
+            creationflags=_no_console(),
+        )
+        assert ran.returncode == 0, ran.stderr
+        if last:
+            argv = ran.stdout.split("\0")[:-1]
     assert argv[0] == "grind-row"
+    assert not list(cwd.glob("scratch/run-record-*")), "the final command removes its piece files"
     return argv[1:]
 
 
+@pytest.mark.spawns_process
 def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
     """The drain brief and `grind_rows.cmd_run_record` agree: the argv the
     brief names, run as written with NOTHING on stdin, writes the run record
@@ -189,20 +217,19 @@ def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
 
     from coordinator_core.backlog_grind_assemble import grind_rows
 
-    call_text = _sweep_call(queue_dirs=[], declared_js="DECLARED", decisions_js="DEC")
     record = {
-        "profile": "p1", "run_id": "20261002T000000Z", "counts": {}, "spend": {},
+        "profile": "p1", "run_id": "20261017T161125Z", "counts": {}, "spend": {},
         "handed_back": [], "halted": False, "reason": "it's \"quoted\" — café; $(x) `y`",
     }
     argv = _emitted_run_record_argv(
-        call_text,
-        {"RUN_ID": "20261002T000000Z", "REPO_ROOT": str(tmp_path), "REC": json.dumps(record), "DECLARED": [], "DEC": ""},
+        tmp_path, record=json.dumps(record), declared=[], decisions="", repo_root=str(tmp_path),
+        profile_dir=str(tmp_path / "profiles"), queue_dirs=(),
     )
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
 
     assert grind_rows.main(argv) == grind_rows.EXIT_OK
-    target = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261002T000000Z.json"
+    target = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261017T161125Z.json"
     assert json.loads(target.read_text(encoding="utf-8")) == record
 
 
@@ -232,7 +259,7 @@ def test_drain_call_carries_every_flag_in_one_command():
     assert f"--{gcc.QUEUE_FLAG} state/other" in call_text
     assert "--record-urlenc" in call_text
     assert f"--{gcc.DECLARED_FLAG}" in call_text
-    assert "encodeURIComponent(JSON.stringify({paths: DECLARED})).replace(/'/g, '%27')" in call_text
+    assert f"encodeURIComponent(JSON.stringify({{paths: DECLARED}})){grind_stages._URLENC_SHELL_INERT_JS}" in call_text
     assert f"--{gcc.DECISIONS_FLAG} " in call_text
     assert "_shq(DECISIONS)" in call_text
     assert "grind-row sweep" not in call_text
@@ -286,6 +313,16 @@ def test_terminal_commit_call_is_the_haiku_committer_and_returns_the_reply_shape
     for key in ('"committed"', '"rows"', '"dropped"', '"refused"', '"error"', '"sha"'):
         assert key in call_text
     assert "verbatim" in call_text
+
+
+def test_terminal_commit_call_returns_already_landed_and_unlanded_verbatim():
+    call_text = _terminal_call()
+    assert '"already_landed"' in call_text and '"unlanded"' in call_text
+    assert "already_landed and unlanded, verbatim (null where absent)" in call_text
+    props = grind_stages._TERMINAL_COMMIT_SCHEMA["properties"]
+    assert props["already_landed"]["type"] == ["boolean", "null"]
+    assert set(props["unlanded"]["items"]["properties"]) == {"row_id", "reason"}
+    assert grind_stages._TERMINAL_COMMIT_SCHEMA["required"] == ["committed"]
 
 
 def test_terminal_commit_prompt_passes_no_trailer_or_path_list():
@@ -824,6 +861,29 @@ def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
     assert out.returncode == 0, out.stderr
     assert "--profile-dir 'C:\\a b\\profiles' " in out.stdout
     assert "--repo-root '/r o/it'\\''s'" in out.stdout
+
+
+@pytest.mark.spawns_process
+def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path):
+    """A run record far past the ~8 KB `bash -c` cap, carrying quotes, spaces and Windows paths,
+    reaches the verb byte-faithfully: every Bash call the prompt names parses and stays under the cap."""
+    from urllib.parse import unquote
+
+    record = json.dumps({
+        "reason": "it's \"q\" (a) !b *c ~d $(x) `y` C:\\a b\\c " + "é'(x) " * 40,
+        "spend": ["P" * 40 + " 'k' " + "Z" * 40] * 200,
+    })
+    declared = ["C:\\a b\\it's.yaml", "state/it's (x).yaml"] * 5
+    assert len(record) > 2 * grind_stages.BASH_COMMAND_CAP
+    argv = _emitted_run_record_argv(
+        tmp_path, record=record, declared=declared, decisions="C:\\a b\\it's decisions.json",
+        repo_root="/r o/it's", profile_dir="C:\\a b\\profiles",
+    )
+    assert unquote(argv[argv.index("--record-urlenc") + 1]) == record
+    assert json.loads(unquote(argv[argv.index("--declared-urlenc") + 1])) == {"paths": declared}
+    assert argv[argv.index("--profile-dir") + 1] == "C:\\a b\\profiles"
+    assert argv[argv.index("--decisions-file") + 1] == "C:\\a b\\it's decisions.json"
+    assert argv[argv.index("--repo-root") + 1] == "/r o/it's"
 
 
 def test_every_evidence_file_flag_names_its_evidence_path():

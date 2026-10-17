@@ -1237,10 +1237,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     carried: list = []
     if (raw_carry and free) or stopped_flat:
         probe = list(dict.fromkeys([*(free if raw_carry else ()), *stopped_flat]))
-        if supplied_ignored is not None:
-            skip = {p.replace("\\", "/") for p in supplied_ignored}
-        else:
-            skip = {p.replace("\\", "/") for p in _ignored_untracked(worktree_root, probe)}
+        # A supplied set answers only for `paths`; carried candidates sit outside it.
+        asked = {p.replace("\\", "/") for p in raw_paths} if supplied_ignored is not None else set()
+        skip = {p.replace("\\", "/") for p in supplied_ignored or ()}
+        unasked = [p for p in probe if p.replace("\\", "/") not in asked]
+        skip |= {p.replace("\\", "/") for p in _ignored_untracked(worktree_root, unasked)} if unasked else set()
         if raw_carry:
             carried = [p for p in free if p not in skip or p in exempt]
         kept_stopped = {p for p in stopped_flat if p not in skip or p in exempt}
