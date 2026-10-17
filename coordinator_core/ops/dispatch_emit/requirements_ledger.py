@@ -864,7 +864,8 @@ def judge(
 
     A design-conformance row (anchor `design-registry:<id>`) is always essential: `essential: false`
     is ignored, `post_commit` fails, and `met` passes only when `design_conformance.evidence_refusal`
-    (given `repo_root` and the run's `plan_text`) returns None. `wave_reviews` (the review wave's
+    (given `repo_root` and the run's `plan_text`) returns None; a `met` that fails it is judged
+    `not_met`, so an empty `met_by` never stands as met. `wave_reviews` (the review wave's
     `{agent_type, sidecar_path, verdict}` returns) and `noted_paths` (files the revise notes name)
     are default evidence beside the item's own `met_by`."""
     verdict = normalize_verdict(verdict)
@@ -900,6 +901,7 @@ def judge(
             why = _design_failure(item, row, repo_root, plan_text, wave_reviews, noted_paths)
             if why is not None:
                 failures.append({"id": item.id, "reason": why})
+                status = "not_met"
         if routed and item.id in routed and status in ("met", "not_met", "post_commit"):
             reason = _misrouted(row, routed[item.id])
             if reason is not None:

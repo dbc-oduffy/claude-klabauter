@@ -64,7 +64,11 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     DESIGN_ROUTE_CLAUSE,
     scout_assemble_flags_js,
 )
-from coordinator_core.ops.dispatch_emit.design_conformance import DEFAULT_MET_BY_CLAUSE, DESIGN_BRIEF_KEY
+from coordinator_core.ops.dispatch_emit.design_conformance import (
+    ANCHOR_PREFIX as _DESIGN_ANCHOR_PREFIX,
+    DEFAULT_MET_BY_CLAUSE,
+    DESIGN_BRIEF_KEY,
+)
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
@@ -338,6 +342,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
                     "met_by": {"type": ["string", "array"], "items": _STR},
+                    "anchor": _STR,
                 },
             ),
         },
@@ -364,7 +369,8 @@ _LEDGER_ITEMS_RULES = (
     "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
     "and any other gap in plain words. On a design-registry item (anchor design-registry:<id>) judged "
     "'met', set met_by to the repo-relative path of the senior-front-end review file of its board, "
-    "or of its ratification file. "
+    "or of its ratification file; a design-registry item judged 'met' with no met_by is 'not_met'. "
+    "On every item copy its anchor from the ledger row into anchor. "
 )
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
@@ -2355,6 +2361,13 @@ def compose_ask_script(
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
     b.append(
         "    const _reconciled = [];\n"
+        f"    const _designPrefix = {json.dumps(_DESIGN_ANCHOR_PREFIX)};\n"
+        "    for (const i of (_ledger?.items ?? [])) {\n"
+        "      if (!i || i.status !== 'met' || !String(i.anchor ?? '').startsWith(_designPrefix)) continue;\n"
+        "      const _mb = (Array.isArray(i.met_by) ? i.met_by : [i.met_by]).some((m) => typeof m === 'string' && m.trim() && m.trim().toLowerCase() !== 'none');\n"
+        "      if (!_mb) { i.status = 'not_met'; i.essential = true; "
+        "i.remaining = ['met_by: the senior-front-end review or ratification file of the design board']; }\n"
+        "    }\n"
         "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'not_met' || !Array.isArray(i.remaining) || !i.remaining.length) continue;\n"
         "      const rest = i.remaining.filter((a) => !((_manifest.doc_writes ?? []).includes(a) "

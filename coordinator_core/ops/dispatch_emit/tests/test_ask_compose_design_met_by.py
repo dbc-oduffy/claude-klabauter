@@ -59,6 +59,35 @@ def test_verify_prompt_defaults_design_met_by_to_the_wave_senior_front_end_sidec
     assert "'none'" in tail
 
 
+def test_ledger_check_downgrades_a_design_row_met_without_met_by():
+    script = _compose(in_run_commit=True)
+    start = script.index("const _designPrefix = ")
+    guard = script[start:script.index("const _postCommitActs", start)]
+    assert '"design-registry:"' in guard
+    assert "i.status !== 'met'" in guard
+    assert "m.trim()" in guard
+    # The wave-sidecar default renders the literal 'none'; a copied 'none' is not a file.
+    assert "m.trim().toLowerCase() !== 'none'" in guard
+    assert "i.status = 'not_met'; i.essential = true;" in guard
+    # The downgrade runs before the blocking filter and the halted 'ledger-check' items read it.
+    assert start < script.index("const _ledgerBlocking")
+    assert "halted: 'ledger-check'" in script
+
+
+def test_ledger_check_leaves_non_design_met_rows_alone():
+    script = _compose(in_run_commit=True)
+    start = script.index("const _designPrefix = ")
+    guard = script[start:script.index("const _postCommitActs", start)]
+    assert ".startsWith(_designPrefix)) continue;" in guard
+    assert "if (status === 'not_met')" in script  # met rows still fall through to `return false`
+
+
+def test_ledger_check_asks_for_the_anchor_and_states_the_rule():
+    item = ask_compose._LEDGER_CHECK_SCHEMA["properties"]["items"]["items"]["properties"]
+    assert "anchor" in item
+    assert "design-registry item judged 'met' with no met_by is 'not_met'" in ask_compose._LEDGER_ITEMS_RULES
+
+
 def test_default_met_by_sidecar_expression_is_valid_js_and_filters_by_reviewer():
     expr = ask_compose._SFE_WAVE_SIDECARS_JS
     assert expr.count("(") == expr.count(")")
