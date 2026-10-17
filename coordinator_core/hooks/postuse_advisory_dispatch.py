@@ -1471,15 +1471,15 @@ def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, too
 
 
 def _task_gone_in_tail(transcript_path: str, task_id: str) -> bool:
-    """True when a transcript-tail line holds both `No task found` and `task_id`
-    (a TaskStop on a reaped task). Reads the tail only; never raises."""
+    """True when the tail holds the harness's `No task found with ID: <task_id>` (a TaskStop on
+    a reaped task), never prose quoting the phrase. Reads the tail only; never raises."""
     try:
         from coordinator_core.workflow_watch.tail import TailReader
 
         text = TailReader(transcript_path, seek_to_tail=True).poll()
     except Exception:
         return False
-    return any("No task found" in ln and task_id in ln for ln in (text or "").split("\n"))
+    return f"No task found with ID: {task_id}" in (text or "")
 
 
 def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float) -> str:

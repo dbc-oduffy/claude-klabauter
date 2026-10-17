@@ -164,6 +164,35 @@ def _launch_records(session_id: str, script_path: str, dirs: list[str]) -> list[
     return [(task_id, rec) for task_id, (_, rec) in ordered]
 
 
+def _own_launch_ids(
+    session_id: str, script_path: str, dirs: list[str], tool_use_id: object, minted_at: float
+) -> list[str]:
+    """Task ids of the launches this mint submitted. A halted run re-fired under its own id shares
+    the script path with its earlier launches, so the path alone never attributes a launch.
+
+    A pending record (its filename suffix is a tool_use_id, not a task id) is never a launch. With
+    a submitted `tool_use_id`, a record naming another one is an earlier launch; a record
+    naming none (every capture names one) cannot be disproved and stays. Without a submitted id, a
+    named record fired before the mint's whole second is an earlier launch."""
+    own: list[str] = []
+    for task_id, record in _launch_records(session_id, script_path, dirs):
+        if record.get("pending"):
+            continue
+        recorded = record.get("tool_use_id")
+        if not (isinstance(recorded, str) and recorded):
+            own.append(task_id)
+            continue
+        if isinstance(tool_use_id, str) and tool_use_id:
+            if recorded != tool_use_id:
+                continue
+        else:
+            fired = record.get("fired_at")
+            if not isinstance(fired, (int, float)) or fired < int(minted_at):
+                continue
+        own.append(task_id)
+    return own
+
+
 def _tail(path: str) -> str:
     try:
         with open(path, "rb") as handle:
@@ -196,7 +225,7 @@ def _run_ended(
         # An ownerless token is the unlaunched state with no owner to read: it ages out on the
         # same bound and is never spent.
         return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
-    task_ids = _launched_task_ids(session_id, script_path, dirs)
+    task_ids = _own_launch_ids(session_id, script_path, dirs, tool_use_id, minted_at)
     has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
     tail = _tail(transcript_path) if has_transcript else ""
     if not task_ids:
@@ -254,11 +283,10 @@ def _earlier_lines(path: str, needle: str) -> str:
 
 
 def _task_gone(transcript_tail: str, task_id: str) -> bool:
-    """True when a tail line reports `No task found` for `task_id`: the harness never ran it, or
-    reaped it, so no terminal notification can follow."""
-    if task_id not in transcript_tail:
-        return False
-    return any("No task found" in ln and task_id in ln for ln in transcript_tail.split("\n"))
+    """True when the tail holds the harness's `No task found with ID: <task_id>` result: the harness
+    never ran it, or reaped it, so no terminal notification can follow. Trap: prose that quotes
+    `No task found` beside the id (a peer's ask, a log excerpt) must not spend a live token."""
+    return f"No task found with ID: {task_id}" in transcript_tail
 
 
 def _launch_task_id(transcript_tail: str, tool_use_id: str) -> Optional[str]:

@@ -16,6 +16,12 @@ Invariants: the record lives in the git common dir (never the worktree, so no co
 it); only a sha256 of the token is stored; the record names the run's script and a token admits
 nothing without that script; a record older than `TTL_SECONDS` admits nothing. In-process file
 I/O only: no spawn.
+
+Removal rule: only a landed commit, an ended or refused run, or a sanctioned peer release
+removes a record. `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
+caller with its condition. This module's own unlinks are the protocol and are outside that walk:
+`mint` unlinks a stale claimed record, `redeem` unlinks the live record it claims, and
+`consume` / `discard` unlink their targets.
 """
 
 from __future__ import annotations

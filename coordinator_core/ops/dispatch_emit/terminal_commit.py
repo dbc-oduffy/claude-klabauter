@@ -4295,7 +4295,7 @@ def _terminal_commit_inner(
         reply["error"] = _blob_drift_remedy(
             reply["error"], _run_id_of(params, ask_run_dir, script_path_raw)
         )
-    if reply.get("committed"):
+    if reply.get("committed") and reply.get("sha"):
         token_state["landed"] = True
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
