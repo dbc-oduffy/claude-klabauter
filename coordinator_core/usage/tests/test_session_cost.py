@@ -136,11 +136,10 @@ def test_byte_budget_backlog_converges(sess):
     assert not session_cost.render(got).endswith("+")
 
 
-def test_throttle_touches_no_directory_or_transcript(sess, monkeypatch):
+def test_throttle_unchanged_transcript_touches_no_directory_or_transcript(sess, monkeypatch):
     main, cache = sess
     write(main, row("m1", "r1"))
     adv(sess, now=1000.0)
-    append(main, row("m2", "r2"))
     real_open = open
 
     def guarded_open(path, *a, **k):
@@ -156,6 +155,24 @@ def test_throttle_touches_no_directory_or_transcript(sess, monkeypatch):
     got = adv(sess, now=1000.0 + session_cost._RESCAN_AFTER_SEC - 1)
     monkeypatch.undo()
     assert got["usd"] == pytest.approx(usd_of())
+    assert cache_of(sess)["main_size"] == main.stat().st_size
+
+
+def test_appended_turn_folds_inside_rescan_window_without_listing(sess, monkeypatch):
+    main, _ = sess
+    write(main, row("m1", "r1"))
+    adv(sess, now=1000.0)
+    append(main, row("m2", "r2"))
+
+    def no_scandir(*a, **k):
+        raise AssertionError("scandir")
+
+    monkeypatch.setattr(os, "scandir", no_scandir)
+    got = adv(sess, now=1000.0 + session_cost._RESCAN_AFTER_SEC - 1)
+    monkeypatch.undo()
+    assert got["usd"] == pytest.approx(2 * usd_of())
+    assert got["complete"] is True
+    assert cache_of(sess)["main_size"] == main.stat().st_size
 
 
 def test_idless_rows_across_two_appends_counted_once_each(sess):

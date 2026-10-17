@@ -100,5 +100,5 @@ def render(
             continue
         out.append("")
         out.append(receipt.check_narration(f"### {name}"))
-        out.extend(body)
+        out.extend(receipt.clip(body))
     return "\n".join(out) + "\n"

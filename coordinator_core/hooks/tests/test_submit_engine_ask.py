@@ -999,6 +999,19 @@ def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path)
     out, _ = _submit_slice(root, "r2")
     reason = _hso(out)["permissionDecisionReason"]
     assert 'fresh {ask, supersedes: "r2"}' in reason and "r1" in reason
+    assert "Land r1's declared writes" in reason
+
+
+def test_a_halted_predecessor_whose_declared_writes_landed_releases_the_slice(tmp_path, monkeypatch):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "halted")
+    from coordinator_core.ops.dispatch_emit import sibling_hold
+
+    monkeypatch.setattr(sibling_hold, "_landed_work", lambda base, run_id, halted: "landed@abcdef012345")
+    _halt_record(root, "r1", "docs/plans/p.md", "reviewed")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert emit.calls[0][0]["reserved_run_id"] == "r2"
 
 
 def _halt_record(root, run_id, plan_rel, plan_status):

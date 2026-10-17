@@ -1,4 +1,5 @@
 from coordinator_core.ops.ceremony.commit_gates import (
+    is_never_commit,
     residue_gate,
     split_process_paths,
 )
@@ -9,6 +10,13 @@ MIXED = ["src/app.py", "state/handoffs/x.md"]
 def test_never_commit_refused(tmp_path):
     out = residue_gate(tmp_path, ["src/app.py", "scratch/x.py"])
     assert not out.passed and "scratch/x.py" in out.diagnostics[0]
+
+
+def test_is_never_commit_matches_scratch_under_either_separator():
+    assert is_never_commit("scratch/x.py")
+    assert is_never_commit("scratch\\sub\\x.py")
+    assert not is_never_commit("src/scratch/x.py")
+    assert not is_never_commit("docs/scratch.md")
 
 
 def test_coordinator_local_is_partitioned_not_refused(tmp_path):

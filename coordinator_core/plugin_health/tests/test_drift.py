@@ -202,6 +202,34 @@ def test_default_leg_git_state_fetch_failure_warns(tmp_path: Path, monkeypatch):
     assert result is not None
 
 
+def _registry(tmp_path: Path, monkeypatch, body: str) -> None:
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "registry.toml").write_text(body, encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+
+
+def test_run_only_source_is_live_exits_zero(tmp_path: Path, monkeypatch):
+    from coordinator_core.plugin_health import drift as drift_mod
+
+    _registry(tmp_path, monkeypatch, '[plugin.mirrors.coordinator-claude]\npropagation_mode = "source_is_live"\n')
+    out, _err, code = drift_mod._run("", False)
+    assert code == 0
+    assert any("n/a by design" in ln for ln in out)
+
+
+def test_run_drift_exit_names_plugin_even_when_probe_gave_no_line(tmp_path: Path, monkeypatch):
+    from coordinator_core.plugin_health import drift as drift_mod
+
+    _registry(tmp_path, monkeypatch, '[plugin.mirrors.silentplug]\npropagation_mode = ""\n')
+    monkeypatch.setattr(
+        drift_mod, "check_plugin", lambda *a, **k: drift_mod.DriftResult(ok=False)
+    )
+    out, _err, code = drift_mod._run("", False)
+    assert code == 1
+    assert any("silentplug" in ln and ln.startswith("[drift]") for ln in out)
+
+
 def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_path: Path):
     source = tmp_path / "source"
     _mkrepo(source)

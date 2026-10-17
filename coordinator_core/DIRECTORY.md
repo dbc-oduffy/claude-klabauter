@@ -63,7 +63,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `detect_changed_dependency_manifests.py` | `dependency.detect_changed_manifests` | Detects whether a repo's dependency manifests changed within a since-days window |
 | `detect_plugin_layout.py` | `detect.plugin_layout` | Detects flat vs. nested plugin directory layout via a docs/install/AGENT.md existence check |
 | `detect_primary_languages.py` | `detect.primary_languages` | Read-only file-extension tally (pathlib.rglob + Counter) to detect a repo's primary language(s) |
-| `engine_drift.py` | `engine.drift` | Read-only three-state drift probe — running engine SHA vs. `MIN_KNOWN_GOOD_SHA` floor |
+| `engine_drift.py` | `engine.drift` | Read-only three-state drift probe — running engine source-head vs. `MIN_KNOWN_GOOD_SHA` floor |
 | `goal_append.py` | `goal.append` | Appends a goal-event record |
 | `goals_match.py` | `goal.match_candidates` | Read-only ranked resolver over `state/goals/*.md` |
 | `handoff_author_fork.py` | `handoff.author_fork` | MUTATING — generates fork/spinoff handoff artifact |

@@ -136,7 +136,7 @@ class EmitTestRedRecordTest(unittest.TestCase):
 
         def _run_main_with_emitter(emitter_side_effect):
             with mock.patch.object(mod.rvc, "resolve_fast_test_cmd", return_value=fake_resolve), \
-                 mock.patch.object(mod, "compute_diff_scoped_paths", return_value=([], True)), \
+                 mock.patch.object(mod, "compute_diff_scoped_paths", return_value=(["a/t.py"], True)), \
                  mock.patch.object(
                      mod,
                      "enforce_tier_u_gate",
@@ -189,11 +189,11 @@ class FastRedDeltaTest(unittest.TestCase):
             rc = mod.main()
         return rc, out.getvalue(), err.getvalue()
 
-    def test_whole_tier_names_unregistered_id(self) -> None:
+    def test_scoped_run_names_unregistered_id(self) -> None:
         mod = _load_cli_module()
-        rc, _out, err = self._run_main(mod, [])
+        rc, _out, err = self._run_main(mod, ["a/t.py"])
         self.assertEqual(rc, 3)
-        self.assertIn("fast-red delta: new=1 standing=1 fixed=1", err)
+        self.assertIn("fast-red delta: new=1 standing=1 fixed=n/a", err)
         self.assertIn("a/t.py::fresh", err)
 
     def test_scoped_run_reports_fixed_na(self) -> None:
@@ -203,8 +203,8 @@ class FastRedDeltaTest(unittest.TestCase):
 
     def test_delta_failure_leaves_exit_code_and_stdout(self) -> None:
         mod = _load_cli_module()
-        rc_ok, out_ok, _ = self._run_main(mod, [])
-        rc_bad, out_bad, err = self._run_main(mod, [], report_side_effect=RuntimeError("boom"))
+        rc_ok, out_ok, _ = self._run_main(mod, ["a/t.py"])
+        rc_bad, out_bad, err = self._run_main(mod, ["a/t.py"], report_side_effect=RuntimeError("boom"))
         self.assertEqual((rc_ok, out_ok), (rc_bad, out_bad))
         self.assertIn("report failed", err)
 
@@ -218,6 +218,27 @@ class FastRedDeltaTest(unittest.TestCase):
             mod._report_fast_red_delta("pytest", None, None)
             mod._report_fast_red_delta("cargo", ["x"], None)
         self.assertEqual(err.getvalue().count("fast-red delta: unavailable"), 2)
+
+
+class ResolveExecutableTest(unittest.TestCase):
+    def test_python3_absent_from_path_resolves_to_running_interpreter(self) -> None:
+        mod = _load_cli_module()
+        with mock.patch.object(mod.shutil, "which", return_value=None):
+            self.assertEqual(mod._resolve_executable("python3", ""), sys.executable)
+
+    def test_non_python_missing_command_stays_unresolved(self) -> None:
+        mod = _load_cli_module()
+        with mock.patch.object(mod.shutil, "which", return_value=None):
+            self.assertIsNone(mod._resolve_executable("no-such-tool", ""))
+
+    def test_run_fast_test_cmd_launches_without_python3_on_path(self) -> None:
+        mod = _load_cli_module()
+        env = dict(os.environ)
+        env["PATH"] = ""
+        with mock.patch.object(mod.shutil, "which", return_value=None):
+            rc, out = mod._run_fast_test_cmd("python3 -c \"print('ok')\"", env)
+        self.assertEqual(rc, 0)
+        self.assertIn("ok", out)
 
 
 if __name__ == "__main__":

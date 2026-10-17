@@ -203,19 +203,19 @@ def test_agent_worktrees_found_by_gitdir_records(tmp_path):
 
 
 def test_hook_currency_current_is_silent(monkeypatch, author):
-    monkeypatch.setattr(mod, "_hook_walk_report", lambda: "")
+    monkeypatch.setattr(mod, "_hook_stale_lines", lambda: [])
     assert mod._hook_currency(Path(".")) == ([], [])
 
 
 def test_hook_currency_author_gets_a_directive(monkeypatch, author):
-    monkeypatch.setattr(mod, "_hook_walk_report", lambda: "stale hook in repos.a\nand b")
+    monkeypatch.setattr(mod, "_hook_stale_lines", lambda: ["stale hook in repos.a", "and b"])
     directives, points = mod._hook_currency(Path("."))
     assert points == [] and directives[0]["id"] == "d-hook-currency"
     assert directives[0]["args"] == ["hook-currency"] and directives[0]["depends_on"] is None
 
 
 def test_hook_currency_consumer_gets_a_point_gating_the_directive(monkeypatch, consumer):
-    monkeypatch.setattr(mod, "_hook_walk_report", lambda: "stale")
+    monkeypatch.setattr(mod, "_hook_stale_lines", lambda: ["stale"])
     directives, points = mod._hook_currency(Path("."))
     point = points[0]
     assert point["id"] == "j-hook-currency-repair" and point["recommendation"] is None
@@ -225,16 +225,64 @@ def test_hook_currency_consumer_gets_a_point_gating_the_directive(monkeypatch, c
     assert "defer" in [d["value"] for d in point["dispositions"]]
 
 
-def test_hook_walk_that_cannot_run_reads_as_stale(monkeypatch):
-    import git_hook_install
-
-    mod._bin_on_path()
-
-    def boom(*a, **k):
+def test_hook_walk_that_cannot_run_reads_as_stale(monkeypatch, author):
+    def boom():
         raise RuntimeError("registry unreadable")
 
-    monkeypatch.setattr(git_hook_install, "ensure_hooks_fleet", boom)
-    assert "COULD NOT RUN" in mod._hook_walk_report()
+    monkeypatch.setattr(mod, "_hook_stale_lines", boom)
+    directives, _ = mod._hook_currency(Path("."))
+    assert "COULD NOT RUN" in directives[0]["detail"]
+
+
+def _hook_seams(monkeypatch, roots, kinds, states):
+    import git_hook_install as hooks
+
+    mod._bin_on_path()
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "merged_flat_registry", lambda: {})
+    monkeypatch.setattr(hooks, "_registry_repo_roots", lambda bin_dir, registry=None: roots)
+    monkeypatch.setattr(hooks, "_unregistered_hooked_repos", lambda registered, registry=None: [])
+    monkeypatch.setattr(hooks, "_classify_target", lambda root: kinds[root])
+    monkeypatch.setattr(hooks, "_hook_points_at_coordinator", lambda root, name: False)
+
+    def fake_ensure(bin_dir, root=None, outcome=None, *, check_only=False, registry=None):
+        assert check_only is True
+        outcome.append(states[root])
+        return 0
+
+    monkeypatch.setattr(hooks, "ensure_prepare_commit_msg_hook", fake_ensure)
+
+
+def test_hook_stale_lines_report_stale_missing_and_skip_mirrors(monkeypatch):
+    roots = [("repos.a", "/a"), ("repos.b", "/b"), ("repos.c", "/c"), ("repos.d", "/d")]
+    kinds = {"/a": "worktree", "/b": "worktree", "/c": "missing", "/d": "mirror"}
+    states = {"/a": "rewritten-stale", "/b": "current", "/d": "rewritten-stale"}
+    _hook_seams(monkeypatch, roots, kinds, states)
+    lines = mod._hook_stale_lines()
+    text = " | ".join(lines)
+    assert "repos.a prepare-commit-msg: rewritten-stale" in text
+    assert "repos.b" not in text and "repos.d" not in text
+    assert "unreachable" in text and "repos.c -> /c" in text
+
+
+def test_hook_stale_lines_current_fleet_is_empty(monkeypatch):
+    _hook_seams(monkeypatch, [("repos.a", "/a")], {"/a": "worktree"}, {"/a": "current"})
+    assert mod._hook_stale_lines() == []
+
+
+def test_hook_stale_lines_no_registered_repos_is_not_current(monkeypatch):
+    _hook_seams(monkeypatch, [], {}, {})
+    assert mod._hook_stale_lines() != []
+
+
+def test_hook_currency_never_runs_the_disposition_table():
+    import inspect
+
+    source = inspect.getsource(mod._hook_stale_lines)
+    assert "ensure_hooks_fleet" not in source
+    assert "_apply_dispositions" not in source
+    assert "hook_dispositions" not in source
 
 
 def _perf_fleet(monkeypatch, tmp_path, configs):
@@ -372,7 +420,7 @@ def _full_envelope(monkeypatch, tmp_path, *, profile_author: bool) -> dict:
     monkeypatch.setattr(mod, "_author_profile", lambda: profile_author)
     monkeypatch.setattr(scan, "_run", lambda mode: (["[health] addon red"], 0))
     monkeypatch.setattr(mod, "_BIN_DIR", tmp_path / "nobin")
-    monkeypatch.setattr(mod, "_hook_walk_report", lambda: "stale hook")
+    monkeypatch.setattr(mod, "_hook_stale_lines", lambda: ["stale hook"])
     monkeypatch.setattr(
         git_perf_config, "iter_fleet_worktrees",
         lambda bin_dir: git_perf_config.FleetWalkResult(ok=False, reason="no_roots"),

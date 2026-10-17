@@ -1,14 +1,16 @@
 """Sibling-hold leaf: is a halted predecessor closed, and which run replaced a held slice.
 
 ``predecessor_closed`` answers from the run's status-file ``closed_by`` mark, else from the plan its
-halt record names (directly, or through the halted sizing's ``plan:`` edge) reading ``implemented``.
-``mark_superseded`` writes the write-once ``superseded.json`` beside the run's status file.
-File reads plus one atomic write; no subprocess, no git.
+halt record names (directly, or through the halted sizing's ``plan:`` edge) reading ``implemented``,
+else from the landed-work arm: every declared product write clean at HEAD, one differing from the
+halt record's ``run_base_sha``. ``mark_superseded`` writes the write-once ``superseded.json`` beside
+the run's status file. File reads plus one atomic write; no subprocess (git objects are read in-process).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -72,11 +74,75 @@ def _implemented_plan(root: Path, halted: dict) -> Optional[str]:
     return _rel(root, plan_path)
 
 
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+_NON_PRODUCT_PREFIXES = ("state/",)
+
+
+def _declared_product_writes(manifest: dict) -> list:
+    """Manifest ``rows[].writes`` minus state/run-record paths and never-commit paths, forward-slash."""
+    from coordinator_core.ops.ceremony.commit_gates import _NEVER_COMMIT_PREFIXES
+
+    skip = _NON_PRODUCT_PREFIXES + tuple(_NEVER_COMMIT_PREFIXES)
+    rows = manifest.get("rows")
+    out: list = []
+    for row in rows if isinstance(rows, list) else ():
+        writes = row.get("writes") if isinstance(row, dict) else None
+        for w in writes if isinstance(writes, list) else ():
+            if not isinstance(w, str) or not w:
+                continue
+            path = w.replace("\\", "/")
+            if not path.startswith(skip) and path not in out:
+                out.append(path)
+    return out
+
+
+def _landed_work(root: Path, run_id: str, halted: dict) -> Optional[str]:
+    """``landed@<head12>`` when every declared product write is clean at HEAD and one moved since
+    the halted run's ``run_base_sha``; None on a hold or any reader gap. In-process, zero spawns."""
+    base_sha = halted.get("run_base_sha")
+    if not isinstance(base_sha, str) or not _FULL_SHA.match(base_sha):
+        return None
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        manifest = _read_json(record_dir(root, run_id) / "manifest.json")
+    except ValueError:
+        return None
+    paths = _declared_product_writes(manifest) if manifest else []
+    if not paths:
+        return None
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.git.scoped_changed import scoped_changed
+
+    try:
+        scope = scoped_changed(root, paths, [], [])
+        head = head_sha(root)
+        if scope is None or not head:
+            return None
+        changed, untracked = scope
+        if changed or untracked:
+            return None
+        common = resolve_git_common_dir(root)
+        moved = False
+        for path in paths:
+            at_head = _blob_at_commit(common, head, path)
+            at_base = _blob_at_commit(common, base_sha, path)
+            if at_head is None or at_base is None or at_head is ABSENT:
+                return None
+            moved = moved or at_head != at_base
+    except (OSError, ValueError):
+        return None
+    return f"landed@{head[:12]}" if moved else None
+
+
 def predecessor_closed(root: Any, run_id: str) -> Optional[str]:
-    """The evidence that closed halted *run_id* (a plan rel or a ``closed_by`` value), else None.
+    """The evidence that closed halted *run_id* (a plan rel, a ``closed_by`` value, or ``landed@<head12>``).
 
     The status file's ``closed_by`` first, then the halt record's plan (or its sizing's plan) reading
-    ``implemented``; archive fallbacks are walked only on a live miss.
+    ``implemented``, then the declared product writes all committed with one moved since
+    ``run_base_sha``; archive fallbacks are walked only on a live miss.
     """
     base = Path(root)
     status = _read_json(base / contract.status_rel(run_id))
@@ -89,7 +155,9 @@ def predecessor_closed(root: Any, run_id: str) -> Optional[str]:
         halted = _read_json(record_dir(base, run_id) / HALTED_FILE)
     except ValueError:
         return None
-    return _implemented_plan(base, halted) if halted else None
+    if not halted:
+        return None
+    return _implemented_plan(base, halted) or _landed_work(base, run_id, halted)
 
 
 def supersede_refusal(root: Any, run_id: str, by: str) -> Optional[str]:

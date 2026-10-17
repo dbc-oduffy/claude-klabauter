@@ -105,8 +105,11 @@ class Box:
             "judgment_points": list(points), "directives": list(directives), "next_move": "",
         }), "")
 
-    def inbox(self, state="escalate", memos=("state/cross-repo/inbox/a.md",)):
-        dispatches = [{"id": "triage-all", "stage": "triage", "memos": list(memos), "brief": "triage them"}]
+    def inbox(self, state="escalate", memos=("state/cross-repo/inbox/a.md",), report_path=None):
+        dispatch = {"id": "triage-all", "stage": "triage", "memos": list(memos), "brief": "triage them"}
+        if report_path:
+            dispatch["report_path"] = report_path
+        dispatches = [dispatch]
         self.outputs[cli.INBOX_STEP] = (0, json.dumps({"state": state, "dispatches": dispatches}), "")
 
     def runs(self):
@@ -357,6 +360,37 @@ def test_finish_with_memo_missing_from_results_writes_a_failed_row(box):
     failed = {r["id"]: r["reason"] for r in box.rows() if r["status"] == "failed"}
     assert code == 0 and failed.get("inbox:b.md") == "no-result" and "inbox:a.md" not in failed
     assert box.marker() and not box.lock().exists()
+
+
+def _triaged_run(box, report_path, written):
+    box.with_template().inbox(
+        memos=("state/cross-repo/inbox/a.md", "state\\cross-repo\\inbox\\b.md"), report_path=report_path)
+    _, out, _ = box.launch()
+    if written:
+        target = box.root / report_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("report", encoding="utf-8")
+    return box.digest_run_id(out)
+
+
+def test_triaged_dispatch_with_report_and_no_memos_key_is_credited(box):
+    run_id = _triaged_run(box, "state/audits/2026-10-17-inbox-blitz-all.md", written=True)
+    _finish(box, run_id, _results(inbox=[{"key": "triage-all", "outcome": "triaged"}]))
+    assert not [r for r in box.rows() if r["status"] == "failed"]
+
+
+def test_triaged_dispatch_without_its_report_still_fails_its_memos(box):
+    run_id = _triaged_run(box, "state/audits/2026-10-17-inbox-blitz-all.md", written=False)
+    _finish(box, run_id, _results(inbox=[{"key": "triage-all", "outcome": "triaged"}]))
+    failed = {r["id"]: r["reason"] for r in box.rows() if r["status"] == "failed"}
+    assert failed == {"inbox:a.md": "no-result", "inbox:b.md": "no-result"}
+
+
+def test_failed_dispatch_with_report_present_still_fails_its_memos(box):
+    run_id = _triaged_run(box, "state/audits/2026-10-17-inbox-blitz-all.md", written=True)
+    _finish(box, run_id, _results(inbox=[{"key": "triage-all", "outcome": "failed"}]))
+    failed = {r["id"]: r["reason"] for r in box.rows() if r["status"] == "failed"}
+    assert failed == {"inbox:a.md": "no-result", "inbox:b.md": "no-result"}
 
 
 def test_acting_ruling_without_a_directive_writes_decision_and_failed_row(box):

@@ -1198,6 +1198,7 @@ _KILLED_OP_ORPHAN_NAMES = frozenset({
     "repair-empty-review-trail-ranges",
     "coordinator-auto-push",
     "schema-drift-gate",
+    "reap-claims-for-repos",
 })
 
 # NATIVE-FORWARDER MANIFEST (C4a, docs/plans/2026-08-26-every-forwarder-that-
@@ -3921,6 +3922,8 @@ def _write_agent_helper_forwarders(
                         _retire_door_images(bin_dst, {f})
                         door_install.remove_stale_named_forwarder(bin_dst, f)
                     if not _is_publisher_only_name(f, target, publisher_only_launchable):
+                        if not check_only:
+                            _unlink_bare_leftover(bin_dst, f)
                         continue
                     py_dst = bin_dst / f
                     if resolver_module is None:
@@ -4097,6 +4100,16 @@ def _door_leg_target_map(
     }
 
 
+def _unlink_bare_leftover(bin_dst: Path, name: str) -> None:
+    """Remove `<bin>/<name>` for a name that gets no launcher. On Windows the named
+    forwarder path is `<name>.exe`, so an extensionless leftover (a hard-linked door
+    image, an earlier live-tree forwarder) survives `remove_stale_named_forwarder`."""
+    try:
+        (bin_dst / name).unlink()
+    except OSError:
+        pass
+
+
 def _retire_door_images(bin_dst: Path, names: "set[str]") -> None:
     """Drop the native-door leftovers for names the live-tree forwarder now
     owns: the Windows ``<name>.exe`` image and the manifest entry. On POSIX the
@@ -4109,6 +4122,36 @@ def _retire_door_images(bin_dst: Path, names: "set[str]") -> None:
     state = _read_native_forwarder_manifest_state(bin_dst)
     if state.measured and state.names & names:
         _write_native_forwarder_manifest(bin_dst, set(state.names - names))
+
+
+def _split_live_source_tree_map(
+    live_root: Path, live_bin: Path,
+) -> "tuple[dict[str, str], set[str]]":
+    """The live source tree's launchable name->target map, and the publisher-only
+    names that get no launcher. The forwarder-drift probe reads the same split, so
+    what this installs is never reported as orphaned."""
+    live_map = _derive_agent_helper_target_map(live_bin)
+    publisher_only = _publisher_only_names(live_root)
+    launchable = _publisher_only_names(live_root, "PUBLISHER_ONLY_LAUNCHABLE")
+    no_launcher = {
+        name for name, target in live_map.items()
+        if _is_publisher_only_name(name, target, publisher_only)
+        and not _is_publisher_only_name(name, target, launchable)
+    }
+    return {n: t for n, t in live_map.items() if n not in no_launcher}, no_launcher
+
+
+def live_source_tree_forwarder_names(running_engine_root: Path) -> "frozenset[str]":
+    """Names `_install_live_source_tree_forwarders` writes on a dual-tree box; empty
+    on a single-tree install."""
+    live_source_root = engine_source_root()
+    if not live_source_root or Path(live_source_root).resolve() == running_engine_root.resolve():
+        return frozenset()
+    live_root = Path(live_source_root)
+    live_bin = live_root / "coordinator" / "bin"
+    if not live_bin.is_dir() or _live_source_tree_resolver(live_root) is None:
+        return frozenset()
+    return frozenset(_split_live_source_tree_map(live_root, live_bin)[0])
 
 
 def _install_live_source_tree_forwarders(
@@ -4151,20 +4194,13 @@ def _install_live_source_tree_forwarders(
     if not live_bin.is_dir() or resolver_src is None:
         return frozenset()
 
-    live_map = _derive_agent_helper_target_map(live_bin)
-    publisher_only = _publisher_only_names(live_root)
-    launchable = _publisher_only_names(live_root, "PUBLISHER_ONLY_LAUNCHABLE")
-    no_launcher = {
-        name for name, target in live_map.items()
-        if _is_publisher_only_name(name, target, publisher_only)
-        and not _is_publisher_only_name(name, target, launchable)
-    }
-    live_map = {n: t for n, t in live_map.items() if n not in no_launcher}
+    live_map, no_launcher = _split_live_source_tree_map(live_root, live_bin)
     if no_launcher and not check_only:
         from coordinator_core.install import door_install
         _retire_door_images(bin_dst, no_launcher)
         for name in no_launcher:
             door_install.remove_stale_named_forwarder(bin_dst, name)
+            _unlink_bare_leftover(bin_dst, name)
     protected = frozenset(
         set(live_map)
         | set(_resolve_agent_cmd_dest_collisions(live_map).values())

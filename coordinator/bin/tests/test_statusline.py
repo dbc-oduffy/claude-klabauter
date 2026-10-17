@@ -123,6 +123,41 @@ def test_a_raising_session_cost_still_yields_the_rest_of_the_line(tmp_path, monk
     assert statusline._session_cost_segment(payload, "s") is None
 
 
+def _fast_path_fixture(tmp_path, monkeypatch, *, grow):
+    import json
+    import time
+    statusline = _load_statusline()
+    transcript = tmp_path / "sess1.jsonl"
+    transcript.write_bytes(b"x\n")
+    cache = tmp_path / "cost.json"
+    cache.write_text(json.dumps({
+        "complete": True, "usd_total": 1.5, "fresh_until": time.time() + 60, "main_size": 2,
+        "files": {"sess1.jsonl": {"offset": 2, "size": 2}}}), encoding="utf-8")
+    monkeypatch.setattr(statusline, "_cost_path", lambda sid: cache)
+    imported = []
+
+    def engine(dotted):
+        imported.append(dotted)
+        raise ImportError(dotted)
+
+    monkeypatch.setattr(statusline, "_engine_module", engine)
+    if grow:
+        transcript.write_text("x\nmore\n", encoding="utf-8")
+    return statusline, {"transcript_path": str(transcript)}, imported
+
+
+def test_an_unchanged_transcript_renders_from_the_fast_path(tmp_path, monkeypatch):
+    statusline, payload, imported = _fast_path_fixture(tmp_path, monkeypatch, grow=False)
+    assert "~$1.50" in statusline._session_cost_segment(payload, "s")
+    assert imported == []
+
+
+def test_a_grown_transcript_falls_through_to_the_engine(tmp_path, monkeypatch):
+    statusline, payload, imported = _fast_path_fixture(tmp_path, monkeypatch, grow=True)
+    statusline._session_cost_segment(payload, "s")
+    assert imported == ["coordinator_core.usage.session_cost"]
+
+
 def test_the_cost_cache_lands_under_the_settings_home(tmp_path):
     main, _ = _fixture_session(tmp_path / "proj")
     _run(_cost_payload(main), tmp_path / "home")

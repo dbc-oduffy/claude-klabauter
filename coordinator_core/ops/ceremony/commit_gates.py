@@ -851,6 +851,11 @@ def _norm(path: str) -> str:
     return path.replace("\\", "/")
 
 
+def is_never_commit(path: str) -> bool:
+    """True when `path` (either separator) sits under a never-committed prefix such as `scratch/`."""
+    return _norm(path).startswith(_NEVER_COMMIT_PREFIXES)
+
+
 def residue_gate(
     worktree_root: Union[str, Path],
     gate_paths: Sequence[str],
@@ -859,7 +864,7 @@ def residue_gate(
 
     Zero spawns: prefix classification over `gate_paths`.
     """
-    bad = [p for p in gate_paths if _norm(p).startswith(_NEVER_COMMIT_PREFIXES)]
+    bad = [p for p in gate_paths if is_never_commit(p)]
     if not bad:
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
     diagnostics = [f"{p}: scratch in a commit" for p in bad[:5]]

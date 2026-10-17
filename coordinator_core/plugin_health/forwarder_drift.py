@@ -756,6 +756,12 @@ def check_forwarder_drift(
         )
 
     derived = _derive_names(resolved_agent_bin)
+    if agent_bin is None:
+        # A dual-tree box's install also writes forwarders for the live source tree's
+        # own CLIs; those are derived, not orphans.
+        from coordinator_core.install.substrate import live_source_tree_forwarder_names
+
+        derived |= live_source_tree_forwarder_names(resolved_agent_bin.parent.parent)
 
     # CITED-VS-UNCITED SPLIT (see module docstring) — best-effort, only for
     # settings-home/bin (the compat mirror's missing direction is already

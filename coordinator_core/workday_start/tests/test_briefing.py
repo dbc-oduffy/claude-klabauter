@@ -111,3 +111,10 @@ def test_silent_step_and_cadence_skipped_render_nothing_and_not_run_lists_rest()
 def test_engine_step_over_bar_named_in_run_cost():
     md = _render([StepResult("s1", "ran", process_ms=900.0, spawns=2)], [_spec("s1")])
     assert "engine over 500ms: `s1` 900ms" in md
+
+
+def test_long_step_output_is_clipped_to_the_section_cap():
+    out = "\n".join(f"line {i}" for i in range(50)) + "\n" + "x" * 500
+    md = _render([StepResult("s1", "ran", stdout=out)], [_spec("s1")])
+    body = md.split("### Orphan Sweep\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert body == ["line 0", "line 1", "line 2", "- (+48 more)"]

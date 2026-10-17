@@ -22,6 +22,7 @@ delivery verifier, the terminal judge and the falsifier, never a stand-in for an
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -849,12 +850,28 @@ def _roots_read(row: Mapping) -> list[str]:
     return [v for v in value or [] if isinstance(v, str) and v.strip()]
 
 
-def _misrouted(row: Mapping, owed: str) -> Optional[str]:
-    """The failure reason when `row` (met/not_met/post_commit) did not name the engine root `owed`."""
+def _names_root(entry: str, owed: str) -> bool:
+    """True when `entry` is the root `owed`, or opens with it and continues only past a
+    non-path character (`<root> (read-only)`); `<root>-old` and `<root>/sub` are other paths."""
     from coordinator_core.win_portability import same_path
 
+    if same_path(entry, owed):
+        return True
+
+    def fold(text: str) -> str:
+        return os.path.normcase(text.strip()).replace("\\", "/")
+
+    head, want = fold(entry), fold(owed).rstrip("/")
+    if not want or not head.startswith(want):
+        return False
+    rest = head[len(want):]
+    return not rest or not (rest[0].isalnum() or rest[0] in "_-./")
+
+
+def _misrouted(row: Mapping, owed: str) -> Optional[str]:
+    """The failure reason when `row` (met/not_met/post_commit) did not name the engine root `owed`."""
     read = _roots_read(row)
-    if owed and any(same_path(r, owed) for r in read):
+    if owed and any(_names_root(r, owed) for r in read):
         return None
     return f"judged at {', '.join(read) or 'no root named'}, owed the engine root {owed or '(unresolved)'}"
 
@@ -882,7 +899,8 @@ def judge(
     `gated` fails.
 
     `routed` maps an engine-routed item id to the engine root it was owed: a met/not_met/post_commit
-    item whose `root_read` (string or list) does not include that root adds a failure. It never
+    item whose `root_read` (string or list) does not name that root adds a failure; an entry may carry a
+    trailing annotation, and a `not_met` row withheld by a gated chunk is exempt. It never
     removes one; None or empty is the cwd-only judgment.
 
     A row in `ledger.withheld` (ruled out of scope by a revise) is listed in `open` as
@@ -934,7 +952,8 @@ def judge(
             if why is not None:
                 failures.append({"id": item.id, "reason": why})
                 status = "not_met"
-        if routed and item.id in routed and status in ("met", "not_met", "post_commit"):
+        gated_open = status == "not_met" and isinstance(row.get("withheld_by"), str) and row["withheld_by"] in gated_ids
+        if routed and item.id in routed and status in ("met", "not_met", "post_commit") and not gated_open:
             reason = _misrouted(row, routed[item.id])
             if reason is not None:
                 failures.append({"id": item.id, "reason": reason})

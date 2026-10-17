@@ -30,7 +30,16 @@ Public surface (pinned contract):
 
     def resolve_engine_sha() -> str | None: ...
     def resolve_engine_dirty() -> bool | None: ...
-    MIN_KNOWN_GOOD_SHA: str
+    def resolve_engine_source_head(engine_dir: Path | None = None) -> SourceHead: ...
+    MIN_KNOWN_GOOD_SHA: str   # a claude-klabauter commit, checked against the source-head
+
+`resolve_engine_source_head` names the CLAUDE-KLABAUTER commit the running engine is built
+from: HEAD for a source tree, the publish commit's `Percolate-Source-Head`
+trailer (else its `[source-head <sha>]` subject stamp) for a mirror, detected by
+the `PUBLISH_MIRROR` marker at the repo root. Negative-spec: zero spawns; never
+raises; `engine_dir` defaults to `Path(__file__)`, never the caller's
+`repo_root`; the mirror's own HEAD is not a claude-klabauter sha and is never returned as
+`sha`.
 
 Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 """
@@ -38,11 +47,59 @@ Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NamedTuple
 
 from coordinator_core.git.run import run_git
 from coordinator_core.git_scope import scoped_git_env
 
-MIN_KNOWN_GOOD_SHA: str = "6fdc7b4de770dc1c996b3c2a42bf2c7984dd67c9"
+MIN_KNOWN_GOOD_SHA: str = "c343f6ed19d0eb7e9f7d6b008f63b8d2f57eb997"
+
+_PUBLISH_MIRROR_MARKER = "PUBLISH_MIRROR"
+
+
+class SourceHead(NamedTuple):
+    sha: str | None
+    basis: str
+    engine_head: str | None
+
+
+def resolve_engine_source_head(engine_dir: Path | None = None) -> SourceHead:
+    """The claude-klabauter commit the engine at `engine_dir` is built from.
+
+    `basis` is "source-tree" (`sha` == HEAD) or "mirror-stamp" (`sha` from the
+    HEAD commit's publish stamp). `engine_head` is the checkout's own HEAD.
+    `sha` is None when unresolvable, with `basis` already decided; a path that
+    is not in a repo reports basis "source-tree" and all-None shas.
+    """
+    from coordinator_core.git.git_state import (
+        head_sha,
+        parse_publish_trailers,
+        parse_source_sha_suffix,
+        read_commit,
+    )
+    from coordinator_core.git.repo_root import _walk_for_repo
+
+    try:
+        start = engine_dir if engine_dir is not None else Path(__file__).resolve().parent
+        found = _walk_for_repo(Path(start))
+        if found is None:
+            return SourceHead(None, "source-tree", None)
+        root = found[1]
+        head = head_sha(root)
+        if not (root / _PUBLISH_MIRROR_MARKER).exists():
+            return SourceHead(head, "source-tree", head)
+        if head is None:
+            return SourceHead(None, "mirror-stamp", None)
+        info = read_commit(root, head)
+        if info is None:
+            return SourceHead(None, "mirror-stamp", head)
+        stamped = parse_publish_trailers(info.message).source_head
+        if not stamped:
+            subject = info.message.strip().split("\n", 1)[0]
+            stamped = parse_source_sha_suffix(subject)
+        return SourceHead(stamped or None, "mirror-stamp", head)
+    except OSError:
+        return SourceHead(None, "source-tree", None)
 
 
 def resolve_engine_sha() -> str | None:

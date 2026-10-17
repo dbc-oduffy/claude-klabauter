@@ -2,6 +2,8 @@
 
 Stdlib only, no I/O, no spawn: consumers outside this package (DoE's
 session_spend.py) load it by file path via importlib.util.spec_from_file_location.
+price_table.json beside this file publishes the same table for non-Python
+consumers; test_price_table.py fails when the two disagree, so edit both.
 List prices stand in for subscription-limit weight. A model missing here prices
 as None (unpriced), never as a guess.
 

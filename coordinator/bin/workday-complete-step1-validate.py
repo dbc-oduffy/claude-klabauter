@@ -329,11 +329,24 @@ def _emit(rc_ubt, rc_validate) -> None:
     print(f"RC_UBT='{rc_ubt}' RC_VALIDATE='{rc_validate}'")
 
 
+_PYTHON_LAUNCHERS = frozenset({"python", "python3", "py"})
+
+
+def _resolve_executable(token: str, path: str | None) -> str | None:
+    """PATH lookup for ``token``; a python launcher name absent from PATH
+    resolves to the running interpreter (Windows hosts often lack ``python3``).
+    A Windows Store ``python3`` stub found on PATH is returned as-is."""
+    found = shutil.which(token, path=path)
+    if found is None and token.lower() in _PYTHON_LAUNCHERS:
+        return sys.executable or None
+    return found
+
+
 def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
     """Run ``cmd`` directly (no shell); returns (exit code, combined output)."""
     _err(f"[workday-complete-step1] fast-test: running: {cmd}")
     argv = shlex.split(cmd)
-    resolved = shutil.which(argv[0], path=env.get("PATH"))
+    resolved = _resolve_executable(argv[0], env.get("PATH"))
     if resolved is None:
         ft_content = f"[workday-complete-step1] fast-test: command not found on PATH: {argv[0]!r}\n"
         sys.stderr.write(ft_content)

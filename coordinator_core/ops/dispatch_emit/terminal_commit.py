@@ -4258,6 +4258,23 @@ def _terminal_commit_inner(
         review_land = tuple(_bar_stranded(list(verdict.land)))
         review_unanswerable = verdict.unanswerable
         all_paths.extend(p for p in review_land if p not in all_paths)
+    from coordinator_core.ops.ceremony.commit_gates import is_never_commit
+
+    never_commit_dropped = sorted(
+        {p for p in [*all_paths, *deleted_paths] if is_never_commit(p)}
+    )
+    if never_commit_dropped:
+        dropped_never = set(never_commit_dropped)
+        all_paths = [p for p in all_paths if p not in dropped_never]
+        deleted_paths = [p for p in deleted_paths if p not in dropped_never]
+        review_land = tuple(p for p in review_land if p not in dropped_never)
+        if not all_paths and not deleted_paths:
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_withheld(_with_siblings({
+                "committed": False, "nothing_to_commit": not sibling_paths,
+                "never_commit_dropped": never_commit_dropped,
+            }))
     # Unlike a hand commit, a run's product commit never absorbs a live peer's in-flight edit.
     from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
 
@@ -4329,7 +4346,7 @@ def _terminal_commit_inner(
     credited: dict = {}
     for c in done_chunks + contributing_partial:
         declared = set(c.paths) | set(_own_prefix_files(worktree_root, c, report_cache) or [])
-        credited[c.id] = sorted(declared - absent_dropped - set(wh_reasons))
+        credited[c.id] = sorted(declared - absent_dropped - set(wh_reasons) - set(never_commit_dropped))
     sibling_set = {p for ps in sibling_paths.values() for p in ps}
     landing_now = set(all_paths) | set(deleted_paths) | sibling_set
     unprobed = sorted({p for ps in credited.values() for p in ps} - landing_now)
@@ -4757,7 +4774,7 @@ def _terminal_commit_inner(
     if reply.get("committed") and reply.get("sha"):
         residue = _commit_residue(
             worktree_root, request, snapshot, report_cache, session_id,
-            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | {p for ps in sibling_paths.values() for p in ps},
+            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | set(never_commit_dropped) | {p for ps in sibling_paths.values() for p in ps},
             unfinished=incomplete_chunks | held_ids,
             commit_v2_mod=commit_v2_mod,
         )
@@ -4834,6 +4851,7 @@ def _terminal_commit_inner(
     reply["partial_committed"] = [c.id for c in contributing_partial]
     _with_withheld(reply)
     reply["dropped_absent"] = dropped_absent
+    reply["never_commit_dropped"] = never_commit_dropped
     reply["deleted_paths"] = deleted_paths
     reply["unmarked_incomplete"] = unmarked_incomplete
     if unsent_memos:

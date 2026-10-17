@@ -173,13 +173,14 @@ def advance(transcript_path: str, cache_path: Path, *, now: float, byte_budget: 
             # cache needs no advance(), so the render skips importing the engine.
             cache["fresh_until"] = now + _RESCAN_AFTER_SEC
             dirty = True
-        elif cache["complete"]:
+        elif cache["complete"] and _main_unchanged(cache, main):
             return _summary(cache)
         remaining = max(0, byte_budget)
         complete = True
         for rel, entry in files.items():
             try:
-                size = os.stat(base / rel).st_size if rescan or entry["size"] > entry["offset"] else entry["size"]
+                size = (os.stat(base / rel).st_size
+                        if rescan or rel == main.name or entry["size"] > entry["offset"] else entry["size"])
             except OSError:
                 continue
             entry["size"] = size
@@ -205,6 +206,10 @@ def advance(transcript_path: str, cache_path: Path, *, now: float, byte_budget: 
             entry["offset"] += len(chunk)
             remaining -= len(chunk)
             dirty = True
+        main_entry = files.get(main.name)
+        if main_entry is not None and cache.get("main_size") != main_entry["size"]:
+            cache["main_size"] = main_entry["size"]
+            dirty = True
         if cache["complete"] != complete:
             dirty = True
         cache["complete"] = complete
@@ -213,6 +218,14 @@ def advance(transcript_path: str, cache_path: Path, *, now: float, byte_budget: 
         return _summary(cache)
     except (OSError, ValueError, KeyError, TypeError):
         return result
+
+
+def _main_unchanged(cache: dict[str, Any], main: Path) -> bool:
+    """One stat: the main transcript is still the size the cache's `main_size` recorded."""
+    try:
+        return os.stat(main).st_size == cache.get("main_size")
+    except OSError:
+        return True
 
 
 def _summary(cache: dict[str, Any]) -> dict:

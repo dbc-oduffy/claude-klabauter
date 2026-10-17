@@ -2,8 +2,11 @@
 coordinator_core.ops.engine_drift — JSON-RPC "engine.drift" operation.
 
 Purpose: a read-only drift PROBE for the running coordinator_core engine — compares the
-engine SHA actually executing (resolve_engine_sha(), engine_version.py) against the
-committed known-good floor (MIN_KNOWN_GOOD_SHA) and reports which of THREE states apply.
+running engine's SOURCE-HEAD (resolve_engine_source_head(), engine_version.py: HEAD for a
+source tree, the publish stamp for the mirror) against the committed known-good floor
+(MIN_KNOWN_GOOD_SHA, a claude-klabauter sha) and reports which of THREE states apply. Ancestry runs
+in a git dir that holds claude-klabauter history: the engine's own repo for a source tree,
+engine_root.engine_source_root() for the mirror (history is distinct from claude-klabauter's).
 Mirrors the offers-not-nags shape of coordinator-content-repo's check-plugin-drift.sh (adapted, not
 re-derived): silent when clean, an offer naming the concrete refresh action when behind,
 and — the one genuine correctness gap this op closes relative to a naive two-state
@@ -14,7 +17,9 @@ THREE states (do not collapse to two):
   - "behind"       — running SHA resolved and strictly behind the floor. An offer naming
                       the delta and the refresh action (offers-not-nags: lead with the fix).
   - "indeterminate"— running SHA is unresolved (git absent / not a repo / detached HEAD /
-                      shallow clone) OR ancestry could not be computed. This is NEITHER
+                      shallow clone, unstamped mirror) OR ancestry could not be computed
+                      (floor absent, shallow, no registered claude-klabauter source tree, git error).
+                      Result carries "cause". This is NEITHER
                       silent-clean NOR a behind-floor alarm: treating "unknown" as clean
                       is a false all-clear on exactly the broken-checkout condition most
                       likely to accompany a stale engine; treating it as behind is a false
@@ -35,15 +40,30 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-from coordinator_core.engine_version import MIN_KNOWN_GOOD_SHA, resolve_engine_sha
-from coordinator_core.git_scope import PROBE_UNKNOWN, PROBE_YES, git_predicate
+from coordinator_core.engine_version import MIN_KNOWN_GOOD_SHA, resolve_engine_source_head
+from coordinator_core.git.run import run_git
+from coordinator_core.git_scope import (
+    PROBE_NO,
+    PROBE_UNKNOWN,
+    PROBE_YES,
+    git_predicate,
+    scoped_git_env,
+)
 from coordinator_core.ipc import register_op
+
+CAUSE_FLOOR_ABSENT = "floor_absent"
+CAUSE_SHALLOW = "shallow"
+CAUSE_GIT_ERROR = "git_error"
+CAUSE_MIRROR_UNSTAMPED = "mirror_unstamped"
+CAUSE_SOURCE_HISTORY_UNAVAILABLE = "source_history_unavailable"
 
 
 def classify_drift(
     running_sha: Optional[str],
     floor_sha: str,
     is_behind: Callable[[str, str], Optional[bool]],
+    diagnose: Optional[Callable[[str], str]] = None,
+    unresolved_cause: Optional[str] = None,
 ) -> dict:
     """Pure decision logic — no git I/O, deterministically testable.
 
@@ -55,15 +75,32 @@ def classify_drift(
             of floor (older than the floor — genuinely behind), False if running is
             at-or-ahead of floor, or None if ancestry is indeterminable (e.g. git
             errored, unrelated histories, shallow clone missing the floor commit).
+        diagnose: callable(floor_sha) -> CAUSE_*, consulted only when is_behind
+            returns None; None means CAUSE_GIT_ERROR.
 
     Returns a result dict with a "state" key set to one of "clean" | "behind" |
     "indeterminate", plus state-specific fields (see each branch below). The dict
     shape is stable across states only for "state"/"running_sha"/"floor_sha" — callers
     should branch on "state" before reading state-specific keys.
     """
+    if running_sha is None and unresolved_cause == CAUSE_MIRROR_UNSTAMPED:
+        return {
+            "state": "indeterminate",
+            "cause": CAUSE_MIRROR_UNSTAMPED,
+            "running_sha": None,
+            "floor_sha": floor_sha,
+            "reason": "mirror HEAD commit carries no source-head stamp",
+            "notice": (
+                "engine version indeterminate — cannot verify freshness. "
+                "The published mirror's HEAD commit has no [source-head <sha>] stamp or "
+                "Percolate-Source-Head trailer. Republish the mirror to stamp it."
+            ),
+        }
+
     if running_sha is None:
         return {
             "state": "indeterminate",
+            "cause": CAUSE_GIT_ERROR,
             "running_sha": None,
             "floor_sha": floor_sha,
             "reason": "engine SHA unresolved (not a git repo, detached HEAD, or git unavailable)",
@@ -79,18 +116,46 @@ def classify_drift(
     behind = is_behind(running_sha, floor_sha)
 
     if behind is None:
+        cause = diagnose(floor_sha) if diagnose is not None else CAUSE_GIT_ERROR
+        head = (
+            "engine version indeterminate — cannot verify freshness. "
+            f"Ancestry between the running SHA ({running_sha[:12]}) and the known-good "
+            f"floor ({floor_sha[:12]}) could not be computed"
+        )
+        if cause == CAUSE_SOURCE_HISTORY_UNAVAILABLE:
+            reason = "no claude-klabauter source tree is registered on this box"
+            head = (
+                "engine version indeterminate — cannot verify freshness. "
+                f"The engine's source-head ({running_sha[:12]}) is known, but comparing it "
+                f"with the floor ({floor_sha[:12]}) needs the claude-klabauter source history"
+            )
+            tail = ": no source tree is registered on this box. Register the claude-klabauter checkout as the engine source."
+        elif cause == CAUSE_FLOOR_ABSENT:
+            reason = (
+                f"floor commit {floor_sha[:12]} is not an object in this full (non-shallow) "
+                "engine clone"
+            )
+            tail = (
+                f": the floor commit is absent from the engine history. Fetching more history "
+                "cannot add it; re-pin MIN_KNOWN_GOOD_SHA (engine_version.py) to a commit "
+                "reachable from the engine's HEAD."
+            )
+        elif cause == CAUSE_SHALLOW:
+            reason = "shallow engine clone does not contain the floor commit"
+            tail = (
+                ": the engine checkout is a shallow clone missing the floor commit. "
+                "Fetch full history for the engine checkout to make this resolvable."
+            )
+        else:
+            reason = "ancestry between running SHA and floor SHA could not be determined"
+            tail = " (git error or unrelated histories). Run git in the engine checkout to see the error."
         return {
             "state": "indeterminate",
+            "cause": cause,
             "running_sha": running_sha,
             "floor_sha": floor_sha,
-            "reason": "ancestry between running SHA and floor SHA could not be determined",
-            "notice": (
-                "engine version indeterminate — cannot verify freshness. "
-                f"Ancestry between the running SHA ({running_sha[:12]}) and the known-good "
-                f"floor ({floor_sha[:12]}) could not be computed (shallow clone missing the "
-                "floor commit, unrelated histories, or a git error). Fetch full history "
-                "for the engine checkout to make this resolvable."
-            ),
+            "reason": reason,
+            "notice": head + tail,
         }
 
     if behind:
@@ -112,13 +177,17 @@ def classify_drift(
     }
 
 
-def _git_is_behind(running_sha: str, floor_sha: str) -> Optional[bool]:
+def _same_commit(a: str, b: str) -> bool:
+    """Prefix equality: a subject-only stamp may be abbreviated to 7+ hex."""
+    return a.startswith(b) or b.startswith(a)
+
+
+def _git_is_behind(running_sha: str, floor_sha: str, repo: Path) -> Optional[bool]:
     if running_sha == floor_sha:
         return False
 
-    engine_dir = Path(__file__).resolve().parent.parent
     verdict, reason = git_predicate(
-        engine_dir,
+        repo,
         ["merge-base", "--is-ancestor", running_sha, floor_sha],
         timeout=10,
     )
@@ -128,20 +197,81 @@ def _git_is_behind(running_sha: str, floor_sha: str) -> Optional[bool]:
     return verdict == PROBE_YES
 
 
+def _diagnose_indeterminate(floor_sha: str, engine_dir: Path) -> str:
+    """Why ancestry failed in `engine_dir` (the ancestry repo): runs only on the
+    indeterminate path (at most two spawns).
+
+    Floor present, or the probe itself failing, is a generic git error; floor absent splits
+    on whether the clone is shallow.
+    """
+    verdict, _ = git_predicate(
+        engine_dir,
+        ["rev-parse", "--verify", "--quiet", f"{floor_sha}^{{commit}}"],
+        timeout=10,
+    )
+    if verdict != PROBE_NO:
+        return CAUSE_GIT_ERROR
+    shallow = run_git(
+        ["-C", str(engine_dir), "rev-parse", "--is-shallow-repository"],
+        env=scoped_git_env(),
+    )
+    if shallow.ok and shallow.stdout.strip() == "true":
+        return CAUSE_SHALLOW
+    return CAUSE_FLOOR_ABSENT if shallow.ok else CAUSE_GIT_ERROR
+
+
+def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
+    """Probe the engine at `engine_dir` (default: the running engine's own checkout).
+
+    Resolves the source-head, picks the ancestry repo (the engine repo for a source
+    tree; engine_root.engine_source_root() for a mirror, None when unregistered), and
+    delegates the three-state decision to classify_drift(). Adds `basis` and
+    `engine_head`. `running_sha` is the source-head that was checked.
+    """
+    from coordinator_core.engine_root import engine_source_root
+
+    engine_dir = engine_dir if engine_dir is not None else Path(__file__).resolve().parent.parent
+    head = resolve_engine_source_head(engine_dir)
+    floor = MIN_KNOWN_GOOD_SHA
+    mirror = head.basis == "mirror-stamp"
+
+    repo: Optional[Path]
+    if mirror:
+        source = engine_source_root() if head.sha is not None else None
+        repo = Path(source) if source else None
+    else:
+        repo = engine_dir
+
+    def is_behind(running: str, floor_sha: str) -> Optional[bool]:
+        if _same_commit(running, floor_sha):
+            return False
+        if repo is None:
+            return None
+        return _git_is_behind(running, floor_sha, repo)
+
+    def diagnose(floor_sha: str) -> str:
+        if repo is None:
+            return CAUSE_SOURCE_HISTORY_UNAVAILABLE
+        return _diagnose_indeterminate(floor_sha, repo)
+
+    result = classify_drift(
+        head.sha, floor, is_behind, diagnose,
+        unresolved_cause=CAUSE_MIRROR_UNSTAMPED if mirror else None,
+    )
+    result["basis"] = head.basis
+    result["engine_head"] = head.engine_head
+    return result
+
+
 @register_op("engine.drift")
 def _engine_drift(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'engine.drift' handler — probe the running engine's freshness.
 
-    Params: none consumed.
+    Params: none consumed (no engine_dir over RPC).
     repo_root: unused — this op inspects the engine's OWN checkout (Path(__file__)),
-    not the caller's repo, mirroring engine_version.resolve_engine_sha()'s self-locating
-    convention (a drift probe for the engine that ran must inspect the engine that ran).
+    not the caller's repo.
 
-    Resolves the running SHA via resolve_engine_sha(), builds the real ancestry check
-    via _git_is_behind() against MIN_KNOWN_GOOD_SHA, and delegates the three-state
-    decision to the pure classify_drift(). Returns classify_drift()'s result dict
-    unmodified — this handler is a thin I/O-resolving wrapper, not a second decision
-    point.
+    Returns probe_engine_drift()'s result: state, running_sha (the source-head
+    checked), floor_sha, basis, engine_head, plus offer/notice/cause per state.
     """
-    running_sha = resolve_engine_sha()
-    return classify_drift(running_sha, MIN_KNOWN_GOOD_SHA, _git_is_behind)
+    return probe_engine_drift()

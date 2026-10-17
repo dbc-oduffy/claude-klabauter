@@ -398,6 +398,50 @@ def test_routed_item_must_name_the_engine_root_it_read(run, tmp_path):
         assert "owed the engine root" in out["failures"][0]["reason"]
 
 
+def test_gated_withheld_not_met_row_passes_without_the_owed_root(run, tmp_path):
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    base = [("R2", "met"), ("R3", "met")]
+    verdict = _verdict(("R1", "not_met", {"withheld_by": "G1", "root_read": "elsewhere"}), *base)
+    out = rl.judge(_ledger(run), verdict, {"R1": str(engine)}, ["G1"])
+    assert out["pass"] and out["open"] == [{"id": "R1", "reason": "withheld_by G1"}]
+    ungated = rl.judge(_ledger(run), verdict, {"R1": str(engine)}, ["G2"])
+    assert not ungated["pass"] and {f["id"] for f in ungated["failures"]} == {"R1"}
+
+
+def test_annotated_root_read_entry_names_the_owed_root(run, tmp_path):
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    base = [("R2", "met"), ("R3", "met")]
+    owed = str(engine).replace("\\", "/")
+    ledger = _ledger(run)
+    for entry in (f"{owed} (engine, read-only)", f"{owed}: read", f"{owed}   "):
+        out = rl.judge(ledger, _verdict(("R1", "met", {"root_read": [entry]}), *base), {"R1": str(engine)})
+        assert out["pass"], entry
+    for entry in (f"{owed}-old (x)", f"{owed}/sub (x)", "elsewhere (x)"):
+        out = rl.judge(ledger, _verdict(("R1", "met", {"root_read": [entry]}), *base), {"R1": str(engine)})
+        assert not out["pass"], entry
+
+
+def test_cockpit_r1_shape_gated_withheld_with_annotated_klabauter_root(run):
+    owed = "E:/claude-klabauter"  # abs-path-ok: fixture data reproducing the reported verdict
+    verdict = _verdict(
+        ("R1", "not_met", {"withheld_by": "C2", "root_read": [owed + " (engine repo, owed)"]}),
+        ("R2", "met"), ("R3", "met"),
+    )
+    out = rl.judge(_ledger(run), verdict, {"R1": owed}, ["C2"])
+    assert out["pass"] and out["failures"] == []
+    annotated_met = _verdict(("R1", "met", {"root_read": [owed + " (engine repo, owed)"]}), ("R2", "met"), ("R3", "met"))
+    assert rl.judge(_ledger(run), annotated_met, {"R1": owed})["pass"]
+
+
+def test_met_row_naming_no_owed_root_is_still_refused(run):
+    verdict = _verdict(("R1", "met", {"withheld_by": "C2"}), ("R2", "met"), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, {"R1": "owed-root"}, ["C2"])
+    assert [f["id"] for f in out["failures"]] == ["R1"]
+    assert "no root named" in out["failures"][0]["reason"]
+
+
 def test_unrouted_judgment_ignores_root_read(run):
     verdict = _verdict(("R1", "met", {"root_read": "anywhere"}), ("R2", "met"), ("R3", "met"))
     assert rl.judge(_ledger(run), verdict) == rl.judge(_ledger(run), verdict, {}) == {"pass": True, "failures": [], "open": []}

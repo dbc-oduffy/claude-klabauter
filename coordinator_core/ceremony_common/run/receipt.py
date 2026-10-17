@@ -30,6 +30,20 @@ FAILURE_BACKLOG_STAGE = "failure-backlog"
 ENGINE_BAR_MS = 500.0
 MAX_RULE_POINTS = 3
 SEPARATE_COST_CLASSES: tuple[str, ...] = ("suite", "remote")
+# A receipt is read by a person, not archived: every section is clipped to this many lines and
+# every line to LINE_CAP chars. The ledger on disk keeps the full step output; the receipt never
+# points at it.
+SECTION_LINE_CAP = 3
+LINE_CAP = 160
+
+
+def clip(body: Sequence[str]) -> list[str]:
+    """`body` cut to SECTION_LINE_CAP non-blank lines of at most LINE_CAP chars, plus a count."""
+    lines = [ln.rstrip() for ln in body if ln.strip()]
+    out = [ln if len(ln) <= LINE_CAP else ln[: LINE_CAP - 3] + "..." for ln in lines[:SECTION_LINE_CAP]]
+    if len(lines) > SECTION_LINE_CAP:
+        out.append(f"- (+{len(lines) - SECTION_LINE_CAP} more)")
+    return out
 
 
 def check_narration(text: str) -> str:
@@ -72,7 +86,8 @@ def _failed(rows: list[StepResult], by_id: Mapping[str, StepResult], steps: Mapp
     out: list[str] = []
     for r in failed:
         backlog = _backlog_id(r.id, by_id, steps)
-        out.append(f"- `{r.id}`: {r.reason or 'failed'}; backlog row: {backlog or 'none filed'}")
+        reason = _first_line(r.reason) or "failed"
+        out.append(f"- `{r.id}`: {reason}; backlog row: {backlog or 'none filed'}")
     if any(steps[r.id].gates_next for r in failed if r.id in steps):
         halted = sum(1 for r in rows if r.status == "halted-by-gate")
         out.append(f"- halted-by-gate: {halted}")
@@ -179,7 +194,7 @@ def emit_sections(title: str, middle: Sequence[tuple[str, Sequence[str]]], recor
             return
         out.append("")
         out.append(check_narration(f"### {name}"))
-        out.extend(body)
+        out.extend(clip(body))
 
     for name in HEAD_RECORD:
         add(name, record.get(name, "").splitlines())

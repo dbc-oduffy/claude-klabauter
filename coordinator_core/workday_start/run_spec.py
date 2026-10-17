@@ -223,17 +223,32 @@ def _memo_name(path: str) -> str:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
+_FAILED_OUTCOMES = frozenset({"failed", "error", "blocked", "aborted", "no-result"})
+
+
 def check_results(digest: Mapping[str, Any], results: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """Inbox memos with no agent result, and `needs-ruling` results that carry no decision."""
+    """Inbox memos with no agent result, and `needs-ruling` results that carry no decision.
+
+    A dispatch that returned a non-failure outcome with its `report_path` on disk is credited with
+    every memo it was given, whether or not its result lists `memos`; omissions inside a written
+    report are not detected here.
+    """
     named: list[str] = []
+    given: dict[str, tuple[list[str], str]] = {}
     for group in digest["agent_work"]["groups"]:
         if group["id"] == "inbox":
             for entry in group["entries"]:
-                named.extend(entry["inputs"].get("memos") or [])
+                inputs = entry["inputs"]
+                named.extend(inputs.get("memos") or [])
+                given[entry["key"]] = (inputs.get("memos") or [], inputs.get("report_path") or "")
+    root = Path(digest.get("repo_root") or ".")
     failures: list[tuple[str, str]] = []
     returned: set[str] = set()
     for res in (results.get("groups") or {}).get("inbox", []):
         returned.update(res.get("memos") or [])
+        memos, report = given.get(res.get("key"), ([], ""))
+        if report and res.get("outcome") not in _FAILED_OUTCOMES and (root / report).is_file():
+            returned.update(memos)
         if res.get("outcome") == "needs-ruling" and not res.get("decision"):
             failures.append((f"inbox:{res['key']}", "needs-ruling-no-decision"))
     seen: set[str] = set()

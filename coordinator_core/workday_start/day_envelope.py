@@ -1,15 +1,12 @@
 """In-process day envelope producer for the workday-start orient step.
 
-`day_envelope(repo_root) -> (exit_code, text)`; `text` is one JSON object with `directives[]` and
-`judgment_points[]` (a silent member is omitted, never empty), the shape `driver._envelope_outcome`
-parses and `rules.RULES` matches. Read-only, no network, no spawn on the common path: nine readers
-(addon health, RAG staleness, agent worktrees, EM effort and model, bin sentinel, working-repo
-registration, hook currency, git-perf currency, stale origin stubs). Plan orphan tiers are not
-produced here: `list_orphaned` measured 266-484ms alone, so `d-plan-orphan-tiers` stays absent until
-a bounded-head rebuild lands.
+`day_envelope(repo_root) -> (exit_code, text)`; `text` is one JSON object with `directives[]`,
+`judgment_points[]` and `reader_errors[]` (a silent member is omitted, never empty), the shape
+`driver._envelope_outcome` parses and `rules.RULES` matches. Read-only, no network, no spawn.
 
-A reader that raises contributes nothing and is named under `reader_errors`; one failing reader
-never hides the others.
+`READERS` is the public reader tuple, each reader `(repo_root) -> (directives, points)`. A reader
+that raises contributes nothing and is named under `reader_errors`; one failing reader never hides
+the others. Reader set and read shapes: `docs/research/2026-10-17-day-envelope-rebuild-spike.md`.
 """
 from __future__ import annotations
 
@@ -56,8 +53,15 @@ _AGENT_MARKER = "/.claude/worktrees/agent-"
 Result = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 
+def _bin_on_path() -> None:
+    """`coordinator/bin/lib` importable (appended, so it never shadows an installed module)."""
+    for entry in (_BIN_DIR, _BIN_DIR / "lib"):
+        if str(entry) not in sys.path:
+            sys.path.append(str(entry))
+
+
 def _health_probes() -> Any:
-    """The `workday-start-health-probes` script as a module (its checks are the incumbent owners)."""
+    """The probes script as a module; only the git-perf key decider is read from it (0.3ms cold)."""
     mod = sys.modules.get("_workday_start_health_probes")
     if mod is None:
         import importlib.util
@@ -75,19 +79,13 @@ def _health_probes() -> Any:
     return mod
 
 
-def _bin_on_path() -> None:
-    """`coordinator/bin/lib` importable (appended, so it never shadows an installed module)."""
-    for entry in (_BIN_DIR, _BIN_DIR / "lib"):
-        if str(entry) not in sys.path:
-            sys.path.append(str(entry))
-
-
 def _author_profile() -> bool:
     from coordinator_core.machine_profile import machine_profile
 
     return machine_profile() == "author"
 
 
+# addon-health (REQ-W6): is any addon red or stale today? One verdict-file read by the owner module.
 def _addon_health(repo_root: Path) -> Result:
     from coordinator_core.plugin_health import scan
 
@@ -101,6 +99,7 @@ def _addon_health(repo_root: Path) -> Result:
     return directives, []
 
 
+# rag-staleness (REQ-W8): is example-retrieval-repo state older than 24h on an author box? One stat.
 def _rag_staleness(repo_root: Path) -> Result:
     if not _author_profile():
         return [], []
@@ -137,6 +136,8 @@ def _agent_worktrees(repo_root: Path) -> list[str]:
     return sorted(found)
 
 
+# agent-worktrees (REQ-W9): does an agent worktree hold reapable or dirty work? Classification (a git
+# read) is paid only for an agent root the recorded gitdir paths name.
 def _agent_worktrees_reader(repo_root: Path) -> Result:
     branch = _current_branch(repo_root)
     if not branch:
@@ -188,6 +189,7 @@ def _model_in_tail(transcript: Path) -> str:
     return found[-1] if found else ""
 
 
+# em-environment (REQ-W5): is EM effort medium and the model Opus? Settings read plus a bounded tail.
 def _em_environment(repo_root: Path) -> Result:
     from coordinator_core.ops.check_em_environment import _resolve_effort, _resolve_transcript
 
@@ -224,12 +226,21 @@ def _em_environment(repo_root: Path) -> Result:
     return [], points
 
 
+def _is_readable_file(path: Path) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            fh.read(1)
+    except OSError:
+        return False
+    return path.is_file()
+
+
+# bin-sentinel (REQ-H1): is the engine bin populated? One open of the sentinel file, no script load.
 def _bin_sentinel(repo_root: Path) -> Result:
-    probes = _health_probes()
     sentinel = _BIN_DIR / "archive-stamp-cli.py"
     if not _BIN_DIR.is_dir():
         detail = f"CLAUDE-KLABAUTER-BIN PROBE: '{_BIN_DIR}' missing; wrong checkout or stale clone"
-    elif not probes._is_readable_script(str(sentinel)):
+    elif not _is_readable_file(sentinel):
         detail = f"CLAUDE-KLABAUTER-BIN PROBE: sentinel '{sentinel}' missing or unreadable; restore it with `git checkout -- {sentinel}`"
     else:
         return [], []
@@ -250,13 +261,19 @@ def _is_engine_authoring_tree(repo_root: Path) -> bool:
     return isinstance(manifest, dict) and manifest.get("repo_id") == _CLAUDE_KLABAUTER_REPO_ID
 
 
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+# working-repo-registration (REQ-H2): is this checkout the registered working repo? One manifest read,
+# one registry key, a path compare; the repair stays behind the probe's `--fix`.
 def _working_repo_registration(repo_root: Path) -> Result:
     if not _is_engine_authoring_tree(repo_root):
         return [], []
     from coordinator_core.machine_resolver import registry_get
 
     registered = registry_get(_WORKING_REPO_KEY)
-    if registered and _health_probes()._paths_match(registered, str(repo_root)):
+    if registered and _same_path(registered, str(repo_root)):
         return [], []
     state = f"registered as {registered!r}" if registered else "not registered"
     return [
@@ -267,26 +284,59 @@ def _working_repo_registration(repo_root: Path) -> Result:
     ], []
 
 
-def _hook_walk_report() -> str:
-    """Fleet hook walk, check only; empty text means current, anything else stale or unrunnable."""
+def _hook_stale_lines() -> list[str]:
+    """Stamp-currency walk of the registered repos; empty means current.
+
+    The same predicate the repairing fleet walk uses (`ensure_prepare_commit_msg_hook`,
+    check-only), without the retired-shim disposition table, which is a migration cleanup and
+    parses a git index per repo.
+    """
     from coordinator_core.machine_resolver import merged_flat_registry
 
     _bin_on_path()
-    git_hook_install = importlib.import_module("git_hook_install")
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stderr(buf):
-            git_hook_install.ensure_hooks_fleet(str(_BIN_DIR), check_only=True, registry=merged_flat_registry())
-    except Exception as exc:  # noqa: BLE001 - an unrunnable walk reads as stale, never as current
-        return f"COULD NOT RUN the fleet hook walk: {exc}"
-    return buf.getvalue().strip()
+    hooks = importlib.import_module("git_hook_install")
+    registry = merged_flat_registry()
+    bin_dir = str(_BIN_DIR)
+    roots = hooks._registry_repo_roots(bin_dir, registry=registry)
+    roots = roots + hooks._unregistered_hooked_repos({r for _, r in roots}, registry=registry)
+    if not roots:
+        return ["no registered repos; hook currency unknown"]
+    stale: list[str] = []
+    missing: list[str] = []
+    for key, root in sorted(roots):
+        kind = hooks._classify_target(root)
+        if kind == "missing":
+            missing.append(f"{key} -> {root}")
+            continue
+        if kind == "mirror" and not hooks._hook_points_at_coordinator(root, "prepare-commit-msg"):
+            continue
+        states: list[str] = []
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                hooks.ensure_prepare_commit_msg_hook(
+                    bin_dir, root=root, outcome=states, check_only=True, registry=registry
+                )
+        except Exception as exc:  # noqa: BLE001 - one bad repo must not hide the rest
+            stale.append(f"{key} prepare-commit-msg: {type(exc).__name__}: {exc}")
+            continue
+        state = states[0] if states else "unknown"
+        if state in hooks._HEALED_OUTCOMES or state.startswith(("skipped-", "left-")):
+            stale.append(f"{key} prepare-commit-msg: {state}")
+    lines = [f"stale hook(s) across {len(roots)} registered repo(s):"] + stale if stale else []
+    if missing:
+        lines.append(f"{len(missing)} registered target(s) unreachable: " + "; ".join(missing))
+    return lines
 
 
+# hook-currency (REQ-H3): is every registered repo's coordinator hook current? Stamp leg only.
 def _hook_currency(repo_root: Path) -> Result:
-    report = _hook_walk_report()
-    if not report:
+    try:
+        lines = _hook_stale_lines()
+    except Exception as exc:  # noqa: BLE001 - an unrunnable walk reads as stale, never as current
+        lines = [f"COULD NOT RUN the fleet hook walk: {exc}"]
+    if not lines:
         return [], []
-    detail = truncate_external_text(report.replace("\n", " | "))
+    detail = truncate_external_text(" | ".join(lines))
     directive = build_directive("d-hook-currency", _PROBES_CLI, ["hook-currency"], detail)
     if _author_profile():
         return [directive], []
@@ -303,8 +353,8 @@ def _hook_currency(repo_root: Path) -> Result:
     return [directive], [point]
 
 
+# git-perf-currency (REQ-H4): does every fleet worktree carry core.untrackedCache? One config read each.
 def _git_perf_currency(repo_root: Path) -> Result:
-    probes = _health_probes()
     _bin_on_path()
     from coordinator_core.install import git_perf_config
 
@@ -312,6 +362,7 @@ def _git_perf_currency(repo_root: Path) -> Result:
     if not walk.ok:
         detail = f"could not establish fleet currency ({walk.reason})"
     else:
+        probes = _health_probes()
         drift: list[str] = []
         for item in walk.items:
             kind, key, root = item[0], item[1], item[2]
@@ -362,6 +413,8 @@ def _markdown_heads(directory: Path) -> Iterable[tuple[Path, dict[str, str]]]:
                 yield Path(entry.path), fields
 
 
+# stale-origin-stubs (REQ-H7): has an open origin stub already shipped? Handoff heads first; plan
+# heads are read only when a live stub exists.
 def _stale_origin_stubs(repo_root: Path) -> Result:
     handoffs = list(_markdown_heads(repo_root / "state" / "handoffs"))
     stubs: dict[tuple[str, str], Path] = {}

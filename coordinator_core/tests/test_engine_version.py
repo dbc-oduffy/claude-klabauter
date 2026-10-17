@@ -123,6 +123,87 @@ def test_min_known_good_sha_is_a_real_commit_in_this_repo():
         f"MIN_KNOWN_GOOD_SHA {MIN_KNOWN_GOOD_SHA!r} is not a resolvable "
         f"commit in this repo's history: {result.stderr}"
     )
+    anc = subprocess.run(
+        ["git", "-C", str(engine_dir), "merge-base", "--is-ancestor",
+         MIN_KNOWN_GOOD_SHA, "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        **no_console_creationflags(),
+    )
+    assert anc.returncode == 0, "MIN_KNOWN_GOOD_SHA is not an ancestor of HEAD"
+
+
+def _git(repo: Path, *args: str) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    return out.stdout.strip()
+
+
+def _repo_with_commit(path: Path, message: str, *, marker: bool = False) -> str:
+    path.mkdir(parents=True)
+    _git(path, "init", "-q")
+    if marker:
+        (path / "PUBLISH_MIRROR").write_text("x", encoding="utf-8")
+    (path / "f.txt").write_text("x", encoding="utf-8")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", message)
+    return _git(path, "rev-parse", "HEAD")
+
+
+_SRC = "a" * 40
+
+
+def test_marker_constant_matches_memo_resolver():
+    from coordinator_core import engine_version
+    from coordinator_core.ops.fleet._memo_resolver import PUBLISH_MIRROR_MARKER
+
+    assert engine_version._PUBLISH_MIRROR_MARKER == PUBLISH_MIRROR_MARKER
+
+
+def test_source_head_source_tree(tmp_path):
+    from coordinator_core.engine_version import resolve_engine_source_head
+
+    head = _repo_with_commit(tmp_path / "src", "plain")
+    got = resolve_engine_source_head(tmp_path / "src")
+    assert (got.sha, got.basis, got.engine_head) == (head, "source-tree", head)
+
+
+def test_source_head_mirror_trailer(tmp_path):
+    from coordinator_core.engine_version import resolve_engine_source_head
+
+    head = _repo_with_commit(
+        tmp_path / "m",
+        f"publish\n\nPercolate-Round: r1\nPercolate-Source-Head: {_SRC}",
+        marker=True,
+    )
+    got = resolve_engine_source_head(tmp_path / "m")
+    assert (got.sha, got.basis, got.engine_head) == (_SRC, "mirror-stamp", head)
+
+
+def test_source_head_mirror_subject_stamp(tmp_path):
+    from coordinator_core.engine_version import resolve_engine_source_head
+
+    head = _repo_with_commit(tmp_path / "m", f"publish [source-head {_SRC[:12]}]", marker=True)
+    got = resolve_engine_source_head(tmp_path / "m")
+    assert (got.sha, got.basis, got.engine_head) == (_SRC[:12], "mirror-stamp", head)
+
+
+def test_source_head_mirror_unstamped(tmp_path):
+    from coordinator_core.engine_version import resolve_engine_source_head
+
+    head = _repo_with_commit(tmp_path / "m", "publish without stamp", marker=True)
+    got = resolve_engine_source_head(tmp_path / "m")
+    assert (got.sha, got.basis, got.engine_head) == (None, "mirror-stamp", head)
+
+
+def test_source_head_outside_a_repo_never_raises(monkeypatch, tmp_path):
+    from coordinator_core.engine_version import resolve_engine_source_head
+
+    monkeypatch.setattr("coordinator_core.git.repo_root._walk_for_repo", lambda start: None)
+    assert resolve_engine_source_head(tmp_path).sha is None
 
 
 def test_engine_build_reports_the_running_copys_head_in_a_real_repo():

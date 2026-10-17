@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,35 @@ def test_opus_costs_more_than_three_haiku(pt):
         "claude-haiku-5-5", {"input_tokens": 20_000, "output_tokens": 2_000, "cache_read_input_tokens": 40_000}, None
     )
     assert opus > haiku
+
+
+def _json_table():
+    return json.loads((_PATH.with_name("price_table.json")).read_text(encoding="utf-8"))
+
+
+def test_json_matches_python_table(pt):
+    data = _json_table()
+    assert isinstance(data["schema_version"], int)
+    assert data["cache_read_mult"] == pt.CACHE_READ_MULT
+    assert data["cache_write_mult"] == pt.CACHE_WRITE_MULT
+    assert set(data["models"]) == set(pt.PRICES)
+    approx = pytest.approx
+    for key, p in pt.PRICES.items():
+        m = data["models"][key]
+        assert m["input"] == approx(p["input"])
+        assert m["output"] == approx(p["output"])
+        assert m["cache_read"] == approx(p["input"] * pt.CACHE_READ_MULT)
+        assert m["cache_creation"] == approx(p["input"] * pt.CACHE_WRITE_MULT)
+        assert m.get("fast_multiplier") == p.get("fast_multiplier")
+        tier = m.get("long_prompt_tier")
+        if "tier_prompt_tokens" in p:
+            assert tier["prompt_tokens_over"] == p["tier_prompt_tokens"]
+            assert tier["input"] == approx(p["tier_input"])
+            assert tier["output"] == approx(p["tier_output"])
+            assert tier["cache_read"] == approx(p["tier_input"] * pt.CACHE_READ_MULT)
+            assert tier["cache_creation"] == approx(p["tier_input"] * pt.CACHE_WRITE_MULT)
+        else:
+            assert tier is None
 
 
 def test_sonnet_prices_at_list(pt):

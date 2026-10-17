@@ -118,10 +118,12 @@ def _session_cost_segment(payload: dict, session_id: str) -> str | None:
         return None
     cost_path = _cost_path(session_id)
     try:
-        # Fast path: a complete cache inside its rescan window renders as-is; importing the
+        # Fast path: a complete cache inside its rescan window, whose recorded main-transcript
+        # size equals the transcript's current size (one stat), renders as-is; importing the
         # engine (lib + cc_invoke, ~15ms) on every redraw would blow the field's 10ms budget.
         rec = json.loads(cost_path.read_text(encoding="utf-8"))
-        if rec.get("complete") and rec.get("files") and time.time() < rec.get("fresh_until", 0):
+        if (rec.get("complete") and rec.get("files") and time.time() < rec.get("fresh_until", 0)
+                and Path(transcript).stat().st_size == rec["main_size"]):
             return _colorize(None, f"~${max(0.0, rec['usd_total']):.2f}")
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass

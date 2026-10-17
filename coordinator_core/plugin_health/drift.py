@@ -1019,6 +1019,10 @@ def _run(filter_plugin: str, check_clean_only: bool):
         stderr_lines.extend(result.stderr_lines)
         if not result.ok:
             total_drift = 1
+            if not any(plugin_name in ln and ln.startswith("[drift]") for ln in result.lines):
+                stdout_lines.append(
+                    f"[drift] {plugin_name}: drift detected (probe failed without detail; see stderr)"
+                )
 
     return stdout_lines, stderr_lines, total_drift
 
