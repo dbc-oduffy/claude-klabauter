@@ -18,8 +18,18 @@ from coordinator_core.plugin_health.forwarder_drift import _resolve_agent_bin, _
 _PROG = "doe-bin-forwarders"
 
 # DoE's hooks/scripts/group-em-autofire.py loads this file by path and calls its functions, so a
-# forwarder cannot stand in for it. A name leaves this set only once the engine/DoE split is reconciled.
-DOE_LIVE = frozenset({"group-em-box-notice.py"})
+# forwarder cannot stand in for it. The claude-author/scip/fleet-scan scripts run against DoE's own
+# coordinator/bin/lib; the engine copies are older trampolines, so a forwarder would regress them.
+# A name leaves this set only once the engine/DoE split is reconciled.
+DOE_LIVE = frozenset({
+    "group-em-box-notice.py",
+    "claude-author.py",
+    "fleet-claude-md-fleet-rule-scan.py",
+    "gen-claude-author-launcher.py",
+    "gen-claude-author-shim.py",
+    "install-claude-author-wrapper.py",
+    "scip-rebuild-at-ceremony.py",
+})
 
 CANONICAL_CODE = (
     "import sys",
