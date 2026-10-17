@@ -34,6 +34,7 @@ _PYTEST_DIRNAME = "pytest"
 _WARP_DIRNAME = "warp"
 _RUN_FILE_SUFFIXES = (".workflow.mjs.emitted.json", ".workflow.mjs")
 OPEN_RUN_NO_RECORD_QUIESCENCE_HOURS = 168
+CURSOR_NAME = ".scratch-hygiene-cursor"
 
 
 def _norm(path: str | os.PathLike[str]) -> str:
@@ -314,23 +315,52 @@ def _entries(root: Path) -> list[str]:
         return []
 
 
-def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
-    """Every top-level entry in ``<repo>/scratch``, ``<repo>/state/scratch`` and ``coordinator_temp_root(repo)``.
-    ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
-    per-run children are."""
-    repo_root = Path(repo_root)
-    paths = []
-    for root, per_run in (
+def _candidate_roots(repo_root: Path) -> tuple[tuple[Path, Optional[str]], ...]:
+    return (
         (repo_root / "scratch", _WARP_DIRNAME),
         (repo_root / "state" / "scratch", None),
         (coordinator_temp_root(repo_root), _PYTEST_DIRNAME),
-    ):
+    )
+
+
+def purge_candidates(repo_root: str | os.PathLike[str]) -> list[str]:
+    """Every top-level entry in ``<repo>/scratch``, ``<repo>/state/scratch`` and ``coordinator_temp_root(repo)``.
+    ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
+    per-run children are. The op's own cursor file (``CURSOR_NAME`` and its temp files) is never one."""
+    repo_root = Path(repo_root)
+    paths = []
+    for root, per_run in _candidate_roots(repo_root):
         for p in _entries(root):
-            if os.path.basename(p) == per_run and not _is_link(p) and os.path.isdir(p):
+            base = os.path.basename(p)
+            if base.startswith(CURSOR_NAME):
+                continue
+            if base == per_run and not _is_link(p) and os.path.isdir(p):
                 paths.extend(_entries(Path(p)))
             else:
                 paths.append(p)
     return paths
+
+
+def _order_key(roots: list[str], path: str) -> tuple[int, str]:
+    norm = _norm(path)
+    for i, root in enumerate(roots):
+        if norm.startswith(root + os.sep):
+            return (i, norm)
+    return (len(roots), norm)
+
+
+def ordered_candidates(repo_root: str | os.PathLike[str], cursor: Optional[str] = None) -> list[str]:
+    """``purge_candidates`` rotated to start at the first entry ordered after ``cursor`` (a path),
+    wrapping at the end. The cursor names an entry, not a position, so deletions since it was
+    written do not shift the resume point. No cursor, or one ordered after every entry, starts at the top."""
+    repo_root = Path(repo_root)
+    paths = purge_candidates(repo_root)
+    if not cursor:
+        return paths
+    roots = [_norm(root) for root, _per_run in _candidate_roots(repo_root)]
+    key = _order_key(roots, cursor)
+    start = next((i for i, p in enumerate(paths) if _order_key(roots, p) > key), 0)
+    return paths[start:] + paths[:start]
 
 
 def plan_purge(
@@ -341,9 +371,10 @@ def plan_purge(
     registry_dir: Optional[Path] = None,
     now: Optional[float] = None,
     deadline: Optional[float] = None,
+    candidates: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
-    """Dry-run purge records for every candidate entry. Deletes nothing. A missing root
-    yields no records."""
+    """Dry-run purge records for every candidate entry (``candidates`` when given, else
+    ``purge_candidates``). Deletes nothing. A missing root yields no records."""
     repo_root = Path(repo_root)
     ctx = _Context(registry_dir=registry_dir)
     now = time.time() if now is None else now
@@ -357,5 +388,5 @@ def plan_purge(
             deadline=deadline,
             _ctx=ctx,
         )
-        for p in purge_candidates(repo_root)
+        for p in (purge_candidates(repo_root) if candidates is None else candidates)
     ]

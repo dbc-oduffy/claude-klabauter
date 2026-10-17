@@ -52,7 +52,7 @@ def _plan(cite: bool) -> str:
 ```yaml plan-tasks
 - id: D1
   title: decision
-  change_kind: doc-new
+  change_kind: doc-edit
   surface: docs/decisions/DR-1.md
   writes:
     - docs/decisions/DR-1.md
@@ -64,6 +64,7 @@ def _plan(cite: bool) -> str:
     - pkg/b.py
   depends_on:
     - chunk: D1
+      gate_kind: output-consumption-runtime
 ```
 """
 

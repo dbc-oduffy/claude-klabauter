@@ -60,9 +60,11 @@ import importlib.util
 import json
 import logging
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
+from coordinator_core.git.commit import checkin_sizes, hash_worktree_blobs_via_spawn
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import read_object
 from coordinator_core.git.git_state import _parse_tree_entries, head_blobs, read_tree_spine
@@ -203,24 +205,29 @@ def skill_weight_check_worktree(
     root: Path, paths: Iterable[str], deleted_paths: Iterable[str] = ()
 ) -> Tuple[Optional[str], Optional[str]]:
     """`skill_weight_check` for a commit that has no assembled tree yet: sizes
-    come from the named worktree files. `commit_v2` lands through
+    come from the named worktree files, sized as the blob `git add` would
+    write (`checkin_sizes`), not by raw worktree length. `commit_v2` lands through
     `commit_paths`, which never reaches `_commit_via_head_spine`."""
     root = Path(root)
     named = [*paths, *deleted_paths]
 
     def changed(common_dir: Path) -> Dict[str, Optional[int]]:
-        out: Dict[str, Optional[int]] = {}
+        files: List[str] = []
         for path in named:
             if not path.startswith(_SKILLS_PREFIX):
                 continue
             live = root / path
             if live.is_dir():
-                for f in live.rglob("*"):
-                    if f.is_file():
-                        out[f.relative_to(root).as_posix()] = f.stat().st_size
+                files.extend(
+                    f.relative_to(root).as_posix() for f in live.rglob("*") if f.is_file()
+                )
             else:
-                out[path] = live.stat().st_size if live.is_file() else None
-        return out
+                files.append(path)
+        return checkin_sizes(
+            root,
+            list(dict.fromkeys(files)),
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=root),
+        )
 
     def baseline_text(common_dir: Path) -> Optional[str]:
         live = root / _SW_BASELINE

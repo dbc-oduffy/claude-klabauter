@@ -16,6 +16,59 @@ def _write(path: str, content: str) -> None:
         fh.write(content)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_claude_home(tmp_path_factory, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path_factory.mktemp("cfg")))
+
+
+def _flagged_repo(tmp_path):
+    _write(
+        str(tmp_path / ".claude/settings.json"),
+        json.dumps({"enabledPlugins": {"web-dev@mkt": True}}),
+    )
+
+
+def test_bound_session_lines_precede_step3(tmp_path, capsys, monkeypatch):
+    from coordinator_core.install import plugin_cache_sessions as pcs
+
+    _flagged_repo(tmp_path)
+    sess = pcs.BoundSession("sid-1", "peer", 4242, 1.0, "/x", "bound")
+    seen = []
+    monkeypatch.setattr(pcs, "sessions_bound_to", lambda p, **k: seen.append(p) or [sess])
+    assert main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert seen and seen[0].parts[-3:] == ("cache", "mkt", "web-dev")
+    assert "peer pid 4242 sid-1" in out
+    assert out.index("relaunch these sessions, then re-run step (3)") < out.index("(3) rm -rf")
+    assert "only once no session above remains" in out
+
+
+def test_no_bound_sessions_output_unchanged(tmp_path, capsys, monkeypatch):
+    from coordinator_core.install import plugin_cache_sessions as pcs
+
+    _flagged_repo(tmp_path)
+    monkeypatch.setattr(pcs, "sessions_bound_to", lambda p, **k: [])
+    main([str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "relaunch" not in out
+    assert out.endswith("/cache/<marketplace>/<plugin>/.\n")
+
+
+def test_no_findings_never_calls_detector(tmp_path, capsys, monkeypatch):
+    from coordinator_core.install import plugin_cache_sessions as pcs
+
+    def boom(*a, **k):
+        raise AssertionError("detector called")
+
+    monkeypatch.setattr(pcs, "sessions_bound_to", boom)
+    _write(
+        str(tmp_path / ".claude/settings.json"),
+        json.dumps({"enabledPlugins": {"coordinator@mkt": True}}),
+    )
+    assert main([str(tmp_path)]) == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_no_settings_json_is_silent_noop(tmp_path, capsys):
     rc = main([str(tmp_path)])
     assert rc == 0

@@ -107,6 +107,7 @@ def _land(main_root: Path, repo_root: Path, params: dict, grind: dict) -> dict:
         "message": _message(grind, landing, len(commit_deleted), params.get("deliverable_id")),
         "drop_ignored": True,
         "skip_missing": True,
+        "carry_stopped_runs": False,
     }
     if commit_deleted:
         commit_params["deleted_paths"] = commit_deleted

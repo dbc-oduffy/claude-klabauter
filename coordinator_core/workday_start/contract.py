@@ -45,7 +45,6 @@ LAUNCH_STAGES: tuple[str, ...] = (
     "sentinels",
     "freshness",
     "weekly",
-    "backfill-scan",
     "alignment-inputs",
     "decide",
 )

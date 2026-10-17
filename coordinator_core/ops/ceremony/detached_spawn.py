@@ -209,6 +209,11 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     that finder is ever consulted -- deterministically, regardless of both the calling
     process's cwd and this box's ambient editable-install pin.
 
+    `site_free=True` starts the child with `-S` (no site import, ~30ms saved) and appends the
+    parent's purelib and platlib to `PYTHONPATH`; `.pth`-based editable installs are NOT
+    processed, so only enable it for a script whose imports resolve from `repo_root` plus
+    site-packages.
+
     `env_extra` adds child-only variables. It exists so a caller can hand the child a
     value WITHOUT writing to this process's own `os.environ`: an interpreter-global env
     write outlives the call, is inherited by every later subprocess this process spawns,
@@ -244,6 +249,7 @@ def spawn_detached(
     script_path: str,
     args: Sequence[str] | None = None,
     env_extra: "dict | None" = None,
+    site_free: bool = False,
 ) -> bool:
     """Spawn `script_path` as a detached child process, fully disowned from the parent's
     stdio, on both POSIX and Windows -- the shared shape C17's other chunks (C2/C5/C14)
@@ -321,11 +327,23 @@ def spawn_detached(
     else:
         popen_kwargs["creationflags"] = _windows_detached_flags()
 
+    argv = [python_exe, script_path, *args]
+    child_env = _child_env(repo_root, env_extra)
+    if site_free:
+        # `-S` skips site import; never `-I`, which would drop the PYTHONPATH above. The
+        # parent's purelib is appended so third-party imports still resolve.
+        import sysconfig
+
+        argv.insert(1, "-S")
+        paths = sysconfig.get_paths()
+        for key in dict.fromkeys((paths["purelib"], paths["platlib"])):
+            child_env["PYTHONPATH"] += os.pathsep + key
+
     try:
         subprocess.Popen(
-            [python_exe, script_path, *args],
+            argv,
             cwd=repo_root,
-            env=_child_env(repo_root, env_extra),
+            env=child_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

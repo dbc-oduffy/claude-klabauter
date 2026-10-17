@@ -169,7 +169,8 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         settings_doe = _build_doe_fixture(tmp, "settings")
         mirror_doe = _build_doe_fixture(tmp, "mirror")
         _plant_fake_machine_local(settings_home, settings_doe)
-        _plant_fake_machine_local(claude_home, mirror_doe)
+        # CLAUDE_HOME names the HOME substitute; the config dir (and its bin/) is <CLAUDE_HOME>/.claude.
+        _plant_fake_machine_local(os.path.join(claude_home, ".claude"), mirror_doe)
 
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
@@ -195,7 +196,8 @@ def test_coordinator_registry_split_repo_fallback_mirror_reachable_when_settings
         claude_home = os.path.join(tmp, "claude-home")
 
         mirror_doe = _build_doe_fixture(tmp, "mirror-only")
-        _plant_fake_machine_local(claude_home, mirror_doe)
+        # CLAUDE_HOME names the HOME substitute; the config dir (and its bin/) is <CLAUDE_HOME>/.claude.
+        _plant_fake_machine_local(os.path.join(claude_home, ".claude"), mirror_doe)
 
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home

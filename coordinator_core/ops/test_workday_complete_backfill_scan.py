@@ -29,7 +29,13 @@ from typing import List, Optional
 
 import pytest
 
-from coordinator_core.ops.workday_complete_backfill_scan import main
+from coordinator_core.ops.workday_complete_backfill_scan import (
+    TSV_COLUMNS,
+    GapRow,
+    gap_summary_lines,
+    main,
+    scan,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file's `main()` calls genuinely shell out to
@@ -162,11 +168,42 @@ def test_commit_no_summary_emitted_and_summary_present_excluded(repo, monkeypatc
 
     row = next(ln for ln in out.splitlines() if ln.startswith("2026-03-10\t"))
     fields = row.split("\t")
-    assert len(fields) == 5
+    assert len(fields) == 4 == len(TSV_COLUMNS)
     assert fields[1] == "2"
-    assert len(fields[4].split(",")) == int(fields[1])
     assert fields[2] != fields[3]
     assert len(fields[2]) >= 7
+
+
+def test_scan_returns_the_rows_main_prints(repo, monkeypatch, capsys):
+    _commit_on(repo, "2026-03-10", "a")
+    _commit_on(repo, "2026-03-10", "b")
+    _commit_on(repo, "2026-03-11", "c")
+    monkeypatch.setenv("COORDINATOR_ROOT_WARN_SUPPRESS", "1")
+    result = scan(str(repo), 14, today="2026-03-15")
+    rc = _run_scan(repo, monkeypatch, capsys)
+    printed = [ln for ln in capsys.readouterr().out.splitlines() if ln]
+    assert rc == 0
+    assert [r.tsv() for r in result.rows] == printed
+    assert [r.date for r in result.rows] == ["2026-03-10", "2026-03-11"]
+    assert result.older_gaps == []
+
+
+def test_gap_summary_lines_verbatim_and_capped():
+    rows = [
+        GapRow("2026-03-10", 2, "a" * 7, "b" * 7),
+        GapRow("2026-03-11", 1, "c" * 7, "d" * 7),
+        GapRow("2026-03-12", 5, "e" * 7, "f" * 7),
+    ]
+    assert gap_summary_lines(rows) == [
+        "2026-03-10  2 commits",
+        "2026-03-11  1 commits",
+        "2026-03-12  5 commits",
+    ]
+    assert gap_summary_lines(rows, cap=2) == [
+        "2026-03-10  2 commits",
+        "2026-03-11  1 commits",
+        "+1 more",
+    ]
 
 
 def test_bad_lookback_rejected(repo, monkeypatch, capsys):
@@ -225,12 +262,11 @@ def test_ac1_one_uncovered_day_emits_exactly_one_row(repo, monkeypatch, capsys):
     lines = [ln for ln in out.splitlines() if ln]
     assert len(lines) == 1
     fields = lines[0].split("\t")
-    assert len(fields) == 5
-    day, count, base, tip, shas = fields
+    assert len(fields) == 4
+    day, count, base, tip = fields
     assert day == "2026-03-10"
     assert count == "1"
     assert len(base) >= 7 and len(tip) >= 7
-    assert shas.split(",") == [tip]
     assert fields[2] == fields[3]
 
 
@@ -403,8 +439,8 @@ def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, ca
     lines = [ln for ln in out.splitlines() if ln.startswith(f"{day}\t")]
     assert len(lines) == 1
     fields = lines[0].split("\t")
-    assert len(fields) == 5
-    _, count, base, tip, shas = fields
+    assert len(fields) == 4
+    _, count, base, tip = fields
 
     assert count == "3"
     assert base == root_sha
@@ -412,11 +448,8 @@ def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, ca
     assert tip != m1_early
     assert tip != main_mid
 
-    assert shas.split(",") == [m1_early, main_mid, m2_late]
-    assert len(shas.split(",")) == int(count)
 
-
-def test_ac3_the_sha_column_names_commits_the_base_tip_range_does_not_contain(
+def test_ac3_count_exceeds_the_base_tip_range_it_is_reported_beside(
     repo, monkeypatch, capsys
 ):
     day = "2026-03-16"
@@ -431,16 +464,12 @@ def test_ac3_the_sha_column_names_commits_the_base_tip_range_does_not_contain(
     assert rc == 0
 
     line = next(ln for ln in out.splitlines() if ln.startswith(f"{day}\t"))
-    _, count, base, tip, shas = line.split("\t")
+    _, count, base, tip = line.split("\t")
 
     in_range = _git(repo, "rev-list", f"{base}..{tip}").split()
     assert len(in_range) == 1 and in_range[0] == m2_late
     assert int(count) == 3
     assert len(in_range) != int(count)
-
-    union = shas.split(",")
-    assert sorted(union) == sorted([m1_early, main_mid, m2_late])
-    assert len(union) == int(count)
     assert m1_early not in in_range and main_mid not in in_range
 
 
@@ -581,6 +610,68 @@ def test_tip_align_anchor_none_emits_no_row_and_warns(repo, monkeypatch, capsys)
     assert any(day in ln and "WARN" in ln for ln in captured.err.splitlines())
 
 
+def _anchored_day_files(repo: Path, day: str, sha_line: str, with_block: bool) -> None:
+    summaries = repo / "archive" / "daily-summaries"
+    summaries.mkdir(parents=True, exist_ok=True)
+    (summaries / f"{day}-machine-a.md").write_text(
+        f"---\ncovered_machine: null\n---\nsummary\n{sha_line}\n"
+    )
+    if with_block:
+        wc = repo / "state" / "week-changelog"
+        wc.mkdir(parents=True, exist_ok=True)
+        (wc / f"{day}.md").write_text("changelog block\n")
+
+
+def test_short_tip_prefix_anchor_with_null_machine_covers_day(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    _commit_on(repo, day, "early", fname="e.txt", time_="08:00:00Z")
+    tip = _commit_on(repo, day, "later", fname="l.txt", time_="18:00:00Z")
+    _anchored_day_files(repo, day, f"covered_tip_sha: {tip[:8]}", with_block=True)
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert _rows(captured.out, day) == []
+    assert not any("WARN" in ln for ln in captured.err.splitlines())
+
+
+def test_short_anchor_before_later_commit_is_still_a_gap(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    early = _commit_on(repo, day, "early", fname="e.txt", time_="08:00:00Z")
+    later = _commit_on(repo, day, "later", fname="l.txt", time_="18:00:00Z")
+    _anchored_day_files(repo, day, f"covered_tip_sha: {early[:8]}", with_block=True)
+
+    _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+
+    rows = _rows(capsys.readouterr().out, day)
+    assert len(rows) == 1 and rows[0][3] == later
+
+
+def test_unmatched_short_anchor_stays_covered_with_warn(repo, monkeypatch, capsys):
+    day = "2026-03-10"
+    _commit_on(repo, day, "a commit", fname="a.txt")
+    _anchored_day_files(repo, day, "covered_tip_sha: deadbee", with_block=True)
+
+    _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+    captured = capsys.readouterr()
+
+    assert _rows(captured.out, day) == []
+    assert any(day in ln and "WARN" in ln for ln in captured.err.splitlines())
+
+
+def test_anchored_day_without_changelog_block_is_flagged_by_changelog_leg(
+    repo, monkeypatch, capsys
+):
+    day = "2026-03-10"
+    tip = _commit_on(repo, day, "a commit", fname="a.txt")
+    _anchored_day_files(repo, day, f"covered_tip_sha: {tip[:8]}", with_block=False)
+
+    _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-11")
+
+    assert len(_rows(capsys.readouterr().out, day)) == 1
+
+
 def test_tip_align_anchor_only_inside_fence_is_treated_as_missing(repo, monkeypatch, capsys):
     day = "2026-03-10"
     sha = _commit_on(repo, day, "a commit", fname="a.txt")
@@ -592,3 +683,56 @@ def test_tip_align_anchor_only_inside_fence_is_treated_as_missing(repo, monkeypa
     assert rc == 0
     assert _rows(captured.out, day) == []
     assert any(day in ln and "WARN" in ln for ln in captured.err.splitlines())
+
+
+def _day_back(n: int, today: str = "2026-03-15") -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(today) - timedelta(days=n)).isoformat()
+
+
+def test_older_gaps_report_uncovered_commit_days_before_window(repo, monkeypatch, capsys):
+    for n in range(20, 26):
+        _commit_on(repo, _day_back(n), f"old {n}")
+    monkeypatch.setenv("COORDINATOR_ROOT", str(repo))
+    result = scan(str(repo), 14, "2026-03-15")
+    assert result.older_gaps == [_day_back(n) for n in range(25, 19, -1)]
+    assert result.rows == []
+
+
+def test_older_gaps_stop_at_coverage_frontier(repo, monkeypatch, capsys):
+    from coordinator_core.session import record_homes
+
+    _commit_on(repo, _day_back(40), "beyond frontier")
+    frontier = _day_back(30)
+    sha = _commit_on(repo, frontier, "frontier")
+    (repo / "archive" / "daily-summaries" / f"{frontier}.md").write_text(f"s\ncovered_tip_sha: {sha}\n")
+    changelog = Path(record_homes.home_dir(str(repo), "week-changelog"))
+    changelog.mkdir(parents=True)
+    (changelog / f"{frontier}.md").write_text("block\n")
+    _commit_on(repo, _day_back(22), "inside")
+    result = scan(str(repo), 14, "2026-03-15")
+    assert result.older_gaps == [_day_back(22)]
+
+
+def test_older_gaps_bounded_by_ceiling_without_covered_day(repo):
+    from coordinator_core.ops.workday_complete_backfill_scan import OLDER_GAPS_CEILING_DAYS
+
+    _commit_on(repo, _day_back(OLDER_GAPS_CEILING_DAYS + 10), "past ceiling")
+    _commit_on(repo, _day_back(OLDER_GAPS_CEILING_DAYS - 5), "inside ceiling")
+    result = scan(str(repo), 14, "2026-03-15")
+    assert result.older_gaps == [_day_back(OLDER_GAPS_CEILING_DAYS - 5)]
+
+
+def test_main_writes_older_gaps_stderr_line_and_keeps_tsv_four_columns(repo, monkeypatch, capsys):
+    from coordinator_core.ops.workday_complete_backfill_scan import OLDER_GAPS_PREFIX
+
+    _commit_on(repo, _day_back(21), "a")
+    _commit_on(repo, _day_back(20), "b")
+    _commit_on(repo, _day_back(3), "recent")
+    assert _run_scan(repo, monkeypatch, capsys) == 0
+    cap = capsys.readouterr()
+    assert f"{OLDER_GAPS_PREFIX} 2 day(s), {_day_back(21)}..{_day_back(20)}" in cap.err
+    assert cap.out.splitlines(), "recent gap row expected on stdout"
+    for line in cap.out.splitlines():
+        assert len(line.split("\t")) == len(TSV_COLUMNS)

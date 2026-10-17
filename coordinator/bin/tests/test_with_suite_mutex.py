@@ -43,6 +43,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import threading
@@ -641,7 +642,7 @@ def test_two_consecutive_runs_leave_current_and_previous_records(tmp_path):
     repo = _make_repo(tmp_path)
     env = _base_env(tmp_path / "home")
     (repo / "tracked.py").write_text("x = 2\n")
-    first = _run_in(repo, ["--collection", "unit", "--", sys.executable, "-c", "print('one')"], env=env)
+    first = _run_in(repo, ["--collection", "unit", "--", sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'one\\n')"], env=env)
     second = _run_in(
         repo, ["--collection", "unit", "--", sys.executable, "-c", "import sys; sys.exit(3)"], env=env
     )
@@ -668,11 +669,13 @@ def test_two_consecutive_runs_leave_current_and_previous_records(tmp_path):
 def test_log_bytes_identical_with_wrapper_stdout_piped_or_file(tmp_path):
     repo = _make_repo(tmp_path)
     env = _base_env(tmp_path / "home")
+    # Raw byte writes: text-mode stdout translates "\n" to "\r\n" on Windows, which
+    # would make the byte-identity assertions below measure the child, not the wrapper.
     child = (
         "import sys, time\n"
-        "sys.stdout.write('out-a\\n'); sys.stdout.flush(); time.sleep(0.3)\n"
-        "sys.stderr.write('err-a\\n'); sys.stderr.flush(); time.sleep(0.3)\n"
-        "sys.stdout.write('out-b\\n')\n"
+        "sys.stdout.buffer.write(b'out-a\\n'); sys.stdout.flush(); time.sleep(0.3)\n"
+        "sys.stderr.buffer.write(b'err-a\\n'); sys.stderr.flush(); time.sleep(0.3)\n"
+        "sys.stdout.buffer.write(b'out-b\\n')\n"
     )
     argv = ["--collection", "pipe", "--", sys.executable, "-c", child]
     rec = repo / ".coordinator-local" / "suite-runs" / "pipe"
@@ -849,7 +852,7 @@ def test_reuse_fresh_gate_refusal_exits_77_without_spawning(tmp_path, monkeypatc
 
     monkeypatch.setattr(module, "enforce_tier_u_gate", refuse)
     assert _in_process_main(module, monkeypatch, repo, _reuse_args(cmd)) == 77
-    assert seen and seen[0].startswith(cmd[0])
+    assert seen and seen[0].startswith(shlex.quote(cmd[0]))
     assert counter.read_text() == ""
 
 

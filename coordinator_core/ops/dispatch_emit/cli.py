@@ -418,6 +418,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "then `review-stamp.py rejudge --plan <plan>` (unmet stamp) or `review-stamp.py mint --plan <plan>` (no stamp)",
     )
     parser.add_argument(
+        "--as-agent-brief",
+        action="store_true",
+        help="with --rejudge: print the criterion judge as {agent_type, model, prompt, schema, ident} "
+        "JSON for an Agent-tool dispatch instead of emitting a Workflow script; record the judge's "
+        "returned JSON with `reverify_delivery record --judge-json <f> --ident <f>`",
+    )
+    parser.add_argument(
         "--mark-landed",
         dest="mark_landed_phase",
         default=None,
@@ -1169,6 +1176,33 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             )
             return EXIT_USAGE
         return _do_mark_landed(args.script_positional, args.mark_landed_phase, args.sha)
+
+    if args.as_agent_brief:
+        if not args.rejudge or not args.plan or args.out_path or args.fire:
+            print(
+                "emit-dispatch-workflow: ERROR — --as-agent-brief needs --rejudge and --plan, "
+                "and excludes --out/--fire",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops.dispatch_emit.op import _installed_plugin_root
+        from coordinator_core.ops.dispatch_emit.emit import resolve_agent_type_host
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import ReverifyRefused, emit_rejudge_brief
+
+        try:
+            brief = emit_rejudge_brief(
+                repo_root=Path(args.repo_root).resolve() if args.repo_root else Path.cwd(),
+                plan_path=args.plan,
+                agent_type_host=resolve_agent_type_host(
+                    coordinator_agent_type_host=os.environ.get("COORDINATOR_AGENT_TYPE_HOST"),
+                    claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT") or _installed_plugin_root(),
+                ),
+            )
+        except (ReverifyRefused, *_DATA_ERRORS) as exc:
+            print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+            return EXIT_DATA_ERROR
+        print(json.dumps(brief, indent=2, sort_keys=True))
+        return EXIT_OK
 
     if args.rejudge:
         if args.plan and not args.out_path:

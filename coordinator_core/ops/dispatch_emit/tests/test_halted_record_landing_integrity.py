@@ -53,8 +53,9 @@ def test_since_base_overlap_withholds_whole_chunk(repo, monkeypatch):
     _marker_script(repo, [("C1", ["a.py", "b.py"]), ("C2", ["good.py"])], DONE)
     seen = {}
 
-    def fake(root, paths, base, *, run_id):
+    def fake(root, paths, base, *, run_id, plan=None):
         seen["base"] = base
+        seen["plan"] = plan
         return [landing_integrity.Finding("a.py", landing_integrity.SINCE_BASE_OVERLAP, "drops lines of abc1234")]
 
     monkeypatch.setattr(landing_integrity, "run_base_for", lambda *a, **k: "a" * 40)
@@ -63,6 +64,7 @@ def test_since_base_overlap_withholds_whole_chunk(repo, monkeypatch):
     out = _call(repo, LEDGER)
 
     assert seen["base"] == "a" * 40
+    assert "plan" in seen
     assert out["withheld"] == {"a.py": "since-base-overlap", "b.py": "since-base-overlap"}
     assert out["landed_chunks"] == ["C2"]
     assert out["integrity"][0]["reason"] == "since-base-overlap"

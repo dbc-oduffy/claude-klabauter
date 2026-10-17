@@ -197,8 +197,8 @@ def _real_today() -> dt.date:
 
 
 def _weekly_ids(root: Path, today: dt.date, **kw) -> tuple[set[str], set[str]]:
-    owed = manifest.steps_for(("weekly", "backfill-scan"), repo_root=root, today=today, **kw)
-    skipped = manifest.cadence_skipped(("weekly", "backfill-scan"), repo_root=root, today=today, **kw)
+    owed = manifest.steps_for(("weekly",), repo_root=root, today=today, **kw)
+    skipped = manifest.cadence_skipped(("weekly",), repo_root=root, today=today, **kw)
     return {s.id for s in owed}, {s.id for s, _ in skipped}
 
 
@@ -207,7 +207,7 @@ def test_weekly_group_skips_on_a_fresh_marker(tmp_path: Path) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     owed, skipped = _weekly_ids(tmp_path, _real_today(), freshness={"stdout": '{"doc_commit_delta": 3}'})
     assert owed == set()
-    assert "weekly-orphan-branch-sweep" in skipped and "weekly-backfill-scan" in skipped
+    assert "weekly-orphan-branch-sweep" in skipped and "weekly-central-run-due" in skipped
     assert "weekly-check-harvest-debt" in skipped
 
 
@@ -215,7 +215,7 @@ def test_weekly_group_runs_on_a_stale_marker(tmp_path: Path) -> None:
     _touch_marker(tmp_path, 30)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     owed, skipped = _weekly_ids(tmp_path, _real_today())
-    assert "weekly-orphan-branch-sweep" in owed and "weekly-backfill-scan" in owed
+    assert "weekly-orphan-branch-sweep" in owed and "weekly-central-run-due" in owed
     assert skipped == {"weekly-draft-plan-aging"}
 
 

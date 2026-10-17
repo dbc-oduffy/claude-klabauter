@@ -20,6 +20,7 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, spli
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.testing.suite_run_record import read_head_sha
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import design_route
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -104,7 +105,7 @@ _PARAMS = (
     Field("only_rows", "str_list"),
 )
 
-__all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "relayed_ask_block"]
+__all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "relayed_ask_block", "manifest_payload"]
 
 PM_INTENT_HEADING = "## PM intent (verbatim)"
 
@@ -695,7 +696,7 @@ def stage(
             [r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)]
         ),
     )
-    _write(record / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
+    _write(record / "manifest.json", json.dumps(manifest_payload(root, manifest), indent=2) + "\n")
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route
@@ -707,11 +708,16 @@ def stage(
     return manifest
 
 
+def manifest_payload(root: Path, manifest: StageManifest) -> dict:
+    """`manifest.to_json()` plus `head_sha`: the execute-start HEAD (stage commits nothing), None when unresolvable."""
+    return {**manifest.to_json(), "head_sha": read_head_sha(root)}
+
+
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
 
-    Replies `StageManifest.to_json()`; a refused request replies `{"error": str}`.
+    Replies `StageManifest.to_json()` plus `head_sha`; a refused request replies `{"error": str}`.
     """
     if repo_root is None:
         return {"error": "dispatch.ask_stage requires repo_root"}
@@ -720,9 +726,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return refusal
     writes = params.get("writes") or []
     run_id = params["run_id"]
+    root = main_worktree_root(Path(repo_root))
     try:
         manifest = stage(
-            main_worktree_root(Path(repo_root)),
+            root,
             run_id=run_id,
             plan_rel=params.get("plan_path") or None,
             sizing_rel=params.get("sizing_path") or None,
@@ -735,4 +742,4 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     except (AskStageError, SizingFireRefused) as exc:
         return {"error": str(exc)}
-    return manifest.to_json()
+    return manifest_payload(root, manifest)

@@ -445,5 +445,6 @@ def test_degraded_host_reverify_script_emits_no_coordinator_type_and_keeps_judge
     pattern = r"agentType:\s*['\"]coordinator:"
     assert re.search(pattern, normal)
     assert not re.search(pattern, degraded)
-    assert degraded.count("agent(") == normal.count("agent(") == 3
+    assert normal.count("agent(") == 2  # delivery verifier + the merged verify leg
+    assert degraded.count("agent(") == 3  # the judge keeps its own leg where it holds Write
     assert "criterion: _judge" in degraded

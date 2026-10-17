@@ -36,7 +36,7 @@ def _run(stdin: bytes, settings_home: Path, *args: str) -> subprocess.CompletedP
 def _payload(session_id: str = "sl-smoke") -> bytes:
     return json.dumps({
         "session_id": session_id,
-        "model": {"id": "claude-opus-5", "display_name": "Opus 5"},
+        "model": {"id": "claude-opus-5-5", "display_name": "Opus 5"},
         "effort": {"level": "high"},
         "context_window": {"used_percentage": 10, "context_window_size": 200000},
     }).encode("utf-8")
@@ -66,6 +66,67 @@ def test_selftest_reports_the_sidecar_path(tmp_path):
     result = _run(b"", tmp_path, "--selftest")
     assert result.returncode == 0
     assert str(tmp_path / "state" / "context-window") in result.stdout.decode("utf-8")
+
+
+def _row(mid: str, tokens: int = 1_000_000) -> str:
+    return json.dumps({"requestId": f"r-{mid}", "message": {
+        "id": mid, "model": "claude-opus-5-5",
+        "usage": {"input_tokens": tokens, "output_tokens": 0}}}) + "\n"
+
+
+def _fixture_session(root: Path, session_id: str = "sess1") -> tuple[Path, float]:
+    from coordinator_core.usage.price_table import estimate_usd
+    main = root / f"{session_id}.jsonl"
+    rows = {main: _row("m1"),
+            root / session_id / "subagents" / "agent-a.jsonl": _row("m2"),
+            root / session_id / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl": _row("m3")}
+    for path, text in rows.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    one = estimate_usd("claude-opus-5-5", {"input_tokens": 1_000_000, "output_tokens": 0}, None)
+    assert one
+    return main, one * 3
+
+
+def _cost_payload(transcript: Path, session_id: str = "sess1") -> bytes:
+    body = json.loads(_payload(session_id))
+    body["transcript_path"] = str(transcript)
+    return json.dumps(body).encode("utf-8")
+
+
+def test_cost_segment_is_last_and_equals_the_fixture_total(tmp_path):
+    main, total = _fixture_session(tmp_path / "proj")
+    line = _run(_cost_payload(main), tmp_path / "home").stdout.decode("utf-8").strip()
+    assert line.split(" · ")[-1] == f"~${total:.2f}"
+
+
+def test_cost_segment_absent_without_transcript_path(tmp_path):
+    line = _run(_payload(), tmp_path).stdout.decode("utf-8").strip()
+    assert "~$" not in line and line.endswith("%")
+
+
+def test_cost_segment_absent_not_zero_when_session_is_unreadable(tmp_path):
+    line = _run(_cost_payload(tmp_path / "gone" / "sess1.jsonl"), tmp_path).stdout.decode("utf-8")
+    assert "~$" not in line and "Opus 5" in line
+
+
+def test_cost_segment_marks_backlog_with_plus():
+    statusline = _load_statusline()
+    cost = statusline._engine_module("coordinator_core.usage.session_cost")
+    assert cost.render({"usd": 1.234, "complete": False, "unpriced_tokens": 0, "files": 1}) == "~$1.23+"
+
+
+def test_a_raising_session_cost_still_yields_the_rest_of_the_line(tmp_path, monkeypatch):
+    statusline = _load_statusline()
+    monkeypatch.setattr(statusline, "_engine_module", lambda dotted: (_ for _ in ()).throw(ImportError(dotted)))
+    payload = {"transcript_path": str(tmp_path / "s.jsonl")}
+    assert statusline._session_cost_segment(payload, "s") is None
+
+
+def test_the_cost_cache_lands_under_the_settings_home(tmp_path):
+    main, _ = _fixture_session(tmp_path / "proj")
+    _run(_cost_payload(main), tmp_path / "home")
+    assert (tmp_path / "home" / "state" / "session-cost" / "sess1.json").is_file()
 
 
 def _load_statusline():

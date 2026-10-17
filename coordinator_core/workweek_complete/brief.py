@@ -112,7 +112,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "detect-initiative-candidates",
     "coordinator-initiative",
     "cruft-sweep",
-    "reap-claims-for-repos",
     "handoff-housekeeping",
     "check-wsc-inline-budget",
     "reassess-goal-krs",
@@ -318,11 +317,6 @@ def _build_directives(
                 if _repo_root
                 else []
             ),
-        ),
-        _directive(
-            "d_step4_counts_reap_claims",
-            cli="reap-claims-for-repos",
-            args=[],
         ),
         _directive(
             "d_step4_counts_handoff_housekeeping",

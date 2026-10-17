@@ -994,14 +994,13 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
 # 2026-07-14 claim-lock-liveness slice1 review)
 # ---------------------------------------------------------------------------
 #
-# session.reap._reap_orphaned_claims and
-# archive_handoffs._is_terminal Check 4 must agree on the SAME claim-dir path
-# convention (<common_dir>/coordinator-sessions/<claim-class>-claims/<name>) or
-# a future rename silently no-ops one side (the plan's own warning). Hoisted
-# here so both ops/session/reap.py and ops/fleet/archive_handoffs.py import
-# the same constants/helper instead of re-literaling the path segments.
-# coordinator_core.ops.session.reap re-exports _CLAIM_SUBDIRS/_sessions_dir
-# from this module for backward-compatible test imports.
+# archive_handoffs._is_terminal Check 4 and the claim readers must agree on the
+# SAME claim-dir path convention
+# (<common_dir>/coordinator-sessions/<claim-class>-claims/<name>) or a future
+# rename silently no-ops one side. Hoisted here so they import the same
+# constants/helper instead of re-literaling the path segments.
+# coordinator_core.ops.session.reap re-exports _sessions_dir from this module
+# for backward-compatible test imports.
 
 # Claim class subdirectory names (mirrors cs_reap_stale_claims no-arg coverage).
 _CLAIM_SUBDIRS: tuple = ("handoff-claims", "memo-claims", "plan-claims", "row-claims")

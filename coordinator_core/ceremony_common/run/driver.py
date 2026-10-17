@@ -70,6 +70,8 @@ DIGEST_FILE = "digest.json"
 AGENT_RESULTS_FILE = "agent-results.json"
 BRIEFING_FILE = "briefing.md"
 DONE_FILE = "finished.json"
+LOCK_RUN_FILE = "lock-run-id"
+CARRIED_PREFIX = "carried:"
 
 Dispatch = Mapping[str, Callable[..., ChildOutcome]]
 
@@ -116,6 +118,7 @@ class _Run:
     resolution: "decide.Resolution | None" = None
     halted_by: "str | None" = None
     held_by: "str | None" = None
+    carry: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -334,6 +337,41 @@ def _suite_grant(owed: Sequence[StepSpec]) -> "str | None":
     return next((s.depends_on for s in owed if s.cost_class == "suite" and s.depends_on), None)
 
 
+def _not_yet_ran(run: _Run, spec: Any, owed: Sequence[StepSpec]) -> list[StepSpec]:
+    """`owed` minus the steps that already ran: a `ran` row in this ledger, or a dead run's envelope directive.
+
+    A dead run's directive is carried into this ledger as a `carried:<run id>` row. Envelope,
+    front-door, gating and in-process steps are never carried: later steps read their output from
+    memory, which a dead run did not leave.
+    """
+    ran = {r["id"] for r in ledger.read(run.run_dir) if r["status"] == "ran"}
+    directive_ids = {str(d.get("id", "")) for d in (run.envelope or {}).get("directives") or ()}
+    runnable: list[StepSpec] = []
+    for step in owed:
+        if step.gates_next:
+            runnable.append(step)
+        elif step.id in ran:
+            continue
+        elif (
+            step.id in run.carry and step.id in directive_ids and step.id != spec.envelope_step and step.kind != "inproc"
+        ):
+            ledger.append(run.run_dir, _row(step.id, "ran", f"{CARRIED_PREFIX}{run.carry[step.id]}"))
+        else:
+            runnable.append(step)
+    return runnable
+
+
+def _dead_run_ran_ids(spec: Any, repo_root: Path, lock_run_id: str) -> set[str]:
+    """Ids of the `ran` rows in the ledger of the run that held lock `lock_run_id`; empty when it left none."""
+    dead = _find_run_dir(spec, repo_root, lock_run_id)
+    if dead is None:
+        return set()
+    try:
+        return {r["id"] for r in ledger.read(dead) if r["status"] == "ran"}
+    except (OSError, ValueError):
+        return set()
+
+
 def _run_batch(
     run: _Run,
     spec: Any,
@@ -354,7 +392,7 @@ def _run_batch(
         for step in owed:
             ledger.append(run.run_dir, _row(step.id, "halted-by-gate", run.halted_by))
     elif owed:
-        runnable = list(owed)
+        runnable = _not_yet_ran(run, spec, owed)
         if gating and run.held_by is not None:
             runnable = []
             for step in owed:
@@ -840,6 +878,14 @@ def _stub_digest(spec: Any, repo_root: Path, state: str, note: str) -> dict[str,
     )
 
 
+def _lock_run_id_of(run_dir: Path) -> "str | None":
+    """The lock run id a launch stamped before it wrote any state file, or None."""
+    try:
+        return (run_dir / LOCK_RUN_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
 def _find_run_dir(spec: Any, repo_root: Path, lock_run_id: str) -> "Path | None":
     base = ledger.run_dir(repo_root, spec.run_dir_name, "x").parent
     if not base.is_dir():
@@ -852,6 +898,8 @@ def _find_run_dir(spec: Any, repo_root: Path, lock_run_id: str) -> "Path | None"
                     return path
             except ValueError:
                 continue
+        elif _lock_run_id_of(path) == lock_run_id:
+            return path
     return None
 
 
@@ -894,6 +942,9 @@ def launch(
     base = dict(default_dispatch())
     base.update(dispatch or {})
     marker = spec.marker_path(repo_root) if spec.marker_path is not None else None
+    prior = single_flight._read_holder(
+        single_flight._lock_dir(repo_root, spec.run_dir_name) / single_flight._LOCK_NAME
+    )
     adm = single_flight.acquire(
         repo_root, ceremony=spec.run_dir_name, marker_path=marker, today=today, session_id=session_id,
     )
@@ -915,6 +966,7 @@ def launch(
     run_id = _mint_run_id()
     run_dir = ledger.run_dir(repo_root, spec.run_dir_name, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / LOCK_RUN_FILE).write_text(adm.run_id, encoding="utf-8", newline="\n")
     try:
         adm.run_dir.rmdir()
     except OSError:
@@ -924,6 +976,8 @@ def launch(
         lock_run_id=adm.run_id, day=day, date=_dt.date.fromisoformat(day), branch=_current_branch(repo_root),
         prog=prog, flags=dict(flags),
     )
+    if prior is not None and prior["run_id"] != adm.run_id and prior["day"] == day:
+        run.carry = dict.fromkeys(_dead_run_ran_ids(spec, repo_root, prior["run_id"]), prior["run_id"])
     try:
         return _launch_admitted(spec, run, adm, base, plugin_root, prog_args)
     except BaseException:

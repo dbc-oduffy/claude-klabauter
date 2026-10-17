@@ -417,8 +417,7 @@ _EMITTED_COMMIT_AUTHORITY = (
     "workflow's driver after the run)"
 )
 _EMITTED_DEFERRED_VERIFICATION_AUTHORITY = (
-    "this run's terminal scoped commit and its per-row `verify:` "
-    "`coordinator:test-runner` calls"
+    "this run's terminal scoped commit and its scoped test legs"
 )
 
 #: `.coordinator-local/subagent-share/` is already inside
@@ -3776,7 +3775,11 @@ def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequenc
     )
 
 
-def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Optional[str] = None) -> str:
+def _run_row_helper_js(
+    agent_type_host: Optional[str] = None,
+    default_plan: Optional[str] = None,
+    verify_wanted_js: str = "true",
+) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
 
@@ -3803,9 +3806,31 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Opti
     ``coordinator:test-runner`` ``agent()`` call onto ``_verifications``,
     never into this row's own returned promise -- ``compose_script`` awaits
     ``_verifications`` separately, AFTER every row's own promise settles.
+
+    ``verify_wanted_js`` is a JS expression the push is gated on. The literal
+    ``"false"`` omits the push code entirely: a terminal test or verify leg
+    re-runs a superset of every per-row scope, so a per-row ``verify:`` agent
+    would repeat a result it already decides.
     """
     verify_agent_type = _js_string_literal(
         _degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host)
+    )
+    verify_push = (
+        ""
+        if verify_wanted_js == "false"
+        else (
+            f"    if (!incomplete && verifyScope && ({verify_wanted_js})) {{\n"
+            "      _verifications.push(agent(\n"
+            "        `Run and report on the scoped test target(s) for ${id}: ` + "
+            "verifyScope.join(', ') + '. ' + "
+            f"{_js_string_literal(_test_runner_clause())},\n"
+            "        { "
+            f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
+            f"agentType: {verify_agent_type}, {_model_opt(_TEST_AGENT_TYPE)}, "
+            "schema: _ROW_VERIFY_SCHEMA }\n"
+            "      ));\n"
+            "    }\n"
+        )
     )
     return (
         "  const _falsifierBroken = new Map();\n"
@@ -3920,17 +3945,8 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Opti
         "        _halted = id;\n"
         "      }\n"
         "    }\n"
-        "    if (!incomplete && verifyScope) {\n"
-        "      _verifications.push(agent(\n"
-        "        `Run and report on the scoped test target(s) for ${id}: ` + "
-        "verifyScope.join(', ') + '. ' + "
-        f"{_js_string_literal(_test_runner_clause())},\n"
-        "        { "
-        f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
-        f"agentType: {verify_agent_type}, {_model_opt(_TEST_AGENT_TYPE)}, "
-        "schema: _ROW_VERIFY_SCHEMA }\n"
-        "      ));\n"
-        "    }\n"
+        + verify_push
+        + (
         # A row whose only write is gitignored (a verification row's evidence
         # file) finishes with no commit; _finished keeps it from reading as a
         # run that changed nothing, so it still reaches the judge.
@@ -3940,6 +3956,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None, default_plan: Opti
         "    }\n"
         "    return result;\n"
         "  }"
+        )
     )
 
 
@@ -3968,10 +3985,8 @@ _CHECKPOINT_COMMIT_SCHEMA = {
 }
 
 
-#: Script-scope binding of the run's base sha, resolved at the script's first step
-#: (``_run_base_blocks``), not at emit. Parts of an over-cap inventory are all emitted
-#: before any fires; an emit-time base makes part N's checkpoint guard and seam
-#: landed-range treat parts 1..N-1's commits as foreign.
+#: Script-scope binding of the run's base sha: the emit-time sha on the emit route
+#: (``_emit_run_base_blocks``), the stage manifest's ``head_sha`` on the ask route.
 _RUN_BASE_VAR = "_runBase"
 
 
@@ -4010,51 +4025,14 @@ def _checkpoint_trailer_js(
     return expr
 
 
-_RUN_BASE_SCHEMA = json.dumps(
-    {"type": "object", "properties": {"sha": {"type": "string"}}, "required": ["sha"]},
-    sort_keys=True,
-)
-
-
-def _run_base_blocks(
-    emit_sha: str,
-    repo_anchor: Optional[str],
-    *,
-    declared: bool = False,
-    unreadable_js: Optional[str] = None,
-) -> list[str]:
-    """First step of the script: ``_runBase`` is the repo's HEAD when the script
-    FIRES. ``emit_sha`` is the fallback for an agent that fails or answers
-    malformed. Resume replays this call from the journal (same prompt, same
-    position), so a resumed run keeps its first fire's base.
-    ``declared`` re-observes a ``_runBase`` the caller already declared (the ask route,
-    whose checkpoint machinery precedes execute); ``unreadable_js`` replaces the throw
-    when no base is known."""
-    decl = [] if declared else [f"  let {_RUN_BASE_VAR} = {_js_string_literal(emit_sha)};"]
-    missing = (
-        [unreadable_js]
-        if unreadable_js
-        else [
-            f"  if (!{_RUN_BASE_VAR}) throw new Error('run base sha unreadable and none known at emit: "
-            "checkpoint commits would carry no Checkpoint-Base');"
-        ]
-    )
-    root = f"'git -C ' + {_REPO_ROOT_VAR} + ' rev-parse HEAD'" if repo_anchor else "'git rev-parse HEAD'"
-    prompt = (
-        "'Run base. Run exactly `' + " + root + " + '` and change nothing. "
-        "Return sha: its 40-hex output, verbatim.'"
-    )
+def _emit_run_base_blocks(emit_sha: str) -> list[str]:
+    """Emit-route base: ``_runBase`` is the emit-time sha literal; no agent reads HEAD. Used only by
+    `compose_script`'s runtime_base branch; the ask route takes the stage manifest's `head_sha`."""
     return [
-        *decl,
-        "  try {",
-        f"    const _rb = await agent({prompt}, {{ label: 'run-base', effort: 'low', "
-        f"{_model_opt('', 'haiku')}, schema: {_RUN_BASE_SCHEMA} }});",
-        "    const _rbSha = _rb && typeof _rb.sha === 'string' ? _rb.sha.trim() : '';",
-        f"    if (/^[0-9a-f]{{40}}$/.test(_rbSha)) {_RUN_BASE_VAR} = _rbSha;",
-        f"    else log('Run base unreadable at fire; using the emit-time sha ' + {_RUN_BASE_VAR});",
-        f"  }} catch (e) {{ log('Run base agent failed; using the emit-time sha ' + {_RUN_BASE_VAR}); }}",
-        *missing,
-        f"  log('Run base sha (observed at fire): ' + {_RUN_BASE_VAR});",
+        f"  let {_RUN_BASE_VAR} = {_js_string_literal(emit_sha)};",
+        f"  if (!{_RUN_BASE_VAR}) throw new Error('run base sha unreadable and none known at emit: "
+        "checkpoint commits would carry no Checkpoint-Base');",
+        f"  log('Run base sha (emit-time): ' + {_RUN_BASE_VAR});",
     ]
 
 
@@ -4952,7 +4930,7 @@ def compose_script(
         for p in _widen_with_test_candidates(_declared_paths(row), repo_root)
     ]
     if runtime_base:
-        body_blocks.extend(_run_base_blocks(run_base_sha or "", repo_anchor))
+        body_blocks.extend(_emit_run_base_blocks(run_base_sha or ""))
     elif run_base_sha:
         body_blocks.append(
             f"  log({_js_string_literal(f'Run base sha (provided): {run_base_sha}')});"
@@ -5052,6 +5030,7 @@ def compose_script(
                 prior_run_base=prior_run_base,
             )
         )
+        row_helper_index = len(body_blocks)
         body_blocks.append(_run_row_helper_js(agent_type_host, plan_path if seam_leg else None))
 
     gate_commands_all = _distinct_gate_commands(flat_rows, plan_context)
@@ -5564,6 +5543,10 @@ def compose_script(
             test_var = _TEST_RESULT_VAR
 
     if not review_only:
+        if test_var is not None:
+            body_blocks[row_helper_index] = _run_row_helper_js(
+                agent_type_host, plan_path if seam_leg else None, "false"
+            )
         body_blocks.append(
             "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) { _halted = _r; _haltedByHold = true; } }"
         )
@@ -6142,11 +6125,15 @@ def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
 
 class ResumeLanded(NamedTuple):
     """``rows``: ids of the plan already landed. ``ledger_run``: run id of the newest ledger-check
-    halt commit naming the plan, else None. ``ledger_sha``: that same commit's full 40-hex sha."""
+    halt commit naming the plan, else None. ``ledger_sha``: that same commit's full 40-hex sha.
+    ``run_halts``: ``{run_id: (Lands-Chunks ids, newest sha)}`` of every ledger-check halt commit
+    that names the plan or carries no ``Halt-Plan:`` trailer (a halt commit the ``Halt-Plan:``
+    match above cannot see), newest run first; ``sizing_fire._carry`` walks it for the halt chain."""
 
     rows: frozenset
     ledger_run: Optional[str]
     ledger_sha: Optional[str] = None
+    run_halts: Mapping = {}
 
 
 def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
@@ -6158,7 +6145,8 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     """Row ids of ``plan`` already landed: checkpoint commits (as ``checkpoint_landed_state``) plus
     the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
     ``Halted-By:`` is ``ledger-check``; and the run id parsed from the newest such halt commit's
-    subject, with its sha. One ``git log`` spawn; empty when git cannot answer."""
+    subject, with its sha; ``run_halts`` also covers halt commits with no ``Halt-Plan:`` trailer.
+    One ``git log`` spawn; empty when git cannot answer."""
     from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
     from coordinator_core.git.run import run_git
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
@@ -6166,6 +6154,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     result = run_git(
         [
             "log", "-n", "500", "--grep=^Checkpoint-Plan: ", f"--grep=^{HALT_PLAN_TRAILER}: ",
+            "--grep=^warp: record halted ",
             "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
             f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
@@ -6178,6 +6167,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     ids: set = set()
     ledger_run: Optional[str] = None
     ledger_sha: Optional[str] = None
+    run_halts: dict = {}
     for record in result.stdout.split("\x1e"):
         parts = record.strip("\r\n").split("\x1f")
         if len(parts) < 6:
@@ -6185,14 +6175,20 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
         subject, checkpoint, halt_plan, halted_by, chunks, sha = parts[:6]
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
             ids.update(plan_commit_row_ids(subject))
-        if any(v.strip() == "ledger-check" for v in halted_by.split("\x1d")) and any(
-            checkpoint_plan_matches(v, plan) for v in halt_plan.split("\x1d") if v.strip()
-        ):
-            ids.update(i for i in re.split(r"[,\s\x1d]+", chunks) if i)
+        is_ledger_check = any(v.strip() == "ledger-check" for v in halted_by.split("\x1d"))
+        named = [v for v in halt_plan.split("\x1d") if v.strip()]
+        names_plan = any(checkpoint_plan_matches(v, plan) for v in named)
+        chunk_ids = {i for i in re.split(r"[,\s\x1d]+", chunks) if i}
+        run = halted_run_id(subject)
+        if is_ledger_check and names_plan:
+            ids.update(chunk_ids)
             if ledger_run is None:
-                ledger_run = halted_run_id(subject)
+                ledger_run = run
                 ledger_sha = sha.strip() or None
-    return ResumeLanded(frozenset(ids), ledger_run, ledger_sha)
+        if run is not None and is_ledger_check and (names_plan or not named):
+            landed, first_sha = run_halts.get(run, (frozenset(), None))
+            run_halts[run] = (landed | chunk_ids, first_sha or sha.strip() or None)
+    return ResumeLanded(frozenset(ids), ledger_run, ledger_sha, run_halts)
 
 
 def deleted_in_range(
@@ -6240,9 +6236,10 @@ def _repo_has_branches(repo_root) -> bool:
     unborn or non-repo directory has none, so its emit degrades rather than refuses."""
     common = resolve_git_common_dir(repo_root)
     try:
-        return (common / "packed-refs").is_file() or any(
-            p.is_file() for p in (common / "refs" / "heads").rglob("*")
-        )
+        if (common / "packed-refs").is_file():
+            return True
+        with os.scandir(common / "refs" / "heads") as entries:
+            return next(entries, None) is not None
     except OSError:
         return False
 

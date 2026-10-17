@@ -114,11 +114,16 @@ from coordinator_core.contract.decision_object.judgment import (
 from coordinator_core.completion_receipts.day import receipts_for_day
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.repo_root import git_common_dir
-from coordinator_core.op_budget_suspension import is_suspended, refusal_message
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.goal_close_day import collect_open_day_goals
 from coordinator_core.ops.requirement_register import StallReport, stall_judgment_point, stall_report
+from coordinator_core.ops.workday_complete_backfill_scan import (
+    DEFAULT_LOOKBACK as LOOKBACK_DAYS,
+    GapScan,
+    gap_summary_lines,
+    scan as backfill_scan,
+)
 from coordinator_core.ops.workday_complete_step2_5_dirty_tree import (
     classify_dirty_tree,
 )
@@ -138,7 +143,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workday-complete-args-and-validate",
     "workday-complete-reconcile",
     "workday-complete-step2_5-dirty-tree",
-    "reap-claims-for-repos",
     "handoff-housekeeping",
     "workday-complete-step3-consolidate",
     "workday-complete-backfill-scan",
@@ -190,6 +194,76 @@ def _compute_register_stall() -> StallReport:
         return stall_report(Path(_main_worktree_root_for_directive()), date.today())
     except Exception:  # noqa: BLE001 - never fail the ceremony
         return StallReport()
+
+
+#: Gap rows above which the backfill fan-out needs a PM glance.
+BACKFILL_CAP_ROWS = 10
+
+
+def _compute_backfill_scan() -> tuple[GapScan, str]:
+    """Read-only pre-A0 scan of the main worktree: `(scan, "")`, or `(empty scan, narration line)`
+    when the scan raises, so the brief degrades to no cap point and never fails the ceremony."""
+    try:
+        return backfill_scan(_main_worktree_root_for_directive(), LOOKBACK_DAYS), ""
+    except Exception as exc:  # noqa: BLE001 - never fail the ceremony
+        return GapScan(), (
+            f"Backfill scan unavailable ({exc!r}); jp_step3_5_backfill_cap not emitted, "
+            "run workday-complete-backfill-scan by hand."
+        )
+
+
+def _backfill_cap_live(scan: Optional[GapScan]) -> bool:
+    """True when the cap point is live. `None` (scan not probed) keeps the point."""
+    if scan is None:
+        return True
+    return len(scan.rows) > BACKFILL_CAP_ROWS or bool(scan.older_gaps)
+
+
+def _older_gaps_line(older_gaps: list[str]) -> str:
+    days = sorted(older_gaps)
+    return f"older gaps: {len(days)} day(s), {days[0]}..{days[-1]} (before the {LOOKBACK_DAYS}-day window)"
+
+
+def _backfill_cap_judgment_point(scan: Optional[GapScan]) -> dict[str, Any]:
+    """`jp_step3_5_backfill_cap`; `scan` is the pre-A0 read, `None` when not probed."""
+    if scan is None:
+        question = (
+            "Backfill scan may find more than "
+            f"{BACKFILL_CAP_ROWS} pre-A0 gap rows. Backfill all, or a bounded subset?"
+        )
+        evidence = f"workday-complete-backfill-scan --lookback {LOOKBACK_DAYS} (pre-A0 gap rows)"
+    else:
+        question = (
+            f"Backfill scan found {len(scan.rows)} pre-A0 gap row(s) in the last {LOOKBACK_DAYS} days"
+            + (f" and {len(scan.older_gaps)} older uncovered day(s)" if scan.older_gaps else "")
+            + ". Backfill all, or a bounded subset?"
+        )
+        lines = gap_summary_lines(scan.rows)
+        if scan.older_gaps:
+            lines.append(_older_gaps_line(scan.older_gaps))
+        evidence = (
+            f"workday-complete-backfill-scan --lookback {LOOKBACK_DAYS} (pre-A0):\n" + "\n".join(lines)
+        )
+    return build_judgment_point(
+        {
+            "disposition": "bounded_subset",
+            "rationale": (
+                "A 10+-day gap is a signal worth a human glance, not a "
+                "silent 10-agent burst; default to the PM-named bounded "
+                "subset over an unbounded auto-fan."
+            ),
+        },
+        id="jp_step3_5_backfill_cap",
+        question=question,
+        dispositions=[
+            build_disposition("backfill_all", resolves=["d_step3_5_backfill_phase_b"]),
+            build_disposition("bounded_subset", resolves=["d_step3_5_backfill_phase_b"]),
+        ],
+        evidence=evidence,
+        reason="pm-scoped-tradeoff",
+        revalidate_at_dispatch=True,
+        round_trip="terminal",
+    )
 
 
 def _compute_completion_receipts_gate(for_date: Optional[str]) -> dict[str, Any]:
@@ -296,25 +370,6 @@ def _directive(
     }
 
 
-# Directive CLIs whose engine op can be suspended. The CLI door swallows the
-# dispatcher's refusal on stderr and exits 0, so without this the ceremony reports
-# the step as done while it reaped nothing.
-_DIRECTIVE_CLI_OPS = {"reap-claims-for-repos": "session.reap_claims_for_repos"}
-
-
-def _suspended_directive_notice(directives: list[dict[str, Any]]) -> str:
-    """One narration line per directive whose op is suspended; "" when none."""
-    lines = []
-    for directive in directives:
-        op = _DIRECTIVE_CLI_OPS.get(directive["cli"])
-        if op is not None and is_suspended(op):
-            lines.append(
-                f"SUSPENDED, NO-OP: directive {directive['id']} did nothing. "
-                f"{refusal_message(op)}"
-            )
-    return " ".join(lines)
-
-
 def _build_directives(
     decisions: dict[str, Any],
     open_day_goals: dict[str, Any],
@@ -322,6 +377,7 @@ def _build_directives(
     for_date: Optional[str] = None,
     only_mode: bool = False,
     scope_summary: Optional[str] = None,
+    backfill_cap_live: bool = True,
 ) -> list[dict[str, Any]]:
     """Tier-1 (mechanical, no open question) directive entries — one per
     collapsed workday-complete.md step: 1/1.5/2.5/2.6/2.65/3/3.5-PhaseA0/4a/6/
@@ -342,8 +398,8 @@ def _build_directives(
     `_build_judgment_points`) found the tree genuinely ambiguous — a clean
     tree leaves `d_step3_consolidate` ungated (`depends_on=None`), since
     there is no live ask for it to wait on. The backfill Phase-B dispatch
-    (part of Step 3.5) waits on the backfill-cap PM ask when the gap-row
-    count exceeds the cap, and `d_goal_close_day` waits on
+    (part of Step 3.5) waits on the backfill-cap PM ask only while
+    `backfill_cap_live` (`_backfill_cap_live`: the point is emitted), and `d_goal_close_day` waits on
     `jp_day_goal_closeout`. Every other directive is `depends_on: None` —
     it fires unconditionally, per the halt contract's "a mechanical
     directive not gated on any judgment point always fires" rule.
@@ -438,11 +494,6 @@ def _build_directives(
             args=[],
         ),
         _directive(
-            "d_step2_66_reap_claims",
-            cli="reap-claims-for-repos",
-            args=[],
-        ),
-        _directive(
             "d_step2_67_handoff_housekeeping",
             cli="handoff-housekeeping",
             args=[],
@@ -462,7 +513,7 @@ def _build_directives(
             cli="workday-complete-backfill-scan",
             args=[
                 "--lookback",
-                "14",
+                str(LOOKBACK_DAYS),
                 "--repo-root",
                 _main_worktree_root_for_directive(),
             ],
@@ -495,7 +546,7 @@ def _build_directives(
             )
             + (["--only-mode"] if for_date and only_mode else [])
             + ([f"--scope-summary={scope_summary}"] if for_date and scope_summary else []),
-            depends_on="jp_step3_5_backfill_cap",
+            depends_on="jp_step3_5_backfill_cap" if backfill_cap_live else None,
             stdin_from="d_step3_5_backfill_scan",
         ),
         _directive(
@@ -563,6 +614,24 @@ def _build_directives(
     return directives
 
 
+_GOAL_PREVIEW_LIMIT = 10
+_GOAL_TEXT_CUT = 80
+
+
+def _goal_preview(rows: list[dict[str, Any]]) -> str:
+    """First `_GOAL_PREVIEW_LIMIT` rows as `<goal_id>: <text cut>`, then a
+    `+K more` tail. The JP carries a preview; `goal.close_day` returns all."""
+    if not rows:
+        return "none"
+    lines = [
+        f"{row.get('goal_id', '?')}: {str(row.get('text', '?'))[:_GOAL_TEXT_CUT]}"
+        for row in rows[:_GOAL_PREVIEW_LIMIT]
+    ]
+    if len(rows) > _GOAL_PREVIEW_LIMIT:
+        lines.append(f"+{len(rows) - _GOAL_PREVIEW_LIMIT} more")
+    return "; ".join(lines)
+
+
 def _build_day_goal_closeout_judgment_point(open_day_goals: dict[str, Any]) -> dict[str, Any]:
     """C4's conditional judgment point — see `_build_directives`'s docstring
     for why this one (unlike every point below) is only ever constructed
@@ -577,21 +646,15 @@ def _build_day_goal_closeout_judgment_point(open_day_goals: dict[str, Any]) -> d
     """
     today_rows = open_day_goals.get("today") or []
     stale_rows = open_day_goals.get("stale") or []
-    today_desc = (
-        "; ".join(f"{row.get('goal_id', '?')}: {row.get('text', '?')}" for row in today_rows)
-        or "none"
-    )
-    stale_desc = (
-        "; ".join(f"{row.get('goal_id', '?')}: {row.get('text', '?')}" for row in stale_rows)
-        or "none"
-    )
+    today_desc = _goal_preview(today_rows)
+    stale_desc = _goal_preview(stale_rows)
     return build_judgment_point(
         None,
         id="jp_day_goal_closeout",
         question=(
             f"{len(today_rows)} day goal(s) due today and {len(stale_rows)} "
             "stale day goal(s) from prior days are open on the goals wire. "
-            "Record a done/dropped outcome for each in "
+            "Record a done/dropped outcome for each in the top-level key "
             "decisions['day_goal_closeout'] = {goal_id: 'done'|'dropped'} "
             "(any value other than exactly 'done' closes 'dropped' — DEC-1), "
             "or skip for now?"
@@ -600,7 +663,11 @@ def _build_day_goal_closeout_judgment_point(open_day_goals: dict[str, Any]) -> d
             build_disposition("record", resolves=["d_goal_close_day"]),
             build_disposition("skip", resolves=[]),
         ],
-        evidence=f"goal.close_day today=[{today_desc}] stale=[{stale_desc}]",
+        evidence=(
+            f"today={len(today_rows)} stale={len(stale_rows)}; "
+            f"today=[{today_desc}] stale=[{stale_desc}]; "
+            "source: goal.close_day (open day goals, today and stale)"
+        ),
         reason="insufficient-evidence",
         revalidate_at_dispatch=True,
         round_trip="terminal",
@@ -612,8 +679,13 @@ def _build_judgment_points(
     dirty_tree_verdict: dict[str, Any],
     for_date: Optional[str] = None,
     register_stall: Optional[StallReport] = None,
+    backfill_scan_result: Optional[GapScan] = None,
 ) -> list[dict[str, Any]]:
     """Tier-2/3 (open-question) judgment-point entries.
+
+    `backfill_scan_result` is `brief()`'s one pre-A0 scan: `jp_step3_5_backfill_cap` is
+    emitted only when it holds more than `BACKFILL_CAP_ROWS` rows or any older gap. `None`
+    (not probed) keeps the point with generic evidence.
 
     - `jp_requirement_register_stall` — reportable, appended only when
       `register_stall` is non-empty.
@@ -638,7 +710,8 @@ def _build_judgment_points(
       `reason="insufficient-evidence"`, not via
       `build_untrusted_gate_judgment_point`.
     - `jp_step3_5_backfill_cap` — tier-2, recommendation required (the
-      backfill-cap PM ask: auto-fan the full wave, or a bounded subset).
+      backfill-cap PM ask: auto-fan the full wave, or a bounded subset),
+      conditional on the pre-A0 scan (see `backfill_scan_result`).
     - `jp_step4b_analyst_dispatch` / `jp_step4_5_clustering_dispatch` — tier-2, recommendation required
       (Sonnet-dispatch decisions).
     - `jp_step4e_health_ledger_new_rows` — tier-2, recommendation required
@@ -718,32 +791,9 @@ def _build_judgment_points(
                 round_trip="terminal",
             )
         )
+    if _backfill_cap_live(backfill_scan_result):
+        points.append(_backfill_cap_judgment_point(backfill_scan_result))
     points += [
-        build_judgment_point(
-            {
-                "disposition": "bounded_subset",
-                "rationale": (
-                    "A 10+-day gap is a signal worth a human glance, not a "
-                    "silent 10-agent burst; default to the PM-named bounded "
-                    "subset over an unbounded auto-fan."
-                ),
-            },
-            id="jp_step3_5_backfill_cap",
-            question=(
-                "Backfill scan found more than 10 skipped days (post-Phase-A0 "
-                "true gaps). Backfill all, or a bounded subset?"
-            ),
-            dispositions=[
-                build_disposition("backfill_all", resolves=["d_step3_5_backfill_phase_b"]),
-                build_disposition(
-                    "bounded_subset", resolves=["d_step3_5_backfill_phase_b"]
-                ),
-            ],
-            evidence="workday-complete-backfill-scan --lookback 14 (post-A0 row count > 10)",
-            reason="pm-scoped-tradeoff",
-            revalidate_at_dispatch=True,
-            round_trip="terminal",
-        ),
         build_judgment_point(
             {
                 "disposition": "dispatch",
@@ -926,6 +976,7 @@ def brief(
     try:
         open_day_goals = _compute_open_day_goals()
         dirty_tree_verdict = _compute_dirty_tree_verdict()
+        backfill_scan_result, backfill_scan_note = _compute_backfill_scan()
         directives = _build_directives(
             decisions if decisions is not None else {},
             open_day_goals,
@@ -933,12 +984,14 @@ def brief(
             for_date=for_date,
             only_mode=only_mode,
             scope_summary=scope_summary,
+            backfill_cap_live=_backfill_cap_live(backfill_scan_result),
         )
         judgment_points = _build_judgment_points(
             open_day_goals,
             dirty_tree_verdict,
             for_date=for_date,
             register_stall=_compute_register_stall(),
+            backfill_scan_result=backfill_scan_result,
         )
         recommendation_carrying = [
             point for point in judgment_points if point.get("recommendation") is not None
@@ -961,9 +1014,8 @@ def brief(
         "assembler, so it is also never a directives[] entry — see this "
         "module's negative-spec."
     )
-    suspended_notice = _suspended_directive_notice(directives)
-    if suspended_notice:
-        narration = f"{narration} {suspended_notice}"
+    if backfill_scan_note:
+        narration = f"{narration} {backfill_scan_note}"
     reported_narration_suffix = _reported_narration_suffix(reported_judgment_points)
     if reported_narration_suffix:
         narration = f"{narration} {reported_narration_suffix}"

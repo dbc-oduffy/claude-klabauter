@@ -572,6 +572,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
         ("_dispatch_ledger_delivered",),
     ),
+    # Enrolled 2026-10-17: the workday-complete brief calls `scan` in-process (pre-A0 gap read).
+    "bin.workday_complete_backfill_scan.scan": (
+        "coordinator_core/ops/workday_complete_backfill_scan.py",
+        ("scan",),
+    ),
     "ops.discover_working_repos": (
         "coordinator_core/ops/discover_working_repos.py",
         ("_tier_a5", "_publish_mirror_keys"),
@@ -1343,10 +1348,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/queue_append.py",
         ("_queue_append_handler",),
     ),
-    "session.reap_claims_for_repos": (
-        "coordinator_core/ops/session/reap.py",
-        ("_handler_reap_claims_for_repos",),
-    ),
     "baton.carry_forward": (
         "coordinator_core/ops/baton_carry_forward.py",
         ("_carry_forward",),
@@ -1799,6 +1800,43 @@ class _Legitimation(typing.NamedTuple):
 #: correctly-counted site permanently undischargeable, and admitting both silently exempts a site
 #: nothing counts. Op-keying is what lets each pair carry its own verdict.
 _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
+    (
+        "bin.workday_complete_backfill_scan.scan",
+        "coordinator_core/ops/workday_complete_backfill_scan.py",
+        "_run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/workday_complete/tests/test_backfill_cap_point.py",
+        executed="Measured 2026-10-17: `for-each-ref` and `log` under the counter of "
+        "`test_brief_scan_spawn_count_is_pinned` (`assert counts == {\"git\": SCAN_GIT_SPAWNS, ...}`).",
+    ),
+    (
+        "bin.workday_complete_backfill_scan.scan",
+        "coordinator_core/ops/changelog_ops.py",
+        "_batch_resolve_commits",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/workday_complete/tests/test_backfill_cap_point.py",
+        executed="Measured 2026-10-17: the batched `cat-file --batch-check` under the counter of "
+        "`test_brief_scan_spawn_count_is_pinned`.",
+    ),
+    (
+        "bin.workday_complete_backfill_scan.scan",
+        "coordinator_core/_claude_klabauter_root.py",
+        "_machine_local_get",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/workday_complete/tests/test_backfill_cap_point.py",
+        executed="Measured 2026-10-17: the interpreter start, reached only when the scanned root "
+        "is the claude home, under the counter of `test_brief_scan_in_the_claude_home_adds_the_"
+        "machine_local_interpreter_spawn` (`python == CLAUDE_HOME_EXTRA_SPAWNS`).",
+    ),
     (
         "bin.reap_integrated_review_findings.tracked_untracked_split",
         "coordinator/bin/reap-integrated-review-findings.py",

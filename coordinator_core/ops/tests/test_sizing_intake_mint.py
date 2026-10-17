@@ -69,9 +69,32 @@ def test_em_brief_is_optional_and_never_blocks(repo, brief, expect):
     assert _doc(repo, out)["em_analysis"].get("em_brief") == expect
 
 
-def test_refuses_with_no_recorded_turn(repo):
+def test_no_recorded_turn_mints_relayed(repo):
+    out = _mint(repo, source="relayed", sender="peer-x", relayed_text="please do X")
+    assert out["exit_code"] == 0 and out["turn"] is None and out["provenance"] == "relayed"
+    doc = _doc(repo, out)
+    assert "pm_verbatims" not in doc
+    assert doc["em_analysis"]["provenance"] == "relayed"
+    assert doc["em_analysis"]["relayed_text"] == "please do X"
+    assert doc["em_analysis"]["relayed_sender"] == "peer-x"
+    assert doc["intent"] == "please do X"
+    assert validate_frontmatter(doc, mod._SIZING_SCHEMA_PATH) == []
+
+
+def test_turnless_ask_without_source_is_relayed(repo):
     out = _mint(repo)
-    assert out["exit_code"] == 1 and "no recorded PM turn" in out["error"]
+    assert out["exit_code"] == 0 and out["provenance"] == "relayed"
+    assert _doc(repo, out)["em_analysis"]["relayed_sender"] == "unknown"
+
+
+def test_relayed_source_ignores_a_recorded_turn_and_leaves_the_mark(repo):
+    _turns("pm words")
+    out = _mint(repo, source="relayed", sender="peer", relayed_text="peer ask")
+    assert out["exit_code"] == 0 and out["turn"] is None
+    assert "pm_verbatims" not in _doc(repo, out)
+    pm = _mint(repo, name="pm one", source="pm")
+    assert pm["exit_code"] == 0 and pm["turn"] == 0 and pm["provenance"] == "pm-verbatim"
+    assert [v["text"] for v in _doc(repo, pm)["pm_verbatims"]] == ["pm words"]
 
 
 def test_refuses_an_existing_path(repo, monkeypatch):

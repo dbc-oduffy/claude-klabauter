@@ -394,7 +394,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """session.record_pickup — record a `/pickup` consume event, append-only/versioned.
 
     Op scope "none" (fleet-generic per-repo target-resolution convention —
-    mirrors session.reap_claims_for_repos / cartography.churn precedent): the
+    mirrors cartography.churn precedent; session.reap_claims_for_repos, also
+    cited once, was deleted under DR-344's kill bar): the
     `repo_root` handler arg is unused (always None for scope-"none" ops); the
     real target repo is the REQUIRED `repo_root` wire param, since a `/pickup`
     may consume a handoff in a repo different from claude-klabauter's own dispatching

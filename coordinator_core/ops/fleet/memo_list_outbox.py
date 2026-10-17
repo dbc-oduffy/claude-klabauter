@@ -52,11 +52,9 @@ Negative-spec:
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._outbox_enum import (
     build_dry_run_result,
@@ -64,8 +62,6 @@ from coordinator_core.ops.fleet._outbox_enum import (
     main_worktree_root,
     merged_outbox_drafts,
 )
-
-_LOG = logging.getLogger(__name__)
 
 _MODE = "list_outbox"
 
@@ -89,6 +85,10 @@ def _validate_list_outbox_params(params: dict):
 
 
 def _candidate_for_draft(draft_path: Path) -> dict:
+    # Deferred: the primitives module pulls hashlib, and an empty outbox (the
+    # common case) never parses a draft.
+    from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+
     topic = draft_path.stem
     candidate = {
         "id": str(draft_path),

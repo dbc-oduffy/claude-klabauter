@@ -169,14 +169,38 @@ def test_malformed_submissions_refuse_without_writing(repo, params):
     assert _snapshot(repo) == before
 
 
-def test_no_recorded_pm_turn_refuses_before_any_write(tmp_path, monkeypatch):
+def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
-    before = _snapshot(tmp_path)
-    out = mod.fanout({"asks": [{"ask": "x"}], "session_id": SID}, tmp_path)
-    assert out["exit_code"] == 1 and "PM turn" in out["error"]
-    assert _snapshot(tmp_path) == before
+    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
+    out = mod.fanout({"asks": [{"ask": "fix x", "sender": "peer-a", "writes": ["x"]}], "session_id": SID}, tmp_path)
+    assert out["exit_code"] == 0, out
+    doc = _sizing(tmp_path, out["ready"][0]["sizing"])
+    assert "pm_verbatims" not in doc
+    assert doc["intent_source"] == "em-elaborated"
+    assert c.slice_ask_source(doc) == "relayed"
+    assert doc["em_analysis"][mod.RELAYED_TEXT_KEY] == "fix x"
+    assert doc["em_analysis"][mod.RELAYED_FROM_KEY] == "peer-a"
+
+
+def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(repo):
+    out = _go(repo, {"sender": "peer-b", "asks": [
+        {"ask": "fix a", "source": "relayed", "relayed_text": "peer said: fix a", "writes": ["a"]},
+        {"ask": "fix b", "writes": ["b"]},
+    ]})
+    assert out["exit_code"] == 0, out
+    relayed, pm = (_sizing(repo, r["sizing"]) for r in out["ready"])
+    assert "pm_verbatims" not in relayed
+    assert relayed["em_analysis"][mod.RELAYED_TEXT_KEY] == "peer said: fix a"
+    assert relayed["em_analysis"][mod.RELAYED_FROM_KEY] == "peer-b"
+    assert [v["text"] for v in pm["pm_verbatims"]] == [VERBATIM]
+    assert c.slice_ask_source(pm) is None
+
+
+def test_blank_sender_refuses(repo):
+    out = _go(repo, {"asks": [{"ask": "x", "sender": " "}]})
+    assert out["exit_code"] == 1
 
 
 def test_sized_through_turn_moves_once_after_the_last_slice(repo):

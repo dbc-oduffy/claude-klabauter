@@ -16,7 +16,7 @@ Result bindings (C13 reads these names verbatim): ``_reviewPrep``,
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from coordinator_core.ops.review_mint.roster import (
     _TSHIRT_ORDER,
@@ -1546,6 +1546,57 @@ def criterion_judge_brief(
     return prompt, schema
 
 
+class CriterionJudgeParts(NamedTuple):
+    """The judge call as data: what ``compose_criterion_judge`` renders into an ``agent(...)``
+    expression and what an Agent-tool dispatch needs. ``model``/``effort`` are ``None`` when the
+    roster pins none; ``schema_literal`` is the exact JSON text the script embeds."""
+
+    agent_type: str
+    model: Optional[str]
+    effort: Optional[str]
+    prompt: str
+    schema_literal: str
+
+    @property
+    def schema(self) -> dict:
+        return json.loads(self.schema_literal)
+
+
+def criterion_judge_parts(
+    review: ExecuteReview,
+    *,
+    stage_schemas: Dict[str, dict],
+    plan_path: str,
+    run_base_sha: str,
+    falsifier: Optional[dict] = None,
+    prompt_head: str = "",
+    criterion: Optional[OperativeCriterion] = None,
+    host_degraded: bool = False,
+    evidence_path: Optional[str] = None,
+    evidence: Optional[JudgeEvidence] = None,
+    em_owned_rows: Optional[List[str]] = None,
+    ledger_charter: Optional[str] = None,
+    ledger_schema: Optional[dict] = None,
+) -> Optional[CriterionJudgeParts]:
+    """The roster judge's call parts, or ``None`` when the roster declares no judge. The one
+    source both ``compose_criterion_judge`` and an Agent-tool brief render from."""
+    if review.judge is None:
+        return None
+    judge_type, prompt = _criterion_judge_prompt(
+        review, plan_path=plan_path, run_base_sha=run_base_sha, falsifier=falsifier,
+        prompt_head=prompt_head, criterion=criterion, host_degraded=host_degraded,
+        evidence_path=evidence_path, evidence=evidence, em_owned_rows=em_owned_rows,
+        ledger_charter=ledger_charter,
+    )
+    schema_literal = _widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas))
+    if ledger_schema is not None:
+        merged = json.loads(schema_literal)
+        merged.setdefault("properties", {}).update(ledger_schema.get("properties", {}))
+        merged["required"] = sorted({*merged.get("required", []), *ledger_schema.get("required", [])})
+        schema_literal = json.dumps(merged, sort_keys=True)
+    return CriterionJudgeParts(judge_type, review.judge.model, review.judge.effort, prompt, schema_literal)
+
+
 def compose_criterion_judge(
     review: ExecuteReview,
     *,
@@ -1575,28 +1626,23 @@ def compose_criterion_judge(
     appended to the prompt, and ``ledger_schema`` (an object schema whose properties carry
     ``items``, ``all_of_pm_ask`` and ``conflicts``) is merged into the widened result schema,
     with its ``required`` fields required. Both ``None`` leaves the call byte-identical."""
-    if review.judge is None:
-        return None
-    judge_type, prompt = _criterion_judge_prompt(
-        review, plan_path=plan_path, run_base_sha=run_base_sha, falsifier=falsifier,
-        prompt_head=prompt_head, criterion=criterion, host_degraded=host_degraded,
+    parts = criterion_judge_parts(
+        review, stage_schemas=stage_schemas, plan_path=plan_path, run_base_sha=run_base_sha,
+        falsifier=falsifier, prompt_head=prompt_head, criterion=criterion, host_degraded=host_degraded,
         evidence_path=evidence_path, evidence=evidence, em_owned_rows=em_owned_rows,
-        ledger_charter=ledger_charter,
+        ledger_charter=ledger_charter, ledger_schema=ledger_schema,
     )
-    schema_literal = _widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas))
-    if ledger_schema is not None:
-        merged = json.loads(schema_literal)
-        merged.setdefault("properties", {}).update(ledger_schema.get("properties", {}))
-        merged["required"] = sorted({*merged.get("required", []), *ledger_schema.get("required", [])})
-        schema_literal = json.dumps(merged, sort_keys=True)
+    if parts is None:
+        return None
+    prompt = parts.prompt
     call = _agent_call_literal(
-        judge_type,
+        parts.agent_type,
         prompt,
         CRITERION_JUDGE_PHASE_TITLE,
         schema=True,
         as_arrow=False,
-        agent_opts=_agent_opts_for(review.judge, emitted_agent_type=judge_type),
-        schema_literal=schema_literal,
+        agent_opts=_agent_opts_for(review.judge, emitted_agent_type=parts.agent_type),
+        schema_literal=parts.schema_literal,
     )
     if prompt_suffix_js:
         prefix = f"agent({_prompt_literal(prompt)}"

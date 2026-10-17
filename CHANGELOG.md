@@ -16,6 +16,17 @@ Engine levers since 0.3.0: dispatch and review are cheaper and stricter, and the
 watch can be run as a single blocking wait.
 
 ### Added
+- **Cost-weighted usage.** One engine-owned model-to-price table
+  (`coordinator_core/usage/price_table.py`). Run reports, the grind record and each run's
+  `usage.json` carry every agent's input, output, cache-read and cache-write tokens, tagged by
+  model, plus an estimated USD figure and a run total.
+- **A `~$N.NN` session-cost field on the status line.** It covers the whole session history,
+  including subagents and fired workflows. A per-file offset cache means a redraw reads only
+  appended bytes.
+- **A killed ceremony apply resumes.** `/workday-complete` and `/workweek-complete` apply keep a
+  checkpoint. A rerun skips directives that already landed and starts at the first unfinished one.
+- **A `lapsed` outcome for expired day goals** is drafted, and it is gated on the DoE
+  cockpit-contract bump.
 
 - **Strict dispatch at every size.** After sizing, the dispatching session's inline code
   write is denied with a route to the executor, at every task size, rather than advised.
@@ -52,6 +63,16 @@ watch can be run as a single blocking wait.
 - **`review_stamp` judge-only mint** writes the judged register rows back to the sizing.
 
 ### Changed
+- **terminal_commit's worktree snapshot runs in process.** It no longer spawns `git status`,
+  and falls back to it on any gap. Parity with real git is pinned across 23 cases. A full-path
+  call drops from 4 processes to 1.
+- **Deleted under the 500ms kill bar:** `session.reap_claims_for_repos` (34s worst case;
+  DR-460) and `/workday-start`'s weekly backfill scan (506ms; DR-461). The complete ceremonies
+  no longer emit the reap directive.
+- **Complete-ceremony validate steps are strictly diff-scoped.** They never fall back to the full
+  fast tier; unmapped paths are reported instead.
+- **Ceremony apply streams one progress line per directive.** `scratch_hygiene` drains its
+  backlog across calls, and its dry run matches what apply deletes.
 
 - **The XS arm skips post-execute review** and commits straight after execute.
 - **The foreground reroute passes synchronous-return agent types through** in the engine, as
@@ -89,6 +110,20 @@ watch can be run as a single blocking wait.
   caller's declaration.
 
 ### Fixed
+- **terminal_commit stages what `git add` would.** CRLF content on an `autocrlf=true` checkout
+  lands as LF blobs, and `allow_empty` from the params file is honoured, so a run whose content
+  already landed can still close.
+- **Withheld paths no longer count as stranded or credited** in the terminal-commit credit gate.
+- **The plugin-cache live-session guard.** Dev-sync neither wipes nor copies a cache a live
+  session is bound to. Install reports a missing coordinator registration, or dev-box drift,
+  instead of a false PASS. The mirror carries `coordinator_install.py`. Install refreshes the
+  Group EM home.
+- **The engine-ask commit step** gets its params file even when the command is `cd`-prefixed.
+- **`/workday-complete` frictions:**
+  - a dead holder's path is adopted only when the holder is abandoned;
+  - the register stall names its routing action and stops counting claimed or closed rows;
+  - step 2.5 auto-classifies redirect artifacts and runtime caches;
+  - `/workday-start` reads the 4-column scan output.
 
 - **The watch's gate-holder pattern matches the Group EM handle again** (for example
   `<name>-e4`). The handle now resolves at runtime, so it survives the publish scrub.

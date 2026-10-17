@@ -319,6 +319,33 @@ def test_plan_mismatch_absent_record_and_unlanded_sha_refuse(env):
     assert unlanded["refused"] == "terminal-commit-not-landed"
 
 
+def test_workflow_stem_record_closes_when_called_with_the_bare_run_id(env):
+    env.new_record()
+    bare = RUN.removesuffix(".workflow")
+    assert bare != RUN and env.record_file.name == f"{bare}.workflow.json"
+
+    out = cws.close_landed_run(
+        env.repo, env.repo / ".git", {"plan_path": PLAN, "run_id": bare, "session_id": bench.SESSION_ID}
+    )
+
+    assert "error" not in out, out
+    assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented"
+    assert out["committed"] is True
+    assert not (env.repo / run_close.close_job_path(bare)).exists()
+    assert env.record()["review_receipt"] == PLAN
+
+
+def test_neither_close_job_record_present_names_both_paths(env):
+    env.record_file.unlink()
+    bare = RUN.removesuffix(".workflow")
+
+    out = cws.close_landed_run(env.repo, env.repo / ".git", {"plan_path": PLAN, "run_id": bare})
+
+    assert out["refused"] == "no-close-job"
+    assert run_close.close_job_path(bare) in out["error"]
+    assert run_close.close_job_path(bare + ".workflow") in out["error"]
+
+
 @pytest.mark.parametrize("run_id", ["../x", "a/b", "a\\b", ".."])
 def test_run_id_that_is_not_a_file_stem_reads_no_file(env, monkeypatch, run_id):
     def boom(*a, **k):

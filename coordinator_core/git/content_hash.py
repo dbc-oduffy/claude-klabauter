@@ -55,6 +55,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from coordinator_core.git import call_io_scope
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 
 __all__ = [
@@ -70,10 +71,21 @@ __all__ = [
 _LOCAL_ATTRIBUTES_FILENAME = ".gitattributes"
 
 
-def _read_config_core_autocrlf(config_path: Path) -> Optional[str]:
+def _read_text_scoped(path: Path) -> Optional[str]:
+    """Decoded text of `path`, or `None` on any `OSError`; bytes are shared per
+    `call_io_scope`, so repeated reads inside one call open the file once."""
     try:
-        text = config_path.read_text(encoding="utf-8", errors="replace")
+        data = call_io_scope.read_bytes(path)
     except OSError:
+        return None
+    if data is None:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def _read_config_core_autocrlf(config_path: Path) -> Optional[str]:
+    text = _read_text_scoped(config_path)
+    if text is None:
         return None
     value: Optional[str] = None
     in_core = False
@@ -180,9 +192,8 @@ def _text_attribute_pinned(root: Path, normalized: str) -> Optional[str]:
         )
 
     for candidate, rel_to_attrs_dir in candidates:
-        try:
-            text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _read_text_scoped(candidate)
+        if text is None:
             continue
         for line in text.splitlines():
             code = line.split("#", 1)[0].strip()
@@ -242,9 +253,8 @@ def _clean_filter_may_apply(root: Path, normalized: str) -> Optional[str]:
         )
 
     for candidate, rel_to_attrs_dir in candidates:
-        try:
-            text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _read_text_scoped(candidate)
+        if text is None:
             continue
         for line in text.splitlines():
             code = line.split("#", 1)[0].strip()

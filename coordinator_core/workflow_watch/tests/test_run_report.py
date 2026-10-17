@@ -95,6 +95,30 @@ def test_large_transcript_reads_head_and_tail_only_and_marks_partial(tmp_path):
     assert row["turn1_context"] == 3
 
 
+def test_split_model_usd_and_run_total_rendered(tmp_path):
+    def agent(agent_id, model, usage):
+        (tmp_path / f"agent-{agent_id}.jsonl").write_text(json.dumps(
+            {"type": "assistant", "timestamp": "2026-10-16T10:00:00Z", "requestId": "r",
+             "message": {"id": "m", "model": model, "usage": usage}}) + "\n", encoding="utf-8")
+
+    agent("o1", "claude-opus-5-5", _usage(1000, 0, 0, 1000))
+    agent("h1", "claude-haiku-5-5", _usage(1000, 0, 0, 1000))
+    agent("x1", "claude-mystery-9", _usage(10, 0, 0, 10))
+    report = run_report.build_report(_journal(tmp_path, [("o1", "a"), ("h1", "b"), ("x1", "c")]))
+    opus, haiku, mystery = report["rows"]
+    assert opus["model"] == "claude-opus-5-5" and opus["usd"] == 0.024
+    assert haiku["usd"] == 0.0006
+    assert opus["input_tokens"] == 1000 and opus["cache_read_input_tokens"] == 0
+    assert mystery["usd"] is None and mystery["unpriced"] is True
+    assert report["run_total"]["total_tokens"] == 4020
+    assert abs(report["run_total"]["usd"] - 0.0246) < 1e-9
+    text = run_report.render(report)
+    assert "run total: 4020 tok, $0.0246" in text
+    assert "claude-opus-5-5: 1 agent(s)" in text
+    for col in ("cache_r", "cache_w", "est_$"):
+        assert col in text
+
+
 def test_forty_agent_report_is_fast_and_spawns_nothing(tmp_path, monkeypatch):
     import subprocess
 

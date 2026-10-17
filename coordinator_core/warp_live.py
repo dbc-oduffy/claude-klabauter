@@ -380,8 +380,16 @@ def size_stage_run(
 
 
 def _record_live(
-    root: Path, record: dict, session_id: Optional[str], transcript_path: Optional[str], dirs: list[str]
+    root: Path,
+    record: dict,
+    session_id: Optional[str],
+    transcript_path: Optional[str],
+    dirs: list[str],
+    *,
+    ended_on_evidence: bool = False,
 ) -> bool:
+    """True while the run is live; with `ended_on_evidence`, True only when the run ended on the
+    harness's evidence (the one site that consumes the token)."""
     run_id = record["run_id"]
     submission = _read_json(_submission_path(root, run_id)) or {}
     run_session = submission.get("session_id") or record.get("session_id")
@@ -394,7 +402,19 @@ def _record_live(
     )
     if ended == _EVIDENCE:
         _run_token.consume(root, run_id)
+    if ended_on_evidence:
+        return ended == _EVIDENCE
     return ended is None
+
+
+def run_ended_on_evidence(repo_root: Path, record: dict, *, tmpdir: Optional[str] = None) -> bool:
+    """True only when the harness's own evidence shows the run ended (a terminal or stopped task
+    notification, a gone task, a refused submitting call); an unlaunched-grace timer end is False.
+    `record` is a token record (`run_id`, `minted_at`, `script_path`, `session_id`). Spends the
+    token on an evidence end, as `_record_live` does."""
+    return _record_live(
+        Path(repo_root), record, None, None, _launch_dirs(tmpdir), ended_on_evidence=True
+    )
 
 
 def live_run_for_sizing(

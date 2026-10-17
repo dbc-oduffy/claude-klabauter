@@ -87,7 +87,7 @@ def test_validator_failure_is_a_soft_refusal_and_writes_nothing(repo, monkeypatc
     sizing = _put(repo, "an intent")
     before = sizing.read_bytes()
 
-    def _fail(content, out_path, repo_root):
+    def _fail(content, out_path, repo_root, **kwargs):
         raise SystemExit(1)
 
     monkeypatch.setattr(_cli, "_assert_scaffold_content_valid", _fail)
@@ -106,9 +106,10 @@ def test_scout_evidence_renders_one_bullet_per_item(repo):
     assert [ln for ln in section.splitlines() if ln.startswith("- ")] == ["- docs/a.md", "- b"]
 
 
-def test_no_scout_evidence_keeps_the_comment(repo):
+def test_no_scout_evidence_omits_the_empty_section(repo):
     _put(repo, "an intent")
     result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
     text = (repo / result["path"]).read_text(encoding="utf-8")
-    section = text.split("## Reference materials (read first)")[1].split("## Specification")[0]
-    assert "<!-- List file paths" in section
+    assert "## Reference materials (read first)" not in text
+    assert "<!-- List file paths" not in text
+    assert "## Specification" in text

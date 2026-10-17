@@ -201,10 +201,18 @@ def _object_present(repo: Path, sha: str) -> bool:
     return _git(repo, "cat-file", "-e", sha, check=False).returncode == 0
 
 
+def _head_branch(repo: Path) -> str:
+    """The branch holding the delivery commits. A delivery lands on the day's work
+    branch when the receiver sits on main, so the gestures must destroy THAT branch:
+    destroying `main` alone leaves the delivery commit reachable from the work branch."""
+    return _git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
+
+
 def _gesture_rename_and_recreate(repo: Path, root_sha: str) -> None:
-    _git(repo, "branch", "-m", "main", "old")
-    _git(repo, "branch", "main", root_sha)
-    _git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
+    head = _head_branch(repo)
+    _git(repo, "branch", "-m", head, "old")
+    _git(repo, "branch", head, root_sha)
+    _git(repo, "symbolic-ref", "HEAD", f"refs/heads/{head}")
     _git(repo, "reset", "--hard", root_sha)
     _git(repo, "branch", "-D", "old")
     _git(repo, "reflog", "expire", "--expire=now", "--all")
@@ -218,9 +226,10 @@ def _gesture_reset_hard_only(repo: Path, root_sha: str) -> None:
 
 
 def _gesture_branch_delete_after_switch(repo: Path, root_sha: str) -> None:
+    head = _head_branch(repo)
     _git(repo, "checkout", "-b", "tmp", root_sha)
-    _git(repo, "branch", "-D", "main")
-    _git(repo, "branch", "-m", "tmp", "main")
+    _git(repo, "branch", "-D", head)
+    _git(repo, "branch", "-m", "tmp", head)
     _git(repo, "reflog", "expire", "--expire=now", "--all")
     _git(repo, "gc", "--prune=now")
 

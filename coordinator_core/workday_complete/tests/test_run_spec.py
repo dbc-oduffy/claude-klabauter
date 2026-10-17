@@ -113,6 +113,7 @@ def test_rules_decide_the_rule_points():
     assert run_spec.only_mode(points[run_spec.ANALYST_POINT], context={"flags": {"only": True}}) is None
     cap = run_spec.backfill_cap(points[run_spec.BACKFILL_CAP_POINT], context=ctx)
     assert cap.decision == "backfill_all" and "count flag" in cap.rationale
+    assert "14-day" not in cap.rationale and "lookback window" in cap.rationale
     by_rule = {
         pid: decide.resolve([points[pid]], [], rules=run_spec.RULE_TABLE, context=ctx).decisions[0]
         for pid in (run_spec.ANALYST_POINT, run_spec.CLUSTERING_POINT, run_spec.HEALTH_LEDGER_POINT)

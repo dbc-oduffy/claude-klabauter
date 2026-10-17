@@ -581,6 +581,33 @@ def test_relayed_source_forwards_ask_source(tmp_path):
     assert "ask_source" not in emit.calls[2][0]
 
 
+def test_a_relayed_ask_is_admitted_with_no_pm_turn_check_of_its_own(tmp_path):
+    emit = _Emit()
+    out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a", "source": "relayed"}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert emit.calls[0][0]["ask_source"] == "relayed"
+
+
+def test_an_engine_refusal_still_denies_with_its_own_text(tmp_path):
+    out = mod.evaluate(
+        _payload(_repo(tmp_path), {"ask": "a"}), emit=_Emit(raises=ValueError("boom")),
+    )
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert "boom" in _hso(out)["permissionDecisionReason"]
+
+
+def test_a_relayed_sender_reaches_the_fanout_and_must_be_a_string(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    args = {"asks": [{"ask": "x", "sender": "coordinator-content-repo-dc"}, {"ask": "y"}], "source": "relayed"}
+    out = mod.evaluate(_payload(root, args), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert fan.calls[0][0]["asks"][0]["sender"] == "coordinator-content-repo-dc"
+    bad = {"asks": [{"ask": "x", "sender": 3}, {"ask": "y"}]}
+    out = mod.evaluate(_payload(root, bad), emit=_Emit(), fanout=fan)
+    assert "asks[0].sender must be a string" in _hso(out)["permissionDecisionReason"]
+
+
 @pytest.mark.parametrize(
     "args, needle",
     [
@@ -1129,3 +1156,13 @@ def test_a_reserved_id_the_sizing_does_not_reserve_is_refused(tmp_path):
     with pytest.raises(ValueError, match="slice sizing_path"):
         op._reserved_run(root, "r1", None, None)
 
+
+
+def test_a_one_item_relayed_ask_with_sender_keeps_the_fanout_arm_and_forwards_it(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready")])
+    args = {"asks": [{"ask": "a", "source": "relayed", "sender": "coordinator-content-repo-dc", "relayed_text": "the words"}]}
+    out = mod.evaluate(_payload(root, args), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    item = fan.calls[0][0]["asks"][0]
+    assert item["sender"] == "coordinator-content-repo-dc" and item["relayed_text"] == "the words"

@@ -6856,6 +6856,8 @@ def _prompt_sourced_params_admit(
     from the file at `typed_path` (reading it would let any file authorize a commit). The
     typed path must be the canonical one for the prompt's run id; an unreadable transcript
     denies rather than falling back to typed text. None when admitted, else the refusal's leg.
+    The write is independent of shape admission: `check()` calls this for a cd-prefixed command too,
+    because `apply_guard_level` can demote the shape's deny to allow and the op then reads the file.
     """
     from pathlib import Path
 
@@ -6894,6 +6896,39 @@ def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
     )
 
 
+def _cd_prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
+    """The path typed by a run's terminal-commit params-file segment, alone or after bare `cd <dir>` segments.
+
+    Trap: the last segment must satisfy `_is_terminal_commit_params_file_cmd`'s predicate and every
+    earlier one must be exactly `cd <one arg>`. With a `cd` present the typed path must be absolute:
+    a relative one resolves against the hook's cwd here and the post-`cd` directory in the shell.
+    """
+    tokens = _tokenize_full_command(cmd_for_scan)
+    if tokens is None:
+        return None
+    segments = [seg for seg in _segments_from_tokens(tokens) if seg]
+    if not segments:
+        return None
+    *prefix, last = segments
+    if any(len(seg) != 2 or seg[0] != "cd" for seg in prefix):
+        return None
+    if not _token_matches_binary(last[0], _COORDINATOR_INVOKE_BINARY):
+        return None
+    op_idx = _first_positional_after_invoke_module(last, 1)
+    if op_idx is None or last[op_idx] != _RUN_TOKEN_OP:
+        return None
+    if any(t.split("=", 1)[0] == "--repo" for t in last[1:op_idx]):
+        return None
+    path = _bare_params_file_value(last[op_idx + 1:])
+    if path is None or (prefix and not os.path.isabs(path)):
+        return None
+    return path
+
+
+#: `_warp_run_token_admits(params_leg=...)` default: the caller has not run the params admission.
+_PARAMS_LEG_UNSET: Any = object()
+
+
 def _spawn_transcript(payload: Dict[str, Any]) -> Any:
     """The spawn's own transcript path (see `chan.spawn_transcript_path`), else the raw payload value."""
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
@@ -6908,6 +6943,7 @@ def _warp_run_token_admits(
     legs: Set[str],
     heredoc_hit: bool,
     transcript_path: Any = None,
+    params_leg: Any = _PARAMS_LEG_UNSET,
 ) -> Optional[str]:
     """A warp run's own terminal commit: exactly one bare `coordinator-invoke
     dispatch.terminal_commit <params>` segment whose params carry the run token the emit
@@ -6916,7 +6952,9 @@ def _warp_run_token_admits(
     claims the token, so a command the op fails to parse leaves it usable.
 
     Trap: no wrapper, env prefix, `--repo` override, interpreter payload or second segment
-    is admitted -- the token authorizes one op invocation, never a shell.
+    is admitted -- the token authorizes one op invocation, never a shell. The params file is
+    written by `check()` before any shape verdict (`apply_guard_level` can demote a shape
+    refusal to allow, and the op then reads that file); `params_leg` carries that result.
 
     None when admitted, else the refusal's leg (the generic one outside the params-file shape).
     """
@@ -6941,6 +6979,8 @@ def _warp_run_token_admits(
 
     params_file = _bare_params_file_value(seg[op_idx + 1:])
     if params_file is not None:
+        if params_leg is not _PARAMS_LEG_UNSET:
+            return params_leg
         return _prompt_sourced_params_admit(params_file, git_root, transcript_path)
 
     params = run_token.token_params_from_command(raw_cmd)
@@ -7095,6 +7135,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     is_git_commit_agent = agent_type == _GIT_COMMIT_AGENT_TYPE
     if is_git_commit_agent:
+        params_leg: Any = _PARAMS_LEG_UNSET
+        typed_params_file = (
+            None
+            if payload_legs or heredoc_stdin_import_hit or not git_root
+            else _cd_prefixed_params_file_value(cmd_for_scan)
+        )
+        if typed_params_file is not None:
+            params_leg = _prompt_sourced_params_admit(
+                typed_params_file, git_root, _spawn_transcript(payload)
+            )
         may_commit, ownership_reason = _git_commit_agent_may_commit(
             cmd_for_scan, git_root, session_id, cwd
         )
@@ -7108,6 +7158,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 payload_legs,
                 heredoc_stdin_import_hit,
                 transcript_path=_spawn_transcript(payload),
+                params_leg=params_leg,
             )
             if git_root
             else _LEG_RUN_TOKEN_PARAMS
@@ -7116,6 +7167,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
         if _is_terminal_commit_params_file_cmd(cmd_for_scan):
             ownership_reason = refusal
+        elif params_leg is not _PARAMS_LEG_UNSET and params_leg is not None:
+            ownership_reason = params_leg
 
     kind_unresolved = not effective_type
 

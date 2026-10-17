@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -244,3 +245,58 @@ def test_hand_shipped_one_git_spawn_for_many_candidates(repo, monkeypatch):
     monkeypatch.setattr(subject, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
     subject.run(repo)
     assert len(calls) == 1
+
+
+PLAN = "docs/plans/p.md"
+PLAN_ID = "pln-hand-shipped-000001"
+
+
+def _register_sizing(repo):
+    from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_register_cascade import _row, _sizing_text
+
+    text = _sizing_text([_row("r1")]).replace(
+        "status: routed\n", f'status: routed\ndeliverable_id: "{DID}"\nplan: {PLAN}\n', 1
+    ).replace(f"claimed_by:\n  - docs/plans/p.md", f"claimed_by:\n  - {PLAN}")
+    (repo / SIZING).parent.mkdir(parents=True, exist_ok=True)
+    (repo / SIZING).write_text(text, encoding="utf-8")
+    (repo / PLAN).parent.mkdir(parents=True, exist_ok=True)
+    (repo / PLAN).write_text(
+        f"---\nplan_id: {PLAN_ID}\nsizing_object: {SIZING}\n---\nbody\n", encoding="utf-8"
+    )
+
+
+def _met_record(repo):
+    import yaml
+
+    from coordinator_core.session import record_homes
+
+    path = Path(record_homes.home_dir(str(repo), "delivery-verdicts")) / "2099-01" / f"{PLAN_ID}.rejudge.met.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {"id": "r1", "claim": "this-plan", "status": "met", "wired": True, "surface": "ui",
+           "observed_ref": "x.py::f"}
+    fm = {"kind": "criterion-rejudge", "plan_id": PLAN_ID, "head_sha": "abc",
+          "recorded_at": "2099-01-01T00:00:00.000000Z",
+          "criterion": {"status": "met", "observation": "judged", "sidecar": None, "register_rows": [row]}}
+    path.write_text("---\n" + yaml.safe_dump(fm) + "---\n", encoding="utf-8")
+
+
+def test_hand_shipped_register_refusal_applies_a_recorded_met_verdict_then_ships(repo):
+    _register_sizing(repo)
+    run_dir = _run_dir(repo)
+    _commit(repo, WRITES)
+    _met_record(repo)
+    counters = subject.run(repo)
+    assert counters["promoted"] == 1, counters["lines"]
+    assert _status(repo) == "shipped"
+    assert (run_dir / "reconciled.json").exists()
+
+
+def test_hand_shipped_register_refusal_without_a_verdict_names_the_judge_route(repo):
+    _register_sizing(repo)
+    run_dir = _run_dir(repo)
+    _commit(repo, WRITES)
+    counters = subject.run(repo)
+    assert counters["refused"] == 1 and counters["promoted"] == 0
+    assert "--as-agent-brief" in counters["lines"][0] and "reverify-delivery record" in counters["lines"][0]
+    assert _status(repo) == "routed"
+    assert not (run_dir / "reconciled.json").exists()

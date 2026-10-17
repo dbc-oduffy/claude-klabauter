@@ -14,9 +14,28 @@ const b = await agent(prompt, { label: `review:${role}`, phase: "Review", model:
 def test_extracts_two_legs_one_templated():
     legs = lr.emitted_legs(SCRIPT)
     assert legs == [
-        lr.EmittedLeg("size", "Size", "coordinator:op", "haiku"),
-        lr.EmittedLeg("review:", "Review", None, "opus"),
+        lr.EmittedLeg("size", "Size", "coordinator:op", "haiku", 'prompt with label: "fake" and agent(x)'),
+        lr.EmittedLeg("review:", "Review", None, "opus", None),
     ]
+
+
+def test_templated_prompt_keeps_its_literal_prefix():
+    legs = lr.emitted_legs("agent(`Run exactly \\`git ${cmd}\\``, { label: 'a' })")
+    assert legs[0].prompt == "Run exactly `git "
+
+
+def test_variable_prompt_yields_none():
+    assert lr.emitted_legs("agent(prompt, { label: 'a' })")[0].prompt is None
+
+
+@pytest.mark.parametrize("marker", lr.RELAY_MARKERS)
+def test_relay_markers_finds_each_marker(marker):
+    assert lr.relay_markers(f"do this. {marker} then stop") == (marker,)
+
+
+def test_relay_markers_empty_for_judgment_prompt_and_none():
+    assert lr.relay_markers("Review the diff and rule on each finding.") == ()
+    assert lr.relay_markers(None) == ()
 
 
 def test_concatenated_label_keeps_literal_prefix():

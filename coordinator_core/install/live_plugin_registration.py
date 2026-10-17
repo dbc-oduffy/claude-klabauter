@@ -1,121 +1,49 @@
-"""Register the coordinator plugin AT the live clone, never as a copy of it.
+"""Read-only check of the coordinator record in ``installed_plugins.json``.
 
-THE REQUIREMENT (PM, 2026-08-26, via coordinator-content-repo-em): plain ``claude`` must run
-the live coordinator surface on a DoE box. Not ``claude-author`` — the muscle
-memory is ``claude``, and a second binary name is a workaround, not an install
-shape.
-
-WHAT BLOCKED IT: ``claude plugin install`` COPIES a directory-source plugin into
-``<claude-home>/plugins/cache/<marketplace>/<plugin>/<version>/`` and pins a
-``gitCommitSha`` at install time — for a directory source exactly as for a git
-one. Plain ``claude`` then serves a frozen snapshot of the clone. Measured on
-the fleet-floor Mac: the snapshot was 4 commits stale 20 minutes after install
-(51 ``coordinator:`` commands against 53 live). ``claude-author`` was unaffected
-because it injects ``--plugin-dir <clone>/coordinator`` and never consults the
-cache — which is precisely why the gap went unnoticed: every agent-launched
-session was live, and only a human typing ``claude`` got the snapshot.
-
-THE SHAPE, AND WHY THIS ONE: point the installed-plugin record's ``installPath``
-at the clone itself and carry no ``gitCommitSha``. Verified end-to-end on this
-box, 2026-08-26: with the cache copy MOVED ASIDE ENTIRELY, plain ``claude``
-still resolved ``coordinator:`` commands, and ``claude plugin list --json``
-reported the clone as ``installPath``. Nothing is copied, so nothing can go
-stale — the staleness property is definitional, not maintained.
-
-This is not a new shape we invented for the problem. Our own OSS installer
-(``coordinator/dist/publish-repo-setup/install.py::register_installed_plugins``)
-already writes exactly this record — a real directory, no SHA — and
-``example-retrieval-repo@example-retrieval-repo`` has run that way on the fleet-floor Mac since
-2026-08-22.
-
-NEGATIVE SPEC — NOT A SYMLINK. The shape proved from outside first was to
-replace the cache directory with a symlink to the clone. It works, and it was
-the right probe. It is the wrong install: it leaves a record claiming a cache
-path that is not one, keeps a ``gitCommitSha`` pinned to a commit the session is
-not running (a manifest that is a false witness), and leaves a displaced real
-copy beside it for someone to find. Naming the clone directly makes the record
-say what is true.
-
-NEGATIVE SPEC — DOES NOT DELETE THE DISPLACED COPY. A copy left in the cache is
-inert once nothing points at it; removing it is not this function's business and
-would put a user's bytes on the line for a cosmetic gain. It is REPORTED so the
-caller can say so.
-
-WHY IT MUST RE-ASSERT EVERY RUN: any later ``claude plugin install`` or plugin
-update rewrites the record back to a fresh copy, silently restoring snapshot
-behaviour — nothing warns. Idempotence is therefore the whole design: this is
-cheap, it is a no-op when already correct, and it is wired into the install
-sequence rather than offered as a repair someone must remember to run.
+Plain ``claude`` is vanilla on a DoE dev box (a ``.coordinator-dev-repo`` sentinel
+beside the plugin root): the coordinator shell function's ``--plugin-dir`` is the
+only coordinator entry there, so a coordinator record found there is drift and is
+reported, never repointed or removed. A consumer box keeps the marketplace record
+``claude plugin install/update`` wrote; a missing one is reported, never created.
+This module writes nothing. Ruling: DoE ``DR-plain-claude-is-vanilla-on-a-doe-box``.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Optional
-from coordinator_core.install.write_surface import (
-    ShapedClause,
-    WriteSurfaceDeclaration,
-    WriteSurfaceEntry,
-)
+
+from coordinator_core.install import plugin_cache_sessions
 
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 
 _PLUGIN_CACHE_REL = ("plugins", "cache")
 
-STATUS_ABSENT = "absent"
 STATUS_NO_ENTRY = "no-entry"
-STATUS_ALREADY_LIVE = "already-live"
-STATUS_REPOINTED = "repointed"
 STATUS_UNREADABLE = "unreadable"
 STATUS_LIVE_ROOT_MISSING = "live-root-missing"
 STATUS_NOT_DEV_CLONE = "not-dev-clone"
+STATUS_VANILLA = "vanilla"
+STATUS_DRIFT = "drift"
+STATUS_NO_COORDINATOR_RECORD = "no-coordinator-record"
 
 #: Fleet-wide dev-vs-consumer discriminant, at the repo root one level above the
 #: plugin root. A consumer box (plugin-cache install, or a published mirror clone)
-#: lacks it and keeps the record `claude plugin install/update` wrote — repointing
-#: there contradicts INSTALL.md 1d and ping-pongs with `claude plugin update`.
+#: lacks it and keeps the record `claude plugin install/update` wrote.
 DEV_REPO_SENTINEL = ".coordinator-dev-repo"
-
-
-WRITE_SURFACE = WriteSurfaceDeclaration(
-    writer_id="live-plugin-registration",
-    source_module="coordinator_core.install.live_plugin_registration",
-    clauses=(
-        ShapedClause(
-            discovered_by="assert_live_plugin_registration (claude_home param)",
-            entry_template=WriteSurfaceEntry(
-                kind="file-path",
-                path="<caller-supplied-claude_home>/plugins/installed_plugins.json",
-                reason=(
-                    "_atomic_write_json rewrites each matching plugin "
-                    "record's installPath to the live plugin root and drops "
-                    "its gitCommitSha. Gated twice: `dry_run` suppresses the "
-                    "write entirely, and `changed` stays False when every "
-                    "record already points live, so the already-live path "
-                    "performs no write at all"
-                ),
-            ),
-        ),
-    ),
-)
 
 
 def installed_plugin_paths(claude_home: Path) -> dict[str, str]:
     """Every plugin the platform records as installed, as
     ``{plugin-name: installPath}``.
 
-    THE PLATFORM'S OWN RECORD of where a plugin lives, exposed for readers
-    that need to check whether some other resolver agrees with it. Keys are
-    the bare plugin name -- the manifest keys it as ``<name>@<marketplace>``,
-    and the marketplace half is not what a caller matching on a repo
-    identity has to hand.
+    Keys are the bare plugin name -- the manifest keys it as
+    ``<name>@<marketplace>``, and the marketplace half is not what a caller
+    matching on a repo identity has to hand.
 
     Best-effort by contract: an absent, unreadable, or malformed manifest
-    yields ``{}``. Every caller so far is advisory (a warning, or a
-    preference between candidates it already had), so a missing record must
-    degrade to "no opinion" rather than to an error -- a box with no plugins
+    yields ``{}``, because every caller is advisory and a box with no plugins
     installed yet is the normal fresh-machine state, not a fault.
 
     Later records for one name win, matching how the platform itself reads a
@@ -123,8 +51,7 @@ def installed_plugin_paths(claude_home: Path) -> dict[str, str]:
     """
     record_path = claude_home.joinpath(*_INSTALLED_PLUGINS_REL)
     try:
-        with open(record_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        data = json.loads(record_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     plugins = data.get("plugins") if isinstance(data, dict) else None
@@ -156,164 +83,106 @@ def read_plugin_name(live_plugin_root: Path) -> Optional[str]:
     return name if isinstance(name, str) and name else None
 
 
-def _same_path(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+def assert_live_plugin_registration(claude_home: Path, live_plugin_root: Path) -> dict[str, Any]:
+    """Report whether a ``<plugin-name>@*`` record exists, and what that means on this box.
 
-
-def _is_live_root(path: str, live: str) -> bool:
-    return _same_path(path, live) or _same_path(os.path.realpath(path), os.path.realpath(live))
-
-
-def _is_within(candidate: str, root: str) -> bool:
-    try:
-        return _same_path(os.path.commonpath([candidate, root]), root)
-    except ValueError:
-        return False
-
-
-def assert_live_plugin_registration(
-    claude_home: Path, live_plugin_root: Path, *, dry_run: bool = False
-) -> dict[str, Any]:
-    """Repoint every installed record of this plugin at the live clone.
-
-    Journals the file it rewrote (or an empty resolution when it wrote
-    nothing) unless `dry_run`."""
-    report = _assert_live_plugin_registration(claude_home, live_plugin_root, dry_run=dry_run)
-    if not dry_run:
-        from coordinator_core.install import resolution_journal
-
-        wrote = report.get("status") == STATUS_REPOINTED
-        resolution_journal.record_resolution(
-            "live-plugin-registration",
-            0,
-            [WriteSurfaceEntry(kind="file-path", path=report["path"])] if wrote else (),
-        )
-    return report
-
-
-def _assert_live_plugin_registration(
-    claude_home: Path, live_plugin_root: Path, *, dry_run: bool
-) -> dict[str, Any]:
+    Answers: is there a coordinator record in installed_plugins.json, and is
+    this a dev-sentinel box? Never writes."""
     record_path = claude_home.joinpath(*_INSTALLED_PLUGINS_REL)
-    report: dict[str, Any] = {"path": str(record_path), "entries": [], "live_path": str(live_plugin_root)}
+    sentinel = live_plugin_root.parent / DEV_REPO_SENTINEL
+    report: dict[str, Any] = {
+        "path": str(record_path),
+        "entries": [],
+        "live_path": str(live_plugin_root),
+    }
 
-    if not record_path.is_file():
-        report["status"] = STATUS_ABSENT
-        return report
-
-    try:
-        data = json.loads(record_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        report["status"] = STATUS_UNREADABLE
-        report["evidence"] = f"{type(exc).__name__}: {exc}"
-        return report
+    data: Any = {}
+    if record_path.is_file():
+        try:
+            data = json.loads(record_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            report["status"] = STATUS_UNREADABLE
+            report["evidence"] = f"{type(exc).__name__}: {exc}"
+            return report
 
     if not live_plugin_root.is_dir():
         report["status"] = STATUS_LIVE_ROOT_MISSING
         report["evidence"] = str(live_plugin_root)
         return report
 
-    if not (live_plugin_root.parent / DEV_REPO_SENTINEL).is_file():
-        report["status"] = STATUS_NOT_DEV_CLONE
-        report["evidence"] = str(live_plugin_root.parent / DEV_REPO_SENTINEL)
-        return report
-
     plugin_name = read_plugin_name(live_plugin_root)
     if plugin_name is None:
         report["status"] = STATUS_NO_ENTRY
-        report["evidence"] = (
-            f"no readable .claude-plugin/plugin.json under {live_plugin_root}"
-        )
+        report["evidence"] = f"no readable .claude-plugin/plugin.json under {live_plugin_root}"
         return report
 
-    plugins = data.get("plugins")
-    if not isinstance(plugins, dict):
-        report["status"] = STATUS_NO_ENTRY
-        return report
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if isinstance(plugins, dict):
+        for key, records in plugins.items():
+            if (
+                isinstance(key, str)
+                and key.startswith(f"{plugin_name}@")
+                and isinstance(records, list)
+                and any(isinstance(r, dict) for r in records)
+            ):
+                install_path = next(
+                    (r.get("installPath") for r in records if isinstance(r, dict) and r.get("installPath")),
+                    None,
+                )
+                report["entries"].append({"key": key, "install_path": install_path})
 
-    live_str = str(live_plugin_root)
-    cache_root = str(claude_home.joinpath(*_PLUGIN_CACHE_REL))
-    live_in_cache = _is_within(os.path.realpath(live_str), os.path.realpath(cache_root))
-    changed = False
-
-    for key, records in plugins.items():
-        if not key.startswith(f"{plugin_name}@") or not isinstance(records, list):
-            continue
-        for record in records:
-            if not isinstance(record, dict):
-                continue
-            previous = record.get("installPath")
-            has_sha = "gitCommitSha" in record
-            if isinstance(previous, str) and _is_live_root(previous, live_str):
-                if live_in_cache or not has_sha:
-                    continue
-            displaced = (
-                previous
-                if isinstance(previous, str)
-                and not _is_live_root(previous, live_str)
-                and _is_within(previous, cache_root)
-                else None
-            )
-            report["entries"].append({
-                "key": key,
-                "previous_path": previous,
-                "displaced_copy": displaced,
-                "dropped_sha": record.get("gitCommitSha"),
-            })
-            record["installPath"] = live_str
-            record.pop("gitCommitSha", None)
-            changed = True
-
-    if not report["entries"]:
-        report["status"] = STATUS_ALREADY_LIVE if plugins else STATUS_NO_ENTRY
-        return report
-
-    report["status"] = STATUS_REPOINTED
-    if changed and not dry_run:
-        _atomic_write_json(record_path, data)
+    report["plugin_name"] = plugin_name
+    if sentinel.is_file():
+        report["status"] = STATUS_DRIFT if report["entries"] else STATUS_VANILLA
+        if report["status"] == STATUS_DRIFT:
+            for entry in report["entries"]:
+                if entry["install_path"]:
+                    entry["bound_sessions"] = plugin_cache_sessions.sessions_bound_to(
+                        Path(entry["install_path"]), claude_home=claude_home
+                    )
+    elif report["entries"]:
+        report["status"] = STATUS_NOT_DEV_CLONE
+        report["evidence"] = str(sentinel)
+    else:
+        report["status"] = STATUS_NO_COORDINATOR_RECORD
     return report
 
 
-def _atomic_write_json(path: Path, data: Any) -> None:
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
-    tmp.replace(path)
-
-
 def format_report(report: dict[str, Any]) -> list[str]:
+    """The one-to-few lines stating the outcome."""
     status = report.get("status")
-    if status == STATUS_ALREADY_LIVE:
-        return ["PASS [plugin] coordinator plugin already registered at its live clone"]
-    if status == STATUS_ABSENT:
-        return ["SKIP [plugin] no installed_plugins.json — nothing registered on this box yet"]
+    if status == STATUS_VANILLA:
+        return ["PASS [plugin] no coordinator record, plain `claude` is vanilla on a dev box"]
+    if status == STATUS_DRIFT:
+        lines: list[str] = []
+        for e in report["entries"]:
+            lines.append(
+                f"WARN [plugin] {e['key']} registered at {e['install_path']} on a dev box; "
+                "removal is the PM's call"
+            )
+            bound = e.get("bound_sessions")
+            if bound:
+                lines.extend(
+                    plugin_cache_sessions.relaunch_lines(
+                        Path(e["install_path"]), bound, step="the removal"
+                    )
+                )
+        return lines
+    if status == STATUS_NO_COORDINATOR_RECORD:
+        name = report.get("plugin_name") or "coordinator"
+        return [
+            f"WARN [plugin] no {name} record in {report.get('path')}; "
+            f"run `claude plugin install {name}@<marketplace>`"
+        ]
     if status == STATUS_NO_ENTRY:
         return ["SKIP [plugin] no installed record for this plugin"]
     if status == STATUS_UNREADABLE:
-        return [
-            f"WARN [plugin] {report['path']} unreadable ({report.get('evidence')}) — "
-            "plain `claude` may serve a frozen copy; re-run after repairing it"
-        ]
+        return [f"WARN [plugin] {report['path']} unreadable ({report.get('evidence')}); repair it and re-run"]
     if status == STATUS_LIVE_ROOT_MISSING:
-        return [f"SKIP [plugin] live plugin root {report.get('evidence')} does not exist — record unchanged"]
+        return [f"SKIP [plugin] live plugin root {report.get('evidence')} does not exist"]
     if status == STATUS_NOT_DEV_CLONE:
         return [
-            f"SKIP [plugin] not a dev clone (no {report.get('evidence')}) — "
-            "keeping the plugin-cache record `claude plugin install/update` manages"
+            f"SKIP [plugin] not a dev clone (no {report.get('evidence')}); "
+            "keeping the record `claude plugin install/update` manages"
         ]
-    lines = []
-    for entry in report.get("entries", []):
-        target = entry.get("live_path") or report.get("live_path")
-        if target and not os.path.isdir(target):
-            lines.append(
-                f"WARN [plugin] {entry['key']} repointed at {target}, which does not exist "
-                f"(was {entry['previous_path']})"
-            )
-            continue
-        lines.append(
-            f"PASS [plugin] {entry['key']} now resolves live (was {entry['previous_path']})"
-        )
-        if entry.get("displaced_copy"):
-            lines.append(
-                f"  displaced copy left in place, now inert: {entry['displaced_copy']}"
-            )
-    return lines
+    return []

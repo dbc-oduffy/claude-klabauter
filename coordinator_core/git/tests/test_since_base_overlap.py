@@ -91,6 +91,29 @@ def test_landing_that_keeps_foreign_lines_is_clean(tmp_path: Path) -> None:
     assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None) == []
 
 
+def test_crlf_worktree_that_keeps_foreign_lines_is_clean(tmp_path: Path) -> None:
+    # core.autocrlf checkout: LF blobs, CRLF worktree file.
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    repo.land((_join(foreign_lines) + "own = 1\n").replace("\n", "\r\n"))
+
+    assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None) == []
+
+
+def test_crlf_worktree_that_drops_foreign_lines_is_refused(tmp_path: Path) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    repo.land((_join(base_lines) + "own = 1\n").replace("\n", "\r\n"))
+
+    findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None)
+
+    assert [(f.path, f.reason) for f in findings] == [(PATH, SINCE_BASE_OVERLAP)]
+
+
 def test_removing_blank_or_paren_line_the_foreign_commit_did_not_add_is_clean(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     foreign_lines = list(base_lines)

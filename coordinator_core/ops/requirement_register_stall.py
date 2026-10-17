@@ -32,5 +32,6 @@ def _stall_report_op(params: dict, repo_root: Optional[Path] = None) -> dict:
         "stale_rows": report.stale_rows,
         "stuck_plans": report.stuck_plans,
         "unclaimed_rows": report.unclaimed_rows,
+        "routing_actions": report.routing_actions,
         "judgment_point": stall_judgment_point(report, id=str(params.get("jp_id") or STALL_JP_ID)),
     }

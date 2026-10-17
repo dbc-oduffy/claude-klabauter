@@ -45,7 +45,7 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("ask", "commit"),
         ("ask", "halt-commit"),
         ("ask", "commit:wave-"),
-        ("emit", "run-base"),
+        ("ask", "blitz-stage-read"),
         ("emit", "commit:wave-"),
         ("grind", "commit"),
         ("grind", "review-fix-commit"),
@@ -218,11 +218,26 @@ def _review_scripts() -> dict[str, list[str]]:
     }
 
 
+def _reverify_scripts(repo: Path) -> list[str]:
+    """Reverify with tests re-run on and off, without a judge and on a degraded host, plus the rejudge script."""
+    from coordinator_core.ops.dispatch_emit.tests.test_emit_judge_reads_register import _script
+    from coordinator_core.ops.dispatch_emit.tests.test_reverify_verify_leg import _compose
+
+    return [
+        _compose(),
+        _compose(rerun_tests=False),
+        _compose(with_judge=False),
+        _compose(host_degraded=True),
+        _script(repo, '---\nplan_id: "p1"\n---\nbody\n'),
+    ]
+
+
 def _composed(repo: Path, *, golden: bool = True) -> dict[str, list[str]]:
     return {
         "ask": _ask_scripts(repo),
         "emit": _emit_scripts(golden=golden),
         "grind": _grind_scripts(),
+        "reverify": _reverify_scripts(repo),
         **_review_scripts(),
     }
 
@@ -264,9 +279,56 @@ def test_a_deleted_register_entry_names_its_leg(tmp_path):
 
 def test_the_composed_set_reaches_every_workflow_and_the_hidden_legs(tmp_path):
     emitted = _emitted(tmp_path)
-    assert {wf for wf, _ in emitted} == {"ask", "emit", "grind", "review"}
-    for key in (("ask", "size-reword"), ("ask", "gate"), ("ask", "commit"), ("emit", "run-base"), ("grind", "verify-op")):
+    assert {wf for wf, _ in emitted} == {"ask", "emit", "grind", "reverify", "review"}
+    for key in (("ask", "size-reword"), ("ask", "gate"), ("ask", "commit"), ("grind", "verify-op")):
         assert key in emitted, f"{key} is no longer composed: the ratchet fixtures lost it"
+
+
+_RETIRED_MECHANICAL_LEGS = (
+    ("ask", "run-base"), ("ask", "manifest-read"), ("ask", "ledger-restage"), ("ask", "ready-restage"),
+    ("emit", "run-base"),
+)
+
+
+def test_no_retired_mechanical_leg_is_composed_or_declared(tmp_path):
+    emitted = _emitted(tmp_path)
+    declared = {(d.workflow, d.label) for d in lr.REGISTER}
+    for key in _RETIRED_MECHANICAL_LEGS:
+        assert key not in emitted, f"{key} is composed again"
+        assert key not in declared, f"{key} is declared again"
+
+
+def _relay_offenders(emitted: dict[Key, list[lr.EmittedLeg]]) -> dict[Key, tuple[str, ...]]:
+    return {
+        key: lr.relay_markers(leg.prompt)
+        for key, legs in emitted.items()
+        for leg in legs
+        if key not in _RUNTIME_FLOOR and lr.relay_markers(leg.prompt)
+    }
+
+
+def test_no_relay_shaped_leg_outside_the_floor(tmp_path):
+    offenders = _relay_offenders(_emitted(tmp_path))
+    assert not offenders, (
+        f"{sorted(offenders)} compose a prompt whose whole job is a relay, read or git query: "
+        "fold it into the nearest judgment agent or compute it in the script"
+    )
+
+
+def test_the_relay_refusal_fires_on_a_stray_executor_leg():
+    script = (
+        "const r = await agent('Run exactly `git rev-parse HEAD` and return its JSON reply verbatim', "
+        "{ label: 'stray-relay', agentType: 'general-purpose', model: 'sonnet' });"
+    )
+    (leg,) = lr.emitted_legs(script)
+    key = ("ask", "stray-relay")
+    stray = lr.LegDecl(*key, lr.LegClass.EARNS_ITS_COST, "executes a row")
+    assert _earns_its_cost_refusal(key, leg) is None, "the stray leg passes the class and type refusal"
+    assert stray.cls is lr.LegClass.EARNS_ITS_COST
+    assert _relay_offenders({key: [leg]}) == {
+        key: ("return its JSON reply verbatim", "Run exactly `", "rev-parse HEAD")
+    }
+    assert _relay_offenders({("ask", "gate"): [leg]}) == {}
 
 
 #: Plan-blitz and roadmap-blitz titles are DoE's, passed through as given.

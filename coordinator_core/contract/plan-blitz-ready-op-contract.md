@@ -32,18 +32,22 @@ Never for a pulled, replan or judgment plan.
 
 The reply is returned verbatim as `readyOpReply` on that plan's entry in `ready`, and nowhere else:
 never on a pulled, replan or judgment entry. plan-blitz never interprets the reply. Claude-klabauter adopts
-it only as the signal that the stage act ran: the manifest claude-klabauter adopts is the one it reads back
-from `state/warp/<run_id>/manifest.json`, and only when that is whole:
+the reply as the stage manifest when it is whole, and only then:
 
 - an object with no `error`;
 - `rows`, `review_declared_paths` and `test_targets` are arrays;
 - every row is an object whose `id`, `brief_path`, `agent_type` and `model` are non-empty strings,
   `wave` is an integer, and `writes` and `deps` are arrays;
-- every `gated[]` and `owed[]` entry present carries a non-empty string `id`.
+- every `gated[]` and `owed[]` entry present carries a non-empty string `id`;
+- `head_sha` is 40 lowercase hex.
 
-A disk manifest that fails this halts the run with `stage manifest on disk is not whole: <first
-failing field>`, and an absent one with `no stage manifest on disk: <manifest_rel>`; both carry the refire `next_action`; no executor dispatches. A ready entry that is a bare string
-carries none.
+When the reply is absent, or present and not whole, claude-klabauter composes one conditional haiku leg,
+`blitz-stage-read`: it runs the stage op only when the op did not run (no reply and no error, or the
+`did not run` error), then reads `state/warp/<run_id>/manifest.json` and returns it under the same
+rule. A disk manifest that fails it halts the run with `stage manifest on disk is not whole: <first
+failing field>`, and an absent one with `no stage manifest on disk: <manifest_rel>`; both carry the
+refire `next_action`; no executor dispatches. A ready entry that is a bare string carries none. A
+producer that puts a caller-supplied reply schema on `readyOpReply` removes the leg.
 
 ## 5. Absent arg and old plan-blitz
 

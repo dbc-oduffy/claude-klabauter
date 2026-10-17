@@ -89,7 +89,7 @@ def _run_digest(script: str, tmp_path) -> dict:
         "_blockedChunks = [], _verifications = [], _falsifierBroken = new Map(), "
         "_routedOut = [], _reviews = [], "
         "_reviewPrep = null, _reviewWave = null, _deliveryVerdict = null, _reviewIntegration = null, "
-        "_testResult = null, _falsifier = null;\n"
+        "_testResult = null, _falsifier = null, _runBase = '" + "a" * 40 + "';\n"
         "const _notStarted = [];\nconst _planHeld = {};\n" + held_line + "\n_notStarted.push(...Object.keys(_heldRows));\n"
         "console.log(JSON.stringify((function(){\n" + tail + "\n})()));\n",
         encoding="utf-8",

@@ -31,7 +31,11 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops import baton_pm_turns
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
-from coordinator_core.ops.sizing_intake_contract import EM_BRIEF_KEY, intake_record
+from coordinator_core.ops.sizing_intake_contract import (
+    EM_BRIEF_KEY,
+    intake_record,
+    relayed_intake_record,
+)
 from coordinator_core.session_baton import store
 
 _SIZING_SCHEMA_PATH: Path = (
@@ -53,8 +57,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "sizing.intake_mint" handler.
 
     Params: name (str, required slug source), em_brief (str, optional), session_id (str,
-    optional). Returns exit_code 0 with applied, sizing_path (repo-relative), turn, submit;
-    exit_code 1 with error on: no name, no recorded PM turn, a turn already at or behind the
+    optional), source ("relayed" forces relayed provenance), sender and relayed_text (str,
+    optional, carried on a relayed sizing). With source "relayed" or no recorded PM turn the
+    sizing is relayed: no pm_verbatims row, turn None, no sized mark. Otherwise the newest PM
+    turn seeds it. Returns exit_code 0 with applied, sizing_path (repo-relative), turn,
+    provenance, submit; exit_code 1 with error on: no name, a turn already at or behind the
     session's sized_through_turn mark, an existing target path, or a schema failure.
     """
     if repo_root is None:
@@ -71,16 +78,28 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not sid:
         return _err("no resolvable session id")
 
-    newest = baton_pm_turns.recent_window(session_id=sid, cwd=cwd, after_turn=-1)[:1]
-    if not newest:
-        return _err("no recorded PM turn")
-    turn = newest[0]
-    mark = store.read_baton(sid, cwd).get("sized_through_turn")
-    if isinstance(mark, int) and not isinstance(mark, bool) and turn["turn"] <= mark:
-        return _err(f"turn {turn['turn']} is already sized")
+    source = params.get("source")
+    sender = params.get("sender")
+    relayed_text = params.get("relayed_text")
+    for key, val in (("source", source), ("sender", sender), ("relayed_text", relayed_text)):
+        if val is not None and not isinstance(val, str):
+            return _err(f"{key} must be a string")
+
+    turn = None
+    if source != "relayed":
+        newest = baton_pm_turns.recent_window(session_id=sid, cwd=cwd, after_turn=-1)[:1]
+        if newest:
+            turn = newest[0]
+            mark = store.read_baton(sid, cwd).get("sized_through_turn")
+            if isinstance(mark, int) and not isinstance(mark, bool) and turn["turn"] <= mark:
+                return _err(f"turn {turn['turn']} is already sized")
 
     today = date.today().isoformat()
-    record = intake_record(name=slug, turn=turn, today=today)
+    if turn is None:
+        text = (relayed_text or "").strip() or (em_brief or "").strip() or slug
+        record = relayed_intake_record(name=slug, text=text, sender=sender or "", today=today)
+    else:
+        record = intake_record(name=slug, turn=turn, today=today)
     if em_brief and em_brief.strip():
         record["em_analysis"][EM_BRIEF_KEY] = em_brief.strip()
     errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
@@ -107,12 +126,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except MutateAbort as exc:
         return _err(str(exc.args[0]) if exc.args else "intake mint aborted")
 
-    baton_pm_turns.mark_sized_through(turn["turn"], session_id=sid, cwd=cwd)
+    if turn is not None:
+        baton_pm_turns.mark_sized_through(turn["turn"], session_id=sid, cwd=cwd)
     return {
         "exit_code": 0,
         "applied": True,
         "sizing_path": rel,
-        "turn": turn["turn"],
+        "turn": turn["turn"] if turn is not None else None,
+        "provenance": "pm-verbatim" if turn is not None else "relayed",
         "submit": (
             'Workflow({name: "coordinator:engine-ask", '
             f'args: {{sizing: "{rel}"}}}})'

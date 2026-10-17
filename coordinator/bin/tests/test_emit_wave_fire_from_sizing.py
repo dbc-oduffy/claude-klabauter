@@ -267,7 +267,11 @@ def test_emitted_baton_carries_no_absolute_paths(tmp_path, monkeypatch):
 def test_emitted_baton_is_complete_and_schema_valid(tmp_path, monkeypatch):
     text = _real_fire_baton_text(tmp_path, monkeypatch, _full_sizing(tmp_path))
     mod = ewf._load_mint.__globals__["sys"].modules["coordinator_doc_new_for_fire"]
-    mod._assert_scaffold_content_valid(text, str(tmp_path / "state/handoffs/x.md"), str(tmp_path))
+    # The sizing mint omits the Session Ledger block by design (the first
+    # appended row creates it), so it validates with the ledger heading waived.
+    mod._assert_scaffold_content_valid(
+        text, str(tmp_path / "state/handoffs/x.md"), str(tmp_path), waive_ledger_heading=True
+    )
     assert 'governing_plan: "docs/plans/p.md"' in text
     assert "- Estimate: M" in text
     assert "- Interaction mode: hands-on" in text

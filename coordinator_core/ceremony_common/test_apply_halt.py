@@ -378,3 +378,50 @@ class TestExitCodeLabel:
 
     def test_unrecognized_int_returns_none(self) -> None:
         assert apply_halt.exit_code_label(99) is None
+
+
+class TestAdvisoryBreachOncePerBudgetInstance:
+    def test_two_instances_sharing_a_composition_id_each_print_their_first_breach(
+        self, monkeypatch, capsys
+    ) -> None:
+        from coordinator_core.composition_budget import CompositionBudget
+
+        monkeypatch.setattr(CompositionBudget, "advisory_check", lambda self, unit=None: False)
+        first = CompositionBudget(composition_id="shared-id")
+        second = CompositionBudget(composition_id="shared-id")
+
+        for budget in (first, second):
+            apply_halt.budget_advisory_mid_directive(budget, "d1")
+            apply_halt.budget_advisory_mid_directive(budget, "d2")
+
+        err = capsys.readouterr().err
+        assert err.count("mid-directive advisory breach") == 2
+        assert apply_halt.advisory_breach_count(first) == 2
+        assert apply_halt.advisory_breach_count(second) == 2
+
+    def test_count_is_zero_for_none_and_unbreached(self) -> None:
+        from coordinator_core.composition_budget import CompositionBudget
+
+        assert apply_halt.advisory_breach_count(None) == 0
+        assert apply_halt.advisory_breach_count(CompositionBudget(composition_id="x")) == 0
+
+    def test_entry_is_dropped_when_the_budget_is_collected(self, monkeypatch) -> None:
+        import gc
+
+        from coordinator_core.composition_budget import CompositionBudget
+
+        monkeypatch.setattr(CompositionBudget, "advisory_check", lambda self, unit=None: False)
+        budget = CompositionBudget(composition_id="gc-id")
+        apply_halt.budget_advisory_mid_directive(budget, "d1")
+        key = id(budget)
+        assert key in apply_halt._ADVISORY_BREACHES
+        del budget
+        gc.collect()
+        assert key not in apply_halt._ADVISORY_BREACHES
+
+
+def test_directive_progress_writes_one_flushed_stderr_line(capsys) -> None:
+    apply_halt.directive_progress("prog", "d1", "landed")
+    captured = capsys.readouterr()
+    assert captured.err == "prog: d1 landed\n"
+    assert captured.out == ""

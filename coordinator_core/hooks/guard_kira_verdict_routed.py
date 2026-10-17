@@ -46,7 +46,9 @@ heading or a fan-out-integrator receipt.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from typing import Optional
 
 from coordinator_core.git.repo_root import show_toplevel
@@ -186,15 +188,62 @@ def _kira_is_review_activity(filename: str, meta: dict) -> bool:
     return "review" in filename.lower()
 
 
-def _kira_is_run_owned(filename: str, meta: dict) -> bool:
+_KIRA_RUN_ID_RE = re.compile(r"ask-\d{8}T\d{6}-[0-9a-f]{6}")
+
+
+def _kira_as_list(value) -> list:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return value if isinstance(value, list) else []
+
+
+def _kira_run_attribution(repo_root: str, in_scope: list) -> "tuple[frozenset, frozenset]":
+    """(sidecar stems, repo-relative code paths) that an in-session engine-ask
+    run owns. The positive signal is the run's own `engine:*` sidecars: a
+    stem is the run's only when one of them names it in `integrated_from`
+    (the run's review stage writes that), and a path is the run's only when
+    the manifest of a run id carried in an engine sidecar's filename declares
+    it. The EM's own reviewer is named by no engine sidecar and so stays
+    unattributed. Unreadable manifests attribute nothing (fail toward
+    blocking)."""
+    stems: set = set()
+    run_ids: set = set()
+    for filename, meta in in_scope:
+        agent_type = meta.get("agent_type")
+        if not (isinstance(agent_type, str) and agent_type.startswith("engine:")):
+            continue
+        stems.update(s for s in _kira_as_list(meta.get("integrated_from")) if isinstance(s, str))
+        run_ids.update(_KIRA_RUN_ID_RE.findall(filename))
+    paths: set = set()
+    for run_id in run_ids:
+        try:
+            with open(
+                os.path.join(repo_root, "state", "warp", run_id, "manifest.json"),
+                "r",
+                encoding="utf-8",
+            ) as fh:
+                manifest = json.load(fh)
+            declared = list(manifest.get("review_declared_paths") or [])
+            for row in manifest.get("rows") or []:
+                declared.extend(row.get("writes") or [])
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+        paths.update(p.replace("\\", "/") for p in declared if isinstance(p, str))
+    return frozenset(stems), frozenset(paths)
+
+
+def _kira_is_run_owned(filename: str, meta: dict, run_stems: frozenset = frozenset()) -> bool:
     """True for a review sidecar written by an engine-ask Workflow run's own
-    review stage (prep-freeze, wave bookkeeping, per-slice findings): its
-    reviewer is the run's, so it is not this session's review activity.
+    review stage (prep-freeze, wave bookkeeping, per-slice findings), or one
+    an engine sidecar of the run names in `run_stems`: its reviewer is the
+    run's, so it is not this session's review activity.
     Reads only the sidecar's filename and flat frontmatter."""
     agent_type = meta.get("agent_type")
     if isinstance(agent_type, str) and agent_type.startswith("engine:"):
         return True
     if filename.startswith(("ask-", "manifest-ask-")):
+        return True
+    if _kira_stem(filename) in run_stems:
         return True
     return (
         _kira_normalize_agent_type(agent_type) == "review-findings"
@@ -203,10 +252,15 @@ def _kira_is_run_owned(filename: str, meta: dict) -> bool:
     )
 
 
-def _kira_session_authored_diff(repo_root: str, session_id: str) -> bool:
+def _kira_session_authored_diff(
+    repo_root: str, session_id: str, run_paths: frozenset = frozenset()
+) -> bool:
     """True when this session's own touch record holds a TOUCH of a code file
     that was not positively a read (doc-only and bookkeeping paths are not a
-    diff to review). Spawn-free: raw events are scanned, not the
+    diff to review) and not one an in-session engine run declared in
+    `run_paths` (touches carry no agent id there, so the run's declared
+    paths are the attribution; an EM edit to such a path is masked).
+    Spawn-free: raw events are scanned, not the
     last-verb-wins projection, because a commit RELEASES the claim and a
     committed diff must still count. Any read failure reads False (a guard
     that cannot prove a diff must not block on it)."""
@@ -229,6 +283,7 @@ def _kira_session_authored_diff(repo_root: str, session_id: str) -> bool:
                     event.verb == touch_record.VERB_TOUCH
                     and touch_record.kind_blocks_a_peer_commit(event.kind)
                     and _is_code_path(event.path)
+                    and event.path.replace("\\", "/") not in run_paths
                 ):
                     return True
         return False
@@ -236,14 +291,14 @@ def _kira_session_authored_diff(repo_root: str, session_id: str) -> bool:
         return False
 
 
-def _kira_block_condition_1(in_scope: list) -> bool:
+def _kira_block_condition_1(in_scope: list, run_stems: frozenset = frozenset()) -> bool:
     kira_present = any(_kira_is_kira(f, m) for f, m in in_scope)
     if kira_present:
         return False
     return any(
         _kira_is_review_activity(f, m)
         and not _kira_is_kira(f, m)
-        and not _kira_is_run_owned(f, m)
+        and not _kira_is_run_owned(f, m, run_stems)
         for f, m in in_scope
     )
 
@@ -408,9 +463,10 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
 
     reasons: list = []
 
-    authored_diff = _kira_session_authored_diff(repo_root, session_id)
+    run_stems, run_paths = _kira_run_attribution(repo_root, in_scope)
+    authored_diff = _kira_session_authored_diff(repo_root, session_id, run_paths)
 
-    if _kira_block_condition_1(in_scope) and authored_diff:
+    if _kira_block_condition_1(in_scope, run_stems) and authored_diff:
         reasons.append(
             "- Other review activity ran this session, but no Kira "
             "(overengineering-reviewer) sidecar is present. Kira fires on "
@@ -420,7 +476,7 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
     kira_entries = [
         (f, m)
         for f, m in in_scope
-        if _kira_is_kira(f, m) and (authored_diff or not _kira_is_run_owned(f, m))
+        if _kira_is_kira(f, m) and (authored_diff or not _kira_is_run_owned(f, m, run_stems))
     ]
     for kira_file, kira_meta in kira_entries:
         findings_count = _kira_to_int(kira_meta.get("findings_count"))

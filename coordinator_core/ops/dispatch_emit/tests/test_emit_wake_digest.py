@@ -703,7 +703,7 @@ def test_composed_script_routes_a_pass_with_skips_and_tells_the_agent_to_report_
     assert script.count('"pass-with-skips"') >= 2  # test_result + row_verification_result enums
     assert "'pass-with-skips'" in script  # the digest's tests.status route
     assert "-rs" in script and "pass-with-skips" in script.split("test:terminal")[0]
-    assert "verify:" in script and "skipped" in script
+    assert "skipped" in script
 
 
 def test_composed_script_passes_the_dispatch_suite_guard():

@@ -195,7 +195,7 @@ def test_refire_resumes_at_the_ledger_plans_nothing_and_the_withheld_chunk_lands
     resume = script.index("const _resumeLedger = !_halted && !!_gate.resume_ledger;")
     assert resume < script.index("label: 'verify'")
     assert resume < script.index("label: 'plan'")
-    assert "if (!_halted && !_resumeLedger) {\n  phase('Execute');" in script
+    assert "if (!_halted && (!_resumeLedger || _ledgerExec)) {\n  phase('Execute');" in script
     assert "_gate.resume_ledger.em_discharged" in script
 
     token = _second_run(halted)

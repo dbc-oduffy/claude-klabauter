@@ -186,14 +186,18 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ipc import register_op
 from coordinator_core.git.git_state import head_branch, head_sha
+from coordinator_core.git.git_objects import cas_ref, read_ref_loose_or_packed
 from coordinator_core.ops.ceremony.push import (
     PUSH_RETRY_BUDGET_SECS,
+    _REMOTE_NAME_RE,
     PushOutcome,
+    _read_git_config_text,
     _remaining_or_none,
     push_with_retry,
 )
 from coordinator_core.ops.ceremony.push_ceiling import (
     PUSH_CEILING_MAX_SECS,  # noqa: F401 -- re-exported for the ceiling pin
+    _scan as _config_scan,
     gitattributes_declares_lfs_filter,
     resolve_push_ceiling,
 )
@@ -478,6 +482,42 @@ def _range_touches_lfs_paths(root: Path, base_sha: str, head_sha_value: str) -> 
     return False
 
 
+def resolve_push_remote(root: Path, branch: str) -> Optional[str]:
+    """`branch.<b>.remote`, else the sole configured remote, else `origin`; None if none."""
+    text = _read_git_config_text(root)
+    configured = _config_scan(text, "branch", branch, "remote")
+    if configured:
+        return configured
+    remotes = _REMOTE_NAME_RE.findall(text)
+    if len(remotes) == 1:
+        return remotes[0]
+    return "origin" if "origin" in remotes else None
+
+
+def _record_tracking_ref(root: Path, branch: str, landed_sha: Optional[str]) -> None:
+    """Point `refs/remotes/<remote>/<branch>` at the landed sha; never raises.
+
+    Trap: a narrow `remote.<r>.fetch` refspec leaves git without a mapping for this
+    branch, so a landed push writes no tracking ref and the branch reads ahead
+    forever -- on every push, not only the first, so a ref already present but
+    behind the landed sha is advanced too (compare-and-swap against what was read).
+    A ref already at the landed sha (full refspec) is left alone.
+    """
+    if not landed_sha:
+        return
+    try:
+        remote = resolve_push_remote(root, branch)
+        if remote is None:
+            return
+        common_dir = resolve_git_common_dir(root)
+        ref = f"refs/remotes/{remote}/{branch}"
+        current = read_ref_loose_or_packed(common_dir, ref)
+        if current != landed_sha:
+            cas_ref(common_dir, ref, current, landed_sha)
+    except Exception:  # noqa: BLE001 -- advisory bookkeeping must never fail a landed push
+        return
+
+
 def _upstream_sha(repo: Union[str, Path], branch: str) -> Optional[str]:
     """The sha `refs/remotes/<remote>/<branch>` currently points at, for
     whichever configured remote carries that branch, or `None` if no remote
@@ -696,6 +736,8 @@ def push_outstanding(
     # silently skipped the publish for every schema change whose branch was
     # pushed for the first time.
     if outcome.exit_code == 0 and "push" in outcome.acted:
+        if branch is not None:
+            _record_tracking_ref(root, branch, outcome.landed_sha)
         cockpit_script = _cockpit_publish_script(str(root))
         publish_budget = _remaining_or_none(publish_deadline)
         # Negative spec: a non-positive remainder means the ladder consumed the

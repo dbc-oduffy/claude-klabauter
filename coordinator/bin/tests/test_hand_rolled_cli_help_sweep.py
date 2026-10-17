@@ -397,7 +397,6 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "hook-run.py",
     "host-gpu-probe.py",
     "mise-prep-gate.py",
-    "reap-claims-for-repos.py",
     "review-findings-ledger.py",
     "review-stamp.py",
     "subagent-statusline.py",

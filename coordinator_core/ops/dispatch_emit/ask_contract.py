@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NamedTuple
@@ -349,6 +349,8 @@ RESUME_LEDGER_HALT_SHA_FIELD = "halt_sha"
 RESUME_LEDGER_REMAINING_FIELD = "remaining"
 #: `resume_ledger` verdict key carrying the revise note texts, oldest first.
 RESUME_LEDGER_NOTES_FIELD = "revise_notes"
+#: `resume_ledger` verdict key carrying the ids an earlier halt judged met that a later no-landing halt re-listed.
+RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
 #: `dispatch.terminal_commit` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
@@ -380,6 +382,15 @@ class HaltRecord:
     blocking: tuple[str, ...] | None
     #: `{row_id: {remaining: [str], evidence: str}}`; empty when halted.json predates the key.
     remaining: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: Register row ids the run staged as rulable (manifest `rulable_ids`); empty when the manifest predates the key.
+    rulable: frozenset[str] = frozenset()
+
+    @property
+    def met(self) -> frozenset[str]:
+        """Rulable ids the halt did not list as blocking; empty when `blocking` was unrecorded."""
+        if self.blocking is None:
+            return frozenset()
+        return self.rulable - frozenset(self.blocking)
 
 
 #: Mirrors `halted_record_commit._blocking_items`, which writes this shape; change both together.
@@ -430,6 +441,7 @@ def read_halt_record(repo_root: Path, run_id: str) -> HaltRecord | None:
         staged.update(i["id"] for i in items if isinstance(i, dict) and isinstance(i.get("id"), str))
     plan = halted.get(HALT_PLAN_FIELD)
     blocking = halted.get(HALT_BLOCKING_FIELD)
+    rulable = manifest.get("rulable_ids")
     return HaltRecord(
         run_id=run_id,
         plan_rel=plan if isinstance(plan, str) and plan else None,
@@ -437,7 +449,44 @@ def read_halt_record(repo_root: Path, run_id: str) -> HaltRecord | None:
         staged=frozenset(staged),
         blocking=tuple(blocking) if isinstance(blocking, list) and all(isinstance(b, str) for b in blocking) else None,
         remaining=_read_remaining(halted),
+        rulable=frozenset(r for r in rulable if isinstance(r, str)) if isinstance(rulable, list) else frozenset(),
     )
+
+
+def carry_forward(
+    newest: tuple[HaltRecord, bool], earlier: Sequence[tuple[HaltRecord, bool]]
+) -> tuple[tuple[str, ...], dict[str, dict[str, Any]], tuple[str, ...]]:
+    """`(blocking, remaining, carried_met)` for a resume from ``newest``. Each argument is a
+    `(record, lands_chunks)` pair; ``earlier`` is newest first. An id an earlier halt judged met
+    and every newer halt re-listed is carried met, unless a halt between landed a chunk (its
+    blocking was judged on changed work). Remaining per still-blocking id is newest first, merged
+    across the walked records, deduplicated. Pure."""
+    head, head_lands = newest
+    pool = set(head.blocking or ())
+    walked = [head]
+    carried: set[str] = set()
+    if not head_lands:
+        for rec, lands in earlier:
+            walked.append(rec)
+            carried |= pool & rec.met
+            if lands:
+                break
+            if rec.blocking is not None:
+                pool &= set(rec.blocking)
+    blocking = tuple(i for i in (head.blocking or ()) if i not in carried)
+    remaining: dict[str, dict[str, Any]] = {}
+    for item in blocking:
+        steps: list[str] = []
+        evidence = ""
+        for rec in walked:
+            entry = rec.remaining.get(item)
+            if entry is None:
+                continue
+            steps.extend(s for s in entry.get("remaining", ()) if s not in steps)
+            evidence = evidence or entry.get("evidence", "")
+        if steps or evidence:
+            remaining[item] = {"remaining": steps, "evidence": evidence}
+    return blocking, remaining, tuple(i for i in (head.blocking or ()) if i in carried)
 
 
 #: The run's delivery note (`<dir>/<run_id>.md`): what was asked, what shipped, review findings,
@@ -488,6 +537,8 @@ class LedgerHalt:
     remaining: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     halted: str = LEDGER_HALT_KIND
     outcome: str | None = None
+    #: Derived from the halt chain at resume; never persisted in the pointer.
+    carried_met: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {

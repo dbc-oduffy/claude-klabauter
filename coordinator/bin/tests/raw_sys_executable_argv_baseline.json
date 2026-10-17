@@ -1,5 +1,5 @@
 {
-  "total": 55,
+  "total": 54,
   "exclude_dir_patterns": [
     "/tests/",
     "/test-fixtures/"
@@ -34,7 +34,6 @@
     "coordinator/bin/workday-start-day-branch-resolve.py": 1,
     "coordinator/bin/workday-start-health-probes.py": 2,
     "coordinator/bin/workday-start-step0.py": 1,
-    "coordinator/bin/workweek-complete-close.py": 1,
     "coordinator/bin/workweek-complete-drift-guards.py": 5,
     "coordinator/bin/wsc-coverage-gate-runner.py": 1,
     "coordinator/bin/wsc-session-disposition.py": 1,

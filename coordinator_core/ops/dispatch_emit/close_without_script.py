@@ -273,13 +273,16 @@ def close_landed_run(worktree_root: Path, repo_root: Path, params: dict) -> dict
                 f"run_id {run_id!r} is not a bare file stem. Pass the close-job record's stem "
                 "(the emitted script's file name without .mjs).",
             )
-        record = run_close._load(worktree_root, run_id)
-        if record is None:
+        stem = run_close.resolve_close_job_stem(worktree_root, run_id)
+        if stem is None:
             raise CloseRefusal(
                 "no-close-job",
-                f"no close-job record at {run_close.close_job_path(run_id)}. "
+                f"no close-job record at {run_close.close_job_path(run_id)} or "
+                f"{run_close.close_job_path(run_id + '.workflow')}. "
                 "A run that has not landed closes through dispatch.terminal_commit with script_path.",
             )
+        run_id = stem
+        record = run_close._load(worktree_root, run_id)
         if not isinstance(plan_rel, str) or _norm(record.get("plan_rel")) != _norm(plan_rel):
             raise CloseRefusal(
                 "close-job-plan-mismatch",

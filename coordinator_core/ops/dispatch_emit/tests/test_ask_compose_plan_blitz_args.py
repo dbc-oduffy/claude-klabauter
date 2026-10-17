@@ -78,4 +78,4 @@ def test_a_stop_after_script_carries_no_ready_op():
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 
     script = _compose(stop_after=STOP_AFTER_PLAN)
-    assert "readyOp" not in script
+    assert "readyOp: {" not in script

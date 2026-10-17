@@ -18,7 +18,12 @@ import json
 from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
-from coordinator_core.ops.dispatch_emit.emit import _AGENT_MODELS, _degrade_agent_type
+from coordinator_core.ops.dispatch_emit.emit import (
+    _AGENT_MODELS,
+    _EXECUTOR_AGENT_TYPE,
+    _degrade_agent_type,
+    resolve_agent_model,
+)
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER,
     ITEM_MARK,
@@ -189,14 +194,18 @@ def _when_condition(stage: Stage, scope: str, stages: Mapping[str, Stage], sched
     return f"({returns} && {returns}[{field}]) === {want}"
 
 
-#: Model for a stage that declares none and whose agent type has no `_AGENT_MODELS` pin; the Workflow model guard needs every agent() to set one.
-_DEFAULT_STAGE_MODEL = "sonnet"
+def _stage_model(stage: Stage, agent_type: str) -> str:
+    """Stage-declared model, else the agent table's pin; a type with no pin (general-purpose) takes the executor's pin. The Workflow model guard needs every agent() to set one."""
+    if stage.model:
+        return stage.model
+    if agent_type in _AGENT_MODELS:
+        return resolve_agent_model(agent_type)
+    return resolve_agent_model(_EXECUTOR_AGENT_TYPE)
 
 
 def _agent_options(stage: Stage, manifest: Manifest, agent_type: str, agent_type_host: str | None) -> str:
     options = [f"agentType: {_js_string_literal(_degrade_agent_type(agent_type, agent_type_host))}"]
-    model = stage.model or _AGENT_MODELS.get(agent_type) or _DEFAULT_STAGE_MODEL
-    options.append(f"model: {_js_string_literal(model)}")
+    options.append(f"model: {_js_string_literal(_stage_model(stage, agent_type))}")
     if stage.effort is not None:
         options.append(f"effort: {_js_string_literal(stage.effort)}")
     if stage.schema is not None:

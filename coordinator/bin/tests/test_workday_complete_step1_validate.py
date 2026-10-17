@@ -1,17 +1,15 @@
 """bin/tests/test_workday_complete_step1_validate.py
 
-Purpose: Unit tests for the abort-time process-group teardown wiring in
-workday-complete-step1-validate.py's `_run_fast_test_cmd` -- the second of
-the two ceremony spawn sites touched by chunk C1 of docs/plans/2026-08-13-
-reap-orphaned-execnet-gateways.md. The sibling spawn site
-(validate-fast-and-packageability.py) already has this coverage in
-test_validate_fast_and_packageability.py's `ProcessGroupTeardownTest`; this
-file closes the gap left on this module, mirroring that file's structure
-and conventions rather than inventing new ones.
+Purpose: Unit tests for workday-complete-step1-validate.py -- the abort-time
+process-group teardown wiring in `_run_fast_test_cmd` (chunk C1 of
+docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md) and the strictly
+diff-scoped run contract (docs/plans/2026-10-17-diff-scoped-complete-validate-
+no-full-tier.md, C1): the unscoped configured fast tier is never run.
 
-Spec backlink: pln-reap-orphaned-execnet-gateways-398c2c,
-chunk C1. Row R13 (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md)
-adds T6: argv[0] resolution via shutil.which before Popen.
+Spec backlink: pln-reap-orphaned-execnet-gateways-398c2c, chunk C1;
+pln-diff-scoped-complete-validate-072e05, chunk C1. Row R13
+(docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md) adds T6: argv[0]
+resolution via shutil.which before Popen.
 
 Test coverage:
   T1  _add_process_group_spawn_kwargs sets start_new_session on every
@@ -24,25 +22,27 @@ Test coverage:
   T4  _assign_windows_job_object / _close_windows_job_object are no-ops
       on a non-Windows host (this dev machine) and never raise
   T5  _run_fast_test_cmd preserves rc=0/rc=N/rc=127 end-to-end through the
-      Popen-based spawn -- mirrors T16 in the sibling file's
-      ProcessGroupTeardownTest, the end-to-end proof of AC3's exit-code-
-      identity contract that this file's earlier tests exercise only at
-      the `_teardown_process_group` unit level.
+      Popen-based spawn
   T6  _run_fast_test_cmd resolves argv[0] via shutil.which before Popen --
       a fake `pnpm.CMD` shim placed on PATH resolves and runs, and an
       unresolved argv[0] fails fast with rc=127 and a one-line message,
       without ever reaching Popen.
+  T7  main() never runs the unscoped command: unmapped sources are named and
+      only mapped tests run; zero mapped tests spawns nothing; a scoped run
+      that collects zero tests (rc 5) does not fall back to the full tier.
 """
 from __future__ import annotations
 
 import contextlib
 import importlib.util
+import io
 import os
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -176,93 +176,74 @@ class ArgvWhichResolutionTest(unittest.TestCase):
         self.assertIn("command not found", content)
 
 
-class SuiteRunReuseTest(unittest.TestCase):
-    """AC8: reuse of a fresh `fast` record, recording of full runs, no record on a scoped run."""
+class DiffScopedOnlyTest(unittest.TestCase):
+    """T7: main() has no path to the unscoped configured fast-tier command."""
 
-    def _main(self, mod, cwd, *, reuse, diff_paths=(), run=None):
-        import io
-        from contextlib import redirect_stdout, redirect_stderr
-        from types import SimpleNamespace
+    _CMD = "pytest -m fast"
 
-        resolve = SimpleNamespace(returncode=0, stdout="pytest -m fast\n")
-        out, err = io.StringIO(), io.StringIO()
-        gate = mock.Mock(side_effect=AssertionError("tier gate consulted on a reuse hit"))
-        run = run or mock.Mock(side_effect=AssertionError("suite spawned on a reuse hit"))
-        old = os.getcwd()
-        os.chdir(cwd)
-        try:
-            with mock.patch.object(mod.rvc, "resolve_fast_test_cmd", return_value=resolve), \
-                    mock.patch.object(mod, "compute_diff_scoped_paths",
-                                      return_value=(list(diff_paths), True)), \
-                    mock.patch.object(mod.suite_run_reuse, "find_reusable", return_value=reuse), \
-                    mock.patch.object(mod, "enforce_tier_u_gate", gate), \
-                    mock.patch.object(mod, "_run_fast_test_cmd", run), \
-                    mock.patch.object(mod, "_git_head_sha",
-                                      side_effect=AssertionError("git rev-parse spawned")), \
-                    mock.patch.object(mod, "_emit_test_red_record") as red, \
-                    redirect_stdout(out), redirect_stderr(err):
-                rc = mod.main()
-        finally:
-            os.chdir(old)
-        return rc, out.getvalue(), err.getvalue(), red
-
-    def test_ac8_fresh_failing_record_is_reused_without_spawn(self) -> None:
+    def _main(self, diff_paths, fully_mapped, run_rc=0, unmapped=()):
         mod = _load_cli_module()
+        run = mock.Mock(return_value=(run_rc, ""))
+        err = io.StringIO()
+        out = io.StringIO()
         with tempfile.TemporaryDirectory() as td:
-            os.mkdir(os.path.join(td, ".git"))
-            log = os.path.join(td, "current.log")
-            with open(log, "w", encoding="utf-8") as fh:
-                fh.write("FAILED tests/test_a.py::test_x - assert 0\n")
-            reuse = mod.suite_run_reuse.Reuse(
-                "fast", "a" * 40, 1, "fail", ["tests/test_a.py::test_x"], log)
-            rc, out, err, red = self._main(mod, td, reuse=reuse)
-        self.assertEqual(out, "RC_UBT='skipped' RC_VALIDATE='1'\n")
-        self.assertEqual(rc, 3)
-        self.assertIn(f"suite-run: reused fast@{'a' * 40} outcome=fail log={log}", err)
-        args = red.call_args
-        self.assertEqual(args[0][4], "a" * 40)
-        self.assertEqual(args[0][3], ("pytest", ["tests/test_a.py::test_x"]))
-
-    def test_diff_scoped_run_writes_no_fast_record(self) -> None:
-        mod = _load_cli_module()
-        with tempfile.TemporaryDirectory() as td:
-            os.mkdir(os.path.join(td, ".git"))
-            run = mock.Mock(return_value=(0, ""))
-            gate = mock.Mock(return_value=mock.Mock(proceed=True))
-            import io
-            from contextlib import redirect_stdout, redirect_stderr
-            from types import SimpleNamespace
             old = os.getcwd()
             os.chdir(td)
             try:
                 with mock.patch.object(mod.rvc, "resolve_fast_test_cmd", return_value=SimpleNamespace(
-                        returncode=0, stdout="pytest -m fast\n")), \
+                        returncode=0, stdout=self._CMD + "\n")), \
                         mock.patch.object(mod, "compute_diff_scoped_paths",
-                                          return_value=(["tests/test_a.py"], True)), \
-                        mock.patch.object(mod, "enforce_tier_u_gate", gate), \
+                                          return_value=(list(diff_paths), fully_mapped)), \
+                        mock.patch.object(mod, "find_changed_source_files",
+                                          return_value=["a/mapped.py", *unmapped]), \
+                        mock.patch.object(mod, "map_source_to_tests",
+                                          side_effect=lambda s, r: [] if s in unmapped else ["t.py"]), \
+                        mock.patch.object(mod, "enforce_tier_u_gate",
+                                          return_value=mock.Mock(proceed=True)), \
                         mock.patch.object(mod, "_run_fast_test_cmd", run), \
                         mock.patch.object(mod.suite_mutex, "held",
                                           side_effect=lambda *a, **k: contextlib.nullcontext(True)), \
                         mock.patch.object(mod, "_emit_test_red_record"), \
-                        redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                    mod.main()
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = mod.main()
             finally:
                 os.chdir(old)
-            self.assertEqual(run.call_args[0][2], None)
-            self.assertFalse(os.path.exists(os.path.join(td, ".coordinator-local")))
+        return rc, out.getvalue(), err.getvalue(), run
 
-    def test_full_run_miss_records_fast_once(self) -> None:
-        mod = _load_cli_module()
-        with tempfile.TemporaryDirectory() as td:
-            os.mkdir(os.path.join(td, ".git"))
-            py = mod.shlex.quote(sys.executable)
-            rc, _ = mod._run_fast_test_cmd(
-                f"{py} -c \"print('hello')\"", dict(os.environ), td)
-            self.assertEqual(rc, 0)
-            rec = os.path.join(td, ".coordinator-local", "suite-runs", "fast")
-            self.assertTrue(os.path.isfile(os.path.join(rec, "current.json")))
-            with open(os.path.join(rec, "current.log"), encoding="utf-8") as fh:
-                self.assertIn("hello", fh.read())
+    def test_unmapped_paths_named_and_only_mapped_tests_run(self) -> None:
+        rc, out, err, run = self._main(["tests/test_a.py"], False, unmapped=("pkg/orphan.py",))
+        self.assertEqual(rc, 0)
+        self.assertIn("pkg/orphan.py", err)
+        self.assertNotIn("a/mapped.py", err)
+        run.assert_called_once()
+        self.assertEqual(run.call_args[0][0], f"{self._CMD} tests/test_a.py")
+
+    def test_no_mapped_tests_runs_nothing_and_says_so(self) -> None:
+        rc, out, err, run = self._main([], False, unmapped=("pkg/orphan.py",))
+        run.assert_not_called()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "RC_UBT='skipped' RC_VALIDATE='skipped'\n")
+        self.assertIn("pkg/orphan.py", err)
+        self.assertIn("running no tests", err)
+
+    def test_empty_diff_runs_nothing(self) -> None:
+        rc, out, _err, run = self._main([], True)
+        run.assert_not_called()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "RC_UBT='skipped' RC_VALIDATE='skipped'\n")
+
+    def test_scoped_run_collecting_zero_tests_does_not_fall_back(self) -> None:
+        rc, out, err, run = self._main(["tests/test_a.py"], True, run_rc=5)
+        run.assert_called_once()
+        self.assertEqual(run.call_args[0][0], f"{self._CMD} tests/test_a.py")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "RC_UBT='skipped' RC_VALIDATE='skipped'\n")
+        self.assertIn("not falling back", err)
+
+    def test_scoped_failure_still_reported(self) -> None:
+        rc, out, _err, run = self._main(["tests/test_a.py"], True, run_rc=1)
+        self.assertEqual(rc, 3)
+        self.assertEqual(out, "RC_UBT='skipped' RC_VALIDATE='1'\n")
 
 
 if __name__ == "__main__":

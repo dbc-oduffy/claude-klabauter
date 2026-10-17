@@ -105,7 +105,7 @@ def test_the_refire_gate_carries_the_halt_sha_the_owed_work_and_the_revise_note(
 def test_the_composed_resume_script_runs_a_remaining_work_leg_before_the_verify(monkeypatch):
     script = _script(monkeypatch)
     leg = script.index("label: 'ledger-remaining'")
-    assert script.index("if (_resumeLedger && (_gate.resume_ledger.blocking ?? []).length) {") < leg
+    assert script.index("if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {") < leg
     assert leg < script.index("label: 'verify'")
     prompt = script[leg - 2200 : leg]
     assert "_gate.resume_ledger.remaining ?? {}" in prompt and "_gate.resume_ledger.revise_notes ?? []" in prompt

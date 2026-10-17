@@ -102,6 +102,7 @@ from __future__ import annotations
 
 import enum
 import sys
+import weakref
 from typing import TYPE_CHECKING, Any, Callable, Optional, Type
 
 from coordinator_core.composition_budget import BudgetBreach
@@ -370,11 +371,43 @@ def budget_advisory_mid_directive(
 
     def _advise() -> None:
         if not composition_budget.advisory_check(unit=directive_id):
-            print(
-                "[composition-budget] mid-directive advisory breach after "
-                f"directive={directive_id!r}: composition="
-                f"{composition_budget.composition_id!r}",
-                file=sys.stderr,
-            )
+            if _note_advisory_breach(composition_budget) == 1:
+                print(
+                    "[composition-budget] mid-directive advisory breach after "
+                    f"directive={directive_id!r}: composition="
+                    f"{composition_budget.composition_id!r} "
+                    "(further breaches counted, not printed)",
+                    file=sys.stderr,
+                )
 
     _budget_call("mid-directive advisory", _advise)
+
+
+#: Per-run breach counts keyed by the budget INSTANCE (`id()`), never by
+#: `composition_id`: the warm engine reuses ids across runs. `CompositionBudget`
+#: is an unhashable dataclass, so a `WeakKeyDictionary` cannot hold it; a
+#: `weakref.finalize` drops the entry when the instance dies instead.
+_ADVISORY_BREACHES: dict[int, int] = {}
+
+
+def _note_advisory_breach(composition_budget: "CompositionBudget") -> int:
+    key = id(composition_budget)
+    if key not in _ADVISORY_BREACHES:
+        weakref.finalize(composition_budget, _ADVISORY_BREACHES.pop, key, None)
+        _ADVISORY_BREACHES[key] = 0
+    _ADVISORY_BREACHES[key] += 1
+    return _ADVISORY_BREACHES[key]
+
+
+def advisory_breach_count(composition_budget: "Optional[CompositionBudget]") -> int:
+    """Mid-directive advisory breaches observed on this budget instance."""
+    if composition_budget is None:
+        return 0
+    return _ADVISORY_BREACHES.get(id(composition_budget), 0)
+
+
+def directive_progress(prog: str, directive_id: str, outcome: str) -> None:
+    """One flushed stderr line `<prog>: <directive_id> <outcome>`; `outcome`
+    is landed | already-satisfied | blocked | failed. stdout stays the single
+    JSON report."""
+    print(f"{prog}: {directive_id} {outcome}", file=sys.stderr, flush=True)

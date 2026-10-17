@@ -132,34 +132,96 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
 
     def test_t3_interp_missing(self) -> None:
-        env = {
-            "COORDINATOR_FAST_TEST_CMD": "python -m pytest",
-            "PATH": "/nonexistent-empty-path-dir",
-        }
-        proc = _run(["fast", "--repo-root", _REPO], env=env)
-        self.assertIn("Validation: interp-missing", proc.stdout)
-        self.assertEqual(proc.returncode, 1)
+        # On Windows the resolver's shared ladder finds CPython from the running
+        # image, not PATH, so emptying PATH cannot make an interpreter "missing"
+        # there. Stub both rungs (ladder and PATH probe) and drive run_fast
+        # in-process: that pins the bare-`python` -> interp-missing mapping on
+        # every platform.
+        import importlib.util
+        from unittest import mock
+
+        from coordinator_core import resolve_validation_cmd as core
+
+        spec = importlib.util.spec_from_file_location("_vfp_interp_missing", _CLI)
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+
+        with mock.patch.dict(os.environ, {"COORDINATOR_FAST_TEST_CMD": "python -m pytest"}),                 mock.patch.object(core, "_shared_console_python", lambda: None),                 mock.patch.object(core.shutil, "which", lambda *_a, **_k: None):
+            validation_result, exit_code = mod.run_fast(_REPO)
+
+        self.assertEqual(validation_result, "interp-missing")
+        self.assertEqual(exit_code, 1)
+
+    @staticmethod
+    def _scoped_mod(cmd: str, paths: list, fully_mapped: bool = True):
+        mod = _load_cli_module()
+
+        class _R:
+            stdout = cmd + "\n"
+            returncode = 0
+
+        mod._resolver.resolve_fast_test_cmd = lambda repo_root: _R()
+        mod.compute_diff_scoped_paths = lambda repo_root: (paths, fully_mapped)
+        return mod
 
     def test_t4_resolved_command_passes(self) -> None:
-        env = {"COORDINATOR_FAST_TEST_CMD": "true"}
-        proc = _run(["fast", "--repo-root", _REPO], env=env)
-        self.assertIn("Validation: 0", proc.stdout)
-        self.assertEqual(proc.returncode, 0)
+        mod = self._scoped_mod("true", ["pkg/test_a.py"])
+        self.assertEqual(mod.run_fast(_REPO), ("0", 0))
 
     def test_t17_budget_line_emitted_on_stderr(self) -> None:
-        env = {"COORDINATOR_FAST_TEST_CMD": "true"}
-        proc = _run(["fast", "--repo-root", _REPO], env=env)
-        self.assertIn("Validation: 0", proc.stdout)
-        self.assertEqual(proc.returncode, 0)
-        self.assertIn("[validate-gate] self_process_ms=", proc.stderr)
-        self.assertIn("suite_process_ms=", proc.stderr)
-        self.assertIn("(process time, not wall clock)", proc.stderr)
+        mod = self._scoped_mod("true", ["pkg/test_a.py"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(mod.run_fast(_REPO), ("0", 0))
+        self.assertIn("[validate-gate] self_process_ms=", err.getvalue())
+        self.assertIn("suite_process_ms=", err.getvalue())
+        self.assertIn("(process time, not wall clock)", err.getvalue())
 
-    def test_t5_resolved_command_fails(self) -> None:
-        env = {"COORDINATOR_FAST_TEST_CMD": "exit 3"}
-        proc = _run(["fast", "--repo-root", _REPO], env=env)
-        self.assertIn("Validation: tier-u-refused", proc.stdout)
-        self.assertEqual(proc.returncode, 3)
+    def test_t5_unscoped_shape_refused_by_tier_gate(self) -> None:
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        mod = self._scoped_mod("true", ["pkg/test_a.py"])
+        mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+            proceed=False, refusal_message="refused"
+        )
+        mod._run_resolved_command = lambda *a, **k: self.fail("ran past a refused gate")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result, code = mod.run_fast(_REPO)
+        self.assertEqual((result, code), ("tier-u-refused", 3))
+
+    def test_no_mapped_tests_runs_nothing_and_reports(self) -> None:
+        mod = self._scoped_mod("true", [], fully_mapped=True)
+        mod._run_resolved_command = lambda *a, **k: self.fail("a command ran with no mapped tests")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(mod.run_fast(_REPO), ("skipped", 0))
+        self.assertIn("running no tests", err.getvalue())
+
+    def test_unmapped_only_diff_runs_nothing_and_names_paths(self) -> None:
+        mod = self._scoped_mod("true", [], fully_mapped=False)
+        mod._unmapped_changed_sources = lambda repo_root: ["pkg/orphan.py"]
+        mod._run_resolved_command = lambda *a, **k: self.fail("a command ran with no mapped tests")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(mod.run_fast(_REPO), ("skipped", 0))
+        self.assertIn("pkg/orphan.py", err.getvalue())
+
+    def test_scoped_run_collecting_zero_tests_does_not_fall_back(self) -> None:
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        mod = self._scoped_mod("true", ["pkg/test_a.py"])
+        mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+            proceed=True, refusal_message=None
+        )
+        seen: list = []
+        mod._run_resolved_command = lambda cmd, **k: seen.append(cmd) or mod.PYTEST_NO_TESTS_COLLECTED
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(mod.run_fast(_REPO), ("skipped", 0))
+        self.assertEqual(seen, ["true pkg/test_a.py"])
+        self.assertIn("collected zero tests", err.getvalue())
 
     def test_t8_diff_scoped_branch_executes_without_raising(self) -> None:
         import importlib.util
@@ -247,9 +309,9 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertIn("pkg/test_mapped_from_source.py", captured_cmds[0])
         self.assertIn(marker_expr, captured_cmds[0])
 
-    def test_t10_unmapped_source_diff_falls_back_to_unscoped_command(self) -> None:
-        """The conjunctive fail-safe (AC9): fully_mapped=False must run the
-        UNSCOPED command, not a partial narrowing."""
+    def test_t10_unmapped_source_diff_runs_only_mapped_tests(self) -> None:
+        """fully_mapped=False names the unmapped paths and runs the mapped
+        tests only, never the unscoped command."""
         import importlib.util
 
         from coordinator_core.session.tier_u_gate import TierUGateResult
@@ -284,13 +346,18 @@ class FastSubcommandTest(unittest.TestCase):
             return 0
 
         mod._run_resolved_command = _fake_run_resolved_command
+        mod._unmapped_changed_sources = lambda repo_root: ["pkg/orphan.py"]
 
-        validation_result, exit_code = mod.run_fast(_REPO)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            validation_result, exit_code = mod.run_fast(_REPO)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(captured_cmds), 1)
-        self.assertEqual(captured_cmds[0], resolved_cmd)
-        self.assertNotIn("pkg/test_partial.py", captured_cmds[0])
+        self.assertNotEqual(captured_cmds[0], resolved_cmd)
+        self.assertTrue(captured_cmds[0].startswith(resolved_cmd))
+        self.assertIn("pkg/test_partial.py", captured_cmds[0])
+        self.assertIn("pkg/orphan.py", err.getvalue())
 
 
 class PackageabilitySubcommandTest(unittest.TestCase):
@@ -364,7 +431,7 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
         mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
             resolved_cmd + "\n", 0
         )
-        mod.compute_diff_scoped_paths = lambda repo_root: ([], True)
+        mod.compute_diff_scoped_paths = lambda repo_root: (["pkg/test_a.py"], True)
 
         from coordinator_core.session.tier_u_gate import TierUGateResult
 
@@ -432,120 +499,7 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
 
 
 class SuiteRunReuseTest(unittest.TestCase):
-    """C5: a fresh full-fast record is reused ahead of the tier gate; only full runs record."""
-
-    def _setup(self, tmp_dir: str, diff_paths: list):
-        os.makedirs(os.path.join(tmp_dir, ".git"))
-        mod = _load_cli_module()
-
-        class _R:
-            stdout = "true\n"
-            returncode = 0
-
-        mod._resolver.resolve_fast_test_cmd = lambda repo_root: _R()
-        mod.compute_diff_scoped_paths = lambda repo_root: (diff_paths, True)
-        mod.append_test_paths = lambda cmd, paths: cmd + " " + " ".join(paths)
-        return mod
-
-    def test_fresh_record_hits_without_gate_or_spawn(self) -> None:
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            mod = self._setup(tmp_dir, [])
-            reuse = mod.suite_run_reuse.Reuse("fast", "abc", 3, "fail", None, "/x.log")
-            patcher = mock.patch.object(
-                mod.suite_run_reuse, "find_reusable", lambda root, coll, argv: reuse)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-            spawned: list = []
-
-            def _no_gate(cmd, repo_root=None):
-                raise AssertionError("tier gate consulted on a reuse hit")
-
-            mod.enforce_tier_u_gate = _no_gate
-            mod._run_resolved_command = lambda *a, **k: spawned.append(a)
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err):
-                result = mod.run_fast(tmp_dir)
-            self.assertEqual(result, ("3", 3))
-            self.assertEqual(spawned, [])
-            self.assertIn("suite-run: reused fast@abc outcome=fail log=/x.log", err.getvalue())
-
-    def test_miss_records_once_via_record_target(self) -> None:
-        import tempfile
-
-        from coordinator_core.session.tier_u_gate import TierUGateResult
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            mod = self._setup(tmp_dir, [])
-            patcher = mock.patch.object(
-                mod.suite_run_reuse, "find_reusable", lambda root, coll, argv: None)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-            mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
-                proceed=True, refusal_message=None
-            )
-            calls: list = []
-            mod._run_resolved_command = lambda cmd, record=None: calls.append(record) or 0
-            os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
-            self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
-            self.assertEqual(mod.run_fast(tmp_dir), ("0", 0))
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(calls[0][1], "fast")
-            self.assertEqual(calls[0][0], mod.suite_run_record.repo_root_for(tmp_dir))
-
-    def test_diff_scoped_run_never_records_or_reuses(self) -> None:
-        import tempfile
-
-        from coordinator_core.session.tier_u_gate import TierUGateResult
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            mod = self._setup(tmp_dir, ["tests/test_a.py"])
-
-            def _boom(*a, **k):
-                raise AssertionError("reuse consulted for a diff-scoped run")
-
-            patcher = mock.patch.object(mod.suite_run_reuse, "find_reusable", _boom)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-            mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
-                proceed=True, refusal_message=None
-            )
-            seen: list = []
-            mod._run_resolved_command = lambda cmd, record=None: seen.append((cmd, record)) or 0
-            os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
-            self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
-            mod.run_fast(tmp_dir)
-            self.assertEqual(seen, [("true tests/test_a.py", None)])
-            self.assertFalse(os.path.exists(os.path.join(tmp_dir, "suite-runs", "fast")))
-
-    def test_no_tests_collected_fallback_records_full_run(self) -> None:
-        import tempfile
-
-        from coordinator_core.session.tier_u_gate import TierUGateResult
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            mod = self._setup(tmp_dir, ["tests/test_a.py"])
-            patcher = mock.patch.object(
-                mod.suite_run_reuse, "find_reusable", lambda root, coll, argv: None)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-            mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
-                proceed=True, refusal_message=None
-            )
-            seen: list = []
-
-            def _run(cmd, record=None):
-                seen.append((cmd, record))
-                return mod.PYTEST_NO_TESTS_COLLECTED if record is None else 0
-
-            mod._run_resolved_command = _run
-            os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
-            self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
-            self.assertEqual(mod.run_fast(tmp_dir), ("0", 0))
-            self.assertIsNone(seen[0][1])
-            self.assertEqual(seen[1][0], "true")
-            self.assertEqual(seen[1][1][1], "fast")
+    """_run_resolved_command with a record target tees output into a suite-run record."""
 
     def test_real_run_tees_and_writes_record(self) -> None:
         import tempfile

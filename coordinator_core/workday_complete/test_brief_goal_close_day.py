@@ -129,6 +129,27 @@ def test_judgment_point_question_and_evidence_present_today_and_stale_distinctly
     assert {d["value"] for d in jp["dispositions"]} == {"record", "skip"}
 
 
+def test_evidence_previews_stale_goals_with_more_tail_and_source_line():
+    stale = [_row(f"stale-{i}", "x" * 200) for i in range(40)]
+    jp = wc_brief._build_day_goal_closeout_judgment_point(_rows(stale=stale))
+    n = wc_brief._GOAL_PREVIEW_LIMIT
+    assert f"+{40 - n} more" in jp["evidence"]
+    assert f"stale-{n - 1}:" in jp["evidence"]
+    assert f"stale-{n}:" not in jp["evidence"]
+    assert "x" * 81 not in jp["evidence"]
+    assert "source: goal.close_day (open day goals, today and stale)" in jp["evidence"]
+    assert "top-level key decisions['day_goal_closeout']" in jp["question"]
+
+
+def test_evidence_lists_every_goal_id_of_a_small_fixture():
+    jp = wc_brief._build_day_goal_closeout_judgment_point(
+        _rows(today=[_row("a-1")], stale=[_row("b-2"), _row("c-3")])
+    )
+    for gid in ("a-1", "b-2", "c-3"):
+        assert gid in jp["evidence"]
+    assert "more" not in jp["evidence"]
+
+
 def test_directive_carries_depends_on_and_decisions_are_threaded_into_args(monkeypatch):
     _stub_operator_config(monkeypatch)
     monkeypatch.setattr(

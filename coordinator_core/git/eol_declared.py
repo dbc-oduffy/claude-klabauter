@@ -14,7 +14,7 @@ returns the entry to clean with the wrong bytes still on disk. Measured
 `.gitattributes` does not close this. It governs the bytes git itself writes
 (checkout) and reads (check-in normalization); it has no authority over bytes a
 producer writes straight into the working tree, and there is no chokepoint on
-those. That is how `coordinator/bin/reap-claims-for-repos.cmd` reached LF under
+those. That is how `coordinator/bin/reap-claims-for-repos.cmd` (since deleted) reached LF under
 a `crlf` declaration (kill-ledger K-062) -- a real incident, not a hypothetical.
 
 WHAT THIS MODULE IS NOT. It is not a revival of `coordinator_core/ops/eol/`,

@@ -71,11 +71,14 @@ which side of the ``ops``/``write_guards`` split a caller sits on.
 """
 
 from __future__ import annotations
+import os
 import sys
 
 import re
 from pathlib import Path
 from typing import Iterable, Optional
+
+from coordinator_core.git import call_io_scope
 
 from coordinator_core.write_guards._case_fold_path import strip_extended_length_prefix
 
@@ -135,7 +138,10 @@ def contained_path(candidate: Path, allowed_roots: Iterable[Path]) -> Optional[P
     candidate_compare_path = Path(candidate_for_compare)
     for root in allowed_roots:
         try:
-            root_resolved = root.resolve()
+            if root.is_absolute():
+                root_resolved = call_io_scope.memo("realpath-root", os.fspath(root), root.resolve)
+            else:
+                root_resolved = root.resolve()
         except OSError:
             print(f"skip: contained_path: root.resolve() failed: {sys.exc_info()[1]}", file=sys.stderr)
             continue

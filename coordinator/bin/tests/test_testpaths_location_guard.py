@@ -137,7 +137,14 @@ _EXCLUDED_DIR_NAMES = {"scratchpad"}
 # admits took) or deleting the file. Reach for an entry only when neither is
 # right, and say why in the value.
 # ---------------------------------------------------------------------------
-_OUTSIDE_TESTPATHS_EXEMPT: dict[str, str] = {}
+_OUTSIDE_TESTPATHS_EXEMPT: dict[str, str] = {
+    "coordinator/ceremony_tests/test_generator_provenance_ratchet.py": (
+        "PM-ratified ceremony-tier ratchet (docs: 2026-10-05 declared-pair census, "
+        "'ratchet moves to coordinator/ceremony_tests/, outside testpaths'); a whole-tree "
+        "AST scan measured at ~186s, so admitting it would put it in every fast/full run. "
+        "Run by name at the census ceremony, never collected by a tier."
+    ),
+}
 
 
 def _pass(label: str) -> None:

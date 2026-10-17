@@ -62,6 +62,10 @@ Negative-spec:
       stats+parses regardless of an open scope and never populates it --
       `_agree_branch_cas_refusal` is the one production caller that does
       this, by design.
+    - The SECOND per-call exception: `head_sha` memoises under
+      `call_io_scope.HEAD_NAMESPACE` while a `call_io_scope()` is open (ref
+      writers invalidate it); `head_sha(repo, fresh=True)` bypasses it, same
+      contract as `read_index(fresh=True)`.
     - Does NOT return `{}` on any parse failure. Signature mismatch,
       unsupported version, a split index, or any unmerged (`stage > 0`)
       entry all RAISE `IndexParseError` -- an empty dict reads as "nothing
@@ -80,6 +84,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterator, NamedTuple, Optional, Sequence, Tuple, Union
 
+from coordinator_core.git.call_io_scope import HEAD_NAMESPACE, memo, scope_open
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.git_objects import _read_object, _retry_transient_read
 from coordinator_core.git.run import run_git
@@ -521,8 +526,12 @@ def head_branch(repo: Union[str, Path]) -> Optional[str]:
     return ref
 
 
-def head_sha(repo: Union[str, Path]) -> Optional[str]:
-    """Read `resolve_git_dir(repo)/HEAD`, following ONE ref hop -- HEAD's
+def head_sha(repo: Union[str, Path], *, fresh: bool = False) -> Optional[str]:
+    """Inside an open `call_io_scope` the answer is memoised under
+    `HEAD_NAMESPACE`, keyed on the resolved git dir; ref writers invalidate
+    that namespace. `fresh=True` neither reads nor writes the memo.
+
+    Uncached path: read `resolve_git_dir(repo)/HEAD`, following ONE ref hop -- HEAD's
     own `ref: refs/heads/<x>` line to `refs/heads/<x>`'s content, read from
     `resolve_git_common_dir(repo)` (refs are never worktree-private; only
     `HEAD` itself is) -- and falling back to `resolve_git_common_dir(repo)/
@@ -530,6 +539,12 @@ def head_sha(repo: Union[str, Path]) -> Optional[str]:
     a detached-nothing/unborn branch (a symref whose target has no loose
     ref and no packed-refs entry), never raises on a missing HEAD.
     """
+    if fresh or not scope_open():
+        return _head_sha_uncached(repo)
+    return memo(HEAD_NAMESPACE, str(resolve_git_dir(repo)), lambda: _head_sha_uncached(repo))
+
+
+def _head_sha_uncached(repo: Union[str, Path]) -> Optional[str]:
     gitdir = resolve_git_dir(repo)
     try:
         content = (gitdir / "HEAD").read_text(encoding="utf-8").strip()

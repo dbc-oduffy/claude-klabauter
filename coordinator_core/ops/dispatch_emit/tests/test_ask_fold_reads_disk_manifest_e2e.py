@@ -1,7 +1,7 @@
-"""The composed ask script adopts the stage manifest from the disk read leg, not the trimmed relay.
+"""The composed ask script adopts a stage relay only when it is whole, with no read leg behind it.
 
 The fold segment of the composed script runs under node with the relay adopted through the real
-`_adoptManifest` and the `manifest-read` leg stubbed by label.
+`_adoptManifest`; any agent() the segment reaches is a failure.
 """
 
 from __future__ import annotations
@@ -23,15 +23,15 @@ _ROW = {
     "id": "C1", "brief_path": "b/C1.md", "agent_type": "coordinator:executor", "model": "opus",
     "writes": ["a.py"], "wave": 0, "deps": [],
 }
-_DISK = {"run_dir": "d", "plan_id": "p", "rows": [_ROW], "review_declared_paths": ["a.py"],
-         "test_targets": ["t.py"], "marker_path": "m"}
-#: What the plan-blitz ready relay hands back: rows without brief_path, no review_declared_paths.
+_SHA = "a" * 40
+_WHOLE = {"run_dir": "d", "plan_id": "p", "rows": [_ROW], "review_declared_paths": ["a.py"],
+          "test_targets": ["t.py"], "marker_path": "m", "head_sha": _SHA}
+#: What a trimming relay hands back: rows without brief_path, no review_declared_paths.
 _TRIMMED_RELAY = {"rows": [{"id": "C1", "wave": 0, "deps": []}]}
-_MANIFEST_REL = "state/warp/run-1/manifest.json"
 
 
-def _fold(relay, disk) -> dict:
-    """Run the fold segment: adopt `relay`, answer the manifest-read leg with `disk`, return its outcome."""
+def _fold(relay) -> dict:
+    """Run the fold segment: adopt `relay`, return its outcome and every agent label it reached."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -40,9 +40,7 @@ def _fold(relay, disk) -> dict:
     end = script.index("\n", script.index("'stage staged no rows'"))
     program = (
         "const _seen = [];\n"
-        "const _DISK = JSON.parse(process.env.DISK);\n"
-        "const agent = async (_p, opts) => { _seen.push(opts.label); if (opts.label === 'manifest-read') return _DISK;"
-        " throw new Error('unstubbed ' + opts.label); };\n"
+        "const agent = async (_p, opts) => { _seen.push(opts.label); throw new Error('unstubbed ' + opts.label); };\n"
         "const _agentDefsClause = () => '';\n"
         "(async () => {\n"
         "let _manifest = null, _stagedManifest = null, _halted = null, _allLanded = false, _gate = { arm: 'm' };\n"
@@ -54,40 +52,44 @@ def _fold(relay, disk) -> dict:
     )
     proc = subprocess.run(
         [node, "-"], input=program, capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "RELAY": json.dumps(relay), "DISK": json.dumps(disk)},
+        env={**os.environ, "RELAY": json.dumps(relay)},
         **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_a_trimmed_relay_with_a_whole_disk_manifest_proceeds_on_the_disk_rows():
-    out = _fold(_TRIMMED_RELAY, _DISK)
+def test_a_whole_relay_is_adopted_with_no_agent_behind_it():
+    out = _fold(_WHOLE)
     assert out["halted"] is None
-    assert out["manifest"] == _DISK
-    assert out["seen"] == ["manifest-read"]
+    assert out["manifest"] == _WHOLE
+    assert out["seen"] == []
 
 
-def test_an_absent_disk_manifest_halts_naming_the_path():
-    out = _fold(_TRIMMED_RELAY, {"error": "no such file"})
+def test_a_trimmed_relay_halts_naming_the_missing_field():
+    out = _fold(_TRIMMED_RELAY)
+    assert out["seen"] == []
     assert out["halted"]["kind"] == "refusal"
-    assert out["halted"]["reason"] == f"no stage manifest on disk: {_MANIFEST_REL}"
+    assert out["halted"]["reason"] == "stage manifest relay is not whole: review_declared_paths"
 
 
-def test_a_disk_manifest_missing_review_declared_paths_halts_naming_the_field():
-    disk = {k: v for k, v in _DISK.items() if k != "review_declared_paths"}
-    out = _fold(_TRIMMED_RELAY, disk)
-    assert out["halted"]["kind"] == "refusal"
-    assert out["halted"]["reason"] == "stage manifest on disk is not whole: review_declared_paths"
+def test_a_relay_without_a_head_sha_halts_naming_it():
+    out = _fold({k: v for k, v in _WHOLE.items() if k != "head_sha"})
+    assert out["halted"]["reason"] == "stage manifest relay is not whole: head_sha"
 
 
-def test_a_relayed_stage_error_halts_without_a_disk_read():
-    out = _fold({"error": "boom"}, _DISK)
+def test_a_relay_with_a_malformed_head_sha_halts_naming_it():
+    out = _fold({**_WHOLE, "head_sha": "HEAD"})
+    assert out["halted"]["reason"] == "stage manifest relay is not whole: head_sha"
+
+
+def test_a_relayed_stage_error_halts_without_a_read():
+    out = _fold({"error": "boom"})
     assert out["seen"] == []
     assert out["halted"]["reason"] == "stage refused: boom"
 
 
 def test_no_relay_at_all_keeps_the_no_folded_manifest_halt():
-    out = _fold(None, _DISK)
+    out = _fold(None)
     assert out["seen"] == []
     assert out["halted"]["reason"].startswith("no folded stage manifest")

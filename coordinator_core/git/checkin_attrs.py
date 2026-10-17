@@ -40,7 +40,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.git.content_hash import _attributes_pattern_matches
+from coordinator_core.git.content_hash import _attributes_pattern_matches, _read_text_scoped
 from coordinator_core.git.git_dir import resolve_git_dir
 
 TEXT = "text"
@@ -72,9 +72,8 @@ def checkin_disposition(root: Path, normalized: str) -> str:
 
     verdict = UNSET
     for candidate, rel_to_attrs_dir in candidates:
-        try:
-            text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _read_text_scoped(candidate)
+        if text is None:
             continue
         for line in text.splitlines():
             code = line.split("#", 1)[0].strip()

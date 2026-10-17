@@ -133,39 +133,13 @@ def test_goal_close_day_only_emitted_when_open_rows_present() -> None:
     assert "goal-close-day" in present_clis
 
 
-def test_reap_claims_for_repos_directive_present() -> None:
-    """Sub-reap (iii), the orphaned-claim-dir cull, has NO production caller
-    other than this directive (`session.reap_claims_for_repos` was cut out
-    of `session.reap`'s `_handler` by PM ruling 2026-08-22 and relocated
-    here) -- deleting this directive silently disables the orphaned-claim
-    cull with no other signal that it happened."""
+def test_no_directive_names_the_deleted_reap_claims_cli() -> None:
+    """The reap-claims directive was deleted outright, so no directive
+    carries its cli and the module exposes no killed-directive machinery."""
     directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
-    clis = {d["cli"] for d in directives}
-    assert "reap-claims-for-repos" in clis, (
-        "reap-claims-for-repos directive missing from workday-complete: "
-        "sub-reap (iii), the orphaned-claim-dir cull, has no other "
-        "production caller -- deleting this directive silently disables it"
-    )
-
-
-def test_suspended_reap_claims_op_is_named_in_ceremony_narration() -> None:
-    """The reap-claims directive no-ops while its op is suspended (the CLI door
-    swallows the refusal on stderr, exit 0), so the brief must say so in the
-    ceremony output rather than leave exit-0 silence."""
-    from coordinator_core import op_budget_suspension as obs
-
-    directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
-    assert obs.is_suspended("session.reap_claims_for_repos")
-    notice = wc_brief._suspended_directive_notice(directives)
-    assert "d_step2_66_reap_claims" in notice
-    assert "SUSPENDED, NO-OP" in notice
-    assert obs.refusal_message("session.reap_claims_for_repos") in notice
-
-
-def test_suspended_notice_is_empty_when_op_not_suspended(monkeypatch) -> None:
-    monkeypatch.setattr(wc_brief, "is_suspended", lambda op: False)
-    directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
-    assert wc_brief._suspended_directive_notice(directives) == ""
+    assert "reap-claims-for-repos" not in {d["cli"] for d in directives}
+    assert "reap-claims-for-repos" not in wc_brief.CONSUMES_MANIFEST
+    assert not hasattr(wc_brief, "_suspended_directive_notice")
 
 
 def test_dirty_tree_scan_directive_always_present_but_gate_is_conditional() -> None:

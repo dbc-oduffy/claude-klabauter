@@ -90,16 +90,20 @@ from typing import TYPE_CHECKING, Any, Optional
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
     _directive_gate_open,
+    advisory_breach_count,
     budget_advisory_mid_directive,
     budget_check_post_mutation,
     budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
+    directive_progress,
     exit_code_label,
 )
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.ceremony_common import cli_dispatch as _shared_cli_dispatch
+from coordinator_core.ceremony_common.apply_checkpoint import Checkpoint, open_checkpoint
 from coordinator_core.ceremony_common.cli_dispatch import (
     resolve_cli_script_root,
     invoke_cli_main as _shared_invoke_cli_main,
@@ -138,6 +142,8 @@ if TYPE_CHECKING:
 # `workday_complete.apply`'s own.
 # ---------------------------------------------------------------------------
 WorkweekApplyExitCode = build_ceremony_halt_exit_codes("WorkweekApplyExitCode")
+
+_PROG = "workweek-complete-apply"
 
 _WORKWEEK_COMMIT_SUBJECT = "chore(workweek-complete): commit ceremony outputs"
 
@@ -210,6 +216,19 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     return module
 
 
+def _unload_cli_module(cli_name: str) -> None:
+    """Drops every reference to a loaded CLI module: this module's cache, the
+    shared loader's path-keyed cache and `sys.modules`. A partial drop keeps the
+    module alive and saves nothing."""
+    module = _LOADED_MODULES.pop(cli_name, None)
+    if module is None:
+        return
+    script_path = _CLI_DISPATCH.get(cli_name)
+    if script_path is not None:
+        _shared_cli_dispatch._LOADED_MODULES.pop(str(script_path.resolve()), None)
+    sys.modules.pop(module.__name__, None)
+
+
 def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, CliExitClass]:
     try:
         exit_code, _stdout_text, stderr_text, exit_class = _shared_invoke_cli_main(module, args)
@@ -240,6 +259,8 @@ def _execute_directives(
     judgment_points: list[dict[str, Any]],
     decisions: dict[str, Any],
     composition_budget: "Optional[CompositionBudget]" = None,
+    *,
+    checkpoint: Optional[Checkpoint] = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -281,6 +302,14 @@ def _execute_directives(
     failed: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
+    resumed: list[str] = []
+    resumed_args_changed: list[str] = []
+    interrupted: list[str] = []
+    resume_landed = checkpoint.landed_ids() if checkpoint is not None else frozenset()
+    resume_interrupted = checkpoint.interrupted_ids() if checkpoint is not None else frozenset()
+    last_use: dict[str, int] = {}
+    for index, directive in enumerate(directives):
+        last_use[directive.get("cli")] = index
 
     pre_mutation_breach = budget_check_pre_mutation(composition_budget)
     if pre_mutation_breach is not None:
@@ -317,24 +346,42 @@ def _execute_directives(
             "results": [],
         }
 
-    for directive in directives:
+    for index, directive in enumerate(directives):
         if directive.get("already_satisfied"):
             landed.append(directive["id"])
+            directive_progress(_PROG, directive["id"], "already-satisfied")
+            continue
+        if directive["id"] in resume_landed:
+            landed.append(directive["id"])
+            resumed.append(directive["id"])
+            if checkpoint.args_changed(directive["id"], directive.get("args", [])):
+                resumed_args_changed.append(directive["id"])
+            directive_progress(_PROG, directive["id"], "resumed")
             continue
         try:
             gate_open = _directive_gate_open(directive, jp_by_id, decisions)
         except Exception as exc:  # noqa: BLE001 - malformed envelope is per-directive
             failed.append({"id": directive["id"], "error": f"gate evaluation error: {exc}"})
+            directive_progress(_PROG, directive["id"], "failed")
             continue
         if not gate_open:
             blocked.append(directive["id"])
+            directive_progress(_PROG, directive["id"], "blocked")
             continue
+        if directive["id"] in resume_interrupted:
+            interrupted.append(directive["id"])
+        if checkpoint is not None:
+            checkpoint.record_dispatching(directive["id"])
         try:
             result = _dispatch_directive(directive)
         except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
             failed.append({"id": directive["id"], "error": str(exc)})
             budget_advisory_mid_directive(composition_budget, directive["id"])
+            directive_progress(_PROG, directive["id"], "failed")
             continue
+        finally:
+            if last_use.get(directive["cli"]) == index:
+                _unload_cli_module(directive["cli"])
         budget_advisory_mid_directive(composition_budget, directive["id"])
         if result.get("exit_code", 0) != 0:
             error = (
@@ -354,10 +401,17 @@ def _execute_directives(
                 degraded.append(entry)
             else:
                 failed.append(entry)
+            directive_progress(_PROG, directive["id"], "failed")
             results.append(result)
             continue
         results.append(result)
         landed.append(directive["id"])
+        if checkpoint is not None:
+            checkpoint.record_landed(directive["id"], directive.get("args", []))
+        directive_progress(_PROG, directive["id"], "landed")
+
+    for cli_name in list(_LOADED_MODULES):  # last-use unload skips a CLI whose final directive never dispatched
+        _unload_cli_module(cli_name)
 
     report = {
         "landed": landed,
@@ -365,7 +419,13 @@ def _execute_directives(
         "failed": failed,
         "degraded": degraded,
         "results": results,
+        "budget_advisory_breaches": advisory_breach_count(composition_budget),
     }
+    if checkpoint is not None:
+        report["resumed"] = resumed
+        report["interrupted"] = interrupted
+        if resumed_args_changed:
+            report["resumed_args_changed"] = resumed_args_changed
 
     if failed and landed:
         return int(WorkweekApplyExitCode.PARTIAL_MUTATION), report
@@ -538,9 +598,20 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
 
         root, sid, before, pre_skip = _prepare_commit_tail()
+        checkpoint = open_checkpoint(root, "workweek-complete", dirty_before=before) if root else None
+        if checkpoint is not None and (checkpoint.landed_ids() or checkpoint.interrupted_ids()):
+            recorded = checkpoint.dirty_before()
+            if recorded is not None:
+                before = recorded
         exit_code, report = _execute_directives(
-            directives, judgment_points, effective_decisions, composition_budget=composition_budget
+            directives,
+            judgment_points,
+            effective_decisions,
+            composition_budget=composition_budget,
+            checkpoint=checkpoint,
         )
+        if checkpoint is not None and checkpoint.stale_checkpoint:
+            report["stale_checkpoint"] = checkpoint.stale_checkpoint
         if pre_skip is None and not report["results"] and exit_code == int(
             WorkweekApplyExitCode.DIRECTIVE_FAILED
         ):
@@ -563,6 +634,8 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             exit_code = int(WorkweekApplyExitCode.PARTIAL_MUTATION)
         exit_label = exit_code_label(exit_code, report)
         if exit_code == int(WorkweekApplyExitCode.SUCCESS):
+            if checkpoint is not None:
+                checkpoint.finish()
             outcome = "success"
         elif exit_code == int(WorkweekApplyExitCode.PARTIAL_MUTATION):
             outcome = "partial_mutation"

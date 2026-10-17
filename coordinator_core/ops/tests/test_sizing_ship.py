@@ -254,6 +254,24 @@ def test_ship_writes_only_status_field(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_register_refusal_keeps_prefix_and_names_no_workflow_route(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, "20260101-a.yaml", status="routed")
+    before = sizing.read_text(encoding="utf-8")
+    monkeypatch.setattr(ship_mod.requirement_register, "read_register", lambda text: [{"id": "R1"}])
+    monkeypatch.setattr(ship_mod.requirement_register, "ship_refusal", lambda reg: "R1 open")
+
+    result = _run({"sizing_path": "state/sizings/20260101-a.yaml"}, repo_root=repo / ".git")
+
+    assert result["exit_code"] == 1
+    assert "its requirement register is not met: R1 open" in result["error"]
+    assert "--rejudge --as-agent-brief" in result["error"]
+    assert "reverify-delivery record --judge-json" in result["error"]
+    assert "review-stamp mint/rejudge" in result["error"]
+    assert sizing.read_text(encoding="utf-8") == before
+
+
 def test_registered_in_all_quad_surfaces():
     from coordinator_core.authz.classification import OP_CLASSIFICATION
     from coordinator_core.op_scopes import _OP_KEY_SCOPE

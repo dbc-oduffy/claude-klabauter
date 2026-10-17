@@ -31,7 +31,9 @@ def _set_cap(monkeypatch, value):
 def test_cap_is_threaded_into_terminal_and_per_row_runner_briefs(monkeypatch):
     _set_cap(monkeypatch, "2")
     script = _compose()
-    assert script.count("--maxWorkers=2") >= 2
+    assert "test:terminal" in script
+    assert script.count("--maxWorkers=2") >= 1
+    assert "--maxWorkers=2" in emit._run_row_helper_js()
 
 
 def test_unset_cap_emits_nothing_new():

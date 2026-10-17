@@ -44,10 +44,11 @@ def test_raw_ask_emits_the_full_phase_chain_with_both_verbs(repo):
     text = Path(reply["path"]).read_text(encoding="utf-8")
     titles = _titles(text)
     present = [p for p in ASK_PHASES if p in titles]
-    assert {"size", "plan", "stage"} <= set(present)
+    assert {"size", "plan"} <= set(present)
+    assert "stage" not in titles  # the stage leg is folded into deterministic code; OP_ASK_STAGE still rides the plan phase
     positions = [titles.index(p) for p in present]
     assert positions == sorted(positions)
-    assert titles.index("stage") < titles.index("Execute") < titles.index("Review wave") < titles.index("Verify")
+    assert titles.index("plan") < titles.index("Execute") < titles.index("Review wave") < titles.index("Verify")
     assert OP_ASK_GATE in text and OP_ASK_STAGE in text
     assert reply["ok"], reply["findings"]
 

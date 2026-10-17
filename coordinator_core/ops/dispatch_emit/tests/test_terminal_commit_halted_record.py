@@ -300,7 +300,7 @@ def test_incomplete_chunks_param_overrides_report_evidence(repo):
 
 
 def _hold(monkeypatch, held: set) -> None:
-    def fake(root, paths, holds=None, own_sid=None, abandoned_holds=None):
+    def fake(root, paths, holds=None, own_sid=None, abandoned_holds=None, held_out=None):
         holds.extend((p, "peer-sid") for p in paths if p in held)
         return []
 

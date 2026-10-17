@@ -6,8 +6,8 @@ the slices, mints a parent id and one reserved run id per slice, writes one draf
 slice and the write-once parent record, and returns the frozen reply plus the ready runs' fire
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
-Two arms:
-  - asks:   {asks: [{ask, source?, label?, writes?}], confirm_split?} -- the parent register is one row
+Three arms:
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, label?, writes?}], sender?, confirm_split?} -- the parent register is one row
             (R1..Rn) per ask, each slice claims its own.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
@@ -16,7 +16,9 @@ Two arms:
             sizing's `em_analysis.ask_parent`.
 
 Negative spec:
-  - Refuses before writing anything: shape, partition and PM-turn checks run first.
+  - Refuses before writing anything: shape and partition checks run first.
+  - Does NOT refuse for a missing PM turn: a relayed slice, or any slice with no PM turn, is stamped
+    relayed (text and sender in `em_analysis`) and carries no `pm_verbatims`.
   - Does NOT call the `sizing.intake_mint` handler (it refuses a second mint for one PM turn).
   - Does NOT spawn a process (no git); every write goes through `session.claimed_write`.
   - Does NOT fire anything: it returns the fire calls, the caller fires them.
@@ -54,6 +56,8 @@ _SIZING_SCHEMA_PATH: Path = (
 )
 _SLUG_MAX = 40
 ASK_PARENT_KEY = "ask_parent"
+RELAYED_TEXT_KEY = "relayed_text"
+RELAYED_FROM_KEY = "relayed_sender"
 
 
 class _Refused(ValueError):
@@ -116,6 +120,22 @@ def _read_slices(params: Mapping) -> tuple[list[contract.AskSlice], Optional[str
     return out, parent_sizing
 
 
+def _relay_fields(params: Mapping, count: int) -> list[tuple[Optional[str], Optional[str]]]:
+    """Per ask item (sender, relayed_text); an item's own `sender` wins over the submission's."""
+    raw = params.get("asks")
+    if raw is None:
+        return [(None, None)] * count
+    top = params.get("sender")
+    out = []
+    for i, item in enumerate(raw):
+        sender, text = item.get("sender", top), item.get("relayed_text")
+        for key, val in (("sender", sender), ("relayed_text", text)):
+            if val is not None and (not isinstance(val, str) or not val.strip()):
+                raise _Refused(f"asks[{i}]: {key} must be a non-empty string")
+        out.append((sender.strip() if sender else None, text.strip() if text else None))
+    return out
+
+
 def _load_parent(root: Path, rel: str) -> dict:
     from coordinator_core.session.record_homes import home_dir
 
@@ -136,33 +156,44 @@ def _parent_rows(sizing: Mapping) -> list[dict]:
 
 
 def _verbatim_turns(parent: Optional[Mapping], sid: Optional[str], cwd: str) -> list[dict]:
-    """The full PM verbatim every slice carries: the parent sizing's own, else the newest recorded turn."""
+    """The PM verbatim a non-relayed slice carries: the parent sizing's own, else the newest recorded
+    turn. Empty when the session has recorded no PM turn: those slices are stamped relayed."""
     if parent:
         kept = [v for v in parent.get("pm_verbatims") or [] if isinstance(v, Mapping) and isinstance(v.get("text"), str)]
         if kept:
             return [dict(v) for v in kept]
     if not sid:
-        raise _Refused("no resolvable session id")
+        return []
     newest = baton_pm_turns.recent_window(session_id=sid, cwd=cwd, after_turn=-1)[:1]
     if not newest:
-        raise _Refused("no recorded PM turn")
+        return []
     return [dict(newest[0])]
 
 
 def _slice_record(
     sl: contract.AskSlice, *, name: str, turns: list[dict], marker: str, today: str,
     parent_rows: Optional[dict[str, dict]], sources: Optional[list] = None,
+    sender: Optional[str] = None, relayed_text: Optional[str] = None,
 ) -> dict:
-    record = intake_record(name=name, turn=turns[-1], today=today)
+    """A slice sizing. A relayed slice, or any slice when no PM turn exists, is stamped relayed,
+    carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row."""
+    relayed = sl.source == ASK_SOURCE_RELAYED or not turns
+    record = intake_record(name=name, turn={"text": sl.ask} if not turns else turns[-1], today=today)
     record["intent"] = sl.ask
     record["intent_source"] = "em-elaborated"
-    record["pm_verbatims"] = [
-        {k: v for k, v in (("text", t.get("text", t.get("prompt"))), ("turn", t.get("turn")), ("ts", t.get("ts"))) if v is not None}
-        for t in turns
-    ]
+    if relayed:
+        record.pop("pm_verbatims", None)
+        analysis = record["em_analysis"]
+        analysis[contract.SLICE_SOURCE_KEY] = ASK_SOURCE_RELAYED
+        analysis[RELAYED_TEXT_KEY] = relayed_text or sl.ask
+        if sender:
+            analysis[RELAYED_FROM_KEY] = sender
+    else:
+        record["pm_verbatims"] = [
+            {k: v for k, v in (("text", t.get("text", t.get("prompt"))), ("turn", t.get("turn")), ("ts", t.get("ts"))) if v is not None}
+            for t in turns
+        ]
     record["em_analysis"][ASK_PARENT_KEY] = marker
-    if sl.source == ASK_SOURCE_RELAYED:
-        record["em_analysis"][contract.SLICE_SOURCE_KEY] = ASK_SOURCE_RELAYED
     if parent_rows is not None:
         record[rr.REGISTER_KEY] = {
             rr.SOURCES_KEY: sources,
@@ -295,6 +326,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
 
     sid = params.get("session_id") or resolve_current_session_id(Path(cwd))
     turns = _verbatim_turns(parent_doc, sid, cwd)
+    relay = _relay_fields(params, len(slices))
 
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_hex = uuid.uuid4().hex[:6]
@@ -316,6 +348,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
         record = _slice_record(
             sl, name=f"{sl.label}"[:60], turns=turns, marker=contract.ask_parent_marker(parent_id, run_ids[i]),
             today=today, parent_rows=parent_rows, sources=sources,
+            sender=relay[i][0], relayed_text=relay[i][1],
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:
@@ -345,7 +378,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
     parent_path.parent.mkdir(parents=True, exist_ok=True)
     record_json = contract.ParentRecord(parent_id, runs, confirm).to_json()
     claimed_write.create_exclusive(parent_path, json.dumps(record_json, indent=2) + "\n")
-    turn_no = turns[-1].get("turn")
+    turn_no = turns[-1].get("turn") if turns else None
     if sid and isinstance(turn_no, int) and not isinstance(turn_no, bool):
         baton_pm_turns.mark_sized_through(turn_no, session_id=sid, cwd=cwd)
 

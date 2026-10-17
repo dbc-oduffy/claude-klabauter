@@ -147,8 +147,11 @@ class TestAC3AsyncioImportGraph:
         # above the `if dry_run:` branch would silently reintroduce the
         # ~31ms cost on every census with nothing here to catch it.
         repo = _init_repo(tmp_path / "repo")
+        # A real launch puts the script's own directory on sys.path, which is how
+        # main()'s `import lib` bootstrap resolves; a -c probe has to do it itself.
         probe = (
             "import sys, importlib.util as u; "
+            f"sys.path.insert(0, r'{_SCRIPT.parent}'); "
             f"spec = u.spec_from_file_location('m', r'{_SCRIPT}'); "
             "m = u.module_from_spec(spec); spec.loader.exec_module(m); "
             "m.main(['--dry-run']); "

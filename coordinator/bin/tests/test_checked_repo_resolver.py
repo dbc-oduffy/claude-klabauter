@@ -761,7 +761,6 @@ class TestBareShowToplevelInventory(unittest.TestCase):
         "cross-repo-memo.py",
         "cruft-sweep.py",
         "discharge-landed.py",
-        "reap-claims-for-repos.py",
     }
 
     @staticmethod

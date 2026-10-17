@@ -114,10 +114,9 @@ _RATCHET_BAR_MS = 2000.0
 # and this frozenset was not pruned, leaving the guard red until 2026-08-22.
 _RATIFIED_SUSPENSIONS = frozenset({
     # PM ruling 2026-08-30 ("2,242ms p50 over four samples -- this is enough to
-    # suspend"), applied to the two live ops sharing that shape. Evidence and the
+    # suspend"), applied to the live ops sharing that shape. Evidence and the
     # return condition are on each SUSPENDED_OPS entry; the adjudication is
     # state/audits/2026-08-30-the-op-table-against-both-admission-criteria.md.
-    "session.reap_claims_for_repos",
     "records.history",
     "session.boot_sweep",
     # deliverable.cascade_terminal — row REMOVED and pruned here in the SAME commit; the

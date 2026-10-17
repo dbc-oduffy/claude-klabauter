@@ -99,3 +99,90 @@ def test_probe_counts_replaces_and_lists_asyncio_importers(tmp_path):
     assert isinstance(result["asyncio_importers"], list)
     for hit in result["asyncio_importers"]:
         assert hit["phase"] in {"setup", "call"} and hit["requests"] >= 1
+
+
+def test_spawn_verb_extraction():
+    assert ab.spawn_verb(["git", "-C", "x", "--no-optional-locks", "status", "--porcelain"]) == ("git", "status")
+    assert ab.spawn_verb(["git", "hash-object", "-w", "--stdin-paths"]) == ("git", "hash-object")
+    assert ab.spawn_verb(["/usr/bin/python3", "/p/close_job_noop.py", "run"]) == ("python3", "close_job_noop.py")
+    assert ab.spawn_verb(["py\\python.exe", "-S", "-E", "p\\close_job_noop.py"]) == ("python", "close_job_noop.py")
+
+
+def test_spawns_flag_parses_without_baseline():
+    args = ab.parse_args(["--spawns"])
+    assert args.spawns and args.baseline is None
+    assert ab.parse_args(["--spawns", "--at", "f" * 40]).at == "f" * 40
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_spawns_probe_lists_the_close_job_with_its_site(tmp_path):
+    result = ab.run_probe(_REPO, tmp_path)
+    assert result["spawn_total"] == len(result["spawns"]) >= 1
+    assert all(set(s) == {"exe", "verb", "site", "phase"} and s["phase"] == "call" for s in result["spawns"])
+    assert any(
+        s["site"] in {
+            "coordinator_core.ops.ceremony.detached_spawn:spawn_detached",
+            "coordinator_core.ops.dispatch_emit.terminal_commit:_launch_close_job",
+        }
+        for s in result["spawns"]
+    )
+
+
+_CANNED_IMPORTTIME = """\
+import time: self [us] | cumulative | imported package
+import time:       100 |        100 |   encodings
+import time:        50 |         50 |     leaf_a
+import time:        30 |         30 |     leaf_b
+import time:        10 |         90 |   pkg_one
+import time:       200 |        200 |   pkg_two
+some unrelated stderr line
+"""
+
+
+def test_parse_importtime_returns_outermost_with_cumulative_and_module_counts():
+    rows = ab.parse_importtime(_CANNED_IMPORTTIME)
+    assert [r["name"] for r in rows] == ["encodings", "pkg_one", "pkg_two"]
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["pkg_one"]["cum_us"] == 90 and by_name["pkg_one"]["modules"] == 3
+    assert by_name["pkg_two"]["modules"] == 1
+
+
+def test_net_attribution_nets_setup_and_ranks():
+    full = ab.parse_importtime(_CANNED_IMPORTTIME)
+    setup = [{"name": "encodings", "cum_us": 100, "modules": 1}, {"name": "pkg_two", "cum_us": 50, "modules": 1}]
+    rows = ab.net_attribution(full, setup)
+    assert [r["name"] for r in rows] == ["pkg_two", "pkg_one"]
+    assert rows[0]["net_ms"] == 0.15
+
+
+def test_probe_flags_parse():
+    args = ab.parse_args(["--importers", "a.b", "c.d", "--attribute", "--top", "7", "--at", "f" * 40])
+    assert args.importers == ["a.b", "c.d"] and args.attribute and args.top == 7 and args.at == "f" * 40
+    with pytest.raises(SystemExit):
+        ab.parse_args(["--at", "f" * 40])
+
+
+def test_main_refuses_repo_out_dir_for_at(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_INVOCATION_ORIGIN", "benchmark")
+    with pytest.raises(ValueError, match="inside the repo root"):
+        ab.main(["--at", "0" * 40, "--importers", "asyncio", "--out-dir", str(_REPO / "scratch" / "ab-refused")])
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_importers_reports_a_requester_for_a_module_the_path_loads(tmp_path):
+    target = "coordinator_core.ops.ceremony.commit_v2"
+    result = ab.run_probe(_REPO, tmp_path, targets=[target])
+    hits = result["importers"][target]
+    assert hits and all(h["requester"].count(":") == 1 and h["requests"] >= 1 for h in hits)
+    assert result["asyncio_importers"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_attribute_ranks_outermost_imports_with_triggers(tmp_path):
+    rows = ab.run_attribute(_REPO, tmp_path, 5)
+    assert 0 < len(rows) <= 5
+    assert [r["net_ms"] for r in rows] == sorted((r["net_ms"] for r in rows), reverse=True)
+    assert all("trigger" in r and r["modules"] >= 1 for r in rows)

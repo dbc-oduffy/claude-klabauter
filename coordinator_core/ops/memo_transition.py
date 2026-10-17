@@ -1068,6 +1068,14 @@ def _handle_supersede(fm_text: str, params: dict) -> str | None:
     return _apply_supersede_fields(fm_text, note, realized_by, at)
 
 
+def _abort_reply(exc: MutateAbort, fallback: str) -> dict:
+    """The op refusal for a MutateAbort; a second exception arg is the CLI wording (`cli_error`)."""
+    reply = _err(str(exc.args[0]) if exc.args else fallback)
+    if len(exc.args) > 1:
+        reply["cli_error"] = str(exc.args[1])
+    return reply
+
+
 def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | None:
     if _disposition_matches(fm_text, params):
         return None
@@ -1076,8 +1084,11 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
         same_decision = params.get("decision") and params.get("decision") == read_fm_field_unquoted(
             fm_text, "decision"
         )
-        route = "; to amend the note or realized_by only, pass correct_realization" if same_decision else ""
-        raise MutateAbort(f"memo is already actioned with a different disposition — cannot re-action{route}")
+        base = "memo is already actioned with a different disposition — cannot re-action"
+        if not same_decision:
+            raise MutateAbort(base)
+        tail = "; to amend the note or realized_by only, pass "
+        raise MutateAbort(f"{base}{tail}correct_realization", f"{base}{tail}--correct-realization")
 
     new_decision = params.get("decision")
     cur_decision = read_fm_field_unquoted(fm_text, "decision")
@@ -1304,7 +1315,7 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
     try:
         new_text = locked_rmw(memo_path, _mutate, repo_root=git_root)
     except MutateAbort as exc:
-        return _err(str(exc.args[0]) if exc.args else "action: unknown mutation error")
+        return _abort_reply(exc, "action: unknown mutation error")
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:
@@ -1757,7 +1768,7 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
     try:
         new_text = locked_rmw(memo_path, _mutate, repo_root=git_root)
     except MutateAbort as exc:
-        return _err(str(exc.args[0]) if exc.args else "resolve: unknown mutation error")
+        return _abort_reply(exc, "resolve: unknown mutation error")
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:

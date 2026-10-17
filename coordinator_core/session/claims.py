@@ -2479,7 +2479,8 @@ def _clear_path_claim_if_dead(
     124 claim dirs, 124 ``session_id`` files) so no multi-claimant refusal can
     apply to them, and a dead-holder baton clears one at a time today. An
     abandoned baton is blocked by the absence of a BULK route
-    (``session.reap_claims_for_repos``, killed over the brightline), which is
+    (``session.reap_claims_for_repos``, deleted under DR-344's kill bar, no
+    cull route), which is
     `state/bug-backlog/2026-08-31-no-working-path-releases-an-abandoned-claim.
     yaml`, not this arm.
 
@@ -3285,13 +3286,13 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
 
     Reuses the EXISTING ``unconsume`` verb (``coordinator_core.ops.handoff_
     transition._unclaim``) rather than hand-rolling a second frontmatter
-    mutator. Shared by ``clear_claim_if_dead`` (this module, manual EM-driven
-    clear) and ``coordinator_core.ops.session.reap._reap_orphaned_claims``
-    (automated reaper) — both clear the same ``<sessions_dir>/handoff-claims/
-    <basename>`` lock and both carried the identical frontmatter-drift bug
-    (the Director of Engineering Finding 4/5).
+    mutator. Used by ``clear_claim_if_dead`` (this module, manual EM-driven
+    clear); the automated reaper ``_reap_orphaned_claims`` that shared it was
+    deleted under DR-344's kill bar. Both cleared the same
+    ``<sessions_dir>/handoff-claims/<basename>`` lock and both carried the
+    identical frontmatter-drift bug.
 
-    ORDERING (the Director of Engineering Finding 4 — "atomic" is an overclaim; rmtree and a
+    ORDERING ("atomic" would be an overclaim; rmtree and a
     frontmatter mutation are two distinct filesystem ops, never atomic across
     a crash): callers MUST invoke this BEFORE ``shutil.rmtree``-ing the claim
     dir, never after. Crash disposition: (a) crash after this call succeeds
@@ -3382,7 +3383,7 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     a successor", never as "has none".
 
     ``sessions_dir``: the ``<common_dir>/coordinator-sessions`` dir (the same
-    value ``clear_claim_if_dead``/``_reap_orphaned_claims`` already resolve);
+    value ``clear_claim_if_dead`` resolves);
     the handoff worktree is derived from its parent (``common_dir``) via
     ``main_worktree_root`` — the single reviewed home for that derivation
     (see that helper's own negative-spec; do not inline a bare ``.parent``).
@@ -3825,13 +3826,9 @@ def list_claims_by_session_checked(
           inside ``drop()`` at ``:967``, for ``class_ in ("handoff", "memo")``):
           RELEASED. This is the put-down/decline path, never a side effect
           of shipping.
-        - reap (``coordinator_core/ops/session/reap.py:417
-          _reap_orphaned_claims``, iterating ``_CLAIM_SUBDIRS``): released
-          ONLY when the holding session is confirmed DEAD (fail-closed-to-keep
-          on a live holder or a liveness-check exception). Not applicable at
-          gate-read time for a still-running closing session — but is the
-          mechanism that eventually reaps a handoff claim once its session
-          truly exits.
+        - reap (``_reap_orphaned_claims``): DELETED under DR-344's kill bar, so
+          no automated path releases a claim whose session exited; only
+          ``clear_claim_if_dead`` (manual) and ``drop`` release one.
 
     Consequence: a handoff claim survives both ship and archive, so an
     archived-mid-ceremony owned baton is still attributable to its session at
@@ -3863,7 +3860,7 @@ def plan_claim_dir(common_dir: Path, plan_path: Path) -> Path:
     """Derive the plan-execution claim-lock dir for a given plan path.
 
     <common_dir>/coordinator-sessions/plan-claims/<stem> — the SAME key
-    session.reap._reap_orphaned_claims sweeps and ``claim_plan`` /
+    the deleted session.reap._reap_orphaned_claims swept and ``claim_plan`` /
     ``claim_artifact("plan", slug, ...)`` writes. Keyed on ``plan_path.stem``
     (filename MINUS ``.md``), NOT the full filename — the one divergence from
     ``handoff_claim_dir``. Single source of truth: ``ops.fleet._common``

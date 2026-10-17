@@ -29,6 +29,12 @@ def test_ask_trailer_names_no_baked_plan_or_sha():
     assert "docs/plans/" not in line
 
 
+def test_ask_run_base_comes_from_the_staged_manifest_not_an_agent():
+    head = _pre_execute(_compose())
+    assert "_runBase = /^[0-9a-f]{40}$/.test(String(_manifest?.head_sha ?? ''))" in head
+    assert "label: 'run-base'" not in head
+
+
 def test_ask_refuses_to_enter_execution_without_plan_or_run_base():
     head = _pre_execute(_compose())
     tail = head[head.rindex("phase('plan')"):]

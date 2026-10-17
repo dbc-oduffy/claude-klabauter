@@ -26,7 +26,8 @@ def test_tests_only_staleness_allows_reverify_and_emits_tests_stage(tmp_path, mo
     out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
     rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record=str(record), out_path=str(out))
     text = out.read_text(encoding="utf-8")
-    assert "Tests re-run" in text and "python3" in text and "tests_run" in text
+    assert "python3" in text and "tests_run" in text
+    assert ("Verify" in text) != ("Tests re-run" in text), "one tests leg: merged into the judge or standalone"
 
 
 def test_old_shape_record_emits_no_tests_stage(tmp_path, monkeypatch):
@@ -76,7 +77,7 @@ def test_not_run_tests_and_criterion_are_legs_to_run_and_all_pass_still_refuses(
     monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
     out = repo / "p.mjs"
     rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record=str(record), out_path=str(out))
-    assert "Tests re-run" in out.read_text(encoding="utf-8")
+    assert "tests_run" in out.read_text(encoding="utf-8")
     assert rd._criterion_unsettled({"criterion": {"status": "not_run"}})
     ok = {"tests": {"status": "pass"}, "criterion": {"status": "met"}}
     assert not rd._unsettled(ok)

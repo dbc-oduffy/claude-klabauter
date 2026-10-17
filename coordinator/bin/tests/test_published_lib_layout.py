@@ -107,6 +107,17 @@ def test_row_five_admits_percolate():
         )
 
 
+def test_both_klabauter_lib_rows_admit_install():
+    wanted = {"claude-klabauter-lib", "claude-klabauter-coordinator-lib"}
+    rows = {r[0]: r for r in _rows() if r[0] in wanted}
+    assert set(rows) == wanted, f"missing lib rows: {wanted - set(rows)}"
+    for name, row in rows.items():
+        assert "install" in row[6].split(","), (
+            f"row {name!r} does not admit install/; coordinator_install.py would not "
+            "reach the klabauter mirror"
+        )
+
+
 def test_source_fixtures_exist():
     assert os.path.isfile(_SOURCE_BIN_LIB_CC_INVOKE)
     assert os.path.isfile(_SOURCE_SETTINGS_HOME)

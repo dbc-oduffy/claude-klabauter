@@ -305,6 +305,47 @@ def _worktree_blob(
     gitdir: Path, root: Path, rel: str, data: bytes, created: Optional[set] = None
 ) -> str:
     """The blob sha `git add` would have produced for `rel`, in process.
+    Raises `FilterUnsupported` for the shapes `_checkin_bytes` refuses."""
+    return write_object(gitdir, b"blob", _checkin_bytes(root, rel, data), created=created)
+
+
+def checkin_sizes(
+    repo: Union[str, Path],
+    paths: Sequence[str],
+    *,
+    blob_fallback: Callable[[Sequence[str]], Mapping[str, str]],
+) -> Dict[str, Optional[int]]:
+    """`{path: size of the blob git add would write}` for each worktree path.
+
+    Zero spawns unless a path is refused by `_checkin_bytes`; all refused
+    paths then resolve through ONE `blob_fallback` call and are sized from
+    the object header. A path that cannot be read maps to None."""
+    root = Path(repo)
+    sizes: Dict[str, Optional[int]] = {}
+    refused = []
+    for p in paths:
+        try:
+            data = (root / p).read_bytes()
+        except OSError:
+            sizes[p] = None
+            continue
+        try:
+            sizes[p] = len(_checkin_bytes(root, p, data))
+        except FilterUnsupported:
+            refused.append(p)
+    if refused:
+        resolved = blob_fallback(refused)
+        common = resolve_git_common_dir(root)
+        for p in refused:
+            obj = read_object(common, resolved[p])
+            if obj is None:
+                raise CommitRefused(f"{p}: blob {resolved[p]} written by the fallback is unreadable")
+            sizes[p] = len(obj[1])
+    return sizes
+
+
+def _checkin_bytes(root: Path, rel: str, data: bytes) -> bytes:
+    """The bytes git's checkin filter would hash for `rel`.
 
     `git add` does not record raw bytes -- it runs git's checkin filters, and
     on this box `core.autocrlf=true` means a CRLF worktree file hashes to its
@@ -346,7 +387,7 @@ def _worktree_blob(
     if disposition == checkin_attrs.BINARY:
         # `-text` -- no checkin conversion at all, so the raw bytes are
         # always what git would have hashed. Zero cost, no CR check needed.
-        return write_object(gitdir, b"blob", data, created=created)
+        return data
     if disposition == checkin_attrs.TEXT:
         # `text` / `text=auto` / `eol=lf` / `eol=crlf` -- checkin always
         # normalizes CRLF -> LF (checkin_attrs.py's own point: the two `eol=`
@@ -359,7 +400,7 @@ def _worktree_blob(
         # wrong shas (see module docstring), so it is refused to the
         # batched fallback rather than guessed.
         if bytes([13]) not in data:
-            return write_object(gitdir, b"blob", data, created=created)
+            return data
         raise FilterUnsupported(
             f"{rel}: a text/eol attribute ({disposition}) pins this path's "
             "checkin conversion and its content contains CR bytes -- "
@@ -379,14 +420,14 @@ def _worktree_blob(
     # bytes as-is and so do we.
     if bytes([13]) in data:
         if _repo_autocrlf_true(root):
-            return write_object(gitdir, b"blob", _autocrlf_checkin_normalize(data), created=created)
+            return _autocrlf_checkin_normalize(data)
         raise FilterUnsupported(
             f"{rel}: contains CR bytes -- checkin normalization for this path "
             "is not reproduced in process, and the raw bytes hash to a blob "
             "git disagrees with. Refused rather than silently committing "
             "different content."
         )
-    return write_object(gitdir, b"blob", data, created=created)
+    return data
 
 
 def hash_worktree_blobs_via_spawn(

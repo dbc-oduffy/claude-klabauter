@@ -85,7 +85,7 @@ _REVISE = "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id:
 
 def test_in_run_stopped_next_action_is_revise_and_refire_never_a_commit(monkeypatch):
     script = _script(monkeypatch)
-    assert f": {_REVISE};" in script
+    assert f": {_REVISE});" in script
     assert "get terminal_commit_cli() { return this.next_action.kind === 'terminal_commit' " in script
 
 
@@ -126,7 +126,7 @@ def test_commit_prompt_carries_a_path_command_and_an_uncopied_params_block(monke
 def test_token_less_composition_keeps_the_commit_hand_off(monkeypatch):
     script = _script(monkeypatch, in_run_commit=False)
     assert "revise_and_refire', op" not in script
-    assert "{ kind: 'none', op: null, params: null };" in script
+    assert "{ kind: 'none', op: null, params: null });" in script
     assert "get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }" in script
 
 

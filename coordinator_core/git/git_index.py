@@ -48,6 +48,7 @@ from coordinator_core.git.git_dir import resolve_git_dir
 __all__ = [
     "IndexStatusEntry",
     "IndexIdentity",
+    "IndexFlaggedIdentity",
     "IndexParseError",
     "IndexV4Unsupported",
     "parse_index_stat",
@@ -80,6 +81,19 @@ class IndexIdentity(NamedTuple):
     mtime_nsec: int = 0
 
 
+class IndexFlaggedIdentity(NamedTuple):
+    """`IndexIdentity` plus assume-valid, skip-worktree and intent-to-add."""
+
+    mode: int
+    sha: str
+    size: int
+    mtime: int
+    mtime_nsec: int = 0
+    assume_valid: bool = False
+    skip_worktree: bool = False
+    intent_to_add: bool = False
+
+
 class IndexParseError(ValueError):
     pass
 
@@ -98,8 +112,12 @@ def parse_index_stat(repo: Union[str, Path]) -> Dict[str, IndexStatusEntry]:
 
 
 def parse_index_identity(
-    repo: Union[str, Path], wanted: Optional[Collection[str]] = None
-) -> Dict[str, IndexIdentity]:
+    repo: Union[str, Path],
+    wanted: Optional[Collection[str]] = None,
+    *,
+    prefixes: Optional[Collection[str]] = None,
+    with_flags: bool = False,
+) -> Dict[str, Union[IndexIdentity, IndexFlaggedIdentity]]:
     """ONE walk of `.git/index` yielding the UNION of what the two
     clean/modified axes need per path -- `(mode, sha, size, mtime,
     mtime_nsec)`.
@@ -155,6 +173,13 @@ def parse_index_identity(
     (or every entry, when `wanted=None`): a skipped entry costs only the
     two `flags` bytes already read, same trade-off as the truncation note
     above.
+
+    `prefixes` adds every entry AT or UNDER each directory prefix (`p` or
+    `p/...`; `""` selects all) to what `wanted` selects, and the walk returns
+    once a name sorts past every range (`p + b"0"`) -- the same sort-order
+    caveat: a late-sorting prefix still steps over most of the index.
+    `with_flags=True` returns `IndexFlaggedIdentity` values; without it the
+    result is byte-identical to the unscoped call.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -163,7 +188,13 @@ def parse_index_identity(
     if raw is None:
         return {}
 
-    return _parse_index_bytes(raw, index_path=index_path, wanted=wanted)
+    return _parse_index_bytes(
+        raw,
+        index_path=index_path,
+        wanted=wanted,
+        prefixes=prefixes,
+        with_flags=with_flags,
+    )
 
 
 def _read_index_bytes_with_retry(index_path: Path) -> Optional[bytes]:
@@ -187,8 +218,13 @@ def _read_index_bytes_with_retry(index_path: Path) -> Optional[bytes]:
 
 
 def _parse_index_bytes(
-    raw: bytes, *, index_path: Path, wanted: Optional[Collection[str]] = None
-) -> Dict[str, IndexIdentity]:
+    raw: bytes,
+    *,
+    index_path: Path,
+    wanted: Optional[Collection[str]] = None,
+    prefixes: Optional[Collection[str]] = None,
+    with_flags: bool = False,
+) -> Dict[str, Union[IndexIdentity, IndexFlaggedIdentity]]:
     if len(raw) < 12:
         raise IndexParseError(f"{index_path}: truncated header ({len(raw)} bytes)")
 
@@ -210,14 +246,30 @@ def _parse_index_bytes(
             f"(supported: {_SUPPORTED_VERSIONS})"
         )
 
-    entries: Dict[str, IndexIdentity] = {}
+    entries: Dict[str, Union[IndexIdentity, IndexFlaggedIdentity]] = {}
     offset = 12
 
     wanted_bytes: Optional[set] = None
     if wanted is not None:
         wanted_bytes = {p.encode("utf-8", "surrogateescape") for p in wanted}
-        if not wanted_bytes:
+        if not wanted_bytes and not prefixes:
             return {}
+
+    prefix_exact: set = set()
+    prefix_under: tuple = ()
+    prefix_all = False
+    sort_exit: Optional[bytes] = None
+    if prefixes is not None:
+        encoded = [p.encode("utf-8", "surrogateescape").rstrip(b"/") for p in prefixes]
+        if not encoded and not wanted_bytes:
+            return {}
+        prefix_all = b"" in encoded
+        prefix_exact = {p for p in encoded if p}
+        prefix_under = tuple(p + b"/" for p in prefix_exact)
+        if not prefix_all:
+            bounds = [p + b"0" for p in prefix_exact]
+            bounds.extend(w + b"\x00" for w in (wanted_bytes or ()))
+            sort_exit = max(bounds)
 
     for _ in range(entry_count):
         entry_start = offset
@@ -238,7 +290,10 @@ def _parse_index_bytes(
                 )
             if offset + 2 > len(raw):
                 raise IndexParseError(f"{index_path}: truncated extended flags at {offset}")
+            xflags = struct.unpack(">H", raw[offset : offset + 2])[0]
             offset += 2
+        else:
+            xflags = 0
 
         try:
             nul = raw.index(b"\x00", offset)
@@ -256,8 +311,19 @@ def _parse_index_bytes(
         padding = (8 - (entry_len % 8)) % 8
         offset = nul + 1 + padding
 
-        if wanted_bytes is not None and name not in wanted_bytes:
-            continue
+        if prefixes is None:
+            if wanted_bytes is not None and name not in wanted_bytes:
+                continue
+        else:
+            if sort_exit is not None and name >= sort_exit:
+                break
+            if not (
+                prefix_all
+                or name in prefix_exact
+                or name.startswith(prefix_under)
+                or (wanted_bytes is not None and name in wanted_bytes)
+            ):
+                continue
 
         if stage != 0:
             raise IndexParseError(
@@ -272,10 +338,26 @@ def _parse_index_bytes(
         size = struct.unpack(">I", raw[entry_start + 36 : entry_start + 40])[0]
         sha = raw[entry_start + 40 : entry_start + 60].hex()
         path = name.decode("utf-8", "surrogateescape")
-        entries[path] = IndexIdentity(
-            mode=mode, sha=sha, size=size, mtime=mtime_sec, mtime_nsec=mtime_nsec
-        )
-        if wanted_bytes is not None and len(entries) == len(wanted_bytes):
+        if with_flags:
+            entries[path] = IndexFlaggedIdentity(
+                mode=mode,
+                sha=sha,
+                size=size,
+                mtime=mtime_sec,
+                mtime_nsec=mtime_nsec,
+                assume_valid=bool(flags & 0x8000),
+                skip_worktree=bool(xflags & 0x4000),
+                intent_to_add=bool(xflags & 0x2000),
+            )
+        else:
+            entries[path] = IndexIdentity(
+                mode=mode, sha=sha, size=size, mtime=mtime_sec, mtime_nsec=mtime_nsec
+            )
+        if (
+            prefixes is None
+            and wanted_bytes is not None
+            and len(entries) == len(wanted_bytes)
+        ):
             break
 
     return entries

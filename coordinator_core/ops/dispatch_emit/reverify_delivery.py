@@ -39,6 +39,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     _host_native,
     _schema_literal,
     compose_criterion_judge,
+    criterion_judge_parts,
     delivery_supersession_clause,
     em_owned_clause,
     owner_repo_clause,
@@ -67,6 +68,34 @@ _PHASE = "Delivery re-verify"
 _CRITERION_STATUSES = ("met", "not_met", "indeterminate")
 _TESTS_PHASE = "Tests re-run"
 _TESTS_STATUSES = ("pass", "fail", "error")
+_VERIFY_PHASE = "Verify"
+
+_TESTS_FIELD = (
+    ", tests: _tests ? { status: _tests.status ?? null, run: _tests.tests_run ?? null, "
+    "failed: _tests.tests_failed ?? null, sidecar: _tests.sidecar_path ?? null, "
+    "baseline_method: _tests.baseline_method ?? null, baseline: _tests.baseline ?? null } : null"
+)
+_CRITERION_FIELD = (
+    ", criterion: _judge ? { status: _judge.status ?? null, "
+    "observation: _judge.observation ?? null } : null"
+)
+
+
+def _tests_prompt(head_sha: str, plan_path: str, base: str, *, write_record: bool = False) -> str:
+    """The scoped-test brief. `write_record` adds the test-runner's sidecar clause, which an agent
+    without Write cannot honour."""
+    return (
+        f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
+        "Run Python as `python3`, falling back to `python` when `python3` is absent. "
+        "Report raw evidence; do not gate. "
+        + (
+            "Write your record and return sidecar_path -- required. "
+            "The engine stamps agent_type and target_plan on it at record time.\n"
+            if write_record
+            else "You have no Write tool: return it under `test` and omit sidecar_path.\n"
+        )
+        + f"plan_path: {plan_path}"
+    )
 
 #: The verifier has no Write tool; `record` persists its returned verdict.
 _NO_SIDECAR_NOTE = "Return the verdict as your structured result only; the engine records it. Write no sidecar."
@@ -355,8 +384,7 @@ def compose_reverify_script(
         agent_opts=_agent_opts_for(agent, emitted_agent_type=_DELIVERY_VERIFIER_HOST_NATIVE_TYPE),
         schema_literal=_schema_literal(agent.schema, stage_schemas),
     )
-    judge_call = compose_criterion_judge(
-        review,
+    judge_kwargs = dict(
         stage_schemas=stage_schemas,
         plan_path=plan_path,
         run_base_sha=base,
@@ -368,19 +396,55 @@ def compose_reverify_script(
         evidence=_register_evidence(plan_path, repo_root),
         em_owned_rows=owned,
     )
+    judge_call = compose_criterion_judge(review, **judge_kwargs)
     phases = [_js_string_literal(_PHASE)] if call else []
     tests_lines = ""
     tests_field = ""
     tests_ident: dict[str, str] = {}
-    if rerun_tests:
-        phases.append(_js_string_literal(_TESTS_PHASE))
-        tests_prompt = (
-            f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
-            "Run Python as `python3`, falling back to `python` when `python3` is absent. "
-            "Report raw evidence; do not gate. Write your record and return sidecar_path -- required. "
-            "The engine stamps agent_type and target_plan on it at record time.\n"
-            f"plan_path: {plan_path}"
+    # A degraded host runs the judge as general-purpose, which has Write: keep the two legs there.
+    verify_merge = rerun_tests and judge_call is not None and not host_degraded
+    judge_lines = ""
+    criterion_field = ""
+    if verify_merge:
+        parts = criterion_judge_parts(review, **judge_kwargs)
+        test_schema = json.loads(stage_schema_literal("test_result"))
+        test_schema["required"] = [k for k in test_schema["required"] if k != "sidecar_path"]
+        verify_schema = {
+            "type": "object",
+            "properties": {"test": test_schema, "judge": parts.schema},
+            "required": ["judge"],
+            "additionalProperties": False,
+        }
+        verify_prompt = (
+            "Verify in two steps, in order, in one run.\n\n"
+            "Step 1 -- scoped tests. " + _tests_prompt(head_sha, plan_path, base)
+            + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
+            "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
+            "Return the verdict under `judge`.\n\n"
+            + parts.prompt
         )
+        verify_call = _agent_call_literal(
+            parts.agent_type,
+            verify_prompt,
+            _VERIFY_PHASE,
+            schema=True,
+            as_arrow=False,
+            agent_opts=_agent_opts_for(review.judge, emitted_agent_type=parts.agent_type),
+            schema_literal=json.dumps(verify_schema, sort_keys=True),
+        )
+        phases.append(_js_string_literal(_VERIFY_PHASE))
+        tests_lines = (
+            f"  phase({_js_string_literal(_VERIFY_PHASE)});\n"
+            f"  const _verify = await {verify_call};\n"
+            "  const _tests = _verify.test ?? null;\n"
+            "  const _judge = _verify.judge ?? null;\n"
+        )
+        tests_field = _TESTS_FIELD
+        criterion_field = _CRITERION_FIELD
+        tests_ident["tests_agent_type"] = parts.agent_type
+    elif rerun_tests:
+        phases.append(_js_string_literal(_TESTS_PHASE))
+        tests_prompt = _tests_prompt(head_sha, plan_path, base, write_record=True)
         tests_type, tests_role = _host_native(review.prep.agent_type, host_degraded)
         tests_ident["tests_agent_type"] = tests_type
         tests_call = _agent_call_literal(
@@ -396,23 +460,14 @@ def compose_reverify_script(
             f"  phase({_js_string_literal(_TESTS_PHASE)});\n"
             f"  const _tests = await {tests_call};\n"
         )
-        tests_field = (
-            ", tests: _tests ? { status: _tests.status ?? null, run: _tests.tests_run ?? null, "
-            "failed: _tests.tests_failed ?? null, sidecar: _tests.sidecar_path ?? null, "
-            "baseline_method: _tests.baseline_method ?? null, baseline: _tests.baseline ?? null } : null"
-        )
-    judge_lines = ""
-    criterion_field = ""
-    if judge_call is not None:
+        tests_field = _TESTS_FIELD
+    if judge_call is not None and not verify_merge:
         phases.append(_js_string_literal(CRITERION_JUDGE_PHASE_TITLE))
         judge_lines = (
             f"  phase({_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)});\n"
             f"  const _judge = await {judge_call};\n"
         )
-        criterion_field = (
-            ", criterion: _judge ? { status: _judge.status ?? null, "
-            "observation: _judge.observation ?? null } : null"
-        )
+        criterion_field = _CRITERION_FIELD
     meta = (
         "export const meta = {\n"
         "  name: 'reverify-delivery',\n"
@@ -847,6 +902,39 @@ def emit_reverify(
     return {"path": out_path, "supersedes": rel, "claims": len(claims), "receipt": receipt}
 
 
+def _rejudge_judge_kwargs(
+    stage_schemas: dict,
+    plan_path: str,
+    run_base_sha: Optional[str],
+    head_sha: str,
+    repo_root: Optional[Path],
+    host_degraded: bool,
+) -> dict:
+    """The judge-call keywords the rejudge script and the Agent-tool brief both render from."""
+    return {
+        "stage_schemas": stage_schemas,
+        "plan_path": plan_path,
+        "run_base_sha": run_base_sha or "run_base_sha",
+        "falsifier": None,
+        "criterion": resolve_operative_criterion_for_plan(plan_path, repo_root),
+        "prompt_head": _JUDGE_NOW_HEAD.format(head_sha=head_sha)
+        + owner_repo_clause(_engine_rows(plan_path, repo_root), {}),
+        "host_degraded": host_degraded,
+        "evidence_path": _row_evidence_path(plan_path, repo_root),
+        "evidence": _register_evidence(plan_path, repo_root),
+        "em_owned_rows": _em_owned_rows(plan_path, repo_root),
+    }
+
+
+def _rejudge_ident(
+    plan_id: Optional[str], head_sha: str, plan_path: str, run_base_sha: Optional[str]
+) -> dict:
+    return {
+        "rejudge": True, "plan_id": plan_id, "head_sha": head_sha, "plan_path": plan_path,
+        "run_base_sha": run_base_sha,
+    }
+
+
 def compose_rejudge_script(
     *,
     fragment: dict,
@@ -863,24 +951,13 @@ def compose_rejudge_script(
     review = parse_execute_review(fragment)
     call = compose_criterion_judge(
         review,
-        stage_schemas=stage_schemas,
-        plan_path=plan_path,
-        run_base_sha=run_base_sha or "run_base_sha",
-        falsifier=None,
-        criterion=resolve_operative_criterion_for_plan(plan_path, repo_root),
-        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha)
-        + owner_repo_clause(_engine_rows(plan_path, repo_root), {}),
-        host_degraded=host_degraded,
-        evidence_path=_row_evidence_path(plan_path, repo_root),
-        evidence=_register_evidence(plan_path, repo_root),
-        em_owned_rows=_em_owned_rows(plan_path, repo_root),
+        **_rejudge_judge_kwargs(
+            stage_schemas, plan_path, run_base_sha, head_sha, repo_root, host_degraded
+        ),
     )
     if call is None:
         raise ReverifyRefused("rejudge: the review roster declares no criterion judge")
-    ident = {
-        "rejudge": True, "plan_id": plan_id, "head_sha": head_sha, "plan_path": plan_path,
-        "run_base_sha": run_base_sha,
-    }
+    ident = _rejudge_ident(plan_id, head_sha, plan_path, run_base_sha)
     return (
         "// Runs inside the Workflow runner; a top-level `return` is legal there.\n"
         "export const meta = {\n"
@@ -961,15 +1038,21 @@ def _hand_worked_run_base(repo_root: Path, plan_path: str, fm: Any) -> Optional[
     return sha or None
 
 
-def emit_rejudge(
-    *, repo_root: Path, plan_path: str, out_path: str, agent_type_host: Optional[str] = None
-) -> dict:
-    """Emit the judge-only script for a plan whose `review_stamp` records an unmet criterion,
-    whose delivery verdict records one, or that carries no `review_stamp` and has every row coded."""
-    from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
-    from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs, _write_emission_receipt
-    from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
+def _register_gate_demotes(repo_root: Path, plan_path: str, criterion: dict) -> bool:
+    """True when `terminal_commit._register_gate` would demote this met stamp criterion to
+    `not_met`; the gate runs on a copy, so nothing is written."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate
 
+    try:
+        plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError:
+        return False
+    return _register_gate(repo_root, plan_rel, {"criterion": dict(criterion)}) is not None
+
+
+def _rejudge_subject(repo_root: Path, plan_path: str) -> "tuple[Optional[str], Optional[str]]":
+    """`(plan_id, run_base_sha)` of a plan eligible for a criterion rejudge; raises
+    `ReverifyRefused` for one that is not."""
     text = Path(plan_path).read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     split = split_frontmatter(text)
     try:
@@ -979,7 +1062,9 @@ def emit_rejudge(
     stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
     criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
     plan_id = str(fm.get("plan_id") or "") or None if isinstance(fm, dict) else None
-    if isinstance(criterion, dict) and criterion.get("status") != "met":
+    if isinstance(criterion, dict) and (
+        criterion.get("status") != "met" or _register_gate_demotes(repo_root, plan_path, criterion)
+    ):
         run_base_sha = stamp.get("run_base_sha")
     else:
         recorded = recorded_unmet_criterion(repo_root, plan_id, plan_path)
@@ -993,6 +1078,50 @@ def emit_rejudge(
                 f"rejudge: {plan_path} carries no unmet review_stamp criterion and no recorded "
                 "delivery verdict with an unmet exit criterion to re-judge"
             )
+    return plan_id, run_base_sha
+
+
+def emit_rejudge_brief(
+    *, repo_root: Path, plan_path: str, agent_type_host: Optional[str] = None
+) -> dict:
+    """The criterion judge as an Agent-tool brief `{agent_type, model, prompt, schema, ident}`,
+    under the refusals `emit_rejudge` applies; writes nothing and fires nothing. Its prompt and
+    schema are the ones the rejudge script embeds."""
+    from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs
+    from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
+
+    plan_id, run_base_sha = _rejudge_subject(repo_root, plan_path)
+    fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
+    head_sha = _head_sha(repo_root)
+    parts = criterion_judge_parts(
+        parse_execute_review(fragment),
+        **_rejudge_judge_kwargs(
+            schemas, plan_path, run_base_sha, head_sha, repo_root,
+            agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
+        ),
+    )
+    if parts is None:
+        raise ReverifyRefused("rejudge: the review roster declares no criterion judge")
+    return {
+        "agent_type": parts.agent_type,
+        "model": parts.model,
+        "prompt": parts.prompt,
+        "schema": parts.schema,
+        "ident": _rejudge_ident(plan_id, head_sha, plan_path, run_base_sha),
+    }
+
+
+def emit_rejudge(
+    *, repo_root: Path, plan_path: str, out_path: str, agent_type_host: Optional[str] = None
+) -> dict:
+    """Emit the judge-only script for a plan whose `review_stamp` records an unmet criterion,
+    whose delivery verdict records one, or that carries no `review_stamp` and has every row coded."""
+    from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs, _write_emission_receipt
+    from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
+
+    plan_id, run_base_sha = _rejudge_subject(repo_root, plan_path)
     fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     script = compose_rejudge_script(
         fragment=fragment,
@@ -1175,20 +1304,55 @@ def _repo_of_cwd() -> Path:
     return cwd
 
 
+def _json_arg(raw: str) -> dict:
+    """A JSON object given inline or as a file path."""
+    if not raw.lstrip().startswith("{"):
+        raw = Path(raw).read_text(encoding="utf-8")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = argparse.ArgumentParser(prog="reverify-delivery")
     sub = parser.add_subparsers(dest="cmd", required=True)
     rec = sub.add_parser("record", help="write the superseding delivery-verdict from the Workflow result")
     rec.add_argument("--run-record", default=None, help="required except for a judge-only rejudge result")
-    rec.add_argument("--result-json", required=True, help="the Workflow's returned JSON, or a path to it")
+    rec.add_argument("--result-json", default=None, help="the Workflow's returned JSON, or a path to it")
+    rec.add_argument(
+        "--judge-json", default=None,
+        help="an Agent-dispatched criterion judge's returned JSON, or a path to it; needs --ident",
+    )
+    rec.add_argument(
+        "--ident", default=None,
+        help="the `ident` of `emit-dispatch-workflow --rejudge --as-agent-brief` (or the whole brief), "
+        "as JSON or a path to it",
+    )
     rec.add_argument("--repo-root", default=None)
     rec.add_argument("--session-id", default="")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    raw = args.result_json
     try:
-        if not raw.lstrip().startswith("{"):
-            raw = Path(raw).read_text(encoding="utf-8")
-        result = json.loads(raw)
+        if args.judge_json is not None:
+            if args.result_json is not None or args.run_record or args.ident is None:
+                raise ValueError("--judge-json takes --ident and excludes --result-json and --run-record")
+            ident = _json_arg(args.ident)
+            ident = ident.get("ident", ident)
+            if not ident.get("rejudge"):
+                raise ValueError("--ident is not a rejudge ident")
+            judged = _json_arg(args.judge_json)
+            print(record_criterion_rejudge(
+                repo_root=Path(args.repo_root) if args.repo_root else _repo_of_cwd(),
+                plan_id=ident.get("plan_id"),
+                head_sha=ident["head_sha"],
+                criterion={k: judged.get(k) for k in ("status", "observation", "register_rows")},
+                session_id=args.session_id,
+                run_base_sha=ident.get("run_base_sha"),
+            ))
+            return 0
+        if args.result_json is None:
+            raise ValueError("--result-json or --judge-json is required")
+        result = _json_arg(args.result_json)
         if "reverify_delivery" not in result:
             result = _unwrap_task_output(result)
         ident = result["reverify_delivery"]

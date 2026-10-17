@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str}` | `{sizing: str}` | `{asks: [{ask, source?, label?, writes?}], confirm_split?}` (each ask a
+`args` shape: `{ask: str}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, label?, writes?}], confirm_split?}` (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
@@ -202,6 +202,12 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         item_source = item.get("source")
         if item_source is not None and item_source not in ASK_SOURCES:
             return None, f"asks[{i}].source must be one of: {', '.join(ASK_SOURCES)}."
+        sender = item.get("sender")
+        if sender is not None and not isinstance(sender, str):
+            return None, f"asks[{i}].sender must be a string."
+        relayed_text = item.get("relayed_text")
+        if relayed_text is not None and not isinstance(relayed_text, str):
+            return None, f"asks[{i}].relayed_text must be a string."
         label = item.get("label")
         if label is not None and not isinstance(label, str):
             return None, f"asks[{i}].label must be a string."
@@ -397,7 +403,7 @@ def evaluate(
             {**item, "source": item.get("source", source)} if item.get("source", source) is not None else dict(item)
             for item in asks
         ]
-        if len(asks) == 1:
+        if len(asks) == 1 and not (asks[0].get("sender") or asks[0].get("relayed_text")):
             ask, source, asks = asks[0]["ask"], asks[0].get("source"), None
 
     supersedes, supersedes_refusal = _supersedes(payload["tool_input"])

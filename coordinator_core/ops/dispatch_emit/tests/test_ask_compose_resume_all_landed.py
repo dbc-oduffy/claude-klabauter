@@ -13,7 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
 _STALE_REASON = "resume staged no dispatchable rows"
 _LANDED_PREFIX = "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows)"
-_HALT_PREFIX = "  if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) {"
+_HALT_PREFIX = "  else if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) {"
 
 _HARNESS = """
 let _halted = null, _allLanded = false, _resumeLedger = false, _planRel = 'p.md', _sizingRel = 's.yaml', _runId = 'r';
@@ -28,7 +28,8 @@ def _lines(script: str) -> list[str]:
 
 
 def _drive(script: str, gate: dict, manifest: dict) -> dict:
-    program = _HARNESS % (json.dumps(gate), json.dumps(manifest), "\n".join(_lines(script)))
+    body = "\n".join(ln.replace("  else if (", "  if (", 1) for ln in _lines(script))
+    program = _HARNESS % (json.dumps(gate), json.dumps(manifest), body)
     out = subprocess.run(["node", "-e", program], capture_output=True, text=True, check=True).stdout
     return json.loads(out)
 

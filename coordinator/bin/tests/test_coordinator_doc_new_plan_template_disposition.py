@@ -150,8 +150,10 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # 3.16.0 -> 3.17.0 (9c96a747e6) re-looked: `delivered_elsewhere`
         # disposition and optional `delivered_via`; the new conditional
         # `required` fires only on that disposition, never on an open row.
+        # 3.17.0 -> 3.18.0 (356a632daa) re-looked: version and bump-note only
+        # (re-vendor of the 3.17.0 shape); no property or `required` delta.
         # Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "3.17.0")
+        self.assertEqual(schema.get("x-schema-version"), "3.18.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

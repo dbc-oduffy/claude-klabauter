@@ -23,6 +23,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.git.git_index import (  # noqa: E402
+    IndexFlaggedIdentity,
+    IndexIdentity,
     parse_index_identity,
     IndexParseError,
     IndexV4Unsupported,
@@ -42,6 +44,8 @@ def _entry_fixed(
     extended: bool,
     mtime_nsec: int = 0,
     stage: int = 0,
+    xflags: int = 0,
+    assume_valid: bool = False,
 ) -> bytes:
     fixed = struct.pack(
         ">IIIIIIIIII",
@@ -59,9 +63,11 @@ def _entry_fixed(
     if extended:
         flags |= 0x4000
     flags |= (stage & 0x3) << 12
+    if assume_valid:
+        flags |= 0x8000
     fixed += struct.pack(">H", flags)
     if extended:
-        fixed += struct.pack(">H", 0)
+        fixed += struct.pack(">H", xflags)
     return fixed
 
 
@@ -77,6 +83,8 @@ def _build_index(entries, *, version=2):
             e.get("extended", False),
             e.get("mtime_nsec", 0),
             e.get("stage", 0),
+            e.get("xflags", 0),
+            e.get("assume_valid", False),
         )
         entry_len = len(fixed) + len(name) + 1
         padding = (8 - (entry_len % 8)) % 8
@@ -314,3 +322,147 @@ def test_unmerged_entry_never_reads_as_staged(tmp_path):
 
     with pytest.raises(IndexParseError):
         parse_index_identity(repo, wanted=["conflicted.txt"])
+
+
+_PREFIX_NAMES = [
+    "a.b",
+    "a/one.txt",
+    "a/sub/two.txt",
+    "ab/three.txt",
+    "b/four.txt",
+    "c.txt",
+    "d/five.txt",
+    "z.txt",
+]
+
+
+def _prefix_repo(tmp_path, names=_PREFIX_NAMES):
+    repo = _plain_repo(tmp_path)
+    ordered = sorted(names, key=lambda n: n.encode())
+    entries = [
+        {"name": n, "mode": 0o100644, "size": i + 1, "mtime": 100}
+        for i, n in enumerate(ordered)
+    ]
+    _write_index(repo / ".git", _build_index(entries))
+    return repo
+
+
+def _expected(full, prefixes):
+    out = {}
+    for name, ident in full.items():
+        for p in prefixes:
+            if p == "" or name == p or name.startswith(p.rstrip("/") + "/"):
+                out[name] = ident
+                break
+    return out
+
+
+@pytest.mark.parametrize(
+    "prefixes",
+    [
+        ["a"],
+        ["b"],
+        ["a", "d"],
+        ["a/sub"],
+        ["ab"],
+        ["c.txt"],
+        ["z.txt"],
+        ["nothere"],
+        ["a/"],
+        [""],
+    ],
+)
+def test_prefixes_select_exactly_the_entries_at_or_under_each(tmp_path, prefixes):
+    repo = _prefix_repo(tmp_path)
+    full = parse_index_identity(repo)
+
+    assert parse_index_identity(repo, prefixes=prefixes) == _expected(full, prefixes)
+
+
+def test_prefix_does_not_select_sibling_names_sharing_the_leading_bytes(tmp_path):
+    repo = _prefix_repo(tmp_path)
+
+    got = parse_index_identity(repo, prefixes=["a"])
+
+    assert set(got) == {"a/one.txt", "a/sub/two.txt"}
+
+
+def test_prefixes_union_with_wanted(tmp_path):
+    repo = _prefix_repo(tmp_path)
+
+    got = parse_index_identity(repo, wanted=["z.txt"], prefixes=["b"])
+
+    assert set(got) == {"b/four.txt", "z.txt"}
+
+
+def test_empty_prefixes_and_empty_wanted_return_nothing(tmp_path):
+    repo = _prefix_repo(tmp_path)
+
+    assert parse_index_identity(repo, prefixes=[]) == {}
+
+
+def test_prefix_walk_returns_past_the_last_range_without_reading_the_tail(tmp_path):
+    repo = _plain_repo(tmp_path)
+    raw = bytearray(
+        _build_index(
+            [
+                {"name": "a/x.txt", "mode": 0o100644, "size": 1, "mtime": 1},
+                {"name": "b/y.txt", "mode": 0o100644, "size": 2, "mtime": 2},
+            ]
+        )
+    )
+    raw[8:12] = struct.pack(">I", 3)
+    _write_index(repo / ".git", bytes(raw))
+
+    assert set(parse_index_identity(repo, prefixes=["a"])) == {"a/x.txt"}
+    with pytest.raises(IndexParseError):
+        parse_index_identity(repo)
+
+
+def test_default_values_are_plain_identities_without_flag_fields(tmp_path):
+    repo = _prefix_repo(tmp_path)
+
+    for ident in parse_index_identity(repo, prefixes=["a"]).values():
+        assert type(ident) is IndexIdentity
+        assert len(ident) == 5
+
+
+def test_with_flags_surfaces_assume_valid_skip_worktree_and_intent_to_add(tmp_path):
+    repo = _plain_repo(tmp_path)
+    entries = [
+        {"name": "av.txt", "mode": 0o100644, "size": 1, "mtime": 1, "assume_valid": True},
+        {"name": "clean.txt", "mode": 0o100644, "size": 1, "mtime": 1},
+        {"name": "ita.txt", "mode": 0o100644, "size": 1, "mtime": 1, "extended": True, "xflags": 0x2000},
+        {"name": "sw.txt", "mode": 0o100644, "size": 1, "mtime": 1, "extended": True, "xflags": 0x4000},
+    ]
+    _write_index(repo / ".git", _build_index(entries, version=3))
+
+    got = parse_index_identity(repo, prefixes=[""], with_flags=True)
+
+    assert got["av.txt"].assume_valid and not got["av.txt"].skip_worktree
+    assert not any(
+        (got["clean.txt"].assume_valid, got["clean.txt"].skip_worktree, got["clean.txt"].intent_to_add)
+    )
+    assert got["ita.txt"].intent_to_add and not got["ita.txt"].skip_worktree
+    assert got["sw.txt"].skip_worktree and not got["sw.txt"].assume_valid
+    assert all(type(v) is IndexFlaggedIdentity for v in got.values())
+
+
+def test_with_flags_without_scope_keeps_the_wanted_early_exit(tmp_path):
+    repo = _prefix_repo(tmp_path)
+
+    got = parse_index_identity(repo, wanted=["a.b"], with_flags=True)
+
+    assert set(got) == {"a.b"}
+
+
+def test_unmerged_entry_in_a_prefix_scope_raises(tmp_path):
+    repo = _plain_repo(tmp_path)
+    raw = _build_index(
+        [{"name": "d/c.txt", "mode": 0o100644, "size": 3, "mtime": 100, "stage": 2}]
+    )
+    _write_index(repo / ".git", raw)
+
+    with pytest.raises(IndexParseError):
+        parse_index_identity(repo, prefixes=["d"])
+    assert parse_index_identity(repo, prefixes=["other"]) == {}

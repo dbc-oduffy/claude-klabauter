@@ -117,6 +117,27 @@ def _parse_frontmatter(local_md_path: str) -> Tuple[str, str]:
     return _parse_project_type(fm), _parse_stack_tags(fm)
 
 
+def _bound_session_lines(flagged: List[Tuple[str, str]]) -> List[str]:
+    """Relaunch lines for live sessions running from any flagged plugin's cache dir; [] when none."""
+    from pathlib import Path
+
+    from coordinator_core._settings_home import claude_config_dir
+    from coordinator_core.install.plugin_cache_sessions import (
+        relaunch_lines,
+        sessions_bound_to,
+    )
+
+    out: List[str] = []
+    home = claude_config_dir()
+    for plugin, marketplace in flagged:
+        if not marketplace:
+            continue
+        cache = home / "plugins" / "cache" / marketplace / plugin
+        sessions = sessions_bound_to(cache, claude_home=home)
+        out.extend(relaunch_lines(Path(cache), sessions, step="step (3)"))
+    return out
+
+
 def _audit(repo_root: str) -> str:
     settings_path = os.path.join(repo_root, ".claude", "settings.json")
     if not os.path.isfile(settings_path):
@@ -130,11 +151,13 @@ def _audit(repo_root: str) -> str:
     project_type, stack_tags = _parse_frontmatter(local_md_path)
 
     findings: List[str] = []
+    flagged: List[Tuple[str, str]] = []
     for key in enabled_keys:
         if not key:
             continue
-        plugin, _, _marketplace = key.partition("@")
+        plugin, _, marketplace = key.partition("@")
         if not _is_justified(plugin, project_type, stack_tags):
+            flagged.append((plugin, marketplace))
             pt_disp = project_type or "unset"
             tags_disp = stack_tags or "unset"
             findings.append(
@@ -153,7 +176,10 @@ def _audit(repo_root: str) -> str:
     lines.append(
         "                   (2) remove entry from ~/.claude/plugins/installed_plugins.json,"
     )
-    lines.append("                   (3) rm -rf ~/.claude/plugins/cache/<marketplace>/<plugin>/.")
+    held = _bound_session_lines(flagged)
+    lines.extend(held)
+    step3 = "                   (3) rm -rf ~/.claude/plugins/cache/<marketplace>/<plugin>/"
+    lines.append(step3 + (" only once no session above remains." if held else "."))
     return "\n".join(lines) + "\n"
 
 

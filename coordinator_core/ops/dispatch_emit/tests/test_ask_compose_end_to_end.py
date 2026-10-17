@@ -408,7 +408,7 @@ def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_g
     script = _compose()
     assert "readyOp:" in script
     for entry in ("_ready", "_reready"):
-        assert f"_adoptManifest({entry}.readyOpReply)" in script
+        assert f"_adoptManifest({entry}.readyOpReply, true)" in script
     assert _NO_FOLD in script and "label: 'stage'" not in script
 
 
@@ -426,17 +426,17 @@ _WHOLE_ROW = {
     "rows, error",
     [
         ([_WHOLE_ROW], None),
-        # The disk read returned rows as {id, wave, deps}: every executor got "undefined".
-        ([{"id": "C1", "wave": 0}], "stage manifest on disk is not whole: rows[0].brief_path"),
+        # A relay that returned rows as {id, wave, deps}: every executor got "undefined".
+        ([{"id": "C1", "wave": 0}], "stage manifest relay is not whole: rows[0].brief_path"),
     ],
 )
-def test_a_disk_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
+def test_a_relayed_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
     from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import _fold
 
-    disk = {"rows": rows, "review_declared_paths": [], "test_targets": []}
-    out = _fold({"rows": rows}, disk)
+    relay = {"rows": rows, "review_declared_paths": [], "test_targets": [], "head_sha": "a" * 40}
+    out = _fold(relay)
     if error is None:
-        assert out["manifest"] == disk
+        assert out["manifest"] == relay
     else:
         assert error in out["manifest"]["error"]
 

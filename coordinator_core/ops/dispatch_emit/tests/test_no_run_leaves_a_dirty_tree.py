@@ -271,7 +271,7 @@ def _author_review_edit(root: Path) -> None:
     run's ``submission.json`` ``submitted_at``."""
     from coordinator_core.session import core, touch_record
 
-    _write(root, REVIEW_FILE, "edited by review\n")
+    _write(root, REVIEW_FILE, "# edited by review\n")
     hub = Path(core.sessions_dir(str(root)))
     agent_dir = hub / ".agents" / _REVIEW_AGENT
     agent_dir.mkdir(parents=True)

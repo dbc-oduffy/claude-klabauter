@@ -3417,11 +3417,12 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
 
 
 def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Make plain `claude` resolve the LIVE coordinator clone, not a copy of it.
+    """Report the coordinator plugin record; never write it.
 
-    Points the installed-plugin record at the clone instead of a cache copy -- see
-    `coordinator_core.install.live_plugin_registration` for the shape, the
-    measurement, and why it is not a symlink.
+    Plain `claude` is vanilla on a dev box (a `.coordinator-dev-repo` sentinel box): no
+    record is created or repointed there, and one found is reported as drift. A consumer
+    box keeps the record `claude plugin install/update` wrote; a missing one is reported.
+    See `coordinator_core.install.live_plugin_registration`.
 
     ADVISORY, matching every sibling phase in this block: a box whose plugin
     record cannot be read prints and returns rather than failing the install.
@@ -3429,7 +3430,7 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
     coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
     live_plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
     if live_plugin_root is None:
-        print("SKIP [plugin] no live plugin root resolved — plain `claude` unchanged")
+        print("SKIP [plugin] no live plugin root resolved — nothing to report")
         return
 
     if str(claude_klabauter_root_resolved) not in sys.path:
@@ -3446,6 +3447,40 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
         return
     for line in format_report(report):
         print(line)
+
+
+def refresh_group_em_home(repo_root: Path, args: Args) -> None:
+    """Redeploy the shipped group-em CLAUDE.md template into the group-em home on every run.
+
+    Calls DoE's `_gem_home.ensure_home(refresh=True)` in process (no interpreter spawn).
+    ADVISORY like its siblings: any failure prints WARN and returns.
+    """
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [group-em] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    script = None if plugin_root is None else plugin_root / "hooks" / "scripts" / "_gem_home.py"
+    if script is None or not script.is_file():
+        print("SKIP [group-em] no _gem_home.py under the plugin root")
+        return
+    scripts_dir = str(script.parent)
+    added = scripts_dir not in sys.path
+    if added:
+        sys.path.insert(0, scripts_dir)  # _gem_home imports its sibling _engine_root
+    try:
+        spec = importlib.util.spec_from_file_location("_setup_gem_home", script)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        home = module.ensure_home(refresh=True)
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [group-em] refresh skipped ({type(exc).__name__}: {exc})")
+        return
+    finally:
+        if added and scripts_dir in sys.path:
+            sys.path.remove(scripts_dir)
+    print(f"OK   [group-em] home refreshed from template: {home}")
 
 
 def repair_status_lines(claude_klabauter_root_resolved: Path) -> None:
@@ -4732,6 +4767,7 @@ def main(argv: list[str]) -> int:
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         repair_status_lines(claude_klabauter_root_resolved)
+        refresh_group_em_home(repo_root, args)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)

@@ -243,13 +243,16 @@ class CrossPlatformParityTests(unittest.TestCase):
             f"missing co-located Windows launcher: {cmd_path}",
         )
 
-    def test_shebang_is_python3(self):
+    def test_line_one_is_not_a_polyglot_trampoline(self):
+        # The generator-owned unix shebang was retired 2026-07-28
+        # (POSIX-EXEC-ASSUMPTION-GUARD): `.py` bin files launch through the
+        # `.cmd` twin, so line 1 is a shebang or a `#` comment, never a
+        # shell-parsed sh/python trampoline.
         with open(_CLI, encoding="utf-8") as fh:
             first_line = fh.readline().rstrip("\n")
-        self.assertEqual(
-            first_line,
-            "#!/usr/bin/env python3",
-            "line-1 shebang must be the DR-076 python3 shape",
+        self.assertTrue(
+            first_line.startswith("#"),
+            f"line 1 must be a shebang or `#` comment, got: {first_line!r}",
         )
 
     def test_cmd_invokes_same_entrypoint(self):

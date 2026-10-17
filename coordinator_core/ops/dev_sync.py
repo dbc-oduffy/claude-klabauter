@@ -8,7 +8,9 @@ without restarting or bumping the plugin version — Claude Code caches
 installed plugins by version under `~/.claude/plugins/cache/<marketplace>/
 <plugin>/<version>/`, and edits to source don't propagate there automatically.
 This module bridges that gap by wiping and re-copying the per-plugin cache
-directory tree from the repo's `plugins/` source tree.
+directory tree from the repo's `plugins/` source tree. While a live session
+is bound to a cache version dir that plugin is left untouched, with neither wipe
+nor copy (HELD line plus relaunch instruction); the next run with none bound syncs it.
 
 Repo-root discovery: `REPO_ROOT` is the parent of the directory containing
 the trampoline's `.sh` (i.e. `dirname(script)/..`) — mirrors the bash
@@ -30,6 +32,8 @@ Exit codes (parity-critical, preserved from the bash oracle):
         outside `$HOME/.claude/plugins/cache` — refuses to `rm -rf` and aborts
 
 Negative-spec (retired/never-had patterns — do NOT reintroduce):
+    - Does NOT unlink or rmtree anything under a cache version dir while a live
+      session is bound to it; no waiter or daemon deletes later.
     - Does NOT touch `~/.claude/plugins/marketplaces/` — this module writes
       the CACHE tree only, never the install-manifest tree.
     - Does NOT bump `plugin.json` `version` — that's a separate, human-driven
@@ -54,6 +58,12 @@ import shutil
 import sys
 from pathlib import Path
 from typing import List, Optional
+
+from coordinator_core.install.plugin_cache_sessions import (
+    prune_dead_bindings,
+    relaunch_lines,
+    sessions_bound_to,
+)
 
 MARKETPLACE = "coordinator-claude"
 
@@ -120,6 +130,13 @@ def _sync_plugin(name: str, source_dir: Path, cache_dir: Path) -> str:
         )
         sys.exit(1)
 
+    bound = sessions_bound_to(cache_target)
+    # Held: neither wipe nor copy. A bound session sees its launch-time tree or a
+    # relaunch notice, never a mixed one; overwriting files under it changes its skills mid-run.
+    if bound:
+        lines.append(f"  HELD: {name} ({version}) — cache untouched, {len(bound)} bound session(s)")
+        lines.extend(relaunch_lines(cache_target, bound, step="dev-sync"))
+        return "\n".join(lines)
     if cache_target.is_dir():
         for child in cache_target.iterdir():
             if child.name == ".orphaned_at":
@@ -128,6 +145,7 @@ def _sync_plugin(name: str, source_dir: Path, cache_dir: Path) -> str:
                 shutil.rmtree(child, ignore_errors=True)
             else:
                 child.unlink(missing_ok=True)
+    prune_dead_bindings()
 
     shutil.copytree(src, cache_target, dirs_exist_ok=True)
 

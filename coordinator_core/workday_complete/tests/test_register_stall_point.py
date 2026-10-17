@@ -26,6 +26,8 @@ def test_names_stale_stuck_and_unclaimed():
     assert "row R1" in evidence
     assert "docs/plans/p1.md" in evidence
     assert "row R2" in evidence
+    assert "route: Workflow coordinator:engine-ask state/sizings/a.yaml" in evidence
+    assert "route: resume the plan, or supersede it" in evidence
 
 
 def test_absent_when_report_empty_or_omitted():

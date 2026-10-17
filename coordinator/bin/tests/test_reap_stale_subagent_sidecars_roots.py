@@ -145,13 +145,16 @@ class TestTrackedPathsDistinguishesTheTwoRoots:
             ".coordinator-local", "subagent-share", "sid-new", "ignored.md"
         )
         spawns = []
-        real_run = reap.subprocess.run
+        real_popen = subprocess.Popen
 
-        def counting_run(argv, *args, **kwargs):
+        # The classifier lives in coordinator_core.sidecar_reap and spawns
+        # through the shared git runner, which uses Popen -- count there, the
+        # one place every spawn from this call must pass through.
+        def counting_popen(argv, *args, **kwargs):
             spawns.append(list(argv))
-            return real_run(argv, *args, **kwargs)
+            return real_popen(argv, *args, **kwargs)
 
-        monkeypatch.setattr(reap.subprocess, "run", counting_run)
+        monkeypatch.setattr(subprocess, "Popen", counting_popen)
 
         tracked = reap._tracked_paths(
             repo,

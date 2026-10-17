@@ -30,6 +30,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_TOUCHPOINT,
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
+    RESUME_LEDGER_CARRIED_MET_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
@@ -46,12 +47,14 @@ from coordinator_core.ops.sizing_acceptance import (
     lacks_human_acceptance,
     sizing_acceptance_skipped,
 )
+from coordinator_core.ops.dispatch_emit.ask_stage import _handler as _stage_handler
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     ARM_ROADMAP,
     STATEMENT_ABSENT_PREFIX,
     COMMIT_HALT_KIND,
+    RESUME_LEDGER_HALT_BLOCKING_FIELD,
     SizingFireRefused,
     collect_fire_refusals,
     effective_route,
@@ -68,6 +71,8 @@ _PARAMS = (
     Field("baton", "nonempty_str"),
     Field("record", "dict"),
     Field("run_id", "nonempty_str"),
+    Field("cross_repo_approved", "bool"),
+    Field("session_id", "str"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit", design_route.RECORD_KIND)
 _XL_PICKS = ("roadmap", "accept_multi_session", "split")
@@ -318,11 +323,17 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         for row_id, entry in read_em_discharges(Path(repo_root) / halt.plan_rel).items()
         if isinstance(entry, dict) and isinstance(entry.get("text"), str)
     }
-    blocking = [*(b for b in halt.blocking if b not in out), *(r for r in rulable if r not in halt.blocking)]
+    carried = [c for c in halt.carried_met if c not in out]
+    blocking = [
+        *(b for b in halt.blocking if b not in out),
+        *(r for r in rulable if r not in halt.blocking and r not in carried),
+    ]
     verdict = {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
         "blocking": blocking,
+        RESUME_LEDGER_CARRIED_MET_FIELD: carried,
+        RESUME_LEDGER_HALT_BLOCKING_FIELD: [b for b in halt.blocking if b not in out],
         RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged,
         "rulable_ids": rulable,
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
@@ -429,7 +440,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?; or kind
     design_approval, board_url, pm_ruling, ruling_ref: the canvas board link and the PM's verbatim approval,
     echoed in `recorded` and not stored),
-    `run_id` (str: the warp run asking).
+    `run_id` (str: the warp run asking), `cross_repo_approved` (bool) and `session_id` (str): the stage params
+    for a ledger-resume verdict, which with `run_id` gains `manifest` (the `dispatch.ask_stage` reply on its
+    `resume_ledger.plan`, or its `{error}`); no other verdict carries the key.
 
     With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict. With
     `record`, writes that ruling through its single writer, then gates the sizing as it stands and
@@ -460,7 +473,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
     if params.get("run_id"):
         _record_resume_snapshot(root, params["run_id"], verdict)
-    return (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+    out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+    if params.get("run_id") and verdict.halt is None and verdict.resume_ledger is not None:
+        out["manifest"] = _stage_handler({
+            "run_id": params["run_id"],
+            "plan_path": verdict.resume_ledger["plan"],
+            "writes": writes,
+            "cross_repo_approved": bool(params.get("cross_repo_approved")),
+            "session_id": params.get("session_id") or None,
+            "commit_sizing_path": sizing_rel,
+        }, repo_root=root)
+    return out
 
 
 def _record_resume_snapshot(root: Path, run_id: str, verdict: GateVerdict) -> None:

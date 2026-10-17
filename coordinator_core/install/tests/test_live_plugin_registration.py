@@ -1,14 +1,7 @@
-"""Plain `claude` must resolve the live clone, and keep resolving it.
+"""live_plugin_registration is read-only: it reports the coordinator record, never writes it.
 
-The defect these pin: `claude plugin install` copies a directory-source plugin
-into the plugin cache and pins a `gitCommitSha`, so plain `claude` serves a
-frozen snapshot while `claude-author` (which injects `--plugin-dir`) serves the
-clone. Two sessions, two different coordinator surfaces, no warning.
-
-Negative-spec: none of these assert the displaced cache copy is deleted. It is
-inert once nothing points at it, and removing a user's bytes for tidiness is
-not this module's business -- `test_displaced_cache_copy_is_reported_not_removed`
-pins that deliberately.
+Plain `claude` is vanilla on a dev-sentinel box, so a coordinator record there is
+drift; a consumer box keeps the marketplace record and a missing one is reported.
 """
 
 from __future__ import annotations
@@ -16,290 +9,216 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from coordinator_core.install import plugin_cache_sessions
 from coordinator_core.install.live_plugin_registration import (
-    STATUS_ABSENT,
-    STATUS_ALREADY_LIVE,
-    STATUS_NO_ENTRY,
-    STATUS_REPOINTED,
+    STATUS_DRIFT,
     STATUS_LIVE_ROOT_MISSING,
+    STATUS_NO_COORDINATOR_RECORD,
+    STATUS_NO_ENTRY,
     STATUS_NOT_DEV_CLONE,
     STATUS_UNREADABLE,
+    STATUS_VANILLA,
     assert_live_plugin_registration,
     format_report,
     read_plugin_name,
 )
 
 
-def _clone(tmp_path: Path, name: str = "coordinator") -> Path:
+@pytest.fixture(autouse=True)
+def _no_live_sessions(monkeypatch):
+    monkeypatch.setattr(plugin_cache_sessions, "sessions_bound_to", lambda *a, **k: [])
+
+
+def _session(sid: str = "sess-1") -> plugin_cache_sessions.BoundSession:
+    return plugin_cache_sessions.BoundSession(sid, "proj-a0", 4242, 1.0, "/x/cache", "bound")
+
+
+def _drift_home(tmp_path: Path) -> Path:
+    home = _home(tmp_path, None)
+    (home / "plugins" / "installed_plugins.json").write_text(
+        json.dumps(_coordinator_record(home)), encoding="utf-8"
+    )
+    return home
+
+
+def test_drift_with_a_bound_session_names_it_and_the_relaunch(tmp_path, monkeypatch):
+    home = _drift_home(tmp_path)
+    seen = []
+
+    def fake(path, **kw):
+        seen.append((path, kw))
+        return [_session()]
+
+    monkeypatch.setattr(plugin_cache_sessions, "sessions_bound_to", fake)
+    lines = format_report(assert_live_plugin_registration(home, _clone(tmp_path)))
+    text = "\n".join(lines)
+    assert lines[0].startswith("WARN") and "removal is the PM's call" in lines[0]
+    assert "sess-1" in text and "4242" in text and "relaunch these sessions" in text
+    assert seen == [(home / "plugins" / "cache" / "coordinator", {"claude_home": home})]
+
+
+def test_drift_without_sessions_is_unchanged(tmp_path):
+    home = _drift_home(tmp_path)
+    lines = format_report(assert_live_plugin_registration(home, _clone(tmp_path)))
+    assert len(lines) == 1 and "relaunch" not in lines[0]
+
+
+def test_non_drift_arms_never_call_the_detector(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("detector called")
+
+    monkeypatch.setattr(plugin_cache_sessions, "sessions_bound_to", boom)
+    assert_live_plugin_registration(_home(tmp_path, _OTHER_ONLY), _clone(tmp_path))
+    consumer = tmp_path / "c"
+    consumer.mkdir()
+    assert_live_plugin_registration(
+        _drift_home(consumer), _clone(consumer, sentinel=False)
+    )
+    assert_live_plugin_registration(_home(consumer / "x", None), consumer / "missing")
+
+
+def _clone(tmp_path: Path, name: str = "coordinator", sentinel: bool = True) -> Path:
     root = tmp_path / "clone" / "coordinator"
     (root / ".claude-plugin").mkdir(parents=True)
-    (root.parent / ".coordinator-dev-repo").write_text("dev\n", encoding="utf-8")
+    if sentinel:
+        (root.parent / ".coordinator-dev-repo").write_text("dev\n", encoding="utf-8")
     (root / ".claude-plugin" / "plugin.json").write_text(
         json.dumps({"name": name, "version": "4.0.0"}), encoding="utf-8"
     )
     return root
 
 
-def _claude_home(tmp_path: Path, records: dict | None) -> Path:
+def _home(tmp_path: Path, records: dict | None) -> Path:
     home = tmp_path / "claude-home"
     (home / "plugins").mkdir(parents=True)
     if records is not None:
-        (home / "plugins" / "installed_plugins.json").write_text(
-            json.dumps(records), encoding="utf-8"
-        )
+        (home / "plugins" / "installed_plugins.json").write_text(json.dumps(records), encoding="utf-8")
     return home
 
 
-def _cached_record(home: Path, *, sha: str | None = "956fd5a8", name: str = "coordinator") -> dict:
-    entry = {
-        "scope": "user",
-        "installPath": str(home / "plugins" / "cache" / "coordinator-claude" / name / "4.0.0"),
-        "version": "4.0.0",
-    }
-    if sha:
-        entry["gitCommitSha"] = sha
-    return {"version": 2, "plugins": {f"{name}@coordinator-claude": [entry]}}
+def _coordinator_record(home: Path, name: str = "coordinator") -> dict:
+    return {"version": 2, "plugins": {f"{name}@coordinator-claude": [
+        {"scope": "user", "installPath": str(home / "plugins" / "cache" / name), "gitCommitSha": "abc"}
+    ]}}
 
 
-def _read(home: Path) -> dict:
-    return json.loads((home / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+_OTHER_ONLY = {"version": 2, "plugins": {"example-game-repo@x": [{"scope": "user", "installPath": "/c/h"}]}}
 
 
-def test_a_cached_record_is_repointed_at_the_clone(tmp_path):
-    clone = _clone(tmp_path)
-    home = _claude_home(tmp_path, None)
+def _bytes(home: Path) -> bytes | None:
+    p = home / "plugins" / "installed_plugins.json"
+    return p.read_bytes() if p.is_file() else None
+
+
+def test_sentinel_box_with_only_another_plugin_is_vanilla_not_the_old_pass(tmp_path):
+    home = _home(tmp_path, _OTHER_ONLY)
+    before = _bytes(home)
+
+    report = assert_live_plugin_registration(home, _clone(tmp_path))
+
+    lines = format_report(report)
+    assert report["status"] == STATUS_VANILLA
+    assert not any("already registered" in line for line in lines)
+    assert _bytes(home) == before
+
+
+def test_sentinel_box_without_record_file_is_vanilla(tmp_path):
+    home = _home(tmp_path, None)
+    assert assert_live_plugin_registration(home, _clone(tmp_path))["status"] == STATUS_VANILLA
+    assert _bytes(home) is None
+
+
+def test_sentinel_box_with_coordinator_record_reports_drift_and_writes_nothing(tmp_path):
+    home = _home(tmp_path, None)
     (home / "plugins" / "installed_plugins.json").write_text(
-        json.dumps(_cached_record(home)), encoding="utf-8"
+        json.dumps(_coordinator_record(home)), encoding="utf-8"
     )
+    before = _bytes(home)
 
-    report = assert_live_plugin_registration(home, clone)
+    report = assert_live_plugin_registration(home, _clone(tmp_path))
 
-    assert report["status"] == STATUS_REPOINTED
-    entry = _read(home)["plugins"]["coordinator@coordinator-claude"][0]
-    assert entry["installPath"] == str(clone)
+    lines = format_report(report)
+    assert report["status"] == STATUS_DRIFT
+    assert len(lines) == 1 and lines[0].startswith("WARN")
+    assert "coordinator@coordinator-claude" in lines[0] and "cache" in lines[0]
+    assert _bytes(home) == before
 
 
-def test_the_pinned_sha_is_dropped_rather_than_updated(tmp_path):
-    """A SHA beside a live path is a false witness: it names a commit the
-    session is not running. Nothing is pinned, so nothing should claim to be."""
-    clone = _clone(tmp_path)
-    home = _claude_home(tmp_path, None)
-    home.joinpath("plugins", "installed_plugins.json").write_text(
-        json.dumps(_cached_record(home, sha="deadbeef")), encoding="utf-8"
+def test_sentinel_box_drift_lists_every_matching_key(tmp_path):
+    home = _home(tmp_path, {"version": 2, "plugins": {
+        "coordinator@a": [{"installPath": "/p/a"}],
+        "coordinator@b": [{"installPath": "/p/b"}],
+        "example-game-repo@x": [{"installPath": "/p/h"}],
+    }})
+    report = assert_live_plugin_registration(home, _clone(tmp_path))
+    assert [e["key"] for e in report["entries"]] == ["coordinator@a", "coordinator@b"]
+    assert len(format_report(report)) == 2
+
+
+def test_consumer_box_with_only_another_plugin_reports_missing_record(tmp_path):
+    home = _home(tmp_path, _OTHER_ONLY)
+    before = _bytes(home)
+
+    report = assert_live_plugin_registration(home, _clone(tmp_path, sentinel=False))
+
+    lines = format_report(report)
+    assert report["status"] == STATUS_NO_COORDINATOR_RECORD
+    assert lines and lines[0].startswith("WARN") and not any(l.startswith("PASS") for l in lines)
+    assert "claude plugin install coordinator@" in lines[0]
+    assert _bytes(home) == before
+
+
+def test_consumer_box_without_record_file_reports_missing_record(tmp_path):
+    report = assert_live_plugin_registration(_home(tmp_path, None), _clone(tmp_path, sentinel=False))
+    assert report["status"] == STATUS_NO_COORDINATOR_RECORD
+
+
+def test_consumer_box_with_coordinator_record_keeps_the_skip(tmp_path):
+    home = _home(tmp_path, None)
+    (home / "plugins" / "installed_plugins.json").write_text(
+        json.dumps(_coordinator_record(home)), encoding="utf-8"
     )
+    before = _bytes(home)
 
-    assert_live_plugin_registration(home, clone)
-
-    entry = _read(home)["plugins"]["coordinator@coordinator-claude"][0]
-    assert "gitCommitSha" not in entry
-
-
-def test_re_asserting_an_already_live_record_changes_nothing(tmp_path):
-    """Idempotence is the whole design -- this runs on every install."""
-    clone = _clone(tmp_path)
-    home = _claude_home(
-        tmp_path,
-        {"version": 2, "plugins": {"coordinator@coordinator-claude": [
-            {"scope": "user", "installPath": str(clone), "version": "4.0.0"}
-        ]}},
-    )
-    before = (home / "plugins" / "installed_plugins.json").read_bytes()
-
-    report = assert_live_plugin_registration(home, clone)
-
-    assert report["status"] == STATUS_ALREADY_LIVE
-    assert (home / "plugins" / "installed_plugins.json").read_bytes() == before
-
-
-def test_a_reinstall_that_restored_a_copy_is_caught_on_the_next_run(tmp_path):
-    """The failure mode this phase exists for: `claude plugin install` rewrites
-    the record back to a fresh copy and nothing warns."""
-    clone = _clone(tmp_path)
-    home = _claude_home(tmp_path, None)
-    record_file = home / "plugins" / "installed_plugins.json"
-    record_file.write_text(json.dumps(_cached_record(home)), encoding="utf-8")
-    assert_live_plugin_registration(home, clone)
-
-    record_file.write_text(json.dumps(_cached_record(home, sha="newpin")), encoding="utf-8")
-    report = assert_live_plugin_registration(home, clone)
-
-    assert report["status"] == STATUS_REPOINTED
-    assert _read(home)["plugins"]["coordinator@coordinator-claude"][0]["installPath"] == str(clone)
-
-
-def test_displaced_cache_copy_is_reported_not_removed(tmp_path):
-    clone = _clone(tmp_path)
-    home = _claude_home(tmp_path, None)
-    record = _cached_record(home)
-    copy_dir = Path(record["plugins"]["coordinator@coordinator-claude"][0]["installPath"])
-    copy_dir.mkdir(parents=True)
-    (copy_dir / "marker").write_text("x", encoding="utf-8")
-    (home / "plugins" / "installed_plugins.json").write_text(json.dumps(record), encoding="utf-8")
-
-    report = assert_live_plugin_registration(home, clone)
-
-    assert report["entries"][0]["displaced_copy"] == str(copy_dir)
-    assert (copy_dir / "marker").is_file()
-    assert any("now inert" in line for line in format_report(report))
-
-
-def test_a_live_cache_root_is_not_repointed_or_called_inert(tmp_path):
-    home = _claude_home(tmp_path, None)
-    record = _cached_record(home)
-    cache_dir = Path(record["plugins"]["coordinator@coordinator-claude"][0]["installPath"])
-    (cache_dir / ".claude-plugin").mkdir(parents=True)
-    (cache_dir / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "coordinator"}), encoding="utf-8"
-    )
-    record_file = home / "plugins" / "installed_plugins.json"
-    record_file.write_text(json.dumps(record), encoding="utf-8")
-    before = record_file.read_bytes()
-
-    report = assert_live_plugin_registration(home, cache_dir)
+    report = assert_live_plugin_registration(home, _clone(tmp_path, sentinel=False))
 
     assert report["status"] == STATUS_NOT_DEV_CLONE
-    assert report["entries"] == []
-    assert record_file.read_bytes() == before
-    assert not any("inert" in line for line in format_report(report))
+    assert all(line.startswith("SKIP") for line in format_report(report))
+    assert _bytes(home) == before
 
 
-def test_an_install_path_outside_the_cache_is_not_called_cache_residue(tmp_path):
-    """Someone's deliberate elsewhere-path is repointed, but never reported as
-    a copy we made."""
-    clone = _clone(tmp_path)
-    elsewhere = tmp_path / "somewhere" / "coordinator"
-    home = _claude_home(
-        tmp_path,
-        {"version": 2, "plugins": {"coordinator@coordinator-claude": [
-            {"scope": "user", "installPath": str(elsewhere), "version": "4.0.0"}
-        ]}},
-    )
-
-    report = assert_live_plugin_registration(home, clone)
-
-    assert report["entries"][0]["displaced_copy"] is None
-
-
-def test_every_scope_of_the_same_plugin_is_repointed(tmp_path):
-    """The record holds one list per key -- a user-scope entry repointed while a
-    project-scope entry still names a copy is the split this phase closes."""
-    clone = _clone(tmp_path)
-    home = _claude_home(tmp_path, None)
-    cache = home / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "4.0.0"
-    (home / "plugins" / "installed_plugins.json").write_text(
-        json.dumps({"version": 2, "plugins": {"coordinator@coordinator-claude": [
-            {"scope": "user", "installPath": str(cache), "gitCommitSha": "a"},
-            {"scope": "project", "projectPath": "/x", "installPath": str(cache), "gitCommitSha": "b"},
-        ]}}),
-        encoding="utf-8",
-    )
-
-    report = assert_live_plugin_registration(home, clone)
-
-    assert len(report["entries"]) == 2
-    assert all(r["installPath"] == str(clone)
-               for r in _read(home)["plugins"]["coordinator@coordinator-claude"])
-
-
-def test_another_plugins_record_is_never_touched(tmp_path):
-    clone = _clone(tmp_path)
-    home = _claude_home(
-        tmp_path,
-        {"version": 2, "plugins": {
-            "coordinator@coordinator-claude": [{"scope": "user", "installPath": "/old"}],
-            "example-game-repo@example-game-workbench-repo": [
-                {"scope": "user", "installPath": "/cache/example-game-repo", "gitCommitSha": "keepme"}
-            ],
-        }},
-    )
-
-    assert_live_plugin_registration(home, clone)
-
-    other = _read(home)["plugins"]["example-game-repo@example-game-workbench-repo"][0]
-    assert other == {"scope": "user", "installPath": "/cache/example-game-repo", "gitCommitSha": "keepme"}
-
-
-def test_dry_run_reports_without_writing(tmp_path):
-    clone = _clone(tmp_path)
-    home = _claude_home(tmp_path, None)
-    (home / "plugins" / "installed_plugins.json").write_text(
-        json.dumps(_cached_record(home)), encoding="utf-8"
-    )
-    before = (home / "plugins" / "installed_plugins.json").read_bytes()
-
-    report = assert_live_plugin_registration(home, clone, dry_run=True)
-
-    assert report["status"] == STATUS_REPOINTED
-    assert (home / "plugins" / "installed_plugins.json").read_bytes() == before
-
-
-def test_a_box_with_no_record_file_is_an_ordinary_outcome(tmp_path):
-    report = assert_live_plugin_registration(_claude_home(tmp_path, None), _clone(tmp_path))
-    assert report["status"] == STATUS_ABSENT
+def test_empty_record_list_is_not_a_coordinator_record(tmp_path):
+    home = _home(tmp_path, {"version": 2, "plugins": {"coordinator@x": []}})
+    assert assert_live_plugin_registration(home, _clone(tmp_path))["status"] == STATUS_VANILLA
 
 
 def test_an_unreadable_record_degrades_rather_than_raising(tmp_path):
-    home = _claude_home(tmp_path, None)
+    home = _home(tmp_path, None)
     (home / "plugins" / "installed_plugins.json").write_text("{not json", encoding="utf-8")
-    report = assert_live_plugin_registration(home, _clone(tmp_path))
-    assert report["status"] == STATUS_UNREADABLE
+    assert assert_live_plugin_registration(home, _clone(tmp_path))["status"] == STATUS_UNREADABLE
+
+
+def test_a_nonexistent_live_root_is_reported(tmp_path):
+    home = _home(tmp_path, _coordinator_record(Path("/x")))
+    before = _bytes(home)
+    report = assert_live_plugin_registration(home, tmp_path / "gone" / "coordinator")
+    assert report["status"] == STATUS_LIVE_ROOT_MISSING
+    assert _bytes(home) == before
 
 
 def test_the_plugin_name_is_read_from_the_clone_never_hardcoded(tmp_path):
     clone = _clone(tmp_path, name="renamed-plugin")
     assert read_plugin_name(clone) == "renamed-plugin"
-
-    home = _claude_home(
-        tmp_path,
-        {"version": 2, "plugins": {"renamed-plugin@coordinator-claude": [
-            {"scope": "user", "installPath": "/cache/x", "gitCommitSha": "s"}
-        ]}},
-    )
-    report = assert_live_plugin_registration(home, clone)
-    assert report["status"] == STATUS_REPOINTED
+    home = _home(tmp_path, _coordinator_record(Path("/x"), name="renamed-plugin"))
+    assert assert_live_plugin_registration(home, clone)["status"] == STATUS_DRIFT
+    other = _home(tmp_path / "o", _coordinator_record(Path("/x"), name="coordinator"))
+    assert assert_live_plugin_registration(other, clone)["status"] == STATUS_VANILLA
 
 
 def test_a_clone_without_a_plugin_manifest_asserts_nothing(tmp_path):
-    home = _claude_home(tmp_path, {"version": 2, "plugins": {}})
+    home = _home(tmp_path, {"version": 2, "plugins": {}})
     not_a_plugin = tmp_path / "repo" / "not-a-plugin"
     not_a_plugin.mkdir(parents=True)
-    (not_a_plugin.parent / ".coordinator-dev-repo").write_text("dev\n", encoding="utf-8")
-    report = assert_live_plugin_registration(home, not_a_plugin)
-    assert report["status"] == STATUS_NO_ENTRY
-
-
-def test_a_consumer_clone_without_the_dev_sentinel_is_never_repointed(tmp_path):
-    clone = _clone(tmp_path)
-    (clone.parent / ".coordinator-dev-repo").unlink()
-    home = _claude_home(tmp_path, None)
-    record_file = home / "plugins" / "installed_plugins.json"
-    record_file.write_text(json.dumps(_cached_record(home)), encoding="utf-8")
-    before = record_file.read_bytes()
-
-    report = assert_live_plugin_registration(home, clone)
-
-    assert report["status"] == STATUS_NOT_DEV_CLONE
-    assert record_file.read_bytes() == before
-    assert all(line.startswith("SKIP") for line in format_report(report))
-
-
-def test_a_nonexistent_live_root_is_never_written_into_a_record(tmp_path):
-    home = _claude_home(tmp_path, None)
-    record_file = home / "plugins" / "installed_plugins.json"
-    record_file.write_text(json.dumps(_cached_record(home)), encoding="utf-8")
-    before = record_file.read_bytes()
-
-    report = assert_live_plugin_registration(home, tmp_path / "gone" / "coordinator")
-
-    assert report["status"] == STATUS_LIVE_ROOT_MISSING
-    assert record_file.read_bytes() == before
-
-
-def test_a_repointed_entry_whose_target_vanished_is_not_a_pass(tmp_path):
-    report = {
-        "status": STATUS_REPOINTED,
-        "live_path": str(tmp_path / "gone"),
-        "entries": [{"key": "coordinator@x", "previous_path": "/cache/x", "displaced_copy": None}],
-    }
-    lines = format_report(report)
-    assert lines and not any(line.startswith("PASS") for line in lines)
+    assert assert_live_plugin_registration(home, not_a_plugin)["status"] == STATUS_NO_ENTRY

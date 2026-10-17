@@ -210,7 +210,27 @@ def test_default_resolution_cmd_forwarder_process_time() -> None:
     assert result["process_time_ms"] <= 351.6, result
 
 
+@pytest.mark.real_home
+def test_installed_forwarder_process_time() -> None:
+    """The surface that ships: the installed native forwarder in the settings home, which
+    reaches the stamped root's warm server. This leg carries the brightline ceiling; the
+    dev-tree legs below are unstamped and cold by design (DR-315 s2) and claim no speed.
+    Ruling: state/apm-rulings/2026-10-17-warm-hop-measures-non-production-path.md."""
+    _require_windows_or_darwin()
+    from coordinator_core._settings_home import settings_home
+
+    exe = settings_home() / "bin" / ("cross-repo-memo.exe" if IS_WINDOWS else "cross-repo-memo")
+    if not exe.is_file():
+        pytest.skip(f"{exe} not installed")
+
+    result = batched_process_time_ms([str(exe), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT))
+    assert result["procs_per_call"] <= 2.0, result
+    assert result["process_time_ms"] <= 200.0, result
+
+
 def test_default_resolution_python_direct_process_time() -> None:
+    """Unstamped dev-tree leg: cold by design (DR-315 s2), a regression ratchet with no speed
+    claim. The shipped surface is gated by test_installed_forwarder_process_time."""
     _require_windows_or_darwin()
     if not _PY_CLI.is_file():
         pytest.skip(f"{_PY_CLI} not found")
@@ -226,7 +246,11 @@ def test_bare_interpreter_floor_process_time() -> None:
     _require_windows_or_darwin()
 
     result = batched_process_time_ms([sys.executable, "-c", "pass"], k=K_INVOCATIONS)
-    assert result["procs_per_call"] == 1.0, result
+    # The harness spawns CREATE_NO_WINDOW (what real callers do), and on Windows that flag
+    # allocates a fresh console: python.exe + its conhost.exe (DR-373), so the exact floor is 2.
+    # Exact equality stays: any further process still fails.
+    expected = 2.0 if IS_WINDOWS else 1.0
+    assert result["procs_per_call"] == expected, result
     assert result["process_time_ms"] <= 100.0, result
 
 

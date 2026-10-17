@@ -354,7 +354,9 @@ def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[M
         raw = dict(register.raw) if register is not None else {}
         new_rows = edit([dict(r) for r in rows])
         out["rows"] = rows
-        if new_rows is None or new_rows == rows:
+        listed = {e.get("turn") for e in raw.get(rr.UNRELATED_TURNS_KEY) or [] if isinstance(e, dict)}
+        fresh = [e for e in unrelated if e["turn"] not in listed]
+        if new_rows is None or (new_rows == rows and not fresh):
             return old
         sources = [s for s in raw.get(rr.SOURCES_KEY) or [] if isinstance(s, dict)]
         if not any(s.get("doc") == sizing_rel for s in sources):
@@ -410,14 +412,17 @@ def _int_turn(value: object) -> Optional[int]:
 
 
 def foreign_turns(
-    root: Path, sizing: Optional[Mapping], ask_text: Optional[str], relayed_text: Optional[str]
+    root: Path, sizing: Optional[Mapping], ask_text: Optional[str], relayed_text: Optional[str],
+    *, followups: bool = False,
 ) -> dict[int, str]:
     """`{turn: normalised text}` of the sizing's embedded PM turns that provably belong to another
     run. One-turn sizing: the lone turn, when the ask does not quote it and quotes a different
     recorded session turn (the sizing embedded the newest turn by recency). Multi-turn sizing: an
     embedded turn the ask does not quote that matches a recorded session turn preceding every
     session turn the ask quotes; a later turn (a follow-up) is never foreign. Empty for a relayed
-    run, a run without an ask, or an ask no recorded session turn quotes."""
+    run, a run without an ask, or an ask no recorded session turn quotes. `followups=True` also
+    returns the later turns the lenient rule keeps: a session turn neither quoted by the ask nor
+    relayed or revised into the run is not this run's requirement."""
     if (relayed_text and relayed_text.strip()) or not (ask_text and ask_text.strip()):
         return {}
     embedded = [
@@ -446,9 +451,14 @@ def foreign_turns(
         mine, theirs = _norm(text), recorded.get(n, "")
         if min(len(mine), len(theirs)) < _MIN_FOREIGN_MATCH or not (mine in theirs or theirs in mine):
             continue
-        if n < earliest or not _shares_content_word(ask_text, mine):
+        if (followups and not _CONTINUATION_OPENER.match(mine)) or n < earliest or not _shares_content_word(ask_text, mine):
             out[n] = mine
     return out
+
+
+# A later turn that opens as a continuation ("also ...", "and ...") is the PM extending the ask:
+# it stays coverable even in `followups` mode, where a bare shared word does not.
+_CONTINUATION_OPENER = re.compile(r"\s*(also|and|plus|additionally|furthermore|then)\b")
 
 
 _CONTENT_WORD = re.compile(r"[a-z0-9]{5,}")
@@ -466,7 +476,7 @@ FOREIGN_TURN_REASON = "another run's PM turn: the run's ask neither quotes nor a
 
 def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
-    withhold: Optional[Mapping] = None,
+    withhold: Optional[Mapping] = None, list_turns: Optional[Mapping[int, str]] = None,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
     (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
@@ -477,6 +487,7 @@ def _append_rows(
     unknown id or a met/waived row refuses the whole write."""
 
     drop_turns = drop_turns or {}
+    list_turns = list_turns or {}
 
     def edit(rows: list[dict]) -> list[dict]:
         named = list((withhold or {}).get("ids") or [])
@@ -522,7 +533,7 @@ def _append_rows(
                     row[rr.ROW_RULING] = dict(ruling)
         return rows
 
-    unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted(drop_turns)]
+    unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted({*drop_turns, *list_turns})]
     return _mutate_register(root, sizing_rel, edit, unrelated=unrelated)
 
 
@@ -633,6 +644,18 @@ def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
     return out
 
 
+def _unbound_followups(
+    root: Path, sizing: Mapping, ask_text: Optional[str], relayed_text: Optional[str], foreign: Mapping[int, str],
+) -> dict[int, str]:
+    """Recorded session turns after the ask that no register row covers and that bind has not
+    already proven foreign: they were neither relayed into the run nor revise it, so bind lists
+    them under `unrelated_turns` instead of seeding a row."""
+    recorded = foreign_turns(root, sizing, ask_text, relayed_text, followups=True)
+    register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
+    needles = [n for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping) and (n := _norm(r.get(rr.ROW_TEXT) or ""))]
+    return {n: t for n, t in recorded.items() if n not in foreign and not any(x in t for x in needles)}
+
+
 def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
     """A sibling slice shares its `pm_verbatims` with every other slice, so it seeds none of them:
     its register already holds the rows the split assigned it, else its `intent` is its one row,
@@ -668,12 +691,13 @@ def bind(
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     sizing = sizing if isinstance(sizing, dict) else {}
     foreign = foreign_turns(root, sizing, ask_text, relayed_text)
+    unbound = _unbound_followups(root, sizing, ask_text, relayed_text, foreign)
     if rr.is_sibling_slice(sizing):
         entries = _slice_entries(sizing)
     elif relayed_text and relayed_text.strip():
         entries = []
     else:
-        entries = [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
+        entries = [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, {**foreign, **unbound})]
     register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
     rows_now = [r for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping)]
     asked = any(r.get(rr.ROW_ANCHOR) in (ORIGIN_ASK, ORIGIN_RELAYED) for r in rows_now)
@@ -685,8 +709,8 @@ def bind(
             entries.append((text, f"{ORIGIN_REVISION}@{_now()}" if fresh else origin))
     queued = _inbox(dir_)
     entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
-    if entries or foreign:
-        _append_rows(root, sizing_rel, entries, drop_turns=foreign)
+    if entries or foreign or unbound:
+        _append_rows(root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound)
     if not bound:
         _write_run(dir_, {**run, "sizing_rel": sizing_rel})
     if queued:

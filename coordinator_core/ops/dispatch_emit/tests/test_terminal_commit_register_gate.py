@@ -99,6 +99,44 @@ def test_claimed_row_absent_from_judge_and_ledger_still_demotes(repo):
     assert review["criterion"]["status"] == "not_met"
 
 
+def _claimed_row(repo, tail):
+    _set_register(
+        repo,
+        "    - {id: r1, source_text: t1, anchor: a1, surface: ui, claimed_by: [docs/plans/p.md], " + tail + "}\n",
+    )
+
+
+@pytest.mark.parametrize("rows", [None, []])
+def test_disk_met_wired_attributed_claimed_row_is_not_owed_a_judge_verdict(repo, rows):
+    _claimed_row(repo, "status: met, wired: true, met_by: [abc1234]")
+    review = _review(rows)
+    assert _register_gate(repo, _PLAN, review) is None
+    assert review["criterion"]["status"] == "met"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "status: open, wired: false",
+        "status: met, wired: false, met_by: [abc1234]",
+        "status: met, wired: true, met_by: []",
+        "status: met, wired: true",
+    ],
+)
+def test_claimed_row_not_fully_met_on_disk_still_reports_not_judged(repo, tail):
+    _claimed_row(repo, tail)
+    review = _review(None)
+    reason = _register_gate(repo, _PLAN, review)
+    assert reason is not None and "r1" in reason and "not judged" in reason
+    assert review["criterion"]["status"] == "not_met"
+
+
+def test_judged_not_met_verdict_demotes_a_disk_met_row(repo):
+    _claimed_row(repo, "status: met, wired: true, met_by: [abc1234]")
+    reason = _register_gate(repo, _PLAN, _review([_good(status="partial")]))
+    assert reason is not None and "judged status 'partial', not met" in reason
+
+
 def test_no_rows_claimed_by_plan_is_untouched(repo):
     other = "docs/plans/nobody.md"
     (repo / other).write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")

@@ -14,9 +14,18 @@ from typing import Mapping, Sequence
 import yaml
 
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt, ResumePlan, ledger_halt_path, read_ledger_halt
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    LEDGER_HALT_KIND,
+    LedgerHalt,
+    ResumePlan,
+    ledger_halt_path,
+    read_ledger_halt,
+)
 
 COMMIT_HALT_KIND = "commit"
+#: `resume_ledger` key naming the ids the halt itself blocked on, a subset of `blocking`: only these
+#: owe work changed since the halt commit. Rows judged afterwards were not halt-blocking and stay met.
+RESUME_LEDGER_HALT_BLOCKING_FIELD = "halt_blocking"
 from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.session import record_homes
 
@@ -178,8 +187,8 @@ def _ledger_halt_for(
     (`state.ledger_run`) whose committed record names this sizing (and this plan when it records
     one) and staged every id in `open_ids`; its blocking ids come from the pointer when the pointer
     names that run, else the record. With no open id the pointer alone also suffices. `state` is the
-    `resume_landed_state` answer already spent; absent, it is read here only when the pointer
-    cannot answer, so no path spends a second `git log`."""
+    `resume_landed_state` answer already spent; absent, it is read here once, so no path spends a
+    second `git log`."""
     from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record
 
     if any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows):
@@ -194,20 +203,20 @@ def _ledger_halt_for(
         pointer = None
     if pointer is not None and pointer.halted == COMMIT_HALT_KIND and open_ids:
         return None
-    if pointer is not None and not open_ids:
-        # This path spent no git spawn before the sha was needed; the call below is its one `git log`.
-        return replace(pointer, halt_sha=_halt_run_landed(root, pointer.run_id, plan_rel)[1])
     if state is None:
         from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
         state = resume_landed_state(root, plan_rel)
+    if pointer is not None and not open_ids:
+        halt_sha = state.run_halts.get(pointer.run_id, (frozenset(), None))[1]
+        return _carry(root, plan_rel, replace(pointer, halt_sha=halt_sha), state.run_halts)
     if state.ledger_run is None:
         # A halt commit without a `Halt-Plan:` trailer is invisible to `resume_landed_state`; the
         # pointer's run then resumes when that run's halt commit landed every open row.
         if pointer is not None:
-            landed, sha = _halt_run_landed(root, pointer.run_id, plan_rel)
+            landed, sha = state.run_halts.get(pointer.run_id, (frozenset(), None))
             if set(open_ids) <= landed:
-                return replace(pointer, halt_sha=sha)
+                return _carry(root, plan_rel, replace(pointer, halt_sha=sha), state.run_halts)
         return None
     record = read_halt_record(root, state.ledger_run)
     if (
@@ -221,44 +230,50 @@ def _ledger_halt_for(
         blocking = pointer.blocking
     else:
         blocking = record.blocking or ()
-    return LedgerHalt(
-        state.ledger_run, plan_rel, sizing_rel, tuple(blocking),
-        halt_sha=state.ledger_sha, remaining=record.remaining,
+    return _carry(
+        root, plan_rel,
+        LedgerHalt(
+            state.ledger_run, plan_rel, sizing_rel, tuple(blocking),
+            halt_sha=state.ledger_sha, remaining=record.remaining,
+        ),
+        state.run_halts,
     )
 
 
-def _halt_run_landed(root: Path, run_id: str, plan_rel: str) -> tuple[frozenset, str | None]:
-    """`(Lands-Chunks: ids, newest sha)` of `ledger-check` halt commits whose subject names
-    `run_id`: covers a halt commit that carries no `Halt-Plan:` trailer (one naming another plan
-    is skipped). The sha is None when no such commit exists. One `git log`; empty when git cannot
-    answer."""
-    from coordinator_core.git.run import run_git
+def _carry(
+    root: Path, plan_rel: str, halt: LedgerHalt, run_halts: Mapping
+) -> LedgerHalt:
+    """`halt` with ids an earlier halt of this plan and sizing judged met dropped from `blocking`
+    (named in `carried_met`) and `remaining` merged across the halts walked. Reads one record per
+    halt back to the first that landed a chunk; no git spawn. A commit-halt pointer, a halt that
+    itself landed a chunk, or an unreadable earlier record leaves `halt` as it is. This function only
+    loads records; `carry_forward` owns the stop-at-landing rule, so the early breaks here are a read bound."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import carry_forward, read_halt_record
 
-    result = run_git(
-        [
-            "log", "-n", "50", f"--grep=^warp: record halted {run_id} run artifacts",
-            "--format=%s\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Halt-Plan,valueonly,separator=%x1d)\x1f%H\x1e",
-        ],
-        cwd=str(root),
-    )
-    if result.returncode != 0:
-        return frozenset(), None
-    ids: set = set()
-    sha: str | None = None
-    for record in result.stdout.split("\x1e"):
-        parts = record.strip("\r\n").split("\x1f")
-        if len(parts) < 4 or not parts[0].startswith(f"warp: record halted {run_id} run artifacts"):
-            continue
-        named = [v for v in parts[3].split("\x1d") if v.strip()]
-        if named and not any(v.strip() == plan_rel for v in named):
-            continue
-        if any(v.strip() == "ledger-check" for v in parts[1].split("\x1d")):
-            ids.update(i for i in re.split(r"[,\s\x1d]+", parts[2]) if i)
-            if sha is None and len(parts) > 4:
-                sha = parts[4].strip() or None
-    return frozenset(ids), sha
+    if halt.halted != LEDGER_HALT_KIND:
+        return halt
+    newest = read_halt_record(root, halt.run_id)
+    if newest is None:
+        return halt
+    chain = [(run, bool(landed), sha) for run, (landed, sha) in run_halts.items()]
+    runs = [entry[0] for entry in chain]
+    after = chain[runs.index(halt.run_id) + 1 :] if halt.run_id in runs else [e for e in chain if e[0] != halt.run_id]
+    head_lands = any(e[0] == halt.run_id and e[1] for e in chain)
+    earlier: list = []
+    if not head_lands:
+        for run, lands, _ in after:
+            record = read_halt_record(root, run)
+            if (
+                record is None
+                or record.sizing_rel != halt.sizing_rel
+                or (record.plan_rel is not None and record.plan_rel != plan_rel)
+            ):
+                break
+            earlier.append((record, lands))
+            if lands:
+                break
+    blocking, remaining, carried = carry_forward((replace(newest, blocking=halt.blocking), head_lands), earlier)
+    return replace(halt, blocking=blocking, remaining={**halt.remaining, **remaining}, carried_met=carried)
 
 
 def _acceptance_skipped(sizing: Mapping) -> bool:

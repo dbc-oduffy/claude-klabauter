@@ -20,7 +20,11 @@ Purpose: classifies every dirty path in the cwd's git repo (via `git status
     ORPHAN-TMP     — basename matches `*.tmp.[0-9]*.[0-9]*` (an Edit-tool
                      atomic-write crash artifact); listed on stderr, never
                      auto-deleted.
-    AUTO-GITIGNORE — `logs/`, `*.log`, `*.pid`, `.DS_Store`, `Thumbs.db`;
+    REDIRECT-ARTIFACT — untracked, 0-byte, basename in {nul, con, 0-9, &1,
+                     $null}; removed with `os.remove`, never needs-PM.
+    AUTO-GITIGNORE — `logs/`, `*.log`, `*.pid`, `*.pyc`, `.DS_Store`,
+                     `Thumbs.db`, `__pycache__/` `.pytest_cache/`
+                     `.mypy_cache/` `.ruff_cache/` (path segment);
                      pattern appended to `.gitignore` (dedup'd), tracked
                      copies `git rm --cached`, one commit.
     CLAIM          — (C6, 2026-08-05 in-process-writers-declare-their-
@@ -187,11 +191,13 @@ MUTATES = ["cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/*
 
 import fnmatch
 import os
+import stat
 import subprocess
 import sys
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.session import liveness
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -218,7 +224,17 @@ _GITIGNORE_BASENAME_EXACT = {
 _GITIGNORE_BASENAME_GLOBS = [
     ("*.log", "*.log"),
     ("*.pid", "*.pid"),
+    ("*.pyc", "*.pyc"),
 ]
+# Runtime-cache directory names, matched as a whole path segment.
+_GITIGNORE_CACHE_DIRS = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
+
+# REDIRECT-ARTIFACT: basenames a shell-redirect mistake leaves behind. A path
+# takes the branch only when untracked, in this set, AND 0 bytes: size alone
+# (a new empty `__init__.py`) is never enough.
+_REDIRECT_ARTIFACT_BASENAMES = frozenset(
+    {"nul", "NUL", "con", "CON", "&1", "$null", *"0123456789"}
+)
 
 # CLAIM (C6) commit-roots-seen label for a path committed BY CLAIM rather
 # than by any prefix below -- distinguishes a claim-driven commit-message
@@ -311,6 +327,9 @@ def _append_to_gitignore(pattern: str, gitignore_path: str, dry_run: bool) -> bo
 def _classify_gitignore(path: str, bname: str) -> Optional[str]:
     if path.startswith("logs/"):
         return "logs/"
+    for segment in path.split("/")[:-1]:
+        if segment in _GITIGNORE_CACHE_DIRS:
+            return segment + "/"
     if bname in _GITIGNORE_BASENAME_EXACT:
         return _GITIGNORE_BASENAME_EXACT[bname]
     for glob, pattern in _GITIGNORE_BASENAME_GLOBS:
@@ -338,6 +357,17 @@ def _classify_orphan_tmp(bname: str) -> bool:
     return fnmatch.fnmatchcase(bname, "*.tmp.[0-9]*.[0-9]*")
 
 
+def _is_redirect_artifact(path: str, bname: str, repo_root: str) -> bool:
+    """One `os.stat`, only for a path whose basename already matched the set."""
+    if bname not in _REDIRECT_ARTIFACT_BASENAMES:
+        return False
+    try:
+        st = os.stat(os.path.join(repo_root, *path.split("/")))
+    except OSError:
+        return False
+    return st.st_size == 0 and stat.S_ISREG(st.st_mode)
+
+
 def _split_rename(rest: str) -> Tuple[Optional[str], str]:
     if " -> " not in rest:
         return None, rest
@@ -357,10 +387,12 @@ class _Counters:
         self.sub = 0
         self.leave = 0
         self.orphan = 0
+        self.redirect = 0
         self.gitignore = 0
         self.commit = 0
         self.claim_mine = 0
         self.claim_peer = 0
+        self.claim_orphan = 0
         self.source = 0
         self.ambiguous = 0
 
@@ -373,6 +405,7 @@ class _Accumulators:
         self.commit_add_paths: List[str] = []
         self.commit_roots_seen: List[str] = []
         self.notices: List[str] = []
+        self.redirect_paths: List[str] = []
 
 
 def _resolve_claim_context(
@@ -437,6 +470,18 @@ def _resolve_claim_context(
     return mine_paths, peer_map
 
 
+def _owner_abandoned(owner: str, repo_root: str, memo: Dict[str, bool]) -> bool:
+    """`liveness.session_abandoned(owner, repo_root)`, one call per distinct owner
+    per run (in-process, spawns nothing). A raise reads as not abandoned, so the
+    path stays a peer claim."""
+    if owner not in memo:
+        try:
+            memo[owner] = bool(liveness.session_abandoned(owner, repo_root))
+        except Exception:
+            memo[owner] = False
+    return memo[owner]
+
+
 def _batch_diff_has_content(paths: List[str], repo_root: str) -> FrozenSet[str]:
     """Batched replacement for a per-path `git diff --quiet -- <path>` probe.
 
@@ -476,6 +521,7 @@ def _classify_main_pass(
     claim_ctx: Optional[Tuple[FrozenSet[str], Dict[str, dict]]] = None,
 ) -> bool:
     needs_pm = False
+    abandoned_memo: Dict[str, bool] = {}
 
     # Pre-pass: parse every status line once and batch the two per-path git
     # probes (EOL-PHANTOM diff check, SUBMODULE stage check) into at most two
@@ -535,6 +581,12 @@ def _classify_main_pass(
             counters.orphan += 1
             continue
 
+        # 4.5 REDIRECT-ARTIFACT (untracked 0-byte shell-redirect leftovers).
+        if xy == "??" and _is_redirect_artifact(path, bname, repo_root):
+            acc.redirect_paths.append(path)
+            counters.redirect += 1
+            continue
+
         # 5. AUTO-GITIGNORE.
         gi_pattern = _classify_gitignore(path, bname)
         if gi_pattern is not None:
@@ -565,7 +617,21 @@ def _classify_main_pass(
                 counters.claim_mine += 1
                 continue
             peer_fact = peer_map.get(path)
-            if peer_fact is not None:
+            if (
+                peer_fact is not None
+                and peer_fact["liveness"] == "dead"
+                and _owner_abandoned(peer_fact["owner"], repo_root, abandoned_memo)
+            ):
+                # Takeable = dead AND abandoned; a dead-but-not-abandoned holder
+                # stays a peer claim, and "undetermined" always does.
+                acc.notices.append(
+                    f"[{_PROG}] orphan-claim: {path} owner={peer_fact['owner']} "
+                    f"liveness=dead abandoned=yes -> adopt-commit"
+                )
+                counters.claim_orphan += 1
+                # Falls through: only a path the AUTO-COMMIT branch accepts is adopted;
+                # an AMBIGUOUS one stays needs-PM.
+            elif peer_fact is not None:
                 acc.notices.append(
                     f"[{_PROG}] peer-claim: {path} owner={peer_fact['owner']} "
                     f"liveness={peer_fact['liveness']} "
@@ -742,6 +808,9 @@ def _build_summary_lines(counters: _Counters, acc: _Accumulators) -> List[str]:
     if counters.orphan > 0:
         lines.append(f"[{_PROG}] orphan-tmp listed (no action): {counters.orphan}")
 
+    if counters.redirect > 0:
+        lines.append(f"[{_PROG}] redirect-artifact removed (0 bytes): {counters.redirect}")
+
     if counters.gitignore > 0:
         seen: List[str] = []
         for pat in acc.gitignore_patterns:
@@ -756,6 +825,8 @@ def _build_summary_lines(counters: _Counters, acc: _Accumulators) -> List[str]:
 
     if counters.claim_mine > 0:
         lines.append(f"[{_PROG}] claim-commit (by claim, not prefix): {counters.claim_mine}")
+    if counters.claim_orphan > 0:
+        lines.append(f"[{_PROG}] orphan-claim (dead holder, adopt-commit): {counters.claim_orphan}")
     if counters.claim_peer > 0:
         lines.append(f"[{_PROG}] peer-claim (needs PM, not committed): {counters.claim_peer}")
 
@@ -852,6 +923,17 @@ def main(argv: List[str]) -> int:
 
     for notice in acc.notices:
         print(notice, file=sys.stderr)
+
+    for p in acc.redirect_paths:
+        if dry_run:
+            print(f"[{_PROG}] DRY-RUN: would remove redirect artifact {p}", file=sys.stderr)
+            continue
+        try:
+            os.remove(os.path.join(repo_root, *p.split("/")))
+        except OSError as exc:
+            print(f"[{_PROG}] ERROR: cannot remove redirect artifact {p}: {exc}", file=sys.stderr)
+            return 1
+        print(f"[{_PROG}] removed redirect artifact: {p}", file=sys.stderr)
 
     rc = _act_gitignore(repo_root, dry_run, counters, acc)
     if rc is not None:

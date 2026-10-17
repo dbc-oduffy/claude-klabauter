@@ -45,22 +45,6 @@ def test_the_allowlist_names_only_writers_that_still_exist():
     assert set(_NOT_AN_INSTALL_RUN_WRITER) <= set(declarations)
 
 
-def test_live_plugin_registration_journals_even_when_it_wrote_nothing(tmp_path, monkeypatch):
-    from coordinator_core.install import resolution_journal as rj
-    from coordinator_core.install.live_plugin_registration import assert_live_plugin_registration
-
-    sh = tmp_path / "sh"
-    sh.mkdir()
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(sh))
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    monkeypatch.delenv(rj.RESOLUTION_JOURNAL_ENV_VAR, raising=False)
-
-    report = assert_live_plugin_registration(tmp_path / "claude", tmp_path / "live")
-
-    assert report["status"] == "absent"
-    assert rj.read_journal()["live-plugin-registration"][0].entries == ()
-
-
 def test_a_journal_row_every_shaped_template_admits_builds_a_receipt():
     """A template whose literal prefix rejects the writer's own concrete paths
     or keys makes `build_receipt` raise, and the whole receipt is lost."""

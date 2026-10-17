@@ -55,6 +55,25 @@ class EmittedLeg:
     phase: Optional[str]
     agent_type: Optional[str]
     model: Optional[str]
+    prompt: Optional[str] = None
+
+
+RELAY_MARKERS: tuple[str, ...] = (
+    "return its JSON reply verbatim",
+    "with the Read tool and return its JSON content verbatim",
+    "Run exactly `",
+    "rev-parse HEAD",
+)
+
+
+def relay_markers(prompt: Optional[str]) -> tuple[str, ...]:
+    """The `RELAY_MARKERS` a leg prompt contains, in marker order; empty for None.
+
+    `EmittedLeg.prompt` is the prompt's literal prefix (cut at the first `${` or `+`), so a marker
+    after an interpolation, or a prompt that opens with code, is not seen."""
+    if prompt is None:
+        return ()
+    return tuple(marker for marker in RELAY_MARKERS if marker in prompt)
 
 
 RUNTIME_FLOOR_RULING = "state/apm-rulings/2026-10-15-engine-ask-phase-consolidation.md"
@@ -95,6 +114,14 @@ REGISTER: tuple[LegDecl, ...] = (
         "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "
         "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs and the reviewer rows' verdict-write",
     ),
+    _earns("ask", "size-retry", "re-runs the scout when its first pass did not assemble the sizing"),
+    _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes"),
+    _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
+    _floor(
+        "ask", "blitz-stage-read",
+        "stages when readyOp did not run and returns manifest.json, only when plan-blitz's schema-less readyOpReply "
+        "arrives trimmed; no judgment agent precedes it. Cut when DoE's readyOp takes a caller reply schema",
+    ),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
@@ -119,7 +146,6 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("emit", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),
     _earns("emit", "review:coordinator:exit-criterion-judge", "rules whether the plan's exit criterion is met"),
     _earns("emit", "review:general-purpose", "reviews the diff as a general reviewer"),
-    _floor("emit", "run-base", "first step of the script: git rev-parse HEAD, no agent precedes it"),
     _floor("emit", "commit:wave-", _COMMIT_FLOOR),
     *_review_legs("emit", prep=_earns("emit", "review:coordinator:review-prep", "multi-step review prep")),
     _earns("grind", "size", "scouts a row and judges its size; absorbed the sizing-assemble op that ran after it"),
@@ -133,6 +159,13 @@ REGISTER: tuple[LegDecl, ...] = (
     _floor("grind", "commit", _COMMIT_FLOOR),
     _floor("grind", "review-fix-commit", _COMMIT_FLOOR),
     *_review_legs("grind", prep=_earns("grind", "review:coordinator:review-prep", "multi-step review prep")),
+    _earns("reverify", "review:general-purpose", "re-verifies a prior delivery FAIL's unbacked claims at HEAD"),
+    _earns(
+        "reverify", "review:coordinator:exit-criterion-judge",
+        "runs the plan's scoped tests, then rules the exit criterion in one agent on the judge's type",
+    ),
+    _earns("reverify", "review:coordinator:test-runner", "re-runs the plan's scoped tests where no judge is rostered"),
+    _earns("reverify", "review:coordinator:criterion-judge", "rules the plan's criterion against the register"),
     *_review_legs("review", prep=_earns("review", "review:coordinator:review-prep", "multi-step review prep")),
     _earns("review", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),
     _earns("review", "review:coordinator:staff-eng", "reviews the diff as staff engineer"),
@@ -262,6 +295,7 @@ def emitted_legs(script: str) -> list[EmittedLeg]:
                 phase=_string_option(s_args, r_args, "phase"),
                 agent_type=_string_option(s_args, r_args, "agentType"),
                 model=_string_option(s_args, r_args, "model"),
+                prompt=_literal_prefix(r_args[1:]),
             )
         )
     return legs

@@ -382,6 +382,21 @@ def _load(root: Path, run_id: str) -> Optional[dict[str, Any]]:
     return data if isinstance(data, dict) and isinstance(data.get("legs"), dict) else None
 
 
+def resolve_close_job_stem(root: Path, run_id: str) -> Optional[str]:
+    """Return the stem of the run's on-disk close-job record, or None when neither exists.
+
+    *run_id* wins when it reads a record; else ``<run_id>.workflow``. A *run_id* already
+    ending ``.workflow`` is never suffixed a second time.
+    """
+    candidates = [run_id]
+    if not run_id.endswith(".workflow"):
+        candidates.append(f"{run_id}.workflow")
+    for stem in candidates:
+        if _load(root, stem) is not None:
+            return stem
+    return None
+
+
 def record_leg_outcome(
     root: Path, run_id: str, leg: str, status: str, detail: str = ""
 ) -> None:

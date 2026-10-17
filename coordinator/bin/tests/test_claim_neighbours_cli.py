@@ -6,12 +6,14 @@ import importlib.util
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.session import claim_index as real_claim_index
 from coordinator_core.session import liveness as real_liveness
+from coordinator_core.session import touch_record
 
 pytestmark = [
     pytest.mark.cadence,
@@ -60,12 +62,26 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def _touch_line(verb: str, path: str, when: str = "2026-08-16T10:00:00.000000Z") -> str:
-    return f"{verb} {when} {path}"
+def _touch_line(verb: str, path: str, when: str = "2026-08-16T10:00:00.000000Z") -> tuple:
+    return (verb, path, when)
 
 
 def _write_touched(repo: Path, sid: str, lines: list) -> None:
-    _write(_sessions_dir(repo) / sid / "touched.txt", "\n".join(lines) + "\n")
+    """Writes the sink in the live record format; the owning session id is the
+    record's `sid`, so it is supplied here rather than in `_touch_line`."""
+    encoded = b"".join(
+        touch_record.encode_line(
+            session_id=sid,
+            agent_id=None,
+            verb=verb,
+            path=path,
+            timestamp=datetime.fromisoformat(when.replace("Z", "+00:00")).timestamp(),
+        )
+        for verb, path, when in lines
+    )
+    target = _sessions_dir(repo) / sid / touch_record.RECORD_FILENAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(encoded)
 
 
 def _write_plan_claim(repo: Path, sid: str, slug: str) -> None:

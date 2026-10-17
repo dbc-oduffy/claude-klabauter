@@ -49,7 +49,6 @@ CONSUMES_MANIFEST: frozenset[str] = frozenset({
     "workday-complete-args-and-validate",
     "workday-complete-reconcile",
     "workday-complete-step2_5-dirty-tree",
-    "reap-claims-for-repos",
     "handoff-housekeeping",
     "workday-complete-step3-consolidate",
     "workday-complete-backfill-scan",
@@ -97,7 +96,6 @@ _LAUNCH_DIRECTIVES = frozenset({
     "d_step1_validate",
     "d_step1_5_cruft_sweep",
     "d_step2_5_dirty_tree_scan",
-    "d_step2_66_reap_claims",
     "d_step2_67_handoff_housekeeping",
     "d_step3_5_backfill_scan",
     "d_step4a_inventory",
@@ -108,7 +106,6 @@ _LAUNCH_DIRECTIVES = frozenset({
 
 _HEADINGS: Mapping[str, str] = {
     "d_step1_validate": "Validate",
-    "d_step2_66_reap_claims": "Orphan reap",
     "d_step3_consolidate": "Branch state",
     "d_goal_close_day": "Day-goal closeout",
     "d_step10_weekly_staleness": "Weekly staleness",
@@ -363,7 +360,8 @@ def backfill_cap(point: Mapping[str, Any], *, context: Mapping[str, Any]) -> Dec
     return _rule_decision(
         point, RULE_BACKFILL_CAP, "backfill_all",
         "backfill-dispatch-rows has no count flag and processes every row of the scan TSV on "
-        "stdin; the scan's 14-day lookback is the only cap, so bounded_subset cannot be carried out.",
+        "stdin; the scan's lookback window bounds the fan-out and nothing else does, so "
+        "bounded_subset cannot be carried out.",
     )
 
 
@@ -680,7 +678,6 @@ def receipt_facts(
         ) if p)),
         "goal_closeout": bool(_stdout(ledger_rows, "d_goal_close_day").strip()),
         "validate_failed": failed("d_step1_validate"),
-        "reap_failed": failed("d_step2_66_reap_claims"),
         "archive_audit": "\n".join(
             str(r.get("outcome", "")) for r in audit if isinstance(r, Mapping) and r.get("outcome")
         ),
@@ -698,7 +695,6 @@ RECEIPT_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("Day summary", "day_summary", "fact:day_summary"),
     ("Day-goal closeout", "goal_closeout", "step:d_goal_close_day"),
     ("Validate", "validate_failed", "step:d_step1_validate"),
-    ("Orphan reap", "reap_failed", "step:d_step2_66_reap_claims"),
     ("Archive audit", "archive_audit", "fact:archive_audit"),
     ("Commit coverage", "coverage_gaps", "step:day_coverage_sweep"),
     ("Baton drift", "baton_stranded", "step:baton_drift_sweep"),

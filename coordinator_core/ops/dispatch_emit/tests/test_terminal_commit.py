@@ -567,10 +567,11 @@ def test_all_clean_request_is_nothing_to_commit_without_error(repo):
 # One git process: the status snapshot terminal_commit hands commit_v2, which then
 # writes the commit in-process with no check-ignore or ls-tree read of its own. A
 # second means a new spawn joined the hot path.
-_EXPECTED_SPAWNS = 1
+_EXPECTED_SPAWNS = 0
+_GATED_SPAWNS = 1
 
 
-def test_process_time_and_spawns_on_a_40_path_request(repo):
+def _forty_path_request(repo, gated: bool):
     # AC17: process time < 200ms and a pinned spawn count for a clean 40-path
     # request (no eol-fallback path in this fixture).
     # Warm-up commit first: under xdist this may be the worker's first commit, and its lazy
@@ -587,6 +588,15 @@ def test_process_time_and_spawns_on_a_40_path_request(repo):
         chunks=(ChunkCommit(id="C3", title="t3", paths=tuple(paths)),),
     )
     script = _write_script(repo, request)
+
+    from coordinator_core.git.scoped_worktree_status import gap_reason
+
+    if gated:
+        (repo / ".gitmodules").write_text("", encoding="utf-8")
+        assert gap_reason(repo, paths, [], [":(glob)*"]) is not None
+    else:
+        gap = gap_reason(repo, paths, [], [":(glob)*"])
+        assert gap is None, f"this host gates the in-process snapshot, so the pin cannot hold: {gap}"
 
     import subprocess as _subprocess
 
@@ -610,7 +620,17 @@ def test_process_time_and_spawns_on_a_40_path_request(repo):
 
     assert out["committed"] is True
     assert elapsed_ms < 200, f"process time {elapsed_ms}ms exceeds the 200ms bar"
+    return spawn_count
+
+
+def test_process_time_and_spawns_on_a_40_path_request(repo):
+    spawn_count = _forty_path_request(repo, gated=False)
     assert spawn_count == _EXPECTED_SPAWNS, f"expected {_EXPECTED_SPAWNS} spawns, saw {spawn_count}"
+
+
+def test_a_gated_repo_still_spawns_the_status_snapshot_once(repo):
+    spawn_count = _forty_path_request(repo, gated=True)
+    assert spawn_count == _GATED_SPAWNS, f"expected {_GATED_SPAWNS} spawn, saw {spawn_count}"
 
 
 _PLAN = """---
@@ -1418,3 +1438,37 @@ def test_review_firing_writer_error_is_reported_not_raised(repo, monkeypatch):
     out = _review_record_call(repo, with_plan=True)
     assert out["committed"] is True, out
     assert out["review_record_error"] == "boom"
+
+
+def test_yaml_load_uses_libyaml_loader_when_present(monkeypatch):
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    seen = []
+    real = yaml.load
+
+    def spy(text, Loader=None):
+        seen.append(Loader)
+        return real(text, Loader=Loader)
+
+    monkeypatch.setattr(yaml, "load", spy)
+    assert tc._yaml_load("a: 2026-01-02\n") == {"a": __import__("datetime").date(2026, 1, 2)}
+    assert seen == [getattr(yaml, "CSafeLoader", yaml.SafeLoader)]
+
+
+def test_read_rel_serves_memo_until_file_changes(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    (tmp_path / "plan.md").write_text("one", encoding="utf-8")
+    calls = []
+    real = tc.contained_path
+    monkeypatch.setattr(tc, "contained_path", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+    assert tc._read_rel(tmp_path, "plan.md") == "one"
+    assert tc._read_rel(tmp_path, "plan.md") == "one"
+    assert len(calls) == 1
+    (tmp_path / "plan.md").write_text("three!", encoding="utf-8")
+    assert tc._read_rel(tmp_path, "plan.md") == "three!"
+    assert len(calls) == 2
+    (tmp_path / "plan.md").unlink()
+    assert tc._read_rel(tmp_path, "plan.md") is None

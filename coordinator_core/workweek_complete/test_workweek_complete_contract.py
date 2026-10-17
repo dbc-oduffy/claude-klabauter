@@ -119,13 +119,9 @@ def test_step2_directive_names_the_validate_gate_cli_fast_subcommand() -> None:
     assert directive["args"] == ["fast"]
 
 
-def test_reap_claims_for_repos_directive_present() -> None:
-    clis = {d["cli"] for d in wwc_brief._build_directives()}
-    assert "reap-claims-for-repos" in clis, (
-        "reap-claims-for-repos directive missing from workweek-complete: "
-        "sub-reap (iii), the orphaned-claim-dir cull, has no other "
-        "production caller -- deleting this directive silently disables it"
-    )
+def test_no_directive_names_reap_claims_for_repos() -> None:
+    assert "reap-claims-for-repos" not in {d["cli"] for d in wwc_brief._build_directives()}
+    assert "reap-claims-for-repos" not in wwc_brief.CONSUMES_MANIFEST
 
 
 def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() -> None:

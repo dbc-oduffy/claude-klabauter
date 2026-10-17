@@ -246,6 +246,21 @@ def _reconcile_anthropic_co_authored_by(commit_msg_file: Union[str, Path]) -> bo
     return present
 
 
+def _read_session_shape(shape_path: str) -> object:
+    """Parsed `session-shape.json`, or None on any absent/unreadable/malformed
+    file. The bytes are read through the per-call scope, so repeated reads of
+    one path inside a call open it once."""
+    from coordinator_core.git import call_io_scope
+
+    try:
+        raw = call_io_scope.read_bytes(shape_path)
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+
 def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
     """Read `<git_dir>/coordinator-sessions/<session_id>/session-shape.json`
     and return `pickup.deliverable_id` if present and non-blank, else "".
@@ -255,11 +270,7 @@ def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
     shape_path = os.path.join(
         git_dir, "coordinator-sessions", session_id, "session-shape.json"
     )
-    try:
-        with open(shape_path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except Exception:
-        return ""
+    data = _read_session_shape(shape_path)
     if not isinstance(data, dict):
         return ""
     pickup = data.get("pickup")
@@ -543,11 +554,7 @@ def _held_pickup_deliverable_ids(git_dir: str, session_id: str) -> List[str]:
     shape_path = os.path.join(
         git_dir, "coordinator-sessions", session_id, "session-shape.json"
     )
-    try:
-        with open(shape_path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except Exception:
-        return []
+    data = _read_session_shape(shape_path)
     if not isinstance(data, dict):
         return []
     history = data.get("pickup_history")

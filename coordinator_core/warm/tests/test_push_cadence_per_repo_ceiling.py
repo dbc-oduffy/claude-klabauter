@@ -6,6 +6,7 @@ repo with a configured upstream; only the streamed git leg and `time.monotonic` 
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 import coordinator_core.ops.ceremony.push as push_mod
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.push_ceiling import PUSH_CEILING_MAX_SECS
-from coordinator_core.warm import push_cadence
+from coordinator_core.warm import push_cadence, telemetry
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -160,7 +161,19 @@ def _ceilings(monkeypatch, mapping):
     )
 
 
-def test_extended_repo_first_with_flag_is_admitted_then_sweep_stops(tmp_path, monkeypatch):
+def _rows(tmp_path) -> list:
+    path = tmp_path / "svc" / telemetry.PUSH_SWEEP_FILENAME
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.fixture(autouse=True)
+def _sweep_world(monkeypatch, tmp_path):
+    monkeypatch.setattr(push_cadence, "is_ahead", lambda root: True)
+    svc = tmp_path / "svc"
+    monkeypatch.setattr(telemetry, "svc_dir", lambda engine_root=None: svc)
+
+
+def test_extended_repo_with_flag_is_admitted_beside_the_default_repos(tmp_path, monkeypatch):
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
     _ceilings(monkeypatch, {"slow": 100.0})
@@ -168,36 +181,34 @@ def test_extended_repo_first_with_flag_is_admitted_then_sweep_stops(tmp_path, mo
 
     push_cadence.sweep_repos(repos, allow_extended_first=True, clock=lambda: 0.0)
 
-    assert swept == ["slow"]
-    assert push_cadence._resume_repo == repos[1]
+    assert sorted(swept) == ["b", "c", "slow"]
+    assert _rows(tmp_path)[0]["not_reached"] == []
 
 
-def test_extended_repo_in_second_position_is_the_cut(tmp_path, monkeypatch):
+def test_a_second_extended_repo_is_not_reached(tmp_path, monkeypatch):
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
-    _ceilings(monkeypatch, {"slow": 100.0})
-    repos = _fake_repos(tmp_path, ["a", "slow", "c"])
+    _ceilings(monkeypatch, {"slow": 100.0, "slower": 100.0})
+    repos = _fake_repos(tmp_path, ["a", "slow", "slower"])
 
     push_cadence.sweep_repos(repos, allow_extended_first=True, clock=lambda: 0.0)
 
-    assert swept == ["a"]
-    assert push_cadence._resume_repo == repos[1]
-    swept.clear()
-    push_cadence.sweep_repos(repos, allow_extended_first=True, clock=lambda: 0.0)
-    assert swept == ["slow"]
+    assert sorted(swept) == ["a", "slow"]
+    assert _rows(tmp_path)[0]["not_reached"] == [str(repos[2])]
 
 
-def test_extended_resume_repo_is_admitted_on_a_real_monotonic_clock(tmp_path, monkeypatch):
+def test_the_longest_since_pushed_extended_repo_is_the_one_admitted(tmp_path, monkeypatch):
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
-    _ceilings(monkeypatch, {"slow": 100.0})
-    repos = _fake_repos(tmp_path, ["a", "slow", "c"])
-    push_cadence._resume_repo = repos[1]
+    monkeypatch.setattr(
+        push_cadence, "since_pushed_key", lambda root: {"slow": 5.0, "slower": 1.0}.get(root.name, 9.0)
+    )
+    _ceilings(monkeypatch, {"slow": 100.0, "slower": 100.0})
+    repos = _fake_repos(tmp_path, ["slow", "slower"])
 
     push_cadence.sweep_repos(repos, allow_extended_first=True, clock=lambda: 50_000.0)
 
-    assert swept == ["slow"]
-    assert push_cadence._resume_repo == repos[2]
+    assert swept == ["slower"]
 
 
 def test_exit_sweep_declines_an_extended_repo(tmp_path, monkeypatch):
@@ -210,8 +221,8 @@ def test_exit_sweep_declines_an_extended_repo(tmp_path, monkeypatch):
         repos, total_ceiling_secs=push_cadence.EXIT_SWEEP_CEILING_SECS, clock=lambda: 0.0
     )
 
-    assert swept == []
-    assert push_cadence._resume_repo == repos[0]
+    assert swept == ["b"]
+    assert _rows(tmp_path)[0]["not_reached"] == [str(repos[0])]
 
 
 def test_default_ceiling_repos_are_admitted_as_before(tmp_path, monkeypatch):
@@ -222,8 +233,8 @@ def test_default_ceiling_repos_are_admitted_as_before(tmp_path, monkeypatch):
 
     push_cadence.sweep_repos(repos, clock=lambda: 0.0)
 
-    assert swept == ["a", "b"]
-    assert push_cadence._resume_repo is None
+    assert sorted(swept) == ["a", "b"]
+    assert _rows(tmp_path)[0]["not_reached"] == []
 
 
 def test_idle_tick_passes_allow_extended_first():

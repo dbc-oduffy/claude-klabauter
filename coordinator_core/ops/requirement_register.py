@@ -83,6 +83,7 @@ _LIST_CAP = 15
 _PLAN_HEAD_BYTES = 16384
 _STALLED_STATUSES = (STATUS_OPEN, STATUS_PARTIAL)
 _STUCK_PLAN_STATUSES = ("approved", "executing")
+_CLOSED_SIZING_STATUSES = ("shipped", "declined", "superseded")
 _SHIPPED = "shipped"
 
 _REGISTER_LINE_RE = re.compile(rb"(?m)^" + REGISTER_KEY.encode() + rb":")
@@ -122,6 +123,24 @@ class StallReport:
 
     def __bool__(self) -> bool:
         return bool(self.stale_rows or self.stuck_plans or self.unclaimed_rows)
+
+    @property
+    def routing_actions(self) -> dict[str, str]:
+        """One runnable action per non-empty bucket, keyed by bucket field name."""
+        actions: dict[str, str] = {}
+        if self.stale_rows:
+            actions["stale_rows"] = (
+                "resume the claiming plan, or sizing.record_register to defer or waive the row"
+            )
+        if self.stuck_plans:
+            actions["stuck_plans"] = "resume the plan, or supersede it"
+        if self.unclaimed_rows:
+            sizing = self.unclaimed_rows[0].split(" row ", 1)[0]
+            actions["unclaimed_rows"] = (
+                f"Workflow coordinator:engine-ask {sizing}; "
+                "or sizing.decline / sizing.record_register to close a row nobody will plan"
+            )
+        return actions
 
 
 _str_loader_cache: list[Any] = []
@@ -929,6 +948,7 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
     sizings_dir = Path(record_homes.home_dir(str(root), "sizings"))
     sizings_rel = Path(record_homes.home_dir(".", "sizings")).as_posix()
     bearing: dict[str, Register] = {}
+    closed: set[str] = set()
     try:
         names = sorted(n for n in os.listdir(sizings_dir) if n.endswith(".yaml"))
     except OSError:
@@ -941,12 +961,16 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
             continue
         if not has_register_key(data):
             continue
-        register = read_register(data.decode("utf-8", "replace"))
+        text = data.decode("utf-8", "replace")
+        register = read_register(text)
         if register is not None:
             bearing[f"{sizings_rel}/{name}"] = register
+            if _fm_scalar(text, "status") in _CLOSED_SIZING_STATUSES:
+                closed.add(f"{sizings_rel}/{name}")
     if not bearing:
         return StallReport()
 
+    plan_claimed: dict[str, set[str]] = {}
     plan_created: dict[str, Optional[str]] = {}
     stuck: list[str] = []
     plans_dir = root / "docs" / "plans"
@@ -960,6 +984,10 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
         if fm is None:
             continue
         plan_created[f"docs/plans/{name}"] = _fm_scalar(fm, "created")
+        if "register_claims" in fm:
+            claim_sizing, claim_ids = plan_claims(fm)
+            if claim_sizing in bearing:
+                plan_claimed.setdefault(claim_sizing, set()).update(claim_ids)
         status = _fm_scalar(fm, "status")
         sizing = (_fm_scalar(fm, "sizing_object") or "").replace("\\", "/")
         if status in _STUCK_PLAN_STATUSES and sizing in bearing:
@@ -976,6 +1004,8 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
         for row in register.rows:
             status, claimed = row.get(ROW_STATUS), claimants(row)
             if status == STATUS_OPEN and not claimed:
+                if sizing_rel in closed or str(row.get(ROW_ID)) in plan_claimed.get(sizing_rel, ()):
+                    continue
                 unclaimed.append(f"{sizing_rel} row {row.get(ROW_ID)} ({row.get(ROW_SURFACE)})")
             elif claimed and status in _STALLED_STATUSES:
                 since = _parse_day(row.get(ROW_LAST_PROGRESS_AT)) or _parse_day(
@@ -989,12 +1019,14 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
     return StallReport(stale_rows=stale, stuck_plans=stuck, unclaimed_rows=unclaimed)
 
 
-def _capped(title: str, items: Sequence[str]) -> list[str]:
+def _capped(title: str, items: Sequence[str], action: str = "") -> list[str]:
     if not items:
         return []
     out = [f"{title} ({len(items)}):"] + [f"  - {i}" for i in items[:_LIST_CAP]]
     if len(items) > _LIST_CAP:
         out.append(f"  +{len(items) - _LIST_CAP} more")
+    if action:
+        out.append(f"  route: {action}")
     return out
 
 
@@ -1002,10 +1034,11 @@ def stall_judgment_point(report: StallReport, *, id: str) -> Optional[dict[str, 
     """One reported judgment point naming the stalls, or None when the report is empty."""
     if not report:
         return None
+    actions = report.routing_actions
     lines = (
-        _capped("stale rows", report.stale_rows)
-        + _capped("stuck plans", report.stuck_plans)
-        + _capped("unclaimed rows", report.unclaimed_rows)
+        _capped("stale rows", report.stale_rows, actions.get("stale_rows", ""))
+        + _capped("stuck plans", report.stuck_plans, actions.get("stuck_plans", ""))
+        + _capped("unclaimed rows", report.unclaimed_rows, actions.get("unclaimed_rows", ""))
     )
     total = len(report.stale_rows) + len(report.stuck_plans) + len(report.unclaimed_rows)
     return build_judgment_point(
@@ -1015,7 +1048,10 @@ def stall_judgment_point(report: StallReport, *, id: str) -> Optional[dict[str, 
             "the check never writes",
         },
         id=id,
-        question=f"{total} requirement-register stall(s) found. Route them?",
+        question=(
+            f"{total} requirement-register stall(s) found. Route: "
+            + " | ".join(f"{k}: {v}" for k, v in actions.items())
+        ),
         dispositions=[build_disposition("acknowledge")],
         evidence="\n".join(lines),
         reason=f"no progress in {STALL_DAYS} days, or no plan claims the row",

@@ -947,10 +947,18 @@ def test_swept_isolation_root_refuses_before_spawning_child():
     assert "resolves under the system temp directory" in captured.getvalue()
 
 
-def test_is_swept_tmp_root_predicate(tmp_path):
-    live = tmp_path / "still-here"
-    live.mkdir()
-    swept = tmp_path / "already-gone"
-    assert _cli_mod._is_swept_tmp_root(str(swept)) is True
-    assert _cli_mod._is_swept_tmp_root(str(live)) is False
-    assert _cli_mod._is_swept_tmp_root("/no/such/repo/state/lessons") is False
+def test_is_swept_tmp_root_predicate():
+    # Paths are built under tempfile.gettempdir() itself: the suite redirects
+    # the temp dir away from pytest's tmp_path tree, so tmp_path is not "under
+    # the system temp directory" as the predicate defines it.
+    import shutil
+    import tempfile
+
+    live = tempfile.mkdtemp(prefix="lesson-add-live-")
+    try:
+        swept = os.path.join(tempfile.gettempdir(), "lesson-add-already-gone")
+        assert _cli_mod._is_swept_tmp_root(swept) is True
+        assert _cli_mod._is_swept_tmp_root(live) is False
+        assert _cli_mod._is_swept_tmp_root("/no/such/repo/state/lessons") is False
+    finally:
+        shutil.rmtree(live, ignore_errors=True)

@@ -38,7 +38,10 @@ def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
     assert na.startswith("  _nextAction = _closeable ? { kind: (")
     assert "? null : 'dispatch.terminal_commit'), params: " in na.split("\n", 1)[0]
     assert f"const _closeable = !!((!_halted && {_GUARD[1:-1]}" in _script(monkeypatch)
-    assert ": { kind: 'none', op: null, params: null };" in na.split("\n", 1)[0]
+    # Semantics: no clean manifest -> kind none, unless the halt itself names a repin_register
+    # next_action (6478788038); the fallback is not pinned to a literal tail.
+    head = na.split("\n", 1)[0]
+    assert "_halted?.next_action?.kind === 'repin_register' ? _halted.next_action : { kind: 'none', op: null, params: null }" in head
     assert na.rstrip().endswith("get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }, };")
 
 

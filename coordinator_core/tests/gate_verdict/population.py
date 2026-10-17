@@ -55,7 +55,6 @@ POPULATION: Mapping[str, tuple] = {
     "prune-closed-bugs": ("not_a_gate", "prunes records"),
     "query-completions": ("not_a_gate", "read-only query"),
     "query-records": ("not_a_gate", "read-only query"),
-    "reap-claims-for-repos": ("not_a_gate", "reaps claims"),
     "reassess-goal-krs": ("not_a_gate", "reassesses and writes KRs"),
     "record-superseding-review": ("not_a_gate", "writes a superseding review record, prints its path"),
     "review-stamp": (

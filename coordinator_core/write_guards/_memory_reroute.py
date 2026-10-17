@@ -2,13 +2,15 @@
 
 ``reroute_to_lesson`` turns the content of an over-cap memory write into one
 ``state/lessons/`` record through ``queue_append.append_queue_entry`` and
-returns its absolute path; ``added_lines`` isolates what a MEMORY.md write
+returns its absolute path, claiming it for the writing session so the
+own-left-behind commit carry picks it up; ``added_lines`` isolates what a MEMORY.md write
 added. Never raises: any failure is ``None`` and the caller keeps its plain
 deny. Spawns nothing.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -45,6 +47,22 @@ def _title(content: str, filename: str) -> str:
     )
 
 
+def _claim(out: object, root: Optional[str], session_id: str) -> None:
+    """Claim the written lesson for ``session_id`` with a repo-relative path (zero
+    spawns); skipped silently when unclaimable, never fails the reroute."""
+    if not (root and session_id):
+        return
+    try:
+        from coordinator_core.session import scope as session_scope
+
+        rel = os.path.relpath(os.path.realpath(str(out)), os.path.realpath(root))
+        if rel.startswith(".."):
+            return
+        session_scope.touch_written_path(session_id, Path(rel).as_posix(), str(root))
+    except Exception:
+        return
+
+
 def reroute_to_lesson(
     content: str, *, display: str, filename: str, cwd: Optional[str], session_id: str
 ) -> Optional[str]:
@@ -65,6 +83,9 @@ def reroute_to_lesson(
             session_id=session_id or "",
         )
         out = result.get("out_path")
-        return str(out) if out else None
+        if not out:
+            return None
+        _claim(out, root, session_id)
+        return str(out)
     except Exception:
         return None

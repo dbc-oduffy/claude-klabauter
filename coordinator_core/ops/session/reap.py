@@ -31,38 +31,13 @@ closed" rail would newly make those permanently unreapable, which is a wider
 behavioural change than this row's named risk (dirty uncommitted work)
 requires.
 
-Sub-reap (iii) (orphaned claim dirs, liveness-checked TOCTOU-re-read rm -rf) is
-NOT invoked by this handler at all — see "Boot backstop cull removal" below.
-`_reap_orphaned_claims` (the predicate) still lives in this module and is still
-reachable, but only via the already-registered, already-decoupled
-`session.reap_claims_for_repos` op (`_handler_reap_claims_for_repos`, target_root
-param), which a ceremony gate (`/workday-start`, `/workday-complete`,
-`/consolidate-git`, `/merge-to-main`) invokes with the calling repo's own root
-as its sole `target_roots` entry. session.reap itself never runs it, on any
-path — boot, which invokes session.reap, therefore never reaches the
-irreversible cull.
-
-Boot backstop cull removal (C3, PM ruling 2026-08-22, "the boot backstop asks
-git nothing" — docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md,
-AC6/AC6d): this supersedes the prior Decision D1 shape (a) cadence-DECOUPLING
-(PM-ratified 2026-07-14 claim-lock-liveness plan § C4), which ran (iii) on
-every session.reap invocation including boot. That decoupling correctly took
-(iii) off the 12h gate, but left it firing at boot — an aggressive,
-NOT-git-reversible rm -rf at precisely the moment the box is busiest. The
-gate was the wrong axis; the fix is relocation, not re-tuning the gate: (iii)
-now runs ONLY from a supervised ceremony gate, via the op that already existed
-for exactly this shape (`session.reap_claims_for_repos`), never composed
-behind session.reap or boot_sweep — no new op identity was needed, and no rider
-was added back onto session.reap as a convenience (that would reintroduce the
-Decision D1 conflict this dissolves: session.reap's own identity carries
-nothing but its own sub-reaps (i)/(ii)/(iv), never mixing in the untracked
-rm -rf a ceremony gate now owns).
+Sub-reap (iii) (orphaned claim dirs) was deleted under DR-344's kill bar, with
+its predicate and its per-repo op. No op culls claim dirs; session.reap carries
+only its own sub-reaps (i)/(ii)/(iv)-(vi).
 
 Class-B safety contract (NOT DR-211 git-archival — untracked .git/ substrate):
   - Per-record idempotency: if archive dest already exists, skip (no error).
-  - Liveness: ONLY via resolve_live_session_ids / cs_claim_holder_live — NEVER raw pid.
-  - TOCTOU: double liveness check immediately before rm on claim dirs
-    (mirrors the bash oracle's cs_reap_stale_claims).
+  - Liveness: ONLY via resolve_live_session_ids — NEVER raw pid.
   - Fail-closed-to-keep: on any liveness-check error or meta-read failure,
     DEFER (keep the record) — untracked-substrate removal is NOT git-reversible;
     mirrors the bash oracle's "bias to life" posture.
@@ -70,20 +45,12 @@ Class-B safety contract (NOT DR-211 git-archival — untracked .git/ substrate):
     NOT flock — .last-reap is a long-lived persistence marker, not a short-held
     write-critical-section (session-state-contract.md § Negative-Spec).
 
-Cadence decoupling — SUPERSEDED (C3, see "Boot backstop cull removal" above):
-  the original Decision D1 shape (a) (PM-ratified 2026-07-14 claim-lock-liveness
-  plan § C4, docs/plans/2026-07-14-claim-lock-liveness-archival-gate-unification.md)
-  decoupled sub-reap (iii) from the 12h .last-reap marker so it ran at EVERY
-  session-init instead. C3 goes further: (iii) no longer runs from session.reap
-  at all, gated or not — it runs only from a ceremony gate via
-  session.reap_claims_for_repos. Only sub-reaps (i)/(ii)/(iv) remain behind
-  the 12h gate here. session.boot_sweep still does NOT invoke session.reap
-  directly (shape (b), folding claim-reap into boot_sweep, remains REJECTED:
-  it would mix Class-B untracked rm-rf into boot_sweep's DR-211 tracked-archival
-  safety identity) — session.reap is invoked by coordinator-content-repo's SessionStart
-  trampoline coordinator/hooks/scripts/sweep-boot.py :: _reap_sessions (boot
-  cadence, registered 6c17f8275 on 2026-08-25), and after C3 that boot-path
-  invocation performs no irreversible cull. That leg pre-gates on an 11h
+Cadence: only sub-reaps (i)/(ii)/(iv)/(v) sit behind the 12h gate here.
+  session.boot_sweep does NOT invoke session.reap
+  directly (it would mix Class-B untracked rm-rf into boot_sweep's DR-211
+  tracked-archival safety identity) — session.reap is invoked by coordinator-content-repo's
+  SessionStart trampoline coordinator/hooks/scripts/sweep-boot.py :: _reap_sessions
+  (boot cadence, registered 6c17f8275 on 2026-08-25). That leg pre-gates on an 11h
   .last-reap mtime, deliberately SHORTER than _CADENCE_SECONDS below, so this
   op stays the authority: a drifted constant there can only over-spawn, never
   suppress. The prior caller, session-init, was deleted 2026-07-15 and this op
@@ -92,10 +59,7 @@ Cadence decoupling — SUPERSEDED (C3, see "Boot backstop cull removal" above):
   the caller living in a sibling repo is why that outage was silent here.
 
 Self-registration: importing this module calls
-register_op("session.reap", _handler) as a side-effect, and (C5)
-register_op("session.reap_claims_for_repos", _handler_reap_claims_for_repos) — the
-per-repo claim-reap primitive (target-root-parameterized, op scope "none"; see
-"Per-repo claim-reap PRIMITIVE" section below) — and
+register_op("session.reap", _handler) as a side-effect, and
 register_op("session.audit_unreapable", _handler_audit_unreapable), the read-only
 observability half of the uuid-shape gate: session.reap reports the gate-rejected
 population as a DEBUG count by D1 contract, and that op reports its NAMES,
@@ -122,11 +86,7 @@ Negative-spec:
   - Does NOT treat params.repo_root as the path source — D3 check only.
   - Does NOT expose a dry_run/candidate_ids two-phase contract — this is not a fleet op;
     it has no cockpit-facing reviewer loop.
-  - Does NOT invoke `_reap_orphaned_claims` (sub-reap (iii)) from the `session.reap`
-    handler, on any path — cadence-gated or full-run (C3, PM ruling 2026-08-22).
-    A caller wanting the irreversible claim-dir cull must call the already-registered
-    `session.reap_claims_for_repos` op directly; session.reap's own identity carries
-    only (i)/(ii)/(iv).
+  - Does NOT cull claim dirs: sub-reap (iii) was deleted under DR-344's kill bar.
 """
 
 from __future__ import annotations
@@ -142,15 +102,13 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
-from coordinator_core.lifecycle import git_common_dir, main_worktree_root
-from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
+from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops.fleet._common import (
-    _CLAIM_SUBDIRS,
     _sessions_dir,
     build_setup_error_result,
     check_repo_root,
 )
-from coordinator_core.session.claims import reconcile_dead_handoff_claim_frontmatter
 from coordinator_core.session.liveness import (
     _NON_SESSION_DIR_NAMES,
     session_abandoned,
@@ -172,10 +130,8 @@ _AGENT_ARCHIVE_RETENTION_SECONDS: int = 14 * 24 * 3600  # 14d mtime → prune .a
 _SESSION_ARCHIVE_RETENTION_SECONDS: int = 30 * 24 * 3600
 _SESSION_ARCHIVE_NAME_RE = re.compile(r"^[^_.].*-\d{4}-\d{2}-\d{2}$")
 
-# _CLAIM_SUBDIRS / _sessions_dir: imported above from ops.fleet._common (single
-# shared source of truth with archive_handoffs.py's Check 4 — code-reviewer F1,
-# 2026-07-14 claim-lock-liveness slice1 review). Re-exported via this module's
-# namespace for existing test imports (coordinator_core.ops.session.reap.{_CLAIM_SUBDIRS,_sessions_dir}).
+# _sessions_dir: imported above from ops.fleet._common, re-exported via this
+# module's namespace for existing test imports (coordinator_core.ops.session.reap._sessions_dir).
 
 # Positive uuid-shape gate for sub-reap (i)'s candidate loop (C2,
 # docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md). Same
@@ -871,178 +827,6 @@ def _prune_archive_entries(sessions_dir: Path, select, retention_seconds: int) -
 
 
 # ---------------------------------------------------------------------------
-# Sub-reaper (iii): orphaned claim dirs
-# ---------------------------------------------------------------------------
-
-def _reap_orphaned_claims(
-    sessions_dir: Path,
-) -> Tuple[List[str], List[dict], List[dict]]:
-    """Sync: rm -rf orphaned claim dirs after double liveness check (TOCTOU guard).
-
-    Returns (reaped_claims, deferred, failed).
-
-    Claim dirs: <sessions_dir>/{handoff,memo,plan}-claims/<basename>/
-    Liveness: cs_claim_holder_live (NEVER raw pid).
-    TOCTOU: two sequential cs_claim_holder_live calls immediately before rm — if either
-    call returns live (concurrent pickup took over), skip (mirrors shell :855/:861).
-    Fail-closed-to-keep: any exception from cs_claim_holder_live → defer; never reap.
-    rm idempotency: if claim_dir already absent when rm fires, treat as reaped (concurrent
-    reaper won the race; mirrors shell rm -rf idempotency on BSD/macOS note).
-    """
-    reaped: List[str] = []
-    deferred: List[dict] = []
-    failed: List[dict] = []
-
-    for subdir_name in _CLAIM_SUBDIRS:
-        claims_dir = sessions_dir / subdir_name
-        if not claims_dir.is_dir():
-            continue
-
-        for claim_dir in sorted(claims_dir.iterdir()):
-            if not claim_dir.is_dir():
-                continue
-            claim_name = claim_dir.name
-            claim_id = f"{subdir_name}/{claim_name}"
-
-            # First liveness check — fail-closed-to-keep on any exception.
-            try:
-                live1 = cs_claim_holder_live(str(claim_dir))
-            except Exception as exc:
-                deferred.append({
-                    "id": claim_id,
-                    "reason": f"cs_claim_holder_live (read-1) raised — deferred (fail-closed): {exc}",
-                })
-                continue
-
-            if live1:
-                continue  # holder is live — keep
-
-            # TOCTOU re-read: a concurrent pickup may have taken over between the two calls.
-            # If the new holder is live, the second check returns True → skip (keep).
-            try:
-                live2 = cs_claim_holder_live(str(claim_dir))
-            except Exception as exc:
-                deferred.append({
-                    "id": claim_id,
-                    "reason": f"cs_claim_holder_live (TOCTOU re-read) raised — deferred (fail-closed): {exc}",
-                })
-                continue
-
-            if live2:
-                continue  # concurrent takeover confirmed live — keep
-
-            # Reap/ship bug fix 1 (docs/plans/2026-07-24-g4-execute-pipeline-
-            # two-repo-rebuild.md § M3a, the Director of Engineering Finding 5): this automated
-            # reaper shares the identical lock-only-clear frontmatter drift
-            # clear_claim_if_dead had — reconcile the handoff frontmatter
-            # BEFORE the rmtree below (see reconcile_dead_handoff_claim_
-            # frontmatter's docstring for the unconsume-first crash-
-            # disposition rationale). Never raises; skip-and-log on any
-            # precondition miss.
-            if subdir_name == "handoff-claims":
-                reconcile_dead_handoff_claim_frontmatter(claim_name, sessions_dir)
-
-            # Both liveness checks agree: holder not live → reap.
-            # shutil.rmtree handles non-empty claim dirs safely.
-            try:
-                shutil.rmtree(str(claim_dir))
-                _LOG.info("session.reap: reaped orphaned claim %s", claim_id)
-                reaped.append(claim_id)
-            except OSError as exc:
-                if not claim_dir.exists():
-                    # Concurrent reaper removed it first — idempotent; still count as reaped.
-                    _LOG.debug(
-                        "session.reap: concurrent reap of claim %s (already absent) — ok",
-                        claim_id,
-                    )
-                    reaped.append(claim_id)
-                else:
-                    failed.append({"id": claim_id, "reason": f"rm failed: {exc}"})
-
-    return reaped, deferred, failed
-
-
-# ---------------------------------------------------------------------------
-# Per-repo claim-reap PRIMITIVE (C5, shape (b) — target-root-parameterized)
-# ---------------------------------------------------------------------------
-#
-# Spec backlink: pln-claim-lock-liveness-unificatio-c135ac
-# § C5 (PM-ratified 2026-07-14; direction resolved by the Staff Engineer review, "adopt split,
-# no the Director of Engineering round"). DR-211 does NOT govern this primitive — session.reap is declared
-# outside DR-211's git-archival bounds (see module docstring). Governing authority:
-# tri-plane ownership boundary + per-repo-self-sweep convention
-# (coordinator_roots.py:6-8; initiative-FK-backfill precedent).
-#
-# Negative-spec (C5):
-#   - Does NOT enumerate working-repos.yaml — claude-klabauter has no fleet census here.
-#   - Does NOT walk/rm-rf into any sibling repo the caller did not explicitly name
-#     via target_root/target_roots. Fleet-level fan-out over this primitive across
-#     the full working-repos.yaml census is the META-REPO's job (paired DoE
-#     return-memo commitment), not built in this plan.
-#   - Does NOT re-implement the reaper predicate — delegates to
-#     _reap_orphaned_claims (same TOCTOU double-check + fail-closed-to-keep
-#     liveness safety as the cwd path). A live holder's claim is NEVER reaped.
-
-
-def _reap_claims_for_target(target_root: Path) -> Tuple[List[str], List[dict], List[dict]]:
-    """Sync: per-repo claim-reap PRIMITIVE — reap orphaned claim dirs under an
-    explicit *target_root* repo's coordinator-sessions substrate.
-
-    Op scope "none" per claude-klabauter's target-resolution convention (fleet-generic ops
-    use scope "none" with an explicit target_root param, NOT common_dir —
-    mirrors cartography.churn/cartography.tree precedent): target_root may be
-    ANY repo, not just the caller's own dispatching tree. Derives common_dir via
-    git_common_dir(target_root) (a subprocess call scoped to target_root, works
-    for any git repo) then reuses _reap_orphaned_claims — same TOCTOU double
-    liveness check and fail-closed-to-keep guarantee; no parallel reaper
-    predicate is (re-)implemented here.
-
-    Returns (reaped_claims, deferred, failed) — same shape as
-    _reap_orphaned_claims. A target_root with no coordinator-sessions substrate
-    yet (never touched by this session-substrate machinery) returns
-    ([], [], []) — not an error.
-    """
-    try:
-        common_dir = git_common_dir(target_root)
-    except RuntimeError as exc:
-        print(f"skip: _reap_claims_for_target: common_dir = git_common_dir(target_root) failed: {exc}", file=sys.stderr)
-        return [], [], [{
-            "id": str(target_root),
-            "reason": f"git_common_dir failed for target_root: {exc}",
-        }]
-
-    sessions_dir = _sessions_dir(common_dir)
-    if not sessions_dir.is_dir():
-        return [], [], []
-
-    return _reap_orphaned_claims(sessions_dir)
-
-
-def _reap_session_touched_repos(target_roots: List[Path]) -> dict:
-    """Sync: reap orphaned claims across exactly the session-touched baton repos.
-
-    Shape (b) coverage default (C5): every foreign `/pickup` this session
-    performed already resolves a BATON_REPO; the caller collects those touched
-    repo roots and passes them here as *target_roots*. Reaps ONLY the given
-    repos and no others — claude-klabauter does NOT enumerate working-repos.yaml and does
-    NOT expand coverage beyond what this session legitimately touched.
-
-    Returns {<target_root str>: {"reaped_claims": [...], "deferred": [...],
-    "failed": [...]}}, keyed per repo so a caller can distinguish per-repo
-    outcomes.
-    """
-    per_repo: dict = {}
-    for target_root in target_roots:
-        reaped, deferred, failed = _reap_claims_for_target(target_root)
-        per_repo[str(target_root)] = {
-            "reaped_claims": reaped,
-            "deferred": deferred,
-            "failed": failed,
-        }
-    return per_repo
-
-
-# ---------------------------------------------------------------------------
 # Result envelope builders
 # ---------------------------------------------------------------------------
 
@@ -1142,14 +926,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
            path refusal — C6, see module docstring) → .archive/_agents-<aid>-YYYYMMDD/
       (iv) Stale agent-archive prune: .archive/_agents-* older than 14d mtime → rm -rf
 
-    Sub-reap (iii) (orphaned claim dirs, two liveness checks + TOCTOU re-read →
-    rm -rf) is NOT run by this handler at all (C3, PM ruling 2026-08-22 — see
-    module docstring "Boot backstop cull removal"). It is the one irreversible,
-    NOT-git-reversible cull among the four, and boot must not reach it. Call
-    the already-registered `session.reap_claims_for_repos` op from a ceremony
-    gate instead — it invokes the identical `_reap_orphaned_claims` predicate
-    (same TOCTOU + fail-closed-to-keep guarantee), scoped to the caller-named
-    target_roots.
+    Sub-reap (iii) (orphaned claim dirs) was deleted under DR-344's kill bar;
+    no op culls claim dirs.
 
     Class-B op: no git commit; substrate is untracked .git/coordinator-sessions/.
     Fail-closed-to-keep: any liveness-check error or ambiguity defers the record.
@@ -1168,8 +946,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
       cadence_gated bool  true iff the 12h gate fired and all sub-reaps were skipped
       reaped_sessions  [str]   session IDs successfully moved to .archive/
       reaped_agents    [str]   agent IDs successfully moved to .archive/
-      reaped_claims    [str]   ALWAYS [] — sub-reap (iii) no longer runs here (C3);
-                               field is kept for wire-shape stability only.
+      reaped_claims    [str]   ALWAYS [] — sub-reap (iii) was deleted; field is
+                               kept for wire-shape stability only.
       pruned_agent_archive [str]  .archive/_agents-* entry names successfully rm'd
       deferred         [dict]  records kept due to liveness ambiguity / fail-closed
       failed           [dict]  records that could not be moved/rm'd (mv/rm error)
@@ -1213,8 +991,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not force and not _cadence_elapsed(sessions_dir):
         _LOG.debug(
             "session.reap: cadence gate active (< %dh since last reap) — "
-            "skipping sub-reaps (i)/(ii)/(iv); no-op (sub-reap (iii) runs only "
-            "from a ceremony gate via session.reap_claims_for_repos, never here)",
+            "skipping sub-reaps (i)/(ii)/(iv)/(v); no-op",
             _CADENCE_SECONDS // 3600,
         )
         return _build_result(
@@ -1259,10 +1036,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _reap_stale_agents, sessions_dir, Path(worktree_cwd)
     )
 
-    # Sub-reap (iii) (orphaned claim dirs) deliberately does NOT run here — see
-    # module docstring "Boot backstop cull removal" (C3). Call
-    # session.reap_claims_for_repos from a ceremony gate instead.
-
     # --- Sub-reap (iv): stale agent-archive prune ---
     # Behind the same 12h cadence gate as (i)/(ii) — it prunes the .archive/
     # output of sub-reap (ii).
@@ -1299,115 +1072,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         failed=failed_sessions + failed_agents + failed_prune + failed_residue,
         purged_test_residue=purged_residue,
     )
-
-
-# ---------------------------------------------------------------------------
-# Op handler: session.reap_claims_for_repos (C5 — per-repo claim-reap primitive
-# + session-touched-baton-repos coverage default)
-# ---------------------------------------------------------------------------
-
-@register_op("session.reap_claims_for_repos")
-async def _handler_reap_claims_for_repos(
-    params: dict, repo_root: Optional[Path] = None
-) -> dict:
-    """session.reap_claims_for_repos — per-repo claim-reap PRIMITIVE (C5).
-
-    Fleet-generic, op scope "none" per claude-klabauter's target-resolution convention
-    (explicit target_root param, any repo — mirrors cartography.churn /
-    cartography.tree precedent, NOT common_dir). `repo_root` is unused (always
-    None for scope-"none" ops); all target roots are caller-supplied via the
-    `target_roots` wire param.
-
-    Ships shape (b) of C5 (PM-ratified 2026-07-14 claim-lock-liveness plan,
-    the Staff Engineer-review-resolved "adopt split, no the Director of Engineering round"): the PRIMITIVE is
-    target-root-parameterized (one call may name any set of repos), and the
-    session-touched-baton-repos coverage default is DRIVEN by the caller
-    passing exactly the baton repos this session touched (each foreign
-    `/pickup` already resolves BATON_REPO) — claude-klabauter does NOT enumerate
-    working-repos.yaml and does NOT expand coverage to sibling repos this
-    session did not legitimately touch.
-
-    params:
-      target_roots (list[str], required): repo roots to reap orphaned claim
-                                           dirs under. Each is validated
-                                           (non-blank string, resolves to an
-                                           existing path via Path.resolve(strict=True))
-                                           before use — see Finding-1 note below.
-
-    Wire output (session.reap_claims_for_repos-specific — NOT the frozen fleet
-    envelope):
-      exit_code  int   0=ok (no per-repo failures), 1=setup-error (bad params),
-                       2=partial (a per-repo failed[] entry non-empty)
-      results    dict  {<target_root str>: {"reaped_claims": [...],
-                        "deferred": [...], "failed": [...]}}, one entry per
-                        target_root actually processed (invalid roots are
-                        reported in "errors" instead, not silently dropped).
-      errors     list[dict]  {"target_root": <raw str>, "reason": <str>} for
-                              any target_root that was empty/non-string/blank
-                              or failed to resolve to an existing path.
-
-    This previously called
-    cartography._guard.path_guard(raw_target, ".") as a documented "security
-    guard", but joining "." onto target_root always collapses back to
-    target_root itself, so the containment check could never actually fail
-    except on an OSError during resolution — it provided no real traversal
-    protection. The REAL gate for this op is _reap_claims_for_target's
-    git_common_dir(target_root) call, which fails (reported as a per-repo
-    failed[] entry) for any path that isn't a real git repo. Replaced with an
-    explicit blank/whitespace rejection + Path.resolve(strict=True) fail-fast
-    on a non-existent path (cheaper than waiting for the git subprocess to
-    fail) — meaningful validation instead of a vestigial no-op, while
-    git_common_dir remains the actual containment/validity gate.
-
-    Same TOCTOU + fail-closed-to-keep + liveness safety as the cwd-scoped
-    session.reap sub-reap (iii) — delegates to _reap_orphaned_claims via
-    _reap_claims_for_target; no parallel reaper predicate.
-    """
-    raw_targets = params.get("target_roots")
-    if not raw_targets or not isinstance(raw_targets, list):
-        _LOG.error(
-            "session.reap_claims_for_repos: target_roots must be a non-empty list"
-        )
-        return {
-            "exit_code": 1,
-            "results": {},
-            "errors": [{
-                "target_root": raw_targets,
-                "reason": "target_roots must be a non-empty list of repo root strings",
-            }],
-        }
-
-    guarded_targets: List[Path] = []
-    errors: List[dict] = []
-    for raw_target in raw_targets:
-        if not raw_target or not isinstance(raw_target, str):
-            errors.append({
-                "target_root": raw_target,
-                "reason": "target_root entry must be a non-empty string",
-            })
-            continue
-        if not raw_target.strip():
-            errors.append({
-                "target_root": raw_target,
-                "reason": "target_root entry must not be blank/whitespace-only",
-            })
-            continue
-        try:
-            guarded_targets.append(Path(raw_target).resolve(strict=True))
-        except OSError as exc:
-            errors.append({
-                "target_root": raw_target,
-                "reason": f"target_root does not resolve to an existing path: {exc}",
-            })
-
-    results = await asyncio.to_thread(_reap_session_touched_repos, guarded_targets)
-
-    any_failed = any(entry["failed"] for entry in results.values()) or bool(errors)
-    return {
-        "exit_code": 2 if any_failed else 0,
-        "results": results,
-        "errors": errors,
-    }
 
 
 # ---------------------------------------------------------------------------

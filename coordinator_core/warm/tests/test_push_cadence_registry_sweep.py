@@ -7,7 +7,6 @@ directory are the only things faked.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -181,23 +180,45 @@ def test_each_sweep_appends_one_row_naming_pushed_and_failed(tmp_path, monkeypat
     assert len(_rows()) == 2
 
 
-def test_ceiling_cut_repos_are_not_reached(tmp_path, monkeypatch):
+def test_every_ahead_repo_is_pushed_in_one_sweep_and_the_row_names_them(tmp_path, monkeypatch):
     first = _repo_ahead(tmp_path, "first")
     second = _repo_ahead(tmp_path, "second")
-    # The sweep visits the most recent commit first; pin that so `first` is it.
-    for repo, stamp in ((first, 1_700_000_100), (second, 1_700_000_000)):
-        os.utime(repo / ".git" / "logs" / "refs" / "heads" / "work" / "day", (stamp, stamp))
-    ticks = iter([0.0, 0.0, 100.0])
+    clean = _repo_ahead(tmp_path, "clean")
+    _git(["push", "-q", "origin", "work/day"], clean)
+    ticks = iter([0.0, 100.0])
     clock = lambda: next(ticks, 100.0)  # noqa: E731
 
-    push_cadence.sweep_repos(
-        [first, second], total_ceiling_secs=8.0, per_repo_budget_secs=5.0, clock=clock
-    )
+    push_cadence.sweep_repos([clean, first, second], clock=clock)
 
     rows = _rows()
     assert len(rows) == 1
-    assert rows[0]["pushed"] == [str(first)]
-    assert rows[0]["not_reached"] == [str(second)]
-    assert rows[0]["skipped"] == []
+    assert sorted(rows[0]["pushed"]) == sorted([str(first), str(second)])
+    assert sorted(rows[0]["ahead"]) == sorted([str(first), str(second)])
+    assert rows[0]["not_reached"] == []
+    assert rows[0]["skipped"] == [str(clean)]
     assert rows[0]["failed"] == []
-    assert _remote_head(second) != _local_head(second)
+    assert rows[0]["elapsed_secs"] == 100.0
+    assert _remote_head(first) == _local_head(first)
+    assert _remote_head(second) == _local_head(second)
+
+
+def test_not_reached_lists_only_ahead_repos(tmp_path, monkeypatch):
+    first = _repo_ahead(tmp_path, "first")
+    slow = _repo_ahead(tmp_path, "slow")
+    slower = _repo_ahead(tmp_path, "slower")
+    clean = _repo_ahead(tmp_path, "clean")
+    _git(["push", "-q", "origin", "work/day"], clean)
+    monkeypatch.setattr(
+        push_cadence,
+        "resolve_push_ceiling",
+        lambda root, *, default_secs: 100.0 if root.name.startswith("slow") else default_secs,
+    )
+
+    push_cadence.sweep_repos([clean, first, slow, slower], allow_extended_first=True)
+
+    row = _rows()[0]
+    assert len(row["not_reached"]) == 1
+    assert set(row["not_reached"]) <= set(row["ahead"])
+    assert str(clean) not in row["not_reached"]
+    assert str(clean) in row["skipped"]
+    assert str(clean) not in row["ahead"]

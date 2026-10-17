@@ -34,7 +34,7 @@ Stdout (caller eval's this line):
 Stderr: all human-readable detail (fast-test output, resolver hints).
 
 Exit codes:
-  0 — fast-test gate ok or skipped; proceed.
+  0 — fast-test gate ok or skipped (including: no mapped tests for the diff); proceed.
   2 — fast-test build failure (patterns error:/BUILD FAILED/Compilation), OR exit 127
        (missing interpreter/binary), OR resolver failed with interp-missing, OR the
        configured fast_test_cmd was malformed (resolver exit 126 -> config-malformed),
@@ -47,10 +47,10 @@ Exit codes:
        cross-repo/inbox/2026-07-25-coordinator-content-repo-em-validate-tier-u-shape-ruling.md — this
        gate only READS a Tier-U grant, it never writes/consumes-by-granting one.
 
-An unscoped run first consults a fresh `fast` suite-run record
-(suite_run_reuse.find_reusable): a hit spawns nothing, needs no grant, and takes its exit
-code, test-red failing set and sha from the record. A full-command run records `fast`; a
-diff-scoped run records nothing.
+The run is strictly diff-scoped: only tests mapped from the diff run, changed sources with
+no covering test are named on stderr, and a diff that maps to no test runs nothing
+(RC_VALIDATE='skipped'). The unscoped configured fast tier is never run, and no suite-run
+record is read or written.
 
 Port of: workday-complete-step1-validate.sh (DoE 091c0f3e, 2026-07-19).
 The fast-test resolver (bin/coordinator-resolve-validation-cmd.py, ported from
@@ -70,7 +70,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,6 +93,7 @@ from coordinator_core.diff_scoped_tests import (  # noqa: E402
     append_test_paths,
     compute_diff_scoped_paths,
     diag,
+    find_changed_source_files,
 )
 from coordinator_core.ops import fast_red_registry  # noqa: E402
 from coordinator_core.ops.test_red_record import (  # noqa: E402
@@ -102,7 +102,8 @@ from coordinator_core.ops.test_red_record import (  # noqa: E402
 )
 from coordinator_core.session import gate_budget  # noqa: E402
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
-from coordinator_core.testing import suite_mutex, suite_run_record, suite_run_reuse  # noqa: E402
+from coordinator_core.source_test_map import map_source_to_tests  # noqa: E402
+from coordinator_core.testing import suite_mutex  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 from coordinator_core.testing.suite_mutex import MUTEX_WAIT_SECS, mutex_owner  # noqa: E402
 
@@ -328,8 +329,8 @@ def _emit(rc_ubt, rc_validate) -> None:
     print(f"RC_UBT='{rc_ubt}' RC_VALIDATE='{rc_validate}'")
 
 
-def _run_fast_test_cmd(cmd: str, env: dict, record_root=None) -> tuple[int, str]:
-    """Run ``cmd``; a non-None ``record_root`` (full-command runs only) records the run as ``fast``."""
+def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
+    """Run ``cmd`` directly (no shell); returns (exit code, combined output)."""
     _err(f"[workday-complete-step1] fast-test: running: {cmd}")
     argv = shlex.split(cmd)
     resolved = shutil.which(argv[0], path=env.get("PATH"))
@@ -347,11 +348,6 @@ def _run_fast_test_cmd(cmd: str, env: dict, record_root=None) -> tuple[int, str]
         **no_console_creationflags(),
     )
     _add_process_group_spawn_kwargs(spawn_kwargs)
-    rec_head = rec_dirty = rec_log = None
-    if record_root is not None:
-        rec_head, rec_dirty, rec_log = suite_run_reuse.begin_run(record_root, "fast")
-    started_at = suite_run_reuse._now_iso()
-    started_mono = time.monotonic()
     children_before = gate_budget.snapshot_children_times()
     try:
         proc = subprocess.Popen(argv, **spawn_kwargs)
@@ -386,18 +382,6 @@ def _run_fast_test_cmd(cmd: str, env: dict, record_root=None) -> tuple[int, str]
     if ft_content:
         sys.stderr.write(ft_content)
         sys.stderr.flush()
-    if record_root is not None and rec_log is not None:
-        try:
-            with open(rec_log, "w", encoding="utf-8") as fh:
-                fh.write(ft_content)
-        except OSError as exc:
-            _err(f"suite-run record log not written: {exc}")
-        outcome = "pass" if ft_rc == 0 else "fail"
-        suite_run_reuse.record_run(
-            str(record_root), "fast", suite_run_reuse.command_key(shlex.split(cmd)),
-            rec_head, rec_dirty, started_at, started_mono, ft_rc, outcome, True, rec_log, False,
-        )
-        _err(suite_run_reuse.ran_line("fast", rec_head, outcome, suite_run_record.record_dir(record_root, "fast") / "current.log"))
     return ft_rc, ft_content
 
 
@@ -491,32 +475,16 @@ def _record_and_report(ft_rc: int, ft_content: str, classify_rc: int, scope, sha
         _report_fast_red_delta(parsed[0], parsed[1], scope)
 
 
-def _reuse_fresh(root, cmd):
-    reuse = suite_run_reuse.find_reusable(root, "fast", shlex.split(cmd))
-    if reuse is not None:
-        _err(suite_run_reuse.reused_line(reuse))
-    return reuse
-
-
-def _read_log(reuse) -> str:
-    try:
-        return Path(reuse.log_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
-def _finish(rc_ubt, ft_rc: int, ft_content: str, diff_paths, reuse=None) -> int:
-    sha = reuse.head_sha if reuse else None
-    failed_ids = reuse.failed_ids if reuse else None
+def _finish(rc_ubt, ft_rc: int, ft_content: str, diff_paths) -> int:
     rc_validate = ft_rc
 
     if ft_rc == 0:
-        _record_and_report(ft_rc, ft_content, 0, None, sha, failed_ids)
+        _record_and_report(ft_rc, ft_content, 0, None)
         _emit(rc_ubt, rc_validate)
         return 0
 
     classify_rc = _classify_fast_test_output(ft_content, ft_rc)
-    _record_and_report(ft_rc, ft_content, classify_rc, diff_paths or None, sha, failed_ids)
+    _record_and_report(ft_rc, ft_content, classify_rc, diff_paths)
     _emit(rc_ubt, rc_validate)
     return classify_rc
 
@@ -551,22 +519,20 @@ def main() -> int:
 
     diff_paths, fully_mapped = compute_diff_scoped_paths(os.getcwd())
     if not fully_mapped:
+        unmapped = [
+            src for src in find_changed_source_files(os.getcwd())
+            if not map_source_to_tests(src, os.getcwd())
+        ]
         diag(
-            "changed source file(s) did not fully map to covering tests -- "
-            "falling back to the full configured fast tier (conjunctive fail-safe)."
+            "changed source file(s) with no covering test (not run): "
+            + (", ".join(unmapped) or "<unnamed>")
         )
-        diff_paths = []
-    if diff_paths:
-        scoped_cmd = append_test_paths(cmd, diff_paths)
-        diag(f"changed test file(s) detected -- scoping run to: {', '.join(diff_paths)}")
-    else:
-        scoped_cmd = cmd
-
-    root = None if diff_paths else suite_run_record.repo_root_for(os.getcwd())
-    if root is not None:
-        reuse = _reuse_fresh(root, cmd)
-        if reuse is not None:
-            return _finish(rc_ubt, reuse.exit_code, _read_log(reuse), [], reuse)
+    if not diff_paths:
+        diag("no mapped tests for the diff -- running no tests.")
+        _emit(rc_ubt, "skipped")
+        return 0
+    scoped_cmd = append_test_paths(cmd, diff_paths)
+    diag(f"changed test file(s) detected -- scoping run to: {', '.join(diff_paths)}")
 
     gate = enforce_tier_u_gate(scoped_cmd, repo_root=os.getcwd())
     if not gate.proceed:
@@ -597,41 +563,15 @@ def main() -> int:
                 "proceeding unserialized"
                 % (current.get("owner", "<unknown>"), int(MUTEX_WAIT_SECS))
             )
-        ft_rc, ft_content = _run_fast_test_cmd(scoped_cmd, _ft_env, root)
+        ft_rc, ft_content = _run_fast_test_cmd(scoped_cmd, _ft_env)
 
-    if diff_paths and ft_rc == PYTEST_NO_TESTS_COLLECTED:
-        # The diff-scoped run named a changed test file the `-m` marker
-        # filter then deselected entirely (e.g. it carries only
-        # designed_red-marked tests) -- pytest's own "no tests collected"
-        # exit code. That is neither a pass nor a failure; fall back to
-        # the full configured fast tier so the gate still runs SOMETHING
-        # (fail-safe: always toward more testing, never toward silently
-        # running zero tests).
+    if ft_rc == PYTEST_NO_TESTS_COLLECTED:
         diag(
-            "diff-scoped run collected zero tests (pytest rc="
-            f"{PYTEST_NO_TESTS_COLLECTED}) -- falling back to the full "
-            "configured fast tier."
+            "scoped run collected zero tests (pytest rc="
+            f"{PYTEST_NO_TESTS_COLLECTED}) -- no tests ran; not falling back to the full tier."
         )
-        root = suite_run_record.repo_root_for(os.getcwd())
-        if root is not None:
-            reuse = _reuse_fresh(root, cmd)
-            if reuse is not None:
-                return _finish(rc_ubt, reuse.exit_code, _read_log(reuse), [], reuse)
-        gate_full = enforce_tier_u_gate(cmd, repo_root=os.getcwd())
-        if not gate_full.proceed:
-            _err(gate_full.refusal_message)
-            _emit(rc_ubt, "tier-u-refused")
-            return 5
-        with suite_mutex.held(owner, "workday-complete-step1", timeout=MUTEX_WAIT_SECS) as acquired:
-            if not acquired:
-                current = suite_mutex.holder() or {}
-                _err(
-                    "[workday-complete-step1] [WARN] suite mutex held by %s for %ss — "
-                    "proceeding unserialized"
-                    % (current.get("owner", "<unknown>"), int(MUTEX_WAIT_SECS))
-                )
-            ft_rc, ft_content = _run_fast_test_cmd(cmd, _ft_env, root)
-        diff_paths = []
+        _emit(rc_ubt, "skipped")
+        return 0
 
     return _finish(rc_ubt, ft_rc, ft_content, diff_paths)
 

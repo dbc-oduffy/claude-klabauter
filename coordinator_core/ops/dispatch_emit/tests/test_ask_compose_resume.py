@@ -41,7 +41,8 @@ def test_resume_rows_ride_the_gate_into_the_folded_stage_calls():
     assert "resume_rows: _scouted.resume_rows ?? null" in script
     spread = "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {})"
     assert script.count(spread) >= 2
-    assert "only_rows" not in script.replace(spread, "").replace("resume_rows", "")
+    rest = script.replace(spread, "").replace("resume_rows", "").replace("' with only_rows added,", "")
+    assert "only_rows" not in rest
 
 
 def test_gate_reply_schema_carries_resume_plan():

@@ -236,6 +236,38 @@ def test_commit_v2_lands_and_warns_when_the_check_could_not_run(tmp_path):
     assert any(w.startswith("[skill-weight-budget-guard] check did not run") for w in result["warnings"])
 
 
+_SKILL_REL = "coordinator/skills/s0/SKILL.md"
+
+
+def _crlf_lines(n):
+    return b"ab\r\n" * n
+
+
+@pytest.mark.parametrize("attributes", [None, "* text=auto\n"], ids=["no-attr", "text-auto"])
+def test_a_crlf_skill_whose_lf_blob_fits_is_admitted(tmp_path, attributes):
+    root = _doe_repo(tmp_path)
+    _git(["config", "core.autocrlf", "true"], root)
+    if attributes:
+        (root / ".gitattributes").write_text(attributes, encoding="utf-8")
+    (root / _SKILL_REL).write_bytes(_crlf_lines(30))  # 120 B raw, 90 B as an LF blob
+    result = _v2(root, _SKILL_REL)
+    assert result["committed"] is True, result.get("error")
+
+
+@pytest.mark.parametrize("attributes", [None, "* text=auto\n"], ids=["no-attr", "text-auto"])
+def test_a_crlf_skill_whose_lf_blob_is_over_the_limit_is_refused(tmp_path, attributes):
+    root = _doe_repo(tmp_path)
+    _git(["config", "core.autocrlf", "true"], root)
+    if attributes:
+        (root / ".gitattributes").write_text(attributes, encoding="utf-8")
+    before = _head(root)
+    (root / _SKILL_REL).write_bytes(_crlf_lines(60))  # 180 B as an LF blob
+    result = _v2(root, _SKILL_REL)
+    assert result["committed"] is False
+    assert "  skill s0: 180 B (+130)" in result["error"]
+    assert _head(root) == before
+
+
 def test_commit_v2_non_triggering_commit_carries_no_warning(tmp_path):
     root = _doe_repo(tmp_path)
     (root / "other.txt").write_text("o\n", encoding="utf-8")

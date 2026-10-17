@@ -520,3 +520,29 @@ def test_scrub_out_of_root_and_foreign_drive_become_path_token(tmp_path):
 def test_scrub_leaves_repo_relative_tokens_and_caps(tmp_path):
     assert rc.scrub_detail("docs/plans/x.md", tmp_path) == "docs/plans/x.md"
     assert len(rc.scrub_detail("w " * 200, tmp_path)) == rc.DETAIL_CAP
+
+
+def _put_record(root, stem):
+    rc._write_atomic(root / rc.close_job_path(stem), {"legs": {}})
+
+
+def test_resolve_stem_bare_record(tmp_path):
+    _put_record(tmp_path, "r1")
+    assert rc.resolve_close_job_stem(tmp_path, "r1") == "r1"
+
+
+def test_resolve_stem_workflow_record(tmp_path):
+    _put_record(tmp_path, "r1.workflow")
+    assert rc.resolve_close_job_stem(tmp_path, "r1") == "r1.workflow"
+    assert rc.resolve_close_job_stem(tmp_path, "r1.workflow") == "r1.workflow"
+
+
+def test_resolve_stem_bare_wins(tmp_path):
+    _put_record(tmp_path, "r1")
+    _put_record(tmp_path, "r1.workflow")
+    assert rc.resolve_close_job_stem(tmp_path, "r1") == "r1"
+
+
+def test_resolve_stem_neither(tmp_path):
+    assert rc.resolve_close_job_stem(tmp_path, "r1") is None
+    assert rc.resolve_close_job_stem(tmp_path, "r1.workflow") is None

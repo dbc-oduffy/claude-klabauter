@@ -19,11 +19,12 @@ under `warm.idle.DEFAULT_IDLE_MINUTES` (15 * 60 = 900s) so the cadence
 always gets at least one shot before the server would otherwise demote.
 
 SYNCHRONOUS, ON PURPOSE (DR-329, docs/decisions/DR-329-push-runs-on-a-
-cadence-not-on-every-commit.md). No detached child, no new process, no new
-thread: a detach costs +130ms CPU and +7 procs fleet-wide to save ~64ms of
-one session's wall, a net loss under DR-344 (process time, never wall
-clock) at the 50-70-session load norm. The sweep runs inline on the
-watchdog thread and returns before the next tick.
+cadence-not-on-every-commit.md). No detached child, no child interpreter:
+a detach costs +130ms CPU and +7 procs fleet-wide to save ~64ms of one
+session's wall, a net loss under DR-344 (process time, never wall clock) at
+the 50-70-session load norm. The sweep runs inline on the watchdog thread;
+its per-repo pushes run on worker threads that `sweep_repos` itself starts
+and joins before it returns, so nothing outlives the call.
 
 THE REPO SET is derived from what THIS server has actually served -- never
 a disk scan, never a hardcoded path. `warm.server._ServerContext` records
@@ -44,17 +45,18 @@ the local sha. Named residual: a `memo.send` served cold registers in a process
 with no idle tick, so its push waits for a later send from a warm server -- the
 same accepted-exposure class as the linked-worktree note below.
 
-SWEEP COST BUDGET. Serial over every served repo -- N x push, not one push.
-Each repo's own push is bounded by `push_with_retry`'s ladder deadline, which
-is that repo's resolved ceiling (`push_ceiling.resolve_push_ceiling`, default
-`CADENCE_PUSH_RETRY_BUDGET_SECS`, at most `PUSH_CEILING_MAX_SECS`). A repo
-whose ceiling exceeds the default is admitted only first in an idle tick (the
-exit sweep declines it), and the sweep stops after it. The
-whole sweep additionally REFUSES TO START a repo that cannot finish before
-`SWEEP_TOTAL_CEILING_SECS` elapses (`sweep_repos`'s own docstring), so
-`SWEEP_TOTAL_CEILING_SECS` is an enforced worst-case bound on the sweep's
-own occupancy, not merely a stop-taking-new-repos check that a repo
-admitted just under the deadline could still run past -- one wedged repo
+SWEEP COST BUDGET. Every ahead repo per tick, concurrently. All admitted
+pushes start together, so the sweep's occupancy is the LARGEST admitted
+ceiling, never the sum, and spawn count and process time equal the serial
+design pushing the same repos. Each repo's own push is bounded by
+`push_with_retry`'s ladder deadline, which is that repo's resolved ceiling
+(`push_ceiling.resolve_push_ceiling`, default `CADENCE_PUSH_RETRY_BUDGET_SECS`,
+at most `PUSH_CEILING_MAX_SECS`). At most one repo whose ceiling exceeds the
+default is admitted per idle tick (the exit sweep declines it); the rest wait
+for the next tick, where longest-since-pushed ordering puts them first. A repo
+with nothing outstanding costs ~0 and is never admitted. Because a default
+ceiling is at most `SWEEP_TOTAL_CEILING_SECS`, that constant remains the
+enforced worst-case bound on the sweep's own occupancy -- one wedged repo
 cannot make the sweep itself the next unbounded-shutdown-hang class this
 plan exists to retire. `EXIT_SWEEP_CEILING_SECS` is tighter than the
 idle-tick ceiling: an
@@ -115,6 +117,7 @@ and-when.md C2/C8); only the read primitives (`_read_pending_record`,
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import threading
@@ -128,20 +131,20 @@ from coordinator_core.git.git_objects import cas_ref
 from coordinator_core.git.git_objects import read_ref_loose_or_packed as _ref_sha
 from coordinator_core.hooks.auto_push import branch_gate, log_failure
 from coordinator_core.ops.ceremony.git_native import push_refspec
-from coordinator_core.ops.ceremony.push import (
-    CADENCE_PUSH_RETRY_BUDGET_SECS,
-    _REMOTE_NAME_RE,
-    _read_git_config_text,
-)
+from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
 from coordinator_core.ops.ceremony.push_ceiling import (
     PUSH_CEILING_MAX_SECS,
-    _scan as _config_scan,
     resolve_push_ceiling,
 )
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
-from coordinator_core.ops.push_outstanding import _upstream_sha, push_outstanding
+from coordinator_core.ops.push_outstanding import push_outstanding, resolve_push_remote
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
 from coordinator_core.warm import telemetry
+from coordinator_core.warm.push_sweep_order import (
+    is_ahead,
+    no_upstream_and_no_new_commits,
+    since_pushed_key,
+)
 
 try:
     from coordinator_core.machine_profile import machine_profile
@@ -170,39 +173,23 @@ PUSH_CADENCE_INTERVAL_SECS = 600.0
 #: The idle-tick sweep's own ceiling (DR-401, 2026-09-01, re-derived a
 #: SECOND time same-day after an EM ruling reversed the first re-derivation
 #: below -- see DR-401's amended "Ripple" section for the full history).
-#: Sized for exactly ONE slow (has-outstanding-work, needs-the-ladder) repo
-#: per idle tick, not two: `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) is the
-#: floor a single repo needs to clear reliably (`sweep_repos` refuses to
-#: START a repo it cannot finish inside this deadline, so anything at or
-#: below 16.0 would refuse every repo -- see that function's own
-#: docstring); this adds 2.0s on top, covering the sweep's own per-repo
-#: overhead beyond the push itself -- one extra git spawn for
-#: `head_branch` inside `_feed_failure_detector` (a `git rev-parse`-class
-#: call, DR-344's own `git --version` benchmark puts a bare spawn at
-#: ~25ms, so 2.0s is generous headroom, not a tight fit) plus the sweep
-#: lock's file I/O (sub-millisecond). A second slow repo in the same tick
-#: is deliberately NOT budgeted for: it waits for the unconditional retry
-#: at `PUSH_CADENCE_INTERVAL_SECS` (600s) instead -- correctness never
-#: depends on any one tick succeeding (DR-401's own "Why 16.0, not
-#: floor-plus-margin" reasoning). This keeps worst-case idle-tick occupancy
-#: near C5's original 14.0s magnitude rather than C5's ratio times the new
-#: floor (34.0), honoring the load norm's "an op occupying the box for
-#: seconds is real load for ~50-70 queued peers"
-#: (`docs/wiki/machine-load-norm.md`). A repo with nothing outstanding
-#: costs ~0 via `push_outstanding`'s zero-spawn arm and is unaffected by
-#: this number either way, so the two-slow-repo case this sizing declines
-#: to cover needs two repos to BOTH have outstanding work AND both be slow
-#: in the same tick -- the rare case, not the norm. No multi-repo-same-tick
-#: freshness requirement is named anywhere in DR-401 or this module; if one
-#: is ever actually named, this number is the one to revisit.
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) is the floor a single push needs
+#: to clear reliably; this adds 2.0s on top, covering the sweep's own
+#: per-repo overhead beyond the push itself -- one extra git spawn for
+#: `head_branch` inside `_feed_failure_detector` (DR-344's `git --version`
+#: benchmark puts a bare spawn at ~25ms, so 2.0s is generous headroom) plus
+#: the sweep lock's file I/O. Every ahead repo is pushed in the same tick,
+#: concurrently, so this number bounds the sweep's occupancy (the largest
+#: admitted ceiling, never the sum) and stays at 18.0 -- raising it to
+#: N x 16.0 would multiply the watchdog's occupancy, the 34.0s shape DR-401
+#: refused. A repo with nothing outstanding costs ~0 and is never admitted.
 SWEEP_TOTAL_CEILING_SECS = 18.0
 
 #: The exit-path sweep's ceiling is tighter than the idle-tick one -- an
 #: unbounded exit sweep directly lengthens warm-restart latency (module
 #: docstring's SWEEP COST BUDGET section: a same-token successor cannot
 #: bind until the whole shutdown sequence completes). Re-derived (DR-401,
-#: 2026-09-01, second re-derivation -- see `SWEEP_TOTAL_CEILING_SECS`'s
-#: docstring for the history) for the SAME one-repo-per-tick sizing:
+#: 2026-09-01, second re-derivation) for the same occupancy bound:
 #: `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) plus 1.0s -- half the overhead
 #: margin `SWEEP_TOTAL_CEILING_SECS` carries, kept tighter on purpose
 #: (exit-path latency is the more sensitive of the two per this module's
@@ -222,10 +209,6 @@ ServedReposFn = Callable[[], Iterable[Union[str, Path]]]
 
 _cadence_lock = threading.Lock()
 _last_sweep_monotonic: Optional[float] = None
-#: First repo a ceiling-truncated sweep did not reach; the next sweep starts
-#: there. Keyed by repo, not index, so the served set growing between sweeps
-#: cannot shift the resume point. Guarded by `_cadence_lock`.
-_resume_repo: Optional[Path] = None
 #: `(root, branch)` pairs `note_foreign_delivery` registered, insertion-ordered,
 #: each mapped to its consecutive rejected-push count. Guarded by `_cadence_lock`.
 _foreign_deliveries: "dict[tuple[Path, str], int]" = {}
@@ -235,14 +218,14 @@ _foreign_deliveries: "dict[tuple[Path, str], int]" = {}
 #: forever; every rejection is still logged for the push-failure detector.
 FOREIGN_PUSH_MAX_REJECTS = 3
 
-#: Repos `note_commit` flagged since their last sweep visit: a commit landed
-#: here, so the next sweep orders them ahead of every other repo. Marks only --
-#: the push still happens on the cadence (DR-329). Guarded by `_cadence_lock`.
+#: Repos `note_commit` flagged since their last sweep visit; the visit lifts
+#: their failure backoff and clears the mark. Marks only -- the push still
+#: happens on the cadence (DR-329). Guarded by `_cadence_lock`.
 _due_repos: "set[Path]" = set()
 
 #: Per-repo push-failure backoff: `[consecutive_failed_sweeps, sweeps_left_to_skip]`.
-#: Without it a repo that fails every tick sorts first (it is always ahead and
-#: fresh) and spends the ceiling every tick. Guarded by `_cadence_lock`.
+#: Without it a repo that fails every tick is re-pushed every tick and logs a
+#: `push-failures.log` row each time. Guarded by `_cadence_lock`.
 _backoff: "dict[Path, list[int]]" = {}
 
 #: A repo that failed N consecutive sweeps is skipped for `2**(N-1)` sweeps
@@ -260,10 +243,9 @@ def reset_cadence_for_test() -> None:
     production code -- a real server ticks continuously for its whole life
     and never wants to "forget" the last sweep time.
     """
-    global _last_sweep_monotonic, _resume_repo
+    global _last_sweep_monotonic
     with _cadence_lock:
         _last_sweep_monotonic = None
-        _resume_repo = None
         _foreign_deliveries.clear()
         _due_repos.clear()
         _backoff.clear()
@@ -444,52 +426,8 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
         pass
 
 
-# `per_repo_deadline` existed
-# only to be `del`eted on entry; doctrine forbids a signature carrying a
-# parameter no caller needs and no callee uses.
-# No `drain_pending_push` call
-# here; see module docstring's DOES NOT DRAIN section for why.
-def _no_upstream_and_no_new_commits(root: Path, branch: str, sha: str) -> bool:
-    """True when `branch` has no upstream ref and HEAD already sits at some
-    remote-tracking ref's sha: a freshly cut branch with nothing to publish."""
-    common_dir = resolve_git_common_dir(root)
-    remotes = common_dir / "refs" / "remotes"
-    try:
-        for ref in remotes.rglob("*"):
-            if ref.is_file() and ref.name != "HEAD":
-                if ref.relative_to(remotes).parts[1:] == tuple(branch.split("/")):
-                    return False
-                try:
-                    if ref.read_text(encoding="utf-8").strip() == sha:
-                        return True
-                except (OSError, ValueError):  # a non-ref file under refs/remotes
-                    continue
-    except OSError:
-        pass
-    try:
-        packed = (common_dir / "packed-refs").read_text(encoding="utf-8")
-    except OSError:
-        return False
-    for line in packed.splitlines():
-        if line and line[0] not in "#^":
-            psha, _, name = line.partition(" ")
-            if name.startswith("refs/remotes/") and not name.endswith("/HEAD"):
-                if name.split("/", 3)[3:] == [branch]:
-                    return False
-                if psha == sha:
-                    return True
-    return False
-
-
-def _nothing_outstanding(root: Path) -> bool:
-    """HEAD's branch already sits at its remote-tracking sha. Zero spawns."""
-    branch = head_branch(root)
-    if branch is None:
-        return False
-    sha = head_sha(root)
-    return sha is not None and _upstream_sha(root, branch) == sha
-
-
+# No `drain_pending_push` call in this module; see its docstring's DOES NOT
+# DRAIN section for why.
 def _sweep_one(repo_root: Union[str, Path]) -> str:
     """Returns "pushed", "skipped" or "failed" for the sweep telemetry row.
 
@@ -510,7 +448,7 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
         return "skipped"
     branch = head_branch(root)
     sha = head_sha(root) if branch is not None else None
-    if branch is not None and sha is not None and _no_upstream_and_no_new_commits(root, branch, sha):
+    if branch is not None and sha is not None and no_upstream_and_no_new_commits(root, branch, sha):
         return "skipped"
     if not _acquire_sweep_lock(root):
         return "skipped"
@@ -534,45 +472,15 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
 
 
 def note_commit(repo_root: Union[str, Path]) -> None:
-    """Flag `repo_root` as holding a fresh commit: the next sweep visits it
-    first and a failure backoff on it is lifted for that visit. Mark only --
-    never pushes (DR-329). Idempotent; cleared when the sweep visits the repo.
+    """Flag `repo_root` as holding a fresh commit: a failure backoff on it is
+    lifted for the next sweep visit. Mark only -- never pushes, never reorders
+    (DR-329). Idempotent; cleared when the sweep visits the repo.
     """
     with _cadence_lock:
         _due_repos.add(Path(repo_root))
         entry = _backoff.get(Path(repo_root))
         if entry is not None:
             entry[1] = 0
-
-
-def _ref_mtime(path: Path) -> float:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return 0.0
-
-
-def _sweep_priority(root: Path) -> tuple:
-    """Sort key putting repos with work first, newest commit first. Zero spawns:
-    HEAD and upstream shas are file reads, recency is the mtime of the branch
-    reflog (appended on every commit), falling back to the loose ref's mtime.
-    """
-    with _cadence_lock:
-        due = root in _due_repos
-    branch = head_branch(root)
-    sha = head_sha(root) if branch is not None else None
-    ahead = False
-    when = 0.0
-    if branch is not None and sha is not None:
-        ahead = _upstream_sha(root, branch) != sha and not _no_upstream_and_no_new_commits(
-            root, branch, sha
-        )
-        if ahead or due:
-            common_dir = resolve_git_common_dir(root)
-            when = _ref_mtime(common_dir / "logs" / "refs" / "heads" / branch) or _ref_mtime(
-                common_dir / "refs" / "heads" / branch
-            )
-    return (0 if due else 1, 0 if ahead else 1, -when)
 
 
 def _backed_off_now(root: Path) -> bool:
@@ -643,18 +551,6 @@ def _is_definitive_reject(stderr: str) -> bool:
     return any(marker in text for marker in _DEFINITIVE_REJECT_MARKERS)
 
 
-def _foreign_remote(root: Path, branch: str) -> Optional[str]:
-    """`branch.<b>.remote`, else the sole configured remote, else `origin`; None if none."""
-    text = _read_git_config_text(root)
-    configured = _config_scan(text, "branch", branch, "remote")
-    if configured:
-        return configured
-    remotes = _REMOTE_NAME_RE.findall(text)
-    if len(remotes) == 1:
-        return remotes[0]
-    return "origin" if "origin" in remotes else None
-
-
 def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
     """Push one registered named branch; never raises, never touches HEAD's branch."""
     root, branch = pair
@@ -667,7 +563,7 @@ def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
     if local is None:
         _forget_foreign(pair)
         return
-    remote = _foreign_remote(root, branch)
+    remote = resolve_push_remote(root, branch)
     if remote is None:
         _forget_foreign(pair)
         return
@@ -724,106 +620,95 @@ def sweep_repos(
     allow_extended_first: bool = False,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Sweep every repo in `repos`, serially, stopping (without pushing to
-    any remaining repo) once `total_ceiling_secs` has elapsed since this
-    call started -- see module docstring's SWEEP COST BUDGET. Never raises:
-    every per-repo step is already caught inside `_sweep_one`.
+    """Push every ahead repo in `repos` inside one call, concurrently, then
+    the named-branch arm. Never raises: every per-repo step is caught inside
+    `_sweep_one`, and a worker exception counts as "failed".
 
-    REFUSES TO START a repo that cannot finish inside the deadline (C5,
-    2026-08-30): the old check (`clock() >= deadline` at the TOP of each
-    iteration, then run a whole repo) let a repo entered just under the
-    deadline spend its full budget anyway, so the true worst case was
-    `total_ceiling_secs + per_repo_budget_secs` -- 72s at the pre-C5
-    60.0/12.0 pairing, still over the criterion's 15s bound even after
-    lowering just the ceiling. Checking `now + per_repo_budget_secs >
-    deadline` makes `total_ceiling_secs` the real bound: no repo this call
-    ever touches can push it past that ceiling -- for any positive budget
-    this single check subsumes the plain `now >= deadline` case, so that
-    clause is dropped rather than kept as unreachable dead weight
-    (overengineering-reviewer finding 3). Each repo is admitted against its
-    own resolved ceiling (`resolve_push_ceiling`, zero spawns, once per repo
-    per sweep here); `per_repo_budget_secs`, when given, is a test seam that
-    replaces the resolver for every repo.
+    CLASSIFY (zero spawns). Backed-off repos and repos with nothing
+    outstanding (`push_sweep_order.is_ahead` False) are skipped without
+    spending anything. The ahead repos are ordered by
+    `push_sweep_order.since_pushed_key`, longest-since-pushed first, so a repo
+    that was not admitted keeps its old key and leads the next tick.
 
-    EXTENDED CEILINGS. A repo whose ceiling exceeds
-    `CADENCE_PUSH_RETRY_BUDGET_SECS` is admitted only as the FIRST repo of the
-    call and only with `allow_extended_first=True` (`on_idle_tick` passes it;
-    the exit sweep does not, so it declines such a repo). Its deadline is
-    `start + ceiling + (total_ceiling_secs - CADENCE_PUSH_RETRY_BUDGET_SECS)`,
-    and the sweep stops after it with the next repo as the resume cursor. A
-    declined or out-of-position extended repo becomes the cut, so the next
-    idle tick starts at it. A repo at or under the default is admitted
-    exactly as before, against the fixed `total_ceiling_secs` deadline.
+    ADMIT. Each ahead repo's ceiling is resolved once (`resolve_push_ceiling`;
+    `per_repo_budget_secs`, when given, is a test seam replacing the
+    resolver). Every default-ceiling repo is admitted: all pushes start
+    together, so the sweep's occupancy is the largest admitted ceiling, never
+    the sum, and `total_ceiling_secs` needs no per-repo reservation. At most
+    one repo whose ceiling exceeds `CADENCE_PUSH_RETRY_BUDGET_SECS` is
+    admitted, only with `allow_extended_first=True` (`on_idle_tick` passes
+    it; the exit sweep does not). Any other extended repo is `not_reached`.
+
+    RUN. The admitted pushes run on a `ThreadPoolExecutor` created and joined
+    inside this call, one worker per admitted repo -- the width is the ahead
+    count, never a constant. A push is never clamped below its own ceiling:
+    a push killed mid-flight is `unconfirmed`. Results are recorded on the
+    calling thread after the join.
 
     ARM B (P052-C5): the silence watchdog `git_native.push_streamed` adds is
     layered under the per-repo ladder deadline; every ceiling is capped at
     `PUSH_CEILING_MAX_SECS`, so no push runs unbounded.
-
-    ROTATION. A truncated sweep records the first repo it did not reach
-    (`_resume_repo`) and the next sweep starts there, wrapping around, so a
-    served set too large for one ceiling is covered across ticks instead of
-    the same tail being skipped every time. A sweep that reaches every repo
-    clears the cursor. The served order is otherwise preserved (no sort, no
-    shuffle).
     """
-    global _resume_repo
     start = clock()
     deadline = start + total_ceiling_secs
-    extended_margin = total_ceiling_secs - CADENCE_PUSH_RETRY_BUDGET_SECS
     ordered = list(dict.fromkeys(Path(repo) for repo in repos))
-    with _cadence_lock:
-        resume = _resume_repo
-    if resume in ordered:
-        offset = ordered.index(resume)
-        ordered = ordered[offset:] + ordered[:offset]
-    ordered.sort(key=_sweep_priority)
-    cut: Optional[Path] = None
     pushed: list = []
     skipped: list = []
     failed: list = []
     backed_off: list = []
-    reached = len(ordered)
-    for index, root in enumerate(ordered):
+    ahead: list = []
+    for root in ordered:
         if _backed_off_now(root):
             skipped.append(root)
             backed_off.append(root)
-            continue
-        if _nothing_outstanding(root):
-            # Admission reserves a whole push ceiling; a clean repo must not
-            # spend it, or the tail behind a few clean repos is never reached.
+        elif is_ahead(root):
+            ahead.append(root)
+        else:
             skipped.append(root)
-            continue
+    ahead.sort(key=since_pushed_key)
+    admitted: list = []
+    not_reached: list = []
+    extended_taken = False
+    for root in ahead:
         ceiling = (
             per_repo_budget_secs
             if per_repo_budget_secs is not None
             else resolve_push_ceiling(root, default_secs=CADENCE_PUSH_RETRY_BUDGET_SECS)
         )
-        extended = ceiling > CADENCE_PUSH_RETRY_BUDGET_SECS
-        if extended and not (allow_extended_first and index == 0):
-            cut = root
-            reached = index
-            break
-        repo_deadline = start + ceiling + extended_margin if extended else deadline
-        if clock() + ceiling > repo_deadline:
-            cut = root
-            reached = index
-            break
-        result = _sweep_one(root)
+        if ceiling > CADENCE_PUSH_RETRY_BUDGET_SECS:
+            if not allow_extended_first or extended_taken:
+                not_reached.append(root)
+                continue
+            extended_taken = True
+        admitted.append(root)
+    results: dict = {}
+    if admitted:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(admitted), thread_name_prefix="push-sweep"
+        ) as pool:
+            futures = {root: pool.submit(_sweep_one, root) for root in admitted}
+        for root, future in futures.items():
+            try:
+                results[root] = future.result()
+            except Exception:  # noqa: BLE001 -- a sweep push must never raise
+                results[root] = "failed"
+    for root in admitted:
+        result = results[root]
         with _cadence_lock:
             _due_repos.discard(root)
         _note_sweep_result(root, result)
         {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
-        if extended:
-            cut = ordered[index + 1] if index + 1 < len(ordered) else None
-            reached = index + 1
-            break
-    with _cadence_lock:
-        _resume_repo = cut
     _sweep_foreign(deadline=deadline, clock=clock)
     with _cadence_lock:
         streaks = {root: _backoff[root][0] for root in backed_off if root in _backoff}
     telemetry.record_sweep(
-        pushed, skipped, failed, not_reached=ordered[reached:], backoff=streaks
+        pushed,
+        skipped,
+        failed,
+        not_reached=not_reached,
+        backoff=streaks,
+        ahead=ahead,
+        elapsed_secs=clock() - start,
     )
 
 

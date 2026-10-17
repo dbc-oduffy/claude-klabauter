@@ -2512,7 +2512,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   pid); TOCTOU re-read before rm; fail-closed-to-keep on liveness error or ambiguity;
     #   12h .last-reap cadence gate (mtime-based file marker, NOT flock — session-state-contract.md § Neg-Spec).
     "session.reap": OpClass.MUTATING,
-    "session.reap_claims_for_repos": OpClass.MUTATING,
     # session.guard_settings_integrity — MUTATING: restores a corrupted/missing settings
     # file from backup via atomic same-dir temp+os.replace (_atomic_copy). Was registered
     # (ops/__init__ + _registry_map) without a classification, leaving the authz fail-closed

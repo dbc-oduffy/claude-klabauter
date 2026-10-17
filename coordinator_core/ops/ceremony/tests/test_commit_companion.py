@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony.commit_companion import untracked_companions
+from coordinator_core.ops.ceremony.commit_companion import (
+    own_left_behind,
+    untracked_companions,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -73,6 +77,49 @@ def test_two_peers_keyed_separately(repo):
 
 def test_unknown_peer_and_empty_candidates(repo):
     assert untracked_companions(repo, {}, ["nobody"], []) == {}
+
+
+def test_own_untracked_is_carried(repo):
+    assert own_left_behind(repo, {"me": ["a.py", "test_a.py"]}, "me", ["a.py"]) == ["test_a.py"]
+
+
+def test_own_tracked_modified_is_carried(repo):
+    (repo / "tracked_b.py").write_text("changed longer\n", encoding="utf-8")
+    assert own_left_behind(repo, {"me": ["tracked_b.py"]}, "me", []) == ["tracked_b.py"]
+
+
+def test_own_clean_is_omitted(repo):
+    assert own_left_behind(repo, {"me": ["a.py", "sub/c.py"]}, "me", []) == []
+
+
+def test_own_touched_but_same_content_is_omitted(repo):
+    p = repo / "a.py"
+    p.write_text("x\n", encoding="utf-8")
+    os.utime(p, ns=(1_000_000_000, 1_000_000_000))
+    assert own_left_behind(repo, {"me": ["a.py"]}, "me", []) == []
+
+
+def test_own_in_pathspec_is_omitted(repo):
+    assert own_left_behind(repo, {"me": ["test_a.py"]}, "me", ["test_a.py"]) == []
+
+
+def test_own_contested_is_omitted(repo):
+    held = {"me": ["test_a.py", "sub/new.py"]}
+    assert own_left_behind(repo, held, "me", [], contested=["sub\\new.py"]) == ["test_a.py"]
+
+
+def test_own_ignores_peers_and_missing_files(repo):
+    held = {"me": ["ghost.py"], "peer": ["test_a.py"]}
+    assert own_left_behind(repo, held, "me", []) == []
+
+
+def test_own_left_behind_makes_no_subprocess_call(repo, monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("subprocess used")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+    assert own_left_behind(repo, {"me": ["test_a.py"]}, "me", []) == ["test_a.py"]
 
 
 def test_helper_makes_no_subprocess_call(repo, monkeypatch):

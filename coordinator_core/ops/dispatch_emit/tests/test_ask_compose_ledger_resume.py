@@ -32,10 +32,57 @@ def test_the_gate_schema_carries_resume_ledger():
 def test_resume_binds_the_plan_and_takes_the_xs_tail_before_any_plan_or_executor_call(monkeypatch):
     script = _script(monkeypatch)
     bind = script.index("const _resumeLedger = !_halted && !!_gate.resume_ledger;")
-    assert "_planRel = _gate.resume_ledger.plan; _gate = { ..._gate, arm: 'xs' }" in script[bind:]
+    assert "_planRel = _gate.resume_ledger.plan; if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script[bind:]
     assert bind < script.index("label: 'plan'")
-    execute = script.index("if (!_halted && !_resumeLedger) {\n  phase('Execute');")
+    execute = script.index("if (!_halted && (!_resumeLedger || _ledgerExec)) {\n  phase('Execute');")
     assert bind < execute < script.index("label: 'verify'")
+
+
+# Before the fix the block read `_planRel = _gate.resume_ledger.plan; _gate = { ..._gate, arm: 'xs' }; }`
+# for every ledger resume, so an m_plus verdict owing work planned as xs and dispatched no row.
+_BEFORE_STATE = "_planRel = _gate.resume_ledger.plan; _gate = { ..._gate, arm: 'xs' }; }"
+
+
+# The substring tests below pin the composed JS shape only; dispatch of the added rows is proven by
+# test_refire_replan_added_rows_dispatch_e2e.py.
+def test_before_state_unconditional_xs_is_gone(monkeypatch):
+    assert _BEFORE_STATE not in _script(monkeypatch)
+
+
+def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work(monkeypatch):
+    script = _script(monkeypatch)
+    owes = script.index("const _ledgerOwes = _resumeLedger && _gate.arm === 'm_plus'")
+    assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
+    assert "if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script
+    leg = script.index("label: 'ledger-replan'")
+    prompt = script[leg - 4200 : leg]
+    assert "_gate.resume_ledger.blocking.join(', ')" in prompt
+    assert "_gate.resume_ledger.remaining ?? {}" in prompt
+    assert "_gate.resume_ledger.revise_notes ?? []" in prompt
+    assert "added_rows" in prompt
+    assert "agentType: 'coordinator:plan-author'" in script[leg:][:200]
+    assert "label: 'ledger-restage'" not in script
+    assert script.index("const _ledgerOwes") < leg < script.index("label: 'verify'")
+
+
+def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch):
+    script = _script(monkeypatch)
+    leg = script.index("label: 'ledger-replan'")
+    prompt = script[leg - 4200 : leg]
+    assert "with only_rows added, set to the ids of exactly the rows you added" in prompt
+    assert "if (_ledgerAdded.length) { _ledgerExec = true; _adoptManifest(" in script
+    assert "else { _gate = { ..._gate, arm: 'xs' }; _stagedManifest = _gateStaged; _relayGap = _gateGap; }" in script
+    assert script.count("if (!_halted && (!_resumeLedger || _ledgerExec)) {") == 2
+    assert "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {" in script
+
+
+def test_a_re_judge_only_or_s_arm_resume_keeps_the_xs_tail(monkeypatch):
+    # _ledgerOwes is false unless the arm is m_plus AND a blocking id has non-empty remaining; then the
+    # xs force and the remaining-work leg both stay.
+    script = _script(monkeypatch)
+    owes = script[script.index("const _ledgerOwes"):][:400]
+    assert "_gate.arm === 'm_plus'" in owes and ".some(" in owes
+    assert script.count("label: 'ledger-remaining'") == 1
 
 
 def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
@@ -60,7 +107,7 @@ def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monk
 
 def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypatch):
     script = _script(monkeypatch)
-    guard = "if (_resumeLedger && (_gate.resume_ledger.blocking ?? []).length) {"
+    guard = "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {"
     assert script.count("label: 'ledger-remaining'") == 1
     assert script.index(guard) < script.index("label: 'ledger-remaining'") < script.index("label: 'verify'")
     label_at = script.index("label: 'ledger-remaining'")
@@ -75,7 +122,7 @@ def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypat
 def test_no_leg_runs_when_blocking_is_empty_by_the_guard(monkeypatch):
     # The leg is only reachable through the blocking.length guard, so blocking: [] skips it.
     script = _script(monkeypatch)
-    guard = "if (_resumeLedger && (_gate.resume_ledger.blocking ?? []).length) {"
+    guard = "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {"
     assert script.index("label: 'ledger-remaining'") > script.index(guard)
     assert script.count(guard) == 1
 

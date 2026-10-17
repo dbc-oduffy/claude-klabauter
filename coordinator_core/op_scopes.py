@@ -494,12 +494,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # backstop dead throughout. The name survives only in
     # op_budget_suspension.SUSPENDED_OPS, which is the refusal door and needs no
     # module behind it.
-    # session.reap_claims_for_repos — fleet-generic per-repo claim-reap primitive: takes an
-    # explicit target_roots[] param and reaps each, so it derives NO per-request repo key from
-    # the caller's own tree → scope "none" (claude-klabauter's target-resolution convention: fleet-generic
-    # ops pass target_root explicitly rather than resolving common_dir). Spec:
-    # docs/plans/2026-07-14-claim-lock-liveness-archival-gate-unification.md § C5.
-    "session.reap_claims_for_repos":         "none",
     "session.record_pickup":                 "none",
     "session.scope_report":                  "none",
     # session.safe_commit_offer — MUTATING commit+push of THIS session's own
@@ -572,8 +566,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # just above: this op is not scoped to the calling repo's own tree at
     # all — it reaches across every registered sibling via
     # _memo_resolver.read_registry_repos(), the same fleet-generic
-    # target-resolution convention session.reap_claims_for_repos /
-    # session.record_pickup / session.scope_report already use → "none".
+    # target-resolution convention session.record_pickup /
+    # session.scope_report already use → "none".
     # repo_root arrives as None (unused) for this op.
     # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
     "fleet.work_state":                       "none",

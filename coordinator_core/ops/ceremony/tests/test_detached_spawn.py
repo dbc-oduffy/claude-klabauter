@@ -110,6 +110,58 @@ def test_windows_uses_detached_flags(
     assert not kwargs["creationflags"] & getattr(subprocess, "DETACHED_PROCESS", 0)
 
 
+def _argv_env_flags(repo_root: str, script: str, **kw):
+    with mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        detached_spawn.spawn_detached(repo_root, script, ["a"], **kw)
+    args, kwargs = mock_popen.call_args
+    return args[0], kwargs["env"], kwargs.get("creationflags"), kwargs.get("start_new_session")
+
+
+def test_site_free_off_keeps_argv_and_env(repo_root: str, existing_script: str) -> None:
+    argv, env, _, _ = _argv_env_flags(repo_root, existing_script)
+    assert argv == [detached_spawn._resolve_python_exe(), str(Path(repo_root) / existing_script), "a"]
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == repo_root
+
+
+def test_site_free_on_adds_S_and_purelib_but_not_I(repo_root: str, existing_script: str) -> None:
+    import sysconfig
+
+    off = _argv_env_flags(repo_root, existing_script)
+    argv, env, flags, nss = _argv_env_flags(repo_root, existing_script, site_free=True)
+    assert argv[1] == "-S" and "-I" not in argv
+    assert (flags, nss) == (off[2], off[3])
+    parts = env["PYTHONPATH"].split(os.pathsep)
+    assert parts[0] == repo_root
+    assert sysconfig.get_paths()["purelib"] in parts
+
+
+def test_site_free_real_spawn_resolves_imports(tmp_path: Path) -> None:
+    import sys
+
+    engine = Path(__file__).resolve().parents[4]
+    script = tmp_path / "probe.py"
+    script.write_text(
+        "import sys, coordinator_core.ops.ceremony.close_background\n"
+        "open(sys.argv[1], 'w').write('ok')\n",
+        encoding="utf-8",
+    )
+    marker = tmp_path / "marker"
+    real_popen = subprocess.Popen
+    procs: list = []
+
+    def capture(*a, **k):
+        p = real_popen(*a, **k)
+        procs.append(p)
+        return p
+
+    with mock.patch.object(detached_spawn.subprocess, "Popen", side_effect=capture):
+        assert detached_spawn.spawn_detached(
+            str(engine), str(script), [str(marker)], site_free=True
+        )
+    assert procs[0].wait(timeout=30) == 0
+    assert marker.read_text() == "ok"
+
+
 @pytest.mark.parametrize("has_fork", [True, False])
 def test_both_platforms_disown_stdio(
     repo_root: str, existing_script: str, monkeypatch: pytest.MonkeyPatch, has_fork: bool

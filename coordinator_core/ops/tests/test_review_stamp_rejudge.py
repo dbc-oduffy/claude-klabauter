@@ -242,6 +242,31 @@ def test_met_stamp_without_newer_row_verdicts_stays_unchanged(tmp_path):
     assert (tmp_path / _SIZING).read_text(encoding="utf-8") == sizing_before
 
 
+def test_met_stamp_with_register_demoted_close_is_a_rejudge_subject(tmp_path):
+    from coordinator_core.ops.dispatch_emit.reverify_delivery import emit_rejudge, emit_rejudge_brief
+
+    p = _met_stamped(tmp_path, None)
+    brief = emit_rejudge_brief(repo_root=tmp_path, plan_path=str(p))
+    assert brief["ident"]
+    out = tmp_path / "x.workflow.mjs"
+    emit_rejudge(repo_root=tmp_path, plan_path=str(p), out_path=str(out))
+    assert out.read_text(encoding="utf-8").count("agent(") == 1
+
+
+def test_met_stamp_with_met_effective_criterion_is_still_refused(tmp_path):
+    from coordinator_core.ops.dispatch_emit.reverify_delivery import (
+        ReverifyRefused,
+        emit_rejudge,
+        emit_rejudge_brief,
+    )
+
+    p = _plan(tmp_path, "met")
+    with pytest.raises(ReverifyRefused):
+        emit_rejudge_brief(repo_root=tmp_path, plan_path=str(p))
+    with pytest.raises(ReverifyRefused):
+        emit_rejudge(repo_root=tmp_path, plan_path=str(p), out_path=str(tmp_path / "y.mjs"))
+
+
 _SPINE = """```yaml plan-tasks
 - id: A1
   title: a

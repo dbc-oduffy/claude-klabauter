@@ -204,6 +204,33 @@ def test_stall_report_names_stale_stuck_and_unclaimed(tmp_path, monkeypatch):
     assert all(s in point["evidence"] for s in ("row stale", "p.md", "row loose"))
 
 
+@pytest.mark.parametrize("closed", ["shipped", "declined", "superseded"])
+def test_closed_sizing_contributes_no_unclaimed_rows(tmp_path, closed):
+    root = _tree(tmp_path, [_row("loose")])
+    head = f"schema: sizing-object\nstatus: {closed}\n"
+    (root / "state" / "sizings" / "s.yaml").write_text(_sizing([_row("loose")], head=head), encoding="utf-8")
+    assert rr.stall_report(root, date(2026, 10, 9)).unclaimed_rows == []
+
+
+def test_row_claimed_by_plan_register_claims_is_not_unclaimed(tmp_path):
+    root = _tree(tmp_path, [_row("mine"), _row("loose")])
+    (root / "docs" / "plans" / "q.md").write_text(
+        '---\nplan_id: "q1"\ncreated: 2026-10-08\nstatus: draft\n'
+        'register_claims:\n  sizing: "state/sizings/s.yaml"\n  rows: ["mine"]\n---\nbody\n',
+        encoding="utf-8")
+    report = rr.stall_report(root, date(2026, 10, 9))
+    assert len(report.unclaimed_rows) == 1 and "row loose" in report.unclaimed_rows[0]
+
+
+def test_register_claims_for_another_sizing_does_not_claim(tmp_path):
+    root = _tree(tmp_path, [_row("mine")])
+    (root / "docs" / "plans" / "q.md").write_text(
+        '---\nplan_id: "q1"\ncreated: 2026-10-08\nstatus: draft\n'
+        'register_claims:\n  sizing: "state/sizings/other.yaml"\n  rows: ["mine"]\n---\nbody\n',
+        encoding="utf-8")
+    assert len(rr.stall_report(root, date(2026, 10, 9)).unclaimed_rows) == 1
+
+
 def test_stale_row_falls_back_to_plan_created(tmp_path):
     root = _tree(tmp_path, [_row("r", claimed_by=[P1])], plan_age_days=0)
     report = rr.stall_report(root, date(2026, 10, 9))
@@ -259,6 +286,18 @@ def test_the_stall_report_op_returns_the_lines_and_the_ceremony_point(tmp_path):
     assert quiet["stalled"] is False and quiet["judgment_point"] is None
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
         rrs._stall_report_op({"today": "Oct 9"}, root)
+
+
+def test_the_stall_report_op_returns_a_routing_action_per_nonempty_bucket(tmp_path):
+    root = _tree(tmp_path, [_row("loose")])
+    reply = rrs._stall_report_op({"today": "2026-10-09"}, root)
+    actions = reply["routing_actions"]
+    assert set(actions) == {"stuck_plans", "unclaimed_rows"}
+    assert "engine-ask state/sizings/s.yaml" in actions["unclaimed_rows"]
+    assert "sizing.decline" in actions["unclaimed_rows"]
+    evidence = reply["judgment_point"]["evidence"]
+    assert evidence.count("route:") == 2
+    assert actions["stuck_plans"] in reply["judgment_point"]["question"]
 
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)

@@ -127,6 +127,48 @@ def test_invoke_cli_main_no_main_raises_unrecognized_directive() -> None:
         wwc_apply._invoke_cli_main(mod, [])
 
 
+def test_execute_directives_streams_one_progress_line_per_directive(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    modules = {"query-records": _fake_module(lambda argv: 0, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    _, report = wwc_apply._execute_directives(
+        [_directive("d_one", "query-records"), _directive("d_two", "query-records")], [], {}
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        "workweek-complete-apply: d_one landed",
+        "workweek-complete-apply: d_two landed",
+    ]
+    assert captured.out == ""
+    assert report["landed"] == ["d_one", "d_two"]
+
+
+def test_budget_advisory_breach_prints_once_and_report_counts_all(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from coordinator_core.composition_budget import CompositionBudget
+
+    monkeypatch.setattr(CompositionBudget, "advisory_check", lambda self, unit=None: False)
+    modules = {"query-records": _fake_module(lambda argv: 0, "fake_cli")}
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+    budget = CompositionBudget(composition_id="adv-ww-1")
+
+    _, report = wwc_apply._execute_directives(
+        [_directive(f"d{i}", "query-records") for i in range(3)],
+        [],
+        {},
+        composition_budget=budget,
+    )
+
+    err = capsys.readouterr().err
+    assert err.count("mid-directive advisory breach") == 1
+    assert "directive='d0'" in err
+    assert report["budget_advisory_breaches"] == 3
+
+
 def test_execute_directives_failing_directive_stderr_survives_into_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

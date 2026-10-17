@@ -155,7 +155,7 @@ def _replayed_decision(seen: dict, repo: Path, monkeypatch, mode: str, capsys, s
     ).replace("[--well-trodden-step-change when well_trodden_step_change is true]", "")
     cmd = cmd.replace(
         "[--research-class/-appetite/-source/-depth/-target/-question from research when research is returned] ", ""
-    )
+    ).replace("[--design-route <design_route> when design_route is returned] ", "")
     assert "'REPO/state/sizings/" in cmd, cmd
     cmd = cmd.replace("'REPO/state/", f"'{repo.as_posix()}/state/")
     assert "<" not in cmd, cmd

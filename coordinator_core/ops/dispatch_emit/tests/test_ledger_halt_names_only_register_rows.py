@@ -58,7 +58,7 @@ def test_non_register_ids_are_named_in_their_own_clause(monkeypatch):
 def test_halted_carries_the_plan_and_next_action_the_refire(monkeypatch):
     text = _halt(_script(monkeypatch))
     assert f"{HALT_PLAN_FIELD}: _planRel" in text
-    assert "re-fire the same sizing." in text
+    assert "Re-fire the same sizing: it executes the remaining work of the rows it keeps" in text
 
 
 def test_a_manifest_with_rulable_ids_validates_against_the_manifest_schema():

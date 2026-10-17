@@ -1,8 +1,9 @@
 """Post-run report over a Workflow run's journal: per-leg cost and executor rows past the wall cap.
 
 The journal carries no timestamps, so wall time comes from each agent transcript's first and last
-`timestamp`. Only a transcript head and a bounded tail are read, with no subprocess. A transcript
-larger than head + tail makes turns, output tokens and peak context lower bounds (`partial`).
+`timestamp`. Token fields, model and est. USD come from a full transcript read
+(usage.agent_usage.scan_run); context, turns and wall read only a head and bounded tail, so on a
+larger transcript turns and peak context are lower bounds (`partial`). No subprocess.
 Post-run only: never called from the fire op, a hook or an emitted script.
 
     python3 -m coordinator_core.workflow_watch.run_report --journal <abs path to journal.jsonl> [--json]
@@ -17,6 +18,8 @@ import os
 import sys
 from typing import Any, Optional
 
+from coordinator_core.usage.agent_usage import agent_meta, scan_run, started_agents as _started_agents
+from coordinator_core.usage.price_table import TOKEN_FIELDS
 from coordinator_core.workflow_watch.stall import _tail_text, _transcript_path
 
 EXECUTOR_WALL_CAP_SECONDS = 30 * 60
@@ -24,30 +27,6 @@ EXECUTOR_LABEL_PREFIX = "work:"
 HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 64 * 1024
 UNKNOWN = "unknown"
-
-
-def _started_agents(journal_path: str) -> list[tuple[str, str]]:
-    """(agentId, label) of every `started` event, in journal order, one per agent id."""
-    seen: dict[str, str] = {}
-    try:
-        with open(journal_path, encoding="utf-8", errors="replace") as handle:
-            for raw in handle:
-                if '"started"' not in raw:
-                    continue
-                try:
-                    event = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(event, dict) or event.get("type") != "started":
-                    continue
-                agent_id = event.get("agentId")
-                if not isinstance(agent_id, str) or agent_id in seen:
-                    continue
-                label = event.get("label")
-                seen[agent_id] = label if isinstance(label, str) and label else agent_id
-    except OSError:
-        return []
-    return list(seen.items())
 
 
 def _head_text(path: str, limit: int) -> str:
@@ -96,30 +75,14 @@ def _context(usage: dict) -> int:
                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
 
 
-def _meta(run_dir: str, agent_id: str, transcript: Optional[str]) -> dict:
-    name = f"agent-{agent_id}.meta.json"
-    candidates = [os.path.join(run_dir, name), os.path.join(run_dir, "subagents", name)]
-    if transcript:
-        candidates.insert(0, transcript[: -len(".jsonl")] + ".meta.json")
-    for path in candidates:
-        try:
-            with open(path, encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return {}
-
-
 def _agent_row(run_dir: str, agent_id: str, label: str) -> dict:
     row: dict[str, Any] = {
         "label": label, "agent_id": agent_id, "agent_type": UNKNOWN, "model": UNKNOWN,
-        "turn1_context": None, "peak_context": None, "output_tokens": None, "turns": None,
+        "turn1_context": None, "peak_context": None, "turns": None,
         "wall_seconds": None, "partial": False,
     }
     path = _transcript_path(run_dir, agent_id)
-    meta = _meta(run_dir, agent_id, path)
+    meta = agent_meta(run_dir, agent_id, path)
     for key, field in (("agent_type", "agentType"), ("model", "model")):
         if isinstance(meta.get(field), str) and meta[field]:
             row[key] = meta[field]
@@ -138,7 +101,7 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict:
     stamps = [t for t in (_epoch(e.get("timestamp")) for e in events) if t is not None]
     if stamps:
         row["wall_seconds"] = round(max(stamps) - min(stamps), 1)
-    out_by_msg: dict[str, int] = {}
+    seen_msgs: set[str] = set()
     for event in events:
         message = event.get("message")
         if event.get("type") != "assistant" or not isinstance(message, dict):
@@ -150,38 +113,67 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict:
         if row["turn1_context"] is None:
             row["turn1_context"] = ctx
         row["peak_context"] = max(row["peak_context"] or 0, ctx)
-        ident = message.get("id") if isinstance(message.get("id"), str) else f"n{len(out_by_msg)}"
-        out_by_msg[ident] = max(out_by_msg.get(ident, 0), int(usage.get("output_tokens") or 0))
-    if out_by_msg:
-        row["turns"] = len(out_by_msg)
-        row["output_tokens"] = sum(out_by_msg.values())
+        ident = message.get("id") if isinstance(message.get("id"), str) else f"n{len(seen_msgs)}"
+        seen_msgs.add(ident)
+    if seen_msgs:
+        row["turns"] = len(seen_msgs)
     return row
 
 
 def build_report(journal_path: str) -> dict:
-    """{"rows": [...], "over_cap": [...]} for one run's journal."""
+    """{"rows", "over_cap", "by_model", "run_total"} for one run's journal.
+
+    Token sums, usd and model come from usage.agent_usage.scan_run (full transcript read);
+    context, turns and wall time stay head+tail bounded.
+    """
     run_dir = os.path.dirname(journal_path)
-    rows = [_agent_row(run_dir, agent_id, label) for agent_id, label in _started_agents(journal_path)]
+    usage = scan_run(run_dir)
+    by_id = {a["agent_id"]: a for a in usage["agents"]}
+    rows = []
+    for agent_id, label in _started_agents(journal_path):
+        row = _agent_row(run_dir, agent_id, label)
+        scanned = by_id.get(agent_id)
+        if scanned is not None:
+            for key in (*TOKEN_FIELDS, "total_tokens", "usd", "unpriced", "speed"):
+                row[key] = scanned[key]
+            row["model"] = scanned["model"] or row["model"]
+        rows.append(row)
     over = [r for r in rows
             if r["label"].startswith(EXECUTOR_LABEL_PREFIX)
             and r["wall_seconds"] is not None and r["wall_seconds"] > EXECUTOR_WALL_CAP_SECONDS]
-    return {"wall_cap_seconds": EXECUTOR_WALL_CAP_SECONDS, "rows": rows, "over_cap": over}
+    return {"wall_cap_seconds": EXECUTOR_WALL_CAP_SECONDS, "rows": rows, "over_cap": over,
+            "by_model": usage["by_model"], "run_total": usage["run_total"]}
 
 
 def _cell(value: Any, mark: str = "") -> str:
     return UNKNOWN if value is None else f"{value}{mark}"
 
 
+def _usd(value: Any) -> str:
+    return UNKNOWN if value is None else f"${value:.4f}"
+
+
 def render(report: dict) -> str:
-    head = ["label", "type", "model", "turn1_ctx", "peak_ctx", "out_tok", "turns", "wall_s"]
+    head = ["label", "type", "model", "turn1_ctx", "peak_ctx", "in", "out", "cache_r", "cache_w",
+            "est_$", "turns", "wall_s"]
     table = [head]
     for r in report["rows"]:
         mark = "+" if r["partial"] else ""
+        has = "input_tokens" in r
         table.append([r["label"], r["agent_type"], r["model"], _cell(r["turn1_context"]),
-                      _cell(r["peak_context"]), _cell(r["output_tokens"], mark),
-                      _cell(r["turns"], mark),_cell(r["wall_seconds"])])
+                      _cell(r["peak_context"]),
+                      *(_cell(r.get(f) if has else None) for f in TOKEN_FIELDS),
+                      _usd(r.get("usd")) + ("*" if r.get("unpriced") else ""),
+                      _cell(r["turns"], mark), _cell(r["wall_seconds"])])
     widths = [max(len(row[i]) for row in table) for i in range(len(head))]
     lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table]
+    total = report.get("run_total") or {}
+    lines.append("")
+    lines.append(f"run total: {total.get('total_tokens', 0)} tok, {_usd(total.get('usd'))}"
+                 + (f" ({total['unpriced_tokens']} tok unpriced, * rows)"
+                    if total.get("unpriced_tokens") else ""))
+    for model, b in sorted((report.get("by_model") or {}).items()):
+        lines.append(f"  {model}: {b['agents']} agent(s), {b['total_tokens']} tok, {_usd(b['usd'])}")
     lines.append("")
     lines.append(f"over {report['wall_cap_seconds']}s (work:* rows):")
     if report["over_cap"]:

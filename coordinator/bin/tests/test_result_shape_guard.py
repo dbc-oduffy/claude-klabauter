@@ -34,13 +34,15 @@ def git_repo(tmp_path, monkeypatch):
 
 def test_reassess_goal_krs_main_non_dict_result(git_repo, monkeypatch, capsys):
     mod = _load_module("reassess_goal_krs", "reassess-goal-krs.py")
-    monkeypatch.setattr(mod, "cc_invoke", lambda op, params, cwd: ["not", "a", "dict"])
-    monkeypatch.setattr(mod.sys, "argv", ["reassess-goal-krs"])
+    # main() imports `cc_invoke` from the bin/lib bootstrap on each call, so the
+    # seam to stub is the cc_invoke module's own attribute, not the script's.
+    monkeypatch.syspath_prepend(str(_BIN_DIR))
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke as cc_invoke_mod
 
-    with pytest.raises(SystemExit) as exc:
-        mod.main()
+    monkeypatch.setattr(cc_invoke_mod, "cc_invoke", lambda op, params, cwd: ["not", "a", "dict"])
 
-    assert exc.value.code == 1
+    assert mod.main([]) == 1
     err = capsys.readouterr().err
     assert "reassess-goal-krs: malformed result from cc_invoke: not a dict" in err
 

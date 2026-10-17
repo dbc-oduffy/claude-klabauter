@@ -3320,7 +3320,8 @@ class TestSurfaceAdvisoryStderrLine:
         real_popen = subprocess.Popen
 
         def _boom(cmd, *args, **kwargs):
-            if cmd[:2] == ["git", "log"]:
+            # run_git spawns the resolved git.exe, so match the program by stem.
+            if os.path.splitext(os.path.basename(str(cmd[0])))[0].lower() == "git" and cmd[1:2] == ["log"]:
                 raise OSError("boom")
             return real_popen(cmd, *args, **kwargs)
 

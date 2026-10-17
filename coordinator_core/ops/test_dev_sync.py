@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.install.plugin_cache_sessions import BoundSession
+from coordinator_core.ops import dev_sync
 from coordinator_core.ops.dev_sync import main
 
 
@@ -35,6 +37,51 @@ def fake_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
     return home
+
+
+@pytest.fixture(autouse=True)
+def _no_bound_sessions(monkeypatch):
+    monkeypatch.setattr(dev_sync, "sessions_bound_to", lambda *a, **k: [])
+    monkeypatch.setattr(dev_sync, "prune_dead_bindings", lambda *a, **k: 0)
+
+
+def _stale_cache(repo: Path, home: Path) -> Path:
+    cache_target = home / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "1.2.3"
+    cache_target.mkdir(parents=True)
+    (cache_target / "stale.txt").write_text("old\n")
+    return cache_target
+
+
+def test_live_session_holds_prune_and_reports(tmp_path, fake_home, monkeypatch, capsys):
+    repo = _make_repo(tmp_path)
+    monkeypatch.setenv("DEV_SYNC_REPO_ROOT", str(repo))
+    cache_target = _stale_cache(repo, fake_home)
+    session = BoundSession("sid-1", "proj-a", 4242, 1.0, str(cache_target), "bound")
+    monkeypatch.setattr(dev_sync, "sessions_bound_to", lambda *a, **k: [session])
+
+    assert main(["coordinator"]) == 0
+
+    out = capsys.readouterr().out
+    assert (cache_target / "stale.txt").is_file()
+    assert not (cache_target / "skills" / "foo.md").exists()
+    assert "HELD: coordinator (1.2.3) — cache untouched, 1 bound session(s)" in out
+    assert "SYNC" not in out
+    assert "sid-1" in out
+    assert "relaunch these sessions, then re-run dev-sync" in out
+
+
+def test_no_live_session_prunes_stale_and_prunes_bindings(tmp_path, fake_home, monkeypatch, capsys):
+    repo = _make_repo(tmp_path)
+    monkeypatch.setenv("DEV_SYNC_REPO_ROOT", str(repo))
+    cache_target = _stale_cache(repo, fake_home)
+    calls = []
+    monkeypatch.setattr(dev_sync, "prune_dead_bindings", lambda *a, **k: calls.append(1) or 0)
+
+    assert main(["coordinator"]) == 0
+
+    assert not (cache_target / "stale.txt").exists()
+    assert "HELD" not in capsys.readouterr().out
+    assert calls == [1]
 
 
 def test_sync_all_creates_cache_and_skips_no_version(tmp_path, fake_home, monkeypatch, capsys):

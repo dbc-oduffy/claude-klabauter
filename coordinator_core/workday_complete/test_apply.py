@@ -36,6 +36,17 @@ from coordinator_core.ceremony_common.cli_rejection import CliExitClass
 from coordinator_core.workday_complete import apply as wc_apply
 
 
+@pytest.fixture(autouse=True)
+def _isolated_apply_checkpoint(tmp_path, monkeypatch):
+    """`apply()` opens a day-keyed checkpoint under the git common dir; keep it under tmp_path."""
+    (tmp_path / ".git").mkdir()
+    monkeypatch.chdir(tmp_path)
+    sessions = str(tmp_path / ".git" / "coordinator-sessions")
+    from coordinator_core.ceremony_common import apply_checkpoint
+
+    monkeypatch.setattr(apply_checkpoint, "sessions_dir", lambda cwd=None: sessions)
+
+
 def _fake_module(main_fn: Callable[..., Any], name: str = "fake_cli") -> ModuleType:
     mod = ModuleType(name)
     mod.main = main_fn
@@ -688,3 +699,53 @@ def test_main_unknown_argument_still_rejected(capsys: pytest.CaptureFixture[str]
     assert rc == int(wc_apply.WorkdayApplyExitCode.TRANSPORT_FAIL)
     captured = capsys.readouterr()
     assert "unrecognized argument" in captured.err
+
+
+def test_main_streams_one_progress_line_per_directive_and_stdout_is_one_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    modules = {
+        "cli-a": _fake_module(lambda argv: 0, "fake_a"),
+        "cli-b": _fake_module(lambda argv: 0, "fake_b"),
+    }
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+    monkeypatch.setattr(wc_apply, "_resolve_cli", lambda cli_name: cli_name)
+    monkeypatch.setattr(wc_apply, "flush_composition_record", lambda *a, **k: None)
+    envelope = {
+        "directives": [_directive("d_one", "cli-a"), _directive("d_two", "cli-b")],
+        "judgment_points": [],
+    }
+    monkeypatch.setattr(wc_apply, "brief", lambda **kw: (0, envelope))
+
+    rc = wc_apply.main([])
+
+    captured = capsys.readouterr()
+    assert rc == int(wc_apply.WorkdayApplyExitCode.SUCCESS)
+    assert captured.err.splitlines() == [
+        "workday-complete-apply: d_one landed",
+        "workday-complete-apply: d_two landed",
+    ]
+    assert json.loads(captured.out)["landed"] == ["d_one", "d_two"]
+
+
+def test_budget_advisory_breach_prints_once_and_report_counts_all(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from coordinator_core.composition_budget import CompositionBudget
+
+    monkeypatch.setattr(CompositionBudget, "advisory_check", lambda self, unit=None: False)
+    modules = {"cli-a": _fake_module(lambda argv: 0, "fake_a")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+    monkeypatch.setattr(wc_apply, "_resolve_cli", lambda cli_name: cli_name)
+    budget = CompositionBudget(composition_id="adv-1")
+
+    _, report = wc_apply._execute_directives(
+        [_directive(f"d{i}", "cli-a") for i in range(3)], [], {}, composition_budget=budget
+    )
+
+    err = capsys.readouterr().err
+    assert err.count("mid-directive advisory breach") == 1
+    assert "directive='d0'" in err
+    assert report["budget_advisory_breaches"] == 3

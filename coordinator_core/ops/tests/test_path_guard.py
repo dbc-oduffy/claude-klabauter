@@ -229,3 +229,65 @@ def test_contained_path_genuinely_long_windows_path_return_value_keeps_prefix(tm
     assert result is not None
     assert result == Path(long_form)
     assert _has_extended_length_prefix(result)
+
+
+def _count_root_resolves(monkeypatch, root):
+    real_resolve = Path.resolve
+    calls = []
+
+    def counting(self, *a, **kw):
+        if self == root:
+            calls.append(self)
+        return real_resolve(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "resolve", counting)
+    return calls
+
+
+def test_contained_path_root_resolved_once_inside_scope(tmp_path, monkeypatch):
+    from coordinator_core.git import call_io_scope
+
+    root = tmp_path / "allowed"
+    root.mkdir()
+    cand = root / "f.md"
+    cand.write_text("x", encoding="utf-8")
+    calls = _count_root_resolves(monkeypatch, root)
+    with call_io_scope.call_io_scope():
+        for _ in range(5):
+            assert contained_path(cand, [root]) is not None
+    assert len(calls) == 1
+
+
+def test_contained_path_root_resolved_every_call_outside_scope(tmp_path, monkeypatch):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    cand = root / "f.md"
+    cand.write_text("x", encoding="utf-8")
+    calls = _count_root_resolves(monkeypatch, root)
+    for _ in range(5):
+        assert contained_path(cand, [root]) is not None
+    assert len(calls) == 5
+
+
+def test_contained_path_root_oserror_is_retried_not_memoised(tmp_path, monkeypatch):
+    from coordinator_core.git import call_io_scope
+
+    root = tmp_path / "allowed"
+    root.mkdir()
+    cand = root / "f.md"
+    cand.write_text("x", encoding="utf-8")
+    real_resolve = Path.resolve
+    attempts = []
+
+    def flaky(self, *a, **kw):
+        if self == root:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise OSError("boom")
+        return real_resolve(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "resolve", flaky)
+    with call_io_scope.call_io_scope():
+        assert contained_path(cand, [root]) is None
+        assert contained_path(cand, [root]) is not None
+    assert len(attempts) == 2

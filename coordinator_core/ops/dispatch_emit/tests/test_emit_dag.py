@@ -137,7 +137,7 @@ def test_emitted_dag_fixture_passes_run_checks_with_zero_errors():
     assert errors == []
 
 
-def test_verified_row_carries_exactly_one_verify_call_gated_on_done(tmp_path):
+def test_verified_row_composes_no_verify_call_beside_the_terminal_test_leg(tmp_path):
     target = tmp_path / "pkg" / "c1.py"
     target.parent.mkdir(parents=True)
     target.write_text("x = 1\n", encoding="utf-8")
@@ -149,5 +149,6 @@ def test_verified_row_carries_exactly_one_verify_call_gated_on_done(tmp_path):
     script = compose_script(
         waves, name="wf", description="verified row", repo_root=tmp_path, **REVIEW_KW
     )
-    assert script.count("label: 'verify:' + id") == 1
-    assert "if (!incomplete && verifyScope)" in script
+    assert "label: 'verify:' + id" not in script
+    assert "verifyScope)" not in script
+    assert "const _verifications = [];" in script

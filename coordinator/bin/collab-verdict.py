@@ -121,7 +121,7 @@ def refresh(
     """
     root = Path(repo_root).resolve()
     if root != CONTENT_ROOT:
-        raise RefreshError(f"refused: {root} is not the coordinator-content-repo checkout this CLI ships in")
+        raise RefreshError(f"refused: {root} is not the checkout this CLI ships in")
 
     previous = _gate().read_verdict(root)
     if previous.source == "corrupt":

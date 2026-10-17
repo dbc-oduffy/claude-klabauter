@@ -41,6 +41,7 @@ Run:
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -70,10 +71,19 @@ pytestmark = [
 _HANDOFF_FAMILY_TYPES_WITH_AC = ["spinoff", "roadmap-baton", "goal-seed", "roadmap-seed"]
 
 
-#: roadmap-baton is held to the same explicit-sizing-answer bar as --type plan.
-#: This suite probes the AC-checkbox section, so it declares absence rather than
-#: minting a sizing object it would not otherwise need.
-_EXTRA_ARGS: dict[str, list[str]] = {"roadmap-baton": ["--no-sizing-object"]}
+#: roadmap-baton requires its identity flags (--roadmap-id/--stub-id) and is held
+#: to the same explicit-sizing-answer bar as --type plan. This suite probes the
+#: AC-checkbox section, so it declares sizing absence rather than minting a
+#: sizing object it would not otherwise need.
+_EXTRA_ARGS: dict[str, list[str]] = {
+    "roadmap-baton": [
+        "--roadmap-id",
+        "probe-roadmap",
+        "--stub-id",
+        "probe-stub",
+        "--no-sizing-object",
+    ]
+}
 
 
 def _scaffold(doc_type: str, out_path: Path) -> str:
@@ -126,7 +136,10 @@ def test_ac_heading_emitter_site_count_is_covered_by_parametrize_list() -> None:
     again — this test intentionally does not self-heal that drift.
     """
     source = _SCAFFOLDER.read_text(encoding="utf-8")
-    site_count = source.count('"## Acceptance criteria"')
+    # An emitter is a standalone list element in a scaffold body; the
+    # `_BATON_SECTION_HEADS` alias row (`"Acceptance criteria": "## ..."`) only
+    # maps a heading for pre-fill and emits nothing.
+    site_count = len(re.findall(r'^\s+"## Acceptance criteria",\s*$', source, re.MULTILINE))
 
     assert site_count == len(_HANDOFF_FAMILY_TYPES_WITH_AC), (
         f"coordinator-doc-new.py now has {site_count} '## Acceptance criteria' "

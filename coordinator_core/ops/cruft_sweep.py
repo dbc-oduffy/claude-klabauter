@@ -157,9 +157,9 @@ Negative-spec:
     status, name/fingerprint match, or bare mtime age, never on a live-process
     liveness check). Folding it in here would either dilute that check for
     every other phase or bolt a claim-specific liveness branch onto a sweep
-    that has none today. It stays a standalone passenger, routed straight to
-    `session.reap_claims_for_repos` (already registered, already
-    target-root-parameterized) rather than through this module.
+    that has none today. It stays out of this module; its former route,
+    `session.reap_claims_for_repos`, was deleted under DR-344's kill bar, with
+    no cull route.
 """
 
 from __future__ import annotations

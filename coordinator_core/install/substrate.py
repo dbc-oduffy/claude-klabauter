@@ -204,7 +204,6 @@ SETTINGS_HOME_WRITER_CARVE_OUT = (
     "first_run",
     "forwarder_self_heal",
     "gen_settings_hooks",
-    "live_plugin_registration",
     "uninstall_legs",
     "scripts/setup.py::_record_homebrew_removal",
     "scripts/setup.py::ensure_percolate_identity",
@@ -256,10 +255,6 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     "forwarder_self_heal.py": (
         CARVE_OUT_INSTALL_PLANE,
         "appends its failure ledger beside the settings-home forwarders",
-    ),
-    "live_plugin_registration.py": (
-        CARVE_OUT_INSTALL_PLANE,
-        "rewrites the installed-plugin record's installPath to the live clone",
     ),
     "scaffold_structure.py": (
         CARVE_OUT_INSTALL_PLANE,

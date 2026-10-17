@@ -40,6 +40,35 @@ def is_intake(doc: Mapping) -> bool:
             and doc.get("status") == "draft")
 
 
+PROVENANCE_KEY = "provenance"
+PROVENANCE_RELAYED = "relayed"
+RELAYED_TEXT_KEY = "relayed_text"
+RELAYED_SENDER_KEY = "relayed_sender"
+
+
+def relayed_intake_record(*, name: str, text: str, sender: str, today: str) -> dict:
+    """The schema-valid sizing dict for an ask that is a peer's, not the PM's words.
+
+    No `pm_verbatims` row is written: a relayed ask never fabricates the PM's voice. The
+    text and sender ride `em_analysis.relayed_text` / `relayed_sender`; `intent_source` is
+    `em-elaborated`.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("relayed ask carries no text")
+    record = intake_record(name=name, turn={"text": text}, today=today)
+    record["intent_source"] = "em-elaborated"
+    del record["pm_verbatims"]
+    record["em_analysis"][PROVENANCE_KEY] = PROVENANCE_RELAYED
+    record["em_analysis"][RELAYED_TEXT_KEY] = text.strip()
+    record["em_analysis"][RELAYED_SENDER_KEY] = (sender or "").strip() or "unknown"
+    return record
+
+
+def is_relayed(doc: Mapping) -> bool:
+    """True for a sizing whose ask was relayed rather than the PM's own words."""
+    return _em_analysis(doc).get(PROVENANCE_KEY) == PROVENANCE_RELAYED
+
+
 def intake_record(*, name: str, turn: Mapping, today: str) -> dict:
     """The schema-valid sizing dict for one PM turn.
 

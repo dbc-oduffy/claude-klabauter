@@ -49,6 +49,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
+from coordinator_core.git import call_io_scope
+
 
 #: Windows fails `os.replace` with `PermissionError` (WinError 5) when the
 #: DESTINATION is open in another process -- a reader, an indexer, a peer's
@@ -739,11 +741,13 @@ def _ref_exists_loose_or_packed(common_dir: Path, ref_rel: str) -> bool:
 
 
 def _log_all_ref_updates(gitdir: Path) -> bool:
-    config_path = gitdir / "config"
     try:
-        text = config_path.read_text(encoding="utf-8", errors="replace")
+        raw = call_io_scope.read_bytes(gitdir / "config")
     except OSError:
         return True
+    if raw is None:
+        return True
+    text = raw.decode("utf-8", errors="replace")
     in_core = False
     for line in text.splitlines():
         stripped = line.strip()
@@ -779,6 +783,26 @@ def _head_symref_target(head_gitdir: Path) -> Optional[str]:
 
 
 def cas_head_symref(
+    head_gitdir: Path,
+    expected_target: str,
+    new_target: str,
+    *,
+    reflog_committer: Optional[str] = None,
+    reflog_message: Optional[str] = None,
+    sha: Optional[str] = None,
+) -> bool:
+    """`_cas_head_symref` (contract there), then drops the per-call HEAD memo
+    whether or not the swap won."""
+    try:
+        return _cas_head_symref(
+            head_gitdir, expected_target, new_target,
+            reflog_committer=reflog_committer, reflog_message=reflog_message, sha=sha,
+        )
+    finally:
+        call_io_scope.invalidate(call_io_scope.HEAD_NAMESPACE)
+
+
+def _cas_head_symref(
     head_gitdir: Path,
     expected_target: str,
     new_target: str,
@@ -823,6 +847,28 @@ def cas_head_symref(
 
 
 def cas_ref(
+    gitdir: Path,
+    ref: str,
+    expected: Optional[str],
+    new: str,
+    *,
+    reflog_committer: Optional[str] = None,
+    reflog_message: Optional[str] = None,
+    head_gitdir: Optional[Path] = None,
+) -> bool:
+    """`_cas_ref` (contract there), then drops the per-call HEAD memo whether or
+    not the CAS won."""
+    try:
+        return _cas_ref(
+            gitdir, ref, expected, new,
+            reflog_committer=reflog_committer, reflog_message=reflog_message,
+            head_gitdir=head_gitdir,
+        )
+    finally:
+        call_io_scope.invalidate(call_io_scope.HEAD_NAMESPACE)
+
+
+def _cas_ref(
     gitdir: Path,
     ref: str,
     expected: Optional[str],

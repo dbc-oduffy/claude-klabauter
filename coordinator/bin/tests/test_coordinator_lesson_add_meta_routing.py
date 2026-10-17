@@ -60,6 +60,7 @@ _ENV_VARS = (
     _cli_mod._CLAUDE_HOME_ENV,
     "CLAUDE_KLABAUTER_ROOT",
     "COORDINATOR_ENGINE_ROOT",
+    "CLAUDE_CONFIG_DIR",
     _cli_mod._MACHINE_LOCAL_IMPL_ENV,
 )
 
@@ -70,7 +71,7 @@ def meta_repo_home(tmp_path, monkeypatch):
 
     Arranges _git_root() == _claude_home() by git-init'ing a tmp dir and
     running with cwd set to that same dir, so `git rev-parse --show-toplevel`
-    resolves to it. CLAUDE_HOME is pointed at the same dir via env override.
+    resolves to it. CLAUDE_CONFIG_DIR is pointed at the same dir via env override.
     """
     for k in _ENV_VARS:
         monkeypatch.delenv(k, raising=False)
@@ -85,7 +86,9 @@ def meta_repo_home(tmp_path, monkeypatch):
     )
 
     monkeypatch.chdir(fake_home)
-    monkeypatch.setenv(_cli_mod._CLAUDE_HOME_ENV, fake_home)
+    # CLAUDE_HOME names the PARENT of `.claude` (Convention A); the config dir
+    # itself is CLAUDE_CONFIG_DIR, which is what makes cwd's git root == claude_home().
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", fake_home)
     return fake_home
 
 

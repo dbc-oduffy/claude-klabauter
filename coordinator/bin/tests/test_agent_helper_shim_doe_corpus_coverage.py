@@ -108,6 +108,7 @@ for _p in (str(_CLAUDE_KLABAUTER_ROOT), str(_BIN_DIR / "lib")):
 
 from coordinator_core.install.substrate import (  # noqa: E402
     _derive_agent_helper_target_map,
+    _publisher_only_names,
     _install_bin_resolvers,
     _resolve_baked_python_bin,
 )
@@ -365,7 +366,18 @@ def test_real_installed_settings_home_matches_generated_set_when_present() -> No
     if not installed_names:
         pytest.skip(f"{bin_dir} exists but is empty — nothing to cross-check")
 
-    expected_names = set(_derive_agent_helper_target_map(_AGENT_BIN))
+    # Publisher-only names (other than the launchable ones) are deliberately
+    # given no launcher; the installer reaps any it finds.
+    publisher_only = {
+        t[:-3] if t.endswith(".py") else t for t in _publisher_only_names(_CLAUDE_KLABAUTER_ROOT)
+    }
+    launchable = {
+        t[:-3] if t.endswith(".py") else t
+        for t in _publisher_only_names(_CLAUDE_KLABAUTER_ROOT, "PUBLISHER_ONLY_LAUNCHABLE")
+    }
+    expected_names = (
+        set(_derive_agent_helper_target_map(_AGENT_BIN)) - (publisher_only - launchable)
+    )
     stale = sorted(expected_names - installed_names)
     assert not stale, (
         f"real installed settings-home bin dir ({bin_dir}) is missing "
@@ -469,9 +481,18 @@ def test_derived_agent_helper_forwarders_have_cmd_parity(_installed_dirs) -> Non
         if p.is_file()
     }
 
+    # PUBLISHER_ONLY_LAUNCHABLE names are deliberately installed as the
+    # claude-klabauter-resolving Python forwarder (no door image can serve a script the
+    # published engine does not carry), so the native-image shape does not
+    # apply to them.
+    python_forwarder_names = {
+        t[:-3] if t.endswith(".py") else t
+        for t in _publisher_only_names(_CLAUDE_KLABAUTER_ROOT, "PUBLISHER_ONLY_LAUNCHABLE")
+    }
+
     missing_parity: "list[str]" = []
     for name in sorted(derived_names):
-        if name not in installed_stems:
+        if name not in installed_stems or name in python_forwarder_names:
             continue
         reachable = named_forwarder_path(bin_dst, name)
         if not reachable.is_file():

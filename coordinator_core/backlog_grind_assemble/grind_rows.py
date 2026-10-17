@@ -895,6 +895,41 @@ def _commit_land_set(repo_root: Path, profile: str, run_id: str, land: _LandSet)
     return None, str(reply.get("error") or reply)
 
 
+GRIND_CLOSE_AGENT_DESCRIPTIONS = ("ledger-sweep",)
+
+
+def _run_usage(repo_root: Path, run_id: str) -> "dict[str, Any] | None":
+    """The `usage` block for the run record: scan_run's shape plus `as_of` and `unsettled`
+    (agents still live at record time). `{"reason": ...}` when the Workflow run dir is not
+    located (the caller records `usage: null` plus `usage_reason`). None when no session or
+    session dir resolves (no Workflow run to locate; the record stays unchanged).
+
+    Never raises: usage is evidence beside spend, not a gate on the record."""
+    try:
+        from coordinator_core.session import core
+        from coordinator_core.usage import run_locate
+        from coordinator_core.usage.agent_usage import scan_run
+
+        sid = core.resolve_session_id(str(repo_root))
+        if not sid:
+            return None
+        session_dir = run_locate.session_dir_for(sid)
+        if session_dir is None:
+            return None
+        run_dir = run_locate.locate_run_dir(
+            session_dir, run_id, agent_descriptions=GRIND_CLOSE_AGENT_DESCRIPTIONS
+        )
+        if run_dir is None:
+            return {"reason": "no unique unsettled close-leg agent names this run id; run dir not located"}
+        usage = scan_run(str(run_dir))
+        unsettled = run_locate._unsettled_agent_ids(run_dir / "journal.jsonl")
+        usage["as_of"] = "run-record"
+        usage["unsettled"] = sorted(unsettled)
+        return usage
+    except Exception as exc:  # noqa: BLE001 -- the record write must still happen
+        return {"reason": f"usage scan failed: {type(exc).__name__}: {exc}"}
+
+
 def cmd_run_record(rest: list[str]) -> int:
     """`run-record --profile P --run-id T [--record-file F|- | --record-urlenc E] --repo-root D`:
     atomically writes `<repo_root>/state/queue-grind/<P>/runs/<T>.json` from
@@ -1045,6 +1080,13 @@ def cmd_run_record(rest: list[str]) -> int:
         by_type["stage-dead"] = by_type.get("stage-dead", 0) + 1
         counts["by_type"] = by_type
         record["counts"] = counts
+
+    if isinstance(record, dict) and "usage" not in record:
+        block = _run_usage(repo_root, run_id)
+        if block is not None:
+            record["usage"] = block if "agents" in block else None
+            if "agents" not in block:
+                record["usage_reason"] = block["reason"]
 
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}"

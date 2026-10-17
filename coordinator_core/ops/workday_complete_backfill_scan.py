@@ -6,7 +6,7 @@ Spec backlink: coordinator-content-repo:pln-workday-complete-go-local-day--532ea
 Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 Spec backlink: pln-de-machine-workday-complete-ba-f1b7e6 § C1
 
-Purpose: `/workday-complete` Step 3.5 and `/workday-start` Step 1.85 both call the
+Purpose: `/workday-complete` Step 3.5 calls the
 trampoline over this module to detect past days with commits but no daily-summary
 record. Emits TSV rows per past day (within `--lookback`) that need backfill
 attention.
@@ -15,7 +15,10 @@ Daily changelogs are a per-DAY narrative, not per-device (2026-07-19 PM ruling):
 this scanner has exactly one row shape, keyed by day only — there is no machine
 column and no per-machine fan-out.
 
-  `<YYYY-MM-DD>\\t<commit_count>\\t<baseline_sha>\\t<tip_sha>\\t<union_shas,...>`
+  `<YYYY-MM-DD>\\t<commit_count>\\t<baseline_sha>\\t<tip_sha>`   (`TSV_COLUMNS`, 4 columns)
+
+Library entry: `scan(repo_root, lookback) -> GapScan` (the rows `main()` prints,
+plus `older_gaps`); `gap_summary_lines(rows)` renders them for a judgment point.
 
 baseline_sha is the parent of that day's OLDEST commit (across the full-day
 union span, see below); tip_sha is NEWEST. Rows are emitted OLDEST-FIRST so the
@@ -105,6 +108,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from datetime import date, datetime, time as _dtime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -120,6 +124,47 @@ _CREATIONFLAGS = no_console_creationflags()
 _GIT_TIMEOUT = 20
 
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
+
+# The stdout row contract; consumers read these four columns by index.
+TSV_COLUMNS = ("date", "commit_count", "baseline_sha", "tip_sha")
+
+DEFAULT_LOOKBACK = 14
+
+# Hard floor for `GapScan.older_gaps`, in days before today: bounds the extended
+# `git log` range when no covered day exists before the window.
+OLDER_GAPS_CEILING_DAYS = 90
+
+# stderr line prefix `main()` writes for `older_gaps`; consumers parse by this constant.
+OLDER_GAPS_PREFIX = "older-gaps:"
+
+
+@dataclass(frozen=True)
+class GapRow:
+    """One uncovered day: `TSV_COLUMNS` in order."""
+
+    date: str
+    commit_count: int
+    baseline_sha: str
+    tip_sha: str
+
+    def tsv(self) -> str:
+        return "\t".join((self.date, str(self.commit_count), self.baseline_sha, self.tip_sha))
+
+
+@dataclass(frozen=True)
+class GapScan:
+    """Scan result. `older_gaps` holds uncovered days before the lookback window."""
+
+    rows: List[GapRow] = field(default_factory=list)
+    older_gaps: List[str] = field(default_factory=list)
+
+
+def gap_summary_lines(rows: List[GapRow], cap: int = 12) -> List[str]:
+    """One `YYYY-MM-DD  N commits` line per row, at most `cap`, then `+K more`."""
+    lines = [f"{r.date}  {r.commit_count} commits" for r in rows[:cap]]
+    if len(rows) > cap:
+        lines.append(f"+{len(rows) - cap} more")
+    return lines
 
 # ---------------------------------------------------------------------------
 # git subprocess helpers
@@ -433,42 +478,21 @@ def _scan_full_day_union(
     root: str,
     day: str,
     prev_day: str,
-    out: List[str],
+    out: List["GapRow"],
     refs: Optional[List[str]] = None,
 ) -> None:
     """Full-day union span (AC3/DEC-3): union of `git log --no-merges` across
     work/*/* ∪ main ∪ HEAD (local + origin), deduped by SHA. base = parent of
-    the oldest commit, tip = newest, count = unique non-merge commit count,
-    shas = the explicit union commit list, oldest-first.
+    the oldest commit, tip = newest, count = unique non-merge commit count.
 
-    `count` and `base..tip` describe DIFFERENT COMMIT SETS, and always did.
-    `count` is the size of a time-windowed union across many refs; `base..tip`
-    is topological single-ref ancestry, so walking it drops commits on sibling
-    branches that are not ancestors of `tip`, and picks up ancestors of `tip`
-    from outside the day window. A reader who recomputed `count` from
-    `base..tip` and found them equal was lucky, not correct.
-
-    `count` keeps its documented meaning (AC3/DEC-3) verbatim. Redefining it to
-    mean "commits in base..tip" was the other available fix and is the worse
-    one: it silently falsifies what every prior reader reasoned from. So the
-    ROW changed instead — a fifth column carries the union commit list. It is
-    the authoritative answer to "which commits", `len(shas) == count` holds by
-    construction, and it is the first time the two halves of a row can be
-    checked against each other at all.
-
-    `base`/`tip` are unchanged, for the two consumers that read them
-    (`workday-complete-close.py backfill-dispatch-rows` and
-    `workday-complete-backfill-anchor.py run`). Both take `cols[0]`/`cols[3]`
-    under a `len(cols) < 4` guard, so the fifth column is forward-compatible by
-    construction. Treat them as an anchor pair, never as a description of the
-    union: do not re-derive the union from them.
-
-    `count` is `len(shas)` by construction, so this row carries that fact
-    twice; that is a deliberate transition, not a permanent second truth
-    (Review: overengineering-reviewer). Retire the `count` column once every
-    reader takes `cols[4]` (shas) directly instead of `cols[1]` — today no
-    in-repo consumer reads `cols[4]` at all, so the redundancy is unowned
-    until a `shas`-reading consumer exists, in this repo or the mirror side.
+    `count` and `base..tip` describe DIFFERENT COMMIT SETS: `count` is the size
+    of a time-windowed union across many refs; `base..tip` is topological
+    single-ref ancestry, so it drops commits on sibling branches and picks up
+    ancestors of `tip` from outside the day window. Treat `base`/`tip` as an
+    anchor pair (`workday-complete-close.py backfill-dispatch-rows` and
+    `workday-complete-backfill-anchor.py run` read columns 0..3 only), never as
+    a description of the union. The row is `TSV_COLUMNS`, four columns; no
+    commit-list column is emitted.
     """
     if refs is None:
         refs = _collect_union_refs(root)
@@ -513,8 +537,7 @@ def _scan_full_day_union(
     if tip is None or oldest is None:
         return
     base = _rev_parse_parent(root, oldest)
-    shas = ",".join(sha for _ts, sha in sorted(entries, key=lambda e: e[0]))
-    out.append(f"{day}\t{len(entries)}\t{base}\t{tip}\t{shas}")
+    out.append(GapRow(day, len(entries), base, tip))
 
 
 # ---------------------------------------------------------------------------
@@ -542,14 +565,12 @@ def _day_anchor_tokens(root: str, day: str) -> Dict[str, List[str]]:
     return found
 
 
-def _day_tips(
-    root: str, refs: List[str], days: List[str]
-) -> Dict[str, str]:
-    """Union tip per day from ONE `git log` over the whole span, bucketed by
-    host-local calendar day. A commit stamped exactly 23:59:59 belongs to both
-    that day and the next, matching the inclusive `_window_args` bounds."""
-    wanted = set(days)
-    first, last = min(days), max(days)
+def _commit_buckets(
+    root: str, refs: List[str], first: str, last: str
+) -> Dict[str, List[Tuple[int, str]]]:
+    """`(ct, sha)` entries per host-local calendar day in `first..last` from ONE
+    `git log`. A commit stamped exactly 23:59:59 belongs to both that day and the
+    next, matching the inclusive `_window_args` bounds."""
     prev_first = _date_minus(first, 1)
     if not prev_first:
         return {}
@@ -580,11 +601,15 @@ def _day_tips(
         if dt.time() == _dtime(23, 59, 59):
             owners.append((dt.date() + timedelta(days=1)).isoformat())
         for owner in owners:
-            if owner in wanted:
+            if first <= owner <= last:
                 buckets.setdefault(owner, []).append((ts, parts[1]))
+    return buckets
+
+
+def _tips_of(buckets: Dict[str, List[Tuple[int, str]]], days: List[str]) -> Dict[str, str]:
     tips: Dict[str, str] = {}
-    for day, entries in buckets.items():
-        tip, _oldest = _tip_and_oldest(entries)
+    for day in days:
+        tip, _oldest = _tip_and_oldest(buckets.get(day, []))
         if tip:
             tips[day] = tip
     return tips
@@ -603,7 +628,12 @@ def _parent_graph(root: str, refs: List[str], anchors: List[str], since_day: str
     return graph
 
 
-def _tip_gap_days(root: str, covered_days: List[str], refs: List[str]) -> Set[str]:
+def _tip_gap_days(
+    root: str,
+    covered_days: List[str],
+    refs: List[str],
+    buckets: Dict[str, List[Tuple[int, str]]],
+) -> Set[str]:
     """Existence-covered days whose every resolvable summary anchor is a strict
     ancestor of the day's union tip. Warns on stderr for a covered day with no
     resolvable anchor. Spawns a fixed number of git processes (at most four,
@@ -622,7 +652,7 @@ def _tip_gap_days(root: str, covered_days: List[str], refs: List[str]) -> Set[st
         shas = {resolved.get(t) for toks in files.values() for t in toks}
         day_anchors[day] = {s for s in shas if s}
 
-    tips = _day_tips(root, refs, covered_days)
+    tips = _tips_of(buckets, covered_days)
     graph: Optional[Dict[str, List[str]]] = None
     closures: Dict[str, Set[str]] = {}
 
@@ -685,7 +715,7 @@ def _parse_args(
     dispatch it scanned whatever tree the ceremony happened to stand in and
     silently mis-drove both writers. `COORDINATOR_ROOT` is not the answer: its
     own warning names it TEST-ONLY."""
-    lookback = 14
+    lookback = DEFAULT_LOOKBACK
     today_override = None
     repo_root = None
     i = 0
@@ -742,7 +772,7 @@ def _parse_args(
 _USAGE = (
     "usage: workday-complete-backfill-scan [--lookback DAYS] [--today YYYY-MM-DD] "
     "[--repo-root DIR]\n"
-    "Emits <day>\\t<commits>\\t<baseline_sha>\\t<tip_sha>\\t<union_shas> per past day with commits "
+    "Emits <day>\\t<commits>\\t<baseline_sha>\\t<tip_sha> per past day with commits "
     "but no daily summary; empty output = no gaps. --lookback defaults to 14."
 )
 
@@ -810,9 +840,33 @@ def main(argv: List[str]) -> int:
     else:
         state_root = _resolve_state_root_seam()
 
+    result = _scan(root, state_root, lookback, today_override)
+    for row in result.rows:
+        print(row.tsv())
+    if result.older_gaps:
+        print(
+            f"{OLDER_GAPS_PREFIX} {len(result.older_gaps)} day(s), "
+            f"{result.older_gaps[0]}..{result.older_gaps[-1]}",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def scan(repo_root: str, lookback: int = DEFAULT_LOOKBACK, today: Optional[str] = None) -> GapScan:
+    """Read-only library entry: the rows `main()` prints for `repo_root`, plus
+    `older_gaps`. State root resolves as `main()` does for `--repo-root`."""
+    state_root: Optional[str] = (
+        (os.path.join(_claude_klabauter_root(), "state") if _claude_klabauter_root() else None)
+        if _same_path(repo_root, _claude_home())
+        else os.path.join(repo_root, "state")
+    )
+    return _scan(repo_root, state_root, lookback, today)
+
+
+def _scan(root: str, state_root: Optional[str], lookback: int, today_override: Optional[str]) -> GapScan:
     today = today_override or _coordinator_local_day()
 
-    out: List[str] = []
+    out: List[GapRow] = []
 
     days: List[Tuple[str, str]] = []
     i = lookback
@@ -829,15 +883,31 @@ def main(argv: List[str]) -> int:
     covered = [d for d, _p in days if _day_covered(root, state_root, d)]
     covered_set = set(covered)
     refs = _collect_union_refs(root) if days else []
-    gap_days = _tip_gap_days(root, covered, refs) if covered else set()
+    buckets: Dict[str, List[Tuple[int, str]]] = {}
+    older_first = _date_minus(today, OLDER_GAPS_CEILING_DAYS)
+    if days:
+        window_first, window_last = days[0][0], days[-1][0]
+        # The extended range rides the one `git log` the tip leg already makes.
+        low = older_first if older_first and older_first < window_first else window_first
+        buckets = _commit_buckets(root, refs, low, window_last)
+    gap_days = _tip_gap_days(root, covered, refs, buckets) if covered else set()
     for day, prev_day in days:
         if day in covered_set and day not in gap_days:
             continue
         _scan_full_day_union(root, day, prev_day, out, refs)
 
-    for line in out:
-        print(line)
-    return 0
+    older: List[str] = []
+    if days and older_first:
+        window_first = days[0][0]
+        day = _date_minus(window_first, 1)
+        while day and day >= older_first:
+            if _day_covered(root, state_root, day):
+                break
+            if day in buckets:
+                older.append(day)
+            day = _date_minus(day, 1)
+        older.reverse()
+    return GapScan(rows=out, older_gaps=older)
 
 
 if __name__ == "__main__":

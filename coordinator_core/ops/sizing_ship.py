@@ -230,7 +230,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if refusal:
             # The register's own rule decides, as in deliverable.cascade_terminal: every row
             # met and wired, or deferred/waived with a ruling.
-            raise MutateAbort(f"refusing to ship {p}: its requirement register is not met: {refusal}")
+            raise MutateAbort(
+                f"refusing to ship {p}: its requirement register is not met: {refusal}"
+                " | without Workflow: record a judge verdict (--rejudge --as-agent-brief,"
+                " reverify-delivery record --judge-json), then review-stamp mint/rejudge writes the rows"
+            )
 
         route = read_fm_field_unquoted(old_text, "route")
         if route in _CASCADE_ONLY_ROUTES:

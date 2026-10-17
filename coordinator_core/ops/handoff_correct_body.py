@@ -80,7 +80,7 @@ findings.
 The authorship-equality predicate mirrors the ONE already implemented in
 `coordinator_core.baton_assemble._adopt_prior_attempt_scaffold_path` ("does a
 candidate's own `authoring_session` field match the calling session id") — reused
-here via `coordinator_core.baton_assemble._resolve_current_session_id` (the exact
+here via `coordinator_core.ops.session_context.resolve_current_session_id` (the exact
 same env-lookup chain) for the session-id VALUE used in the equality gate, rather
 than re-derived. That shared function returns only the resolved value, not which of
 the three variables produced it, so this module keeps its own small
@@ -147,8 +147,7 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.ceremony.renderers import _ROADMAP_ID_ALLOWLIST_RE
-from coordinator_core.ops.fleet._common import handoff_archive_dest, main_worktree_root
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE as _SESSION_ENV_PRECEDENCE
 
@@ -218,6 +217,10 @@ def _is_roadmap_workflow_authoring_session(value: str) -> bool:
     roadmap_id, sep, _tail = rest.partition("/")
     if not sep or not roadmap_id:
         return False
+    # Function-local: `ops.ceremony.renderers` pulls in `ops.records_query` and
+    # `session.claims`; only a roadmap-shaped value reaches this line.
+    from coordinator_core.ops.ceremony.renderers import _ROADMAP_ID_ALLOWLIST_RE
+
     return bool(_ROADMAP_ID_ALLOWLIST_RE.fullmatch(roadmap_id))
 
 # Same three-variable precedence chain `_resolve_current_session_id` (baton_assemble)
@@ -410,7 +413,7 @@ def _resolve_session_id_with_source() -> "tuple[Optional[str], Optional[str]]":
     authorship gate against a stranger — then stamps that stranger into the
     AC6 correction note as the session that made the correction.
 
-    This function and `baton_assemble._resolve_current_session_id` are
+    This function and `ops.session_context.resolve_current_session_id` are
     cross-checked against each other by the caller below and a mismatch is a
     hard refusal, so the two must be migrated together — they now agree by
     delegating to the same resolver rather than by two copies of one ladder.
@@ -791,6 +794,10 @@ def _check(
     # honored, not overridden by a live-twin check).
     is_archived = False
     if not p.is_file():
+        # Function-local: `ops.fleet._common` loads `session.claims` at module
+        # level, and only the archive-follow arm needs it.
+        from coordinator_core.ops.fleet._common import handoff_archive_dest
+
         archived_candidate = handoff_archive_dest(worktree, p)
         archived_candidate = contained_path(archived_candidate, allowed_roots)
         if archived_candidate is not None and archived_candidate.is_file():
@@ -884,26 +891,22 @@ def _check(
             "CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID — cannot authorize a "
             "correction with no calling session identity"
         )
-    # Cross-check against the shared, reused resolver (baton_assemble's own
-    # authorship-predicate value) — must agree by construction (same chain);
-    # a mismatch would indicate the two copies have drifted (see module
-    # docstring's "if either copy's precedence chain ever changes" note).
-    # Imported HERE, not at module scope — coordinator_core.baton_assemble
-    # itself now imports several coordinator_core.ops.* modules at module
-    # scope, and this module is one of the four that a module-scope import
-    # back into baton_assemble would leave partially initialized during
-    # coordinator_core.ops's eager import sweep, silently deregistering this
-    # op (a stderr warning, not an exception — see
+    # Cross-check against the canonical resolver
+    # (`ops.session_context.resolve_current_session_id`, imported at module
+    # scope above) — must agree by construction (same chain); a mismatch
+    # would indicate the labelling resolver above has drifted from it.
+    # Do NOT import `coordinator_core.baton_assemble` at module scope here —
+    # it imports several coordinator_core.ops.* modules at module scope, and
+    # a module-scope import back into it would leave this module partially
+    # initialized during coordinator_core.ops's eager import sweep, silently
+    # deregistering this op (a stderr warning, not an exception — see
     # coordinator_core/session/claimed_plan.py's negative-spec for the same
-    # hazard on the other end of this cycle). A future reader who hoists this
-    # back to module scope will silently re-break op registration.
-    from coordinator_core.baton_assemble import _resolve_current_session_id
-
-    shared_session_id = _resolve_current_session_id()
+    # hazard on the other end of this cycle).
+    shared_session_id = resolve_current_session_id()
     if shared_session_id != session_id:
         return _err(
             "internal: session-id precedence chain drift between "
-            "handoff_correct_body and baton_assemble — refusing rather than "
+            "handoff_correct_body and ops.session_context — refusing rather than "
             "risk gating on divergent values"
         )
 
@@ -974,7 +977,7 @@ def _check(
     # whenever it holds a live claim, mirror is the fallback when it does
     # not) — this WIDENS what the gate can see, it does not relax who it
     # lets through: a ledger claim naming a *different* session still
-    # refuses exactly as before. `pickup_assemble._claim_already_self_held`
+    # refuses exactly as before. `session.claim_self_held._claim_already_self_held`
     # remains consulted ONLY for disagreement-detection below (never as a
     # competing predicate). If no holder resolves from either source
     # (legacy status:consumed batons with no ledger/mirror claim), fall
@@ -1087,7 +1090,7 @@ def _check(
     # this session, OR this session actually holds the claim while
     # claimed_by/authoring_session name someone else) is stamped, never
     # re-derived as a competing source of truth.
-    from coordinator_core.pickup_assemble import _claim_already_self_held
+    from coordinator_core.session.claim_self_held import _claim_already_self_held
 
     claim_self_held = _claim_already_self_held(worktree, "handoff", p.name)
     disagreement = (basis == "holder") != claim_self_held

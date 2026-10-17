@@ -329,6 +329,10 @@ JSON-RPC dispatch utilities for the command-type execution model. The HTTP invok
 judge predicate, `day` the day derivation, `approve` the `receipt.approve` op (MUTATING; appends
 a quoted superseding receipt).
 
+### `usage/` — token-usage pricing (COMPUTE_ONLY, stdlib-only)
+`price_table` is the one model-to-list-price table (`PRICES`, `TOKEN_FIELDS`, `model_family`,
+`estimate_usd` per message); it imports only the stdlib so DoE loads it by file path.
+
 ### `contract/`
 Vendored cockpit-contract pin (see `docs/wiki/cockpit-contract-revendor.md`). Also home of
 producer-contract docs for claude-klabauter-owned ops, e.g. `handoff-reconcile-producer-contract.md`

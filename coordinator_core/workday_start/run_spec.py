@@ -1,8 +1,8 @@
 """Workday-start's CeremonySpec: the ceremony as data for the shared driver.
 
 Everything here is what the driver cannot know: the manifest's stage-ordered steps and their
-cadence gates, the rule table, the three agent groups, the post-briefing tail, and the two
-per-step checks (the inbox assembler's output, the backfill plan).
+cadence gates, the rule table, the agent groups, the post-briefing tail, and the
+per-step check (the inbox assembler's output).
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from coordinator_core.ceremony_common.run.driver import PRE_DIRECTIVE_STAGE, Run
 from coordinator_core.ceremony_common.run.runner import HELD_PREFIX, ChildOutcome, run_bin_cold
 from coordinator_core.ceremony_common.run.spec import CeremonySpec
 from coordinator_core.git import reconcile_manifest
-from coordinator_core.workday_start import backfill, briefing, manifest, rules
+from coordinator_core.workday_start import briefing, manifest, rules
 from coordinator_core.workday_start.contract import FINISH_STAGES, LAUNCH_STAGES
 
 CEREMONY = "workday-start"
@@ -31,7 +31,6 @@ ENVELOPE_STEP = "orient-day-envelope"
 INBOX_STEP = "memo-inbox-blitz-assemble"
 NOMINATION_STEP = "groupem-nomination-who"
 FRESHNESS_STEP = "fresh-commit-delta"
-BACKFILL_SCAN_STEP = "weekly-backfill-scan"
 ALIGNMENT_STEPS = ("priority-whats-next", "triage-query-completions")
 
 PHASE_ONE_LAST_STAGE = "freshness"
@@ -136,10 +135,6 @@ def _after_step(step: Any, outcome: ChildOutcome, *, envelope: "Mapping[str, Any
         return dataclasses.replace(
             outcome, stdout=f"inbox {inbox.get('state', 'unknown')}: {len(dispatches)} dispatch(es), {memos} memo(s)"
         )
-    if step.id == BACKFILL_SCAN_STEP:
-        _, reason = backfill.plan_with_reason(outcome.stdout, "")
-        if reason:
-            return ChildOutcome(1, outcome.process_ms, outcome.spawns, "", outcome.stderr, reason)
     return outcome
 
 
@@ -153,7 +148,7 @@ def _merge_held(rows: Sequence[Mapping[str, Any]]) -> "Mapping[str, Any] | None"
 def agent_groups(
     envelope: Mapping[str, Any], ledger_rows: Sequence[Mapping[str, Any]], resolution: Any
 ) -> list[dict[str, Any]]:
-    """The inbox, backfill and alignment groups; the driver appends the judgment group."""
+    """The reconcile, inbox and alignment groups; the driver appends the judgment group."""
     groups: list[dict[str, Any]] = []
     held = _merge_held(ledger_rows)
     if held is not None:
@@ -181,14 +176,6 @@ def agent_groups(
             "inputs": {"supersession_candidates": inbox.get("supersession_candidates") or []},
             "entries": entries,
         })
-    scan = _latest(ledger_rows, BACKFILL_SCAN_STEP)
-    if scan is not None and scan["status"] == "ran":
-        planned, reason = backfill.plan_with_reason(_raw(scan), "")
-        if planned and not reason:
-            groups.append({
-                "id": "backfill", "phase": 2, "agent": None, "ruling_agent": None, "inputs": {},
-                "entries": planned,
-            })
     ran = [
         s for s in ALIGNMENT_STEPS
         if (row := _latest(ledger_rows, s)) is not None and row["status"] == "ran" and _raw(row).strip()

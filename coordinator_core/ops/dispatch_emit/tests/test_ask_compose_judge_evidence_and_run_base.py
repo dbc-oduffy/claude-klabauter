@@ -45,6 +45,13 @@ def test_without_a_caller_base_the_base_is_head(monkeypatch):
     assert "h" * 40 in script
 
 
+def test_the_executed_run_base_is_the_staged_manifests_head_sha_and_no_agent_reads_head(monkeypatch):
+    script = _script(monkeypatch)
+    assert "label: 'run-base'" not in script and "rev-parse HEAD" not in script
+    assert "_runBase = /^[0-9a-f]{40}$/.test(String(_manifest?.head_sha ?? '')) ? _manifest.head_sha : '';" in script
+    assert script.index("_runBase = /^[0-9a-f]{40}$/") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
+
+
 def test_a_caller_run_base_is_the_only_base(monkeypatch):
     script = _script(monkeypatch, run_base_sha="a" * 40)
     assert "a" * 40 in script

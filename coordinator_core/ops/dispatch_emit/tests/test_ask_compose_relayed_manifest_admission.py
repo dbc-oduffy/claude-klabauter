@@ -18,7 +18,7 @@ _ROW = {
     "id": "C1", "brief_path": "b/C1.md", "agent_type": "coordinator:executor", "model": "opus",
     "writes": ["a.py"], "wave": 0, "deps": [],
 }
-_WHOLE = {"rows": [_ROW], "review_declared_paths": ["a.py"], "test_targets": ["t.py"]}
+_WHOLE = {"rows": [_ROW], "review_declared_paths": ["a.py"], "test_targets": ["t.py"], "head_sha": "b" * 40}
 _JOURNAL_RELAY = {"rows": ["TC(w0)", "TS(w0)", "CH", "AL (w3)"]}
 
 
@@ -47,6 +47,12 @@ def test_a_whole_reply_missing_only_test_targets_is_refused():
     assert _gap({k: v for k, v in _WHOLE.items() if k != "test_targets"}) == "test_targets"
 
 
+@pytest.mark.parametrize("sha", [None, "", "HEAD", "b" * 39, "B" * 40])
+def test_a_manifest_without_a_40_hex_head_sha_is_refused(sha):
+    assert _gap({**_WHOLE, "head_sha": sha}) == "head_sha"
+    assert _gap({k: v for k, v in _WHOLE.items() if k != "head_sha"}) == "head_sha"
+
+
 def test_the_c268bb_row_shape_is_refused():
     thin = {**_WHOLE, "rows": [{"id": "C1", "wave": 0, "deps": []}]}
     assert _gap(thin) == "rows[0].brief_path"
@@ -66,23 +72,27 @@ def test_each_pinned_field_is_checked(patch, field):
     assert _gap({**_WHOLE, **patch}) == field
 
 
-def test_no_adoption_site_adopts_a_relayed_manifest():
+def test_every_adoption_site_admits_a_relay_only_through_the_wholeness_check():
     script = _compose()
-    assert not re.search(r"_stagedManifest\s*=\s*(?!null)[^;]*(?:readyOpReply|\.manifest)", script)
-    assert "_stagedManifest = _diskRead;" in script
+    sites = re.findall(r"_stagedManifest\s*=\s*(?!null)[^;]*(?:readyOpReply|\.manifest)", script)
+    assert sites in ([], ["_stagedManifest = _r.manifest"]), sites
+    if sites:
+        helper = script[script.index("const _blitzStageRead"):script.index("_stagedManifest = _r.manifest")]
+        assert "_wholeManifestGap(_r.manifest)" in helper
+    assert "_diskRead" not in script
     assert "Array.isArray(_ready.readyOpReply?.rows)" not in script
-    for site in ("_ready.readyOpReply", "_reready.readyOpReply", "_spineReview.manifest",
-                 "_revised.manifest", "_authored.manifest"):
+    for site in ("_spineReview.manifest", "_revised.manifest", "_authored.manifest"):
         assert f"_adoptManifest({site})" in script, site
+    for site in ("_ready.readyOpReply", "_reready.readyOpReply"):
+        assert f"_adoptManifest({site}, true)" in script, site
 
 
-def test_a_refused_disk_manifest_halts_with_the_named_reason_before_execute():
+def test_a_not_whole_relay_halts_with_the_named_reason_before_execute():
     script = _compose()
-    assert "_stageHalt = 'stage manifest on disk is not whole: ' + _diskGap;" in script
-    assert "no stage manifest on disk: " in script
+    assert "'stage manifest relay is not whole: ' + _relayGap" in script
     assert "relayed stage manifest is not whole" not in script
     assert "reason: _manifest.error" in script
-    assert script.index("stage manifest on disk is not whole") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
+    assert script.index("stage manifest relay is not whole") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
 
 
 def test_incomplete_chunk_pushes_need_no_own_guard_and_result_rows_are_strings():

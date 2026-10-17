@@ -56,6 +56,7 @@ Negative-spec (hard-won, restated for this row):
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from pathlib import Path
@@ -343,9 +344,26 @@ def _disclose_gone_deletions(message: str, gone: list) -> str:
     return f"{head}\n\n{lines}\n\n{rest}"
 
 
+_TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: \S")
+
+
+def _stopped_run_trailers(message: str, run_ids: list) -> str:
+    """Append one `Stopped-Run-Residue: <run_id>` trailer per carried stopped run, joining the
+    message's trailer block when it ends in one."""
+    if not run_ids:
+        return message
+    lines = [f"Stopped-Run-Residue: {rid}" for rid in run_ids]
+    body = message.rstrip("\n")
+    head, sep, last = body.rpartition("\n\n")
+    if sep and all(_TRAILER_LINE.match(ln) for ln in last.split("\n")):
+        return f"{head}\n\n{last}\n" + "\n".join(lines) + "\n"
+    return f"{body}\n\n" + "\n".join(lines) + "\n"
+
+
 def _peer_claim_warnings(
     worktree_root: Path, paths: list, peer_holds: Optional[list] = None,
     own_sid: Optional[str] = None, abandoned_holds: Optional[list] = None,
+    held_out: Optional[dict] = None,
 ) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
@@ -369,6 +387,8 @@ def _peer_claim_warnings(
     except Exception as exc:  # noqa: BLE001 -- never refuse the commit
         return [f"claim state indeterminate ({exc!r})"]
 
+    if held_out is not None:
+        held_out.update(lookup_result.held_by or {})
     warnings: list = []
     live_peers: list = []
     for path in paths:
@@ -424,6 +444,54 @@ def _peer_claim_warnings(
         except Exception as exc:  # noqa: BLE001 -- never refuse the commit
             warnings.append(f"companion state indeterminate ({exc})")
     return warnings
+
+
+def _own_left_behind(
+    worktree_root: Path, held_by: dict, own_sid: Optional[str], pathspec: list,
+) -> tuple:
+    """``(free, contested)`` own dirty paths outside ``pathspec``. A per-path liveness or
+    ``UNANSWERABLE`` doubt is contested; a failure of the whole candidate scan or lookup returns
+    ``([], [])`` (nothing carried, nothing reported). A sid holding no committed path is absent
+    from ``held_by`` and carries nothing."""
+    held = [p for p in held_by.get(own_sid, ()) if p not in pathspec] if own_sid else []
+    if not held:
+        return [], []
+    try:
+        from coordinator_core.ops.ceremony.commit_companion import own_left_behind
+
+        candidates = own_left_behind(worktree_root, held_by, own_sid, pathspec)
+    except Exception:  # noqa: BLE001 -- never refuse the commit
+        return [], []
+    if not candidates:
+        return [], []
+    contested: set = set()
+    try:
+        peers = session_claim_index.lookup(list(candidates), cwd=str(worktree_root))
+    except Exception:  # noqa: BLE001
+        return [], []
+    for path in candidates:
+        claimants = peers.get(path, [])
+        if session_claim_index.UNANSWERABLE in claimants:
+            contested.add(path)
+            continue
+        kinds = (peers.recorded_kind or {}).get(path, {})
+        for sid in claimants:
+            if sid == own_sid or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
+                continue
+            try:
+                if not session_liveness.session_live(sid, str(worktree_root)):
+                    continue
+            except Exception:  # noqa: BLE001
+                contested.add(path)
+                break
+            try:
+                if session_liveness.session_abandoned(sid, str(worktree_root)):
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+            contested.add(path)
+            break
+    return [p for p in candidates if p not in contested], [p for p in candidates if p in contested]
 
 
 def _pre_commit_gates(
@@ -743,9 +811,14 @@ def _land(
     declared_reverts: list,
     expected_blobs: Optional[dict] = None,
     expected_content_sha256: Optional[dict] = None,
+    allow_empty: bool = False,
 ) -> _Landing:
-    try:
-        outcome = commit_paths(
+    """One `commit_paths` attempt. `allow_empty` is tried only after a plain attempt raised
+    `NothingToCommit` and no recent commit carries this message, so a retried call reports the
+    predecessor instead of landing a second marker."""
+
+    def _attempt(empty_ok: bool) -> CommitOutcome:
+        return commit_paths(
             worktree_root,
             paths,
             message,
@@ -753,12 +826,21 @@ def _land(
             untracked_paths=untracked,
             prefer_staged=prefer_staged,
             prefer_deliberate_stage=deliberate_stage,
+            allow_empty=empty_ok,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
             detect_rollback=True,
             declared_reverts=declared_reverts,
             expected_blobs=expected_blobs or None,
             expected_content_sha256=expected_content_sha256 or None,
         )
+
+    try:
+        try:
+            outcome = _attempt(False)
+        except NothingToCommit:
+            if not allow_empty or _landed_by_predecessor(worktree_root, message) is not None:
+                raise
+            outcome = _attempt(True)
     except BlobDriftRefused as exc:
         return _Landing(None, None, [], _error(
             str(exc),
@@ -856,6 +938,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        False -- see the backlog row
                                        `commit-v2-prefers-worktree-over-index`
                                        for why it is not flipped.
+        allow_empty (bool, optional, DEFAULT FALSE) -- land ONE marker commit (tree equal to
+                                       HEAD's) when every declared path already matches HEAD, so
+                                       a run whose content landed by hand can still close. Tried
+                                       only after the plain attempt raised nothing-to-commit and
+                                       no recent commit carries this message (a retry replies
+                                       `already_landed_sha`). A mixed process/product set lands
+                                       at most one marker.
         session_id (str, optional)  -- canonical UUID (8-4-4-4-12 hex,
                                        case-insensitive) threaded into
                                        `apply_missing_trailers` as
@@ -901,6 +990,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `main` and a remote is configured; a non-empty reason admits, never ambient. In-process callers of
     `_handler` (bookkeeping commits) get the same refusal on a remote-backed `main` unless they pass it.
 
+    carry_own_left_behind (bool, default false) adds own dirty claimed paths no live peer holds; reply `own_left_behind`.
+    carry_stopped_runs (bool, default true) adds the dirty, uncontested run artifacts of this session's
+    runs that ended on evidence; reply `stopped_run_residue`, one `Stopped-Run-Residue:` trailer per run.
     skip_missing (bool, default false) drops `paths` absent from disk and HEAD, as `skipped_missing`.
     gone_tracked_as_deleted (bool, default false) reclassifies `paths` entries gone from the worktree
     but tracked at HEAD as declared deletions. For a caller whose `paths` is itself the declaration
@@ -975,6 +1067,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     raw_prefer_deliberate_stage = params.get("prefer_deliberate_stage", False)
     if not isinstance(raw_prefer_deliberate_stage, bool):
         return _error("params.prefer_deliberate_stage must be a boolean")
+    raw_allow_empty = params.get("allow_empty", False)
+    if not isinstance(raw_allow_empty, bool):
+        return _error("params.allow_empty must be a boolean")
 
     session_id_override = params.get("session_id")
     if session_id_override is not None:
@@ -1011,6 +1106,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     raw_skip_missing = params.get("skip_missing", False)
     if not isinstance(raw_skip_missing, bool):
         return _error("params.skip_missing must be a boolean")
+
+    raw_carry = params.get("carry_own_left_behind", False)
+    if not isinstance(raw_carry, bool):
+        return _error("params.carry_own_left_behind must be a boolean")
+
+    raw_carry_stopped = params.get("carry_stopped_runs", True)
+    if not isinstance(raw_carry_stopped, bool):
+        return _error("params.carry_stopped_runs must be a boolean")
 
     raw_gone_as_deleted = params.get("gone_tracked_as_deleted", False)
     if not isinstance(raw_gone_as_deleted, bool):
@@ -1092,10 +1195,57 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # A live peer holding a named path is reported, never refused.
     peer_holds: list = []
     abandoned_holds: list = []
+    held_by: dict = {}
     peer_claim_warnings = _peer_claim_warnings(
-        worktree_root, list(raw_paths) + raw_removed, peer_holds,
-        abandoned_holds=abandoned_holds,
+        worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=session_id_override,
+        abandoned_holds=abandoned_holds, held_out=held_by,
     )
+    own_sid = session_id_override
+    if own_sid is None:
+        try:
+            own_sid = session_core.resolve_session_id(str(worktree_root))
+        except Exception:  # noqa: BLE001
+            own_sid = None
+    # own_sid now reaches _peer_claim_warnings above, so the session's own holds drop out of peer warnings.
+    free, contested = _own_left_behind(
+        worktree_root, held_by, own_sid, [*raw_paths, *raw_removed]
+    )
+    stopped_carried: dict = {}
+    stopped_withheld: dict = {}
+    stopped_error: Optional[str] = None
+    if raw_carry_stopped and own_sid:
+        try:
+            from coordinator_core.ops.dispatch_emit import stopped_runs
+
+            stopped = stopped_runs.residue(
+                worktree_root, own_sid, [*raw_paths, *raw_removed]
+            )
+            stopped_carried = {rid: list(ps) for rid, ps in stopped.carried.items()}
+            stopped_withheld = dict(stopped.withheld)
+        except Exception as exc:  # noqa: BLE001
+            stopped_carried, stopped_withheld = {}, {}
+            stopped_error = f"stopped-run residue unavailable ({type(exc).__name__}); nothing carried"
+    stopped_flat = list(dict.fromkeys(p for ps in stopped_carried.values() for p in ps))
+    carried: list = []
+    if (raw_carry and free) or stopped_flat:
+        probe = list(dict.fromkeys([*(free if raw_carry else ()), *stopped_flat]))
+        if supplied_ignored is not None:
+            skip = {p.replace("\\", "/") for p in supplied_ignored}
+        else:
+            skip = {p.replace("\\", "/") for p in _ignored_untracked(worktree_root, probe)}
+        if raw_carry:
+            carried = [p for p in free if p not in skip or p in exempt]
+        kept_stopped = {p for p in stopped_flat if p not in skip or p in exempt}
+        stopped_carried = {
+            rid: [p for p in ps if p in kept_stopped] for rid, ps in stopped_carried.items()
+        }
+        stopped_carried = {rid: ps for rid, ps in stopped_carried.items() if ps}
+        have = set(raw_paths)
+        raw_paths = (
+            list(raw_paths) + carried
+            + [p for p in stopped_flat if p in kept_stopped and p not in have and p not in carried]
+        )
+    left = [p for p in free if p not in carried] + contested
 
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
     # after the fact is not one. Contrast `_guard_class_relay_step` below,
@@ -1144,6 +1294,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # `outcome.sign_warning` is surfaced into `warnings` below.
     message = _disclose_peer_holds(message, peer_holds + abandoned_holds)
     message = _disclose_gone_deletions(message, reclassified)
+    message = _stopped_run_trailers(message, list(stopped_carried))
     message = apply_missing_trailers(
         message,
         worktree_root,
@@ -1193,6 +1344,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 if mixed else raw_prefer_staged
             ),
             deliberate_stage=raw_prefer_deliberate_stage,
+            allow_empty=raw_allow_empty and not landed_halves and half_index == len(halves) - 1,
             declared_reverts=(
                 [p for p in raw_declared_reverts if (p in proc_set) == is_process]
                 if mixed else raw_declared_reverts
@@ -1249,6 +1401,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
+    if stopped_error is not None:
+        warnings.append(stopped_error)
+    warnings.extend(
+        f"carried stopped run {rid}'s residue: {len(ps)} file(s)"
+        for rid, ps in stopped_carried.items()
+    )
     if skill_weight_note is not None:
         warnings.append(skill_weight_note)
     staged_preferred = [p for o in outcomes for p in o.staged_preferred]
@@ -1366,6 +1524,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "dropped_ignored": dropped_ignored,
         "skipped_missing": skipped_missing,
     }
+    if carried or left:
+        result["own_left_behind"] = {"carried": carried, "left": left}
+    if stopped_carried or stopped_withheld:
+        result["stopped_run_residue"] = {
+            "carried": stopped_carried, "withheld": stopped_withheld,
+        }
     if process_sha is not None:
         result["process_sha"] = process_sha
     return result

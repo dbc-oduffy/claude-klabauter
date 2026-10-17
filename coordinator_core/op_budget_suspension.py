@@ -303,43 +303,9 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     # The op the ruling was actually given on -- `ceremony.session_instructions`,
     # p50 2,242.2ms over n=4 -- is NOT here: it was already killed 2026-08-27
     # under DR-344 and is not registered, so its rows predate its removal and
-    # there is nothing left to suspend. The ruling is applied to the two ops
+    # there is nothing left to suspend. The ruling is applied to the ops
     # that share its shape and are still live.
     # → state/audits/2026-08-30-the-op-table-against-both-admission-criteria.md
-    "session.reap_claims_for_repos": {
-        "c2_citation": {
-            "route": None,
-            "confidence": "UNADJUDICATED",
-            "n": 4,
-            "p95_ms": 34265.6,
-            "window": "24h_production",
-            "t_start_min": "2026-08-27T17:33:42Z",
-            "t_start_max": "2026-08-30T12:19:32Z",
-            "verdict": "adjudicated",
-            "outcome": "suspended-on-pm-ruling",
-        },
-        "measured": {"max_ms": 34265.6, "p50_ms": 7.8, "n": 6},
-        "note": (
-            "p50 7.8ms against a 34,265.6ms max -- a tail, not a shape, and "
-            "n=6 cannot separate 'the worst op on the box' from an artifact. "
-            "Suspended anyway per the ruling above: an op that can occupy the "
-            "box for 34 seconds does not keep dispatching while we collect "
-            "samples. Sole caller is the CLI trampoline "
-            "`coordinator/bin/reap-claims-for-repos.py`, which now surfaces "
-            "the refusal."
-        ),
-        "disposition": (
-            "suspend, not gravestone -- the claim-reaping job is real and "
-            "nothing here shows the op is wrong, only that its tail is "
-            "unaffordable. Comes back on a re-measure with n >= 30 showing "
-            "max under the bar, per this table's standing rule."
-        ),
-        "spinoff": None,
-        "fallback": (
-            "Claim release is report-only and human-invoked: drop a stale handoff "
-            "claim per row by hand."
-        ),
-    },
     "records.history": {
         "c2_citation": {
             "route": None,
@@ -1102,24 +1068,6 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
             "figure is the op's real cost, not a floor. Convicted here; the "
             "remedy (suspend, gravestone, or fix) is a separate plan's job -- "
             "this chunk's own scope excludes fixing what it convicts."
-        ),
-    },
-    "session.reap_claims_for_repos": {
-        "convicted": False,
-        "bar": "kill",
-        "measured": {
-            "p95_ms": 34265.6,
-            "n": 4,
-            "window": "24h_production",
-            "unit": "process_ms",
-        },
-        "confidence": None,
-        "verdict": "unadjudicated",
-        "route": None,
-        "note": (
-            "n=4 (n=6 all-time). The most suspicious figure in the sweep -- "
-            "either the worst op on the box or an artifact, and n=4 cannot "
-            "tell you which. Recorded as unadjudicated, not convicted."
         ),
     },
     "handoff.housekeeping": {

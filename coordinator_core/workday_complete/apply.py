@@ -92,16 +92,20 @@ from typing import TYPE_CHECKING, Any, Optional
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
     _directive_gate_open,
+    advisory_breach_count,
     budget_advisory_mid_directive,
     budget_check_post_mutation,
     budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
+    directive_progress,
     exit_code_label,
 )
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.ceremony_common import cli_dispatch as _shared_cli_dispatch
+from coordinator_core.ceremony_common.apply_checkpoint import Checkpoint, open_checkpoint
 from coordinator_core.ceremony_common.cli_dispatch import (
     resolve_cli_script_root,
     invoke_cli_main as _shared_invoke_cli_main,
@@ -131,6 +135,8 @@ if TYPE_CHECKING:
 # `workweek_complete.apply`'s own.
 # ---------------------------------------------------------------------------
 WorkdayApplyExitCode = build_ceremony_halt_exit_codes("WorkdayApplyExitCode")
+
+_PROG = "workday-complete-apply"
 
 
 #: THE closed dispatch table (security-load-bearing — see module docstring).
@@ -293,11 +299,24 @@ def _dispatch_directive(
     }
 
 
+def _unload_cli_module(cli_name: str) -> None:
+    """Drops every reference to a loaded CLI module (apply cache, shared
+    `cli_dispatch` cache, `sys.modules`); a partial unload keeps it alive."""
+    module = _LOADED_MODULES.pop(cli_name, None)
+    script_path = _CLI_DISPATCH.get(cli_name)
+    if script_path is not None:
+        _shared_cli_dispatch._LOADED_MODULES.pop(str(script_path.resolve()), None)
+    if module is not None:
+        sys.modules.pop(module.__name__, None)
+
+
 def _execute_directives(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
     decisions: dict[str, Any],
     composition_budget: "Optional[CompositionBudget]" = None,
+    *,
+    checkpoint: "Optional[Checkpoint]" = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -358,6 +377,17 @@ def _execute_directives(
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
     already_satisfied_ids: set[str] = set()
+    resumed: list[str] = []
+    resumed_args_changed: list[str] = []
+    interrupted: list[str] = []
+    last_use_of_cli: dict[str, int] = {}
+    last_consumer_of: dict[str, int] = {}
+    for index, directive in enumerate(directives):
+        last_use_of_cli[directive["cli"]] = index
+        if directive.get("stdin_from") is not None:
+            last_consumer_of[directive["stdin_from"]] = index
+    interrupted_ids = checkpoint.interrupted_ids() if checkpoint is not None else frozenset()
+    landed_ids = checkpoint.landed_ids() if checkpoint is not None else frozenset()
 
     pre_mutation_breach = budget_check_pre_mutation(composition_budget)
     if pre_mutation_breach is not None:
@@ -394,10 +424,26 @@ def _execute_directives(
             "results": [],
         }
 
-    for directive in directives:
+    def _release_producers(index: int) -> None:
+        for producer in [p for p in stdout_by_id if last_consumer_of.get(p, -1) <= index]:
+            del stdout_by_id[producer]
+
+    for index, directive in enumerate(directives):
         if directive.get("already_satisfied"):
             landed.append(directive["id"])
             already_satisfied_ids.add(directive["id"])
+            directive_progress(_PROG, directive["id"], "already-satisfied")
+            continue
+        if checkpoint is not None and directive["id"] in landed_ids:
+            landed.append(directive["id"])
+            resumed.append(directive["id"])
+            if checkpoint.args_changed(directive["id"], directive.get("args", [])):
+                resumed_args_changed.append(directive["id"])
+            if directive["id"] in last_consumer_of:
+                recorded = checkpoint.stdout_of(directive["id"])
+                if recorded is not None:
+                    stdout_by_id[directive["id"]] = recorded
+            directive_progress(_PROG, directive["id"], "resumed")
             continue
         try:
             gate_open = _directive_gate_open(directive, jp_by_id, decisions)
@@ -406,9 +452,11 @@ def _execute_directives(
                 "id": directive["id"],
                 "error": f"gate evaluation error: {type(exc).__name__}: {exc}",
             })
+            directive_progress(_PROG, directive["id"], "failed")
             continue
         if not gate_open:
             blocked.append(directive["id"])
+            directive_progress(_PROG, directive["id"], "blocked")
             continue
 
         stdin_from = directive.get("stdin_from")
@@ -430,9 +478,14 @@ def _execute_directives(
                         "missing stdin rather than feeding an empty stream"
                     )
                 failed.append({"id": directive["id"], "error": reason})
+                directive_progress(_PROG, directive["id"], "failed")
                 continue
             stdin_text = stdout_by_id[stdin_from]
 
+        if checkpoint is not None:
+            if directive["id"] in interrupted_ids:
+                interrupted.append(directive["id"])
+            checkpoint.record_dispatching(directive["id"])
         try:
             result = _dispatch_directive(directive, stdin_text=stdin_text)
         except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
@@ -441,7 +494,15 @@ def _execute_directives(
                 "error": f"{type(exc).__name__}: {exc}",
             })
             budget_advisory_mid_directive(composition_budget, directive["id"])
+            directive_progress(_PROG, directive["id"], "failed")
+            if last_use_of_cli[directive["cli"]] <= index:
+                _unload_cli_module(directive["cli"])
+            _release_producers(index)
             continue
+        if last_use_of_cli[directive["cli"]] <= index:
+            _unload_cli_module(directive["cli"])
+        stdout_text = result.pop("stdout", "") or ""
+        result["stdout_bytes"] = len(stdout_text.encode("utf-8"))
         budget_advisory_mid_directive(composition_budget, directive["id"])
         if result.get("exit_code", 0) != 0:
             error = (
@@ -461,11 +522,26 @@ def _execute_directives(
                 degraded.append(entry)
             else:
                 failed.append(entry)
+            directive_progress(_PROG, directive["id"], "failed")
             results.append(result)
+            _release_producers(index)
             continue
         results.append(result)
         landed.append(directive["id"])
-        stdout_by_id[directive["id"]] = result.get("stdout", "")
+        directive_progress(_PROG, directive["id"], "landed")
+        is_producer = directive["id"] in last_consumer_of
+        if is_producer:
+            stdout_by_id[directive["id"]] = stdout_text
+        if checkpoint is not None:
+            checkpoint.record_landed(
+                directive["id"],
+                directive.get("args", []),
+                stdout_text if is_producer else None,
+            )
+        _release_producers(index)
+
+    for cli_name in list(_LOADED_MODULES):  # last-use unload skips a CLI whose final directive never dispatched
+        _unload_cli_module(cli_name)
 
     report = {
         "landed": landed,
@@ -473,7 +549,13 @@ def _execute_directives(
         "failed": failed,
         "degraded": degraded,
         "results": results,
+        "budget_advisory_breaches": advisory_breach_count(composition_budget),
     }
+    if checkpoint is not None:
+        report["resumed"] = resumed
+        report["interrupted"] = interrupted
+        if resumed_args_changed:
+            report["resumed_args_changed"] = resumed_args_changed
 
     if failed and landed:
         return int(WorkdayApplyExitCode.PARTIAL_MUTATION), report
@@ -540,9 +622,20 @@ def apply(
         judgment_points = envelope.get("judgment_points", [])
         effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
 
-        exit_code, report = _execute_directives(
-            directives, judgment_points, effective_decisions, composition_budget=composition_budget
+        checkpoint = open_checkpoint(
+            Path.cwd(), "workday-complete", for_date=for_date, only_mode=only_mode
         )
+        exit_code, report = _execute_directives(
+            directives,
+            judgment_points,
+            effective_decisions,
+            composition_budget=composition_budget,
+            checkpoint=checkpoint,
+        )
+        if checkpoint.stale_checkpoint:
+            report["stale_checkpoint"] = checkpoint.stale_checkpoint
+        if exit_code == int(WorkdayApplyExitCode.SUCCESS):
+            checkpoint.finish()
         exit_label = exit_code_label(exit_code, report)
         if exit_code == int(WorkdayApplyExitCode.SUCCESS):
             outcome = "success"

@@ -5,43 +5,43 @@ for the ~/.claude meta-repo: self-heal this machine's hook-generation
 kill-switch state right after a git sync event.
 
 Why this leg exists: every OTHER guard in the 2026-07-28 incident cluster
-fires either on the SENDING side (pre-commit: `coordinator-precommit-
-foreign-platform-check`, `coordinator-precommit-settings-tracking-check`) or
-the AUTHORING side (`gen_settings_hooks.py`'s own kill-switch check, the
-`test_gen_settings_hooks.py` portability suite). The incident's actual
-TRANSMISSION was a `git merge`/`git pull` on the RECEIVING machine — the one
+fires either on the SENDING side (pre-commit: coordinator-precommit-
+foreign-platform-check, coordinator-precommit-settings-tracking-check) or
+the AUTHORING side (gen_settings_hooks.py's own kill-switch check, the
+test_gen_settings_hooks.py portability suite). The incident's actual
+TRANSMISSION was a git merge/git pull on the RECEIVING machine — the one
 moment in the observed causal chain (untrack -> propagate on pull ->
 generation silently re-enables) that had NO guard at all. This is that leg.
-`coordinator-precommit-foreign-platform-check`'s own docstring names this gap
-explicitly ("A `post-merge` leg would be needed to close that specific
+coordinator-precommit-foreign-platform-check's own docstring names this gap
+explicitly ("A post-merge leg would be needed to close that specific
 vector; not built here") — this script is that leg, built.
 
-Three things happen here, in order, every time `.git/hooks/post-merge` or
-`.git/hooks/post-checkout` fires inside the meta-repo:
+Three things happen here, in order, every time .git/hooks/post-merge or
+.git/hooks/post-checkout fires inside the meta-repo:
 
   1. RE-CREATE a missing positive consent marker
-     (`.coordinator-hooks-enabled`, see `coordinator_core.install.
-     gen_settings_hooks`) from its GITIGNORED PER-MACHINE SOURCE — this
-     machine's own `settings.json` `env.COORDINATOR_CONTENT_ROOT` value, via
-     `gen_settings_hooks.ensure_positive_marker`. `settings.json` itself is
+     (.coordinator-hooks-enabled, see coordinator_core.install.
+     gen_settings_hooks) from its GITIGNORED PER-MACHINE SOURCE — this
+     machine's own settings.json env.COORDINATOR_CONTENT_ROOT value, via
+     gen_settings_hooks.ensure_positive_marker. settings.json itself is
      untracked/gitignored on this fleet's dev topology, so this value can
      only ever reflect what THIS machine generated for itself — never
      something a sync just delivered. Reuses the SAME migration
-     discriminator `gen_settings_hooks.generate()` itself uses, so the two
+     discriminator gen_settings_hooks.generate() itself uses, so the two
      never drift on what "already consenting" means.
-  2. VALIDATE hook-path shape in the CURRENT worktree `settings.json`
-     against THIS machine, via `coordinator_core.ops.session.
-     guard_foreign_platform_paths.detect_foreign_platform_paths` (read-only
+  2. VALIDATE hook-path shape in the CURRENT worktree settings.json
+     against THIS machine, via coordinator_core.ops.session.
+     guard_foreign_platform_paths.detect_foreign_platform_paths (read-only
      reuse of the existing shape-detector, not a re-derivation of it).
   3. RE-ARM the NEGATIVE kill switch
-     (`gen_settings_hooks.kill_switch_marker_path`) if step 2 found a
-     mismatch — a `settings.json` shaped for the OTHER platform just arrived
+     (gen_settings_hooks.kill_switch_marker_path) if step 2 found a
+     mismatch — a settings.json shaped for the OTHER platform just arrived
      on this machine (exactly the incident shape), so generation must stop
-     until a human sorts it out, rather than the next `/coordinator:setup`
+     until a human sorts it out, rather than the next /coordinator:setup
      run silently regenerating over the foreign content.
 
 DETECT-AND-REPAIR, unlike the pre-commit sibling (which is DETECT-ONLY
-because `settings.json` there is about to be PUSHED to a peer, and a
+because settings.json there is about to be PUSHED to a peer, and a
 same-host "fix" would clobber that peer's next pull). Here the direction is
 reversed: this machine just RECEIVED whatever landed, so re-arming its own
 LOCAL kill switch cannot clobber anyone else — it only ever protects this
@@ -53,7 +53,7 @@ mismatch is reported loudly on stderr and repaired (kill switch armed), not
 escalated as a hard failure. Every internal step is best-effort / fail-open;
 an unimportable engine, an unreadable settings.json, or any unexpected
 exception degrades to silent no-op, never a stack trace against the
-operator's `git merge`.
+operator's git merge.
 
 Scope: only fires inside the meta-repo (git root == CLAUDE_HOME/.claude),
 same discriminator as every sibling gate.
@@ -67,15 +67,15 @@ Sibling: coordinator-precommit-foreign-platform-check (pre-commit, detect-only,
     sending side), coordinator_core.ops.session.
     guard_hook_generation_self_probe (SessionStart, boot-triggered leg of the
     same defense — both re-arm the SAME negative marker via the SAME
-    `gen_settings_hooks.kill_switch_marker_path` helper).
+    gen_settings_hooks.kill_switch_marker_path helper).
 
 Invocation (2026-07-28): carries no shebang and no exec bit, matching its
 pre-commit siblings. It is invoked ONLY via an explicit interpreter
-(`coordinator_core.ops.install_meta_repo_precommit_hook`'s generated hook
-body runs `"$_py" "$_gate_script"`, never bare-name/shebang-exec) —
+(coordinator_core.ops.install_meta_repo_precommit_hook's generated hook
+body runs "$_py" "$_gate_script", never bare-name/shebang-exec) —
 POSIX-only execution assumptions are a portability defect class per the
 2026-07-28 PM ruling (Windows is the P0 primary platform), enforced by
-`coordinator_core.ops.check_posix_exec_assumptions`.
+coordinator_core.ops.check_posix_exec_assumptions.
 """
 from __future__ import annotations
 

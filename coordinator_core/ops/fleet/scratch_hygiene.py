@@ -11,6 +11,8 @@ another repo's Temp subtree; spawns no process.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,13 @@ from typing import Any
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet.scratch_hygiene_apply import apply_purge
 from coordinator_core.ops.fleet.scratch_hygiene_nag import hold_nag, hold_pending_nag
-from coordinator_core.ops.fleet.scratch_hygiene_plan import _Context, classify_entry, plan_purge, purge_candidates
+from coordinator_core.ops.fleet.scratch_hygiene_plan import (
+    CURSOR_NAME,
+    _Context,
+    classify_entry,
+    ordered_candidates,
+    plan_purge,
+)
 from coordinator_core.ops.fleet.scratch_hygiene_records import contract_exit, summary_record
 
 CADENCES = ("workday_start", "workday_complete", "workweek_start", "workweek_complete", "distill")
@@ -38,6 +46,44 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         return None
     return float(value)
+
+
+def _cursor_path(repo_root: Path) -> Path:
+    return repo_root / "scratch" / CURSOR_NAME
+
+
+def _read_cursor(repo_root: Path) -> str | None:
+    """The last walked entry's path, or None when the file is missing or unreadable."""
+    try:
+        value = json.loads(_cursor_path(repo_root).read_text(encoding="utf-8")).get("after")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _write_cursor(repo_root: Path, entry: str) -> None:
+    """Temp file plus ``os.replace``: a concurrent reader sees an old or a new cursor, never a torn one.
+    A missing scratch dir or a failed write leaves the cursor as it was."""
+    target = _cursor_path(repo_root)
+    tmp = target.with_name(f"{CURSOR_NAME}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps({"after": entry}), encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _walk_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    """``eligible`` = would-delete, ``walked`` = gated before the budget ran out, ``skipped_budget`` = the rest."""
+    skipped = sum(r["action"] == "skipped-budget" for r in records)
+    return {
+        "eligible": sum(r["action"] == "would-delete" for r in records),
+        "walked": len(records) - skipped,
+        "skipped_budget": skipped,
+    }
 
 
 def run_hygiene(params: dict) -> dict[str, Any]:
@@ -75,13 +121,22 @@ def run_hygiene(params: dict) -> dict[str, Any]:
 
     records: list[dict[str, Any]] = []
     applied = False
+    walk: dict[str, int] | None = None
+    if not nag_only:
+        candidates = ordered_candidates(repo_root, _read_cursor(repo_root))
     if not nag_only and not apply:
-        records = plan_purge(repo_root, quiescence_hours=quiescence, verify_copy=verify_copy, deadline=deadline)
+        records = plan_purge(
+            repo_root, quiescence_hours=quiescence, verify_copy=verify_copy, deadline=deadline, candidates=candidates
+        )
+        walk = _walk_counts(records)
     elif not nag_only:
         # Gate and delete one entry at a time, so each entry is walked once and a budget
         # that runs out mid-pass has still freed what it gated. One registry read for the pass.
         ctx = _Context()
-        for entry in purge_candidates(repo_root):
+        eligible = deleted = 0
+        last_walked: str | None = None
+        gated: list[dict[str, Any]] = []
+        for entry in candidates:
             rec = classify_entry(
                 entry,
                 repo_root=repo_root,
@@ -90,12 +145,27 @@ def run_hygiene(params: dict) -> dict[str, Any]:
                 deadline=deadline,
                 _ctx=ctx,
             )
-            records.extend(apply_purge(repo_root, [rec], recheck=lambda _entry, _rec=rec: _rec))
+            gated.append(rec)
+            out = apply_purge(repo_root, [rec], recheck=lambda _entry, _rec=rec: _rec)
+            records.extend(out)
+            if rec["action"] != "skipped-budget":
+                last_walked = entry
+            if rec["action"] == "would-delete":
+                eligible += 1
+                deleted += out[0]["action"] == "deleted"
         applied = True
+        if last_walked is not None:
+            _write_cursor(repo_root, last_walked)
+        walk = _walk_counts(gated)
+        walk["deleted"] = deleted
+        walk["recheck_kept"] = eligible - deleted
     if nag_only or cadence in _NAG_CADENCES:
         records = records + hold_nag(repo_root) + hold_pending_nag(repo_root)
     records.append(summary_record(records, applied=applied))
-    return {"records": records, "contract_exit": contract_exit(records), "exit_code": 0}
+    result: dict[str, Any] = {"records": records, "contract_exit": contract_exit(records), "exit_code": 0}
+    if walk is not None:
+        result["walk"] = walk
+    return result
 
 
 @register_op("fleet.scratch_hygiene")

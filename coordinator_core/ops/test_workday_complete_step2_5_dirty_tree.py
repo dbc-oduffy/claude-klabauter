@@ -229,6 +229,67 @@ def test_orphan_tmp_listed_not_deleted(tmp_path, capsys):
     assert "orphan-tmp listed (no action): 1" in out
 
 
+_REDIRECT_NAMES = ["0", "&1", "$null"] + (["nul"] if sys.platform != "win32" else [])
+
+
+@pytest.mark.parametrize("name", _REDIRECT_NAMES)
+def test_zero_byte_redirect_artifact_removed_no_needs_pm(tmp_path, capsys, name):
+    repo = _make_repo(tmp_path)
+    (repo / name).write_text("")
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 0
+    assert not (repo / name).exists()
+    assert f"removed redirect artifact: {name}" in err
+    assert "NEEDS-PM" not in out
+
+
+def test_nonempty_redirect_named_file_not_removed(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    (repo / "0").write_text("abc")
+    rc, _out, _err = _run_port(repo, [], capsys)
+    assert rc == 2
+    assert (repo / "0").exists()
+
+
+def test_empty_init_py_not_redirect_artifact(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("")
+    rc, _out, _err = _run_port(repo, [], capsys)
+    assert rc == 2
+    assert (repo / "pkg" / "__init__.py").exists()
+
+
+def test_redirect_artifact_dry_run_keeps_file(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    (repo / "0").write_text("")
+    rc, _out, err = _run_port(repo, ["--dry-run"], capsys)
+    assert rc == 0
+    assert (repo / "0").exists()
+    assert "would remove redirect artifact 0" in err
+
+
+@pytest.mark.parametrize(
+    "rel, pattern",
+    [
+        ("pkg/__pycache__/x.pyc", "__pycache__/"),
+        (".pytest_cache/v/cache/lastfailed", ".pytest_cache/"),
+        (".mypy_cache/a.json", ".mypy_cache/"),
+        (".ruff_cache/a", ".ruff_cache/"),
+        ("lib2/mod.pyc", "*.pyc"),
+    ],
+)
+def test_runtime_cache_takes_auto_gitignore(tmp_path, capsys, rel, pattern):
+    repo = _make_repo(tmp_path)
+    target = repo / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x")
+    rc, _out, _err = _run_port(repo, [], capsys)
+    assert rc == 0
+    assert pattern in (repo / ".gitignore").read_text().splitlines()
+    assert target.exists()
+
+
 def test_dry_run_no_commit(tmp_path, capsys):
     repo = _make_repo(tmp_path)
     (repo / "state" / "review-trail").mkdir(parents=True)
@@ -618,6 +679,89 @@ def test_claimed_source_tree_path_still_classifies_source_tree_never_commits(
         ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert "bin/foo.sh" in status  # still dirty, uncommitted
+
+
+def _patch_peer(monkeypatch, path, liveness, abandoned=True):
+    from coordinator_core.ops import workday_complete_step2_5_dirty_tree as mod
+
+    fact = {"owner": "gone", "liveness": liveness, "claim_source": "session"}
+    monkeypatch.setattr(
+        mod, "_resolve_claim_context", lambda repo_root: (frozenset(), {path: fact})
+    )
+    monkeypatch.setattr(mod.liveness, "session_abandoned", lambda sid, cwd=None: abandoned)
+
+
+def test_dead_but_not_abandoned_holder_stays_peer_claim(tmp_path, capsys, monkeypatch):
+    repo = _make_repo(tmp_path)
+    (repo / "state" / "review-trail").mkdir(parents=True)
+    (repo / "state" / "review-trail" / "x.md").write_text("x\n")
+    _patch_peer(monkeypatch, "state/review-trail/x.md", "dead", abandoned=False)
+    before = _rev_count(repo)
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 2
+    assert "peer-claim: state/review-trail/x.md owner=gone liveness=dead" in err
+    assert "orphan-claim" not in err
+    assert _rev_count(repo) == before
+
+
+def test_session_abandoned_called_once_per_distinct_owner(tmp_path, capsys, monkeypatch):
+    from coordinator_core.ops import workday_complete_step2_5_dirty_tree as mod
+
+    repo = _make_repo(tmp_path)
+    (repo / "state" / "review-trail").mkdir(parents=True)
+    for n in ("a", "b"):
+        (repo / "state" / "review-trail" / f"{n}.md").write_text("x\n")
+    fact = {"owner": "gone", "liveness": "dead", "claim_source": "session"}
+    peers = {f"state/review-trail/{n}.md": fact for n in ("a", "b")}
+    monkeypatch.setattr(mod, "_resolve_claim_context", lambda repo_root: (frozenset(), peers))
+    calls = []
+    monkeypatch.setattr(
+        mod.liveness, "session_abandoned", lambda sid, cwd=None: calls.append(sid) or True
+    )
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 0
+    assert calls == ["gone"]
+
+
+def test_dead_holder_housekeeping_path_is_adopt_committed(tmp_path, capsys, monkeypatch):
+    repo = _make_repo(tmp_path)
+    (repo / "state" / "review-trail").mkdir(parents=True)
+    (repo / "state" / "review-trail" / "x.md").write_text("x\n")
+    _patch_peer(monkeypatch, "state/review-trail/x.md", "dead")
+    before = _rev_count(repo)
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 0
+    assert "orphan-claim: state/review-trail/x.md owner=gone liveness=dead abandoned=yes -> adopt-commit" in err
+    assert "orphan-claim (dead holder, adopt-commit): 1" in out
+    assert "peer-claim" not in out and "peer-claim" not in err
+    assert _rev_count(repo) == before + 1
+
+
+def test_dead_holder_source_tree_path_stays_source_tree(tmp_path, capsys, monkeypatch):
+    repo = _make_repo(tmp_path)
+    (repo / "bin").mkdir()
+    (repo / "bin" / "a.py").write_text("x\n")
+    _patch_peer(monkeypatch, "bin/a.py", "dead")
+    before = _rev_count(repo)
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 2
+    assert "source-tree: bin/a.py" in err
+    assert "orphan-claim" not in err
+    assert _rev_count(repo) == before
+
+
+@pytest.mark.parametrize("liveness", ["live", "undetermined"])
+def test_non_dead_holder_stays_peer_claim(tmp_path, capsys, monkeypatch, liveness):
+    repo = _make_repo(tmp_path)
+    (repo / "state" / "review-trail").mkdir(parents=True)
+    (repo / "state" / "review-trail" / "x.md").write_text("x\n")
+    _patch_peer(monkeypatch, "state/review-trail/x.md", liveness)
+    before = _rev_count(repo)
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 2
+    assert f"peer-claim: state/review-trail/x.md owner=gone liveness={liveness}" in err
+    assert "orphan-claim" not in err
+    assert _rev_count(repo) == before
 
 
 def test_unresolvable_session_id_degrades_to_pre_c6_ambiguous(tmp_path, capsys, monkeypatch):

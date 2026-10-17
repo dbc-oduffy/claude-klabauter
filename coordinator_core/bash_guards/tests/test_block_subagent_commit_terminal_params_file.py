@@ -67,6 +67,57 @@ def test_the_commit_stage_argv_is_admitted(repo, halted):
     assert _check(_emitted_argv(repo), _transcript(repo, params)) is None
 
 
+def _cd(repo, sep: str) -> str:
+    return f"cd {repo.as_posix()} {sep} "
+
+
+@pytest.mark.parametrize("sep", ["&&", ";"])
+def test_a_cd_prefixed_argv_is_denied_but_its_params_file_is_written(repo, sep):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    verdict = _check(_cd(repo, sep) + _emitted_argv(repo), _transcript(repo, params))
+    assert verdict is not None
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+    canonical = chan.params_path(repo, _RUN)
+    assert json.loads(canonical.read_text(encoding="utf-8")) == params
+
+
+@pytest.mark.parametrize("sep", ["&&", ";"])
+def test_a_cd_prefixed_argv_with_a_missing_token_writes_nothing_and_names_the_token_leg(repo, sep):
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "never-minted", "incomplete_chunks": []}
+    verdict = _check(_cd(repo, sep) + _emitted_argv(repo), _transcript(repo, params))
+    assert verdict is not None
+    assert not chan.params_path(repo, _RUN).exists()
+    assert "the run token is spent, expired or not the one minted" in (
+        verdict["hookSpecificOutput"]["permissionDecisionReason"]
+    )
+
+
+def test_a_cd_prefixed_relative_params_path_writes_nothing(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    cmd = f"cd {repo.as_posix()} && coordinator-invoke dispatch.terminal_commit --params-file scratch/x.json"
+    assert _check(cmd, _transcript(repo, params)) is not None
+    assert not chan.params_path(repo, _RUN).exists()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda a, r: a + " && git commit -am x",
+        lambda a, r: a + " ; git add -A",
+        lambda a, r: "git status && " + a,
+        lambda a, r: f"cd {r.as_posix()} && git status && " + a,
+        lambda a, r: f"cd {r.as_posix()} extra && " + a,
+    ],
+)
+def test_any_extra_segment_other_than_a_bare_cd_never_writes_the_params_file(repo, build):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    assert _check(build(_emitted_argv(repo), repo), _transcript(repo, params)) is not None
+    assert not chan.params_path(repo, _RUN).exists()
+
+
 @pytest.mark.parametrize("agent_type", ["coordinator:executor", "general-purpose", ""])
 def test_the_same_argv_from_any_other_subagent_is_denied(repo, agent_type):
     token = run_token.mint(repo, _RUN, _SCRIPT)

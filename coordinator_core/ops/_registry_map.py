@@ -289,7 +289,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.reap_review_trail_rest":           "coordinator_core.ops.fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings":         "coordinator_core.ops.fleet.reap_integrated_findings",
     "session.reap":                           "coordinator_core.ops.session.reap",
-    "session.reap_claims_for_repos":          "coordinator_core.ops.session.reap",
     "session.audit_unreapable":               "coordinator_core.ops.session.reap",
     "session.guard_settings_integrity":       "coordinator_core.ops.session.guard_settings_integrity",
     "session.guard_hooks_kill_switch_detail": "coordinator_core.ops.session.guard_settings_integrity",

@@ -24,7 +24,7 @@ def _resolve_plugin_root():
 
 
 _PLUGIN_ROOT = _resolve_plugin_root()  # resolved at import, before conftest clears the env var
-_ALLOWED_PRE_EXECUTE_HALTS = {"usage_limit", "refusal"}
+_ALLOWED_PRE_EXECUTE_HALTS = {"usage_limit", "refusal", "design-review"}  # design-review: the PM-requested canvas halt, never any other kind
 
 
 @pytest.fixture

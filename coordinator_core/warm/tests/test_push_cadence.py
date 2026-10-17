@@ -172,28 +172,22 @@ def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch):
     assert sweep_calls == []
 
 
-def test_sweep_total_ceiling_stops_taking_new_repos(tmp_path):
+def _all_ahead(monkeypatch):
+    monkeypatch.setattr(push_cadence, "is_ahead", lambda root: True)
+
+
+def test_every_default_ceiling_repo_is_admitted_whatever_the_clock_reads(tmp_path, monkeypatch):
     swept = []
-
-    def _fake_sweep_one(repo_root):
-        swept.append(repo_root)
-
+    monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
+    _all_ahead(monkeypatch)
+    repos = [_repo(tmp_path, "a"), _repo(tmp_path, "b"), _repo(tmp_path, "c")]
     clock_values = iter([0.0, 10.0, 999.0])
 
-    def _clock():
-        return next(clock_values, 999.0)
+    push_cadence.sweep_repos(
+        repos, total_ceiling_secs=50.0, clock=lambda: next(clock_values, 999.0)
+    )
 
-    import coordinator_core.warm.push_cadence as pc
-
-    orig_sweep_one = pc._sweep_one
-    try:
-        pc._sweep_one = _fake_sweep_one
-        repos = [_repo(tmp_path, "a"), _repo(tmp_path, "b"), _repo(tmp_path, "c")]
-        pc.sweep_repos(repos, total_ceiling_secs=50.0, clock=_clock)
-    finally:
-        pc._sweep_one = orig_sweep_one
-
-    assert len(swept) == 1
+    assert sorted(swept) == ["a", "b", "c"]
 
 
 def test_second_concurrent_sweeper_declines(tmp_path):
@@ -247,6 +241,7 @@ def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
         return _Outcome()
 
     monkeypatch.setattr(push_cadence, "push_outstanding", _fake_push_outstanding)
+    _all_ahead(monkeypatch)
 
     push_cadence.sweep_repos([served])
 
@@ -348,81 +343,49 @@ def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, m
     assert calls[0].get("budget_secs") != push_mod.PUSH_RETRY_BUDGET_SECS
 
 
-def test_sweep_repos_refuses_to_start_a_repo_it_cannot_finish(tmp_path):
-    swept = []
-
-    def _fake_sweep_one(repo_root):
-        swept.append(repo_root)
-
-    clock_values = iter([0.0, 6.0])
-
-    def _clock():
-        return next(clock_values, 999.0)
-
-    import coordinator_core.warm.push_cadence as pc
-
-    orig_sweep_one = pc._sweep_one
-    try:
-        pc._sweep_one = _fake_sweep_one
-        repos = [_repo(tmp_path, "a")]
-        pc.sweep_repos(
-            repos,
-            total_ceiling_secs=10.0,
-            per_repo_budget_secs=6.0,
-            clock=_clock,
-        )
-    finally:
-        pc._sweep_one = orig_sweep_one
-
-    assert swept == []
-
-
-def test_truncated_sweep_resumes_at_the_first_unreached_repo(tmp_path, monkeypatch):
+def test_a_push_longer_than_the_sweep_ceiling_still_starts_for_every_ahead_repo(
+    tmp_path, monkeypatch
+):
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
+    _all_ahead(monkeypatch)
     repos = [_repo(tmp_path, n) for n in ("a", "b", "c", "d")]
 
-    def _run():
-        # Ceiling admits exactly two repos per call: one clock tick each.
-        ticks = {"n": 0}
+    push_cadence.sweep_repos(
+        repos, total_ceiling_secs=10.0, per_repo_budget_secs=6.0, clock=lambda: 0.0
+    )
 
-        def _clock():
-            ticks["n"] += 1
-            return 0.0 if ticks["n"] <= 3 else 999.0
-
-        push_cadence.sweep_repos(
-            repos, total_ceiling_secs=10.0, per_repo_budget_secs=6.0, clock=_clock
-        )
-
-    _run()
-    assert swept == ["a", "b"]
-    swept.clear()
-    _run()
-    assert swept == ["c", "d"]
-    swept.clear()
-    _run()
-    assert swept == ["a", "b"]
+    assert sorted(swept) == ["a", "b", "c", "d"]
 
 
-def test_completed_sweep_clears_the_resume_cursor(tmp_path, monkeypatch):
+def test_an_unreached_extended_repo_keeps_its_old_key_and_leads_the_next_tick(
+    tmp_path, monkeypatch
+):
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
+    _all_ahead(monkeypatch)
+    keys = {"a": 1.0, "b": 2.0, "c": 3.0}
+    monkeypatch.setattr(push_cadence, "since_pushed_key", lambda root: keys[root.name])
+    monkeypatch.setattr(
+        push_cadence,
+        "resolve_push_ceiling",
+        lambda root, *, default_secs: 100.0 if root.name in ("a", "b") else default_secs,
+    )
     repos = [_repo(tmp_path, n) for n in ("a", "b", "c")]
-    push_cadence._resume_repo = repos[2]
-    push_cadence.sweep_repos(repos, clock=lambda: 0.0)
-    assert swept == ["c", "a", "b"]
-    assert push_cadence._resume_repo is None
+
+    push_cadence.sweep_repos(repos, allow_extended_first=True, clock=lambda: 0.0)
+    assert sorted(swept) == ["a", "c"]  # "b" is the second extended repo
     swept.clear()
-    push_cadence.sweep_repos(repos, clock=lambda: 0.0)
-    assert swept == ["a", "b", "c"]
+    keys["a"] = 9.0  # a's push landed, so the remote just heard from it
+    push_cadence.sweep_repos(repos, allow_extended_first=True, clock=lambda: 0.0)
+    assert sorted(swept) == ["b", "c"]
 
 
-def test_resume_cursor_absent_from_served_set_starts_at_the_head(tmp_path, monkeypatch):
-    swept = []
-    monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
-    push_cadence._resume_repo = tmp_path / "gone"
-    push_cadence.sweep_repos([_repo(tmp_path, "a"), _repo(tmp_path, "b")], clock=lambda: 0.0)
-    assert swept == ["a", "b"]
+def test_default_push_ceiling_fits_inside_both_sweep_ceilings():
+    # Admission no longer consults the sweep ceiling; the occupancy bound holds
+    # only while a default-ceiling push fits inside it.
+    assert push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS <= push_cadence.EXIT_SWEEP_CEILING_SECS
+    assert push_cadence.EXIT_SWEEP_CEILING_SECS <= push_cadence.SWEEP_TOTAL_CEILING_SECS
 
 
 def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling():

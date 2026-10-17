@@ -81,7 +81,12 @@ Negative-spec:
     files only, admitted by a review-stage touch record; ``Review-Residue:`` trailers), or refuses
     ``review-edit-unlanded`` naming the files; never leaves it silently dirty.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
-    reports it, because widening the pathspec would hide a wrong spine. A dirty file in a
+    reports it, because widening the pathspec would hide a wrong spine. The one exception is a
+    path the committing session itself holds a write-claim on and no live peer holds: the product
+    commit passes ``carry_own_left_behind`` and commit_v2 carries it (``own_left_behind`` in the
+    reply, relayed verbatim). The second is a stopped own run's residue that commit_v2 carries
+    (``stopped_run_residue`` in the reply, relayed verbatim): those paths count as landed, in
+    neither ``undeclared_dirty`` nor ``undeclared_dirty_peer_held``. A dirty file in a
     declared directory that this run itself touched (its chunk reports, review ``slice_files``,
     run artifacts) and no live peer contests is ``run_owned`` and rides the one commit_v2 call
     (ask route and plan-route DAG); a sibling run's dirt of the same session in a shared
@@ -177,6 +182,7 @@ _PARAM_FIELDS = (
     Field("ledger_verdict", "dict"),
     Field(TERMINAL_RESUME_LEDGER_PARAM, "dict"),
     Field("doc_paths", "str_list"),
+    Field("allow_empty", "bool"),
 )
 
 _PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
@@ -320,15 +326,44 @@ def _missing_run_outcome(params: object) -> Optional[dict]:
 _MINTED_SPINE_ORIGIN = "mise inventory record"
 
 
+def _yaml_load(text):
+    """``yaml.safe_load`` on libyaml when present: same resolvers, same ``yaml.YAMLError``."""
+    import yaml
+
+    return yaml.load(text, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+
+
+_READ_REL_MEMO: dict = {}
+_READ_REL_LIMIT = 256
+
+
 def _read_rel(worktree_root: Path, rel: str) -> Optional[str]:
-    guarded = contained_path(worktree_root / rel, [worktree_root])
+    """Guarded text of ``worktree_root/rel``, or None. Re-reads when the file's
+    (mtime_ns, size, inode) differs from the memoised read, so a write is never served stale."""
+    target = worktree_root / rel
+    try:
+        st = os.stat(target)
+        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        stamp = None
+    key = str(target)
+    if stamp is not None:
+        hit = _READ_REL_MEMO.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+    guarded = contained_path(target, [worktree_root])
     if guarded is None:
         return None
     try:
         with guarded.open("r", encoding="utf-8", newline="") as fh:
-            return fh.read()
+            text = fh.read()
     except OSError:
         return None
+    if stamp is not None:
+        if len(_READ_REL_MEMO) >= _READ_REL_LIMIT:
+            _READ_REL_MEMO.clear()
+        _READ_REL_MEMO[key] = (stamp, text)
+    return text
 
 
 _XS_SPINE_ORIGIN = "sizing object"
@@ -394,7 +429,7 @@ def _cited_baton(worktree_root: Path, sizing_rel: Optional[str]) -> Optional[str
     import yaml
 
     try:
-        doc = yaml.safe_load(text)
+        doc = _yaml_load(text)
     except yaml.YAMLError:
         return None
     cited = doc.get("baton") if isinstance(doc, dict) else None
@@ -548,6 +583,14 @@ def _register_gate(
         got = judged.get(str(rid))
         if got is None and str(rid) in ledger_ids:
             continue
+        # Trap: admits a self-declared met row the judge never saw; no test pins that it still refuses otherwise.
+        if (
+            got is None
+            and row.get(rr.ROW_STATUS) == rr.STATUS_MET
+            and row.get(rr.ROW_WIRED) is True
+            and any(isinstance(m, str) and m.strip() for m in (row.get(rr.ROW_MET_BY) or []))
+        ):
+            continue
         if got is None:
             why = "not judged"
         elif got.get(rr.ROW_STATUS) != rr.STATUS_MET:
@@ -630,7 +673,7 @@ def _register_writeback(
         if new == old:
             raise MutateAbort("")
         try:
-            errors = validate_frontmatter(yaml.safe_load(new) or {}, schema_path)
+            errors = validate_frontmatter(_yaml_load(new) or {}, schema_path)
         except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
             raise MutateAbort(f"register write-back refused: {exc}")
         if errors:
@@ -656,7 +699,7 @@ def _spine_row_ids(plan_text: str) -> Optional[set]:
     if located.status != LocateStatus.LOCATED:
         return None
     try:
-        rows = yaml.safe_load(located.body) or []
+        rows = _yaml_load(located.body) or []
     except yaml.YAMLError:
         return None
     if not isinstance(rows, list):
@@ -818,7 +861,7 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
     import yaml
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-    from coordinator_core.ops.dispatch_emit.spine_read import (
+    from coordinator_core.ops.dispatch_emit.memo_rows import (
         _is_memo_send_row,
         memo_receipt_exists,
         memo_row_slug,
@@ -828,7 +871,7 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
     if located.status != LocateStatus.LOCATED:
         return {}
     try:
-        rows = yaml.safe_load(located.body) or []
+        rows = _yaml_load(located.body) or []
     except yaml.YAMLError:
         return {}
     out: dict = {}
@@ -890,7 +933,7 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[d
     if located.status != LocateStatus.LOCATED or located.span is None:
         return plan_text, []
     try:
-        rows = yaml.safe_load(located.body) or []
+        rows = _yaml_load(located.body) or []
     except yaml.YAMLError:
         return plan_text, []
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
@@ -1000,7 +1043,7 @@ def _open_row_ids(worktree_root: Path, plan_rel: str) -> set:
     if located.status != LocateStatus.LOCATED:
         return set()
     try:
-        rows = yaml.safe_load(located.body) or []
+        rows = _yaml_load(located.body) or []
     except yaml.YAMLError:
         return set()
     if not isinstance(rows, list):
@@ -1101,7 +1144,7 @@ def _resolving_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional
     import yaml
 
     try:
-        doc = yaml.safe_load(text) or {}
+        doc = _yaml_load(text) or {}
     except yaml.YAMLError:
         return None
     if not isinstance(doc, dict):
@@ -1319,7 +1362,7 @@ def _wave_slice_files(sidecar: Path) -> frozenset:
 
     try:
         split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
-        fm = yaml.safe_load(split.fm_text) if split else None
+        fm = _yaml_load(split.fm_text) if split else None
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return frozenset()
     prep = fm.get("prep") if isinstance(fm, dict) else None
@@ -1368,6 +1411,38 @@ def _blob_drift_remedy(error: str, run_id: str) -> str:
     if _GENERIC_DRIFT_REMEDY in error:
         return error.replace(_GENERIC_DRIFT_REMEDY, remedy)
     return f"{error} {remedy}"
+
+
+USAGE_FILE = "usage.json"
+
+
+def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) -> dict:
+    """Write ``state/warp/<run_id>/usage.json`` (``scan_run`` shape, ``as_of: terminal-commit``,
+    ``unsettled`` agent ids) and return ``{total_tokens, usd}``, else ``{usage_total: None, usage_reason}``.
+
+    Never raises: a run dir that does not resolve uniquely, or any I/O failure, leaves no file."""
+    if not session_id:
+        return {"usage_total": None, "usage_reason": "no session_id"}
+    try:
+        from coordinator_core.usage import agent_usage, run_locate
+
+        session_dir = run_locate.session_dir_for(session_id)
+        wf = run_locate.locate_run_dir(session_dir, run_id) if session_dir is not None else None
+        if wf is None:
+            return {"usage_total": None, "usage_reason": "run dir not located"}
+        scan = agent_usage.scan_run(str(wf))
+        body = {
+            **scan,
+            "as_of": "terminal-commit",
+            "unsettled": sorted(run_locate._unsettled_agent_ids(wf / "journal.jsonl")),
+        }
+        target = worktree_root / RECORD_DIR_ROOT / run_id / USAGE_FILE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        replace_text(target, json.dumps(body, indent=2, sort_keys=True) + "\n")
+        total = scan["run_total"]
+        return {"usage_total": {"total_tokens": total["total_tokens"], "usd": total["usd"]}}
+    except Exception as exc:  # noqa: BLE001 -- usage is a report, never a commit gate
+        return {"usage_total": None, "usage_reason": f"usage scan failed: {exc!r}"}
 
 
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
@@ -1446,7 +1521,7 @@ def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: st
     def mutate(old: str) -> str:
         new = write_fm_nested_field(old, "resolution", f'  sha: "{sha}"\n  run_id: "{run_id}"\n')
         try:
-            errors = validate_frontmatter(yaml.safe_load(new) or {}, schema_path)
+            errors = validate_frontmatter(_yaml_load(new) or {}, schema_path)
         except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
             raise MutateAbort(f"resolution write refused: {exc}")
         if errors:
@@ -2145,7 +2220,7 @@ def _stamp_plan_implemented(
 
     split = split_frontmatter(text.replace("\r\n", "\n")) if text is not None else None
     try:
-        fm = (yaml.safe_load(split.fm_text) or {}) if split is not None else {}
+        fm = (_yaml_load(split.fm_text) or {}) if split is not None else {}
     except yaml.YAMLError:
         fm = {}
     stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
@@ -2257,6 +2332,20 @@ def _in_scope(path: str, request: CommitRequest) -> bool:
         if any(path.startswith(prefix.rstrip("/") + "/") for prefix in chunk.prefixes):
             return True
     return False
+
+
+def _stopped_run_carried(reply: dict) -> set:
+    """Paths in commit_v2's ``stopped_run_residue.carried`` reply, normalised to ``/``; empty when
+    the key is absent or malformed."""
+    block = reply.get("stopped_run_residue")
+    carried = block.get("carried") if isinstance(block, dict) else None
+    if not isinstance(carried, dict):
+        return set()
+    return {
+        p.replace("\\", "/")
+        for ps in carried.values() if isinstance(ps, (list, tuple))
+        for p in ps if isinstance(p, str)
+    }
 
 
 def _undeclared_dirty(
@@ -2644,6 +2733,14 @@ def _worktree_snapshot(
     specs = [f":(literal){p}" for p in literals] + [f":(literal){r}/" for r in roots] + list(scope_specs)
     if not specs:
         return None
+    from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
+
+    try:
+        local = scoped_worktree_status(worktree_root, literals, roots, scope_specs)
+    except Exception:  # noqa: BLE001 -- an in-process fault is a gap: the spawn answers
+        local = None
+    if local is not None:
+        return _Snapshot(local[0], local[1], set(literals), roots)
     result = run_git(
         [
             "-C", str(worktree_root), "--no-optional-locks", "status",
@@ -2884,7 +2981,7 @@ def _deferred_rows(worktree_root: Path, plan_rel: str) -> list:
     if located.status != LocateStatus.LOCATED:
         return []
     try:
-        rows = yaml.safe_load(located.body) or []
+        rows = _yaml_load(located.body) or []
     except yaml.YAMLError:
         return []
     return sorted(
@@ -2952,7 +3049,8 @@ def _launch_close_job(worktree_root: Path, run_id: str, batons: list, memo: Opti
     script = CLOSE_JOB_SCRIPT or str(engine / "coordinator_core" / "ops" / "ceremony" / "close_background.py")
     params = json.dumps({"claimed_batons": list(batons), "source_memo": memo})
     return spawn_detached(
-        str(engine), script, [run_id, "--root", str(worktree_root), "--params", params]
+        str(engine), script, [run_id, "--root", str(worktree_root), "--params", params],
+        site_free=True,
     )
 
 
@@ -3144,6 +3242,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         run_id, run_token (str, optional) -- a warp run's in-run commit:
                                              the token is redeemed once, here
                                              (``refused="run-token"`` otherwise).
+        allow_empty (bool, optional)      -- default false; non-boolean is refused before any write.
+                                             Forwarded to the product ``ceremony.commit_v2`` call
+                                             only: a run whose content already landed (every
+                                             declared write equals HEAD) lands one marker commit
+                                             and the close legs run against its sha.
 
     Returns: ``ceremony.commit_v2``'s reply dict plus ``chunks_committed``
     (ids), ``dropped_absent`` (paths dropped as absent-and-untracked) and
@@ -3203,7 +3306,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     the reply also carries ``undeclared_dirty`` -- the
     dirty files (modified or untracked) in the directories of the run's declared
     writes, or under its declared prefixes, that no chunk declares: work the
-    commit could never see. Reported, never committed. ``None`` when git could
+    commit could never see. Reported, never committed, except a path the committing session
+    itself claimed and no live peer holds: commit_v2 carries it (reply ``own_left_behind``
+    ``{carried, left}``), so it leaves this list. ``None`` when git could
     not answer; ``undeclared_dirty_total`` appears when the list is capped.
     A file the run's review stage wrote (per-agent touch records since the run began) that is still
     dirty, uncontested and declared by no sibling run rides the one commit as ``review_residue``
@@ -3225,6 +3330,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``no-close-job``, ``close-job-plan-mismatch``, ``terminal-commit-not-landed``,
     ``no-judge-verdict``, ``task-output-run-mismatch``.
     """
+    from coordinator_core.git.call_io_scope import call_io_scope
+
+    with call_io_scope():
+        return _handler_body(params, repo_root)
+
+
+def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
     stranded: dict = {}
     scope: dict = {}
     withheld: dict = {}
@@ -3334,7 +3446,7 @@ def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set
 
         located = locate_fenced_block(text.replace("\r\n", "\n"))
         try:
-            rows = yaml.safe_load(located.body) or [] if located.status == LocateStatus.LOCATED else []
+            rows = _yaml_load(located.body) or [] if located.status == LocateStatus.LOCATED else []
         except yaml.YAMLError:
             rows = []
         for row in rows if isinstance(rows, list) else ():
@@ -3791,6 +3903,10 @@ def _terminal_commit_inner(
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
             _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review)
+    usage_reply: dict = (
+        _write_usage(worktree_root, session_id, ask_run_dir.name)
+        if ask_run_dir is not None and not anchor_only else {}
+    )
     from coordinator_core.ops.dispatch_emit import run_artifacts
 
     art_run_id = ask_run_dir.name if ask_run_dir is not None else params.get("run_id")
@@ -4199,7 +4315,7 @@ def _terminal_commit_inner(
         if c not in contributing_chunks and not (c.paths and set(c.paths) <= absent_dropped)
     }
     if credit_gate.no_credited_landing(
-        set(stranded), {c.id for c in contributing_chunks + contributing_partial}, landed_ids
+        set(stranded) - set(wh_chunks), {c.id for c in contributing_chunks + contributing_partial}, landed_ids
     ):
         if close_ctx is not None:
             close_ctx.clear()
@@ -4213,7 +4329,7 @@ def _terminal_commit_inner(
     credited: dict = {}
     for c in done_chunks + contributing_partial:
         declared = set(c.paths) | set(_own_prefix_files(worktree_root, c, report_cache) or [])
-        credited[c.id] = sorted(declared - absent_dropped)
+        credited[c.id] = sorted(declared - absent_dropped - set(wh_reasons))
     sibling_set = {p for ps in sibling_paths.values() for p in ps}
     landing_now = set(all_paths) | set(deleted_paths) | sibling_set
     unprobed = sorted({p for ps in credited.values() for p in ps} - landing_now)
@@ -4322,7 +4438,17 @@ def _terminal_commit_inner(
     if allowlist_path is not None and allowlist_path not in all_paths:
         all_paths.append(allowlist_path)
 
-    commit_params: dict = {"paths": all_paths, "message": message}
+    # commit_v2 carries every path the session holds a claim on, so it is asked only when no dirty
+    # file sits unlanded in the run's declared scope: such a file may be a sibling run's of the
+    # same session, which `undeclared_dirty` reports and the commit must not widen to.
+    in_scope_left = snapshot is None or any(
+        _in_scope(p, request)
+        for p in snapshot.changed
+        if p not in all_paths and p not in deleted_paths
+    )
+    commit_params: dict = {
+        "paths": all_paths, "message": message, "carry_own_left_behind": not in_scope_left,
+    }
     if bookkeeping_record_path is not None and bookkeeping_record_path in all_paths:
         # The review record lives under the gitignored subagent-share dir and is tracked by design.
         commit_params["force_ignored"] = [bookkeeping_record_path]
@@ -4333,6 +4459,8 @@ def _terminal_commit_inner(
         # opened, commit_v2's staged-rollback check reads it as restoring the
         # older absence and refuses the run.
         commit_params["declared_reverts"] = deleted_paths
+    if params.get("allow_empty") is True:
+        commit_params["allow_empty"] = True
     if session_id is not None:
         commit_params["session_id"] = session_id
         fixes_at, wave_paths = _fixes_integrated_at(worktree_root, inline_review)
@@ -4400,6 +4528,7 @@ def _terminal_commit_inner(
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
         scope.setdefault("landed", set()).update(all_paths)
+        scope["landed"].update(_stopped_run_carried(reply))
         no_delta = set(reply.get("no_delta") or [])
         coded_chunks = [
             c for c in contributing_chunks
@@ -4710,6 +4839,7 @@ def _terminal_commit_inner(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
+    reply.update(usage_reply)
     if reply.get("committed") or reply.get("nothing_to_commit"):
         _with_siblings(reply)
     elif sibling_paths:

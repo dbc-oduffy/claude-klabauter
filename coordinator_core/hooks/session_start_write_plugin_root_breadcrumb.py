@@ -21,8 +21,13 @@ instead — the same substitution `bin_impl_drift.py`'s W4-C4 arrival already
 made for the identical displacement (the harness sets this env var for the
 invoking hook process; see that module's own arrival note).
 
-Op contract: `params` is unused (mirrors the source script's own
-`__file__`/env-based resolution, never cwd or payload fields). Writes
+Op contract: `params` is read only for `session_id` (top-level, or nested
+under `payload` as the SessionStart dispatcher passes it); the breadcrumb
+itself resolves from env, never cwd. When `session_id` and
+`CLAUDE_PLUGIN_ROOT` are both present the op also calls
+`plugin_cache_sessions.write_binding`, before and regardless of the
+breadcrumb's unchanged early return, so the engine can later name the live
+sessions running from a plugin cache. Writes
 atomically (temp file + `os.replace`) since the consumer is a hot-path `cat`.
 Idempotent: reads the current value first and writes nothing when it already
 matches. Fail-open at every step — an unresolvable `$HOME`, an absent
@@ -69,13 +74,36 @@ def _breadcrumb_path() -> "Path | None":
     return Path(home) / BREADCRUMB_RELATIVE_PATH
 
 
+def _session_id(params: dict) -> "str | None":
+    """`session_id` from params, or from the `payload` the SessionStart dispatcher nests."""
+    sid = params.get("session_id")
+    if not sid:
+        payload = params.get("payload")
+        if isinstance(payload, dict):
+            sid = payload.get("session_id")
+    return sid if isinstance(sid, str) and sid else None
+
+
+def _bind_session(params: dict, root: "str | None") -> None:
+    sid = _session_id(params)
+    if sid is None or root is None:
+        return
+    try:
+        from coordinator_core.install.plugin_cache_sessions import write_binding
+
+        write_binding(sid, root)
+    except Exception:
+        pass
+
+
 @register_op("hooks.session_start_write_plugin_root_breadcrumb")
 def _handler(params: dict, repo_root=None) -> dict:
     try:
+        root = _plugin_root()
+        _bind_session(params, root)
         target = _breadcrumb_path()
         if target is None:
             return no_advisory()
-        root = _plugin_root()
         if root is None:
             return no_advisory()
         try:

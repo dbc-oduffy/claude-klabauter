@@ -6,7 +6,9 @@ Purpose: in a fresh interpreter, after the benchmark's own plan-run fixture runs
 (``build_fixture`` + ``_prepare_close`` + ``_run_full_path``), ``asyncio`` and the modules that
 only existed to serve it (event-loop transports, the async-only handoff closure, the leak gate's
 deferred dependencies) are absent from ``sys.modules``. Rows C1 to C11 each own one importer; this
-test is the closure over all of them.
+test is the closure over all of them. Plan 2026-10-17-terminal-commit-under-200ms (K1) appends
+``baton_assemble`` and ``pickup_assemble``; ``session.claims``, ``spine_read``,
+``schema_validate`` and ``plan_tasks_render`` stay loaded by other path modules and are not pinned.
 
 Negative-spec:
     - Does NOT copy the benchmark driver: it is imported.
@@ -30,12 +32,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _ABSENT = (
     "asyncio",
     "concurrent.futures",
-    "selectors",
+    *(("selectors",) if sys.platform == "win32" else ()),
     "socket",
     "ssl",
     "coordinator_core.authoring_leaks.gate",
     "coordinator_core.ops.session.record_pickup",
     "coordinator_core.ops.handoff_children",
+    "coordinator_core.baton_assemble",
+    "coordinator_core.pickup_assemble",
 )
 
 _PROBE = """

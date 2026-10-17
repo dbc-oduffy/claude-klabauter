@@ -117,7 +117,84 @@ def test_resume_field_names_are_distinct():
         c.RESUME_LEDGER_REMAINING_FIELD,
         c.RESUME_LEDGER_NOTES_FIELD,
         c.RESUME_LEDGER_EM_DISCHARGED_FIELD,
+        c.RESUME_LEDGER_CARRIED_MET_FIELD,
     }
-    assert len(names) == 4
+    assert len(names) == 5
     assert c.TERMINAL_RESUME_LEDGER_PARAM == "resume_ledger"
     assert c.UNCHANGED_SINCE_HALT_REASON
+
+
+def _rec(run_id, blocking, rulable=("T2", "R2", "R3"), remaining=None):
+    return c.HaltRecord(
+        run_id, "p.md", "s.yaml", frozenset(), None if blocking is None else tuple(blocking),
+        remaining or {}, frozenset(rulable),
+    )
+
+
+_STEP = {"remaining": ["carry path"], "evidence": "e1"}
+_OLD = _rec("841059", ["R3"], remaining={"R3": _STEP})
+_NEW = _rec(
+    "1cc5e9",
+    ["T2", "R2", "R3"],
+    remaining={
+        "T2": {"remaining": ["no change"], "evidence": "x"},
+        "R3": {"remaining": ["carry path", "no change since halt"], "evidence": "e2"},
+    },
+)
+
+
+def test_read_halt_record_reads_rulable_and_met(tmp_path):
+    _write_record(tmp_path, {"blocking": ["R3"]})
+    base = tmp_path / "state" / "warp" / "run-1"
+    (base / "manifest.json").write_text(json.dumps({"rulable_ids": ["T2", "R2", "R3", 7]}), encoding="utf-8")
+    rec = c.read_halt_record(tmp_path, "run-1")
+    assert rec.rulable == {"T2", "R2", "R3"}
+    assert rec.met == {"T2", "R2"}
+
+
+def test_met_empty_without_rulable_or_blocking(tmp_path):
+    _write_record(tmp_path, {})
+    assert c.read_halt_record(tmp_path, "run-1").rulable == frozenset()
+    assert _rec("r", None).met == frozenset()
+    assert _rec("r", ["R1"], rulable=()).met == frozenset()
+
+
+def test_carry_forward_incident_chain():
+    blocking, remaining, carried = c.carry_forward((_NEW, False), [(_OLD, True)])
+    assert blocking == ("R3",)
+    assert carried == ("T2", "R2")
+    assert remaining["R3"]["remaining"] == ["carry path", "no change since halt"]
+    assert remaining["R3"]["evidence"] == "e2"
+    assert "T2" not in remaining
+
+
+def test_carry_forward_landing_newest_carries_nothing():
+    blocking, _, carried = c.carry_forward((_NEW, True), [(_OLD, True)])
+    assert blocking == ("T2", "R2", "R3")
+    assert carried == ()
+
+
+def test_carry_forward_stops_at_first_landing_halt():
+    older = _rec("old", ["T2", "R2", "R3"], rulable=("T2", "R2", "R3"))
+    blocking, _, carried = c.carry_forward((_NEW, False), [(_OLD, True), (older, False)])
+    assert carried == ("T2", "R2")
+    assert blocking == ("R3",)
+    mid = _rec("mid", ["T2", "R2", "R3"])
+    _, _, carried = c.carry_forward((_NEW, False), [(mid, True), (_OLD, True)])
+    assert carried == ()
+
+
+def test_carry_forward_requires_blocking_in_every_newer_halt():
+    mid = _rec("mid", ["R3"])
+    _, _, carried = c.carry_forward((_NEW, False), [(mid, False), (_OLD, True)])
+    assert carried == ("T2", "R2")
+    gap = _rec("gap", ["R3"], rulable=("T2", "R3"))
+    older = _rec("older", ["R3"])
+    _, _, carried = c.carry_forward((_NEW, False), [(gap, False), (older, True)])
+    assert carried == ("T2",)
+
+
+def test_ledger_halt_carried_met_not_persisted():
+    halt = c.LedgerHalt("r", "p.md", "s.yaml", ("R3",), carried_met=("T2",))
+    assert "carried_met" not in halt.to_json()
+    assert c.LedgerHalt("r", "p.md", "s.yaml", ()).carried_met == ()

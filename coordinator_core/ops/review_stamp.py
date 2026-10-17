@@ -988,7 +988,9 @@ def _resolve_mint(
         criterion_open_ok=criterion_open_ok,
         delivery_exempt=delivery_verdict is None
         and _verifier_absence_is_benign(integration_data.get("delivery_not_run"))
-        and _criterion_judged(gate_integration.get("criterion"))
+        # An in-run mint records an open criterion rather than gating on it, so a judged one is
+        # not a precondition of the exemption there.
+        and (criterion_open_ok or _criterion_judged(gate_integration.get("criterion")))
         and not _unbacked_claims(delivery_data)
         and (
             _zero_claim_basis(integration_data, delivery_data)
@@ -1033,8 +1035,8 @@ def _resolve_mint(
 
 def _zero_claim_basis(integration_data: Dict[str, Any], delivery_data: Dict[str, Any]) -> bool:
     """True when the run record names a benign reason (roster or tier) for the absent delivery
-    verdict and no delivery stage listed an unbacked claim: with nothing to back, a met criterion
-    plus passing tests is the whole delivery evidence. An absent reason is not benign here."""
+    verdict and no delivery stage listed an unbacked claim: with nothing to back, passing tests
+    (plus a met criterion, outside an in-run mint) are the whole delivery evidence. An absent reason is not benign here."""
     not_run = integration_data.get("delivery_not_run")
     return (
         isinstance(not_run, str)
@@ -1581,7 +1583,7 @@ def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
     )
 
 
-def _refresh_register_rows(plan_path: Path, repo_root: Path, record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def refresh_register_rows(plan_path: Path, repo_root: Path, record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Write a newer met record's passing row verdicts back to the plan's register sizing for a
     stamp whose criterion is already met. `None` when nothing was written."""
     if record is None or record["criterion"].get("status") != "met":
@@ -1635,7 +1637,7 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     if already_met:
         # A met criterion keeps its status; a newer met record's row verdicts still refresh the
         # sizing register rows the stamp left partial.
-        return _refresh_register_rows(plan_path, repo_root, record) or no_change
+        return refresh_register_rows(plan_path, repo_root, record) or no_change
     if record is None:
         return {
             "status": "unchanged",

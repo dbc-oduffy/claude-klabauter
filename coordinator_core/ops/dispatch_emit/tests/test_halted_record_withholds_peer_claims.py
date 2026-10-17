@@ -32,13 +32,19 @@ def oracle(monkeypatch):
         calls: int = 0
         before_commit: int = -1
         params: list = []
+        held_out_seen: list = []
 
     ctl = Ctl()
-    ctl.held, ctl.warnings, ctl.params = set(), [], []
+    ctl.held, ctl.warnings, ctl.params, ctl.held_out_seen = set(), [], [], []
 
-    def fake(root, paths, holds=None, own_sid=None, abandoned_holds=None):
+    def fake(root, paths, holds=None, own_sid=None, abandoned_holds=None, held_out=None):
         ctl.calls += 1
-        holds.extend((p, "peer-sid") for p in paths if p in ctl.held)
+        hit = [p for p in paths if p in ctl.held]
+        holds.extend((p, "peer-sid") for p in hit)
+        if held_out is not None:
+            if hit:
+                held_out.setdefault("peer-sid", []).extend(hit)
+            ctl.held_out_seen.append(held_out)
         return list(ctl.warnings)
 
     real = entry_seam.reentrant_dispatch

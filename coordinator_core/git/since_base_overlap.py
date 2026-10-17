@@ -152,7 +152,7 @@ def check(
     oldest_first = list(reversed(newest_first))
     for path in paths:
         try:
-            new_lines = (root / path).read_bytes().splitlines(keepends=True)
+            raw = (root / path).read_bytes()
         except OSError:
             notes.append(f"{NOTE_UNREADABLE}:{path}")
             continue
@@ -161,6 +161,11 @@ def check(
         if head_blob == base_blob or head_blob is None or head_blob is ABSENT:
             continue
         head_lines = _lines(common_dir, head_blob)
+        # Trap: under core.autocrlf the worktree holds CRLF while blobs hold LF, so a raw
+        # line compare reads every line as dropped. Compare in the blob's line-ending form.
+        if head_lines is not None and b"\r\n" in raw and not any(l.endswith(b"\r\n") for l in head_lines):
+            raw = raw.replace(b"\r\n", b"\n")
+        new_lines = raw.splitlines(keepends=True)
         if head_lines is None or head_lines == new_lines:
             if head_lines is None:
                 notes.append(f"{NOTE_UNREADABLE}:{path}")

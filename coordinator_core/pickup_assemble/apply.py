@@ -2127,7 +2127,7 @@ def main_drop(argv: list[str]) -> int:
 # ---------------------------------------------------------------------------
 # `adjudicate-claimed-batons` — the bulk READ-ONLY route (chunk C4,
 # docs/plans/2026-09-01-the-abandonment-verdict-outlives-the-archiver.md).
-# NOT a replacement for the suspended `session.reap_claims_for_repos`, which
+# NOT a replacement for `session.reap_claims_for_repos` (deleted under DR-344's kill bar), which
 # reaps `.git/`-scoped claim dirs and never touches the frontmatter that
 # decides routability — this walks `state/handoffs/*.md` for `status:
 # claimed` and resolves each holder's basis, ONCE, into liveness's own
@@ -2166,7 +2166,7 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
     rows — is `APPLY_EXIT_OK`: the report's own `claimed_count`/`buckets`
     fields name what was found, so "genuinely nothing to adjudicate" reads
     as an honest zero rather than as the SAME shape a transport failure
-    would produce (the predecessor `session.reap_claims_for_repos`'s own
+    would produce (the deleted predecessor `session.reap_claims_for_repos`'s own
     defect this chunk repairs: exit 0 while doing nothing, indistinguishable
     from exit 0 having done the whole job).
 

@@ -17,7 +17,9 @@ written directly, and a `sizing.ship` refusal is counted, never forced.
 
 from __future__ import annotations
 
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -83,6 +85,32 @@ def _ship(repo_root: Path, sizing_rel: str) -> str:
     return ""
 
 
+_REGISTER_REFUSAL = "its requirement register is not met"
+
+
+def _ship_applying_verdict(repo_root: Path, sizing_rel: str, since: float) -> str:
+    """`_ship`; on a register refusal, writes back a recorded plan-bound met verdict newer than
+    `since` through `review_stamp.refresh_register_rows` and retries once. Returns "" when shipped,
+    else the refusal text (`sizing.ship` already names the judge route in it)."""
+    refusal = _ship(repo_root, sizing_rel)
+    if not refusal or _REGISTER_REFUSAL not in refusal:
+        return refusal
+    plan_rel = sizing_scalar(repo_root, sizing_rel, "plan")
+    plan = repo_root / plan_rel if plan_rel else None
+    plan_id = ""
+    if plan is not None and plan.is_file():
+        match = re.search(r"^plan_id:\s*[\"']?([^\"'\s#]+)", plan.read_text(encoding="utf-8"), re.MULTILINE)
+        plan_id = match.group(1) if match else ""
+    if plan_id:
+        from coordinator_core.ops.dispatch_emit.verdict_supersession import latest_criterion_record
+        from coordinator_core.ops.review_stamp import refresh_register_rows
+
+        record = latest_criterion_record(repo_root, plan_id, datetime.fromtimestamp(since, timezone.utc))
+        if refresh_register_rows(plan, repo_root, record) is not None:
+            return _ship(repo_root, sizing_rel)
+    return refusal
+
+
 def run(repo_root: Path) -> Dict[str, object]:
     """Reconcile every hand-shipped run under `repo_root`; returns counters
     `{candidates, promoted, refused, no_declared_writes, lines}` where `lines` are advisory text."""
@@ -119,7 +147,7 @@ def run(repo_root: Path) -> Dict[str, object]:
         shas = [c["sha"] for c in commits if c["ct"] >= mtime and deliverable_id in c["dids"]]
         if not shas:
             continue
-        refusal = _ship(root, sizing_rel)
+        refusal = _ship_applying_verdict(root, sizing_rel, mtime)
         if refusal:
             counters["refused"] += 1
             lines.append(f"{_PROG}: sizing.ship refused {sizing_rel}: {refusal}")
@@ -135,7 +163,7 @@ def run(repo_root: Path) -> Dict[str, object]:
         covered = set().union(*(c["paths"] for c in matched)) if matched else set()
         if not matched or not set(record.writes) <= covered:
             continue
-        refusal = _ship(root, record.sizing_rel)
+        refusal = _ship_applying_verdict(root, record.sizing_rel, record.submitted_at)
         if refusal:
             counters["refused"] += 1
             lines.append(f"{_PROG}: sizing.ship refused {record.sizing_rel}: {refusal}")

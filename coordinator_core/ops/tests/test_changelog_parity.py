@@ -1290,6 +1290,36 @@ class TestInjectAnchorSmoke:
             assert "error" in result, f"traversal-shaped machine {bad_machine!r} must be rejected, got: {result}"
         assert not (tmp_path / "etc").exists()
 
+    def test_handler_refuses_short_sha_and_null_machine(self, tmp_path):
+        """Parity with the bin writer's _anchor_write_refusal: an 8-hex SHA
+        (even a resolvable one) or a null-token machine is refused and nothing is written."""
+        from coordinator_core.ops.changelog_ops import _inject_anchor_handler
+
+        repo = _make_git_repo(tmp_path)
+        date, machine = "2026-02-10", "refuse-host"
+        target = _seed_daily_summary(repo, date, machine)
+        before = target.read_text(encoding="utf-8") if target else None
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        cases = [
+            (machine, sha[:8]),
+            (machine, sha.upper()),
+            ("null", sha),
+            ("Null", sha),
+            ("None", sha),
+            ("~", sha),
+        ]
+        for m, s in cases:
+            result = asyncio.run(
+                _inject_anchor_handler(
+                    {"date": date, "machine": m, "full_sha": s},
+                    repo_root=repo / ".git",
+                )
+            )
+            assert result.get("action") == "error", f"{(m, s)!r} must be refused, got: {result}"
+        if target:
+            assert target.read_text(encoding="utf-8") == before
+
     def test_handler_missing_full_sha_returns_error(self, tmp_path):
         """Handler returns error dict when 'full_sha' param is missing."""
         from coordinator_core.ops.changelog_ops import _inject_anchor_handler

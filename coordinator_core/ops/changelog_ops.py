@@ -1548,6 +1548,8 @@ async def _upsert_reviewed_handler(
 
 _ANCHOR_KEY = "covered_tip_sha:"
 _MACHINE_KEY = "covered_machine:"
+_ANCHOR_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_ANCHOR_NULL_TOKENS = frozenset({"null", "none", "~"})
 
 
 def _recorded_anchor_sha(content: str) -> Optional[str]:
@@ -2220,10 +2222,21 @@ async def _inject_anchor_handler(
             "error": f"changelog.inject_anchor: 'machine' param is not a safe filename segment: {machine!r}",
             "action": "error",
         }
+    # Parity with the bin writer's _anchor_write_refusal: a null token is never an anchor machine.
+    if machine.lower() in _ANCHOR_NULL_TOKENS:
+        return {
+            "error": f"changelog.inject_anchor: REFUSED: covered_machine must not be a null token (got {machine!r}); anchor not written",
+            "action": "error",
+        }
 
     full_sha = str(params.get("full_sha", "")).strip()
     if not full_sha:
         return {"error": "changelog.inject_anchor: 'full_sha' param is required", "action": "error"}
+    if not _ANCHOR_FULL_SHA_RE.match(full_sha):
+        return {
+            "error": f"changelog.inject_anchor: REFUSED: covered_tip_sha must be 40 lowercase hex (got {full_sha!r}); anchor not written",
+            "action": "error",
+        }
     # Containment (git-flag-injection guard, mirrors changelog.compute_day_fields'
     # commit_span guard): full_sha reaches `git log <full_sha> …` as a bare
     # positional revision argument (the commit-density content-gap guard) with

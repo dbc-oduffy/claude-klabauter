@@ -1,58 +1,58 @@
 #!/usr/bin/env python3
 """
 coordinator-precommit-foreign-platform-check — pre-commit gate for the
-~/.claude meta-repo: refuse a commit whose STAGED `settings.json` carries a
+~/.claude meta-repo: refuse a commit whose STAGED settings.json carries a
 foreign-platform-shaped path (a Windows drive-letter form on a POSIX host, or
-a POSIX-rooted form on a Windows host), OR whose STAGED `CLAUDE.md` /
-`CLAUDE.local.md` carries a foreign-platform-shaped path ASSERTION in prose.
+a POSIX-rooted form on a Windows host), OR whose STAGED CLAUDE.md /
+CLAUDE.local.md carries a foreign-platform-shaped path ASSERTION in prose.
 
-Two distinct surfaces, two distinct failure modes, one gate: `settings.json`
+Two distinct surfaces, two distinct failure modes, one gate: settings.json
 is the MACHINE-EXECUTABLE surface (a foreign path there silently kills every
-hook); `CLAUDE.md`/`CLAUDE.local.md` is the AGENT-READABLE surface loaded
+hook); CLAUDE.md/CLAUDE.local.md is the AGENT-READABLE surface loaded
 into every session (a foreign path there is read and trusted by an agent,
 which then reports a checked-out repo as unreachable — the 2026-07-30
-incident this leg closes: a sibling-repo map asserted `C:\\claude-unreal-
-Example-game-repo` on a macOS machine, and an agent believed it). The prose leg uses a
-narrower, path-ASSERTION-shaped detector (`detect_foreign_platform_paths_in_
-prose`, in the engine module below) rather than the JSON-tree scan's bare
+incident this leg closes: a sibling-repo map asserted C:\\claude-unreal-
+Example-game-repo on a macOS machine, and an agent believed it). The prose leg uses a
+narrower, path-ASSERTION-shaped detector (detect_foreign_platform_paths_in_
+prose, in the engine module below) rather than the JSON-tree scan's bare
 shape regex — free-form doctrine prose legitimately illustrates the very path
 shapes this guard exists to catch (see that function's own docstring for the
 worked false-positive examples and the residual gap it names honestly).
 
 This is the leg of the foreign-platform-path guard that fires via git itself,
 not via any Claude Code hook — it is what would have stopped the 2026-07-28
-incident's corrupting commit (`ed0b972`, "safety") from ever landing. It
+incident's corrupting commit (ed0b972, "safety") from ever landing. It
 therefore survives a session where every Claude Code hook is already dead
 (the exact circularity the SessionStart leg,
-`coordinator/hooks/scripts/guard-foreign-platform-paths.py`, names as its own
+coordinator/hooks/scripts/guard-foreign-platform-paths.py, names as its own
 residual gap).
 
 Scope: only fires inside the meta-repo (git root == CLAUDE_HOME/.claude), same
-discriminator as the sibling `coordinator-precommit-exec-bit-check`. Elsewhere
+discriminator as the sibling coordinator-precommit-exec-bit-check. Elsewhere
 it exits 0 immediately.
 
-Checks the STAGED blob (`git show :settings.json`), not the worktree copy —
+Checks the STAGED blob (git show :settings.json), not the worktree copy —
 consistent with git's own pre-commit contract (what's about to be committed,
 not whatever happens to be sitting in the worktree).
 
-DETECT-ONLY, never auto-fixes: `settings.json` is shared with another machine
+DETECT-ONLY, never auto-fixes: settings.json is shared with another machine
 via bidirectional git sync (push/pull + periodic "safety-commit" snapshots),
 and a same-host "repair" is exactly the kind of write that would clobber the
 OTHER machine on its next pull. A human/PM call is required to pick the
 canonical per-machine value.
 
 Residual gap this leg cannot close (named, not silently assumed away): a
-corruption that never passes through a LOCAL `git commit` on this machine —
-e.g. a `git pull --ff-only` that fast-forwards in a foreign-shaped
-settings.json from `origin` without creating a new local commit object — does
-not invoke `pre-commit` at all. A `post-merge` leg would be needed to close
+corruption that never passes through a LOCAL git commit on this machine —
+e.g. a git pull --ff-only that fast-forwards in a foreign-shaped
+settings.json from origin without creating a new local commit object — does
+not invoke pre-commit at all. A post-merge leg would be needed to close
 that specific vector; not built here (scope-bounded to the leg that matches
 the actually-observed incident mechanism — see the engine module's own
 docstring for the evidence).
 
 Exit contract:
-  0 — clean, or not the meta-repo, or neither `settings.json` nor
-      `CLAUDE.md`/`CLAUDE.local.md` staged this commit, or override set.
+  0 — clean, or not the meta-repo, or neither settings.json nor
+      CLAUDE.md/CLAUDE.local.md staged this commit, or override set.
   1 — a foreign-platform-shaped path was found in the staged settings.json,
       and/or a foreign-platform-shaped path assertion was found in staged
       CLAUDE.md/CLAUDE.local.md prose. Blocks the commit; loud stderr
@@ -67,12 +67,12 @@ Spec backlink: docs/plans (coordinator-content-repo) state/subagent-share/
 Sibling: coordinator-precommit-exec-bit-check (same meta-repo-scoping shape).
 
 Invocation (2026-07-28): carries no shebang and no exec bit. It is invoked
-ONLY via an explicit interpreter (`coordinator_core.ops.
-install_meta_repo_precommit_hook`'s generated hook body runs
-`"$_py" "$_gate_script"`, never bare-name/shebang-exec) — POSIX-only
+ONLY via an explicit interpreter (coordinator_core.ops.
+install_meta_repo_precommit_hook's generated hook body runs
+"$_py" "$_gate_script", never bare-name/shebang-exec) — POSIX-only
 execution assumptions are a portability defect class per the 2026-07-28 PM
 ruling (Windows is the P0 primary platform), enforced by
-`coordinator_core.ops.check_posix_exec_assumptions`.
+coordinator_core.ops.check_posix_exec_assumptions.
 """
 from __future__ import annotations
 
