@@ -206,7 +206,6 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.liveness import cs_claim_holder_live
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops import plan_status_transition
-from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.ops.handoff_stamp import _SHIPPED_IN_KIND_ENUM
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.person_resolver import resolve_operating_person
@@ -245,6 +244,14 @@ _NO_CONSOLE = no_console_creationflags()
 _KIND_REQUIRES_OVERRIDE = frozenset({"ship-commit", "successor", "no-commit"})
 
 _SUBPROCESS_TIMEOUT_SEC = 15
+
+
+def handoff_archive_dest(worktree: Path, src: Path) -> Path:
+    """`ops.fleet._common.handoff_archive_dest`, imported on call: the fleet
+    package costs tens of ms to load and only the handoff-archival checks need it."""
+    from coordinator_core.ops.fleet._common import handoff_archive_dest as _dest
+
+    return _dest(worktree, src)
 
 
 # ---------------------------------------------------------------------------
@@ -2880,6 +2887,24 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
 # coordinator_core.ops.plan_status_transition port (no subprocess/node hop).
 # ---------------------------------------------------------------------------
 
+def _open_spine_row_ids(plan_path: Path) -> list[str]:
+    """Ids of the `open`-disposition rows of a plan's located plan-tasks spine; empty
+    when the plan is unreadable, has no fence or a malformed one. Reads the primitives
+    `workstream_complete.directives_spine_worklist.compute_open_spine_row_gate` reads
+    without importing the `workstream_complete` package, whose load costs tens of ms."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.plan_tasks_render import load_rows, spine_projection
+
+    try:
+        source = plan_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    result = load_rows(source)
+    if result.status is not LocateStatus.LOCATED:
+        return []
+    return [str(row.get("id", "?")) for row in spine_projection(result.rows)["open"]]
+
+
 def cs_stamp_plan_implemented(
     plan_path: str,
     *,
@@ -2922,15 +2947,11 @@ def cs_stamp_plan_implemented(
     it a no-commit stamp has no sha and the cascade refuses every baton.
     """
     if refuse_open_spine_rows:
-        from coordinator_core.workstream_complete.directives_spine_worklist import (
-            compute_open_spine_row_gate,
-        )
-
-        gate = compute_open_spine_row_gate(Path(plan_path).stem, Path(plan_path))
-        if gate.verdict == "applicable" and gate.open_count > 0:
+        open_ids = _open_spine_row_ids(Path(plan_path))
+        if open_ids:
             print(
-                f"stamp-plan-implemented: refusing: {plan_path}: {gate.open_count} spine "
-                f"row(s) still open: {', '.join(r.id for r in gate.rows)} -- land or "
+                f"stamp-plan-implemented: refusing: {plan_path}: {len(open_ids)} spine "
+                f"row(s) still open: {', '.join(open_ids)} -- land or "
                 "disposition them first",
                 file=sys.stderr,
             )

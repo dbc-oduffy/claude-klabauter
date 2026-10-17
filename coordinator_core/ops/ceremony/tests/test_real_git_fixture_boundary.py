@@ -89,6 +89,7 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_no_interpreter_on_commit.py",
     "test_post_commit_tail.py",
     "test_post_commit_tail_completion_fold.py",
+    "test_skill_weight_admission.py",
 })
 
 _IMPORT_PATTERN = re.compile(

@@ -1305,8 +1305,10 @@ def compose_ask_script(
         runner_js = runner_js.replace(_ROW_VERIFY_PROMPT_OPEN, f"{EM_BRIEF_VAR} + {_ROW_VERIFY_PROMPT_OPEN}")
     b.append(runner_js)
     b.append(f"  const {_emit._REPO_ROOT_VAR} = REPO_ROOT;")
+    b.append(f"  let {_emit._RUN_BASE_VAR} = {_lit(run_base_sha)};")
     b.append(_emit._checkpoint_commit_js(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
+        runtime_plan_js=_RUNTIME_PLAN_PATH_JS,
     ))
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
@@ -1567,10 +1569,18 @@ def compose_ask_script(
         b.append("  }")
         b.append("  let _decision = null;")
         # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
-        # JSON; the decision is the span from the first `{` to the last column-0 `}`.
+        # JSON; the decision is the span from the first `{` to the last column-0 `}`. A compact
+        # one-line decision has no column-0 `}`, so the spans widen to the last `}`, then to the
+        # first whole line that parses as a decision: a written sizing must not read as "not run".
         b.append(
             "  try { const _out = String(_scouted.stdout ?? ''); "
-            "_decision = JSON.parse(_out.slice(_out.indexOf('{'), _out.lastIndexOf('\\n}') + 2)); } "
+            "const _try = (t) => { try { const d = JSON.parse(t); "
+            "return d && typeof d === 'object' && typeof d.route === 'string' ? d : null; } catch (_e) { return null; } }; "
+            "const _s = _out.indexOf('{'); "
+            "_decision = _try(_out.slice(_s, _out.lastIndexOf('\\n}') + 2)) "
+            "?? _try(_out.slice(_s, _out.lastIndexOf('}') + 1)) "
+            "?? _out.split('\\n').map((l) => l.trim()).filter((l) => l.startsWith('{')).map(_try)"
+            ".find((d) => d) ?? null; } "
             "catch (_e) { _decision = null; }"
         )
         b.append(
@@ -2193,6 +2203,18 @@ def compose_ask_script(
     b.append("  }")
 
     b.append("  const _verdictReports = [];")
+    b.append("  if (!_halted && !_resumeLedger) {")
+    b.extend(_emit._run_base_blocks(
+        run_base_sha, repo_root, declared=True,
+        unreadable_js=(
+            f"  if (!_runBase || !{_RUNTIME_PLAN_PATH_JS}) {{ _halted = {{ halted: "
+            f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, "
+            f"reason: 'checkpoint trailer unavailable: ' + (!{_RUNTIME_PLAN_PATH_JS} ? 'no plan path for Checkpoint-Plan' : 'no run base for Checkpoint-Base') "
+            "+ '; every checkpoint commit would be refused', "
+            "sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
+        ),
+    ))
+    b.append("  }")
     b.append("  if (!_halted && !_resumeLedger) {")
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")

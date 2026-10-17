@@ -767,6 +767,7 @@ class _Resolved:
     gate_refusal: Optional[str] = None
     attestation_refusal: Optional[str] = None
     judge_only_stamp: Optional[Dict[str, Any]] = None
+    zero_claim_basis: bool = False
 
 
 def _resolve_mint(
@@ -988,7 +989,12 @@ def _resolve_mint(
         delivery_exempt=delivery_verdict is None
         and _verifier_absence_is_benign(integration_data.get("delivery_not_run"))
         and _criterion_judged(gate_integration.get("criterion"))
-        and _delivery_verifier_not_run(plan_path, repo_root, text),
+        and not _unbacked_claims(delivery_data)
+        and (
+            _zero_claim_basis(integration_data, delivery_data)
+            and tests_status == "pass"
+            or _delivery_verifier_not_run(plan_path, repo_root, text)
+        ),
     )
 
     if not landed_here:
@@ -1021,7 +1027,27 @@ def _resolve_mint(
         criterion_block=criterion_block,
         gate_refusal=gate_refusal,
         attestation_refusal=attestation_refusal,
+        zero_claim_basis=_zero_claim_basis(integration_data, delivery_data),
     )
+
+
+def _zero_claim_basis(integration_data: Dict[str, Any], delivery_data: Dict[str, Any]) -> bool:
+    """True when the run record names a benign reason (roster or tier) for the absent delivery
+    verdict and no delivery stage listed an unbacked claim: with nothing to back, a met criterion
+    plus passing tests is the whole delivery evidence. An absent reason is not benign here."""
+    not_run = integration_data.get("delivery_not_run")
+    return (
+        isinstance(not_run, str)
+        and bool(not_run)
+        and _verifier_absence_is_benign(not_run)
+        and not _unbacked_claims(delivery_data)
+    )
+
+
+def _unbacked_claims(delivery_data: Dict[str, Any]) -> int:
+    """How many unbacked claims a delivery stage listed; a null verdict that lists any is a claim
+    the verifier could not back, never an exemption."""
+    return _count(delivery_data.get("claims_unbacked")) + _count(delivery_data.get("unbacked"))
 
 
 def _require_same_diff_sha(repo_root: Path, run_rel: str, terminal_sha: str) -> None:
@@ -1146,10 +1172,19 @@ def _gate_refusal_with_hints(r: _Resolved) -> str:
         run_hint = _rel_or_abs(r.integration_path, repo_root) if r.integration_path is not None else '""'
         if isinstance(not_run, str) and not_run:
             refusal += f"; delivery not run: {not_run}"
-        refusal += (
-            "; a re-run clears this: emit-dispatch-workflow --plan "
-            f"{_rel_or_abs(plan_path, repo_root)} --reverify-delivery {run_hint}, then reverify-delivery record"
-        )
+        if r.zero_claim_basis:
+            refusal += (
+                "; the plan lists no delivery claims, so delivery is exempt once the criterion is met "
+                "with an observation and the tests pass (a delivery re-run returns no verdict here); "
+                f"re-judge: emit-dispatch-workflow --plan {plan_path} --rejudge --out <x>.workflow.mjs, "
+                "fire it, reverify-delivery record --result-json <task output>, record the test-runner's "
+                "verdict, then mint again"
+            )
+        else:
+            refusal += (
+                "; a re-run clears this: emit-dispatch-workflow --plan "
+                f"{_rel_or_abs(plan_path, repo_root)} --reverify-delivery {run_hint}, then reverify-delivery record"
+            )
     if "exit criterion is" in refusal:
         refusal += (
             f"; a re-judge clears this: emit-dispatch-workflow --plan {plan_path} --rejudge "

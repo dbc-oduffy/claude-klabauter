@@ -49,8 +49,8 @@ def repo(tmp_path):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
-    (root / "a.py").write_text("seed\n", encoding="utf-8")
-    (root / "README.md").write_text("seed\n", encoding="utf-8")
+    (root / "a.py").write_text("seed\n", encoding="utf-8", newline="")
+    (root / "README.md").write_text("seed\n", encoding="utf-8", newline="")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     return root
@@ -62,12 +62,12 @@ def _base(repo: Path) -> str:
 
 def _script(repo: Path) -> str:
     request = CommitRequest(chunks=(ChunkCommit(id="C4", title="t4", paths=("a.py",)),))
-    (repo / "run.mjs").write_text("// s\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / "run.mjs").write_text("// s\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
     return "run.mjs"
 
 
 def _write(repo: Path, rel: str, text: str) -> None:
-    (repo / rel).write_text(text, encoding="utf-8")
+    (repo / rel).write_text(text, encoding="utf-8", newline="")
 
 
 def _record(repo: Path, rel: str, text: str, at: float, session: str = SID) -> None:

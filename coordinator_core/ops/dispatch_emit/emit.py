@@ -3984,11 +3984,21 @@ def _checkpoint_trailer_js(
     plan_path: Optional[str],
     run_base_sha: Optional[str],
     prior_run_base: Optional[str] = None,
+    runtime_plan_js: Optional[str] = None,
 ) -> str:
     """JS expression for the body lines `git.checkpoint_guard` reads to refuse
     re-landing a closed or reverted row; ``''`` when the run has no plan.
     ``prior_run_base`` (an ``--only-incomplete`` re-emit's halted-run base) rides as
-    ``Checkpoint-Review-Base:`` so a later re-emit still finds the original base."""
+    ``Checkpoint-Review-Base:`` so a later re-emit still finds the original base.
+    ``runtime_plan_js`` is a JS expression for a plan path known only at run time (the
+    ask route); it replaces the baked ``plan_path``."""
+    if runtime_plan_js:
+        return (
+            _js_string_literal("\n\nCheckpoint-Plan: ")
+            + f" + {runtime_plan_js} + "
+            + _js_string_literal("\nCheckpoint-Base: ")
+            + f" + {_RUN_BASE_VAR}"
+        )
     if not plan_path:
         return "''"
     expr = (
@@ -4006,18 +4016,36 @@ _RUN_BASE_SCHEMA = json.dumps(
 )
 
 
-def _run_base_blocks(emit_sha: str, repo_anchor: Optional[str]) -> list[str]:
+def _run_base_blocks(
+    emit_sha: str,
+    repo_anchor: Optional[str],
+    *,
+    declared: bool = False,
+    unreadable_js: Optional[str] = None,
+) -> list[str]:
     """First step of the script: ``_runBase`` is the repo's HEAD when the script
     FIRES. ``emit_sha`` is the fallback for an agent that fails or answers
     malformed. Resume replays this call from the journal (same prompt, same
-    position), so a resumed run keeps its first fire's base."""
+    position), so a resumed run keeps its first fire's base.
+    ``declared`` re-observes a ``_runBase`` the caller already declared (the ask route,
+    whose checkpoint machinery precedes execute); ``unreadable_js`` replaces the throw
+    when no base is known."""
+    decl = [] if declared else [f"  let {_RUN_BASE_VAR} = {_js_string_literal(emit_sha)};"]
+    missing = (
+        [unreadable_js]
+        if unreadable_js
+        else [
+            f"  if (!{_RUN_BASE_VAR}) throw new Error('run base sha unreadable and none known at emit: "
+            "checkpoint commits would carry no Checkpoint-Base');"
+        ]
+    )
     root = f"'git -C ' + {_REPO_ROOT_VAR} + ' rev-parse HEAD'" if repo_anchor else "'git rev-parse HEAD'"
     prompt = (
         "'Run base. Run exactly `' + " + root + " + '` and change nothing. "
         "Return sha: its 40-hex output, verbatim.'"
     )
     return [
-        f"  let {_RUN_BASE_VAR} = {_js_string_literal(emit_sha)};",
+        *decl,
         "  try {",
         f"    const _rb = await agent({prompt}, {{ label: 'run-base', effort: 'low', "
         f"{_model_opt('', 'haiku')}, schema: {_RUN_BASE_SCHEMA} }});",
@@ -4025,8 +4053,7 @@ def _run_base_blocks(emit_sha: str, repo_anchor: Optional[str]) -> list[str]:
         f"    if (/^[0-9a-f]{{40}}$/.test(_rbSha)) {_RUN_BASE_VAR} = _rbSha;",
         f"    else log('Run base unreadable at fire; using the emit-time sha ' + {_RUN_BASE_VAR});",
         f"  }} catch (e) {{ log('Run base agent failed; using the emit-time sha ' + {_RUN_BASE_VAR}); }}",
-        f"  if (!{_RUN_BASE_VAR}) throw new Error('run base sha unreadable and none known at emit: "
-        "checkpoint commits would carry no Checkpoint-Base');",
+        *missing,
         f"  log('Run base sha (observed at fire): ' + {_RUN_BASE_VAR});",
     ]
 
@@ -4306,6 +4333,7 @@ def _checkpoint_commit_js(
     run_base_sha: Optional[str] = None,
     seam: Optional[SeamLeg] = None,
     prior_run_base: Optional[str] = None,
+    runtime_plan_js: Optional[str] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -4381,10 +4409,10 @@ def _checkpoint_commit_js(
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
         f"    const owed = done.filter((i) => {GATE_OWED_VAR}[i]);",
         "    const message = subject + "
-        + _checkpoint_trailer_js(plan_path, run_base_sha, prior_run_base)
+        + _checkpoint_trailer_js(plan_path, run_base_sha, prior_run_base, runtime_plan_js)
         + (
             " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '');"
-            if plan_path
+            if plan_path or runtime_plan_js
             else ";"
         ),
         "    let r = null;",

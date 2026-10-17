@@ -441,6 +441,28 @@ def compose_reverify_script(
     )
 
 
+def _refuse_unless_zero_claim_settled(
+    unbacked: List[dict], criterion: Optional[dict], tests: Optional[dict]
+) -> None:
+    """A null verdict is recordable only as a delivery-exempt record: the result names no
+    delivery claim, its criterion is `met` and its tests `pass`. Anything else raises with the
+    remedy that clears it."""
+    if unbacked:
+        raise ReverifyRefused(
+            "reverify-delivery: result verdict None carries unbacked claims; "
+            "re-emit with --reverify-delivery so the delivery verifier returns PASS or FAIL"
+        )
+    criterion_status = (criterion or {}).get("status")
+    tests_status = (tests or {}).get("status")
+    if criterion_status != "met" or tests_status != "pass":
+        raise ReverifyRefused(
+            "reverify-delivery: result verdict None records only with criterion status 'met' and "
+            f"tests status 'pass' (got criterion {criterion_status!r}, tests {tests_status!r}); "
+            "settle the criterion with `review-stamp rejudge` and the tests with a passing "
+            "test-runner sidecar passed as --build-test, then mint"
+        )
+
+
 def record_delivery_verdict(
     *,
     repo_root: Path,
@@ -457,7 +479,9 @@ def record_delivery_verdict(
 ) -> str:
     """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path.
     `diff_sha` binds the record to the reviewed terminal commit a null-slot re-run judged."""
-    if verdict not in ("PASS", "FAIL"):
+    if verdict is None:
+        _refuse_unless_zero_claim_settled(unbacked, criterion, tests)
+    elif verdict not in ("PASS", "FAIL"):
         raise ReverifyRefused(f"reverify-delivery: result verdict {verdict!r} is neither PASS nor FAIL")
     now = datetime.now(timezone.utc)
     stem = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(supersedes).stem)
@@ -1202,14 +1226,15 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             plan_path=ident.get("plan_path"),
             agent_type=ident.get("tests_agent_type"),
         )
-        persist_delivery_sidecar(
-            repo_root=repo_root,
-            plan_path=ident.get("plan_path"),
-            session_id=args.session_id,
-            head_sha=ident["head_sha"],
-            verdict=result["verdict"],
-            unbacked=result.get("claims_unbacked") or [],
-        )
+        if result.get("verdict") is not None:
+            persist_delivery_sidecar(
+                repo_root=repo_root,
+                plan_path=ident.get("plan_path"),
+                session_id=args.session_id,
+                head_sha=ident["head_sha"],
+                verdict=result["verdict"],
+                unbacked=result.get("claims_unbacked") or [],
+            )
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)
         return 1

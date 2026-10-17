@@ -33,11 +33,12 @@ def _git(repo: Path, *args: str) -> None:
 
 def _marker(repo: Path, script: str, chunk_id: str, plan_rel: str) -> None:
     request = CommitRequest(chunks=(ChunkCommit(id=chunk_id, title="t", paths=("a.py",)),), plan_path=plan_rel)
-    (repo / script).write_text("// emitted script\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / script).write_text("// emitted script\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
 
 
 @pytest.fixture
 def base(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import review_edits
     from coordinator_core.session import claims
 
     parent = tmp_path / "work"
@@ -46,10 +47,11 @@ def base(tmp_path, monkeypatch):
     outbox = parent / "lessons-outbox"
     outbox.mkdir()
     noop = parent / "noop.py"
-    noop.write_text("pass\n", encoding="utf-8")
+    noop.write_text("pass\n", encoding="utf-8", newline="")
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
+    monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {})
     monkeypatch.setattr(
         claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
     )
@@ -132,7 +134,7 @@ def test_mise_run_marks_plan_reconciliation_and_memo_lifecycle_not_applicable(ba
 
 def test_xs_run_on_a_minted_spine_has_no_governing_plan(base):
     repo, script = base
-    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8", newline="")
     _git(repo, "add", ".gitignore")
     _git(repo, "commit", "-q", "-m", "ignore")
     spine = repo / XS_SPINE
@@ -161,13 +163,13 @@ def test_wave_fire_xs_lane_ask_route_request_with_baton_is_accepted(base):
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import XS_ROW_ID, mint_xs_spine, xs_spine_plan_id
 
     repo, script = base
-    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8", newline="")
     _git(repo, "add", ".gitignore")
     _git(repo, "commit", "-q", "-m", "ignore")
     stem = "2026-10-13-xs-lane"
     sizing_rel = f"state/sizings/{stem}.yaml"
     (repo / sizing_rel).parent.mkdir(parents=True)
-    (repo / sizing_rel).write_text("deliverable_id: dlv-xs-lane\n", encoding="utf-8")
+    (repo / sizing_rel).write_text("deliverable_id: dlv-xs-lane\n", encoding="utf-8", newline="")
     sizing = {
         "intent": "xs lane",
         "deliverable_id": "dlv-xs-lane",
@@ -176,7 +178,7 @@ def test_wave_fire_xs_lane_ask_route_request_with_baton_is_accepted(base):
     run_dir = repo / "scratch" / "warp" / "run-xs"
     run_dir.mkdir(parents=True)
     spine_text, spine_path = mint_xs_spine(sizing, sizing_rel=sizing_rel, writes=["a.py"], out_dir=run_dir)
-    spine_path.write_text(spine_text, encoding="utf-8")
+    spine_path.write_text(spine_text, encoding="utf-8", newline="")
     spine_rel = spine_path.relative_to(repo).as_posix()
     plan_id = xs_spine_plan_id(stem)
     request = CommitRequest(
@@ -188,7 +190,7 @@ def test_wave_fire_xs_lane_ask_route_request_with_baton_is_accepted(base):
         repo_root=repo.as_posix(),
         plan_path=spine_rel,
     )
-    (repo / script).write_text("// emitted script\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / script).write_text("// emitted script\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
     inline_review = copy.deepcopy(driver.INLINE_REVIEW)
     inline_review["plan_id"] = plan_id
     inline_review["integration_stem"] = f"{plan_id}.review-wave-bookkeeping"

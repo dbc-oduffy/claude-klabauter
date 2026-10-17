@@ -58,12 +58,12 @@ from typing import Optional
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.fleet._common import (
+from coordinator_core.ops.fleet._outbox_enum import (
     build_dry_run_result,
     build_setup_error_result,
     main_worktree_root,
+    merged_outbox_drafts,
 )
-from coordinator_core.ops.fleet.memo_draft import merged_outbox_drafts
 
 _LOG = logging.getLogger(__name__)
 

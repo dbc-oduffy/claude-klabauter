@@ -162,7 +162,9 @@ AC3/AC4 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
       touching that path's pinned shape. See that section's own docstring
       for why it duplicates rather than imports `election`/`settings`/
       `skew`.
-    - The `election`/`is_warm_enabled` import below is guarded on
+    - (Superseded for `election`: it now binds lazily on first attribute access via
+      the module `__getattr__`, so an unstamped-clone decline never imports it; the
+      attribute stays patchable.) The `is_warm_enabled` import below is guarded on
       `__name__ != "__main__"` rather than moved inside a function: run as
       `import coordinator_core.warm.client` (every existing caller and
       test), `__name__` is the dotted module path, so this executes exactly
@@ -222,8 +224,21 @@ ENGINE_SKEW = -32002
 #: either direction here closes `engine_root -> skew -> client -> election
 #: -> engine_root` into a real cycle.
 if __name__ != "__main__":
-    from coordinator_core.warm import election
     from coordinator_core.warm.settings import is_warm_enabled
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy `election`: it drags `engine_root` and the pipe-name machinery, none
+    of which an unstamped-clone decline reaches. `client.election` stays
+    resolvable (tests patch `client.election.pipe_name`); the first access
+    binds the real module into this namespace."""
+    if name == "election":
+        from coordinator_core.warm import election as _election_mod
+
+        globals()["election"] = _election_mod
+        return _election_mod
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 READ_DEADLINE_SECS = 2.0
 
@@ -642,6 +657,7 @@ def _endpoint_name(token: str) -> str:
     it is the single production derivation, and the C door reproduces it
     independently. A second Python copy would let the two drift while both
     halves stayed green."""
+    election = globals().get("election") or __getattr__("election")
     if sys.platform == "win32":
         return election.pipe_name(token)
     return str(election.socket_path(token))
@@ -1142,6 +1158,11 @@ def _try_warm_dispatch_inner(
     # between the two call sites within one preamble invocation. Computed
     # once and reused below.
     token = engine_token()
+    if _live_tree_cold and token == "unversioned":
+        # Unstamped clone: no server can exist for it and `_spawn_once` is
+        # gated off, so everything below (identity, env, pipe open) is wasted.
+        _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
+        return None
     pipe = _endpoint_name(token)
     request = {**msg, "_engine_token": token}
     # THE DISPATCH KEY (D1, contract § 1). Minted once per request, here --

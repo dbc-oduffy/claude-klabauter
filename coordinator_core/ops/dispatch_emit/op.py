@@ -1358,15 +1358,23 @@ def _research_route_setup(
     return research_ctx, pipeline_ctx, params
 
 
-def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
+def _refuse_inventory_outside_repo(inventory_path: str, repo_root, *, review_only: bool = False) -> None:
     """A plan row's `spec path` resolves against the inventory's own
     `<repo>/state/mise-inventory/` grandparent; an inventory anywhere else
-    expands no plan and emits a script of one-line stubs."""
+    expands no plan and emits a script of one-line stubs. A review-only emission expands no
+    plan spec, so it also accepts the given repo's `state/warp/<run>/manifest.json`."""
     inventory = Path(inventory_path).resolve()
     root = Path(repo_root).resolve() if repo_root else _repo_root_for_plan(str(inventory))
     if root is None:
         return
     inventory_home = Path(home_dir(str(root), "mise-inventory"))
+    if (
+        review_only
+        and repo_root
+        and inventory.name == "manifest.json"
+        and inventory.parent.parent == Path(home_dir(str(root), "warp"))
+    ):
+        return
     if inventory.parent != inventory_home:
         raise InventoryOutsideRepoError(
             f"inventory {inventory_path!r} is not under {inventory_home}; "
@@ -1840,7 +1848,8 @@ def _dispatch_emit(
     if not is_queue_route and ask_ctx is None and pipeline_ctx is None:
         if inventory_path:
             _refuse_inventory_outside_repo(
-                inventory_path, params.get("inventory_repo_root") or repo_root
+                inventory_path, params.get("inventory_repo_root") or repo_root,
+                review_only=params.get("review_only_rows") is not None,
             )
             part = params.get("inventory_part")
             resume_skipped: list = []

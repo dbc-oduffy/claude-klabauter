@@ -70,9 +70,9 @@ def run_base_for(worktree_root: Path, run_id: Optional[str], params: Mapping) ->
     found = _submission_base(worktree_root, run_id)
     if found:
         return found
-    from coordinator_core.ops.dispatch_emit import op
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract
 
-    return op._recorded_run_base(Path(worktree_root), run_id)
+    return ask_fanout_contract.recorded_run_base(Path(worktree_root), run_id)
 
 
 def since_base_findings(

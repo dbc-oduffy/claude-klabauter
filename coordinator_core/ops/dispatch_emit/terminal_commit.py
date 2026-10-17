@@ -137,7 +137,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import gate_owed  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
@@ -775,6 +775,9 @@ def _source_rows_by_plan(
 #: Per-plan seam-check sidecar suffix; `plan.seam_record` writes `<plan-stem>` + this beside the plan.
 _SEAM_SIDECAR_SUFFIX = ".seam.yaml"
 
+#: Mirrors `plan_tasks_mutate.EVIDENCE_SIDECAR_SUFFIX` (pinned by test): importing that module costs ~25ms.
+_EVIDENCE_SIDECAR_SUFFIX = ".evidence.yaml"
+
 
 def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: list) -> list:
     """Worktree-relative `.seam.yaml` sidecars on disk beside the run's plan and each
@@ -1238,16 +1241,67 @@ def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> tuple:
             candidates.extend(share.glob(f"*/{stem}.md"))
         except OSError:
             pass
+    # A bookkeeping stem's record may carry no integration file: the reviewer's own sidecar then
+    # records which paths its applied fixes touched (its ledger rows) and when it finished
+    # (its recorded ``verified_at``, not the file's mtime, which any later touch moves).
     stamps: list = []
     for c in candidates:
         try:
             stamps.append((c.stat().st_mtime, c))
         except OSError:
             continue
-    if not stamps:
+    paths: set = set()
+    wave_stamps: list = []
+    listed = inline_review.get("wave_sidecar_paths")
+    for w in listed if isinstance(listed, list) else []:
+        if isinstance(w, str) and w:
+            done_at, fixed = _reviewer_applied_fixes(worktree_root / w)
+            if done_at is not None:
+                wave_stamps.append(done_at)
+                paths.update(fixed)
+    if stamps:
+        at, newest = max(stamps, key=lambda s: s[0])
+        paths.update(_wave_slice_files(newest))
+    elif wave_stamps:
+        at = max(wave_stamps)
+    else:
         return None, frozenset()
-    at, newest = max(stamps, key=lambda s: s[0])
-    return at, _wave_slice_files(newest)
+    return at, frozenset(paths)
+
+
+_VERIFIED_AT_RE = re.compile(r"^findings_ledger:.*?\bverified_at:\s*['\"]?([0-9T:.\-]+Z?)", re.MULTILINE)
+_LEDGER_BLOCK_RE = re.compile(r"^## Findings Ledger\b.*?^```json\s*\n(.*?)\n```", re.MULTILINE | re.DOTALL)
+
+
+def _reviewer_applied_fixes(sidecar: Path) -> tuple:
+    """``(completed_epoch, fixed_paths)`` from a review-wave reviewer's sidecar: the epoch of its
+    frontmatter ``findings_ledger.verified_at`` and the ``file`` of each row of its
+    ``## Findings Ledger`` block that is verified, not suspended or rejected, and changed text
+    (a non-empty ``before`` or ``after``). A path merely named elsewhere in the sidecar is not
+    fixed. ``(None, frozenset())`` when unreadable or unstamped."""
+    try:
+        text = sidecar.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None, frozenset()
+    stamp = _VERIFIED_AT_RE.search(text.split("\n---", 2)[0] if text.startswith("---") else "")
+    done_at = _epoch_of(stamp.group(1) if stamp else None)
+    if done_at is None:
+        return None, frozenset()
+    block = _LEDGER_BLOCK_RE.search(text)
+    try:
+        rows = json.loads(block.group(1)) if block else []
+    except ValueError:
+        rows = []
+    fixed = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("verified") is not True:
+            continue
+        if row.get("status") in ("suspended", "rejected") or not (row.get("before") or row.get("after")):
+            continue
+        f = row.get("file")
+        if isinstance(f, str) and f:
+            fixed.add(f.replace("\\", "/"))
+    return done_at, frozenset(fixed)
 
 
 def _wave_slice_files(sidecar: Path) -> frozenset:
@@ -2244,9 +2298,9 @@ def _review_since(
     prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
     base = prep.get("run_base_sha") if isinstance(prep, dict) else None
     if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)) and run_id and _RESOLUTION_RUN_ID.match(run_id):
-        from coordinator_core.ops.dispatch_emit import op
+        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
 
-        base = op._recorded_run_base(worktree_root, run_id)
+        base = recorded_run_base(worktree_root, run_id)
     if not (isinstance(base, str) and _RESOLUTION_SHA.match(base)):
         return None
     from coordinator_core.git.commit_walk import commit_meta
@@ -3025,11 +3079,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     script with no marker returns ``{"committed": False, "nothing_to_commit":
     True}`` without error. ``commit_v2``'s own ``nothing_to_commit: True``
     (a peer already landed the bytes) passes through unmodified, as a
-    non-error. Every reply also carries ``stranded`` -- ``{chunk id: [declared
+    non-error. Every reply also carries ``stranded`` -- ``{chunk id: [sorted declared
     paths]}`` for each ``incomplete_chunks`` id the request marker names, the
     work the commit left uncommitted; ``{}`` when none, or when no marker was read. The key is
     omitted on a ``missing-run-outcome`` or ``unreviewed`` refusal: the incomplete set was not
     known, so an empty map would falsely read as "nothing stranded".
+    ``refused: "no-credited-chunk-landed"`` (``committed`` false) when something is stranded and no
+    non-bookkeeping chunk lands, contributes or was already landed (``landed_chunks``, a clean done
+    chunk); ``refused: "credited-chunk-uncommitted"`` with ``uncommitted`` ({chunk: [paths]}) when a
+    credited chunk's changed declared write is outside the commit. Neither writes anything.
+    ``stranded_residue`` (present only when non-empty) maps each stranded chunk to its declared paths
+    that a side route (review residue, run-owned dirt, prefix expansion, run artifacts) would have
+    carried and the commit left in the tree.
     ``withheld_chunks`` (present only when non-empty) maps each done chunk whose every declared
     path is withheld to ``[{path, reason}]``; it is in neither ``chunks_committed`` nor
     ``no_product_hunk``, is not flipped ``coded``, gets no receipt, and its ``incomplete_reasons``
@@ -3091,7 +3152,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if "siblings" in reply["close"]:
             reply["siblings"] = reply["close"]["siblings"]
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS:
-        reply["stranded"] = stranded
+        reply["stranded"] = {c: sorted(ps) for c, ps in stranded.items()}
     if blockers:
         reply["blockers"] = blockers
     if regraded:
@@ -3099,6 +3160,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if scope:
         if scope.get("run_owned") is not None:
             reply["run_owned"] = scope["run_owned"]
+        if scope.get("stranded_residue"):
+            reply["stranded_residue"] = {c: sorted(ps) for c, ps in scope["stranded_residue"].items()}
         reply.update(
             _undeclared_dirty(
                 scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ())),
@@ -3192,22 +3255,23 @@ def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set
     return out
 
 
+#: The mode predicates below restate `halted_record_commit.is_halted_record_call`,
+#: `roadmap_fanout_commit.is_fanout_record_call` and `grind_commit_contract.is_grind_call` so a plan
+#: run need not load those modules to learn it is none of them; a test pins them to the originals.
 def _is_halted_record_call(params: object) -> bool:
-    from coordinator_core.ops.dispatch_emit.halted_record_commit import is_halted_record_call
-
-    return is_halted_record_call(params)
+    halted = params.get("halted_by") if isinstance(params, dict) else None
+    return isinstance(halted, dict) and isinstance(halted.get("halted"), str) and bool(halted["halted"])
 
 
 def _is_fanout_record_call(params: object) -> bool:
-    from coordinator_core.ops.dispatch_emit.roadmap_fanout_commit import is_fanout_record_call
-
-    return is_fanout_record_call(params)
+    spec = params.get("fanout") if isinstance(params, dict) else None
+    plans = spec.get("plans") if isinstance(spec, dict) else None
+    return isinstance(plans, list) and bool(plans) and all(isinstance(p, str) and p for p in plans)
 
 
 def _is_grind_call(params: object) -> bool:
-    from coordinator_core.ops.dispatch_emit.grind_commit_contract import is_grind_call
-
-    return is_grind_call(params)
+    grind = params.get("grind") if isinstance(params, dict) else None
+    return isinstance(grind, dict) and isinstance(grind.get("rows"), list)
 
 
 def _is_no_script_call(params: object) -> bool:
@@ -3268,7 +3332,7 @@ def _terminal_commit_inner(
 
     if _is_fanout_record_call(params):
         from coordinator_core.ops.dispatch_emit.roadmap_fanout_commit import commit_fanout_record
-        from coordinator_core.ops.fleet._common import main_worktree_root
+        from coordinator_core.lifecycle import main_worktree_root
 
         if _is_halted_record_call(params):
             return _error("params carry both halted_by and fanout", refused="mode-ambiguous")
@@ -3276,7 +3340,7 @@ def _terminal_commit_inner(
 
     if _is_halted_record_call(params):
         from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
-        from coordinator_core.ops.fleet._common import main_worktree_root
+        from coordinator_core.lifecycle import main_worktree_root
 
         if _is_grind_call(params):
             return _error("params carry both grind and halted_by", refused="mode-ambiguous")
@@ -3284,13 +3348,13 @@ def _terminal_commit_inner(
 
     if _is_grind_call(params):
         from coordinator_core.ops.dispatch_emit.grind_terminal_commit import commit_grind_rows
-        from coordinator_core.ops.fleet._common import main_worktree_root
+        from coordinator_core.lifecycle import main_worktree_root
 
         return commit_grind_rows(main_worktree_root(repo_root), repo_root, params)
 
     if _is_no_script_call(params):
         from coordinator_core.ops.dispatch_emit import close_without_script
-        from coordinator_core.ops.fleet._common import main_worktree_root
+        from coordinator_core.lifecycle import main_worktree_root
 
         return close_without_script.close_landed_run(main_worktree_root(repo_root), repo_root, params)
 
@@ -3321,7 +3385,7 @@ def _terminal_commit_inner(
     ):
         session_id = None
 
-    from coordinator_core.ops.fleet._common import main_worktree_root
+    from coordinator_core.lifecycle import main_worktree_root
 
     worktree_root = main_worktree_root(repo_root)
 
@@ -3587,7 +3651,7 @@ def _terminal_commit_inner(
         # earlier firing and would duplicate rows. The evidence-companion check below stages it.
         if request.plan_path and record.get("review_firings"):
             from coordinator_core.ops.criterion_evidence import _criterion_evidence_record
-            from coordinator_core.ops.fleet._common import main_worktree_root as _mwr
+            from coordinator_core.lifecycle import main_worktree_root as _mwr
 
             try:
                 # Trap: a token-released retry re-appends these rows; the writer has no dedupe key.
@@ -3613,11 +3677,9 @@ def _terminal_commit_inner(
         if cited_sizing is not None:
             companions.append(cited_sizing)
         if request.plan_path:
-            from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
-
             evidence_rel = str(
                 PurePosixPath(request.plan_path).with_name(
-                    evidence_sidecar_path(Path(request.plan_path)).name
+                    PurePosixPath(request.plan_path).stem + _EVIDENCE_SIDECAR_SUFFIX
                 )
             )
             if (worktree_root / evidence_rel).is_file():
@@ -3735,6 +3797,21 @@ def _terminal_commit_inner(
     partial_chunks = [c for c in partial_chunks if c.id not in held_ids]
     done_chunks = [c for c in request.chunks if c.id not in incomplete_chunks]
 
+    # A path a stranded chunk declares never rides the commit by a side route (review residue,
+    # run-owned dirt, prefix expansion, run artifacts); a partial chunk that lands is not stranded.
+    landing_partial_ids = {c.id for c in partial_chunks}
+    barred = {cid: paths for cid, paths in stranded.items() if cid not in landing_partial_ids}
+    residue: dict = {}
+
+    def _bar_stranded(paths) -> list:
+        hit = credit_gate.stranded_residue(barred, paths)
+        if not hit:
+            return list(paths)
+        for cid, hit_paths in hit.items():
+            residue.setdefault(cid, set()).update(hit_paths)
+        dropped = {p for hit_paths in hit.values() for p in hit_paths}
+        return [p for p in paths if p not in dropped]
+
     held_paths = _held_write_paths(worktree_root, request, held_ids) if held_ids else {}
     if held_paths:
         overlap: dict = {}
@@ -3777,6 +3854,7 @@ def _terminal_commit_inner(
                 f"report {chunk.report!r} carries no `{PREFIX_CLAIM_LABEL}` list -- "
                 "list it in params.incomplete_chunks to commit the rest"
             )
+        own_prefix_files = _bar_stranded(own_prefix_files)
         chunk_paths = list(chunk.paths) + own_prefix_files
         all_paths.extend(chunk_paths)
         prefix_files.extend(own_prefix_files)
@@ -3788,6 +3866,7 @@ def _terminal_commit_inner(
             _own_prefix_files(worktree_root, chunk, report_cache),
             _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched),
         ) or []
+        own_prefix_files = _bar_stranded(own_prefix_files)
         all_paths.extend(list(chunk.paths) + own_prefix_files)
         prefix_files.extend(own_prefix_files)
 
@@ -3870,8 +3949,10 @@ def _terminal_commit_inner(
         all_paths = [p for p in all_paths if p not in removed]
 
     if art_landable is not None:
-        all_paths.extend(p for p in art_landable.present if p not in all_paths)
-        deleted_paths = sorted(set(deleted_paths) | set(art_landable.deleted))
+        all_paths.extend(
+            p for p in _bar_stranded([q for q in art_landable.present if q not in all_paths])
+        )
+        deleted_paths = sorted(set(deleted_paths) | set(_bar_stranded(list(art_landable.deleted))))
         all_paths = [p for p in all_paths if p not in deleted_paths]
 
     if not all_paths and not deleted_paths:
@@ -3882,6 +3963,8 @@ def _terminal_commit_inner(
     run_owned, owned_deletions = _run_owned_dirt(
         worktree_root, request, snapshot, session_id, all_paths, deleted_paths, touched,
     )
+    run_owned = _bar_stranded(run_owned)
+    owned_deletions = _bar_stranded(list(owned_deletions))
     all_paths.extend(run_owned)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
@@ -3944,6 +4027,7 @@ def _terminal_commit_inner(
             session_id=request.session_id,
         )
     scope.update(root=worktree_root, request=scope_request, snapshot=snapshot)
+    scope["stranded_residue"] = residue
     review_land: tuple = ()
     review_unanswerable: Optional[str] = None
     if review_checked:
@@ -3959,7 +4043,7 @@ def _terminal_commit_inner(
                 refused="review-edit-unlanded",
                 review_edits_unlanded=dict(verdict.halt),
             )
-        review_land = verdict.land
+        review_land = tuple(_bar_stranded(list(verdict.land)))
         review_unanswerable = verdict.unanswerable
         all_paths.extend(p for p in review_land if p not in all_paths)
     # Unlike a hand commit, a run's product commit never absorbs a live peer's in-flight edit.
@@ -4012,6 +4096,49 @@ def _terminal_commit_inner(
     contributing_partial = [c for c in partial_chunks if contributes(c)]
     for c in contributing_partial:
         stranded.pop(c.id, None)
+
+    absent_dropped = set(dropped_absent)
+    landed_ids = set(params.get("landed_chunks") or []) | {
+        c.id for c in done_chunks
+        if c not in contributing_chunks and not (c.paths and set(c.paths) <= absent_dropped)
+    }
+    if credit_gate.no_credited_landing(
+        set(stranded), {c.id for c in contributing_chunks + contributing_partial}, landed_ids
+    ):
+        if close_ctx is not None:
+            close_ctx.clear()
+        shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(stranded.items()))
+        return _error(
+            f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}. "
+            "Finish or land the stranded chunks, then re-fire",
+            refused=credit_gate.REFUSED_NO_CREDITED_LANDING,
+        )
+
+    credited: dict = {}
+    for c in done_chunks + contributing_partial:
+        declared = set(c.paths) | set(_own_prefix_files(worktree_root, c, report_cache) or [])
+        credited[c.id] = sorted(declared - absent_dropped)
+    sibling_set = {p for ps in sibling_paths.values() for p in ps}
+    landing_now = set(all_paths) | set(deleted_paths) | sibling_set
+    unprobed = sorted({p for ps in credited.values() for p in ps} - landing_now)
+    credit_changed = changed
+    if changed is not None and unprobed:
+        probed = _changed(snapshot, worktree_root, unprobed)
+        credit_changed = None if probed is None else set(changed) | set(probed)
+    uncommitted = credit_gate.uncommitted_credited(
+        credited, set(all_paths), set(deleted_paths), sibling_set,
+        None if credit_changed is None else set(credit_changed),
+    )
+    if uncommitted:
+        if close_ctx is not None:
+            close_ctx.clear()
+        shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(uncommitted.items()))
+        return _error(
+            f"credited chunk(s) have declared writes outside this commit: {shown}. "
+            "Land them or list the chunk in params.incomplete_chunks, then re-fire",
+            refused=credit_gate.REFUSED_CREDITED_UNCOMMITTED,
+            uncommitted=uncommitted,
+        )
 
     from datetime import datetime, timezone
 

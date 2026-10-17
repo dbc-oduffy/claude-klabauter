@@ -42,7 +42,7 @@ def _run(lines: list[str], setup: str, tmp_path) -> dict:
     return json.loads(out)
 
 
-_PARSE_MARK = "_decision = JSON.parse"
+_PARSE_MARK = "const _try = "
 _NOT_RUN_MARK = "_decision === null"
 _GATE_MARK = "if (_gate.halt || !_gate.arm)"
 
@@ -115,3 +115,48 @@ def test_every_gate_halt_carries_a_non_empty_reason(gate, expect, sized_in_run, 
 def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run():
     assert "scout stdout:" in _line(_compose(), _GATE_MARK)
     assert "scout stdout:" not in _line(_compose(prompt=None, sizing_rel="state/sizings/x.yaml"), _GATE_MARK)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        '{"route":"plan","tshirt":"L","write":{"path":"s.yaml","status":"written"}}',
+        '{"route":"plan","tshirt":"L","write":{"status":"written"}}\n',
+        'note {x}\n{"route":"plan","write":{"status":"written"}}\nderived 1 row {done}\n',
+    ],
+)
+def test_a_compact_one_line_decision_is_a_decision_not_a_scout_that_never_ran(stdout, tmp_path):
+    script = _compose()
+    setup = (
+        "let _halted = null; const _runId = 'run-1';\n"
+        f"const _scouted = {{ exit_code: 0, stdout: {json.dumps(stdout)}, stderr: '' }};"
+    )
+    assert _run([_line(script, _PARSE_MARK), _line(script, _NOT_RUN_MARK)], setup, tmp_path) is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "stdout, expect",
+    [
+        ('{"warn": "stderr json"}', None),
+        ('{"warn": "x"}\n{"route": "plan"}', {"route": "plan"}),
+        ('{\n  "route": "plan"\n}\n{"note": "stderr"}\n', {"route": "plan"}),
+    ],
+)
+def test_only_an_object_with_a_string_route_is_the_decision(stdout, expect, tmp_path):
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    script = _compose()
+    prog = (
+        f"let _halted = null; let _decision; const _scouted = {{ exit_code: 0, stdout: {json.dumps(stdout)}, stderr: '' }};\n"
+        + _line(script, _PARSE_MARK)
+        + "\nconsole.log(JSON.stringify(_decision));\n"
+    )
+    f = tmp_path / "t.js"
+    f.write_text(prog, encoding="utf-8")
+    out = subprocess.run(
+        ["node", str(f)], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+    assert json.loads(out) == expect

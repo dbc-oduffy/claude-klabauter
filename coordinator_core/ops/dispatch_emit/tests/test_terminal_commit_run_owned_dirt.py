@@ -41,7 +41,7 @@ def repo(tmp_path, monkeypatch):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
-    (root / "README.md").write_text("seed\n", encoding="utf-8")
+    (root / "README.md").write_text("seed\n", encoding="utf-8", newline="")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
@@ -49,13 +49,13 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     (root / "src").mkdir()
-    (root / "src" / "a.py").write_text("a\n", encoding="utf-8")
+    (root / "src" / "a.py").write_text("a\n", encoding="utf-8", newline="")
     return root
 
 
 def _run(repo: Path, **params) -> dict:
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),))
-    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
     return terminal_commit._handler(
         {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, **params},
         repo_root=repo / ".git",
@@ -72,7 +72,7 @@ def _reviewed_touching(*files: str) -> dict:
 
 
 def test_a_run_owned_undeclared_file_lands(repo):
-    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
     out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("src/own.py"))
     assert out["committed"] is True, out
     assert "src/own.py" in _committed(repo)
@@ -81,7 +81,7 @@ def test_a_run_owned_undeclared_file_lands(repo):
 
 
 def test_a_session_claimed_file_the_run_never_touched_is_reported_not_committed(repo):
-    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
     session_scope.touch(SELF, "src/own.py", cwd=str(repo))
     out = _run(repo, session_id=SELF)
     assert out["committed"] is True, out
@@ -91,9 +91,9 @@ def test_a_session_claimed_file_the_run_never_touched_is_reported_not_committed(
 
 
 def test_sibling_run_same_session_same_directory_is_not_staged(repo):
-    (repo / "src" / "a_new.py").write_text("a new\n", encoding="utf-8")
-    (repo / "src" / "b.py").write_text("b\n", encoding="utf-8")
-    (repo / "src" / "b_other.py").write_text("b other\n", encoding="utf-8")
+    (repo / "src" / "a_new.py").write_text("a_new = 1\n", encoding="utf-8", newline="")
+    (repo / "src" / "b.py").write_text("b\n", encoding="utf-8", newline="")
+    (repo / "src" / "b_other.py").write_text("b_other = 1\n", encoding="utf-8", newline="")
     session_scope.touch(SELF, "src/b.py", cwd=str(repo))
     session_scope.touch(SELF, "src/b_other.py", cwd=str(repo))
     out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("src/a_new.py"))
@@ -106,8 +106,8 @@ def test_sibling_run_same_session_same_directory_is_not_staged(repo):
 
 
 def test_a_peer_claimed_file_in_the_same_directory_is_reported_not_committed(repo):
-    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
-    (repo / "src" / "theirs.py").write_text("theirs\n", encoding="utf-8")
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
+    (repo / "src" / "theirs.py").write_text("theirs\n", encoding="utf-8", newline="")
     session_core.init(PEER, cwd=str(repo))
     session_scope.touch(PEER, "src/theirs.py", cwd=str(repo))
     out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("src/own.py", "src/theirs.py"))
@@ -118,7 +118,7 @@ def test_a_peer_claimed_file_in_the_same_directory_is_reported_not_committed(rep
 
 
 def test_an_unclaimed_undeclared_file_is_reported_not_committed(repo):
-    (repo / "src" / "stray.py").write_text("stray\n", encoding="utf-8")
+    (repo / "src" / "stray.py").write_text("stray\n", encoding="utf-8", newline="")
     out = _run(repo, session_id=SELF)
     assert out["committed"] is True, out
     assert "src/stray.py" not in _committed(repo)
@@ -128,7 +128,7 @@ def test_an_unclaimed_undeclared_file_is_reported_not_committed(repo):
 
 def test_a_claimed_file_outside_the_declared_directories_is_not_run_owned(repo):
     (repo / "elsewhere").mkdir()
-    (repo / "elsewhere" / "other-run.py").write_text("x\n", encoding="utf-8")
+    (repo / "elsewhere" / "other-run.py").write_text("x\n", encoding="utf-8", newline="")
     session_scope.touch(SELF, "elsewhere/other-run.py", cwd=str(repo))
     out = _run(repo, session_id=SELF)
     assert out["committed"] is True, out
@@ -138,10 +138,10 @@ def test_a_claimed_file_outside_the_declared_directories_is_not_run_owned(repo):
 
 def _track(repo: Path, *names: str) -> None:
     for name in names:
-        (repo / "src" / name).write_text(name + "\n", encoding="utf-8")
+        (repo / "src" / name).write_text(name + "\n", encoding="utf-8", newline="")
     _git(["add", "src"], repo)
     _git(["commit", "-q", "-m", "track"], repo)
-    (repo / "src" / "a.py").write_text("a edited\n", encoding="utf-8")
+    (repo / "src" / "a.py").write_text("a_edited = 1\n", encoding="utf-8", newline="")
 
 
 def _run_stranded(repo: Path, **params) -> dict:
@@ -149,23 +149,25 @@ def _run_stranded(repo: Path, **params) -> dict:
         ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),
         ChunkCommit(id="C2", title="t2", paths=("src/gone.py",)),
     ))
-    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
     return terminal_commit._handler(
         {"script_path": "run.mjs", "incomplete_chunks": ["C2"], "inline_review": _REVIEWED, **params},
         repo_root=repo / ".git",
     )
 
 
-def test_a_stranded_rows_declared_deletion_lands_with_a_claimed_edit(repo):
+def test_a_stranded_rows_declared_deletion_is_held_back_and_reported(repo):
+    # The credit gate outranks run-owned dirt: a path a stranded chunk declares never rides
+    # the commit by a side route, a deletion included. It is reported, not silently dropped.
     _track(repo, "gone.py")
     (repo / "src" / "gone.py").unlink()
-    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
     out = _run_stranded(repo, session_id=SELF, inline_review=_reviewed_touching("src/own.py"))
     assert out["committed"] is True, out
-    assert _committed(repo) == ["src/a.py", "src/gone.py", "src/own.py"]
-    assert "src/gone.py" in out["deleted_paths"]
-    assert "src/gone.py" not in out["run_owned"]
-    assert "src/gone.py" not in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
+    assert _committed(repo) == ["src/a.py", "src/own.py"]
+    assert "src/gone.py" not in out.get("deleted_paths", [])
+    assert "src/gone.py" in out["stranded_residue"]["C2"]
+    assert "src/gone.py" in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
 
 
 def test_an_undeclared_unclaimed_deleted_tracked_file_is_not_committed(repo):
@@ -213,7 +215,7 @@ def test_an_unreadable_head_spine_joins_no_run_owned_deletions(repo, monkeypatch
 
 
 def test_a_call_without_a_session_id_keeps_the_declared_only_behaviour(repo):
-    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8")
+    (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
     session_scope.touch(SELF, "src/own.py", cwd=str(repo))
     out = _run(repo)
     assert out["committed"] is True, out

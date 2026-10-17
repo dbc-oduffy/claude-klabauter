@@ -45,7 +45,7 @@ def repo(tmp_path):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
-    (root / "README.md").write_text("seed\n", encoding="utf-8")
+    (root / "README.md").write_text("seed\n", encoding="utf-8", newline="")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     return root
@@ -53,7 +53,7 @@ def repo(tmp_path):
 
 def _script(repo: Path) -> str:
     request = CommitRequest(chunks=(ChunkCommit(id="C4", title="t4", paths=("a.py",)),))
-    (repo / "run.mjs").write_text("// s\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / "run.mjs").write_text("// s\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
     return "run.mjs"
 
 
@@ -120,7 +120,7 @@ def _fire(repo: Path, monkeypatch, inline_review: dict = REVIEWED) -> tuple[dict
 
 
 def test_drift_since_the_runs_last_recorded_write_refuses(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     _record(repo, "a.py", _sha("A\n"))
     head = _git(["rev-parse", "HEAD"], repo)
 
@@ -135,18 +135,18 @@ def test_drift_since_the_runs_last_recorded_write_refuses(repo, monkeypatch):
 
 
 def test_a_refused_run_leaves_no_receipts_and_can_refire(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     _record(repo, "a.py", _sha("A\n"))
     out, _ = _fire(repo, monkeypatch)
     assert out["committed"] is False
 
-    (repo / "a.py").write_text("A\n", encoding="utf-8")
+    (repo / "a.py").write_text("A\n", encoding="utf-8", newline="")
     out, _ = _fire(repo, monkeypatch)
     assert out["committed"] is True, out
 
 
 def test_matching_bytes_commit(repo, monkeypatch):
-    (repo / "a.py").write_text("A\n", encoding="utf-8")
+    (repo / "a.py").write_text("A\n", encoding="utf-8", newline="")
     _record(repo, "a.py", _sha("A\n"))
     out, seen = _fire(repo, monkeypatch)
     assert out["committed"] is True, out
@@ -154,7 +154,7 @@ def test_matching_bytes_commit(repo, monkeypatch):
 
 
 def test_a_hashless_newest_event_carries_no_expectation(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     _record(repo, "a.py", _sha("A\n"))
     _record(repo, "a.py", None)
     out, seen = _fire(repo, monkeypatch)
@@ -163,7 +163,7 @@ def test_a_hashless_newest_event_carries_no_expectation(repo, monkeypatch):
 
 
 def test_only_committed_declared_paths_enter_the_expectation_map(repo, monkeypatch):
-    (repo / "a.py").write_text("A\n", encoding="utf-8")
+    (repo / "a.py").write_text("A\n", encoding="utf-8", newline="")
     _record(repo, "a.py", _sha("A\n"))
     _record(repo, "README.md", _sha("not-the-readme\n"))
     out, seen = _fire(repo, monkeypatch)
@@ -177,7 +177,7 @@ _WITH_BASE = {**REVIEWED, "prep": {"run_base_sha": BASE}}
 
 
 def test_a_review_of_the_current_bytes_supersedes_an_older_session_write(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
@@ -186,7 +186,7 @@ def test_a_review_of_the_current_bytes_supersedes_an_older_session_write(repo, m
 
 
 def test_a_rewrite_after_the_review_still_refuses_with_the_reviewed_hash(repo, monkeypatch):
-    (repo / "a.py").write_text("C\n", encoding="utf-8")
+    (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
@@ -197,7 +197,7 @@ def test_a_rewrite_after_the_review_still_refuses_with_the_reviewed_hash(repo, m
 
 
 def test_a_session_write_after_the_review_wins(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     os.utime(repo / "a.py", (2500.0, 2500.0))
     _record_at(repo, "a.py", _sha("A\n"), 3000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
@@ -215,7 +215,7 @@ def test_the_remedy_names_a_registered_op():
 
 
 def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 2000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
@@ -224,13 +224,13 @@ def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):
 
 
 def test_an_unparseable_review_stamp_is_no_review_basis(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8")
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     sidecar = next((repo / ".coordinator-local").rglob("*-prep.review-prep.md"))
     text = sidecar.read_text(encoding="utf-8")
     assert "Z'" in text
-    sidecar.write_text(text.replace("Z'", "Z-garbage'"), encoding="utf-8")
+    sidecar.write_text(text.replace("Z'", "Z-garbage'"), encoding="utf-8", newline="")
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
     assert out["refused"] == "blob-drift"
     assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}
@@ -244,7 +244,7 @@ def _integration(repo: Path, at: float) -> None:
     share = repo / ".coordinator-local" / "subagent-share" / SID
     share.mkdir(parents=True, exist_ok=True)
     f = share / "rev-stem.md"
-    f.write_text("integration\n", encoding="utf-8")
+    f.write_text("integration\n", encoding="utf-8", newline="")
     os.utime(f, (at, at))
 
 
@@ -258,7 +258,7 @@ _FIXED = {**_WITH_BASE, "fixes": 2}
 
 
 def test_reviewer_fixes_applied_in_the_wave_commit_without_drift(repo, monkeypatch):
-    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     _stamp(repo, "a.py", 2500.0)
@@ -269,7 +269,7 @@ def test_reviewer_fixes_applied_in_the_wave_commit_without_drift(repo, monkeypat
 
 
 def test_a_change_after_the_waves_fixes_integrated_still_refuses(repo, monkeypatch):
-    (repo / "a.py").write_text("LATE\n", encoding="utf-8")
+    (repo / "a.py").write_text("LATE\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     _stamp(repo, "a.py", 3500.0)
@@ -280,7 +280,7 @@ def test_a_change_after_the_waves_fixes_integrated_still_refuses(repo, monkeypat
 
 
 def test_without_applied_fixes_the_post_review_bytes_still_refuse(repo, monkeypatch):
-    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     _stamp(repo, "a.py", 2500.0)
@@ -290,7 +290,7 @@ def test_without_applied_fixes_the_post_review_bytes_still_refuse(repo, monkeypa
 
 
 def test_an_unresolved_integration_sidecar_keeps_the_review_expectation(repo, monkeypatch):
-    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     _stamp(repo, "a.py", 2500.0)
@@ -299,7 +299,7 @@ def test_an_unresolved_integration_sidecar_keeps_the_review_expectation(repo, mo
 
 
 def test_a_separator_bearing_integration_stem_does_not_resolve(repo, monkeypatch):
-    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     _stamp(repo, "a.py", 2500.0)
@@ -334,7 +334,7 @@ def test_a_foreign_edit_of_the_note_after_the_expectation_still_refuses(ask_repo
 
     def foreign_edit_then_commit(op, params, **kw):
         if op == "ceremony.commit_v2":
-            (ask_repo / NOTE).write_text("# foreign\n", encoding="utf-8")
+            (ask_repo / NOTE).write_text("# foreign\n", encoding="utf-8", newline="")
         return real(op, params, **kw)
 
     monkeypatch.setattr(terminal_commit, "reentrant_dispatch", foreign_edit_then_commit)
@@ -351,14 +351,14 @@ def _bookkeeping(repo: Path, slice_files: list, at: float) -> None:
     share = repo / ".coordinator-local" / "subagent-share" / SID
     share.mkdir(parents=True, exist_ok=True)
     f = share / "rev-stem.md"
-    f.write_text(f"---\n{yaml.safe_dump({'prep': {'slice_files': slice_files}})}---\n", encoding="utf-8")
+    f.write_text(f"---\n{yaml.safe_dump({'prep': {'slice_files': slice_files}})}---\n", encoding="utf-8", newline="")
     os.utime(f, (at, at))
 
 
 def test_a_wave_fixed_path_with_no_stored_review_hash_commits(repo, monkeypatch):
     """A run whose prep was a test-runner sidecar stores no reviewed_sha256: the wave's own record
     of its slice files is then what admits the post-fix bytes."""
-    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _stamp(repo, "a.py", 2500.0)
     _bookkeeping(repo, ["a.py"], 3000.0)
@@ -368,7 +368,7 @@ def test_a_wave_fixed_path_with_no_stored_review_hash_commits(repo, monkeypatch)
 
 
 def test_a_path_outside_the_waves_slice_files_still_refuses(repo, monkeypatch):
-    (repo / "a.py").write_text("FIXED\n", encoding="utf-8")
+    (repo / "a.py").write_text("FIXED\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _stamp(repo, "a.py", 2500.0)
     _bookkeeping(repo, ["b.py"], 3000.0)
@@ -377,9 +377,111 @@ def test_a_path_outside_the_waves_slice_files_still_refuses(repo, monkeypatch):
 
 
 def test_a_change_after_a_slice_file_wave_integrated_still_refuses(repo, monkeypatch):
-    (repo / "a.py").write_text("LATE\n", encoding="utf-8")
+    (repo / "a.py").write_text("LATE\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _stamp(repo, "a.py", 3500.0)
     _bookkeeping(repo, ["a.py"], 3000.0)
     out, _ = _fire(repo, monkeypatch, _FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+_WAVE_REL = ".coordinator-local/subagent-share/" + SID + "/reviewer.md"
+
+
+def _wave_sidecar(repo: Path, done_at: float, rows=(), *, touched_at: float = None, prose_files=(), targets=()) -> None:
+    """A review-wave reviewer's own sidecar: ``findings_ledger.verified_at`` is when it finished
+    applying (``done_at``); its ledger block holds ``rows``; ``prose_files`` are named in a
+    findings-section json block and ``targets`` in ``reviewed_targets``, neither of which is a
+    fix. The file's mtime is ``touched_at`` (default ``done_at``): a later touch moves only it."""
+    import json
+
+    share = repo / ".coordinator-local" / "subagent-share" / SID
+    share.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.fromtimestamp(done_at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fm = "\n".join(
+        ["---", "reviewed_targets:", *([f"  - {t}" for t in targets] or ["  []"]),
+         f"findings_ledger: {{rows: {len(rows)}, applied: {len(rows)}, verified_at: {stamp}}}", "---"]
+    )
+    prose = json.dumps([{"id": "p", "file": f, "before": "x", "after": "y", "verified": True} for f in prose_files])
+    ledger = json.dumps(list(rows))
+    f = share / "reviewer.md"
+    f.write_text(
+        f"{fm}\n\n## Findings\n\n```json\n{prose}\n```\n\n## Findings Ledger\n\n```json\n{ledger}\n```\n",
+        encoding="utf-8", newline="",
+    )
+    at = touched_at if touched_at is not None else done_at
+    os.utime(f, (at, at))
+
+
+def _row(file: str, **over) -> dict:
+    return {"id": "f1", "file": file, "before": "old", "after": "new", "verified": True, **over}
+
+
+_WAVE_FIXED = {**_FIXED, "integration_stem": "bookkeeping-stem-no-file", "wave_sidecar_paths": [_WAVE_REL]}
+
+
+def _drifted_a(repo: Path, text: bytes = b"FIXED\n", mtime: float = 2500.0) -> None:
+    (repo / "a.py").write_bytes(text)  # bytes: write_text would CRLF the hash on Windows
+    _record_at(repo, "a.py", _sha("A\n"), 1000.0)
+    _stamp(repo, "a.py", mtime)
+
+
+def test_a_verified_ledger_row_commits_when_no_integration_record_resolves(repo, monkeypatch):
+    """The bookkeeping stem names no file on disk: the reviewer's own sidecar supplies the fixed
+    paths (its verified ledger rows) and the moment it finished (its recorded verified_at)."""
+    _drifted_a(repo)
+    _wave_sidecar(repo, 3000.0, [_row("a.py")])
+    out, seen = _fire(repo, monkeypatch, _WAVE_FIXED)
+    assert out["committed"] is True, out
+    assert seen[0]["expected_content_sha256"] == {"a.py": touch_record.compute_content_hash(repo / "a.py")}
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [_row("a.py", verified=False)],
+        [_row("a.py", status="suspended")],
+        [_row("a.py", before="", after="")],
+        [_row("b.py")],
+    ],
+    ids=["unverified", "suspended", "no-change", "other-file"],
+)
+def test_a_ledger_row_that_is_not_an_applied_fix_of_the_path_still_refuses(rows, repo, monkeypatch):
+    _drifted_a(repo)
+    _wave_sidecar(repo, 3000.0, rows)
+    out, _ = _fire(repo, monkeypatch, _WAVE_FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+def test_a_path_only_named_by_the_reviewer_still_refuses(repo, monkeypatch):
+    """Named in a findings-prose json block, a reviewed_targets file and a reviewed_targets dir
+    is reviewed, not fixed."""
+    _drifted_a(repo)
+    _wave_sidecar(repo, 3000.0, [], prose_files=["a.py"], targets=["working-tree:a.py", "working-tree:./"])
+    out, _ = _fire(repo, monkeypatch, _WAVE_FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+def test_a_change_after_the_reviewer_finished_still_refuses(repo, monkeypatch):
+    _drifted_a(repo, b"LATE\n", mtime=3500.0)
+    _wave_sidecar(repo, 3000.0, [_row("a.py")])
+    out, _ = _fire(repo, monkeypatch, _WAVE_FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+def test_a_later_touch_of_the_reviewer_sidecar_does_not_widen_the_window(repo, monkeypatch):
+    """A foreign edit between the reviewer's recorded finish and a later bookkeeping touch of its
+    sidecar is drift: the anchor is verified_at, not the file's mtime."""
+    _drifted_a(repo, b"FOREIGN\n", mtime=3500.0)
+    _wave_sidecar(repo, 3000.0, [_row("a.py")], touched_at=4000.0)
+    out, _ = _fire(repo, monkeypatch, _WAVE_FIXED)
+    assert out["refused"] == "blob-drift"
+
+
+def test_a_reviewer_sidecar_with_no_recorded_finish_adopts_nothing(repo, monkeypatch):
+    _drifted_a(repo)
+    _wave_sidecar(repo, 3000.0, [_row("a.py")])
+    f = repo / ".coordinator-local" / "subagent-share" / SID / "reviewer.md"
+    f.write_text(f.read_text(encoding="utf-8").replace("verified_at", "seen_at"), encoding="utf-8", newline="")
+    out, _ = _fire(repo, monkeypatch, _WAVE_FIXED)
     assert out["refused"] == "blob-drift"

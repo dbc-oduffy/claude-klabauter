@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
+from coordinator_core.ops.dispatch_emit.credit_gate import DOCS_CHUNK_ID, SIZING_CHUNK_ID
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
     REVIEWER_AGENT_TYPE,
@@ -650,12 +651,12 @@ def stage(
         root, run_id, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]
     )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
-    chunks.append(ChunkCommit(id="docs", title="run docs", paths=docs))
+    chunks.append(ChunkCommit(id=DOCS_CHUNK_ID, title="run docs", paths=docs))
     carried_sizing = sizing_rel or commit_sizing_rel
     if carried_sizing:
         # The run flips the sizing to routed and links its plan; no row declares it.
         chunks.append(
-            ChunkCommit(id="sizing", title="sizing record", paths=(carried_sizing,))
+            ChunkCommit(id=SIZING_CHUNK_ID, title="sizing record", paths=(carried_sizing,))
         )
 
     branch = head_branch(root)

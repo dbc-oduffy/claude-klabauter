@@ -573,6 +573,11 @@ _EXPECTED_SPAWNS = 1
 def test_process_time_and_spawns_on_a_40_path_request(repo):
     # AC17: process time < 200ms and a pinned spawn count for a clean 40-path
     # request (no eol-fallback path in this fixture).
+    # Warm-up commit first: under xdist this may be the worker's first commit, and its lazy
+    # imports would otherwise land in the measured window and make the bar scheduling-dependent.
+    (repo / "warm.py").write_text("0\n", encoding="utf-8")
+    warm = CommitRequest(chunks=(ChunkCommit(id="C2", title="warm", paths=("warm.py",)),))
+    assert _call(repo, {"script_path": _write_script(repo, warm), "incomplete_chunks": []})["committed"] is True
     paths = []
     for i in range(40):
         name = f"f{i}.py"

@@ -132,8 +132,8 @@ def test_assemble_decision_parse_tolerates_trailing_stderr_notes():
     """The agent's Bash tool folds stderr into stdout; the JSON is sliced out, not parsed whole."""
     import json
 
-    line = next(ln for ln in _compose().splitlines() if "_decision = JSON.parse" in ln)
-    assert "_out.slice(_out.indexOf('{'), _out.lastIndexOf('\\n}') + 2)" in line
+    line = next(ln for ln in _compose().splitlines() if "const _try = " in ln)
+    assert "_try(_out.slice(_s, _out.lastIndexOf('\\n}') + 2))" in line
     out = '{\n  "route": "plan"\n}\nderived 2 requirement_register rows (T0, T1)\nembedded 2 pm_verbatims (turns 0-1)\n'
     assert json.loads(out[out.index("{") : out.rindex("\n}") + 2]) == {"route": "plan"}
 
@@ -246,7 +246,7 @@ def test_reword_merges_only_the_criterion_and_the_halt_follows_it():
     assert script.count("const _sizingPath") == 1
     reword_end = script.index("label: 'size-reword'")
     halt = script.index("if (_scouted.exit_code !== 0) { _halted")
-    assert reword_end < script.index("_decision = JSON.parse") < halt
+    assert reword_end < script.index("const _try = ") < halt
     assert "the gate, plan, stage, execute and review phases were skipped" in script[halt:]
 
 

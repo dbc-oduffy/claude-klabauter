@@ -63,12 +63,16 @@ from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import feature_refusal
-from coordinator_core.session import machinery_paths as _machinery_paths
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
     build_setup_error_result,
     main_worktree_root,
+)
+from coordinator_core.ops.fleet._outbox_enum import (  # noqa: F401 — re-exports
+    legacy_outbox_dir,
+    merged_outbox_drafts,
+    outbox_dir,
 )
 from coordinator_core.ops.fleet._memo_summary import (
     SUMMARY_PLACEHOLDER,
@@ -102,16 +106,8 @@ _MODE = "draft"
 MUTATES = [".coordinator-local/memo-outbox/*.md"]
 
 
-def outbox_dir(caller_worktree: Path) -> Path:
-    """The CANONICAL (write) outbox dir for `caller_worktree` --
-    `.coordinator-local/memo-outbox/`. Every NEW write in this op family
-    targets this directory only; see `legacy_outbox_dir` for the retired
-    read-fallback root."""
-    return Path(_machinery_paths.memo_outbox_dir(str(caller_worktree)))
-
-
-def legacy_outbox_dir(caller_worktree: Path) -> Path:
-    return Path(_machinery_paths.legacy_memo_outbox_dir(str(caller_worktree)))
+# outbox_dir / legacy_outbox_dir / merged_outbox_drafts live in `_outbox_enum`
+# (imported above) and are re-exported here unchanged.
 
 
 def resolve_outbox_draft_path(caller_worktree: Path, topic: str) -> Path:
@@ -123,22 +119,6 @@ def resolve_outbox_draft_path(caller_worktree: Path, topic: str) -> Path:
         return legacy_path
     return new_path
 
-
-def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
-    new_dir = outbox_dir(caller_worktree)
-    legacy_dir = legacy_outbox_dir(caller_worktree)
-
-    new_paths = sorted(new_dir.glob("*.md"), key=lambda p: p.name) if new_dir.is_dir() else []
-    seen_topics = {p.stem for p in new_paths}
-    legacy_paths = (
-        sorted(
-            (p for p in legacy_dir.glob("*.md") if p.stem not in seen_topics),
-            key=lambda p: p.name,
-        )
-        if legacy_dir.is_dir()
-        else []
-    )
-    return [*new_paths, *legacy_paths]
 
 # Placeholder body written into a fresh draft — guides the human/agent toward
 # memo.compose (fill in body) then memo.send (deliver). Mirrors DoE's

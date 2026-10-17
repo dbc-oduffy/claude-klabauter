@@ -58,6 +58,12 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.lifecycle import main_worktree_root  # re-export — see note below
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.fleet import _index_resync_drain
+from coordinator_core.ops.fleet._outbox_enum import (  # noqa: F401 — re-exports
+    _emit_warm_diagnostic,
+    _setup_error,
+    build_dry_run_result,
+    build_setup_error_result,
+)
 from coordinator_core.ops.fleet._index_resync_pending import PendingResync, record_pending
 # Peer-to-peer import, deliberate (2026-08-26, archive_and_commit tree-build
 # chunk): _commit_via_head_spine is the shared "rewrite HEAD's tree spine ->
@@ -772,96 +778,15 @@ def validate_params(
     return (mode, dry_run, candidate_ids)
 
 
-def _emit_warm_diagnostic(text: str) -> None:
-    """Forward one diagnostic line to the warm per-request sink, if one is bound.
-
-    Function-local import and fail-open by construction: this helper runs on the
-    refusal path of every fleet op, including in a cold spawn where nothing has
-    bound a sink and where `coordinator_core.warm` has no reason to be imported
-    at module scope.  A failure here must never convert a well-formed refusal
-    into an exception — the reason is already on stderr by the time this is
-    called, so the worst case is that a warm caller falls back to today's
-    behaviour rather than losing anything it has today.
-    """
-    try:
-        from coordinator_core.warm.entry_seam import emit_diagnostic
-
-        emit_diagnostic(text)
-    except Exception:  # noqa: BLE001 — diagnostics never fail the op
-        pass
-
-
-def _setup_error(mode, dry_run, reason: str) -> dict:
-    """Internal: log reason to stderr and return the exit_code:1 standard-echoed envelope.
-
-    The reason is NOT added as a top-level wire field.  The frozen envelope shape
-    (contract §2.1) is not expanded by setup errors; cockpit branches on exit_code:1
-    alone (contract §3.2).  So stderr is the ONLY diagnostic channel a setup error
-    has, and it must not depend on logging configuration: `_LOG.error` reaches
-    stderr today only via logging's lastResort handler, which any consumer that
-    calls `logging.basicConfig()` or attaches a handler silently diverts.  The
-    explicit write below guarantees the reason is on the op process's stderr
-    regardless.  stderr carries no structured contract on the exit-0 success path
-    (`_fatal_stderr`'s JSON error envelope is the nonzero-exit path only), so this
-    is a diagnostic addition, not a wire change.
-
-    Reaching THIS process's stderr is ALSO not enough under the warm engine, where
-    "this process" is the SERVER, not the caller's child — the reason lands on the
-    server's stderr and the caller reads an empty stream.  `entry_seam.emit_diagnostic`
-    below is the warm half of the same channel: the server binds a per-request sink
-    and returns what it collected on the response frame.  The stderr write stays
-    unconditional and is what a cold caller reads; neither replaces the other.
-
-    Reaching THIS process's stderr is where claude-klabauter's guarantee stops.  A setup error
-    is a JSON-RPC *success* response, so `invoke._exit_code_for_response` exits the
-    process 0 while the envelope says exit_code:1 — a consumer that spawns this
-    process and reads stderr only on a nonzero exit will capture the reason and
-    discard it.  Consumers must read stderr on the rc==0 path; both halves are pinned
-    by tests/test_setup_error_stderr_channel.py.
-    """
-    _LOG.error("fleet op setup error: %s", reason)
-    print(f"fleet op setup error: {reason}", file=sys.stderr, flush=True)
-    _emit_warm_diagnostic(f"fleet op setup error: {reason}")
-    return {
-        "exit_code": 1,
-        "mode": mode,
-        "dry_run": dry_run,
-        "candidates": [],
-        "acted": [],
-        "skipped": [],
-        "failed": [],
-    }
-
-
-def build_setup_error_result(mode, dry_run, reason: str) -> dict:
-    """Public alias for build_setup_error_result used by handlers for D3 / re-verify errors.
-
-    Logs reason daemon-side; returns the exit_code:1 standard-echoed envelope.
-    The frozen wire envelope is NOT expanded — no reason/error top-level field.
-    """
-    return _setup_error(mode, dry_run, reason)
+# `_emit_warm_diagnostic`, `_setup_error`, `build_setup_error_result` and
+# `build_dry_run_result` live in the light leaf `_outbox_enum` (imported above)
+# so memo.list_outbox does not pay this module's import closure; the names are
+# re-exported here unchanged.
 
 
 # ---------------------------------------------------------------------------
 # Envelope builders (contract §2.1 / §3.2)
 # ---------------------------------------------------------------------------
-
-def build_dry_run_result(mode: str, candidates: list) -> dict:
-    """Build the exit_code:0 dry_run:true response envelope (contract §2.1 :176-215).
-
-    candidates: list of candidate dicts, each with:
-        id, title, status, family, terminal_since (nullable), note (nullable)
-    Mutates nothing — the preview phase is read-only.
-    """
-    return {
-        "exit_code": 0,
-        "mode": mode,
-        "dry_run": True,
-        "candidates": candidates,
-        "acted": [],
-        "skipped": [],
-        "failed": [],
-    }
 
 
 def build_act_result(

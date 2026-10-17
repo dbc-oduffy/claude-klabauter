@@ -41,7 +41,7 @@ def repo(tmp_path, monkeypatch):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
-    (root / "README.md").write_text("seed\n", encoding="utf-8")
+    (root / "README.md").write_text("seed\n", encoding="utf-8", newline="")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
@@ -49,9 +49,9 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     (root / "src").mkdir()
-    (root / "src" / "a.py").write_text("a\n", encoding="utf-8")
+    (root / "src" / "a.py").write_text("a\n", encoding="utf-8", newline="")
     (root / "elsewhere" / "tests").mkdir(parents=True)
-    (root / STRAY).write_text("review edit\n", encoding="utf-8")
+    (root / STRAY).write_text("review_edit = 1\n", encoding="utf-8", newline="")
     return root
 
 
@@ -61,7 +61,7 @@ def _review_wrote(monkeypatch, writes) -> None:
 
 def _run(repo: Path, **params) -> dict:
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),))
-    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
     return terminal_commit._handler(
         {
             "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED,
@@ -110,7 +110,7 @@ def test_unlandable_review_edit_refuses_naming_the_files(repo, monkeypatch):
 
 
 def test_a_deleted_review_write_refuses(repo, monkeypatch):
-    (repo / "elsewhere" / "tests" / "gone.py").write_text("x\n", encoding="utf-8")
+    (repo / "elsewhere" / "tests" / "gone.py").write_text("x\n", encoding="utf-8", newline="")
     _git(["add", "elsewhere"], repo)
     _git(["commit", "-q", "-m", "track"], repo)
     (repo / "elsewhere" / "tests" / "gone.py").unlink()
@@ -131,7 +131,7 @@ def test_an_unanswerable_source_sets_ok_false_with_the_commit_landed(repo, monke
 
 
 def test_an_executor_only_undeclared_file_is_still_only_reported(repo, monkeypatch):
-    (repo / "src" / "stray.py").write_text("stray\n", encoding="utf-8")
+    (repo / "src" / "stray.py").write_text("stray\n", encoding="utf-8", newline="")
     _review_wrote(monkeypatch, {STRAY: "agent-1"})
     out = _run(repo)
     assert out["committed"] is True, out

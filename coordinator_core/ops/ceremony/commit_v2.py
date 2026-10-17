@@ -105,7 +105,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
 from coordinator_core.ops.ceremony.commit_admission import skill_weight_check_worktree
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
 from coordinator_core.ops.ceremony.commit_companion import untracked_companions
-from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session import claim_index as session_claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
@@ -913,9 +913,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "repo_root (git common dir) was not supplied"
         )
 
-    d3_mismatch = check_repo_root(params.get("repo_root"), repo_root)
-    if d3_mismatch is not None:
-        return _error(d3_mismatch)
+    # `ops.fleet._common` is a heavy closure; an absent `repo_root` param needs none of it.
+    if params.get("repo_root") is not None:
+        from coordinator_core.ops.fleet._common import check_repo_root
+
+        d3_mismatch = check_repo_root(params.get("repo_root"), repo_root)
+        if d3_mismatch is not None:
+            return _error(d3_mismatch)
 
     raw_paths = params.get("paths") or []
     if not isinstance(raw_paths, list) or not all(isinstance(p, str) for p in raw_paths):
