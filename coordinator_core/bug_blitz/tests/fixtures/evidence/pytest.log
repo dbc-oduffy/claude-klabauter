@@ -1,0 +1,8 @@
+============================= test session starts =============================
+collected 9 items
+
+=========================== short test summary info ============================
+FAILED pkg/tests/test_a.py::test_one - AssertionError: assert 1 == 2
+FAILED pkg/tests/test_a.py::TestK::test_two
+FAILED pkg/tests/test_b.py::test_three
+============ 3 failed, 6 passed in 0.12s ============

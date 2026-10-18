@@ -2,7 +2,8 @@
 
 A literal with whitespace in it is prose naming the path, not a path operand: a body that writes
 an ungoverned file while its message text names a sizing passes. A path operand, a name bound to
-one, or a sizing passed as argv (`F=<sizing> && python3 - "$F"`) and written through is denied.
+one, or a sizing bound to a variable and passed as argv to a stdin program that writes through it,
+is denied.
 
 Negative-spec: does not assert deny text.
 """

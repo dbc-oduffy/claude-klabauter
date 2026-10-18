@@ -165,9 +165,15 @@ def test_leg_returns_awaitable_and_handler_runs_it_off_the_loop(monkeypatch):
 
 
 def test_register_op_decorates_the_handler_not_a_helper():
+    import importlib
+
     from coordinator_core.ipc import _REGISTRY
 
-    assert _REGISTRY["hooks.project_orientation"] is po._handler
+    live = importlib.import_module("coordinator_core.hooks.project_orientation")
+    registered = _REGISTRY["hooks.project_orientation"]
+    assert registered is live._handler
+    assert registered.__module__ == live.__name__
+    assert registered.__name__ == "_handler"
 
 
 def test_rendered_remedy_is_three_shell_tokens(tmp_path, monkeypatch):

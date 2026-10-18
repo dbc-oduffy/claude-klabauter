@@ -259,6 +259,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     record_dir,
 )
+from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
@@ -895,6 +896,8 @@ _PARAM_FIELDS = (
     Field("ask_brief_file", "str"),
     Field("stop_after", "str"),
     Field("ask_source", "str"),
+    Field("route_preference", "str"),
+    Field("em_rationale", "str"),
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
     Field("required_reviewers", "str_list"),
@@ -1673,6 +1676,18 @@ def _dispatch_emit(
             raise ValueError(f"dispatch.emit ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
         if ask_source == ASK_SOURCE_RELAYED and sizing_path:
             raise ValueError("dispatch.emit ask_source 'relayed' marks a raw ask's text; sizing_path carries none")
+        route_pref = _route_pref.RoutePreference(None, None)
+        if params.get("route_preference") is not None or params.get("em_rationale") is not None:
+            if sizing_path:
+                raise ValueError(
+                    "dispatch.emit route_preference/em_rationale mark a raw ask; sizing_path carries its own"
+                )
+            bad = _route_pref.refusal(
+                "dispatch.emit", params.get("route_preference"), params.get("em_rationale")
+            )
+            if bad:
+                raise ValueError(bad)
+            route_pref = _route_pref.parse(params.get("route_preference"), params.get("em_rationale"))
         sizing_rel: Optional[str] = None
         relayed_slice_text: Optional[str] = None
         if sizing_path:
@@ -1689,6 +1704,7 @@ def _dispatch_emit(
             if is_intake(intake_doc):
                 # Sized in-run: the gate and plan-blitz args are the run's, as for a raw ask.
                 ask_sizing = {"writes": list(params.get("writes") or []), "batons": []}
+                route_pref = _route_pref.from_em_analysis(intake_doc)
                 if slice_ask_source(intake_doc) == ASK_SOURCE_RELAYED:
                     ask_source = ASK_SOURCE_RELAYED
                     relayed_slice_text = str(intake_doc.get("intent") or "") or None
@@ -1754,6 +1770,7 @@ def _dispatch_emit(
             "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
             "inherited_base": inherited_base, "resumes_ask": resumes_ask,
             "ask_source": ask_source, "relayed_slice_text": relayed_slice_text,
+            "route_preference": route_pref,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }
         if ask_baton is not None:
@@ -2104,6 +2121,7 @@ def _dispatch_emit(
             stop_after=params.get("stop_after"),
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
+            route_preference=ask_ctx["route_preference"],
             required_reviewers=ask_ctx["required_reviewers"],
             run_base_sha=ask_ctx.get("inherited_base") or (
                 _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
@@ -2117,7 +2135,11 @@ def _dispatch_emit(
             ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
             ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
-            ask_file.write_text(ask_body, encoding="utf-8")
+            ask_file.write_text(ask_body, encoding="utf-8", newline="\n")
+        if not ask_ctx["route_preference"].is_empty():
+            pref_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / _route_pref.ROUTE_PREFERENCE_FILE
+            pref_file.parent.mkdir(parents=True, exist_ok=True)
+            pref_file.write_text(_route_pref.to_json(ask_ctx["route_preference"]), encoding="utf-8", newline="\n")
         bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
         ask_ctx["revisions_inherited"] = [
             {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip()}

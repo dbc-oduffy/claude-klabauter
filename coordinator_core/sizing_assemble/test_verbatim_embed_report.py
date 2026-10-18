@@ -65,31 +65,39 @@ def _record(count: int, size: int = 2500) -> None:
         pm_turns.append_turn(f"t{n} " + "x" * size, session_id="sid-vr")
 
 
-def test_default_window_embeds_every_turn_since_the_last_sizing(repo, sid, capsys) -> None:
+def test_default_window_embeds_one_turn_the_newest_in_the_window(repo, sid, capsys) -> None:
     _record(6, size=2500)
     code, out, err = _run(_sizing(repo), capsys)
     assert code == 0
-    assert err.strip().endswith("embedded 6 pm_verbatims (turns 0-5)")
+    assert err.strip().endswith("embedded 1 pm_verbatims (turns 5-5)")
     assert store.read_baton(sid, str(repo))["sized_through_turn"] == 5
     json.loads(out)
 
 
-def test_second_sizing_embeds_only_turns_after_the_mark(repo, sid, capsys) -> None:
+def test_second_sizing_embeds_only_a_turn_past_the_mark(repo, sid, capsys) -> None:
     _record(6, size=10)
     pm_turns.mark_sized_through(2, session_id=sid, cwd=str(repo))
     path = _sizing(repo)
     code, _, err = _run(path, capsys)
     assert code == 0
-    assert err.strip().endswith("embedded 3 pm_verbatims (turns 3-5)")
-    assert [e["turn"] for e in yaml.safe_load(path.read_text(encoding="utf-8"))["pm_verbatims"]] == [5, 4, 3]
+    assert err.strip().endswith("embedded 1 pm_verbatims (turns 5-5)")
+    assert [e["turn"] for e in yaml.safe_load(path.read_text(encoding="utf-8"))["pm_verbatims"]] == [5]
 
 
-def test_example_game_repo_shape_embeds_turn_9_with_no_prior_sizing(repo, sid, capsys) -> None:
+def test_example_game_repo_shape_embeds_the_newest_turn_with_no_prior_sizing(repo, sid, capsys) -> None:
     _record(11, size=700)
     path = _sizing(repo)
     code, _, _ = _run(path, capsys)
     assert code == 0
-    assert 9 in [e["turn"] for e in yaml.safe_load(path.read_text(encoding="utf-8"))["pm_verbatims"]]
+    assert [e["turn"] for e in yaml.safe_load(path.read_text(encoding="utf-8"))["pm_verbatims"]] == [10]
+
+
+def test_example_game_repo_turn_9_is_reachable_by_an_explicit_range(repo, sid, capsys) -> None:
+    _record(11, size=700)
+    path = _sizing(repo)
+    code, _, _ = _run(path, capsys, "--verbatim-turns", "9-9")
+    assert code == 0
+    assert [e["turn"] for e in yaml.safe_load(path.read_text(encoding="utf-8"))["pm_verbatims"]] == [9]
 
 
 def test_refused_write_leaves_the_mark(repo, sid, capsys) -> None:
@@ -165,13 +173,13 @@ def test_verbatim_turns_without_write_is_usage_error(capsys) -> None:
     assert sizing_assemble.main([*_ARGS, "--verbatim-turns", "0-1"]) == sizing_assemble.EXIT_USAGE
 
 
-def test_write_derives_a_register_covering_every_turn(repo, sid, capsys) -> None:
+def test_write_derives_a_register_covering_every_embedded_turn(repo, sid, capsys) -> None:
     _record(2, size=10)
     code, out, err = _run(_sizing(repo), capsys)
     assert code == 0
-    assert "derived 2 requirement_register rows" in err and "not covered" not in err
+    assert "derived 1 requirement_register rows" in err and "not covered" not in err
     assert json.loads(out)["write"]["register_coverage"] == {
-        "turns_total": 2,
+        "turns_total": 1,
         "turns_uncovered": [],
     }
 

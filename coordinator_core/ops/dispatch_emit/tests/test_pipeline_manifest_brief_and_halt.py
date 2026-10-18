@@ -8,12 +8,26 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.content_root import read_content_root
 from coordinator_core.ops.dispatch_emit import pipeline_manifest as pm
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest
 
 VENDORED = Path(pm.__file__).parent / "schemas" / "pipeline-manifest.schema.json"
-DOE = Path(__file__).resolve().parents[4].parent / "coordinator-content-repo" / "coordinator" / "schemas" / "pipeline-manifest.schema.json"
+
+
+def _doe_schema() -> Path:
+    root = read_content_root()
+    if not root:
+        return Path("absent")
+    for base in (Path(root) / "coordinator", Path(root)):
+        candidate = base / "schemas" / "pipeline-manifest.schema.json"
+        if candidate.is_file():
+            return candidate
+    return Path("absent")
+
+
+DOE = _doe_schema()
 
 GATE_SCHEMA = {
     "type": "object",

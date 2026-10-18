@@ -34,6 +34,9 @@ def _close():
     global _close_module
     if _close_module is None:
         path = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "workweek-complete-close.py"
+        from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
+
+        ensure_bin_lib_bound(str(path.parent))
         spec = importlib.util.spec_from_file_location("workweek_complete_close", path)
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)

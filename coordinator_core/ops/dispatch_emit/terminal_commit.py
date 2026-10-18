@@ -3068,6 +3068,9 @@ def _regenerate_landing_allowlist(worktree_root: Path, paths: list) -> Optional[
 
     generator = worktree_root / "coordinator" / "bin" / "publish-allowlist-generate.py"
     try:
+        from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
+
+        ensure_bin_lib_bound(str(generator.parent))
         spec = importlib.util.spec_from_file_location("publish_allowlist_generate", generator)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

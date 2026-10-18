@@ -7,6 +7,8 @@ import json
 import os
 import threading
 import time
+
+import pytest
 from pathlib import Path
 
 import coordinator_core
@@ -61,6 +63,7 @@ def test_parks_then_proceeds_when_marker_removed(tmp_path):
     assert not marker.exists()
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: a stale marker must not park for WAIT_BUDGET_S")
 def test_stale_marker_does_not_park(tmp_path):
     root = _engine_root(tmp_path)
     _raise_marker(root, deadline_in=-5)

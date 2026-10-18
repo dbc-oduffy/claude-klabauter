@@ -100,3 +100,22 @@ def test_incomplete_chunk_pushes_need_no_own_guard_and_result_rows_are_strings()
     assert "_incompleteChunks.push(g.id)" in script and "_incompleteChunks.push(o.id)" in script
     assert "rows: (_manifest?.rows ?? []).map((r) => r.id)" in script
     assert "String(r.id)" not in script
+
+
+def _adopt(manifest, soft: bool) -> str | None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    js = (
+        ask_compose._ADMIT_MANIFEST_JS
+        + f"\nlet _stagedManifest = null;\n_adoptManifest({json.dumps(manifest)}, {json.dumps(soft)});\n"
+        "process.stdout.write(JSON.stringify(_stageRefusal));\n"
+    )
+    return json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+
+
+def test_a_relayed_error_note_is_not_a_stage_refusal():
+    # A relay that shortened an oversized manifest put its note in `error`; the disk read decides.
+    note = {"error": "Not transcribed here: rows (68), about 103KB."}
+    assert _adopt(note, soft=True) is None
+    assert _adopt(note, soft=False) == note["error"]

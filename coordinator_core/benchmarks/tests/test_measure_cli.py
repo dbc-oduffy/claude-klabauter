@@ -104,7 +104,7 @@ def test_scoped_file_and_python_c_argv_reach_run(monkeypatch):
 
     def fake_run(argv, k, once):
         seen.append(argv)
-        return {"process_time_ms": 1, "procs_per_call": 1, "instrument": "x", "k": k}
+        return {"process_time_ms": 1, "procs_per_call": 1, "instrument": "x", "k": k, "rc": 0}
 
     monkeypatch.setattr(measure, "_run", fake_run)
     for cmd in (

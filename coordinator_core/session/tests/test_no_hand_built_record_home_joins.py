@@ -96,7 +96,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "distill/curation_status.py",
     "distill/delete_guard.py",
     "environment_story/guard_enforcement_join.py",
-    "execute_plan_assemble/close_out_and_stamp.py",
     "fact_contract_gate/dangling_consumer.py",
     "fact_contract_gate/engine_gap_ratchet.py",
     "fact_contract_gate/prose_rederivation.py",

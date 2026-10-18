@@ -491,12 +491,15 @@ def stage(
     session_id: Optional[str] = None,
     commit_sizing_rel: Optional[str] = None,
     only_rows: Optional[Sequence[str]] = None,
+    ledger_resume: bool = False,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
 
     `only_rows` (a resume: the halted plan's incomplete row ids) stages just those rows; the rest
     are landed, so an edge onto one is satisfied. A resume whose rows are all owed or gated
     returns a manifest with no rows and the owed/gated lists.
+    `ledger_resume=True` (an all-landed plan resumed at its ledger) admits a spine with zero
+    dispatchable rows and returns a whole manifest with rows []; the default refuses it.
     """
     root = Path(repo_root)
     if not safe_id(run_id):
@@ -575,7 +578,7 @@ def stage(
         raise AskStageError(str(exc)) from exc
     # Split, not refuse: runtime_cap is CPU-dependent and a refusal would halt hands-off runs.
     waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
-    if not waves and not (only_rows is not None and (owed or gated)):
+    if not waves and not ledger_resume and not (only_rows is not None and (owed or gated)):
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:
             named += f"; owed by the EM: {', '.join(o.id for o in owed)}"

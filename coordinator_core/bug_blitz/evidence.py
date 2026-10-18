@@ -12,10 +12,11 @@ import re
 from pathlib import Path
 
 from coordinator_core.bug_blitz.contract import FailingTest, ParseResult, TargetSpec
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.testing.suite_run_record import parse_failed_ids, strip_ansi
 
 BACKLOG = "backlog"
-BACKLOG_DIR = "state/bug-backlog"
+BACKLOG_DIR = Path(home_dir("", "bug-backlog")).as_posix()
 UNPARSED_SAMPLE_MAX = 5
 _SAMPLE_WIDTH = 200
 _DIR_LIST = "failing-tests.txt"

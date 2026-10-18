@@ -29,6 +29,9 @@ import sys
 from pathlib import Path
 
 from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.session.record_homes import home_dir
+
+_LIVE_HANDOFFS = Path(home_dir("", "handoffs")).as_posix()
 
 _STORE_NAME = 'claude-klabauter-lint-tree.json'
 _STORE_VERSION = 1
@@ -392,7 +395,7 @@ class _Sweep:
 
     def _shelf(self) -> list:
         """(repo_rel, is_archive, name, size, mtime_ns) in the order the id index claims them."""
-        live = [(r, False, n, s, m) for r, n, s, m in self.scan('state/handoffs', False) if n.endswith('.md')]
+        live = [(r, False, n, s, m) for r, n, s, m in self.scan(_LIVE_HANDOFFS, False) if n.endswith('.md')]
         arch = [(r, True, n, s, m) for r, n, s, m in self.scan('archive/handoffs', True) if n.endswith('.md')]
         return live + arch
 
@@ -430,7 +433,7 @@ class _Sweep:
             for rel, is_arch, name, _s, _m in self._shelf():
                 ent = hids.get(rel)
                 if ent and ent[2]:
-                    key = f'state/handoffs/{name}' if is_arch else rel
+                    key = f'{_LIVE_HANDOFFS}/{name}' if is_arch else rel
                     h.update(f"{'A' if is_arch else 'L'}\0{key}\0{ent[2]}\n".encode('utf-8', 'surrogatepass'))
             self._digest = h.hexdigest()
         return self._digest
@@ -440,7 +443,7 @@ class _Sweep:
         self.refresh_hids()
         hids = self.store.data['hids']
         return self.sv._resolve_handoff_id_claims(
-            (ent[2], f'state/handoffs/{name}' if is_arch else rel, is_arch)
+            (ent[2], f'{_LIVE_HANDOFFS}/{name}' if is_arch else rel, is_arch)
             for rel, is_arch, name, _s, _m in self._shelf()
             if (ent := hids.get(rel)) and ent[2]
         )
@@ -565,7 +568,7 @@ class _Sweep:
         for name, glob, pattern in derived['globs']:
             base, recursive = _glob_base(glob)
             rx = re.compile(pattern)
-            shelf_bases = (('state/handoffs', False), ('archive/handoffs', True))
+            shelf_bases = ((_LIVE_HANDOFFS, False), ('archive/handoffs', True))
             is_shelf_scan = (base, recursive) in shelf_bases
             for rel, fname, size, mtime in self.scan(base, recursive):
                 if rel in seen or not rx.match(rel):

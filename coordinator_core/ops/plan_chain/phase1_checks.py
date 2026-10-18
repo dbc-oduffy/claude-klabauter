@@ -60,6 +60,9 @@ def _check_plan(plan_path: Path) -> dict[str, Any]:
     """``check_plan(path, for_execution=True)`` from ``coordinator/bin/plan-spine-check.py``."""
     _bin_lib_on_path()
     path = _ENGINE_ROOT / "coordinator" / "bin" / "plan-spine-check.py"
+    from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
+
+    ensure_bin_lib_bound(str(path.parent))
     spec = importlib.util.spec_from_file_location("plan_spine_check_for_chain", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod

@@ -48,7 +48,7 @@ def test_override_env():
 
 
 def test_under_one_ms():
-    t = time.perf_counter()
+    t = time.process_time_ns()
     for _ in range(100):
         check("a && b &", "s", {})
-    assert (time.perf_counter() - t) / 100 < 0.001
+    assert (time.process_time_ns() - t) / 1e9 / 100 < 0.001

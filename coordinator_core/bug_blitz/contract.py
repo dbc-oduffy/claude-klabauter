@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from coordinator_core.session.record_homes import home_dir
+
 SUBMIT_OP = "hooks.submit_bug_blitz"
 STUB_NAME = "bug-blitz"
 CLI_NAME = "targeted-test-run"
@@ -135,7 +137,8 @@ def run_tag(run_id: str) -> str:
 
 def tests_record_rel(profile: str, run_id: str, row_id: str) -> str:
     """Repo-relative POSIX path of a row's runner record."""
-    return f"state/queue-grind/{profile}/evidence/{run_id}/{row_id}.tests.json"
+    home = Path(home_dir("", "queue-grind")).as_posix()
+    return f"{home}/{profile}/evidence/{run_id}/{row_id}.tests.json"
 
 
 def record_schema_path() -> Path:

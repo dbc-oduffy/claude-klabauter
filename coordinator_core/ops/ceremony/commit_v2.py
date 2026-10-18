@@ -129,12 +129,8 @@ def stage_class_transition_memo(entry, repo_root=None):
     return _impl(entry, repo_root=repo_root)
 
 
-#: Prefix filter for the guard-class-relay step below. ONLY paths under this
-#: directory can carry a `write_guards` CLASS constant -- this string compare
-#: is the zero-cost gate the whole step's budget rests on (0.156 us / 0 spawns
-#: measured): no path under it means the step below returns having done no
-#: work -- no git call, no object read, no AST parse, no import beyond what
-#: module load already paid.
+#: Prefix filter for the guard-class-relay step: only paths under this directory can carry a
+#: `write_guards` CLASS constant; no path under it means the step does no work.
 _GUARD_MODULE_DIR = "coordinator_core/write_guards/"
 
 
@@ -217,13 +213,8 @@ def _guard_class_relay_step(
     module) -- an in-process `memo.draft`/`memo.compose` op call, never a
     subprocess.
 
-    `pre_commit_sources` is `_pre_commit_guard_sources`'s result, captured
-    BEFORE `commit_paths` ran (see that function's docstring for why it
-    cannot be captured here). The "new" side needs no git read at all: the
-    worktree at THIS path, right now, holds exactly what was just
-    committed (the ordinary case -- `commit_paths` writes from worktree
-    bytes) or the staged-preferred bytes, close enough for a CLASS-literal
-    comparison; a path deleted by this commit simply has no file to read.
+    `pre_commit_sources` is `_pre_commit_guard_sources`'s result, captured BEFORE
+    `commit_paths` ran. The "new" side reads the worktree: it holds what was just committed.
 
     Returns `{"transitions": [...], "skips": [...]}`, both possibly empty.
     A `transitions` entry is `{"module", "old_class", "new_class", "sha",
@@ -292,12 +283,8 @@ def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> 
     `_guard_class_relay_step`, this step cannot refuse, delay, or fail it
     (NEGATIVE SPEC).
 
-    `sid` comes from `session_core.resolve_session_id`, which can resolve to
-    the SPAWNING session's identity inside the resident warm server (env
-    tiers 1-3) rather than the true caller's -- the same exposure
-    `detached_render_commit.py` and `post_commit_tail.py` already carry
-    through the same function; not a new class introduced here, and the
-    transport fix is routed separately.
+    `sid` comes from `session_core.resolve_session_id`, which can resolve to the SPAWNING
+    session inside the resident warm server rather than the true caller.
     """
     if not released:
         return
@@ -309,11 +296,8 @@ def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> 
     )
 
 
-#: Body line naming a live peer's write-claimed path this commit carried. The
-#: harmed party is the peer, not the committer: the warning reaches only the
-#: committer's response, so history carries the fact where the peer and any later
-#: audit can grep it. A body line, not a trailer: a new trailer key is a contract
-#: bump (commit-trailer-producer-contract.md section 5.2, widen-before-flip).
+#: Body line naming a live peer's write-claimed path this commit carried, so history carries
+#: the fact for the peer. A body line, not a trailer: a new trailer key is a contract bump.
 ABSORBED_PEER_CLAIM_PREFIX = "Absorbed-Peer-Claim"
 
 
@@ -332,10 +316,8 @@ def _disclose_peer_holds(message: str, peer_holds: list) -> str:
 def _disclose_gone_deletions(message: str, gone: list) -> str:
     """A `Removes:` line per path `gone_tracked_as_deleted` reclassified.
 
-    The caller's flag is the declaration, but its message is composed before
-    anyone knows which declared paths a row deleted, so it cannot name them;
-    the undeclared-staged-deletion check reads the message, and the history
-    reader needs the removal said too."""
+    The message is composed before anyone knows which declared paths were deleted, and the
+    undeclared-staged-deletion check reads it."""
     if not gone:
         return message
     lines = "\n".join(f"Removes: {path}" for path in gone)
@@ -369,10 +351,9 @@ def _peer_claim_warnings(
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
     ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. Each live peer also
-    gets one warning naming (capped at 5) its untracked files outside ``paths``, degrading likewise.
-    A live claimant that ``session_abandoned`` reads idle here is released: it joins
-    ``abandoned_holds`` (when given), not ``peer_holds``; a raise from that read keeps it a live hold.
-    ``own_sid`` (opt-in) names the caller's session when it is not the worktree's resolved one.
+    gets one warning naming (capped at 5) its untracked files outside ``paths``.
+    A claimant ``session_abandoned`` reads idle joins ``abandoned_holds`` (when given), not
+    ``peer_holds``. ``own_sid`` (opt-in) names the caller's session.
     """
     if not paths:
         return []
@@ -508,14 +489,10 @@ def _pre_commit_gates(
 
     Runs now, in order: `declared_deletion_gate`, `carry_gate`, `residue_gate`,
     `op_scope_coverage_gate`, `leak_gate`, `registration_quad_gate`,
-    `claude_md_budget_gate`, `machine_path_leak_gate`, `attribution_gate`
-    (given `deleted_paths` as its vacated set: no index parse, zero spawns;
-    the Bash tripwires do not run it). `read_source` is the
-    post-commit reader (`commit_source.post_commit_reader`): the last three and
-    `op_scope_coverage_gate` judge the tree this commit lands, never the worktree
-    or the index. Of the Bash path's checks only 7, 11 and 12 move here
-    (the three newest gates); 5, 13 and 14 are subsumed by construction, 8 is
-    advisory, and 9, 10 and 15 do not apply to this route.
+    `claude_md_budget_gate`, `machine_path_leak_gate`, `attribution_gate`.
+    `read_source` is the post-commit reader (`commit_source.post_commit_reader`): the last
+    three and `op_scope_coverage_gate` judge the tree this commit lands, never the
+    worktree or the index.
 
     `run_commit_pipeline` ran four; C3 repointed every caller onto this op,
     which ran none, and the resulting capability drop was filed as a P1
@@ -594,23 +571,13 @@ def _pre_commit_gates(
     exists to prevent. Reinstating it as written would also put this op over
     `PROCESS_TIME_TARGET_MS` (50.0), the standing budget its own gate asserts.
 
-    `carry_gate` and `op_scope_coverage_gate` are free
-    (0.00ms and 2.60ms worst-case, zero spawns), need no message convention,
-    and catch two things nothing else on this route catches: a staged
-    handoff whose `carried_items` declare undeclared state, and a registry-map
-    change registering an op with no scope coverage.
+    `carry_gate` and `op_scope_coverage_gate` are free (zero spawns) and catch two things
+    nothing else on this route catches: a staged handoff whose `carried_items` declare
+    undeclared state, and a registry-map change registering an op with no scope coverage.
 
-    `leak_gate` (`coordinator_core/authoring_leaks`) runs fourth. It runs every
-    detector in `authoring_leaks.WIRED_DETECTORS` -- `import_closure`,
-    `payload_locality`, `foreign_identity`, none omitted -- over one shared
-    `HeadView` (one `read_tree_spine`), and refuses a commit that imports what
-    HEAD will lack, carries text the publish scrub does not rewrite, or names a
-    sibling repo undeclared. Zero spawns. Measured by
-    `benchmarks/probe_commit_gates.py` on a clean tree (prefilter-reject floor),
-    process time per call, warm / cold object cache: 1 path 0.47 / 0.78ms;
-    35 paths 16.2 / 22.5ms; `publish.py` 25.6 / 31.2ms. Each detector is under
-    its own ceiling (5ms / 15ms / 100ms); the 35-path composed figure is their
-    sum. A detector that fails to import or raises refuses the commit.
+    `leak_gate` (`coordinator_core/authoring_leaks`) runs every detector in
+    `authoring_leaks.WIRED_DETECTORS` over one shared `HeadView`, with zero spawns; a
+    detector that fails to import or raises refuses the commit.
     """
     gate_paths = list(paths) + list(deleted_paths)
     if not gate_paths:
@@ -624,10 +591,7 @@ def _pre_commit_gates(
     if not deletion_outcome.passed:
         return "declared_deletion_gate: " + "; ".join(deletion_outcome.diagnostics[:5])
 
-    # Named explicitly rather than read off `gate.__name__`: the refusal text
-    # is what the caller acts on, and a decorated, wrapped, or patched gate
-    # would otherwise report itself as `<lambda>` at exactly the moment
-    # somebody needs to know which gate refused.
+    # Named explicitly rather than read off `gate.__name__`: a wrapped gate would report `<lambda>`.
     for name, gate in (
         ("carry_gate", carry_gate),
         ("residue_gate", residue_gate),
@@ -655,7 +619,7 @@ def _expand_untracked_dirs(worktree_root: Path, untracked: list) -> list:
     ]
     if not dirs:
         return untracked
-    # DR-344 per-use: runs only for a declared untracked directory (never on the terminal_commit
+    # Per-use spawn: runs only for a declared untracked directory (never on the terminal_commit
     # path); one batched spawn, since the HEAD tree under a directory has no in-process reader here.
     result = run_git(
         ["-C", str(worktree_root), "--no-optional-locks", "ls-tree", "-r", "-z",
@@ -698,7 +662,7 @@ def _ignored_untracked(worktree_root: Path, paths: list) -> list:
     if partition is None or not partition[1]:
         return []
     candidates = partition[1]
-    # DR-344 per-use: ignore rules (.gitignore stack, info/exclude, core.excludesFile) have no
+    # Per-use spawn: ignore rules (.gitignore stack, info/exclude, core.excludesFile) have no
     # in-process evaluator; one batched spawn for all candidates, skipped when the caller supplies
     # `ignored_untracked` (terminal_commit does, from its status snapshot).
     result = run_git(
@@ -739,7 +703,7 @@ def _landed_by_predecessor(worktree_root: Path, message: str) -> Optional[str]:
     """Sha of a recent commit whose message equals `message`, else None; never raises."""
     want = _message_identity(message)
     try:
-        # DR-344 per-use: runs only after NothingToCommit (a retried landing), where one bounded
+        # Per-use spawn: runs only after NothingToCommit (a retried landing), where one bounded
         # `git log` message read is the sole way to find the predecessor commit.
         result = run_git(
             ["log", f"-n{_RETRY_LANDED_WINDOW_COMMITS}", "--format=%x1e%H%x1f%ct%x1f%B", "HEAD"],
@@ -814,9 +778,7 @@ def _land(
     expected_content_sha256: Optional[dict] = None,
     allow_empty: bool = False,
 ) -> _Landing:
-    """One `commit_paths` attempt. `allow_empty` is tried only after a plain attempt raised
-    `NothingToCommit` and no recent commit carries this message, so a retried call reports the
-    predecessor instead of landing a second marker."""
+    """One `commit_paths` attempt; `allow_empty` is tried only after `NothingToCommit` with no predecessor."""
 
     def _attempt(empty_ok: bool) -> CommitOutcome:
         return commit_paths(
@@ -852,9 +814,7 @@ def _land(
             ],
         ), None)
     except NothingToCommit as exc:
-        # `already_landed_sha` names the commit when a recent one carries this exact message,
-        # Session-Id trailer included, so a peer's commit cannot match: the retry of a call that
-        # landed before its reply was read.
+        # `already_landed_sha`: a recent commit with this exact message (Session-Id included).
         landed = _landed_by_predecessor(worktree_root, message)
         if landed is not None:
             return _Landing(None, None, [], _error(
@@ -865,13 +825,13 @@ def _land(
             ), landed)
         return _Landing(None, None, [], _error(str(exc), nothing_to_commit=True), None)
     except IndexStaleAfterCommit as exc:
-        # THE COMMIT LANDED. Reporting an error here (`committed: False`) makes the caller retry and
-        # commit twice. `commit_paths` splices the index AFTER the ref swap, so a peer holding
-        # `.git/index.lock` lands here routinely. Recovered as a SUCCESS with the stale index as a warning.
-        # `cast`, not a runtime check: `IndexStaleAfterCommit.outcome` is typed
-        # `object` there only to keep `index_write` free of an import cycle
-        # back to `commit.py`. The sole raiser passes a real `CommitOutcome`.
+        # THE COMMIT LANDED. An error here (`committed: False`) makes the caller commit twice;
+        # a peer holding `.git/index.lock` lands here routinely. Recovered as a SUCCESS with a warning.
+        # `cast`: `IndexStaleAfterCommit.outcome` is typed `object` to avoid an import cycle.
         if exc.outcome is None:
+            # No raiser on the commit path omits it; if one ever does, say so
+            # rather than inventing a sha -- but never downgrade to `_error`,
+            # because the commit landed either way.
             return _Landing(None, None, [], _error(
                 f"{exc} (the outcome was not carried out of the raise site, so "
                 "no sha can be reported -- resolve it with `git log -1`)"
@@ -940,12 +900,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        `commit-v2-prefers-worktree-over-index`
                                        for why it is not flipped.
         allow_empty (bool, optional, DEFAULT FALSE) -- land ONE marker commit (tree equal to
-                                       HEAD's) when every declared path already matches HEAD, so
-                                       a run whose content landed by hand can still close. Tried
-                                       only after the plain attempt raised nothing-to-commit and
-                                       no recent commit carries this message (a retry replies
-                                       `already_landed_sha`). A mixed process/product set lands
-                                       at most one marker.
+                                       HEAD's) when every declared path already matches HEAD.
+                                       Tried only after nothing-to-commit and no recent commit
+                                       carries this message. A mixed set lands at most one marker.
         session_id (str, optional)  -- canonical UUID (8-4-4-4-12 hex,
                                        case-insensitive) threaded into
                                        `apply_missing_trailers` as
@@ -985,7 +942,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         Or
         {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an unresolvable CAS ref, a lost
-        CAS race, or a checkin conversion neither this module nor its `blob_fallback` can reproduce).
+        CAS race, or a path needing a checkin conversion neither this module nor its `blob_fallback` can reproduce).
 
     on_main_reason (str, optional) -- the one explicit door past the refusal of a commit while HEAD is
     `main` and a remote is configured; a non-empty reason admits, never ambient. In-process callers of
@@ -1185,9 +1142,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # An untracked path leaves HEAD like a deleted one: downstream consumers read the union.
     raw_removed = list(raw_deleted) + list(raw_untracked)
 
-    # Filter FIRST, before anything else touching the guard-class-relay step
-    # -- no path under `_GUARD_MODULE_DIR` means zero work below: no git
-    # call, no object read, no AST parse (0.156 us / 0 spawns measured).
+    # Filter FIRST: no path under `_GUARD_MODULE_DIR` means zero work below.
     guard_paths = _guard_module_paths(raw_paths, raw_removed)
     pre_commit_guard_sources = (
         _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
@@ -1276,10 +1231,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error(gate_refusal)
 
     # Declared-vs-actual EOL repair for the executables this commit touches (`docs/reference/eol-drift-detection.md`).
-    # Filter-first: a commit with no `.cmd`/`.ps1`/`.sh`/`.bat` spawns and reads nothing. BEFORE the commit so
-    # the tree that lands carries correct bytes; not a refusal, since the repair is content-neutral.
-    # Wrapped, not trusted: a repair-side exception is worse than the drift (`eol_declared` negative spec).
-    # `prefer_staged` paths are excluded: the caller deliberately diverged the worktree from the index.
+    # Filter-first: no `.cmd`/`.ps1`/`.sh`/`.bat` means no spawn and no read. Runs BEFORE the commit; not a
+    # refusal. Wrapped: a repair-side exception is worse than the drift. `prefer_staged` paths are excluded.
     try:
         prefer_staged_set = set(raw_prefer_staged)
         eol_candidates = [p for p in raw_paths if p not in prefer_staged_set]
@@ -1317,7 +1270,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if skill_weight_refusal is not None:
         return _error(skill_weight_refusal)
 
-    # Process files (`state/`, `docs/plans/`, `archive/`, `.coordinator-local/`) never ride in a
+    # Process files (see `_PROCESS_PREFIXES`) never ride in a
     # product commit on a non-DoE repo: a mixed call lands product first, process second.
     prod_paths, proc_paths = split_process_paths(worktree_root, raw_paths)
     prod_deleted, proc_deleted = split_process_paths(worktree_root, raw_deleted)
@@ -1400,9 +1353,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     process_sha = next((h[3] for h in landed_halves[1:] if h[4]), None)
     index_stale_warning = " ".join(index_stale_warnings) or None
 
-    # A FIELD IS NOT A SIGNAL. A commit which sets one side aside is a
-    # legitimate success and the operator still needs to see why, not a
-    # fact buried in a dict key nobody is obliged to read.
+    # A FIELD IS NOT A SIGNAL: a commit that sets one side aside still owes the operator a warning.
     warnings = []
     if dropped_ignored:
         shown = ", ".join(dropped_ignored[:5]) + (", ..." if len(dropped_ignored) > 5 else "")
@@ -1424,17 +1375,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # First-class: the only warning meaning "this commit is not what the branch's protection expects."
     warnings.extend(o.sign_warning for o in outcomes if o.sign_warning is not None)
     if index_stale_warning is not None:
-        # First, because it is the one warning here that changes what the
-        # reader should DO: everything else describes which bytes landed; this
-        # one says the commit landed and the index did not, so `git status`
-        # will misreport these paths until any subsequent index write.
+        # First: the commit landed and the index did not, so `git status` misreports these paths.
         warnings.append(index_stale_warning)
     if worktree_over_staged:
-        # Bounded like the other truncation sites in this diff area
-        # (commit.py's `refused[:5]` / `sorted(unknown)[:5]`) -- an unbounded
-        # join of every passed-over path violates the register's bounded,
-        # terse intent (docs/wiki/guard-messaging.md § Register) on a commit
-        # touching a dozen-plus partially-staged paths.
+        # Bounded join: an unbounded one breaks the guard-messaging register.
         paths = ", ".join(worktree_over_staged[:5])
         if len(worktree_over_staged) > 5:
             paths += ", ..."
@@ -1467,9 +1411,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "change there, it landed elsewhere or never landed."
             )
 
-    # Reported, not because reporting is what fixes it -- the repair above did
-    # that -- but because a launcher's bytes changing under an operator is a
-    # fact they are owed. Bounded at five like the join above, same reason.
+    # Reported because a launcher's bytes changing under an operator is owed disclosure; bounded at five.
     if eol_drifts:
         shown = "; ".join(d.describe() for d in eol_drifts[:5])
         if len(eol_drifts) > 5:
@@ -1489,32 +1431,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         repo_root=repo_root,
     )
 
-    # Same post-commit region, same negative spec: cannot refuse, delay, or
-    # fail the already-landed commit. Release set is the paths THIS commit
-    # actually covered -- raw_paths + raw_deleted, including outcome.no_delta
-    # members (the caller named them and their bytes are at HEAD).
+    # Same post-commit region, same negative spec: cannot refuse, delay, or fail the landed
+    # commit. Release set: raw_paths + raw_deleted, including outcome.no_delta members.
     _release_committed_claims_step(
         worktree_root, list(raw_paths) + raw_removed
     )
 
-    # Same post-commit region, same negative spec. This op is one of the only
-    # two commit shapes `block_subagent_commit` admits (the other is a plain
-    # scoped `git commit`), so a dispatched committer reaches history through
-    # here or not at all.
-    #
-    # Budget: ~15-31ms process time warm, measured against this handler's
-    # 500ms end-to-end bar -- `_ledger_kind_and_weight` caches to zero after
-    # the first call and `resolve_owner_handoff_id` is the residual. Zero
-    # spawns. Local import for the module-cycle reason the two sibling call
-    # sites (`git_native.commit_authored_content`, `apply._commit_one`) each
-    # document at their own.
+    # Same post-commit region, same negative spec. Zero spawns.
     for done_paths, done_message, _o, done_sha, _p in landed_halves:
         _record_ledger(worktree_root, done_paths, done_sha, done_message)
 
-    # Mark the repo for the next push sweep (DR-329: mark only, never push).
-    # `sys.modules` gate: a process that never loaded the cadence has no
-    # sweeper, and importing it here would charge a cold commit its whole
-    # import graph; the sweep's reflog-recency ordering covers that case.
+    # Mark the repo for the next push sweep: mark only, never push.
+    # `sys.modules` gate: importing the cadence here would charge a cold commit its import graph.
     cadence = sys.modules.get("coordinator_core.warm.push_cadence")
     if cadence is not None:
         cadence.note_commit(worktree_root)

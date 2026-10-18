@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.contract.decision_object.reader_result import build_directive, truncate_external_text
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.workday_start.local_ahead import _current_branch
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]
@@ -416,7 +417,7 @@ def _markdown_heads(directory: Path) -> Iterable[tuple[Path, dict[str, str]]]:
 # stale-origin-stubs (REQ-H7): has an open origin stub already shipped? Handoff heads first; plan
 # heads are read only when a live stub exists.
 def _stale_origin_stubs(repo_root: Path) -> Result:
-    handoffs = list(_markdown_heads(repo_root / "state" / "handoffs"))
+    handoffs = list(_markdown_heads(Path(home_dir(str(repo_root), "handoffs"))))
     stubs: dict[tuple[str, str], Path] = {}
     for path, f in handoffs:
         pair = (f.get("roadmap_id", ""), f.get("stub_id", ""))

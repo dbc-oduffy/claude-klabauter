@@ -310,6 +310,9 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/ops/dispatch_emit/run_credit.py': ('claims-explicitly', 'credit.jsonl appended under the run dir, declared through declare_write: record'),
+    'coordinator_core/ops/fleet/scratch_hygiene.py': ('ignored-target', 'sweep cursor tmp + os.replace under the gitignored scratch/ dir: _write_cursor'),
+    'coordinator_core/usage/session_cost.py': ('outside-repo', 'per-session cost cache tmp + os.replace under <settings-home>/state/session-cost: _write_cache'),
     'coordinator_core/git/sshsig.py': ('outside-repo', 'request frames written to the ssh-agent socket, never a file: _agent_requests'),
     'coordinator_core/hooks/nudge_hand_written_plan.py': ('outside-repo', 'exclusive-create one-shot sentinel under tempfile.gettempdir()'),
     'coordinator_core/ops/baton_pm_turns.py': ('git-internal', 'pm-turns log appended under <git-common-dir>/coordinator-sessions/<sid>: append_turn'),

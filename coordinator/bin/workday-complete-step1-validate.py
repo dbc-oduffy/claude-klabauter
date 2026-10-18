@@ -62,6 +62,7 @@ see _fail_on_ambiguous_shell_syntax for the guard this removal requires.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import importlib.util
 import os
 import re
@@ -435,6 +436,8 @@ def _emit_test_red_record(ft_rc: int, ft_content: str, classify_rc: int, parsed=
         outcome = "green" if ft_rc == 0 else ("build-failure" if classify_rc == 2 else "test-failures")
         runner, failing = parsed if parsed is not None else parse_failing_nodeids(ft_content)
         repo_root = os.getcwd()
+        machine = compute_machine()
+        ran_at = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with recording_declared_writes(cwd=repo_root):
             write_test_red_record(
                 repo_root=Path(repo_root),
@@ -444,9 +447,18 @@ def _emit_test_red_record(ft_rc: int, ft_content: str, classify_rc: int, parsed=
                 outcome=outcome,
                 runner=runner,
                 failing=failing,
+                machine=machine,
+                ran_at=ran_at,
+                output=ft_content,
             )
-            record_path = Path(repo_root) / "state" / "test-red" / f"{compute_machine()}.yaml"
+            record_path = Path(repo_root) / "state" / "test-red" / f"{machine}.yaml"
             declare_write(record_path)
+            if failing:
+                from coordinator_core.ops.test_red_triage import list_triage_files, triage_path
+
+                declare_write(triage_path(Path(repo_root), machine, ran_at))
+                for kept in list_triage_files(Path(repo_root), machine):
+                    declare_write(kept)
     except Exception as exc:  # noqa: BLE001 -- must never affect the validate verdict/exit code
         _err(f"[workday-complete-step1] test-red record: write failed ({exc!r}) — continuing.")
 

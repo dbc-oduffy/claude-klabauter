@@ -8,7 +8,8 @@
       "seam_files": [
         "coordinator_core/warm/door/door.c",
         "coordinator_core/warm/door/door_core.c",
-        "coordinator_core/warm/door/door_posix.c"
+        "coordinator_core/warm/door/door_posix.c",
+        "coordinator_core/warm/server.py"
       ],
       "seam_description": "The native C client. Independently re-derives the same endpoint name coordinator_core.warm.election.pipe_name/socket_path computes in Python (sha1(clone_path)[:16] + user SID + engine token, mirrored by hand -- see door.c's own module comment) and dials it directly, then relays raw argv over the wire as an invoke.from_argv-shaped request. No Python interpreter, no coordinator_core import, on the primary (served) path.",
       "batched_process_time_ms": 7.8,

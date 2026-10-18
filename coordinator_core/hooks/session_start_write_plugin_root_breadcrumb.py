@@ -46,7 +46,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 BREADCRUMB_RELATIVE_PATH = ".claude/.coordinator-plugin-root"
@@ -98,6 +98,7 @@ def _bind_session(params: dict, root: "str | None") -> None:
 
 @register_op("hooks.session_start_write_plugin_root_breadcrumb")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     try:
         root = _plugin_root()
         _bind_session(params, root)

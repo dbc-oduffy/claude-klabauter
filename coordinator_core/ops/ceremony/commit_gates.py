@@ -8,10 +8,7 @@ These gates ARE invoked on the commit path: `ceremony.commit_v2` imports
 below, reached by `coordinator/bin/check-workstream-complete-deletion-blocks`
 (registered in `authz/dispatchable.py`).
 
-The gates are not free -- `commit_v2` is a zero-spawn committer, and putting
-a gate back on that path puts its process cost on every session through the
-sanctioned committer and the dispatchable `git-commit-agent` route. Measure
-a gate in-process before widening what it checks.
+`commit_v2` is a zero-spawn committer: measure a gate in-process before widening it.
 
 Two gates, both pure-Python classification over `git` state (routed through
 `git_native`'s single Windows-safe subprocess choke point):
@@ -732,18 +729,13 @@ def attribution_gate(
     """Refuse a commit whose staged content ADDS a reviewer-attribution line
     (`coordinator_core.attribution.scan_added_lines`) to a non-exempt tracked path.
 
-    In-process and zero-spawn: `read_tree_spine`/`read_object`/`parse_index_identity` only.
-    Exempt paths are filtered first; an empty remainder returns `skipped=True`. `old_text` is the
-    path's HEAD text, else the pooled HEAD text of every deletion/rename source (resolved over the
-    UNFILTERED `gate_paths`, since a source may sit under an exempt root), else `None`. New bytes are
-    the worktree text, plus the staged blob when `prefer_staged`/`deliberate_stage` and it differs;
-    a path gone from the worktree but still staged scans its staged blob. Non-UTF-8 is skipped.
+    Zero-spawn. Exempt paths are filtered first; an empty remainder returns `skipped=True`.
+    `old_text` is the path's HEAD text, else the pooled HEAD text of every deletion/rename source
+    (over the UNFILTERED `gate_paths`), else `None`. New bytes are the worktree text, plus the
+    staged blob when `prefer_staged`/`deliberate_stage` and it differs. Non-UTF-8 is skipped.
 
-    `vacated` is the caller's declared deletion set. When given, those paths' HEAD text is the
-    rename-source pool and the whole-index rename scan (`read_index`) is skipped. Pooling every
-    declared deletion is a superset of the exact-sha rename match, so old_text only widens
-    (fewer false refusals); the cost is a false negative: an attribution line moved from a
-    declared-deleted file into an unrelated new file passes. `None` keeps the index scan.
+    `vacated` (declared deletions), when given, is the rename-source pool and skips the
+    `read_index` rename scan; an attribution line moved into an unrelated new file then passes.
 
     Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, capped at 5, then one
     remedy line. No override key, no bypass.
@@ -839,8 +831,7 @@ def attribution_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=capped)
 
 
-# `.coordinator-local/` is not here: the engine force-tracks dispatch briefs, the memo ledger
-# and review sidecars under it, so it is process residue (advisory), not never-commit.
+# `.coordinator-local/` is process residue (advisory), not never-commit: the engine force-tracks it.
 _NEVER_COMMIT_PREFIXES = ("scratch/",)
 _PROCESS_PREFIXES = ("archive/", "state/", "docs/plans/", ".coordinator-local/")
 _DOE_SENTINEL = ".coordinator-dev-repo"
@@ -862,10 +853,8 @@ def residue_gate(
 ) -> GateOutcome:
     """Refuse a commit carrying `scratch/` paths (never committed anywhere).
 
-    Prefix classification over `gate_paths`; a never-commit path that `.gitignore` already
-    excludes (and the index does not track) is dropped, decided by ONE batched
-    `git check-ignore` that runs only when a never-commit path is present. A check-ignore
-    that cannot answer leaves the path refused.
+    A path `.gitignore` already excludes is dropped by one batched `git check-ignore`; an
+    unanswered check-ignore leaves it refused.
     """
     bad = [p for p in gate_paths if is_never_commit(p)]
     if bad:
@@ -888,12 +877,7 @@ def split_process_paths(
     worktree_root: Union[str, Path],
     paths: Sequence[str],
 ) -> Tuple[List[str], List[str]]:
-    """`(product, process)` partition of `paths`, order preserved, input strings returned as given.
-
-    Process paths sit under `archive/`, `state/`, `docs/plans/` or `.coordinator-local/`
-    (either separator). A repo carrying `.coordinator-dev-repo` has no process class:
-    returns `(list(paths), [])`. Zero spawns.
-    """
+    """`(product, process)` partition of `paths` by `_PROCESS_PREFIXES`; a dev repo has no process class."""
     if (Path(worktree_root) / _DOE_SENTINEL).exists():
         return list(paths), []
     product: List[str] = []
@@ -1018,14 +1002,11 @@ def op_scope_coverage_gate(
     With `read_source` both tables are read from the tree the commit lands; without it,
     the worktree.
 
-    Purpose: `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` are maintained independently,
-    and an op omitted from the latter silently defaults to `"none"` scope rather than failing loud
-    (wrong for `chain_ancestry_waivers.reap`, whose reaper then fell back to the engine's cwd). This
-    makes `test_dispatch_message.py::test_op_key_scope_table_covers_all_registered_ops` unavoidable
-    at commit time.
+    Purpose: an op omitted from `op_scopes._OP_KEY_SCOPE` silently defaults to `"none"` scope;
+    this makes `test_dispatch_message.py::test_op_key_scope_table_covers_all_registered_ops`
+    unavoidable at commit time.
 
-    One-way: only `OP_MODULE_MAP - _OP_KEY_SCOPE` (registered but unclassified) is a violation;
-    `_OP_KEY_SCOPE` legitimately carries entries with no live registry counterpart.
+    One-way: only `OP_MODULE_MAP - _OP_KEY_SCOPE` is a violation.
 
     Scope filter: `skipped=True`, no file read at all, unless `_registry_map.py` is
     among `gate_paths` -- a commit that does not touch the registry has nothing for this
@@ -1052,8 +1033,7 @@ def op_scope_coverage_gate(
         "predicate could not be evaluated" case above. See `_extract_dict_str_keys`'s own
         docstring and `_MultipleModuleBindingsError`.
 
-    Every call re-reads and re-parses both files; nothing persists. Remedy: add the missing entries
-    per `_OP_SCOPE_GATE_REMEDY`, re-stage, re-invoke.
+    Remedy: `_OP_SCOPE_GATE_REMEDY`.
     """
     gate_scope: Set[str] = set(gate_paths)
     if _REGISTRY_MAP_RELPATH not in gate_scope:

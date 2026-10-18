@@ -108,8 +108,9 @@ def residue(
     repo_root: Path, session_id: str, pathspec: Iterable[str], *, now: Optional[float] = None
 ) -> StoppedResidue:
     """Dirty run-artifact candidates of each `stopped_own_runs` id, outside `pathspec`, and not
-    held by a live peer. Unknown contest withholds every dirty candidate as `contest-unknown`.
-    An unreadable index propagates (`IndexParseError`)."""
+    held by a live peer. A candidate whose artifact `runs_of_artifacts` maps to a different run is
+    dropped: a stopped run never carries a sibling's plan, nor a `docs/plans/` path no run owns. Unknown contest withholds every dirty
+    candidate as `contest-unknown`. An unreadable index propagates (`IndexParseError`)."""
     runs = stopped_own_runs(repo_root, session_id, now=now)
     if not runs:
         return StoppedResidue({}, {})
@@ -122,6 +123,12 @@ def residue(
     for run_id in runs:
         paths = {_norm(p) for p in run_artifacts.candidate_paths(root, run_id).paths()}
         cands[run_id] = paths - set(spec)
+    owner = run_artifacts.runs_of_artifacts(root, sorted(set().union(*cands.values())))
+    for run_id, paths in cands.items():
+        paths -= {
+            p for p in paths
+            if owner.get(p, None if p.startswith("docs/plans/") else run_id) != run_id
+        }
     every = sorted(set().union(*cands.values()))
     dirty = set(commit_companion.own_left_behind(root, {session_id: every}, session_id, spec))
     if not dirty:

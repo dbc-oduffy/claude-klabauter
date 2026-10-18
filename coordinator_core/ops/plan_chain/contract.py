@@ -53,7 +53,7 @@ class Halt:
 
     def __post_init__(self) -> None:
         if self.halted_at not in STAGES:
-            raise ValueError(f"halted_at {self.halted_at!r} is not a chain stage")
+            raise ValueError("halted_at " + repr(self.halted_at) + " is not a chain stage")
         if len(self.reason) > HALT_REASON_MAX:
             object.__setattr__(self, "reason", self.reason[:HALT_REASON_MAX])
 

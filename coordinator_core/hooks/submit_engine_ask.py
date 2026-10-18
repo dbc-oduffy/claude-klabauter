@@ -12,7 +12,8 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, label?, writes?}], confirm_split?}` (each ask a
+`args` shape: `{ask: str, route_preference?, em_rationale?}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, label?, writes?}], confirm_split?}` (`route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
@@ -56,7 +57,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_submit_name
 
 
-_ARGS_SHAPE = ARGS_SHAPE
+_ARGS_SHAPE = ARGS_SHAPE.replace(
+    "{ask: \"<words>\"}", "{ask: \"<words>\", route_preference?, em_rationale?}"
+).replace("{ask, source?}", "{ask, source?, route_preference?, em_rationale?}")
 
 EmitFn = Callable[[dict, Path], dict]
 FanoutFn = Callable[[dict, Path], dict]  # the contract's FANOUT_OP signature (ask_fanout_contract.FanoutFn)
@@ -87,6 +90,25 @@ def _request(
         repo.strip() if isinstance(repo, str) and repo.strip() else None,
         args.get("source"),
     )
+
+
+def _call_preference(
+    tool_input: Mapping[str, Any], sizing_rel: Optional[str], asks_present: bool
+) -> tuple[Any, Any, Optional[str]]:
+    """(route_preference, em_rationale, refusal) from the call-level `args` of an `{ask}` submission."""
+    args = tool_input.get("args")
+    if not isinstance(args, dict):
+        return None, None, None
+    pref, rationale = args.get("route_preference"), args.get("em_rationale")
+    if pref is None and rationale is None:
+        return None, None, None
+    if sizing_rel is not None:
+        return None, None, "route_preference rides an ask; a sizing is already sized."
+    if asks_present:
+        return None, None, "route_preference and em_rationale ride each asks item, not the call."
+    from coordinator_core.ops.dispatch_emit.route_preference import refusal
+
+    return pref, rationale, refusal("route_preference", pref, rationale)
 
 
 def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
@@ -193,8 +215,9 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         return None, None
     asks = args["asks"]
     if not isinstance(asks, list) or not asks:
-        return None, "asks must be a non-empty list of {ask, source?, label?, writes?}."
+        return None, "asks must be a non-empty list of {ask, source?, route_preference?, em_rationale?, label?, writes?}."
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES
+    from coordinator_core.ops.dispatch_emit.route_preference import refusal as route_refusal
 
     for i, item in enumerate(asks):
         if not isinstance(item, dict) or not isinstance(item.get("ask"), str) or not item["ask"].strip():
@@ -208,6 +231,9 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         relayed_text = item.get("relayed_text")
         if relayed_text is not None and not isinstance(relayed_text, str):
             return None, f"asks[{i}].relayed_text must be a string."
+        route_why = route_refusal(f"asks[{i}]", item.get("route_preference"), item.get("em_rationale"))
+        if route_why:
+            return None, route_why
         label = item.get("label")
         if label is not None and not isinstance(label, str):
             return None, f"asks[{i}].label must be a string."
@@ -374,7 +400,7 @@ def _live_write_overlap_deny(root: Path, tool_input: Mapping[str, Any], sizing_d
 
 
 def _refuse(text: str) -> dict:
-    return deny("PreToolUse", f"{text}\nShape: Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}}).")
+    return deny("PreToolUse", f"{text}\nInstead: `Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})`.")
 
 
 def evaluate(
@@ -394,6 +420,9 @@ def evaluate(
         return _refuse("Submit exactly one of ask, sizing, asks.")
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
 
+    route_pref, em_rationale, route_refusal = _call_preference(payload["tool_input"], sizing_rel, asks is not None)
+    if route_refusal:
+        return _refuse(route_refusal)
     if source is not None:
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
@@ -405,7 +434,9 @@ def evaluate(
             for item in asks
         ]
         if len(asks) == 1 and not (asks[0].get("sender") or asks[0].get("relayed_text")):
-            ask, source, asks = asks[0]["ask"], asks[0].get("source"), None
+            ask, source = asks[0]["ask"], asks[0].get("source")
+            route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
+            asks = None
 
     supersedes, supersedes_refusal = _supersedes(payload["tool_input"])
     if supersedes_refusal:
@@ -516,6 +547,10 @@ def evaluate(
             params["ask"] = ask
             if source == ASK_SOURCE_RELAYED:
                 params["ask_source"] = ASK_SOURCE_RELAYED
+            if route_pref is not None:
+                params["route_preference"] = route_pref
+            if em_rationale is not None:
+                params["em_rationale"] = em_rationale
         params.update(brief)
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
 

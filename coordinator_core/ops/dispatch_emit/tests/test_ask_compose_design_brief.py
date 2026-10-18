@@ -12,6 +12,8 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.design_conformance import DESIGN_BRIEF_KEY
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _PREFIX = ask_compose._DESIGN_PREFIX_JS
 
 
@@ -42,7 +44,7 @@ def test_plan_author_and_spine_review_prompts_start_with_the_prefix():
     script = _compose()
     for label in ("plan", "plan-review"):
         call = _call_text(script, label)
-        assert call.startswith(f"agent({_PREFIX} + "), label
+        assert call.startswith(f"agent(({_PREFIX} + "), label
 
 
 def test_plan_blitz_agents_are_wrapped_with_the_prefix_ahead_of_the_ledger():

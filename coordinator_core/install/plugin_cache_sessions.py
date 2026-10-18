@@ -17,9 +17,39 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from coordinator_core._settings_home import claude_config_dir
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
 from coordinator_core.session import core, harness_registry
 
 BINDINGS_DIRNAME = ".coordinator-session-plugin-roots"
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="plugin-cache-sessions",
+    source_module="coordinator_core.install.plugin_cache_sessions",
+    clauses=(
+        ShapedClause(
+            discovered_by="write_binding",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path=f"<claude_home>/{BINDINGS_DIRNAME}/<session-id>",
+                reason="write_binding: records the plugin root one session started from, plus a .since stamp",
+            ),
+        ),
+        ShapedClause(
+            discovered_by="prune_dead_bindings",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path=f"<claude_home>/{BINDINGS_DIRNAME}/<session-id>",
+                effect="delete",
+                reason="prune_dead_bindings: removes binding files of unregistered sessions older than min_age_s",
+            ),
+            effect="delete",
+        ),
+    ),
+)
 _SINCE_NAME = ".since"
 
 BASIS_BOUND = "bound"

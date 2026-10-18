@@ -12,6 +12,7 @@ from typing import Optional
 
 from coordinator_core.canvas_harvest import model
 from coordinator_core.session import claimed_write
+from coordinator_core.timestamps import with_age
 
 RECORD_NAME = "harvest.json"
 
@@ -62,14 +63,14 @@ def _write(out_dir: Path, record: dict, probe: dict) -> Path:
 def _require_later(read_at: str, floors: list, what: str) -> None:
     moment = model._instant(read_at)
     if moment is None:
-        raise model.HarvestError(model.PROBE_READS_STALE, f"{what} read_at {read_at!r} is not an instant")
+        raise model.HarvestError(model.PROBE_READS_STALE, f"{what} read_at {with_age(read_at)} is not an instant")
     for label, floor_text in floors:
         floor = model._instant(floor_text) if isinstance(floor_text, str) else None
         if floor is None:
             raise model.HarvestError(model.PROBE_READS_STALE, f"{label} {floor_text!r} is not an instant")
         if moment <= floor:
             raise model.HarvestError(
-                model.PROBE_READS_STALE, f"{what} read {read_at} is not later than {label} {floor_text}"
+                model.PROBE_READS_STALE, f"{what} read {with_age(read_at)} is not later than {label} {floor_text}"
             )
 
 

@@ -274,6 +274,7 @@ from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determin
 from coordinator_core.git.commit import CommitRefused, _index_key
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
@@ -1044,7 +1045,7 @@ def _claim_minted_batons(
     for basename in dispositions:
         if basename in held:
             continue
-        path = Path(worktree_root) / "state" / "handoffs" / basename
+        path = Path(home_dir(str(worktree_root), "handoffs")) / basename
         try:
             authored_by = extract_frontmatter_scalar(path.read_text(encoding="utf-8"), "authoring_session")
         except OSError:

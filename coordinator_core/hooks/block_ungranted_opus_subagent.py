@@ -170,6 +170,7 @@ from coordinator_core.hooks.block_unenumerated_agent_type import (
     resolve_subagent_type,
 )
 from coordinator_core.hooks.enforce_agent_model_pin import _clean_str
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.transcript_tail import resolve_last_assistant_model
 
 GUARD_NAME = "block-ungranted-opus-subagent"
@@ -177,6 +178,12 @@ CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_AGENT_MODEL_GUARD"
+
+
+def _resolved_deny(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Resolve a deny at the policy point; `off` lifts it, `warn` never softens it (PM hard-deny)."""
+    resolved = apply_guard_level(GUARD_NAME, envelope)
+    return None if resolved is None else envelope
 
 #: `fork` is exempt -- see module docstring "EFFECTIVE MODEL RESOLUTION"
 #: rung 1. Mirrors `enforce_agent_model_pin._FORK_TYPE`.
@@ -313,7 +320,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         )
         if parent_model is not None and not _is_gated_tier(parent_model):
             return None
-        return deny("PreToolUse", _fork_execution_reason(parent_model or "<unresolved>", phrase))
+        return _resolved_deny(
+            deny("PreToolUse", _fork_execution_reason(parent_model or "<unresolved>", phrase))
+        )
 
     pins, _error_reason = resolve_model_pins()
     if pins is None:
@@ -327,7 +336,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if subagent_type not in _PLAN_AUTHORING_PERSONAS:
             phrase = _execution_phrase(tool_input)
             if phrase is not None:
-                return deny("PreToolUse", _persona_execution_reason(subagent_type, phrase))
+                return _resolved_deny(
+                    deny("PreToolUse", _persona_execution_reason(subagent_type, phrase))
+                )
         return None
 
     passed_model = _clean_str(tool_input.get("model"))
@@ -371,7 +382,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"agent work. For Opus-grade judgment, dispatch a named persona.",
         )
 
-    return deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note))
+    return _resolved_deny(deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note)))
 
 
 def main() -> int:

@@ -9,7 +9,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 
 ROW = (
     "## Tasks\n\n```yaml plan-tasks\n- id: A\n  title: t\n  surface: s\n  writes: [x.py]\n"
-    "  change_kind: code\n```\n"
+    "  change_kind: code-edit\n```\n"
 )
 
 
@@ -47,11 +47,11 @@ def test_status_edge_held_then_satisfied(tmp_path):
 def test_row_level_chunk_edge_reported(tmp_path):
     root = _root(tmp_path)
     _plan(root, "pg.md", "executing")
-    row = ROW.replace("change_kind: code", "change_kind: code\n  depends_on_plan:\n    - {plan: docs/plans/pg.md, chunk: A, gate_kind: epistemic-premise}")
+    row = ROW.replace("change_kind: code-edit", "change_kind: code-edit\n  depends_on_plan:\n    - {plan: docs/plans/pg.md, chunk: A, gate_kind: epistemic-premise}")
     _plan(root, "hitlist.md", "approved", body=row)
     out = _gate(root)
     assert out["holds"][0]["scope"] == "A"
-    _plan(root, "pg.md", "executing", body=ROW.replace("change_kind: code", "change_kind: code\n  disposition: done"))
+    _plan(root, "pg.md", "executing", body=ROW.replace("change_kind: code-edit", "change_kind: code-edit\n  disposition: done"))
     assert _gate(root)["satisfied"] is True
 
 

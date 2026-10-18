@@ -137,7 +137,7 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # `required` applies only when present); no row-level `required` delta.
         # 3.10.0 -> 3.11.0 (20413076fd) re-looked: optional `appends` only; no
         # `required` delta.
-        # 3.11.0 -> 3.12.0 (54b741624f) re-looked: optional `signoff` ($defs, its
+        # 3.11.0 -> 3.12.0 (54b741624f) re-looked: optional `signoff` (under defs, its
         # own `required` applies only when present); no row-level `required` delta.
         # 3.12.0 -> 3.13.0 (755313987b) re-looked: `signoff.source` widened to
         # g-em|uhura; no row-level `required` delta.

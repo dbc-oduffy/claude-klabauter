@@ -204,6 +204,7 @@ SETTINGS_HOME_WRITER_CARVE_OUT = (
     "first_run",
     "forwarder_self_heal",
     "gen_settings_hooks",
+    "plugin_cache_sessions",
     "uninstall_legs",
     "scripts/setup.py::_record_homebrew_removal",
     "scripts/setup.py::ensure_percolate_identity",
@@ -255,6 +256,10 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     "forwarder_self_heal.py": (
         CARVE_OUT_INSTALL_PLANE,
         "appends its failure ledger beside the settings-home forwarders",
+    ),
+    "plugin_cache_sessions.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "SessionStart hook records each session's plugin root under the claude config dir; the switch cannot apply because the record is what keeps a cache sweep from stranding a live session",
     ),
     "scaffold_structure.py": (
         CARVE_OUT_INSTALL_PLANE,

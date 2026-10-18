@@ -21,7 +21,7 @@ from pathlib import Path
 
 _SECTIONS_DIR = Path(__file__).resolve().parent.parent / "sections"
 
-_NON_PRODUCER_STEMS = frozenset({"__init__", "_shared"})
+_NON_PRODUCER_STEMS = frozenset({"__init__", "_shared", "_cockpit_required"})
 
 _KNOWN_PRODUCERS: frozenset[str] = frozenset(
     {

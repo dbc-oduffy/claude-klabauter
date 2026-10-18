@@ -21,7 +21,7 @@ def test_normalize_sizing_rel_spellings_agree(tmp_path):
     want = "state/sizings/mine.yaml"
     assert run_token.normalize_sizing_rel(repo, want) == want
     assert run_token.normalize_sizing_rel(repo, "./" + want) == want
-    assert run_token.normalize_sizing_rel(repo, "state\sizings\mine.yaml") == want
+    assert run_token.normalize_sizing_rel(repo, r"state\sizings\mine.yaml") == want
     assert run_token.normalize_sizing_rel(repo, str(repo / want)) == want
     assert run_token.normalize_sizing_rel(repo, "") == ""
 

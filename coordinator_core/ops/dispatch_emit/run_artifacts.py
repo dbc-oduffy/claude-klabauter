@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional, Sequence
 
+from coordinator_core.session.record_homes import home_dir
+
 ARTIFACT_CLASSES = (
     "record-dir",
     "sizing",
@@ -33,7 +35,13 @@ ARTIFACT_CLASSES = (
 )
 DOC_PATHS_PARAM = "doc_paths"
 
-_RECORD_ROOT = "state/warp"
+def _home_rel(kind: str) -> str:
+    return Path(home_dir("", kind)).as_posix()
+
+
+_RECORD_ROOT = _home_rel("warp")
+_HANDOFFS_REL = _home_rel("handoffs")
+_SIZINGS_REL = _home_rel("sizings")
 _RUN_FILE = "run.json"
 _PARENT_FILE = "parent.json"
 _STAMP_TAIL = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}$")
@@ -210,7 +218,7 @@ def candidate_paths(
             base = stem.with_suffix("").as_posix()
             add("evidence-sidecar", f"{base}.evidence.yaml")
             add("seam-sidecar", f"{base}.seam.yaml")
-            add("handoff", f"state/handoffs/{stem.stem}.md")
+            add("handoff", f"{_HANDOFFS_REL}/{stem.stem}.md")
     add("delivery-note", f"docs/delivery/{run_id}.md")
 
     if sizing:
@@ -285,11 +293,11 @@ def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
     name. ``None`` for a path of no mapped class."""
     pure = PurePosixPath(rel)
     parent, name = pure.parent.as_posix(), pure.name
-    if parent == "state/sizings" and name.endswith(".yaml"):
+    if parent == _SIZINGS_REL and name.endswith(".yaml"):
         stem = name[: -len(".yaml")]
         head, sep, tail = stem.rpartition("-slice-")
         if sep and tail.isdigit() and head:
-            return f"state/sizings/{head}.yaml"
+            return f"{_SIZINGS_REL}/{head}.yaml"
         return rel
     if parent == "docs/plans":
         plan_name = name
@@ -300,7 +308,7 @@ def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
         if plan_name.endswith(".md"):
             return _norm_rel(_scalar(_read_text(root, f"docs/plans/{plan_name}"), "sizing_object"))
         return None
-    if parent == "state/handoffs" and name.endswith(".md"):
+    if parent == _HANDOFFS_REL and name.endswith(".md"):
         own = _norm_rel(_scalar(_read_text(root, rel), "sizing_object"))
         if own:
             return own
@@ -320,7 +328,7 @@ def runs_of_artifacts(worktree_root: Path, changed: Iterable[str]) -> dict[str, 
         rel = _norm_rel(str(raw))
         if rel is None or rel == _RECORD_ROOT or rel.startswith(_RECORD_ROOT + "/"):
             continue
-        if rel.startswith(("docs/delivery/", "docs/plans/", "state/handoffs/", "state/sizings/")):
+        if rel.startswith(("docs/delivery/", "docs/plans/", _HANDOFFS_REL + "/", _SIZINGS_REL + "/")):
             wanted.append(rel)
     if not wanted:
         return {}

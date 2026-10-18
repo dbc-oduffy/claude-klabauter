@@ -11,7 +11,9 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-_DIRS: tuple[str, ...] = ("state", "tasks")
+_STATE_ROOT = "state"
+_TASKS_ROOT = "tasks"
+_DIRS: tuple[str, ...] = (_STATE_ROOT, _TASKS_ROOT)
 _INFIX = "-recheck-due-"
 _SUFFIX = ".md"
 _DATE_LEN = len("YYYY-MM-DD")

@@ -56,6 +56,7 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
+from coordinator_core.session.record_homes import home_dir as _record_home_dir
 
 GUARD_NAME = "guard-kira-verdict-routed"
 
@@ -218,7 +219,7 @@ def _kira_run_attribution(repo_root: str, in_scope: list) -> "tuple[frozenset, f
     for run_id in run_ids:
         try:
             with open(
-                os.path.join(repo_root, "state", "warp", run_id, "manifest.json"),
+                os.path.join(_record_home_dir(repo_root, "warp"), run_id, "manifest.json"),
                 "r",
                 encoding="utf-8",
             ) as fh:

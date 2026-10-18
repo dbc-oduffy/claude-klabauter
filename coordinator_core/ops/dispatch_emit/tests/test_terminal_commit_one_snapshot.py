@@ -1,7 +1,7 @@
 """terminal_commit's full path reads the worktree once and commits the plan file once.
 
 The product commit, review-stamp mint, coded-stamp and implemented flip share one
-`git status` snapshot and one close commit; a close whose coded-stamp commit fails
+worktree snapshot (read in-process, no `git status` spawn) and one close commit; a close whose coded-stamp commit fails
 leaves the plan's status unflipped on disk.
 """
 
@@ -49,8 +49,10 @@ def test_the_full_path_spawns_one_status_read_and_commits_the_plan_once(tmp_path
     assert out["coded_sha"], out
     git_calls = [c for c in spawned if c and Path(str(c[0])).stem.lower() == "git"]
     statuses = [c for c in git_calls if "status" in c]
-    assert len(statuses) == 1, git_calls
-    assert len(git_calls) == 1, git_calls
+    # The worktree read is answered in-process by scoped_worktree_status; the status spawn is
+    # only its fallback, so a clean fixture spawns no git at all.
+    assert len(statuses) == 0, git_calls
+    assert len(git_calls) == 0, git_calls
     assert _status_line(repo) == "status: implemented"
     plan_commits = _git_out(repo, "log", "--format=%h", "--", driver.PLAN_REL).split()
     assert len(plan_commits) == 2, plan_commits  # the fixture's own plan commit plus the one close commit

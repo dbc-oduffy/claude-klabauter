@@ -918,7 +918,7 @@ def _writes_through(statement: str, target: str) -> bool:
 def _has_stdin_program_argv_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """A governed path passed as argv to a ``python -`` heredoc and written through.
 
-    ``F=<governed> && python3 - "$F" <<'EOF'`` then ``p = sys.argv[1]`` and
+    A variable bound to the governed path, passed to a ``python3 -`` heredoc, then ``p = sys.argv[1]`` and
     ``open(p, 'w')``: the governed name sits only in the argv word and the
     write only in the body, so no segment holds both. Denies when a write or
     move sink TARGETS the governed ``sys.argv[i]`` or a name bound to it
@@ -1053,7 +1053,7 @@ def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) 
         if body not in quoted or _has_os_exec_marker(body):
             continue
         blanker = _blank_all if _body_sinks_are_ungoverned(body, identifiers_lower) else _blank
-        blanked = _PY_STRING_LITERAL_RE.sub(blanker, body)
+        blanked = _PY_STRING_LITERAL_RE.sub(lambda m: blanker(m), body)
         if blanked != body:
             cmd = cmd.replace(body, blanked, 1)
     return cmd

@@ -43,7 +43,7 @@ def _dq(value: str) -> str:
 
 def _rename_key(fm: str, old: str, new: str) -> str:
     pattern = re.compile(r"^" + re.escape(old) + r":(?=[ \t]|\r?$)", re.MULTILINE)
-    return pattern.sub(new + ":", fm, count=1)
+    return pattern.sub(lambda _m: new + ":", fm, count=1)
 
 
 def _first_h1(body_text: str) -> str | None:

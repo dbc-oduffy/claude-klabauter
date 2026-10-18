@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.ops.dispatch_emit import grind_profile
+from coordinator_core.session.record_homes import home_dir
 
 SOURCE_ROWS_FILE = "rows-file"
 SOURCE_PARAMS_FILE = "params-file"
@@ -98,7 +99,7 @@ def reconstruct_rows(
     repo_root: Path, profile: Any, run_id: str, queues: list[str], run_dir: Path
 ) -> list[dict]:
     """Rows of `run_id` that reached their done evidence and whose archive destination is on disk."""
-    evidence_dir = repo_root / "state" / "queue-grind" / profile.name / "evidence" / run_id
+    evidence_dir = Path(home_dir(str(repo_root), "queue-grind")) / profile.name / "evidence" / run_id
     declared = _triage_declared_files(run_dir)
     queue_rels = [q for q in (_queue_rel(q, repo_root) for q in queues) if q is not None]
     rows: list[dict] = []

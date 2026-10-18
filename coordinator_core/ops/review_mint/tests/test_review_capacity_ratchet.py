@@ -6,7 +6,7 @@ import copy
 import pytest
 
 from coordinator_core.ops.review_mint import op as review_mint_op
-from coordinator_core.ops.review_mint.execute_review import compose_execute_review
+from coordinator_core.ops.review_mint.execute_review import REVIEW_PREP_SLICES_JS, compose_execute_review
 from coordinator_core.ops.review_mint.roster import DELIVERY_NOT_ROSTERED, parse_execute_review
 
 _CODE_REVIEWER = "coordinator:code-reviewer"
@@ -76,7 +76,7 @@ def test_reviewer_count_is_one_per_max_rows_capped_by_slices(fragment, rows, sli
 def test_composed_wave_groups_slices_by_the_fragment_max(fragment, rows):
     wave = _compose_wave(fragment, executor_rows=rows)
     assert "_groupSlices" in wave
-    assert f"_groupSlices(_reviewPrep?.slices ?? [], {rows}, 3, 4)" in wave
+    assert f"_groupSlices({REVIEW_PREP_SLICES_JS}, {rows}, 3, 4)" in wave
 
 
 @pytest.mark.parametrize("tshirt", ["L", "XL", "XXL"])

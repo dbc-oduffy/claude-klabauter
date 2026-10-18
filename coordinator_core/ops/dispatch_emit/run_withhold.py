@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Iterable
 
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.session.record_homes import home_dir
 
 WITHHOLD_FILE = "withhold.jsonl"
 MAX_ENTRIES = 64
 REASON_CAP = 500
-_RECORD_PREFIX = "state/warp/"
+_RECORD_PREFIX = Path(home_dir("", "warp")).as_posix() + "/"
 
 
 def validate(raw: object) -> list[dict]:

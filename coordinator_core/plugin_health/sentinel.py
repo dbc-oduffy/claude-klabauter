@@ -1460,7 +1460,7 @@ def _shadowed_key_notes(ml_cmd: Optional[str]) -> List[ProbeNote]:
 
         proc = subprocess.run(
             [ml_cmd, "check"], capture_output=True, text=True,
-            timeout=_probe_wall_secs(), **no_console_creationflags(),
+            timeout=_PROBE_SPAWN_BUDGET_SECS, **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _inconclusive(

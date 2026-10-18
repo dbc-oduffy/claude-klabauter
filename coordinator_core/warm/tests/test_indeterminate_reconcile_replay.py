@@ -132,6 +132,7 @@ def test_door_poll_of_a_finished_key_without_a_retained_result_prints_status(_fr
     assert reply["result"]["exit_code"] == 0
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: the poll must return on the stamp, not the 20s wait")
 def test_door_poll_with_wait_secs_returns_as_soon_as_the_stamp_lands(_fresh_store):
     key = dispatch_ack.mint_key()
     _fresh_store.admit(key, "invoke.from_argv")

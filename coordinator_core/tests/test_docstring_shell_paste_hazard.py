@@ -264,8 +264,6 @@ _BASELINE: set[tuple[str, str]] = {
      'if pip_stderr=$(python3 -m pip install -e "$CLAUDE_PLUGIN_ROOT/whoami/" 2>&1 >/dev/null); then'),
     ('coordinator/bin/resolve-repo-path.py',
      'mirrors the bash oracle\'s `"$MACHINE_LOCAL" get "$KEY" 2>/dev/null || true`.'),
-    ('coordinator/bin/stitch-observer-sidecar.py',
-     'Replaces the inline `cat "$OBSERVER_SIDECAR" >> "$DAILY_SUMMARY"; rm'),
     ('coordinator/bin/tests/test_agent_helper_shim_doe_corpus_coverage.py',
      '${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/<cli>'),
     ('coordinator/bin/tests/test_agent_helper_shim_doe_corpus_coverage.py',

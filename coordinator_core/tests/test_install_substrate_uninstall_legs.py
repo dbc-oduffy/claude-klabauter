@@ -1132,7 +1132,7 @@ def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypa
     (fake_claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)  # empty -> no agent-helper forwarders
     resolve_claude_klabauter_lib = fake_claude_klabauter_root / "coordinator" / "lib" / "resolve-claude-klabauter"
     resolve_claude_klabauter_lib.mkdir(parents=True)
-    (resolve_claude_klabauter_lib / "_resolve_claude_klabauter.py").write_text("stub\n", encoding="utf-8")
+    (resolve_claude_klabauter_lib / "_resolve_claude_klabauter.py").write_text("# stub\n", encoding="utf-8")
     # `_install_bin_resolvers` now loads the bin-templates manifest (C12) off
     # the resolved claude-klabauter root BEFORE anything else — this fixture's
     # `coordinator_engine_root_with_class` is faked to point at

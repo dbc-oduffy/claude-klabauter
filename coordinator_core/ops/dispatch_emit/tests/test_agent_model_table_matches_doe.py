@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.content_root import read_content_root
 from coordinator_core.ops.dispatch_emit import emit
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
 _MODEL_LINE = re.compile(r"^model:\s*['\"]?([A-Za-z0-9._-]+)['\"]?\s*$", re.MULTILINE)
 
 
@@ -17,11 +17,13 @@ def _doe_agents_dir():
     env = os.environ.get("CONTENT_ROOT_ROOT")
     if env:
         candidates.append(Path(env))
-    candidates.append(_REPO_ROOT.parent / "coordinator-content-repo")
+    content_root = read_content_root()
+    if content_root:
+        candidates.append(Path(content_root))
     for root in candidates:
-        agents = root / "coordinator" / "agents"
-        if agents.is_dir():
-            return agents
+        for agents in (root / "coordinator" / "agents", root / "agents"):
+            if agents.is_dir():
+                return agents
     return None
 
 

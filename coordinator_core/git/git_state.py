@@ -6,10 +6,7 @@ own call site in `head_blobs` for the mode-admission rule a caller needs
 (gitlink `160000` is a blob-equivalent leaf, not a directory to descend
 into).
 
-This module hand-parses `.git/index` (v2/v3/v4) and `.git/HEAD` directly
-rather than spawning `git ls-files -s`, `git status`, `git cat-file` or
-`git rev-parse HEAD` to answer questions that are plain file reads once the
-index format is known.
+This module hand-parses `.git/index` (v2/v3/v4) and `.git/HEAD` directly: plain file reads, no spawn.
 
 MANDATORY REUSE, BLOCKING:
     - Path resolution routes through `coordinator_core.git.git_dir`, never a
@@ -62,14 +59,14 @@ Negative-spec:
       stats+parses regardless of an open scope and never populates it --
       `_agree_branch_cas_refusal` is the one production caller that does
       this, by design.
-    - The SECOND per-call exception: `head_sha` memoises under
-      `call_io_scope.HEAD_NAMESPACE` while a `call_io_scope()` is open (ref
-      writers invalidate it); `head_sha(repo, fresh=True)` bypasses it, same
-      contract as `read_index(fresh=True)`.
     - Does NOT return `{}` on any parse failure. Signature mismatch,
       unsupported version, a split index, or any unmerged (`stage > 0`)
       entry all RAISE `IndexParseError` -- an empty dict reads as "nothing
       is staged", the worst possible wrong answer for every caller here.
+    - The SECOND per-call exception: `head_sha` memoises under
+      `call_io_scope.HEAD_NAMESPACE` while a `call_io_scope()` is open (ref
+      writers invalidate it); `head_sha(repo, fresh=True)` bypasses it, same
+      contract as `read_index(fresh=True)`.
 """
 
 from __future__ import annotations
@@ -176,10 +173,8 @@ _INDEX_CALL_CACHE: "contextvars.ContextVar[Optional[Dict[Path, IndexSnapshot]]]"
 def index_read_cache_scope() -> Iterator[None]:
     """Open a `read_index` cache for the lifetime of this `with` block only.
 
-    Every ordinary (`fresh=False`, the default) `read_index(repo)` call made
-    while this scope is open, for the SAME resolved index path, returns the
-    snapshot from the FIRST such call in this scope rather than re-reading
-    and re-parsing `.git/index`.
+    Every ordinary (`fresh=False`) `read_index(repo)` call in this scope, for the SAME resolved
+    index path, returns the snapshot from the FIRST such call.
 
     Never nest this with the intent of sharing one cache across two
     unrelated commits -- each call to this context manager opens its OWN
@@ -202,14 +197,9 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
     `IndexSnapshot` -- `{path: IndexEntry(mode, sha, stage)}` plus the index
     file's `stat_identity`.
 
-    By default (`fresh=False`) this stats+parses the index file FRESH on
-    every call UNLESS an `index_read_cache_scope()` is currently open, in
-    which case a prior call THIS SCOPE already made for the same resolved
-    index path is returned instead of re-reading the file. Pass
-    `fresh=True` to force a real disk read regardless of any open scope,
-    and to skip populating it -- the compare-and-swap re-observation
-    (`_agree_branch_cas_refusal`) always does this; see module negative-
-    spec and `index_read_cache_scope`'s own docstring.
+    By default (`fresh=False`) this stats+parses the index FRESH on every call UNLESS an
+    `index_read_cache_scope()` is open. `fresh=True` forces a real disk read and skips
+    populating the scope -- `_agree_branch_cas_refusal` always does this.
 
     Handles index v2, v3 (extended per-entry flags) and v4 (name
     prefix-compression). Raises `IndexParseError` -- never returns `{}` --
@@ -219,10 +209,8 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
     or a walk that does not land exactly on the start of the extension
     region.
 
-    A genuinely absent index file (no `.git/index` at all -- an unborn repo
-    before the first `git add`) is the one legitimate empty-result case:
-    there is truly nothing staged, so this returns an empty `IndexSnapshot`
-    with `stat_identity=None` rather than raising.
+    An absent index file (an unborn repo before the first `git add`) is the one legitimate
+    empty-result case: an empty `IndexSnapshot` with `stat_identity=None`.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -234,10 +222,8 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
             return cached
 
     try:
-        # THE COMMIT PATH'S OWN READER, and the first read `diverging_paths`
-        # issues on its `context is None` arm -- a transient read failure
-        # here must not become the `IndexParseError` that collapses the
-        # staged-content guard to `[]`, hence the retry.
+        # Retried: a transient read failure must not become the `IndexParseError` that
+        # collapses the staged-content guard to `[]`.
         raw = _retry_transient_read(index_path.read_bytes)
     except FileNotFoundError:
         snapshot = IndexSnapshot({}, None)
@@ -500,11 +486,8 @@ def head_branch(repo: Union[str, Path]) -> Optional[str]:
         - the full ref for a symref outside `refs/heads/`, unstripped.
         - `None` only when HEAD is unreadable or empty. Never raises.
 
-    Deliberately NOT folded into `head_sha`: that function resolves a symref
-    THROUGH to a sha and needs the common dir plus a packed-refs fallback to
-    do it; this one stops at HEAD's own contents and touches exactly one file.
-    A caller wanting both pays one extra small read rather than making either
-    signature three-valued in a second dimension.
+    Deliberately NOT folded into `head_sha`: this one stops at HEAD's own contents and
+    touches exactly one file.
     """
     gitdir = resolve_git_dir(repo)
     try:
@@ -527,17 +510,17 @@ def head_branch(repo: Union[str, Path]) -> Optional[str]:
 
 
 def head_sha(repo: Union[str, Path], *, fresh: bool = False) -> Optional[str]:
-    """Inside an open `call_io_scope` the answer is memoised under
-    `HEAD_NAMESPACE`, keyed on the resolved git dir; ref writers invalidate
-    that namespace. `fresh=True` neither reads nor writes the memo.
-
-    Uncached path: read `resolve_git_dir(repo)/HEAD`, following ONE ref hop -- HEAD's
+    """Read `resolve_git_dir(repo)/HEAD`, following ONE ref hop -- HEAD's
     own `ref: refs/heads/<x>` line to `refs/heads/<x>`'s content, read from
     `resolve_git_common_dir(repo)` (refs are never worktree-private; only
     `HEAD` itself is) -- and falling back to `resolve_git_common_dir(repo)/
     packed-refs` when the loose ref file does not exist. Returns `None` for
     a detached-nothing/unborn branch (a symref whose target has no loose
     ref and no packed-refs entry), never raises on a missing HEAD.
+
+    Inside an open `call_io_scope` the answer is memoised under
+    `HEAD_NAMESPACE`, keyed on the resolved git dir; ref writers invalidate
+    that namespace. `fresh=True` neither reads nor writes the memo.
     """
     if fresh or not scope_open():
         return _head_sha_uncached(repo)
@@ -578,17 +561,13 @@ def _head_sha_uncached(repo: Union[str, Path]) -> Optional[str]:
 
 
 def ref_tips_digest(repo: Union[str, Path]) -> Optional[str]:
-    """A sha256 hex digest over every ref tip: HEAD's raw value (symbolic or
-    detached), each loose ref under `<common-dir>/refs/` (name and content),
-    and the `packed-refs` entries, with a packed ref (and its `^` peel line)
-    dropped when a loose ref of the same name shadows it. Moves when a commit
-    lands, a ref is created, deleted or moved, or `git pack-refs` rewrites
-    storage. File reads only; zero spawns. Transient `*.lock` files are
-    ignored. Files-backend repos only: under the reftable backend refs live
-    outside `refs/` and the digest does not move on a commit.
+    """A sha256 hex digest over every ref tip: HEAD's raw value, each loose ref under
+    `<common-dir>/refs/`, and the `packed-refs` entries (a packed ref shadowed by a loose one is
+    dropped). Moves when a commit lands or a ref is created, deleted, moved or repacked. Zero
+    spawns; transient `*.lock` files are ignored. Files-backend repos only: under reftable the
+    digest does not move on a commit.
 
-    `None` when HEAD is unreadable (git dir does not resolve). A caller treats
-    `None` as "changed", never as a stable value.
+    `None` when HEAD is unreadable; a caller treats it as "changed", never as stable.
     """
     try:
         head = (resolve_git_dir(repo) / "HEAD").read_text(encoding="utf-8").strip()
@@ -652,9 +631,7 @@ def source_sha_suffix(repo: Union[str, Path]) -> str:
     bytes, which this stamp cannot make. What it asserts is exactly what it
     can know -- the source repo's HEAD at publish time.
 
-    WITH THE SOURCE-HEAD SHA IN THE SUBJECT, `git -C <mirror> log -1` names
-    the source commit the round ran from, letting a mirror consumer check
-    currency without grepping engine source for a fix's own text.
+    With the sha in the subject, `git -C <mirror> log -1` names the source commit the round ran from.
 
     IT DOES NOT ESTABLISH THAT A GIVEN FIX IS IN THE PUBLISHED BYTES. A
     `git -C <source> merge-base --is-ancestor <fix> <stamp>` query answers
@@ -680,14 +657,8 @@ def format_source_sha_suffix(sha: Optional[str]) -> str:
     """THE one place the stamp's bytes are spelled. `" [source-head <sha12>]"`,
     or `""` for a falsy sha.
 
-    Split out from `source_sha_suffix` so the three publish legs cannot
-    drift: two of them resolve their sha differently (publish.py may use a
-    round-pinned sha rather than a fresh HEAD read, closing a mid-run race),
-    which is why publish.py could not simply call `source_sha_suffix` and
-    kept its own copy of the format string instead --
-    `test_publish_commit_subject_names_source_sha.py` pins all three legs
-    against that drift.
-
+    Split out from `source_sha_suffix` because publish.py resolves a round-pinned sha;
+    `test_publish_commit_subject_names_source_sha.py` pins all three legs.
     Resolve the sha however the caller must; format it only here.
     """
     return f" [source-head {sha[:12]}]" if sha else ""
@@ -982,13 +953,9 @@ def read_tree_spine(
     return spine
 
 
-#: `head_blobs` memo, keyed `(repo, head_sha, paths)`. See that function for why
-#: the key makes this correct without invalidation. Bounded because the warm
-#: engine is long-lived and every distinct HEAD leaves its entries behind
-#: unreachable-but-resident; LRU eviction by insertion order keeps the working
-#: set (one HEAD, a handful of pathspecs). Deliberately NOT a
-#: `functools.lru_cache`: the key includes a value read at call time
-#: (`head_sha`), which a decorator over the public signature cannot see.
+#: `head_blobs` memo, keyed `(repo, head_sha, paths)`, correct without invalidation. Bounded
+#: (insertion-order LRU) because the warm engine is long-lived. NOT a `functools.lru_cache`:
+#: the key includes `head_sha`, read at call time.
 _HEAD_BLOBS_CACHE: "OrderedDict[Tuple[str, str, Tuple[str, ...]], Dict[str, Tuple[int, str]]]" = OrderedDict()
 _HEAD_BLOBS_CACHE_MAX = 64
 
@@ -1079,11 +1046,8 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
                     continue
                 meta, _, path = record.partition("\t")
                 mode_str, obj_type, sha = meta.split(" ")
-                # "blob" covers regular files AND symlinks (120000).
-                # "commit" is a submodule gitlink (160000) and MUST be
-                # admitted -- see the spine arm's own mode note below and
-                # test_commit_gates.py's `gitlink_160000` regression. Only
-                # "tree" is excluded.
+                # "blob" covers files and symlinks; "commit" is a gitlink (160000) and MUST be
+                # admitted (`gitlink_160000` regression in test_commit_gates.py). Only "tree" is excluded.
                 if obj_type not in ("blob", "commit"):
                     continue
                 result[path] = (int(mode_str, 8), sha)
@@ -1099,11 +1063,8 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
             if entry is None:
                 continue
             mode, sha = entry
-            # `0o40000` is a directory/tree entry -- excluded, matching the
-            # former `ls-tree` reader's own "tree" exclusion (see this
-            # function's docstring). Every other mode -- blob, symlink
-            # (120000), or gitlink/submodule (160000) -- is a leaf and is
-            # admitted.
+            # `0o40000` is a directory/tree entry -- excluded; every other mode (blob, symlink,
+            # gitlink) is a leaf and is admitted.
             if mode == 0o40000:
                 continue
             result[path] = (mode, sha)
@@ -1112,7 +1073,5 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
         _HEAD_BLOBS_CACHE[cache_key] = dict(result)
         while len(_HEAD_BLOBS_CACHE) > _HEAD_BLOBS_CACHE_MAX:
             _HEAD_BLOBS_CACHE.popitem(last=False)
-    # A COPY out, always -- callers mutate what they get back (`git_native`
-    # merges freshness re-reads into its own dict), and handing out the cached
-    # object would let one caller's edit become the next caller's truth.
+    # A COPY out, always: callers mutate what they get back.
     return dict(result)

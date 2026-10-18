@@ -124,6 +124,28 @@ _EXEMPT_PRODUCERS = {
     # and its `_commit_relocations` producer went with it. A deferral row for a
     # deleted file is the stale-roster hazard this ledger exists to catch, so it
     # is removed rather than left to read as outstanding work.
+    "architecture_survey/commit.py": (
+        "`commit_atlas` commits the survey atlas/ledger paths under its own "
+        "run; no baton or handoff owns the commit, so there is no ledger "
+        "entry to record. Pathspec-scoped."
+    ),
+    "ops/reconcile_merge_conclude.py": (
+        "`_commit_merge` concludes an open reconcile merge (`git commit "
+        "--no-edit`); the merge commit belongs to no baton or handoff and "
+        "carries no claim-bearing session id."
+    ),
+    "ops/workday_start_step0_reconcile.py": (
+        "commits the spooled reconcile paths at workday start; session-"
+        "bootstrap bookkeeping owned by no baton or handoff. Pathspec-scoped."
+    ),
+    "percolate/publish_lease.py": (
+        "`acquire` builds the publish-lease commit with `commit-tree` on a "
+        "scratch ref; not a worktree commit and owned by no baton or handoff."
+    ),
+    "sidecar_reap.py": (
+        "reaps run-report sidecars with a `--pathspec-from-file` commit of "
+        "the reaped sidecar paths; housekeeping owned by no baton or handoff."
+    ),
     "percolate/round.py": (
         "NEW producer (`step_commit`), found 2026-08-25 -- commits into "
         "`context.dest_repo_root`, a SIBLING repo mirror, not this repo's "

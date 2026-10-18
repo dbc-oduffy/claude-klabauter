@@ -1,0 +1,7 @@
+ RUN  v1.6.0
+ Test Files  2 failed (2)
+  ddct  test/on-box.test.ts > ON-BOX entries > integrity names an interface
+ FAIL  src/solo.spec.ts > solo > works
+ Tests  2 failed | 4 passed (6)
+ Start at  12:00:00
+ Duration  1.2s

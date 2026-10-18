@@ -204,6 +204,7 @@ from __future__ import annotations
 
 import pytest
 
+import os
 import re
 import shutil
 from pathlib import Path
@@ -355,6 +356,12 @@ def _is_exempt(
         return True
     if is_fixture_scratch_path(span):
         return True
+    # The conftest quarantine home is minted under pytest's basetemp, which a
+    # box can place outside the system temp root; it is a fixture echo by identity.
+    quarantine_home = os.environ.get("HOME", "")
+    if quarantine_home and Path(quarantine_home).name.startswith("home-quarantine"):
+        if _contains_normalized(span, quarantine_home):
+            return True
     for literal in _WRITE_GUARD_CORPUS_CONTENT_LITERALS:
         if _contains_normalized(span, literal) or _contains_normalized(literal, span):
             return True

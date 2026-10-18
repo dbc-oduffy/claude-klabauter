@@ -159,7 +159,7 @@ def export_commit(repo_root: Path, sha: str, *, run_git: Callable[..., Any] = ru
 
 
 def _expand(tokens: Sequence[str], **values: str) -> list[str]:
-    return [t.format(python=sys.executable, **values) for t in tokens]
+    return [sys.executable if t == "{python}" else t.format(**values) for t in tokens]
 
 
 def _gate_env(export: Path) -> Dict[str, str]:

@@ -70,8 +70,9 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
             )
 
         assert lines[0].startswith(f"ARMED peer_count=7 {name} peers at "), lines[0]
-        assert "claude-klabauter" not in lines[0]
-        assert "klabauter" not in lines[0]
+        label = lines[0].split(" peers at ")[0]
+        assert "claude-klabauter" not in label
+        assert "klabauter" not in label
 
 
 # ---------------------------------------------------------------------------

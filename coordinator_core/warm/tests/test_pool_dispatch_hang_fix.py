@@ -54,6 +54,7 @@ def _msg(tmp_path, tag):
     }
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: a saturated pool must reply at the deadline")
 def test_saturated_pool_replies_at_the_deadline_with_occupancy_and_never_runs(tmp_path, monkeypatch):
     claim_dir = tmp_path / "dispatch-claims"
     claim_dir.mkdir()

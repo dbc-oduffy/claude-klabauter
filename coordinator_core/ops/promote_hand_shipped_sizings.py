@@ -33,6 +33,7 @@ from coordinator_core.ops.warp_run_deliverable import (
     write_reconciled,
 )
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import reentrant_dispatch
 
 import coordinator_core.ops.sizing_ship  # noqa: F401 -- registers "sizing.ship"
@@ -182,7 +183,7 @@ def run(repo_root: Path) -> Dict[str, object]:
 def _runless_sizings(root: Path, run_sizings: set) -> List[tuple]:
     """`(sizing_rel, deliverable_id, mtime)` for each shippable sizing no warp run references."""
     found: List[tuple] = []
-    for path in sorted((root / "state" / "sizings").glob("*.yaml")):
+    for path in sorted(Path(home_dir(str(root), "sizings")).glob("*.yaml")):
         rel = _norm(path.relative_to(root).as_posix())
         if rel in run_sizings or sizing_scalar(root, rel, "status") not in _SHIPPABLE:
             continue

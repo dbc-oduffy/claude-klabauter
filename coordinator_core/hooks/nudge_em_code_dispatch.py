@@ -64,6 +64,7 @@ from coordinator_core.hooks._envelope import context_only, no_advisory, payload_
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
 )
@@ -576,7 +577,7 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
         return None
     if run is None:
         return None
-    return deny("PreToolUse", _SIZE_STAGE_DENY)
+    return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _SIZE_STAGE_DENY))
 
 
 def op(payload: dict) -> dict | None:

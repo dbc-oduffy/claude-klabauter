@@ -15,14 +15,18 @@ import yaml
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ALL_LANDED_HALT_KIND,
     LEDGER_HALT_KIND,
     LedgerHalt,
     ResumePlan,
     ledger_halt_path,
     read_ledger_halt,
+    rulable_ids,
 )
 
 COMMIT_HALT_KIND = "commit"
+#: `run_id` of an all-landed halt when no halted run is known.
+ALL_LANDED_NO_RUN = "none"
 #: `resume_ledger` key naming the ids the halt itself blocked on, a subset of `blocking`: only these
 #: owe work changed since the halt commit. Rows judged afterwards were not halt-blocking and stay met.
 RESUME_LEDGER_HALT_BLOCKING_FIELD = "halt_blocking"
@@ -127,7 +131,10 @@ def resumable_plan(
     neither closed by disposition (`coded`, `delivered_elsewhere`, ...) nor landed by a checkpoint
     commit of this plan or a `ledger-check` halt commit whose `Halt-Plan:` names it; row reports
     on disk are stale history and do not refuse. A plan with rows, every one landed, raises SizingFireRefused ("already ran") unless a ledger-halt pointer
-    (`ledger-check` or `commit` halt) names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it. A plan with
+    (`ledger-check` or `commit` halt) names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it.
+    Failing that, a rulable register row or a not_met recorded outcome resumes it as a synthesised
+    `ALL_LANDED_HALT_KIND` ledger resume (`_all_landed_halt`); a spine with no `coded` row also pays the
+    one `resume_landed_state` git spawn. A plan with
     no readable spine or no rows is not resumable (None). One file read, plus one more on the
     already-ran path; one `git log` only when a row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
@@ -163,7 +170,8 @@ def resumable_plan(
         and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
     ]
     state = None
-    if open_ids:
+    coded = any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows)
+    if open_ids or not coded:
         from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
         state = resume_landed_state(root, plan_rel)
@@ -172,10 +180,62 @@ def resumable_plan(
     if halt is not None:
         return ResumePlan(plan_rel, (), ledger=halt)
     if not open_ids:
+        halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state)
+        if halt is not None:
+            return ResumePlan(plan_rel, (), ledger=halt)
         raise SizingFireRefused(
-            [f"{plan_rel} already ran: every row is landed; residue is a new sizing naming it"]
+            [f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"]
         )
     return ResumePlan(plan_rel, tuple(open_ids))
+
+
+def _all_landed_halt(
+    root: Path, plan_rel: str, sizing: Mapping, sizing_rel: str, state=None
+) -> LedgerHalt | None:
+    """The synthesised `ALL_LANDED_HALT_KIND` halt for a plan with no open row, else None (nothing
+    left to judge). It resumes when the sizing's register holds a rulable row, or the newest recorded
+    outcome of this plan's halted run judged an item not_met. `state` is the `resume_landed_state`
+    answer already spent; absent, it is read here once and only when a rulable row exists. The halt is
+    never persisted."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record, read_run_outcome
+
+    register = sizing.get("requirement_register")
+    rows = register.get("rows") if isinstance(register, Mapping) else None
+    rulable = rulable_ids(rows) if isinstance(rows, list) else ()
+    pointer = _own_pointer(root, plan_rel, sizing_rel)
+    run = pointer.run_id if pointer is not None else (state.ledger_run if state is not None else None)
+    if not rulable and not _outcome_not_met(read_run_outcome(root, run) if run else None):
+        return None
+    if state is None and run is None:
+        from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+        state = resume_landed_state(root, plan_rel)
+        run = state.ledger_run
+    record = read_halt_record(root, run) if run else None
+    remaining = {k: v for k, v in record.remaining.items() if k in rulable} if record is not None else {}
+    return LedgerHalt(
+        run or ALL_LANDED_NO_RUN, plan_rel, sizing_rel, tuple(rulable), remaining=remaining, halted=ALL_LANDED_HALT_KIND
+    )
+
+
+def _outcome_not_met(outcome: Mapping | None) -> bool:
+    """True when the recorded run outcome's `ledger_verdict` holds an item judged `not_met`. Termination relies on the next run rewriting its outcome; no test pins that."""
+    verdict = outcome.get("ledger_verdict") if outcome else None
+    items = verdict.get("items") if isinstance(verdict, Mapping) else None
+    return isinstance(items, list) and any(isinstance(i, Mapping) and i.get("status") == "not_met" for i in items)
+
+
+def _own_pointer(root: Path, plan_rel: str, sizing_rel: str) -> LedgerHalt | None:
+    """The halt pointer naming this plan and sizing, from the repo root else the git common dir."""
+    pointer = read_ledger_halt(ledger_halt_path(root, plan_rel))
+    if pointer is None:
+        # The halt writer is handed the git common dir as its root, so a pointer may sit under it.
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+
+        pointer = read_ledger_halt(ledger_halt_path(resolve_git_common_dir(root), plan_rel))
+    if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
+        return None
+    return pointer
 
 
 def _ledger_halt_for(
@@ -193,14 +253,7 @@ def _ledger_halt_for(
 
     if any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows):
         return None
-    pointer = read_ledger_halt(ledger_halt_path(root, plan_rel))
-    if pointer is None:
-        # The halt writer is handed the git common dir as its root, so a pointer may sit under it.
-        from coordinator_core.git.git_dir import resolve_git_common_dir
-
-        pointer = read_ledger_halt(ledger_halt_path(resolve_git_common_dir(root), plan_rel))
-    if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
-        pointer = None
+    pointer = _own_pointer(root, plan_rel, sizing_rel)
     if pointer is not None and pointer.halted == COMMIT_HALT_KIND and open_ids:
         return None
     if state is None:

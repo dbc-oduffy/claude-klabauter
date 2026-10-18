@@ -36,6 +36,7 @@ from coordinator_core.ops.sizing_intake_contract import (
     intake_record,
     relayed_intake_record,
 )
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.session_baton import store
 
 _SIZING_SCHEMA_PATH: Path = (
@@ -107,7 +108,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(f"intake record failed schema validation: {format_validation_errors(errors)}")
 
     worktree = main_worktree_root(repo_root)
-    rel = f"state/sizings/{today}-{slug}.yaml"
+    rel = f"{Path(home_dir('', 'sizings')).as_posix()}/{today}-{slug}.yaml"
     target = worktree / rel
     if target.exists():
         return _err(f"sizing already exists: {rel}")

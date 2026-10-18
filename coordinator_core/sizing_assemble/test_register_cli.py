@@ -260,7 +260,7 @@ def _run_cli(repo: Path, register_arg: str, stdin_text: str | None) -> subproces
 def _without_clock(raw: bytes) -> bytes:
     import re
 
-    return re.sub(rb"computed_at: '[^']*'", b"computed_at: T", raw)
+    return re.sub(rb"computed_at: '[^']*'", lambda _m: b"computed_at: T", raw)
 
 
 @pytest.mark.spawns_process

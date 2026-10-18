@@ -163,6 +163,30 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/wsc_disposition.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/git/call_io_scope.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/ignore_match.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/lfs_attributes.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/main_commit_policy.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/path_canon.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/reconcile_manifest.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/scoped_changed.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/scoped_worktree_status.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/since_base_overlap.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/close_background.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/close_review.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/post_close_admission.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
 }
 
 

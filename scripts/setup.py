@@ -3545,9 +3545,13 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
     """Set `cleanupPeriodDays: 7` in `settings.json` only when the key is absent.
 
     ADVISORY, non-fatal. A user's existing value is never overridden; malformed
-    JSON is left untouched. Atomic write (temp + os.replace)."""
+    JSON is left untouched. Atomic write (temp + os.replace). Refused under
+    `COORDINATOR_DISABLE_MACHINE_MUTATION`."""
     print()
     print("--- Transcript retention default ---")
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [retention] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
     try:
         if str(claude_klabauter_root_resolved) not in sys.path:
             sys.path.insert(0, str(claude_klabauter_root_resolved))

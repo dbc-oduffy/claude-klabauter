@@ -195,10 +195,10 @@ def _step(
     best_effort: bool = False,
     on_exit: Mapping[int, str] | None = None,
 ) -> StepSpec:
-    record: dict[str, Any] = {
-        "id": id_, "cli": target, "args": list(args), "depends_on": None,
-        "already_satisfied": False, "detail": detail, "best_effort": best_effort,
-    }
+    record: dict[str, Any] = dict(
+        id=id_, cli=target, args=list(args), depends_on=None,
+        already_satisfied=False, detail=detail, best_effort=best_effort,
+    )
     return step_from_directive(
         record,
         stage=stage,
@@ -213,7 +213,7 @@ def _step(
 def _not_composed(id_: str) -> StepSpec:
     reason = _GAP_REASONS[id_]
     return step_from_directive(
-        {"id": id_, "cli": NOT_COMPOSED_TARGET, "args": [], "detail": f"not-composed: {reason}"},
+        dict(id=id_, cli=NOT_COMPOSED_TARGET, args=[], detail=f"not-composed: {reason}"),
         stage=STAGE_LAUNCH,
         heading=_OBSERVATIONS,
         cost_class="over-bar",

@@ -68,7 +68,7 @@ def _first_time_sync(session_id: str, rel_path: str) -> bool:
         if os.path.exists(legacy_top_level_path(name)):
             return False
         sentinel = os.path.join(managed_tempdir(), name)
-        fd = os.open(sentinel, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(sentinel, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         return False
     except OSError:

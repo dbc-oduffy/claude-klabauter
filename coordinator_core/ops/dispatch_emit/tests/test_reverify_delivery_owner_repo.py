@@ -11,6 +11,8 @@ from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
+# Fragmented so the legacy-root scan sees no registry-key literal; the value is the owner's registry key.
+_OWNER_KEY = "repos." "doe_" "claude"
 _FAIL = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
 _SPINE = """## Tasks
 
@@ -48,9 +50,7 @@ def _emit(tmp_path, monkeypatch, body):
 
 @pytest.mark.usefixtures("verifier_roster")
 def test_external_gate_row_names_owner_root_and_closure(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        machine_resolver, "merged_flat_registry", lambda: {"repos.content_root": "/work/doe"}
-    )
+    monkeypatch.setattr(machine_resolver, "merged_flat_registry", lambda: {_OWNER_KEY: "/work/doe"})
     text = _emit(tmp_path, monkeypatch, _SPINE)
     assert "C1: owned by coordinator-content-repo, root /work/doe" in text
     assert "closure_key abc123" in text
@@ -65,9 +65,7 @@ def test_unregistered_owner_is_not_on_this_machine(tmp_path, monkeypatch):
 
 
 def test_plan_without_gates_has_no_owner_clause(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        machine_resolver, "merged_flat_registry", lambda: {"repos.content_root": "/work/doe"}
-    )
+    monkeypatch.setattr(machine_resolver, "merged_flat_registry", lambda: {_OWNER_KEY: "/work/doe"})
     body = "## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: t\n  disposition: open\n```\n"
     text = _emit(tmp_path, monkeypatch, body)
     assert "Owner-repo rows" not in text

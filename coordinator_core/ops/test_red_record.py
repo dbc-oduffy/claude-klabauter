@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -179,7 +180,13 @@ def write_test_red_record(
     machine: Optional[str] = None,
     ran_at: Optional[str] = None,
     timeout: float = LOCK_TIMEOUT_SECS,
+    output: Optional[str] = None,
 ) -> dict:
+    """Write the record; when ``output`` (the captured runner output) is given
+    and ``failing`` is non-empty, also write the triage file beside it (see
+    ``test_red_triage``). A triage failure is logged to stderr and never
+    raises or alters the record write.
+    """
     machine = machine or compute_machine()
     ran_at = ran_at or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     target = _test_red_path(repo_root, machine)
@@ -214,6 +221,20 @@ def write_test_red_record(
         return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
 
     locked_rmw(target, _mutate, repo_root=repo_root, timeout=timeout, missing_ok=True)
+    if output is not None and failing:
+        try:
+            from coordinator_core.ops.test_red_triage import write_triage
+
+            write_triage(
+                repo_root=Path(repo_root),
+                output=output,
+                failing=failing,
+                tier=tier,
+                machine=machine,
+                ran_at=ran_at,
+            )
+        except Exception as exc:  # noqa: BLE001 -- triage must never affect the record write
+            print(f"test-red triage: write failed ({exc!r}) -- continuing.", file=sys.stderr)
     return result["entry"]
 
 

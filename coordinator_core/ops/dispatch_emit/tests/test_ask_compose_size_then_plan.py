@@ -57,7 +57,8 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
     from coordinator_core.subagent_sandbox.engine import load_policy
 
     scout = next(ln for ln in _compose().splitlines() if "const _scouted" in ln)
-    assert "schema: " in scout and "sidecar" not in scout
+    assert "schema: " in scout
+    assert "sidecar_dir: .coordinator-local/workflow-sidecars/ask/run-1/size/" in scout
     assert SIZING_SCOUT_AGENT_TYPE not in load_policy().report_sidecar
 
 
@@ -269,6 +270,7 @@ def test_ask_compose_does_not_import_the_spelling_list():
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_commit_params_carry_repo_relative_forward_slash_sidecar_paths(tmp_path):
     import json
     import shutil

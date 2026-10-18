@@ -31,14 +31,15 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, hal
 from coordinator_core.ops.dispatch_emit.halted_record_commit import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_RESUMED
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
+from coordinator_core.session.record_homes import home_dir
 
 OP_NAME = "dispatch.reap_abandoned_runs"
 HALTED_KIND = "abandoned"
-SIZING_ROOT = "state/sizings"
+SIZING_ROOT = Path(home_dir("", "sizings")).as_posix()
 RUN_FILE = "run.json"
 QUIET_SECONDS = 600
 TOKENLESS_QUIET_SECONDS = 3600
-STATUS_ROOTS = [RECORD_DIR_ROOT, SIZING_ROOT, "state/handoffs", "docs/plans", "docs/delivery"]
+STATUS_ROOTS = [RECORD_DIR_ROOT, SIZING_ROOT, Path(home_dir("", "handoffs")).as_posix(),"docs/plans", "docs/delivery"]
 
 
 def abandoned_run_ids(

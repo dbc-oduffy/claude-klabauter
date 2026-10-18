@@ -148,7 +148,8 @@ _REDIR_PRECEDING_OK = set(" \t\n0123456789&")
 #: (``tee >(grep foo) < in``) from becoming a candidate at all.
 _REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
 #: Inside `[[ ... ]]` and `(( ... ))`/`$(( ... ))` a bare `>` is a comparison, never a
-#: redirect: `[[ "$m" > "2026-10-09T12:17:36" ]]` compares strings, and rewriting its ':'
+#: redirect: a string comparison of a variable against a timestamp literal, and rewriting
+#: the literal's ':'
 #: changed the comparison's result. Opener -> closer, matched at quote-depth 0.
 _COMPARISON_SPANS = {"[[": "]]", "((": "))"}
 _SPAN_OPEN_PRECEDING_OK = set(" \t\n;&|($")

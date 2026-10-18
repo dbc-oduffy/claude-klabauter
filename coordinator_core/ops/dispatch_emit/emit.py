@@ -6281,7 +6281,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
                 ledger_run = run
                 ledger_sha = sha.strip() or None
         if run is not None and is_ledger_check and (names_plan or not named):
-            landed, first_sha = run_halts.get(run, (frozenset(), None))
+            landed, first_sha = run_halts[run] if run in run_halts else (frozenset(), None)
             run_halts[run] = (landed | chunk_ids, first_sha or sha.strip() or None)
     return ResumeLanded(frozenset(ids), ledger_run, ledger_sha, run_halts)
 

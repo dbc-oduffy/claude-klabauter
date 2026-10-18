@@ -7,7 +7,8 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Three arms:
-  - asks:   {asks: [{ask, source?, sender?, relayed_text?, label?, writes?}], sender?, confirm_split?} -- the parent register is one row
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, label?, writes?}],
+            sender?, confirm_split?} -- the parent register is one row
             (R1..Rn) per ask, each slice claims its own.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
@@ -45,10 +46,12 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
+from coordinator_core.ops.dispatch_emit.route_preference import RoutePreference, parse, refusal, to_em_analysis
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.ops.sizing_intake_contract import intake_record
 from coordinator_core.session import claimed_write
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warp_fire import fire_command
 
 _SIZING_SCHEMA_PATH: Path = (
@@ -136,6 +139,21 @@ def _relay_fields(params: Mapping, count: int) -> list[tuple[Optional[str], Opti
     return out
 
 
+def _route_fields(params: Mapping, count: int) -> list[RoutePreference]:
+    """Per ask item its route_preference/em_rationale (asks arm only; other arms get empty)."""
+    raw = params.get("asks")
+    if raw is None:
+        return [RoutePreference(None, None)] * count
+    out = []
+    for i, item in enumerate(raw):
+        pref, why = item.get("route_preference"), item.get("em_rationale")
+        problem = refusal(f"asks[{i}]", pref, why)
+        if problem:
+            raise _Refused(problem)
+        out.append(parse(pref, why))
+    return out
+
+
 def _load_parent(root: Path, rel: str) -> dict:
     from coordinator_core.session.record_homes import home_dir
 
@@ -174,6 +192,7 @@ def _slice_record(
     sl: contract.AskSlice, *, name: str, turns: list[dict], marker: str, today: str,
     parent_rows: Optional[dict[str, dict]], sources: Optional[list] = None,
     sender: Optional[str] = None, relayed_text: Optional[str] = None,
+    route_pref: Optional[RoutePreference] = None,
 ) -> dict:
     """A slice sizing. A relayed slice, or any slice when no PM turn exists, is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row."""
@@ -194,6 +213,8 @@ def _slice_record(
             for t in turns
         ]
     record["em_analysis"][ASK_PARENT_KEY] = marker
+    if route_pref is not None:
+        record["em_analysis"].update(to_em_analysis(route_pref))
     if parent_rows is not None:
         record[rr.REGISTER_KEY] = {
             rr.SOURCES_KEY: sources,
@@ -327,6 +348,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
     sid = params.get("session_id") or resolve_current_session_id(Path(cwd))
     turns = _verbatim_turns(parent_doc, sid, cwd)
     relay = _relay_fields(params, len(slices))
+    route_prefs = _route_fields(params, len(slices))
 
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_hex = uuid.uuid4().hex[:6]
@@ -344,11 +366,11 @@ def _fanout(params: Mapping, root: Path) -> dict:
     records: list[tuple[str, str]] = []
     for i, sl in enumerate(slices):
         slug = _slug(sl.label) or f"slice-{i + 1}"
-        rel = f"state/sizings/{today}-{parent_hex}-{i + 1}-{slug}.yaml"
+        rel = f"{Path(home_dir('', 'sizings')).as_posix()}/{today}-{parent_hex}-{i + 1}-{slug}.yaml"
         record = _slice_record(
             sl, name=f"{sl.label}"[:60], turns=turns, marker=contract.ask_parent_marker(parent_id, run_ids[i]),
             today=today, parent_rows=parent_rows, sources=sources,
-            sender=relay[i][0], relayed_text=relay[i][1],
+            sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:

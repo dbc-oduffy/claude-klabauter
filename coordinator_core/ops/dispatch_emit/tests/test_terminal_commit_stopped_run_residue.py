@@ -96,3 +96,61 @@ def test_malformed_key_carries_nothing():
     for bad in ({}, {"stopped_run_residue": None}, {"stopped_run_residue": {"carried": []}},
                 {"stopped_run_residue": {"carried": {"r": "x"}}}):
         assert terminal_commit._stopped_run_carried(bad) == set()
+
+
+def test_stopped_run_residue_never_carries_a_live_siblings_plan(tmp_path, monkeypatch):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import stopped_runs
+    from coordinator_core.ops.dispatch_emit.tests import test_stopped_runs as ts
+    from coordinator_core.session import scope
+
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(ts.warp_live, "managed_tempdir", lambda: managed)
+    monkeypatch.setattr(ts.warp_live, "legacy_top_level_path", lambda name: managed / name)
+    monkeypatch.setattr(scope, "contested_by_live_peers", lambda paths, sid, cwd=None: {})
+
+    stopped = ts._run_id(60, "aaaaaa")
+    live = ts._run_id(30, "bbbbbb")
+    ts._submit(root, tmp_path, stopped, body=ts._stopped_body(stopped))
+    ts._artifacts(root, stopped, sizing="state/sizings/a.yaml")
+    ts._write(root, f"state/warp/{live}/run.json", json.dumps({"sizing_rel": "state/sizings/b.yaml"}))
+    ts._write(root, "state/sizings/b.yaml", "plan: docs/plans/sibling.md\n")
+    ts._write(root, "state/sizings/a.yaml", "baton: state/handoffs/a.md\nplan: docs/plans/sibling.md\n")
+    ts._write(root, "docs/plans/sibling.md", "---\nsizing_object: state/sizings/b.yaml\n---\n")
+
+    got = stopped_runs.residue(root, ts.SESSION, [])
+    assert "docs/plans/sibling.md" not in got.carried[stopped]
+    assert "state/sizings/a.yaml" in got.carried[stopped]
+
+
+def test_stopped_run_residue_withholds_a_plan_no_run_owns(tmp_path, monkeypatch):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import stopped_runs
+    from coordinator_core.ops.dispatch_emit.tests import test_stopped_runs as ts
+    from coordinator_core.session import scope
+
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(ts.warp_live, "managed_tempdir", lambda: managed)
+    monkeypatch.setattr(ts.warp_live, "legacy_top_level_path", lambda name: managed / name)
+    monkeypatch.setattr(scope, "contested_by_live_peers", lambda paths, sid, cwd=None: {})
+
+    stopped = ts._run_id(60, "aaaaaa")
+    live = ts._run_id(30, "bbbbbb")
+    ts._submit(root, tmp_path, stopped, body=ts._stopped_body(stopped))
+    ts._artifacts(root, stopped, sizing="state/sizings/a.yaml")
+    ts._write(root, f"state/warp/{live}/run.json", json.dumps({"sizing_rel": "state/sizings/b.yaml"}))
+    ts._write(root, "state/sizings/b.yaml", "plan: docs/plans/sibling.md\n")
+    ts._write(root, "state/sizings/a.yaml", "baton: state/handoffs/a.md\nplan: docs/plans/sibling.md\n")
+    ts._write(root, "docs/plans/sibling.md", "---\ntitle: no owner\n---\n")
+
+    got = stopped_runs.residue(root, ts.SESSION, [])
+    assert "docs/plans/sibling.md" not in got.carried.get(stopped, ())
+    assert "state/sizings/a.yaml" in got.carried[stopped]

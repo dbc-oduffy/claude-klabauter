@@ -608,6 +608,68 @@ def test_a_relayed_sender_reaches_the_fanout_and_must_be_a_string(tmp_path):
     assert "asks[0].sender must be a string" in _hso(out)["permissionDecisionReason"]
 
 
+def test_a_single_ask_forwards_its_route_preference_to_the_emit(tmp_path):
+    emit = _Emit()
+    args = {"ask": "add a thing", "route_preference": "roadmap", "em_rationale": "spans two workstreams"}
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit)
+    assert _hso(out)["permissionDecision"] == "allow"
+    params = emit.calls[0][0]
+    assert params["route_preference"] == "roadmap"
+    assert params["em_rationale"] == "spans two workstreams"
+
+
+def test_an_ask_with_no_preference_forwards_neither_key(tmp_path):
+    emit = _Emit()
+    mod.evaluate(_payload(_repo(tmp_path), {"ask": "a"}), emit=emit)
+    assert "route_preference" not in emit.calls[0][0] and "em_rationale" not in emit.calls[0][0]
+
+
+def test_a_one_item_asks_collapse_carries_the_item_preference(tmp_path):
+    emit = _Emit()
+    args = {"asks": [{"ask": "a", "route_preference": "goal", "em_rationale": "why"}]}
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=_Fanout([]))
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert emit.calls[0][0]["route_preference"] == "goal"
+    assert emit.calls[0][0]["em_rationale"] == "why"
+
+
+def test_a_multi_item_asks_forwards_each_items_preference_to_the_fanout(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    args = {"asks": [{"ask": "x", "route_preference": "plan", "em_rationale": "why"}, {"ask": "y"}]}
+    out = mod.evaluate(_payload(root, args), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    sent = fan.calls[0][0]["asks"]
+    assert sent[0]["route_preference"] == "plan" and sent[0]["em_rationale"] == "why"
+    assert "route_preference" not in sent[1]
+
+
+@pytest.mark.parametrize(
+    "args, needle",
+    [
+        ({"ask": "a", "route_preference": "shape"}, "route_preference"),
+        ({"ask": "a", "em_rationale": "x" * 2001}, "em_rationale"),
+        ({"ask": "a", "em_rationale": 3}, "em_rationale"),
+        ({"asks": [{"ask": "x"}, {"ask": "y", "route_preference": "shape"}]}, "asks[1].route_preference"),
+        ({"asks": [{"ask": "x", "em_rationale": ""}, {"ask": "y"}]}, "asks[0].em_rationale"),
+        ({"asks": [{"ask": "x", "route_preference": "shape"}]}, "asks[0].route_preference"),
+        ({"sizing": "state/sizings/a.yaml", "route_preference": "plan"}, "a sizing is already sized"),
+        ({"sizing": "state/sizings/a.yaml", "em_rationale": "why"}, "a sizing is already sized"),
+        ({"asks": [{"ask": "x"}, {"ask": "y"}], "route_preference": "plan"}, "each asks item"),
+    ],
+)
+def test_an_invalid_or_misplaced_route_preference_is_denied(tmp_path, args, needle):
+    emit, fan = _Emit(), _Fanout([])
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=fan)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert needle in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == [] and fan.calls == []
+
+
+def test_the_args_shape_names_the_route_preference_keys():
+    assert "route_preference?" in mod._ARGS_SHAPE and "em_rationale?" in mod._ARGS_SHAPE
+
+
 @pytest.mark.parametrize(
     "args, needle",
     [

@@ -19,7 +19,7 @@ from typing import Any
 
 from coordinator_core.atomic_append import append_line
 from coordinator_core.daily_day import local_day
-from coordinator_core.session.core import sessions_dir
+from coordinator_core.session.core import ensure_session, sessions_dir
 
 _DAY_LEN = len("YYYY-MM-DD")
 
@@ -202,8 +202,12 @@ def open_checkpoint(
             _warn("resume unavailable, no git sessions dir")
             return Checkpoint(None, [])
         today = local_day(str(repo_root))
-        directory = Path(base) / f"{ceremony}-apply"
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = Path(
+            ensure_session(f"{ceremony}-apply", str(repo_root), sessions_base=base)
+        )
+        if not directory.is_dir():
+            _warn("resume unavailable, session dir not created")
+            return Checkpoint(None, [])
         name = f"{today}-{_run_key(for_date, only_mode)}.jsonl"
         path = directory / name
         rows = _read_rows(path)

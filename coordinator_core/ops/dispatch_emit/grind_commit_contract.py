@@ -1,7 +1,7 @@
 """The grind mode contract of ``dispatch.terminal_commit``: params key, row shape, row trailer.
 
 Shared by the op that lands a grind's finished rows and by the emitter that composes the call, so it
-imports nothing beyond the standard library.
+imports nothing beyond the standard library and the stdlib-only ``session.record_homes``.
 
 Handler reply shape: ``{committed, sha, rows: [{row_id, outcome, sha}],
 dropped: [{row_id, path, reason}], error, refused, already_landed, unlanded}``. A path the commit
@@ -15,14 +15,22 @@ did not carry; the reason names the landed sha. Both keys are absent on a first 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, unquote
+
+from coordinator_core.session.record_homes import home_dir
+
+
+def _home_prefix(kind: str) -> str:
+    return Path(home_dir("", kind)).as_posix() + "/"
+
 
 GRIND_COMMIT_PARAM = "grind"
 ALREADY_LANDED_KEY = "already_landed"
 UNLANDED_KEY = "unlanded"
 ROW_TRAILER_KEY = "Grind-Row"
-LEDGER_ROOT = "state/queue-grind/"
+LEDGER_ROOT = _home_prefix("queue-grind")
 DROP_LEDGER_ROOT = "ledger-root"
 DROP_UNSEEN_DELETION = "deletion-git-cannot-see"
 
@@ -39,14 +47,14 @@ RUN_RECORD_REQUIRED = ("profile", "run_id", "counts", "spend", "handed_back", "h
 
 # Records a fix stage must never write: history, not work product.
 HISTORICAL_RECORD_PREFIXES = (
-    "state/warp/",
+    _home_prefix("warp"),
     "docs/plans/",
-    "state/handoffs/",
-    "state/sizings/",
+    _home_prefix("handoffs"),
+    _home_prefix("sizings"),
     "docs/decisions/",
 )
 
-_SHARED_WRITE_ROOTS = ("state/sizings/", "state/handoffs/", "state/apm-rulings/")
+_SHARED_WRITE_ROOTS = (_home_prefix("sizings"), _home_prefix("handoffs"), "state/apm-rulings/")
 
 
 def _dir_root(path: str) -> str:

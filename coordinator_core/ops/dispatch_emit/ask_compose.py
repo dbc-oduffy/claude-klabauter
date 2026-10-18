@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, 
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ALL_LANDED_HALT_KIND,
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
@@ -38,6 +39,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KEY,
+    RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     TERMINAL_RESUME_LEDGER_PARAM,
@@ -75,6 +77,7 @@ from coordinator_core.ops.dispatch_emit.design_conformance import (
     DEFAULT_MET_BY_CLAUSE,
     DESIGN_BRIEF_KEY,
 )
+from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
@@ -127,6 +130,7 @@ _OWNER_ROWS_JS = "_crossRepoRows"
 _SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+_OVERRIDE_SLOT = "<why your assembled route differs from route_preference; omit when it matches>"
 _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
@@ -522,7 +526,9 @@ _ADMIT_MANIFEST_JS = (
     "  };\n"
     "  const _adoptManifest = (m, soft) => {\n"
     "    if (m === null || m === undefined || typeof m !== 'object' || Array.isArray(m)) return;\n"
-    "    if (m.error) { if (!_stageRefusal) _stageRefusal = String(m.error); return; }\n"
+    # A soft (relayed) reply's `error` is agent prose -- a relay that shortens an oversized
+    # manifest writes its note there -- so it never refuses; the disk read that follows decides.
+    "    if (m.error) { if (!soft && !_stageRefusal) _stageRefusal = String(m.error); return; }\n"
     "    const gap = _wholeManifestGap(m);\n"
     "    if (gap) { if (!soft && !_relayGap) _relayGap = gap; return; }\n"
     "    _stagedManifest = m;\n"
@@ -1099,7 +1105,7 @@ def _sizing_procedure_pointer() -> str:
     source = Path(root).joinpath(*_SIZING_SKILL_SOURCE)
     if not source.is_file():
         return ""
-    return f", by Reading `{source}` and following it"
+    return f", by Reading `{source.as_posix()}` and following it"
 
 
 def compose_ask_script(
@@ -1128,8 +1134,13 @@ def compose_ask_script(
     ask_source: str = "pm",
     required_reviewers: Sequence[str] = (),
     run_base_sha: Optional[str] = None,
+    route_preference: Optional[_route_pref.RoutePreference] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
+
+    A non-empty `route_preference` adds the EM's steer to the size-stage scout prompt, ahead of the
+    ask text, and a `route_override_reason` slot to each gate command the scout runs after its own
+    sizing-assemble. Empty or absent, every string is unchanged.
 
     `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
     the test instruction; absent, the base is HEAD at compose time.
@@ -1177,6 +1188,7 @@ def compose_ask_script(
     if ask_source not in ASK_SOURCES:
         raise AskComposeRefused(f"ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
     relayed = ask_source == ASK_SOURCE_RELAYED
+    has_route_pref = route_preference is not None and not route_preference.is_empty()
     ledger_clause_text = _RELAYED_LEDGER_CLAUSE if relayed else _LEDGER_CLAUSE
     if stop_after not in (None, STOP_AFTER_PLAN):
         raise AskComposeRefused(f"stop_after takes {STOP_AFTER_PLAN!r} or nothing, got {stop_after!r}")
@@ -1468,6 +1480,7 @@ def compose_ask_script(
             f"{_INVOKE} {OP_ASK_GATE} '"
             f'{{"sizing_path":"{sizing_write_rel}","run_id":"{run_id}","writes":[<your writes>]'
             + (f',"baton":{json.dumps(baton["path"])}' if baton else "")
+            + (f',"route_override_reason":"{_OVERRIDE_SLOT}"' if has_route_pref else "")
             + "}'"
         )
         scout_closing = (
@@ -1512,6 +1525,7 @@ def compose_ask_script(
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
             f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
             "which prior turns are pertinent."
+            + ("\n\n" + _route_pref.scout_block(route_preference).rstrip("\n") if has_route_pref else "")
             + (
                 "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
                 if relayed
@@ -1569,7 +1583,13 @@ def compose_ask_script(
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
-            "gate command and return no arm or halt.",
+            "gate command and return no arm or halt."
+            + (
+                f" When your reworded sizing routes differently from route_preference, add "
+                f'`"route_override_reason":"{_OVERRIDE_SLOT}"` to that JSON object.'
+                if has_route_pref
+                else ""
+            ),
             *(
                 _stage_act_parts(
                     "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
@@ -1869,6 +1889,9 @@ def compose_ask_script(
     b.append(
         f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; "
         f"if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} }}"
+    )
+    b.append(
+        f"  const _allLandedResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_KIND_FIELD} === {_lit(ALL_LANDED_HALT_KIND)};"
     )
     if fold_stage:
         # A ledger verdict carries the gate op's own stage of the resumed plan as `manifest`; the re-plan
@@ -2530,8 +2553,8 @@ def compose_ask_script(
     )
     verify_lines[2:2] = [
         f"    if (_resumeLedger && !_ledgerExec && ({_rl}.blocking ?? []).length) {{\n"
-        f"      try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
-        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } }\n"
+        f"      if (!_allLandedResume) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]
     b.extend(verify_lines)
@@ -2748,7 +2771,7 @@ def compose_ask_script(
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["roadmap-blitz", *rb_phases] if rb_fn else []),
                 ASK_VERIFY_PHASE,
-                *(["commit"] if in_run_commit else []),
+                *(("commit",) if in_run_commit else ()),
             ],
         ),
     )
@@ -2813,11 +2836,14 @@ _SFE_WAVE_SIDECARS_JS = (
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.
 _RESUME_LEDGER_CLAUSE_JS = (
-    "(_resumeLedger ? ' RESUME: an earlier run halted at the ledger check; a remaining-work leg then ran "
-    "against the rows it kept. ' + "
-    f"(_gate.{RESUME_LEDGER_KEY}.blocking.length ? 'Judge only these requirement rows, now, against the current tree: ' + "
-    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. A blocking row is met only on work changed since the halt "
-    f"commit ' + (_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? '(unknown)') + '; the diff the halt already judged is not_met. "
+    "(_resumeLedger ? ' RESUME: ' + (_allLandedResume ? 'every row of the plan landed in an earlier run and no "
+    "executor ran in this one. ' : 'an earlier run halted at the ledger check; a remaining-work leg then ran "
+    "against the rows it kept. ') + "
+    f"(_gate.{RESUME_LEDGER_KEY}.blocking.length ? 'Judge only these requirement rows, now, against ' + "
+    "(_allLandedResume ? 'the landed work of the plan at HEAD: ' : 'the current tree: ') + "
+    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. ' + (_allLandedResume ? 'A blocking row is met when the "
+    "landed work satisfies its register text. ' : 'A blocking row is met only on work changed since the halt "
+    f"commit ' + (_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? '(unknown)') + '; the diff the halt already judged is not_met. ') + '"
     f"Revise notes: ' + JSON.stringify(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []) + "
     "'. Return an item for each of them and no other item.' "
     ": 'No requirement row is left to judge. Return items: [].') + "

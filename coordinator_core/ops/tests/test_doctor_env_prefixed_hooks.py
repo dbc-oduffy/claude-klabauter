@@ -69,7 +69,18 @@ def test_shipped_hooks_json_has_no_false_broken(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_layer_names_carry_no_private_names():
+    from coordinator_core.content_root import read_content_root
+    from coordinator_core.engine_root import coordinator_engine_root
+
     layer = doctor._check_sibling_resolution()
+    host_paths = [str(p) for p in (read_content_root(), coordinator_engine_root()) if p]
+    host_paths.sort(key=len, reverse=True)
+
+    def scrub(message: str) -> str:
+        for host_path in host_paths:
+            message = message.replace(host_path, "<root>")
+        return message
+
     for private in ("coordinator-content-repo", "claude-klabauter", "claude-klabauter"):
         assert private not in layer.name
-        assert all(private not in f.message for f in layer.findings)
+        assert all(private not in scrub(f.message) for f in layer.findings)

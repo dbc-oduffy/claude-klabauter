@@ -337,8 +337,8 @@ class TestCheck2ShellAnywhereOnIntroLine:
         assert check_destructive_git_orphan(cmd) is None
 
     def test_a_leading_assignment_segment_does_not_make_a_cat_heredoc_shell_fed(self):
-        # cockpit-73: `D=<dir>; cat > $D/x.md <<'EOF'` denied a prose body that
-        # quoted a push; the bare assignment segment failed closed as "shell".
+        # cockpit-73: a bare dir assignment before a cat heredoc denied a prose
+        # body that quoted a push; the assignment segment failed closed as "shell".
         body = "\nthe flow runs git push origin main --force later\nEOF"
         assert check_destructive_git_orphan("D=out; cat > $D/x.md <<'EOF'" + body) is None
         assert check_destructive_git_orphan("D=out; bash <<'EOF'" + body) is not None

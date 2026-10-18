@@ -770,10 +770,10 @@ def _line_has_shell_in_command_position(line: str) -> bool:
         except ValueError:
             return True
         if tokens and all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) for t in tokens):
-            # `D=dir; cat > $D/x <<'EOF'`: a bare assignment runs nothing and
-            # cannot be the heredoc's consumer. A `$(...)` in its value is
-            # still caught: `_split_segments` does not split inside it, and
-            # CHECK 2/3 scan the visible line regardless.
+            # A bare assignment segment ahead of a cat heredoc runs nothing and
+            # cannot be the heredoc's consumer. A command substitution in its
+            # value is still caught: `_split_segments` does not split inside
+            # it, and CHECK 2/3 scan the visible line regardless.
             continue
         i = 0
         while i < len(tokens):
@@ -1150,9 +1150,6 @@ def _deny(reason: str) -> Dict[str, Any]:
         }
     }
 
-
-
-
 #: Wall-clock a single dispatch may spend inside `_run_git` subprocesses
 #: before further probes are declined unspawned. Derived from the harness's
 #: own PreToolUse hook window (15 000 ms, read off a `hook_cancelled`
@@ -1515,8 +1512,6 @@ def _batch_show_index_blobs(
             pos += 1
         results[p] = content.decode("utf-8", errors="replace")
     return results
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -8897,10 +8892,6 @@ def check_validate_commit(
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
 def check_find_exec_rewrite(
     cmd: str,
     session_id: str = "",
@@ -9636,8 +9627,6 @@ def check_heredoc_repo_write_advise(
                 + (" %s" % _hd_note if _hd_note else "")
             )
     return None
-
-
 
 
 #: `git commit` options whose VALUE is a separate following token -- skipped
@@ -11249,8 +11238,6 @@ def check_git_commit_safe_commit_advise(
 # own platform-gated guards, which consume the targets these two checks name.
 # ---------------------------------------------------------------------------
 
-
-
 def check_multiprobe_banner_rewrite(
     cmd: str,
     session_id: str = "",
@@ -11264,7 +11251,6 @@ def check_multiprobe_banner_rewrite(
     )
 
     return _impl(cmd, session_id, payload, git_root)
-
 
 
 #: Task 4 fix (2026-07-29, live incident): a shell redirection operator

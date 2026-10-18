@@ -129,6 +129,11 @@ _SCAN_ROOTS = (_REPO_ROOT / "coordinator_core", _REPO_ROOT / "coordinator" / "bi
 # mapped value, fails `test_allowlist_entries_carry_a_reason` below -- the
 # allow-list is data this test reads, not a place to silence a finding by
 # appending a string.
+_TMP_FIXTURE_REASON = (
+    "test fixture: renames a file it created under pytest tmp_path, outside "
+    "any session's claimable space"
+)
+
 _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     # --- C1: relocate_touched_path IS the move; seeded first, per the plan ---
     ("coordinator_core", "session/scope.py", "relocate_touched_path", "shutil.move", "shutil.move(src_abs, dst_abs)", 1):
@@ -484,6 +489,34 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ('coordinator_core', 'roadmap/tests/test_plan_gate.py', 'test_a_shared_basename_with_no_shared_id_is_not_a_resurrection', 'Path.rename', "archived.rename(archived.with_name('live-one.md'))", 1): "test fixture: renames a tmp_path-scoped file it created, outside any session's claimable space",
     ('coordinator_core', 'tests/test_no_live_inbox_writes_from_suite.py', 'test_a_test_originated_rename_into_a_live_root_is_flagged', 'Path.rename', "src.rename(root / 'moved-memo.md')", 1): "test fixture: renames a tmp_path-scoped draft into a tmp_path-scoped stand-in for a live inbox root, to prove the guard flags it -- outside any session's claimable space",
     ('coordinator_core', 'warm/http_hook_forwarder.py', '_replace_with_retry', 'os.replace', 'os.replace(tmp, self._path)', 1): 'atomic tmp->final publish of a file this function just wrote; the target is machinery/scratch state, not a claimable work path',
+
+    # --- Sites that landed after the last curation, each read at its own ---
+    # --- call site against the C3 source-side discriminator.              ---
+    ("bin", "tests/test_percolate_round_removal_side_scoping.py", "test_stranded_root_swap_prior_names_no_removal", "Path.rename", "(repo_root / 'docs').rename(repo_root / 'docs.prior')", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "benchmarks/close_without_script_full_path.py", "build_fixture", "Path.rename", "(repo / script).rename(repo / SCRIPT)", 1): "benchmark fixture builder: renames a file inside a repo it just created in a scratch directory -- no session claim can name it",
+    ("coordinator_core", "git/tests/test_git_state_tree_diff_and_trailers.py", "test_diff_matches_git_for_add_modify_delete_rename_mode_and_nested", "Path.rename", "(repo / 'ren_old.txt').rename(repo / 'ren_new.txt')", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/ask_stage.py", "_set_aside_prior_report", "Path.replace", "report.replace(prior)", 1): "sets a prior run's row report aside to `<id>.prior.md` under the gitignored `.coordinator-local/` dispatch-reports tree; machine-written, never T-claimed, and both ends are ignored paths outside the safe-commit offer",
+    ("coordinator_core", "ops/dispatch_emit/run_token.py", "release", "os.replace", "os.replace(claimed, live)", 1): "run-token record `.claimed` -> live under the run's own machinery directory; a token file is engine bookkeeping, never a session-touched work path",
+    ("coordinator_core", "ops/dispatch_emit/terminal_commit.py", "_undo_archive", "os.replace", "os.replace(move.dst, move.src)", 1): "rollback of an archive move after a failed terminal commit -- restores content to its ORIGINAL path, so a pre-existing claim on src stays correctly attributed; an undo, not a forward relocation",
+    ("coordinator_core", "ops/dispatch_emit/tests/test_halt_commit_relay_layout_e2e.py", "test_another_agents_transcript_behind_a_relay_record_is_denied", "Path.rename", "spawn.rename(spawn.with_name('agent-cafe00000001.jsonl'))", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/tests/test_spine_read_depends_on_plan.py", "_archive", "Path.rename", "src.rename(dest)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/tests/test_stopped_runs.py", "test_claimed_token_is_live", "Path.replace", "path.replace(claimed)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/review_freeze_diff.py", "_shelve_prior_attempt", "Path.rename", "diff_path.rename(diff_path.parent / f'{stem}.attempt{n}.diff')", 1): "shelves an earlier attempt's frozen review diff beside itself under the review-trail machinery directory (gitignored, machine-written); never a T-claimed work path",
+    ("coordinator_core", "ops/review_freeze_diff.py", "_shelve_prior_attempt", "Path.rename", "sha_path.rename(sha_path.parent / f'{stem}.attempt{n}.head.sha')", 1): "the frozen diff's head-sha companion, shelved with it; same review-trail machinery reasoning as the diff entry above",
+    ("coordinator_core", "ops/tests/test_goal_kr_cascade.py", "test_kr_waits_for_every_citing_plan", "Path.rename", "a.rename(plans / 'a.md')", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/tests/test_plan_seam_check.py", "_archive", "Path.rename", "(root / live).rename(moved)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/tests/test_research_close.py", "test_strays_then_the_printed_remedy_then_reclose_records_every_output", "shutil.move", "shutil.move(str(research / n), str(scratch / n))", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "session/scope.py", "unarchive_on_resume", "os.rename", "os.rename(os.path.join(src, name), dst)", 1): "unarchive_on_resume: src is the archived session directory under the .git/ subtree, categorically outside claimable space -- same reasoning as this module's archive() entry",
+    ("coordinator_core", "session/scope.py", "unarchive_on_resume", "os.rename", "os.rename(src, live)", 1): "unarchive_on_resume: archived session directory back to its live slot, both under the .git/ subtree -- same reasoning as the entry above",
+    ("coordinator_core", "session/tests/test_touch_record_last_seen_hashes.py", "_rotate", "os.replace", "os.replace(live, dest)", 1): "test helper reproducing touch_record's own sink rotation on a tmp_path sink -- the sink is the session engine's bookkeeping substrate, same as touch_record._rotate_oversized's entry",
+    ("coordinator_core", "testing/suite_run_record.py", "_demote_current", "os.replace", "os.replace(staged, prev)", 1): "suite-run record two-slot demotion (current -> previous) under the machinery record directory; engine-written test telemetry, never a T-claimed work path",
+    ("coordinator_core", "testing/suite_run_record.py", "_demote_current", "os.replace", "os.replace(staged, prev)", 2): "second leg of the same two-slot demotion; byte-identical call, identical reasoning",
+    ("coordinator_core", "testing/suite_run_record.py", "write_run", "os.replace", "os.replace(log_path, tmp_log)", 1): "moves the run's captured log into the record directory's own staging name; engine-written test telemetry, never a T-claimed work path",
+    ("coordinator_core", "testing/suite_run_record.py", "write_run", "os.replace", "os.replace(staged, rec / f'current.{ext}')", 1): "atomic staged -> current publish of the run record; temp source never claimed",
+    ("coordinator_core", "warm/door/tests/test_door_resolves_published_engine_pointer.py", "test_posix_door_resolves_pointer_and_refuses_with_rungs", "Path.rename", "(stub / 'coordinator_core' / '_engine_stamp').rename(tmp_path / 'stamp.held')", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "warm/tests/test_election_posix.py", "test_socket_identity_and_ownership_checked_unlink", "os.replace", "os.replace(successor, path)", 1): "test fixture: swaps a socket file under tmp_path to simulate a successor owner -- a socket is not a claimable work path",
+    ("coordinator_core", "warm/tests/test_server_posix.py", "test_ctx_shutdown_removes_only_its_own_socket_file", "os.replace", "os.replace(successor, endpoint)", 1): "test fixture: swaps a socket file under tmp_path to simulate a successor owner -- a socket is not a claimable work path",
+    ("coordinator_core", "workweek_start/header.py", "reset_week", "shutil.move", "shutil.move(str(f), str(dest / f.name))", 1): "reset_week archives the closed-out week's daily/priority files into the week archive -- finished artifacts of a week being closed, not files an agent is editing this session; the reset is a bulk ceremony with no session id in scope to restate a claim onto",
 }
 
 _METHODS = {"move", "rename", "replace"}

@@ -50,7 +50,7 @@ def test_size_arm_names_the_sizing_skill_md_as_a_file_to_read(monkeypatch, tmp_p
     _root_with_skill(monkeypatch, tmp_path)
     script = _compose()
     assert SKILL_INVOCATION.search(script) is None
-    assert str(tmp_path / "skills" / "sizing" / "SKILL.md") in script
+    assert (tmp_path / "skills" / "sizing" / "SKILL.md").as_posix() in script
 
 
 def test_unresolved_root_drops_the_pointer_and_stays_skill_free(monkeypatch, tmp_path):

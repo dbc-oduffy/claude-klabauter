@@ -100,7 +100,8 @@ def test_pinned_unreachable_names_always_present():
     assert ops.SIBLING_REPO_RECORD["coordinator-content-repo"]["case_sensitive"] is True
 
 
-def test_engine_sibling_arm_fails_open_without_oss_payload():
+def test_engine_sibling_arm_fails_open_without_oss_payload(monkeypatch):
+    monkeypatch.setitem(sys.modules, "_oss_payload", None)
     record = ops._sibling_repo_record()
     assert "claude-klabauter" not in record
     assert set(record) == {"coordinator-content-repo", "DoE"}

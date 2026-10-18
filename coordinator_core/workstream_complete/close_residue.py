@@ -93,12 +93,16 @@ def snapshot(worktree_root: Union[Path, str], sid: Optional[str]) -> ResidueSnap
     return ResidueSnapshot(owned, held, degraded)
 
 
+def _block_discharge_rel() -> str:
+    return record_homes.home_dir("", "block-discharge").replace(os.sep, "/")
+
+
 def _block_discharge_ledger_rel(sid: str) -> Optional[str]:
     """The session's own block-discharge ledger, repo-relative; the writer
     never claims it, so the snapshot adds it by name. `None` for an unsafe id."""
     if "/" in sid or "\\" in sid or sid.startswith("."):
         return None
-    return f"state/block-discharge/{sid}.jsonl"
+    return f"{_block_discharge_rel()}/{sid}.jsonl"
 
 
 def landing_states(worktree_root: Union[Path, str], rels: Iterable[str]) -> dict[str, str]:
@@ -252,7 +256,7 @@ def unstamped_run_batons_payload(
 ) -> dict[str, Any]:
     """Held batons still open. Pre-close (`dispositions` given): those with no
     disposition entry. Post-close (`None`): those whose
-    `state/handoffs/<baton>` is still present with an open `deployment_state`."""
+    the handoffs-home `<baton>` is still present with an open `deployment_state`."""
     if snap.degraded:
         return _payload("indeterminate", reason="session claim read degraded")
     if not snap.held_batons:
@@ -261,7 +265,7 @@ def unstamped_run_batons_payload(
         return _payload_from_items([b for b in snap.held_batons if b not in dispositions])
     items: list[str] = []
     for baton in snap.held_batons:
-        path = Path(worktree_root) / "state" / "handoffs" / baton
+        path = Path(record_homes.home_dir(str(worktree_root), "handoffs")) / baton
         if not path.is_file():
             continue
         try:
@@ -356,7 +360,7 @@ def owned_dirty_sizing_paths(
     candidates = [
         rel
         for rel in snap.owned_paths
-        if (rel.startswith(prefix) or (rel.startswith("state/block-discharge/") and rel.endswith(".jsonl")))
+        if (rel.startswith(prefix) or (rel.startswith(_block_discharge_rel() + "/") and rel.endswith(".jsonl")))
         and rel not in peers
     ]
     states = landing_states(worktree_root, candidates)

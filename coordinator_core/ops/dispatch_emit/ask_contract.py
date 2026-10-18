@@ -3,7 +3,10 @@
 Signatures implemented in their own modules:
   ask_gate.gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> GateVerdict
   ask_stage.stage(repo_root: Path, *, run_id: str, plan_rel: str | None = None,
-                  sizing_rel: str | None = None, writes: Sequence[str] = ()) -> StageManifest
+                  sizing_rel: str | None = None, writes: Sequence[str] = (),
+                  ledger_resume: bool = False) -> StageManifest
+                  (`ledger_resume=True` admits a spine with zero dispatchable rows, returning a
+                  whole manifest with rows [])
   ask_compose.compose_ask_script(*, repo_root: str, prompt: str | None, sizing_rel: str | None,
                   run_id: str, session_id: str | None, baton: dict | None = None,
                   accept_pending: bool = False, em_brief: EmBrief | None = None,
@@ -14,7 +17,9 @@ Signatures implemented in their own modules:
                   -> tuple[str, list[str]]
   sizing_fire.resumable_plan(sizing, sizing_rel: str, repo_root, arm) -> ResumePlan | None
                   (`ResumePlan` is declared here; a plan with every row landed raises SizingFireRefused
-                  unless a ledger-halt pointer names it, then `ResumePlan.ledger` carries the pointer)
+                  unless a ledger-halt pointer names it, then `ResumePlan.ledger` carries the pointer;
+                  an all-landed plan with a rulable register row resumes with a synthesised
+                  `LedgerHalt(halted=ALL_LANDED_HALT_KIND)`, never written by write_ledger_halt)
   ask_brief.load_em_brief(repo_root, *, brief, brief_file, context=(), session_id="") -> EmBrief | None
 """
 
@@ -32,6 +37,7 @@ from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE
 from coordinator_core.session.record_homes import home_dir
 
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
@@ -122,6 +128,7 @@ ASK_SCOUT_SCHEMA = {
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
+        "route_override_reason": {"type": ["string", "null"]},
         "design_route": {"type": "string", "enum": list(DESIGN_ROUTES)},
         "manifest": {"type": ["object", "null"]},
         "falsifier": {"type": ["object", "null"]},
@@ -283,6 +290,7 @@ RUN_RECORD_FILES = (
     ASK_TEXT_FILE,
     PM_INTENT_FILE,
     RELAYED_ASK_FILE,
+    ROUTE_PREFERENCE_FILE,
 )
 #: `dispatch.terminal_commit` params key whose dict value (a non-empty str `halted`) selects the
 #: halted-run record-only mode.
@@ -501,6 +509,10 @@ HALT_PLAN_TRAILER = "Halt-Plan"
 RESUME_LEDGER_KEY = "resume_ledger"
 #: `LedgerHalt.halted` of a ledger-check pointer (the default); a commit-halt pointer says "commit".
 LEDGER_HALT_KIND = "ledger-check"
+#: `LedgerHalt.halted` of a resume synthesised at gate time from an all-landed plan; never a pointer on disk.
+ALL_LANDED_HALT_KIND = "all-landed"
+#: `resume_ledger` verdict key carrying the halted kind; absent means `LEDGER_HALT_KIND`.
+RESUME_LEDGER_KIND_FIELD = "kind"
 #: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.
 RUN_OUTCOME_FILE = "run-outcome.json"
 RUN_OUTCOME_KEYS = ("inline_review", "incomplete_chunks", "landed_chunks", "ledger_verdict", "plan_path")
@@ -526,7 +538,13 @@ def rulable_ids(rows: Any) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class LedgerHalt:
     """The pointer a ledger halt leaves beside its plan's dispatch reports: the run that halted,
-    the plan and sizing it ran, and the register row ids that blocked it."""
+    the plan and sizing it ran, and the register row ids that blocked it.
+
+    ``halted == ALL_LANDED_HALT_KIND`` is synthesised at gate time for a plan whose rows are all
+    landed and never persisted: ``to_json`` raises ValueError and ``from_json`` refuses the kind.
+    Its run_id is the newest run that landed the plan, or "none" when unknown; halt_sha is None;
+    blocking is the rulable register ids not met; remaining is the newest halt record's remaining
+    for those ids, else {}."""
 
     run_id: str
     plan_rel: str
@@ -541,6 +559,8 @@ class LedgerHalt:
     carried_met: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
+        if self.halted == ALL_LANDED_HALT_KIND:
+            raise ValueError("an all-landed resume is derived at gate time and never persisted")
         out: dict[str, Any] = {
             "run_id": self.run_id,
             HALT_PLAN_FIELD: self.plan_rel,
@@ -562,6 +582,8 @@ class LedgerHalt:
         outcome = data.get("outcome")
         if not isinstance(halted, str) or not halted:
             raise ValueError("halted is not a non-empty str")
+        if halted == ALL_LANDED_HALT_KIND:
+            raise ValueError("an all-landed resume is never a pointer on disk")
         if outcome is not None and not isinstance(outcome, str):
             raise ValueError("outcome is not a str")
         return cls(

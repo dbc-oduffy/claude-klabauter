@@ -23,6 +23,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import design_route
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ALL_LANDED_HALT_KIND,
     HALT_REFUSAL,
     HALT_RESEARCH,
     HALT_ROOM,
@@ -33,6 +34,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_CARRIED_MET_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
+    RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUMED_RUN_ID_KEY,
@@ -47,9 +49,10 @@ from coordinator_core.ops.sizing_acceptance import (
     lacks_human_acceptance,
     sizing_acceptance_skipped,
 )
-from coordinator_core.ops.dispatch_emit.ask_stage import _handler as _stage_handler
+from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, manifest_payload, stage
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
+    ALL_LANDED_NO_RUN,
     ARM_M_PLUS,
     ARM_ROADMAP,
     STATEMENT_ABSENT_PREFIX,
@@ -73,6 +76,7 @@ _PARAMS = (
     Field("run_id", "nonempty_str"),
     Field("cross_repo_approved", "bool"),
     Field("session_id", "str"),
+    Field("route_override_reason", "str"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit", design_route.RECORD_KIND)
 _XL_PICKS = ("roadmap", "accept_multi_session", "split")
@@ -328,6 +332,7 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         *(b for b in halt.blocking if b not in out),
         *(r for r in rulable if r not in halt.blocking and r not in carried),
     ]
+    all_landed = halt.halted == ALL_LANDED_HALT_KIND
     verdict = {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
@@ -338,8 +343,12 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         "rulable_ids": rulable,
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
         RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
-        RESUME_LEDGER_NOTES_FIELD: read_notes(run_dir(Path(repo_root), halt.run_id)),
+        RESUME_LEDGER_NOTES_FIELD: (
+            [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN else read_notes(run_dir(Path(repo_root), halt.run_id))
+        ),
     }
+    if all_landed:
+        verdict[RESUME_LEDGER_KIND_FIELD] = ALL_LANDED_HALT_KIND
     if halt.halted == COMMIT_HALT_KIND:
         outcome = read_run_outcome(Path(repo_root), halt.run_id)
         if outcome is None:
@@ -444,6 +453,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     for a ledger-resume verdict, which with `run_id` gains `manifest` (the `dispatch.ask_stage` reply on its
     `resume_ledger.plan`, or its `{error}`); no other verdict carries the key.
 
+    `route_override_reason` (str): why the sizing routes against the run's `route-preference.json`; with a
+    `run_id` whose record holds a preference it is written to `em_analysis`, and a divergence with no reason
+    on the call or the sizing replies a refusal halt.
+
     With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict. With
     `record`, writes that ruling through its single writer, then gates the sizing as it stands and
     adds `recorded` {ok, error?, pm_ruling?, ruling_ref?} to the reply; a refused write still returns the verdict. Replies
@@ -463,7 +476,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
     if params.get("run_id"):
-        refused = _bind_run(root, params["run_id"], sizing_rel)
+        refused = _bind_run(
+            root, params["run_id"], sizing_rel, route_override_reason=params.get("route_override_reason")
+        )
         if refused is not None:
             return _halt(HALT_REFUSAL, refused).to_json()
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
@@ -475,14 +490,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _record_resume_snapshot(root, params["run_id"], verdict)
     out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
     if params.get("run_id") and verdict.halt is None and verdict.resume_ledger is not None:
-        out["manifest"] = _stage_handler({
-            "run_id": params["run_id"],
-            "plan_path": verdict.resume_ledger["plan"],
-            "writes": writes,
-            "cross_repo_approved": bool(params.get("cross_repo_approved")),
-            "session_id": params.get("session_id") or None,
-            "commit_sizing_path": sizing_rel,
-        }, repo_root=root)
+        try:
+            out["manifest"] = manifest_payload(root, stage(
+                root,
+                run_id=params["run_id"],
+                plan_rel=verdict.resume_ledger["plan"],
+                writes=writes,
+                cross_repo_approved=bool(params.get("cross_repo_approved")),
+                session_id=params.get("session_id") or None,
+                commit_sizing_rel=sizing_rel,
+                ledger_resume=True,
+            ))
+        except (AskStageError, SizingFireRefused) as exc:
+            out["manifest"] = {"error": str(exc)}
     return out
 
 
@@ -507,7 +527,9 @@ def _record_resume_snapshot(root: Path, run_id: str, verdict: GateVerdict) -> No
     resume_snapshot.clear(root, run_id)
 
 
-def _bind_run(root: Path, run_id: str, sizing_rel: str) -> Optional[str]:
+def _bind_run(
+    root: Path, run_id: str, sizing_rel: str, route_override_reason: Optional[str] = None
+) -> Optional[str]:
     """Bind the run to the sizing it is gating: the sizing's requirement_register takes the PM's
     words, the raw ask (a relayed ask under its own origin) and any queued revision
     (`requirements_ledger.bind`), and the run's token record names the sizing, so
@@ -527,5 +549,64 @@ def _bind_run(root: Path, run_id: str, sizing_rel: str) -> Optional[str]:
         )
     except (requirements_ledger.LedgerRefused, OSError) as exc:
         return f"requirements: {exc}"
+    refused = _bind_route_preference(root, run_id, sizing_rel, route_override_reason)
+    if refused is not None:
+        return refused
     run_token.bind_sizing(root, run_id, sizing_rel)
+    return None
+
+
+def _bind_route_preference(
+    root: Path, run_id: str, sizing_rel: str, route_override_reason: Optional[str]
+) -> Optional[str]:
+    """Record the run's EM route preference on the sizing's `em_analysis`; the refusal text when the
+    sizing routes against it with no stated reason, else None. Writes nothing when the sizing already
+    holds the values, and nothing for a run with no `route-preference.json`."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger, route_preference as rp
+
+    record = requirements_ledger.run_dir(root, run_id) / rp.ROUTE_PREFERENCE_FILE
+    if not record.is_file():
+        return None
+    try:
+        pref = rp.from_json(record.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if pref.is_empty():
+        return None
+    reason = route_override_reason.strip() if isinstance(route_override_reason, str) else ""
+
+    import yaml
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    def mutate(old: str) -> str:
+        doc = yaml.safe_load(old) or {}
+        em = doc.get("em_analysis")
+        em = dict(em) if isinstance(em, dict) else {}
+        route = effective_route(doc)
+        held = em.get(rp.ROUTE_OVERRIDE_REASON_KEY)
+        held = held.strip() if isinstance(held, str) else ""
+        want = {**em, **rp.to_em_analysis(pref)}
+        if isinstance(route, str) and route and rp.diverges(pref, route):
+            if not (reason or held):
+                raise MutateAbort(
+                    f"route_override_reason: the sizing routes {route} against route_preference "
+                    f"{pref.route_preference}; state why in route_override_reason."
+                )
+            if reason:
+                want[rp.ROUTE_OVERRIDE_REASON_KEY] = reason
+        if want == em:
+            return old
+        doc["em_analysis"] = want
+        crlf = "\r\n" in old
+        text = yaml.safe_dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True, width=100000)
+        text = requirements_ledger._validated(text)
+        return text.replace("\n", "\r\n") if crlf else text
+
+    try:
+        locked_rmw(requirements_ledger._sizing_path(root, sizing_rel), mutate, repo_root=Path(root))
+    except MutateAbort as exc:
+        return str(exc.args[0]) if exc.args else "route preference write refused"
+    except (LockTimeout, requirements_ledger.LedgerRefused, OSError) as exc:
+        return f"route_preference: {exc}"
     return None

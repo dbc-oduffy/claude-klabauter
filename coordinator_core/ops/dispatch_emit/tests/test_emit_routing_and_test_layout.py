@@ -95,7 +95,7 @@ def test_every_row_head_carries_the_heavy_launch_floor():
 def _js_re(rx: str):
     import re
 
-    return re.compile(rx[1 : rx.rindex("/")].replace("<\/", "</"))
+    return re.compile(rx[1 : rx.rindex("/")].replace(r"<\/", "</"))
 
 
 def test_a_blocked_status_after_prose_is_not_read_as_done():

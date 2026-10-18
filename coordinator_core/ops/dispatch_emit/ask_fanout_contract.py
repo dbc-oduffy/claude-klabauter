@@ -12,9 +12,12 @@ reads it back. Reference: docs/reference/multi-ask-submission-contract.md.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping, Optional, Sequence
+
+from coordinator_core.session.record_homes import home_dir
 
 FANOUT_OP = "dispatch.ask_fanout"
 PARENT_SCHEMA = "ask-parent"
@@ -133,7 +136,7 @@ def parent_record_rel(parent_id: str) -> str:
 
 def run_parent_copy_rel(run_id: str) -> str:
     """Tracked per-run copy of the parent record, landed by that run's own commit."""
-    return f"state/warp/{run_id}/parent.json"
+    return f"{PurePosixPath(home_dir('', 'warp').replace(os.sep, '/'))}/{run_id}/parent.json"
 
 
 def run_base_rel(run_id: str) -> str:

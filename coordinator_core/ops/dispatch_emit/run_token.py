@@ -176,7 +176,7 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
         return False
     try:
         claimed.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         return False
     with os.fdopen(fd, "w", encoding="utf-8") as fh:

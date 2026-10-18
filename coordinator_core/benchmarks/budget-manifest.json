@@ -365,9 +365,9 @@
         "value": 0.2
       },
       "spawn_count_budget": {
-        "commit_stubs_and_report": 2
+        "commit_stubs_and_report": 0
       },
-      "_rationale": "Two scoped commits through ceremony.commit_v2's handler, one over the scaffolded stubs and one over the frozen gate report, each with explicit paths. Measured 2 git spawns for the pair: one `git check-ignore -z --stdin` per commit, since 45509ca448 made commit_v2 refuse new gitignored paths and both commits add only new files; commit_v2 stages in process otherwise. The check is load-bearing (a gitignored path fails the whole add batch) and the count does not grow with the number of stubs. Counted by coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py with exact equality."
+      "_rationale": "Two scoped commits through ceremony.commit_v2's handler, one over the scaffolded stubs and one over the frozen gate report, each with explicit paths. Zero spawns: blitz_stage reads the gitignore verdict in process (git/ignore_match.py over the index) and hands it to commit_v2 as `ignored_untracked`, so commit_v2 runs no `git check-ignore`; a matcher gap omits the param and commit_v2 asks git itself. The refusal of new gitignored paths stays load-bearing and the count does not grow with the number of stubs. Counted by coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py with exact equality."
     },
     "dispatch.ask_gate": {
       "target_ms": 300,
@@ -393,6 +393,7 @@
       "_rationale": "One `git check-ignore -z --stdin` over the whole run's declared-write union (dispatch_emit/emit.py::_gitignored_paths via git/run.py::run_git), batched so the count does not grow with rows or waves; a gitignored write path can never be committed and would otherwise halt the run at preflight. The host commit-trailer read (commit_trailers.read_host_commit_trailers) parses the git config files and starts no process. The review-only route adds exactly two run_git spawns (`rev-parse`, `merge-base`) to pin the terminal commit and its ancestry, on top of the check-ignore count. Counted by coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py with exact equality."
     },
     "hooks.submit_bug_blitz": {
+      "_tier": "HOOK_PORT: deliberately shadowed -- the hook runs the real dispatch.emit queue route, so the 15ms warm-hook band is unreachable and this op is held to its own 500ms target and spawn_count_budget instead",
       "target_ms": 500,
       "tolerance": {
         "kind": "relative",
@@ -404,6 +405,7 @@
       "_rationale": "The hook runs the real dispatch.emit queue route in process and starts no process: a 24-file targets submission measured 0 spawns. Process time over three fresh-interpreter runs was 123.6 to 126.8 ms (imports and emit, fake parse and mint, fixture profile), well under the 500 target. Counted by coordinator_core/hooks/tests/test_submit_bug_blitz.py with exact equality; the real parse and mint are measured by the verification row."
     },
     "hooks.submit_engine_ask": {
+      "_tier": "HOOK_PORT: deliberately shadowed -- the hook runs the real dispatch.emit in process, so the 15ms warm-hook band is unreachable and this op is held to its own 500ms target and spawn_count_budget instead",
       "target_ms": 500,
       "tolerance": {
         "kind": "relative",

@@ -344,10 +344,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: concludes a merge in progress; no caller-supplied claim id",
         "confirmed": True,
     },
-    "percolate/publish_lease.py::_read_remote": {
-        "reason": "ineligible: lease probe on a scratch ref, not a claim-bearing worktree commit",
-        "confirmed": True,
-    },
     "percolate/publish_lease.py::acquire": {
         "reason": "ineligible: lease commit on a scratch ref, not a claim-bearing worktree commit",
         "confirmed": True,
@@ -400,8 +396,12 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
-    "ops/ceremony/commit_v2.py::_land": {
+    "ops/ceremony/commit_v2.py::_attempt": {
         "reason": "release",
+        "confirmed": True,
+    },
+    "ops/push_outstanding.py::_record_tracking_ref": {
+        "reason": "ineligible: advances a remote-tracking ref after a landed push; creates no commit and carries no claim",
         "confirmed": True,
     },
     "workstream_complete/directives_commit_tail.py::run_close_commit": {

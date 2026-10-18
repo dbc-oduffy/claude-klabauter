@@ -8,6 +8,8 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ALL_LANDED_HALT_KIND,
+    RESUME_LEDGER_KIND_FIELD,
     LedgerHalt,
     halted_record_message,
     ledger_halt_path,
@@ -21,7 +23,9 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-ALREADY_RAN = f"{PLAN_REL} already ran: every row is landed; residue is a new sizing naming it"
+ALREADY_RAN = (
+    f"{PLAN_REL} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
+)
 REGISTER = {
     "rows": [
         {"id": "R1", "status": "open"},
@@ -171,7 +175,7 @@ def _load(repo):
 
 
 @pytest.mark.parametrize("case", ["no_pointer", "other_plan", "other_sizing", "malformed", "coded_row"])
-def test_every_other_case_refuses_unchanged(repo, case):  # noqa: F811
+def test_every_other_case_resumes_as_all_landed_with_a_rulable_register(repo, case):  # noqa: F811
     _put_s(repo, requirement_register=REGISTER)
     rows = (("A1", "coded"), ("A2", "open")) if case == "coded_row" else (("A1", "open"), ("A2", "open"))
     _landed_repo(repo, rows)
@@ -185,6 +189,18 @@ def test_every_other_case_refuses_unchanged(repo, case):  # noqa: F811
         p.write_text("{not json", encoding="utf-8")
     elif case == "coded_row":
         _pointer(repo)
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == () and plan.ledger.halted == ALL_LANDED_HALT_KIND
+    assert plan.ledger.blocking == ("R1", "R2") and plan.ledger.halt_sha is None
+    v = gate(repo, REL)
+    assert v.halt is None and v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
+
+
+@pytest.mark.parametrize("case", ["no_pointer", "coded_row"])
+def test_every_other_case_refuses_when_the_register_has_nothing_to_judge(repo, case):  # noqa: F811
+    _put_s(repo)
+    rows = (("A1", "coded"), ("A2", "open")) if case == "coded_row" else (("A1", "open"), ("A2", "open"))
+    _landed_repo(repo, rows)
     with pytest.raises(SizingFireRefused) as exc:
         resumable_plan(_load(repo), REL, repo, "s")
     assert exc.value.fields == [ALREADY_RAN]

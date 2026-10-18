@@ -4017,6 +4017,20 @@ def _fire_submit_engine_ask_scout_deny() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_hook_submit_engine_ask.sizing_scout_deny(payload))
 
 
+def _fire_sizing_scout_deny_leaf() -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import sizing_scout_deny as _leaf
+
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:sizing-scout"}}
+    return _to_envelope_or_none(_leaf.sizing_scout_deny(payload, "coordinator:sizing-scout"))
+
+
+def _fire_sizing_scout_deny_leaf_control() -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import sizing_scout_deny as _leaf
+
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:executor"}}
+    return _to_envelope_or_none(_leaf.sizing_scout_deny(payload, "coordinator:executor"))
+
+
 def _fire_submit_engine_ask_control() -> Optional[Dict[str, Any]]:
     payload = {
         "tool_name": "Agent", "agent_id": "a1", "tool_input": {"subagent_type": "coordinator:sizing-scout"},
@@ -6131,6 +6145,8 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("submit_engine_ask", "fire-non-repo", True, _fire_submit_engine_ask_non_repo),
     HookRow("submit_engine_ask", "fire-subagent-submits", True, _fire_submit_engine_ask_subagent),
     HookRow("submit_engine_ask", "fire-scout-no-live-run", True, _fire_submit_engine_ask_scout_idle),
+    HookRow("sizing_scout_deny", "fire-hand-dispatch", True, _fire_sizing_scout_deny_leaf),
+    HookRow("sizing_scout_deny", "control-other-type", False, _fire_sizing_scout_deny_leaf_control),
     HookRow("submit_bug_blitz", "fire-on-main", True, _fire_submit_bug_blitz_main),
     HookRow("submit_bug_blitz", "fire-no-targets", True, _fire_submit_bug_blitz_no_targets),
     HookRow("submit_bug_blitz", "fire-unknown-arg", True, _fire_submit_bug_blitz_unknown_arg),

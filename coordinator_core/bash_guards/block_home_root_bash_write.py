@@ -89,7 +89,7 @@ def _expand_home_var(target: str, dialect: Optional[Dialect]) -> str:
     if match:
         name = match.group(0).lower()
         key = "HOME" if "home" in name else "USERPROFILE"
-        base = os.environ.get(key) or os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        base = os.environ.get(key) or os.environ.get("HOME") or os.environ.get("USERPROFILE")
         target = (base or "~") + target[match.end():]
     if dialect is Dialect.POWERSHELL:
         target = target.replace("\\", "/")

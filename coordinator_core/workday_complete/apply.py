@@ -383,7 +383,8 @@ def _execute_directives(
     last_use_of_cli: dict[str, int] = {}
     last_consumer_of: dict[str, int] = {}
     for index, directive in enumerate(directives):
-        last_use_of_cli[directive["cli"]] = index
+        if directive.get("cli") is not None:
+            last_use_of_cli[directive["cli"]] = index
         if directive.get("stdin_from") is not None:
             last_consumer_of[directive["stdin_from"]] = index
     interrupted_ids = checkpoint.interrupted_ids() if checkpoint is not None else frozenset()

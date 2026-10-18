@@ -444,11 +444,38 @@ def _write_sizing(
     return rel
 
 
+def _ignored_untracked_hint(repo_root: Path, paths: List[str]) -> Optional[List[str]]:
+    """The untracked ``paths`` a gitignore rule covers, read in process; ``None`` on any gap so
+    commit_v2 asks git itself."""
+    from coordinator_core.git.git_state import IndexParseError, read_index
+    from coordinator_core.git.ignore_match import IgnoreMatcher
+
+    try:
+        tracked = read_index(repo_root)
+        matcher = IgnoreMatcher(repo_root)
+        covered: List[str] = []
+        for rel in paths:
+            if tracked.get(rel) is not None:
+                continue
+            verdict = matcher.ignored(rel, False)
+            if verdict is None:
+                return None
+            if verdict:
+                covered.append(rel)
+        return covered
+    except (IndexParseError, OSError):
+        return None
+
+
 def _commit_paths(repo_root: Path, paths: List[str], message: str) -> Dict[str, Any]:
     """The engine's scoped commit over explicit paths (``ceremony.commit_v2``'s handler)."""
     from coordinator_core.ops.ceremony.commit_v2 import _handler
 
-    return _handler({"paths": paths, "message": message}, repo_root=repo_root)
+    params: Dict[str, Any] = {"paths": paths, "message": message}
+    hint = _ignored_untracked_hint(repo_root, paths)
+    if hint is not None:
+        params["ignored_untracked"] = hint
+    return _handler(params, repo_root=repo_root)
 
 
 def _commit(repo_root: Path, paths: List[str], message: str) -> Tuple[Optional[str], Optional[str]]:

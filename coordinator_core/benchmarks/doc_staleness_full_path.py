@@ -213,6 +213,9 @@ def _load_trampoline():
     bin_dir = str(script.parent)
     if bin_dir not in sys.path:
         sys.path.insert(0, bin_dir)
+    from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
+
+    ensure_bin_lib_bound(bin_dir)
     spec = importlib.util.spec_from_file_location("workweek_complete_doc_staleness", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

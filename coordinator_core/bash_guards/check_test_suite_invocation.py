@@ -778,6 +778,16 @@ def _tokens(segment: str) -> List[str]:
         return segment.split()
 
 
+_UNQUOTED_DRIVE_PATH_RE = re.compile(r"(?<![\w'\"\\])[A-Za-z]:\\[^\s'\";&|<>()]*")
+
+
+def _protect_windows_drive_paths(cmd: str) -> str:
+    """Double the backslashes of an unquoted ``C:\\...`` token so the POSIX
+    tokenizer keeps the path (``sys.executable`` pasted bare) instead of
+    eating each backslash and hiding the runner head."""
+    return _UNQUOTED_DRIVE_PATH_RE.sub(lambda m: m.group(0).replace("\\", "\\\\"), cmd)
+
+
 def _segment_argvs(cmd: str, dialect: Optional[_Dialect] = None) -> List[List[str]]:
     """Split ``cmd`` into command-separator-bounded segments and return each
     segment's argv, QUOTE-AWARE -- a ``;``/``&``/``|`` character sitting
@@ -840,7 +850,7 @@ def _segment_argvs(cmd: str, dialect: Optional[_Dialect] = None) -> List[List[st
     before this parameter existed (AC4 -- zero behavior change on the bash
     leg).
     """
-    cmd = _strip_heredoc_bodies(cmd)
+    cmd = _protect_windows_drive_paths(_strip_heredoc_bodies(cmd))
     if dialect is _Dialect.POWERSHELL:
         segments = _resolve_segments_for_dialect(cmd, dialect, guard_name="check_test_suite_invocation")
         if segments is not None:

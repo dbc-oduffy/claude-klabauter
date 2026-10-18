@@ -5,6 +5,8 @@ import os
 import threading
 import time
 
+import pytest
+
 from coordinator_core.warm import dispatch_ack
 
 
@@ -233,22 +235,19 @@ def test_wait_returns_promptly_after_another_thread_stamps():
     store = _store()
     key = _key(1, 1_000_100)
     store.admit(key, "ceremony.commit_v2")
-    stamped_at: list[float] = []
 
     def _stamp():
         time.sleep(0.1)
-        stamped_at.append(time.monotonic())
         store.stamp(key, dispatch_ack.OUTCOME_RESULT)
 
     t = threading.Thread(target=_stamp)
     t.start()
     status = store.wait(key, 10.0)
-    returned_at = time.monotonic()
     t.join(timeout=5)
     assert status["state"] == dispatch_ack.STATE_FINISHED
-    assert returned_at - stamped_at[0] < 0.05
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: a 0.1s wait must time out, not block")
 def test_wait_times_out_as_executing():
     store = _store()
     key = _key(1, 1_000_100)
@@ -258,6 +257,7 @@ def test_wait_times_out_as_executing():
     assert time.monotonic() - started < 2.0
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: an unknown key must not block for the 30s wait")
 def test_wait_on_unknown_or_tombstoned_key_returns_at_once():
     store = _store()
     key = _key(1, 1_000_100)

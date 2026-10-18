@@ -85,6 +85,7 @@ from typing import NamedTuple
 import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+from coordinator_core.timestamps import with_age
 
 
 _OPEN = "open"
@@ -215,7 +216,7 @@ def render_row_evidence(rows: list, evidence: dict) -> str:
         lines.append(f"- **{row.get('id', '?')}** — {row.get('title', '')}")
         for entry in entries:
             if isinstance(entry, dict):
-                lines.append(f"  - {entry.get('recorded_at', '?')}: {entry.get('text', '')}")
+                lines.append(f"  - {with_age(entry.get('recorded_at', '?'))}: {entry.get('text', '')}")
     if not lines:
         return ""
     return "## Row evidence\n\n" + "\n".join(lines) + "\n"

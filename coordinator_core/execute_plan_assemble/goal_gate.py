@@ -50,6 +50,7 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
+from coordinator_core.session.record_homes import home_dir
 
 #: Rejection reasons `_verify_disposition_ref` / `_verify_baseline_ref`
 #: return. `INDETERMINATE` is a statement about the probe (a git timeout),
@@ -245,7 +246,7 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
         return None
 
     goal_id, _, kr_id = derived_from.partition("#")
-    goals_dir = root / "state" / "goals"
+    goals_dir = Path(home_dir(str(root), "goals"))
     if not goals_dir.is_dir():
         return f"goal id not found (no state/goals/ directory): {goal_id}"
     for goal_path in sorted(goals_dir.glob("*.yaml")):

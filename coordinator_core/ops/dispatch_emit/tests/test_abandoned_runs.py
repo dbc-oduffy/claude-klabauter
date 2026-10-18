@@ -12,6 +12,8 @@ from coordinator_core.ops.dispatch_emit import abandoned_runs as ar
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 ROOT = "state/warp"
 NOW = 1_000_000_000.0
 OLD = NOW - run_token.TTL_SECONDS - 10

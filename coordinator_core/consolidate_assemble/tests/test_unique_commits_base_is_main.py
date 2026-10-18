@@ -25,8 +25,9 @@ def _fake_git(log_ranges: list[str], main_exists: bool):
             rows = _REF_ROWS if main_exists else [r for r in _REF_ROWS if r[1] != "main"]
             out = "".join(f"{r}\t{s}\t{e}\n" for r, s, e in rows)
             return SimpleNamespace(returncode=0, stdout=out, stderr="")
-        if args[0] == "log" and args[1] == "--oneline":
-            log_ranges.append(args[2])
+        if args[0] == "log" and args[1].startswith("--format="):
+            base = args[-1].removeprefix("^")
+            log_ranges.extend(f"{base}..{ref}" for ref in args[2:-1])
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[0] == "worktree":
             return SimpleNamespace(
@@ -39,15 +40,15 @@ def _fake_git(log_ranges: list[str], main_exists: bool):
     return run_git
 
 
-def test_brief_counts_unique_commits_against_main_not_the_current_branch() -> None:
+def test_brief_counts_unique_commits_against_main_not_the_current_branch(tmp_path: Path) -> None:
     ranges: list[str] = []
-    ca.brief(repo_root=Path("/repo"), run_git=_fake_git(ranges, main_exists=True))
+    ca.brief(repo_root=tmp_path, run_git=_fake_git(ranges, main_exists=True))
 
     assert ranges == ["main..work/stale"]
 
 
-def test_brief_falls_back_to_current_when_no_main_branch_exists() -> None:
+def test_brief_falls_back_to_current_when_no_main_branch_exists(tmp_path: Path) -> None:
     ranges: list[str] = []
-    ca.brief(repo_root=Path("/repo"), run_git=_fake_git(ranges, main_exists=False))
+    ca.brief(repo_root=tmp_path, run_git=_fake_git(ranges, main_exists=False))
 
     assert ranges == ["current..work/stale"]

@@ -203,6 +203,36 @@ def test_blank_sender_refuses(repo):
     assert out["exit_code"] == 1
 
 
+def test_route_preference_stamps_only_the_carrying_slice(repo):
+    out = _go(repo, {"asks": [
+        {"ask": "fix a", "route_preference": " roadmap ", "em_rationale": "spans two workstreams", "writes": ["a"]},
+        {"ask": "fix b", "source": "relayed", "route_preference": "goal", "writes": ["b"]},
+        {"ask": "fix c", "writes": ["c"]},
+    ]})
+    assert out["exit_code"] == 0, out
+    docs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in sorted((repo / "state" / "sizings").glob("*.yaml"))]
+    assert len(docs) == 3
+    assert docs[0]["em_analysis"]["route_preference"] == "roadmap"
+    assert docs[0]["em_analysis"]["em_rationale"] == "spans two workstreams"
+    assert docs[1]["em_analysis"]["route_preference"] == "goal"
+    assert "em_rationale" not in docs[1]["em_analysis"]
+    assert "route_preference" not in docs[2]["em_analysis"] and "em_rationale" not in docs[2]["em_analysis"]
+    assert all(not mod.validate_frontmatter(d, mod._SIZING_SCHEMA_PATH) for d in docs)
+
+
+@pytest.mark.parametrize("item,named", [
+    ({"ask": "y", "route_preference": "shape"}, "asks[1].route_preference"),
+    ({"ask": "y", "em_rationale": "x" * 2001}, "asks[1].em_rationale"),
+    ({"ask": "y", "em_rationale": " "}, "asks[1].em_rationale"),
+])
+def test_invalid_route_preference_refuses_before_any_write(repo, item, named):
+    before = _snapshot(repo)
+    out = _go(repo, {"asks": [{"ask": "x", "route_preference": "plan"}, item]})
+    assert out["exit_code"] == 1 and out["applied"] is False
+    assert named in out["error"]
+    assert _snapshot(repo) == before
+
+
 def test_sized_through_turn_moves_once_after_the_last_slice(repo):
     out = _go(repo, {"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "writes": ["b"]}]})
     assert out["exit_code"] == 0

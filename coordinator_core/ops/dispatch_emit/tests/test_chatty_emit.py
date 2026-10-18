@@ -25,7 +25,7 @@ def _script(**kw):
 
 
 def _embedded_roster(script: str) -> dict:
-    m = re.search(r"ROSTER:\\n(\{.*?\\n\})'", script, re.DOTALL)
+    m = re.search(r"ROSTER:\\n(\{.*?\\n\})(?:'|\\n\\n)", script, re.DOTALL)
     assert m
     return json.loads(m.group(1).replace("\\n", "\n").replace('\\"', '"'))
 

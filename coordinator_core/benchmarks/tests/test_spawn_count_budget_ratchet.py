@@ -308,6 +308,22 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "dispatch.ask_gate": {
+        "resume_checkpoint_log": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-17 at the value it entered with: one git log --grep subtracts the rows a checkpoint commit landed."
+            ),
+        },
+    },
+    "plan.readiness_verdict": {
+        "census_python_target_tracking": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-17 at the value it entered with: the census python-target tracking check is one batched ls-files for the whole census."
+            ),
+        },
+    },
     "hooks.postuse_advisory_dispatch": {
         "ascii_write_touch": {
             "ceiling": 0,
@@ -407,6 +423,12 @@ _SPAWN_COUNT_HIGH_WATER = {
             "ceiling": 0,
             "reason": (
                 "First recorded 2026-10-13 at the value it entered with: the raw-ask submission runs the real dispatch.emit in process and starts no process."
+            ),
+        },
+        "asks_submission": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-17 at the value it entered with: the asks submission runs dispatch.emit in process with no spawn."
             ),
         },
     },

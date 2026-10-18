@@ -302,7 +302,7 @@ def prep_block(reply: dict) -> dict:
 def _claim(lock: Path) -> bool:
     for _ in range(2):
         try:
-            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
             return True
         except FileExistsError:
             try:

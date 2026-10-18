@@ -111,6 +111,34 @@ def test_ledger_halt_defaults_keep_four_arg_constructor():
     assert c.LedgerHalt("r", "p.md", "s.yaml", (), sha).halt_sha == sha
 
 
+def _all_landed():
+    return c.LedgerHalt("none", "docs/plans/p.md", "state/sizings/s.yaml", ("R1",), halted=c.ALL_LANDED_HALT_KIND)
+
+
+def test_all_landed_kind_values():
+    assert c.ALL_LANDED_HALT_KIND == "all-landed"
+    assert c.RESUME_LEDGER_KIND_FIELD == "kind"
+    assert c.ALL_LANDED_HALT_KIND not in (c.LEDGER_HALT_KIND, "commit")
+
+
+def test_write_ledger_halt_never_persists_all_landed(tmp_path):
+    path = c.ledger_halt_path(tmp_path, "docs/plans/p.md")
+    with pytest.raises(ValueError):
+        c.write_ledger_halt(path, _all_landed())
+    assert not path.exists()
+    with pytest.raises(ValueError):
+        _all_landed().to_json()
+
+
+def test_all_landed_pointer_on_disk_reads_none(tmp_path):
+    p = tmp_path / "h.json"
+    p.write_text(
+        json.dumps({"run_id": "r", "plan": "p.md", "sizing": "s.yaml", "blocking": [], "halted": "all-landed"}),
+        encoding="utf-8",
+    )
+    assert c.read_ledger_halt(p) is None
+
+
 def test_resume_field_names_are_distinct():
     names = {
         c.RESUME_LEDGER_HALT_SHA_FIELD,

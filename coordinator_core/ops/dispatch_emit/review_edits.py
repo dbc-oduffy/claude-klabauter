@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
+from coordinator_core.session.record_homes import home_dir
+
 HALT_PEER_CONTESTED = "peer-contested"
 HALT_DELETED = "deleted"
 HALT_OUT_OF_WORKTREE = "out-of-worktree"
@@ -67,7 +69,7 @@ def live_sibling_declared(worktree_root: Path, own_run_id: Optional[str]) -> dic
         run_id = record.get("run_id")
         if not isinstance(run_id, str) or run_id == own_run_id:
             continue
-        manifest = Path(worktree_root) / "state" / "warp" / run_id / "manifest.json"
+        manifest = Path(home_dir(str(worktree_root), "warp")) / run_id / "manifest.json"
         try:
             data = json.loads(manifest.read_text(encoding="utf-8"))
         except (OSError, ValueError):

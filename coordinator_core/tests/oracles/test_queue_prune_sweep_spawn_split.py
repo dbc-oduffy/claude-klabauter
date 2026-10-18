@@ -29,21 +29,42 @@ def _patch_run(monkeypatch, fake_run) -> list[list[str]]:
 _QUEUES = ["improvement-queue.md", "bug-backlog.md"]
 
 
-def test_default_callee_batches_n_queue_files_into_one_spawn(tmp_path, monkeypatch):
+def _patch_in_process_callee(monkeypatch, *, code=0, stderr="") -> list[tuple[str, list[str]]]:
+    """The default callee runs in-process through cli_entry.run_op_main."""
+    import coordinator_core.cli_entry as cli_entry
+
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_op_main(module, argv, **kwargs):
+        calls.append((module, list(argv)))
+        if stderr:
+            import sys
+
+            sys.stderr.write(stderr)
+        return code
+
+    monkeypatch.setattr(cli_entry, "run_op_main", fake_run_op_main)
+    return calls
+
+
+def test_default_callee_batches_n_queue_files_into_one_in_process_call(tmp_path, monkeypatch):
     _seed_queues(tmp_path, _QUEUES)
-    calls = _patch_run(
+    spawns = _patch_run(
         monkeypatch, lambda argv, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
     )
+    calls = _patch_in_process_callee(monkeypatch)
 
     result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
 
+    assert spawns == [], f"default-callee leg must spawn no subprocess; spawns={spawns}"
     assert len(calls) == 1, (
-        f"default-callee legacy-markdown leg issued {len(calls)} spawns for "
+        f"default-callee legacy-markdown leg made {len(calls)} callee calls for "
         f"{len(_QUEUES)} queue file(s) -- expected exactly 1 (batched); calls={calls}"
     )
-    positionals = calls[0][2:]
+    module, positionals = calls[0]
+    assert module == "coordinator_core.ops.prune_resolved_queue_entries"
     assert len(positionals) == len(_QUEUES), (
-        f"the one spawn must carry all {len(_QUEUES)} queue files as positionals, "
+        f"the one call must carry all {len(_QUEUES)} queue files as positionals, "
         f"not a subset; positionals={positionals}"
     )
     assert result.verdict in (udg.GateVerdict.CLEAN, udg.GateVerdict.FINDING)
@@ -74,11 +95,8 @@ def test_override_cli_issues_one_spawn_per_queue_file(tmp_path, monkeypatch):
 
 def test_default_callee_names_the_failing_queue_in_batched_stderr(tmp_path, monkeypatch):
     _seed_queues(tmp_path, _QUEUES)
-    _patch_run(
-        monkeypatch,
-        lambda argv, **kw: SimpleNamespace(
-            returncode=1, stdout="", stderr="ERROR: file not found: .../bug-backlog.md\n",
-        ),
+    _patch_in_process_callee(
+        monkeypatch, code=1, stderr="ERROR: file not found: .../bug-backlog.md\n"
     )
 
     result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})

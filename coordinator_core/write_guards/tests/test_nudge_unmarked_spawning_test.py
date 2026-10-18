@@ -156,7 +156,10 @@ def test_guard_fires_through_engine_evaluate_payload_json(registered_repo):
     payload_text = json.dumps(
         _payload(
             "Write",
-            {"file_path": "/repo/coordinator_core/tests/test_thing.py", "content": _UNMARKED_SPAWN_TEST},
+            {
+                "file_path": str(registered_repo / "coordinator_core" / "tests" / "test_thing.py"),
+                "content": _UNMARKED_SPAWN_TEST,
+            },
         )
     )
     skipped: list[str] = []
@@ -174,7 +177,10 @@ def test_guard_fires_through_engine_evaluate_payload_json(registered_repo):
     control_payload_text = json.dumps(
         _payload(
             "Write",
-            {"file_path": "/repo/coordinator_core/tests/test_thing.py", "content": _MARKED_SPAWN_TEST},
+            {
+                "file_path": str(registered_repo / "coordinator_core" / "tests" / "test_thing.py"),
+                "content": _MARKED_SPAWN_TEST,
+            },
         )
     )
     control_results = write_guards_engine.evaluate_payload_json(

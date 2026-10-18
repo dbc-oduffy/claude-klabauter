@@ -11,6 +11,7 @@ import pytest
 
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
+from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.dispatch_emit import run_close as rc
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 from coordinator_core.win_portability import no_console_creationflags
@@ -44,7 +45,7 @@ def repo(tmp_path, monkeypatch):
         wsc,
         "compute_session_shape_gate",
         lambda r, history=None: wsc.SessionShapeGate(
-            sid=SID, disposition="single-session", consumed_handoff="", diagnostics=[],
+            sid=SID, disposition=SINGLE_SESSION, consumed_handoff="", diagnostics=[],
             consumed_handoff_paths=(), detection={},
         ),
     )

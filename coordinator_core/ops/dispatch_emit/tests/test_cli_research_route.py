@@ -209,7 +209,7 @@ def test_context_file_is_named_in_the_brief_and_needs_a_research_route(repo, cap
     assert cli_module.main(["--pipeline", "scouts", "--context", "notes.md"]) == cli_module.EXIT_USAGE
 
 
-def _content_root() -> Path:
+def _real_content_root() -> Path:
     from coordinator_core.conftest import _REAL_CONTENT_ROOT
 
     content = op_module.content_root_for(_REAL_CONTENT_ROOT) if _REAL_CONTENT_ROOT else None
@@ -219,7 +219,7 @@ def _content_root() -> Path:
 
 
 def test_a_repo_and_web_corpus_sizing_emits_with_the_scope_templates_lists(repo, monkeypatch):
-    monkeypatch.setattr(op_module, "_pipeline_content_root", _content_root)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _real_content_root)
     rel = _write_sizing(
         repo, "--research-class", "corpus", "--research-source", "repo", "--research-source", "web",
         "--research-target", "repo=C:/some/repo",
@@ -231,7 +231,7 @@ def test_a_repo_and_web_corpus_sizing_emits_with_the_scope_templates_lists(repo,
 
 
 def test_a_flag_reaches_the_pipeline_that_declares_it_and_an_unclaimed_one_is_refused(repo, monkeypatch):
-    monkeypatch.setattr(op_module, "_pipeline_content_root", _content_root)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _real_content_root)
     rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "repo")
     ctx, _, _ = op_module._research_route_setup({"flags": {"compare": "true"}}, repo, rel, None)
     assert ctx["shape"]["segments"][0]["flags"] == {"compare": "true"}
@@ -251,7 +251,7 @@ def test_every_segments_refusals_arrive_together(repo):
 
 
 def test_sizing_questions_seed_web_topics(repo, monkeypatch):
-    monkeypatch.setattr(op_module, "_pipeline_content_root", _content_root)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _real_content_root)
     rel = _write_sizing(
         repo, "--research-class", "corpus", "--research-source", "web",
         "--research-question", "One?", "--research-question", "Two?", "--research-question", "Three?",

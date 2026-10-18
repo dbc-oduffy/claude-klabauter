@@ -47,6 +47,10 @@ _REAL_TEST_MODULES = {
     "test_orphan_reaper.py",
     "test_state_write_audit.py",
     "test_content_root_fixture.py",
+    "test_baseline_export.py",
+    "test_baseline_export_contract.py",
+    "test_suite_run_record.py",
+    "test_suite_run_reuse.py",
 }
 
 

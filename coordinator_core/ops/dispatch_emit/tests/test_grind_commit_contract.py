@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _good() -> dict:
@@ -162,6 +163,8 @@ def test_decode_refuses_malformed(token):
         gcc.decode_declared_paths(token)
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_import_adds_no_non_stdlib_module():
     code = (
         "import sys\n"
@@ -170,7 +173,9 @@ def test_import_adds_no_non_stdlib_module():
         "new = set(sys.modules) - before\n"
         "print('\\n'.join(sorted(m for m in new if m.split('.')[0] == 'coordinator_core')))\n"
     )
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.split()
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout.split()
     allowed = {
         "coordinator_core.ops.dispatch_emit.grind_commit_contract",
         "coordinator_core._engine_landing",

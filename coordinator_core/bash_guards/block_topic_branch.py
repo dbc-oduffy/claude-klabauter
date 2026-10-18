@@ -58,7 +58,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._rewrite_support import _GIT_GLOBAL_OPT_WITH_ARG
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core.daily_branch import read_configured_day_branch
+from coordinator_core.daily_branch import is_work_branch, read_configured_day_branch
 from coordinator_core.hooks.day_branch_assert import (
     _CLOUD_SESSION_BRANCH_PREFIX,
     is_cloud_session,
@@ -476,7 +476,7 @@ def _offending_ref(
             continue
         if sub == "branch" and ref.startswith(_LOCAL_ONLY_PREFIX):
             continue
-        if sub == "push" and ref.startswith("work/") and ref == _head_branch(git_root):
+        if sub == "push" and is_work_branch(ref) and ref ==_head_branch(git_root):
             continue
         if sub == "push" and _is_local_tag(git_root, ref):
             continue

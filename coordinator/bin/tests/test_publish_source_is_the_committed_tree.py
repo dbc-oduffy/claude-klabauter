@@ -97,8 +97,9 @@ def test_materialized_source_carries_committed_bytes_not_dirty_ones(repo):
 def test_materialized_source_preserves_executable_mode(repo):
     root, _first, _second = repo
     shadow = publish._git_materialize_ref(root, ref="HEAD")
-    assert os.access(shadow / "run.sh", os.X_OK)
-    assert not os.access(shadow / "pkg" / "mod.py", os.X_OK)
+    assert (shadow / "run.sh").is_file()
+    assert (shadow / "run.sh").stat().st_mode & 0o111
+    assert not (shadow / "pkg" / "mod.py").stat().st_mode & 0o111
     publish._cleanup_shadow_roots((shadow,))
 
 
