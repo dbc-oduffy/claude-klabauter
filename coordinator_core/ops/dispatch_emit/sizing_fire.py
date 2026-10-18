@@ -135,8 +135,11 @@ def resumable_plan(
     Failing that, a rulable register row or a not_met recorded outcome resumes it as a synthesised
     `ALL_LANDED_HALT_KIND` ledger resume (`_all_landed_halt`); a spine with no `coded` row also pays the
     one `resume_landed_state` git spawn. A plan with
-    no readable spine or no rows is not resumable (None). One file read, plus one more on the
-    already-ran path; one `git log` only when a row is open. With rows left open, a ledger resume
+    no readable spine or no rows is not resumable (None). A `performer: em` row that the plan's
+    evidence sidecar carries under `em_discharged` counts landed, as in `read_spine`
+    (`em_discharge_eligible`). One file read, plus one more on the already-ran path, plus one more
+    (the evidence sidecar) only when an open `performer: em` row exists; one `git log` only when a
+    row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
     (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`.
     """
@@ -155,7 +158,8 @@ def resumable_plan(
     plan = contained_path(root / plan_rel, [root / "docs" / "plans"])
     if plan is None or not plan.is_file():
         return None
-    result = load_rows_memo(plan.read_text(encoding="utf-8"))
+    plan_text = plan.read_text(encoding="utf-8")
+    result = load_rows_memo(plan_text)
     if result.status is not LocateStatus.LOCATED:
         return None
     rows = [with_canonical_disposition(r) for r in result.rows]
@@ -169,12 +173,15 @@ def resumable_plan(
         and isinstance(r.get("id"), str)
         and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
     ]
+    if open_ids:
+        open_ids = _drop_em_discharged(plan, plan_text, rows, open_ids)
     state = None
-    coded = any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows)
-    if open_ids or not coded:
+    landed_open: tuple = ()
+    if open_ids or not _terminal_coded(rows) or _sha_coded(rows):
         from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
         state = resume_landed_state(root, plan_rel)
+        landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in state.rows and state.row_shas.get(i))
         open_ids = [i for i in open_ids if i not in state.rows]
     halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state)
     if halt is not None:
@@ -186,7 +193,53 @@ def resumable_plan(
         raise SizingFireRefused(
             [f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"]
         )
-    return ResumePlan(plan_rel, tuple(open_ids))
+    return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open)
+
+
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def _coded_rows(rows: Sequence) -> list:
+    return [r for r in rows if isinstance(r, dict) and r.get("disposition") == "coded"]
+
+
+def _sha_coded(rows: Sequence) -> bool:
+    """True when a `coded` row's `disposition_ref` is a full sha: it may be a gate stamp."""
+    return any(_FULL_SHA.fullmatch(str(r.get("disposition_ref") or "")) for r in _coded_rows(rows))
+
+
+def _terminal_coded(rows: Sequence, state=None) -> bool:
+    """True when a row is `coded` other than by the gate's resume stamp: a `coded` row whose
+    `disposition_ref` is the sha `state.row_shas` reports for it was landed by a checkpoint or
+    ledger-check commit, so the terminal commit has not run. With no `state`, any `coded` row counts.
+    Trap: the terminal commit also stamps checkpoint-landed rows with their checkpoint sha, so a run
+    whose every row landed by checkpoint reads here as not yet terminal-committed."""
+    shas = state.row_shas if state is not None else {}
+    return any(
+        not (r.get("disposition_ref") and shas.get(r.get("id")) == r.get("disposition_ref"))
+        for r in _coded_rows(rows)
+    )
+
+
+def _drop_em_discharged(plan: Path, plan_text: str, rows: Sequence, open_ids: list) -> list:
+    """`open_ids` less every row `read_spine` counts satisfied by an em-discharge entry. The evidence
+    sidecar is read once, and only when an open row is eligible for discharge."""
+    from coordinator_core.ops.dispatch_emit.spine_read import _frontmatter_external_gates, em_discharge_eligible
+
+    open_set = set(open_ids)
+    eligible = [
+        r for r in rows if isinstance(r, dict) and r.get("id") in open_set and r.get("performer") == "em"
+    ]
+    if not eligible:
+        return open_ids
+    gates = _frontmatter_external_gates(plan_text, open_set)
+    candidates = [r["id"] for r in eligible if em_discharge_eligible(r, tuple(gates.get(r["id"], ())))]
+    if not candidates:
+        return open_ids
+    from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+
+    discharged = read_em_discharges(plan)
+    return [i for i in open_ids if not (i in candidates and i in discharged)]
 
 
 def _all_landed_halt(
@@ -251,7 +304,11 @@ def _ledger_halt_for(
     second `git log`."""
     from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record
 
-    if any(isinstance(r, dict) and r.get("disposition") == "coded" for r in rows):
+    if state is None and _sha_coded(rows):
+        from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+        state = resume_landed_state(root, plan_rel)
+    if _terminal_coded(rows, state):
         return None
     pointer = _own_pointer(root, plan_rel, sizing_rel)
     if pointer is not None and pointer.halted == COMMIT_HALT_KIND and open_ids:

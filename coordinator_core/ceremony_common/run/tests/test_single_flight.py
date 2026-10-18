@@ -6,7 +6,10 @@ import sys
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.ceremony_common.run import single_flight as sf
+from coordinator_core.win_portability import no_console_creationflags
 
 TODAY = "2026-10-12"
 YESTERDAY = "2026-10-11"
@@ -24,7 +27,7 @@ def _acq(env, session="s1", today=TODAY):
 
 
 def _dead_pid():
-    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p = subprocess.Popen([sys.executable, "-c", "pass"], **no_console_creationflags())
     p.wait()
     return p.pid
 

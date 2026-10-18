@@ -9,6 +9,9 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _ELSE_PREFIX = "    else { if (!_halted) _halted = { halted: 'commit'"
 _RESUME_PREFIX = "  if (_resumeLedger && _nextAction && _nextAction.params && _gate.resume_ledger.inline_review"
@@ -42,7 +45,9 @@ def _drive(js_line: str, *, incomplete=(), commit=None, resume=False, gate=None,
         json.dumps(list(incomplete)), json.dumps(commit or {"refused": "since-base-overlap"}),
         json.dumps(resume), json.dumps(gate or {}), json.dumps(na), js_line,
     )
-    out = subprocess.run(["node", "-e", program], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        ["node", "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout
     return json.loads(out)
 
 

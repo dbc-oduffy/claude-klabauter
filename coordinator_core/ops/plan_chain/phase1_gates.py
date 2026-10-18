@@ -15,7 +15,7 @@ from coordinator_core.ops.plan_chain.contract import ChainManifest, Halt, halt
 from coordinator_core.pickup_assemble import _parse_fm_dict
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
 from coordinator_core.review_assemble import exec_auth_stamp
-from coordinator_core.roadmap.plan_gate import assemble_plan_gate
+from coordinator_core.roadmap.gate_v2 import GateReadRefused, compute_gate_report
 from coordinator_core.session.claims import claim_plan
 
 _EXECUTE = "execute"
@@ -116,15 +116,20 @@ def _roadmap_gate(manifest: ChainManifest, repo_root: Path) -> Halt | None:
     baton_fm = _read_fm(repo_root / manifest.baton)
     if not baton_fm.get("roadmap_id"):
         return None
-    report = assemble_plan_gate(repo_root, subject=manifest.baton)
-    rows = [b for b in report.get("batons", []) if b.get("path") == manifest.baton]
-    if not rows:
-        return halt("roadmap-gate-shut", f"{manifest.baton}: not found in the roadmap gate report")
-    gate = rows[0].get("execution_gate") or {}
-    if gate.get("open"):
-        return None
-    blockers = ", ".join(str(b.get("blocker")) for b in gate.get("blocking", [])) or "unknown"
-    return halt("roadmap-gate-shut", f"{manifest.baton}: execution gate shut by {blockers}")
+    try:
+        report = compute_gate_report(repo_root, subject=manifest.baton)
+        gate = report["verdict"]["execution_gate"]
+        if gate["open"] is True:
+            return None
+        blockers = ", ".join(str(b.get("blocker")) for b in gate.get("blocking") or []) or "none named"
+    except GateReadRefused as exc:
+        return halt("roadmap-gate-shut", f"{manifest.baton}: plan-gate read refused: {exc}")
+    except (KeyError, TypeError, AttributeError) as exc:
+        return halt("roadmap-gate-shut", f"{manifest.baton}: plan-gate report unreadable: {exc!r}")
+    return halt(
+        "roadmap-gate-shut",
+        f"{manifest.baton}: execution gate shut; blocked by {blockers}",
+    )
 
 
 def _claim_gate(rel: str, repo_root: Path) -> Halt | None:

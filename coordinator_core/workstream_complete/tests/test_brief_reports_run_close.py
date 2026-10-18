@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit import run_close as rc
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "22222222-2222-2222-2222-222222222222"
 RUN = "run-ws2"

@@ -289,7 +289,7 @@ def _write_tripwire(root: str, dry_run: bool) -> None:
 
     # An index on disk outranks the branch that led here: the block would be false.
     if (Path(root) / ".project-rag" / "graph.db").is_file():
-        print(f"setup-rag-decision: {root} already has a example-retrieval-repo index — no tripwire written")
+        print(f"setup-rag-decision: {root} already has a RAG index — no tripwire written")
         return
 
     if _tripwire_present(claude_md):
@@ -395,17 +395,17 @@ def setup_rag_decision(argv: List[str]) -> int:
             if dry_run:
                 print("[setup-rag-decision dry-run] branch 1: UE repo + daemon present → offer to index")
             else:
-                print("setup-rag-decision: branch 1 — UE repo with example-retrieval-repo daemon detected.")
-                print("  Offer: run example-retrieval-repo index to build a semantic index for this repo.")
+                print("setup-rag-decision: branch 1 — UE repo with RAG daemon detected.")
+                print("  Offer: run the RAG indexer to build a semantic index for this repo.")
             return 0
 
         # Branch 3: UE repo but no daemon -> tripwire.
         if dry_run:
             print("[setup-rag-decision dry-run] branch 3: UE repo but no daemon → tripwire")
         else:
-            print("setup-rag-decision: branch 3 — UE repo detected but example-retrieval-repo daemon is absent.")
+            print("setup-rag-decision: branch 3 — UE repo detected but the RAG daemon is absent.")
             print("  Writing un-indexed tripwire to CLAUDE.md.")
-            print("  To enable indexing: install and start the example-retrieval-repo daemon, then re-run /repo-setup.")
+            print("  To enable indexing: install and start the RAG daemon, then re-run /repo-setup.")
         _write_tripwire(root, dry_run)
         return 0
 
@@ -421,7 +421,7 @@ def setup_rag_decision(argv: List[str]) -> int:
         )
     else:
         print("setup-rag-decision: branch 2 — non-UE repo. RAG indexing is not yet supported")
-        print("  for non-UE repos: blocked by example-retrieval-repo-ue-addon .uproject-abstention defect")
+        print("  for non-UE repos: blocked by the UE addon's .uproject-abstention defect")
         print("  (cross-repo memo example-retrieval-repo-ue-addon-em). Writing un-indexed tripwire to CLAUDE.md.")
     _write_tripwire(root, dry_run)
     return 0

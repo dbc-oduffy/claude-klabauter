@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.bug_blitz import targeted_run
 from coordinator_core.bug_blitz.contract import EXIT_CODES, record_schema_path
 from coordinator_core.bug_blitz.tests.test_runner_shapes_admitted import ADMITTED_HEADS
+from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.fixture(autouse=True)
@@ -66,14 +67,15 @@ def test_select_unions_surface_touched_tests_and_covering_tests(repo):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_select_js_covering_tests_from_git_index(tmp_path):
     root = tmp_path / "js"
     (root / "src").mkdir(parents=True)
     (root / "src" / "foo.ts").write_text("")
     (root / "src" / "foo.test.ts").write_text("")
     (root / "src" / "bar.spec.tsx").write_text("")
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_creationflags())
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, **no_console_creationflags())
     row = _row(root, "src/bar.spec.tsx")
     selected, _ = targeted_run.select(root, row, ["src/foo.ts"])
     assert selected == ["src/bar.spec.tsx", "src/foo.test.ts"]

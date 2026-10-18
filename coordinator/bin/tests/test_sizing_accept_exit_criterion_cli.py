@@ -10,6 +10,8 @@ from unittest import mock
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
 if _BIN_DIR not in sys.path:
@@ -90,8 +92,6 @@ class TestApmRuling(unittest.TestCase):
         self.assertIn("--apm-ruling", out.getvalue())
 
 
-@pytest.mark.cadence
-@pytest.mark.spawns_process
 class TestStatementOnlyThroughOp(unittest.TestCase):
     """CLI params, with no words flag, handed to the real op."""
 

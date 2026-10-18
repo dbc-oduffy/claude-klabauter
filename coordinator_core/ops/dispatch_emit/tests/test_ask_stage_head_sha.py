@@ -6,6 +6,8 @@ import json
 import re
 import subprocess
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL
@@ -24,6 +26,8 @@ def _manifest(root) -> dict:
     return json.loads((root / RECORD_DIR_ROOT / _RUN / "manifest.json").read_text(encoding="utf-8"))
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_head_sha_is_the_40_hex_head_in_reply_and_manifest(tmp_path):
     git = lambda *a: subprocess.run(  # noqa: E731
         ["git", "-C", str(tmp_path), "-c", "user.email=t@e.x", "-c", "user.name=t", *a],

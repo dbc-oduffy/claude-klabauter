@@ -4031,6 +4031,37 @@ def _fire_sizing_scout_deny_leaf_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_leaf.sizing_scout_deny(payload, "coordinator:executor"))
 
 
+def _fire_hand_dispatch_deny(
+    subagent_type: str, prompt: str = "", **extra: Any
+) -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import hand_dispatch_deny as _leaf
+
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": subagent_type, "prompt": prompt},
+        **extra,
+    }
+    return _to_envelope_or_none(_leaf.hand_dispatch_deny(payload, subagent_type))
+
+
+def _fire_hand_dispatch_deny_plan_author() -> Optional[Dict[str, Any]]:
+    return _fire_hand_dispatch_deny("coordinator:plan-author", "Write the plan.")
+
+
+def _fire_hand_dispatch_deny_roadmap_planner() -> Optional[Dict[str, Any]]:
+    return _fire_hand_dispatch_deny("coordinator:roadmap-planner", "Write the roadmap.")
+
+
+def _fire_hand_dispatch_deny_mise_prep_control() -> Optional[Dict[str, Any]]:
+    return _fire_hand_dispatch_deny(
+        "coordinator:plan-author", "Run mise-prep-gate --repo-root . docs/plans/x.md before returning."
+    )
+
+
+def _fire_hand_dispatch_deny_nested_control() -> Optional[Dict[str, Any]]:
+    return _fire_hand_dispatch_deny("coordinator:plan-author", "Write the plan.", agent_id="a1")
+
+
 def _fire_submit_engine_ask_control() -> Optional[Dict[str, Any]]:
     payload = {
         "tool_name": "Agent", "agent_id": "a1", "tool_input": {"subagent_type": "coordinator:sizing-scout"},
@@ -4080,10 +4111,12 @@ def _fire_enforce_agent_model_pin_control() -> Optional[Dict[str, Any]]:
 
 def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
     payload = {
-        "tool_input": {"file_path": "src/module.py", "content": "def foo():\n    return 42\n"},
+        "tool_input": {"file_path": "/repo/src/module.py", "content": "def foo():\n    return 42\n"},
         "session_id": "sess-c12-nemcd-fire-%s" % uuid.uuid4().hex,
     }
-    return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+        return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
 
 
 def _fire_nudge_em_code_dispatch_control() -> Optional[Dict[str, Any]]:
@@ -6147,6 +6180,10 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("submit_engine_ask", "fire-scout-no-live-run", True, _fire_submit_engine_ask_scout_idle),
     HookRow("sizing_scout_deny", "fire-hand-dispatch", True, _fire_sizing_scout_deny_leaf),
     HookRow("sizing_scout_deny", "control-other-type", False, _fire_sizing_scout_deny_leaf_control),
+    HookRow("hand_dispatch_deny", "fire-plan-author", True, _fire_hand_dispatch_deny_plan_author),
+    HookRow("hand_dispatch_deny", "fire-roadmap-planner", True, _fire_hand_dispatch_deny_roadmap_planner),
+    HookRow("hand_dispatch_deny", "control-mise-prep-brief", False, _fire_hand_dispatch_deny_mise_prep_control),
+    HookRow("hand_dispatch_deny", "control-nested-dispatch", False, _fire_hand_dispatch_deny_nested_control),
     HookRow("submit_bug_blitz", "fire-on-main", True, _fire_submit_bug_blitz_main),
     HookRow("submit_bug_blitz", "fire-no-targets", True, _fire_submit_bug_blitz_no_targets),
     HookRow("submit_bug_blitz", "fire-unknown-arg", True, _fire_submit_bug_blitz_unknown_arg),

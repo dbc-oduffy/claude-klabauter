@@ -1,43 +1,56 @@
+"""Tests for the roadmap.plan_gate op wrapper over gate_v2."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
+from coordinator_core.ipc import CallerFacingValidationError
 from coordinator_core.ops import roadmap_plan_gate as op_module
+from coordinator_core.roadmap import gate_v2
 
 
-def _write(path: Path, frontmatter: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\n{frontmatter.strip()}\n---\n\nbody\n", encoding="utf-8")
+def _gate(open_: bool, blocking=()):
+    return {"open": open_, "blocking": list(blocking)}
 
 
-def _baton(root: Path, stub_id: str, extra: str = "") -> None:
-    _write(
-        root / "state" / "handoffs" / f"{stub_id}.md",
-        f"kind: roadmap-baton\ntitle: {stub_id}\nstub_id: {stub_id}\n"
-        f"status: open\ndeployment_state: ready_to_fire\nbaton_role: work\n{extra}",
-    )
-
-
-def _call(root: Path, **params):
-    return op_module._handler(params, repo_root=root)
+def _report():
+    return {
+        "batons": [
+            {
+                "id": "b-1",
+                "path": "state/handoffs/b-1.md",
+                "stub_id": "stub-1",
+                "planning_gate": _gate(True),
+                "execution_gate": _gate(False, [{"blocker": "x-1"}]),
+            },
+            {
+                "id": "b-2",
+                "path": "state/handoffs/b-2.md",
+                "stub_id": None,
+                "planning_gate": _gate(True),
+                "execution_gate": _gate(True),
+            },
+        ],
+        "waves": [], "cycles": [], "unresolved_blockers": [], "untracked": [],
+        "held": [], "counts": {}, "unmatched_targets": [], "verdict": None,
+    }
 
 
 @pytest.fixture()
-def corpus(tmp_path):
-    """A blocker whose plan cleared review, and the dependent it no longer holds
-    back from PLANNING but still holds back from EXECUTION. This is the whole
-    point of the op in four files."""
-    _write(
-        tmp_path / "docs" / "plans" / "blocker.md",
-        "title: blocker plan\nstatus: approved\nplan_id: pln-blocker",
-    )
-    _baton(tmp_path, "blocker-1", "origin_plan_id: pln-blocker")
-    _baton(tmp_path, "dependent-1", "blocked_by: [blocker-1]")
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    return tmp_path
+def seen(monkeypatch, tmp_path):
+    calls = []
+
+    def fake(root, **kwargs):
+        calls.append((root, kwargs))
+        return _report()
+
+    monkeypatch.setattr(gate_v2, "compute_gate_report", fake)
+    monkeypatch.setattr(op_module, "main_worktree_root", lambda r: r)
+    return calls
+
+
+def _call(tmp_path, **params):
+    return op_module._handler(params, repo_root=tmp_path)
 
 
 def test_the_op_is_registered_under_its_wire_name():
@@ -58,124 +71,66 @@ def test_the_op_declares_a_key_scope():
     assert _OP_KEY_SCOPE["roadmap.plan_gate"] == "common_dir"
 
 
-def test_the_op_writes_nothing(corpus):
-    before = {p: p.read_bytes() for p in corpus.rglob("*.md")}
-    _call(corpus)
-    after = {p: p.read_bytes() for p in corpus.rglob("*.md")}
-    assert before == after
+def test_selectors_pass_through(seen, tmp_path):
+    _call(tmp_path, roadmap_id="rm-1", targets=["b-1"], subject="b-1", gate="planning")
+    root, kwargs = seen[0]
+    assert root == tmp_path
+    assert kwargs == {"roadmap_id": "rm-1", "targets": ["b-1"], "subject": "b-1"}
 
 
-def test_whole_repo_report_carries_both_gates_per_baton(corpus):
-    report = _call(corpus)
-
-    dependent = next(b for b in report["batons"] if b["id"] == "dependent-1")
-    assert dependent["planning_gate"]["open"] is True
-    assert dependent["execution_gate"]["open"] is False
-    assert report["verdict"] is None, "no subject means no single-baton verdict"
+def test_no_selectors_sweeps(seen, tmp_path):
+    _call(tmp_path)
+    assert seen[0][1] == {"roadmap_id": None, "targets": None, "subject": None}
 
 
-@pytest.mark.parametrize(
-    "gate, expected_open",
-    [("planning", True), ("execution", False)],
-)
-def test_subject_verdict_answers_the_admission_question(corpus, gate, expected_open):
-    report = _call(corpus, subject="dependent-1", gate=gate)
-
-    assert report["verdict"]["resolved"] is True
-    assert report["verdict"]["gate"] == gate
-    assert report["verdict"]["open"] is expected_open
+def test_no_subject_leaves_verdict_null(seen, tmp_path):
+    assert _call(tmp_path)["verdict"] is None
 
 
-def test_subject_verdict_defaults_to_reporting_both_gates(corpus):
-    verdict = _call(corpus, subject="dependent-1")["verdict"]
-
-    assert verdict["planning_gate"]["open"] is True
-    assert verdict["execution_gate"]["open"] is False
-
-
-def test_an_unknown_subject_is_refused_rather_than_reported_open(corpus):
-    verdict = _call(corpus, subject="not-a-baton", gate="execution")["verdict"]
-
-    assert verdict["resolved"] is False
-    assert verdict["open"] is False
+def test_subject_with_gate_returns_holding_blockers(seen, tmp_path):
+    v = _call(tmp_path, subject="stub-1", gate="execution")["verdict"]
+    assert v == {
+        "subject": "stub-1", "resolved": True, "gate": "execution",
+        "open": False, "blocking": [{"blocker": "x-1"}],
+    }
 
 
-def test_subject_narrows_the_report_but_not_the_scan(corpus):
-    full = _call(corpus)
-    narrowed = _call(corpus, subject="dependent-1")
-
-    assert len(narrowed["batons"]) == 1
-    assert narrowed["scanned"] == full["scanned"]
-    assert narrowed["waves"] == full["waves"]
-    assert narrowed["counts"] == full["counts"]
+def test_subject_default_gate_carries_both(seen, tmp_path):
+    v = _call(tmp_path, subject="b-2")["verdict"]
+    assert v["resolved"] is True
+    assert v["planning_gate"]["open"] and v["execution_gate"]["open"]
 
 
-def test_roadmap_id_filters_the_candidate_set(tmp_path):
-    (tmp_path / ".git").mkdir()
-    _baton(tmp_path, "in-scope-1", "roadmap_id: alpha")
-    _baton(tmp_path, "out-of-scope-1", "roadmap_id: beta")
-
-    report = _call(tmp_path, roadmap_id="alpha")
-
-    assert [b["id"] for b in report["batons"]] == ["in-scope-1"]
+def test_both_gates_open_requires_execution_gate_open(seen, tmp_path):
+    v = _call(tmp_path, subject="b-1")["verdict"]
+    assert v["planning_gate"]["open"] and not v["execution_gate"]["open"]
+    assert v["open"] is False
 
 
-@pytest.mark.parametrize(
-    "params",
-    [
-        {"gate": "whenever"},
-        {"subject": 7},
-        {"roadmap_id": ["alpha"]},
-    ],
-)
-def test_bad_params_raise_rather_than_degrade(corpus, params):
+def test_unknown_subject_is_unresolved_and_shut(seen, tmp_path):
+    v = _call(tmp_path, subject="nope")["verdict"]
+    assert v["resolved"] is False and v["open"] is False
+
+
+@pytest.mark.parametrize("params", [
+    {"gate": "bogus"}, {"targets": []}, {"targets": "b-1"}, {"subject": 3}, {"roadmap_id": 3},
+])
+def test_bad_params_are_rejected(seen, tmp_path, params):
     with pytest.raises(ValueError):
-        _call(corpus, **params)
+        _call(tmp_path, **params)
+    assert seen == []
 
 
-def test_a_missing_repo_root_is_refused(corpus):
-    with pytest.raises(ValueError, match="repo_root"):
+def test_missing_repo_root_is_rejected():
+    with pytest.raises(ValueError):
         op_module._handler({}, repo_root=None)
 
 
-def test_a_held_target_is_matched_not_unmatched(corpus):
-    _baton(
-        corpus,
-        "held-1",
-        'plan_blitz_hold_reason: "the PM ruled it does not fire"\n',
-    )
+def test_refused_read_arrives_as_an_error_reply_not_a_report(tmp_path, monkeypatch):
+    def refuse(root, **kwargs):
+        raise gate_v2.GateReadRefused("handoff dir unreadable")
 
-    report = _call(corpus, targets=["held-1", "no-such-baton"])
-
-    assert [row["baton"] for row in report["held"]] == ["held-1"]
-    assert report["unmatched_targets"] == ["no-such-baton"]
-    assert "matched_targets" not in report
-
-
-def test_a_target_in_no_wave_names_why(corpus):
-    _baton(
-        corpus,
-        "held-1",
-        'plan_blitz_hold_reason: "the PM ruled it does not fire"\n',
-    )
-
-    report = _call(corpus, targets=["held-1"])
-
-    assert report["waves"] == [] or all("held-1" not in w for w in report["waves"])
-    [row] = [r for r in report["target_exclusions"] if r["target"] == "held-1"]
-    assert row["excluded_because"] in {"not-candidate", "plan-not-needed", "unschedulable"}
-
-
-def test_a_baton_waiting_on_a_held_baton_says_so(corpus):
-    _baton(corpus, "held-2", 'plan_blitz_hold_reason: "PM holds it"\n')
-    _baton(corpus, "waits-on-held", "blocked_by: [held-2]\n")
-
-    report = _call(corpus)
-
-    [row] = [r for r in report["unschedulable"] if r["id"] == "waits-on-held"]
-    assert row["held_by_held"] == ["held-2"]
-    assert report["counts"]["blocked_by_held"] >= 1
-
-
-def test_a_sweep_reports_no_unmatched_targets(corpus):
-    assert _call(corpus)["unmatched_targets"] == []
+    monkeypatch.setattr(gate_v2, "compute_gate_report", refuse)
+    monkeypatch.setattr(op_module, "main_worktree_root", lambda r: r)
+    with pytest.raises(CallerFacingValidationError, match="handoff dir unreadable"):
+        _call(tmp_path)

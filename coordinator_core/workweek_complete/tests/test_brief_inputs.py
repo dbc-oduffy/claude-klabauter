@@ -13,7 +13,7 @@ from coordinator_core.ops.doc_registry import resolve_doc_registry_config
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workweek_complete import brief_inputs as bi
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _README = "# Title\n\nSee `nonexistent/missing_file.py` and `coordinator_core/engine_root.py`.\n"
 

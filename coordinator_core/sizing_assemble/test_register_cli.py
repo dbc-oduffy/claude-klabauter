@@ -17,7 +17,9 @@ import yaml
 
 import coordinator_core.sizing_assemble as sa
 
-_REL = "state/sizings/20260101-a.yaml"
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+_REL ="state/sizings/20260101-a.yaml"
 _SIZING = (
     "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: XL\n"
     "  provisional: true\nroute: pm-decision\ndetents: []\nfork: null\nxl_exit: null\n"

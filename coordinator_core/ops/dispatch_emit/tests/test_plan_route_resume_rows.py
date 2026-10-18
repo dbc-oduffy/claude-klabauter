@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit import plan_route
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN_REL = "docs/plans/p.md"
 

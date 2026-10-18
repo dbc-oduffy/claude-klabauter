@@ -439,6 +439,20 @@ def _call_guard(
     return fn(**kwargs)
 
 
+@pytest.fixture(autouse=True)
+def _topic_branch_judges_a_non_scratch_repo(
+    request: pytest.FixtureRequest, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """block_topic_branch exempts a clone under a repo's own `scratch/`, so a run whose cwd is
+    such a clone gets a bare clean; pin the cwd to a repo the guard judges."""
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is None or callspec.params.get("short_name") != "block_topic_branch":
+        return
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+
 def _powershell_payload(short_name: str, cmd: str) -> Dict[str, Any]:
     payload = {
         "tool_name": "PowerShell",

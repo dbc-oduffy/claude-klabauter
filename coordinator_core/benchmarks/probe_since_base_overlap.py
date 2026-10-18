@@ -25,11 +25,14 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.git.commit_walk import commit_meta
+from coordinator_core.git.run import run_git
+from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.git.git_objects import read_object, read_ref_loose_or_packed
 from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
 
-_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _PLAN_RE = re.compile(r"^Checkpoint-Plan: (\S.*?)\s*$", re.M)
 _BASE_RE = re.compile(r"^Checkpoint-Base: ([0-9a-f]{7,40})\s*$", re.M)
 
@@ -216,15 +219,22 @@ def _src_lines(seed: int, n: int) -> List[bytes]:
     return [f"    value_{seed}_{i} = compute({i}, {seed})  # line {i}\n".encode() for i in range(n)]
 
 
+def _git_checked(args: Sequence[str], cwd: Path, input: Optional[bytes] = None, binary: bool = False):
+    res = run_git(list(args), cwd=str(cwd), input=input, binary=binary)
+    if not res.ok:
+        raise RuntimeError(f"git {' '.join(args)} failed ({res.returncode}): {res.stderr.strip()}")
+    return res
+
+
 def _fast_import(repo: Path, stream: bytes, delta: bool = False) -> None:
-    subprocess.run(["git", "fast-import", "--quiet"] + ([] if delta else ["--depth=0"]), cwd=repo, input=stream, check=True, creationflags=_NOWIN)
+    _git_checked(["fast-import", "--quiet"] + ([] if delta else ["--depth=0"]), repo, input=stream)
 
 
 def build_fixture(root: Path, n_paths: int, depth: int, touches: int, file_lines: int = 4500, delta: bool = False) -> Dict[str, object]:
     """Repo with `n_paths` files of `file_lines` lines: a base commit, then `depth` foreign
     commits that each edit `touches` paths round-robin (a path sees ~depth*touches/n_paths versions)."""
     repo = Path(tempfile.mkdtemp(prefix="fx_", dir=root))
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, creationflags=_NOWIN)
+    _git_checked(["init", "-q", "-b", "main"], repo)
     paths = [f"pkg/m{i}.py" for i in range(n_paths)]
     state = {p: _src_lines(i, file_lines) for i, p in enumerate(paths)}
     out = bytearray()
@@ -258,7 +268,7 @@ def build_fixture(root: Path, n_paths: int, depth: int, touches: int, file_lines
         parent = commit(f"foreign {c}", edited, parent)
     _fast_import(repo, bytes(out), delta)
     head = read_ref_loose_or_packed(repo / ".git", "refs/heads/main")
-    base = subprocess.run(["git", "rev-list", "--first-parent", "main"], cwd=repo, capture_output=True, text=True, creationflags=_NOWIN).stdout.split()[-1]
+    base = run_git(["rev-list", "--first-parent", "main"], cwd=str(repo)).stdout.split()[-1]
     # landing = HEAD copy with the foreign additions dropped (stale-copy shape) for every path
     landing = {}
     for i, p in enumerate(paths):
@@ -304,11 +314,11 @@ def replay_incident(repo_root: Path) -> Dict[str, object]:
     foreign, landing_commit = "a13b25919b", "2418107a64"
 
     def rev(s: str) -> str:
-        return subprocess.run(["git", "rev-parse", s], cwd=repo_root, capture_output=True, text=True, check=True, creationflags=_NOWIN).stdout.strip()
+        return _git_checked(["rev-parse", s], repo_root).stdout.strip()
 
     f_sha, l_sha, base = rev(foreign), rev(landing_commit), rev(foreign + "^")
     head = rev(landing_commit + "^")  # state the halt run saw as HEAD when it landed
-    blob = subprocess.run(["git", "show", f"{l_sha}:{path}"], cwd=repo_root, capture_output=True, check=True, creationflags=_NOWIN).stdout
+    blob = _git_checked(["show", f"{l_sha}:{path}"], repo_root, binary=True).stdout_bytes
     own_plan = "docs/plans/2026-10-16-review-edit-outside-declared-paths.md"
     m = measure(lambda: since_base_drops(cd, head, base, {path: blob}, plan=own_plan))
     res = m.pop("result")
@@ -332,14 +342,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--replay-only", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    declare_benchmark_origin()
     repo_root = Path(__file__).resolve().parents[2]
     out: Dict[str, object] = {"replay": replay_incident(repo_root)}
     if not args.replay_only:
-        tmp = Path(tempfile.mkdtemp(prefix="since_base_probe_"))
+        tmp = Path(tempfile.mkdtemp(prefix="since_base_probe_", dir=managed_tempdir()))
         try:
             out["matrix"] = run_matrix(tmp)
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            rmtree_or_raise(tmp, label="since_base_probe")
     print(json.dumps(out, indent=None if args.json else 2, default=str))
     return 0
 

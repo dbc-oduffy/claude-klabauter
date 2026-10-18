@@ -11,6 +11,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]

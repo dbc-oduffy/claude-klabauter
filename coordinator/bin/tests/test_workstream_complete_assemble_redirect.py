@@ -16,6 +16,12 @@ sys.path.insert(0, str(BIN_DIR / "lib"))
 import entry_point_shim  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _scrub_dispatching_session_identity(monkeypatch):
+    for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_native_route_writes_served_stdout_to_a_redirected_file(tmp_path, monkeypatch):
     report = json.dumps({"directives": [], "note": "non-ascii — dash"})
     served = {"stdout": report, "stderr": "wsc-apply: x\n", "exit_code": 4}
@@ -47,7 +53,8 @@ def test_native_route_writes_served_stdout_to_a_redirected_file(tmp_path, monkey
 
 
 @pytest.mark.spawns_process
-def test_brief_stdout_redirected_to_file_matches_piped_report(tmp_path):
+def test_brief_stdout_redirected_to_file_matches_piped_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "tier-test-unanchored-session")
     script = BIN_DIR / "workstream-complete-assemble.py"
     argv = [sys.executable, str(script), "brief", "--decisions", "{}"]
     out_path = tmp_path / "out.txt"

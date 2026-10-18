@@ -11,8 +11,11 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.git.run import GitResult
 from coordinator_core.workweek_complete.release import gates
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workweek_complete.release.contract import GATE_IDS
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -23,7 +26,8 @@ NUL = bytes([0])
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -34,7 +38,7 @@ def repo(tmp_path: Path) -> Path:
     (r / "coordinator" / "bin" / "lib" / "coordinator_safe_name.py").write_bytes(CSN.read_bytes())
     (r / "tracked.txt").write_text("one\n")
     (r / ".gitignore").write_text("scratch/\n")
-    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    subprocess.run(["git", "init", "-q", str(r)], check=True, **no_console_creationflags())
     _git(r, "config", "user.email", "t@t")
     _git(r, "config", "user.name", "t")
     _git(r, "config", "core.autocrlf", "false")
@@ -78,7 +82,10 @@ def d0_present(tmp_path, monkeypatch):
     from coordinator_core.subagent_sandbox import provision_report
 
     monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: str(plugin))
-    monkeypatch.setattr(gates.shutil, "which", lambda name: "NODE")
+    real_which = gates.shutil.which
+    monkeypatch.setattr(
+        gates.shutil, "which", lambda name, *a, **k: "NODE" if name == "node" else real_which(name, *a, **k)
+    )
     return plugin
 
 

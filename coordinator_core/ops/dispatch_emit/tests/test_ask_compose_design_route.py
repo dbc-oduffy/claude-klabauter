@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, design_route
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+from coordinator_core.win_portability import no_console_creationflags
 
 _CARRY = f"{DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null"
 
@@ -88,7 +89,7 @@ def test_script_with_the_design_review_halt_parses_through_asyncfunction(over, t
         "new (Object.getPrototypeOf(async function () {}).constructor)("
         "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
     )
-    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True)
+    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
 
 

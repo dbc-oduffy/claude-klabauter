@@ -594,6 +594,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "the HEAD symref -- no commit is authored, no pathspec, no session id",
         "confirmed": True,
     },
+    "ops/dispatch_emit/checkpoint_stamp.py::stamp_checkpoint": {
+        "reason": "release",
+        "confirmed": True,
+    },
     "ops/research_close.py::_close_archived": {
         "reason": "ineligible: threads no session id (params carry none), so "
         "there is no id to release claims under",

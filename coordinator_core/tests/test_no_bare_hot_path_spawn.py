@@ -249,9 +249,17 @@ _SUPPRESSION_IDENTIFIER_PREFIXES = ("no_console", "leaf_spawn")
 _CREATIONFLAGS_MAPPING_NAME = "creationflags"
 
 
+#: `cc_invoke._invoke_spawn_kw` wraps `_no_console_kw` and returns
+#: `creationflags=0` only when the parent already owns a console. Matched by
+#: exact identifier, never prefix: `**_invoke_spawn_kw_maybe` still reads bare.
+_SUPPRESSION_WRAPPER_NAMES = frozenset({"invoke_spawn_kw"})
+
+
 def _is_no_console_shaped(identifier: str) -> bool:
     stripped = identifier.lstrip("_")
     if stripped.lower() == _CREATIONFLAGS_MAPPING_NAME:
+        return True
+    if stripped in _SUPPRESSION_WRAPPER_NAMES:
         return True
     return stripped.startswith(_SUPPRESSION_IDENTIFIER_PREFIXES)
 
@@ -991,6 +999,12 @@ def test_gate_honours_the_last_resort_exemption_tag(tmp_path):
     violations = find_bare_hot_path_spawns(tmp_path, scope_dirs=("ops/session",))
 
     assert violations == []
+
+
+def test_invoke_spawn_wrapper_is_matched_exactly_not_by_prefix():
+    assert _is_no_console_shaped("_invoke_spawn_kw")
+    assert not _is_no_console_shaped("_invoke_spawn_kw_maybe")
+    assert not _is_no_console_shaped("invoke_spawn")
 
 
 def test_gate_ignores_out_of_scope_directories(tmp_path):

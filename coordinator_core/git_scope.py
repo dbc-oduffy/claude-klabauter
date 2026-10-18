@@ -69,7 +69,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Sequence
 
-from coordinator_core.git.run import _wall_bound
+from coordinator_core.git.run import _wall_bound, run_git
 
 __all__ = [
     "REPO_SCOPING_ENV_VARS",
@@ -244,21 +244,12 @@ def git_predicate(
     `FOREIGN_REPO_GIT_TIMEOUT_SECONDS` (DR-349 § 3). These are local object-database
     predicates; one that needs longer is a defect report about the call site.
     """
-    wall = _wall_bound(min(timeout, FOREIGN_REPO_GIT_TIMEOUT_SECONDS), False)
-    try:
-        probe = subprocess.run(
-            ["git", "-C", str(repo_path), *args],
-            capture_output=True,
-            text=True,
-            timeout=wall,
-            check=False,
-            env=scoped_git_env(),
-            creationflags=_NO_WINDOW,
-        )
-    except subprocess.TimeoutExpired:
-        return PROBE_UNKNOWN, f"git hung: killed at the {wall}s wall bound"
-    except OSError as exc:
-        return PROBE_UNKNOWN, f"could not run git: {exc}"
+    budget = min(timeout, FOREIGN_REPO_GIT_TIMEOUT_SECONDS)
+    probe = run_git(["-C", str(repo_path), *args], timeout=budget, env=scoped_git_env())
+    if probe.timed_out:
+        return PROBE_UNKNOWN, f"git hung: killed at the {_wall_bound(budget, False)}s wall bound"
+    if probe.returncode == 127:
+        return PROBE_UNKNOWN, "could not run git"
     if probe.returncode == 0:
         return PROBE_YES, ""
     if probe.returncode == 1:

@@ -7,7 +7,7 @@ import pytest
 from coordinator_core.workday_start import local_ahead as mod
 from coordinator_core.workday_start.local_ahead import local_ahead
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BRANCH = "work/test/2026-10-15"
 

@@ -473,6 +473,20 @@ def memo_draft_fields(raw: dict) -> tuple[Optional[dict], str]:
     return {"slug": slug, "to": to.strip(), "title": title, "kind": kind}, ""
 
 
+def em_discharge_eligible(raw: dict, extra_gates: tuple = ()) -> bool:
+    """True when an em-discharge entry would close `raw`: an open, undeferred `performer: em` row that
+    is neither a memo-send nor an operator row and carries no uncleared execution gate. Shared by
+    `read_spine` and the refire gate so the two cannot drift."""
+    return (
+        raw.get("performer") == "em"
+        and raw.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
+        and not (raw.get("deferred") is True or bool(raw.get("deferred_until")))
+        and not _is_memo_send_row(raw)
+        and not _is_operator_row(raw)
+        and not _has_uncleared_execution_gate(raw, extra_gates)
+    )
+
+
 def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
     """True if `raw`'s row-level ``external_gate`` (plus any ``extra_gates``
     resolved onto this row from plan frontmatter — see
@@ -1261,14 +1275,7 @@ def read_spine(
                 memo_slug = slug
                 memo_delivered = memo_receipt_exists(_repo_root_of(plan_path), slug)
         em_discharged = None
-        if (
-            raw.get("performer") == "em"
-            and disposition not in NON_DISPATCHABLE_DISPOSITIONS
-            and deferred is not True
-            and not _is_memo_send_row(raw)
-            and not _is_operator_row(raw)
-            and not _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))
-        ):
+        if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
             if discharges is None:
                 from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 

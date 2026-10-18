@@ -5,11 +5,16 @@ from __future__ import annotations
 import os
 import subprocess
 
+import pytest
+
 from coordinator_core.ops.verify_coverage import gitignored_dirs, walk_markdown
+from coordinator_core.win_portability import no_console_creationflags
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_ignored_directory_is_skipped_and_tracked_one_is_walked(tmp_path):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     (tmp_path / ".gitignore").write_text("data-hold/\n", encoding="utf-8")
     for d in ("data-hold/deep", "docs"):
         (tmp_path / d).mkdir(parents=True)

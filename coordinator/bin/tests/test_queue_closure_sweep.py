@@ -24,11 +24,7 @@ from queue_closure import (  # noqa: E402
 )
 import pytest
 
-pytestmark = [pytest.mark.spawns_process]
-
-import pytest
-
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def write_entry(root, queue, name, **fields):
@@ -342,7 +338,7 @@ def test_fixes_row_in_final_trailer_block_claims_the_row(tmp_path):
     sha = _commit(root, "fix a\n\nbody\n\nFixes-Row: 2026-01-01-a\nSession-Id: x")
     e = _sweep_entries(root)[path]
     assert e.klass == COMMIT_CLAIMED
-    assert sha in e.to_dict()["claimed_by"]
+    assert sha in e.to_dict()["claimed_by"]  # dr084: reads sweep output key, not frontmatter
 
 
 def test_fixes_row_outside_the_final_trailer_block_claims_nothing(tmp_path):

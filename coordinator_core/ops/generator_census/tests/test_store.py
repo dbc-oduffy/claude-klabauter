@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import threading
@@ -135,8 +136,10 @@ def test_load_budget_6000_entries(tmp_path):
     entries = {f"{i:040x}": (_decls(str(i)) if i % 2 else None) for i in range(6000)}
     store.save(tmp_path, HEADER, entries)
     assert len(store.load(tmp_path, HEADER)) == 6000
+    gc.collect()
+    threads = sorted(t.name for t in threading.enumerate())
     figure = in_process_time_ms(lambda: store.load(tmp_path, HEADER))
-    assert figure["process_time_ms"] <= 20, figure
+    assert figure["process_time_ms"] <= 20, (figure, threads)
 
 
 def test_file_is_plain_json(tmp_path):

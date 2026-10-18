@@ -6,6 +6,8 @@ from coordinator_core.ops.ceremony.commit_gates import (
     split_process_paths,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 MIXED = ["src/app.py", "state/handoffs/x.md"]
 
 

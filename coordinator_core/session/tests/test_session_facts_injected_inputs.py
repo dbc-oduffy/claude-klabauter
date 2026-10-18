@@ -15,7 +15,7 @@ from coordinator_core.session import session_facts
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete.session_history import read_session_history
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "11111111-2222-3333-4444-555555555555"
 PEER = "99999999-8888-7777-6666-555555555555"

@@ -14,7 +14,7 @@ from coordinator_core.git.lfs_attributes import (
 LFS = "*.bin filter=lfs diff=lfs merge=lfs -text\n"
 
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(root, *args):

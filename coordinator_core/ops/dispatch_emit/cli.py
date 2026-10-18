@@ -1973,6 +1973,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 is_queue_route=False,
             )
         if split_research:
+            for emitted in result["parts"]:
+                print(
+                    f"emit-dispatch-workflow: part {emitted.get('part') or emitted.get('pipeline')}: "
+                    f"{emitted.get('path')}",
+                    file=sys.stderr,
+                )
             print(
                 f"emit-dispatch-workflow: the emit was split into {len(result['parts'])} parts; "
                 "fire them in order, each after the previous run has landed, "

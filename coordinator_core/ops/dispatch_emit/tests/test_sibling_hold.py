@@ -101,6 +101,7 @@ def _declare(root, base_sha, writes, *, base_field=True):
     _write(root, f"state/warp/{RUN}/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": writes}]}))
 
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _spawns = (pytest.mark.spawns_process, pytest.mark.cadence)
 
 

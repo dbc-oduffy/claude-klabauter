@@ -18,10 +18,13 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.hooks import context_pressure_precompact as cpp  # noqa: E402
 from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 SESSION = "test-session-precompact-wf"
@@ -188,7 +191,7 @@ def test_build_git_section_outside_repo(tmp_path):
 
 
 def _git(repo, *args):
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _session_repo(tmp_path, sid, *, notes=None, turns=0):

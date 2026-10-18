@@ -15,7 +15,7 @@ from coordinator_core.ops.ceremony import close_review as cr
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN = "run-1"
 DID = "dlv-chain-1"

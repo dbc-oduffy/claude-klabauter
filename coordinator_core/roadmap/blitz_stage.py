@@ -9,7 +9,7 @@ process, and freeze the gate report plan-blitz consumes.
 Reuses, never re-implements: ``coordinator-doc-new``'s ``_scaffold_roadmap_baton``
 (loaded in process), ``ops.mint_deliverable_id.mint``, ``roadmap.graph.topo_number``
 and ``roadmap.number_stubs`` edge parsing, ``roadmap.audit.run_audit``, and
-the ``roadmap.plan_gate`` op handler.
+nothing else.
 
 Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
   - ``clusters.md``: one ``## <id> — <title>`` section per cluster; a section's
@@ -20,11 +20,11 @@ Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
       (an id with no letter refuses), and any derived prefix already staged by another roadmap refuses.
   - ``reconciliation.md``: the KEEP verdict table; absent -> every cluster is KEEP.
 
-Gate report contract: the BARE ``roadmap.plan_gate`` result for the roadmap, serialized by
-``ops.roadmap_plan_gate.bare_text`` (byte-identical to ``coordinator-invoke --bare
-roadmap.plan_gate '{"roadmap_id": ...}'``), frozen at
-``state/plan-blitz/<roadmap_id>/wave-1.gate-report.json``. ``waves`` are plan_gate's own: lists of
-baton ids, numbered from 0.
+Gate report contract: ``gate_v2.compute_gate_report`` is frozen to
+``state/plan-blitz/<roadmap_id>/wave-1.gate-report.json`` (``frozen-now``). A report already there
+is returned (``already-frozen``) and wins; a failed audit defers it (``deferred-audit-failed``) and
+an untracked staged stub defers it (``deferred-untracked``); ``waves`` is [] when deferred. A
+``GateReadRefused`` raises ``BlitzStageRefused`` with the gate's own text.
 
 Fold rule (roadmap-planning Step 2.1.6, sized by ``sizing_assemble.TSHIRT_WEIGHT``): see
 ``FOLD_RULE``.
@@ -35,9 +35,7 @@ the sizings home (``estimate.tshirt`` and ``route`` from ``sizing_assemble.route
 stub's ``sizing_object:``. 
 
 Negative-spec:
-  - Commits only the paths it wrote (stubs, then the gate report), via commit_v2. plan_gate
-    withholds an untracked baton, so with ``commit=False`` the report is deferred
-    (``gate_report_path: null``) until the stubs are tracked.
+  - Commits only the paths it wrote (stubs), via commit_v2.
   - Does NOT invent a size or split a stub: a cluster with no ``**loe:**`` refuses the whole call,
     naming every such cluster; XL/XXL are flagged.
   - Does NOT rewrite a frozen gate report or a staged stub.
@@ -497,7 +495,8 @@ def _freeze_gate_report(
     unfoldable_small: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """The report is write-once (0444), so a failed audit defers it: freezing over stubs the
-    audit could not find would pin a report no rerun can correct."""
+    audit could not find would pin a report no rerun can correct. A ``GateReadRefused`` from
+    ``compute_gate_report`` surfaces as ``BlitzStageRefused`` with the gate's own text."""
     rel = Path(record_homes.record_path("", "plan-blitz", f"{roadmap_id}/{GATE_REPORT_NAME}")).as_posix()
     target = repo_root / rel
     if target.is_file():
@@ -508,9 +507,12 @@ def _freeze_gate_report(
         }
     if not audit_passed:
         return {"gate_report_path": None, "gate_report_state": "deferred-audit-failed"}
-    from coordinator_core.ops.roadmap_plan_gate import _handler as plan_gate_op, bare_text
+    from coordinator_core.roadmap import gate_v2
 
-    report = plan_gate_op({"roadmap_id": roadmap_id}, repo_root=repo_root)
+    try:
+        report = gate_v2.compute_gate_report(repo_root, roadmap_id=roadmap_id)
+    except gate_v2.GateReadRefused as exc:
+        raise BlitzStageRefused(str(exc)) from exc
     if unfoldable_small:
         report["unfoldable_small"] = sorted(unfoldable_small)
     staged = set(stub_paths)
@@ -522,12 +524,24 @@ def _freeze_gate_report(
             "untracked_stubs": untracked,
         }
     target.parent.mkdir(parents=True, exist_ok=True)
-    create_exclusive(target, bare_text(report))
+    create_exclusive(target, json.dumps(report, indent=2, default=str) + "\n")
     os.chmod(target, 0o444)
     return {"gate_report_path": rel, "gate_report_state": "frozen-now", "_report": report}
 
 
-_WAVE_BATON_KEYS = ("id", "path", "title", "sized", "planPath", "executionOpen", "tshirt", "route", "sizingObject")
+def _wave_baton_row(row: Dict[str, Any], baton_id: str) -> Dict[str, Any]:
+    """One wave entry from a report row (requirement-9 nested fields)."""
+    plan = row.get("plan") or {}
+    gate = row.get("execution_gate") or {}
+    return {
+        "id": baton_id,
+        "path": row.get("path"),
+        "title": row.get("title"),
+        "sized": row.get("sized"),
+        "planPath": plan.get("path"),
+        "executionOpen": gate.get("open"),
+        "sizingObjects": row.get("sizing_objects"),
+    }
 
 
 def _waves_of(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -537,10 +551,7 @@ def _waves_of(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return []
     rows = {b.get("id"): b for b in report.get("batons") or []}
     return [
-        {
-            "index": i,
-            "batons": [{k: rows.get(bid, {}).get(k) for k in _WAVE_BATON_KEYS} | {"id": bid} for bid in wave],
-        }
+        {"index": i, "batons": [_wave_baton_row(rows.get(bid, {}), bid) for bid in wave]}
         for i, wave in enumerate(report.get("waves") or [])
     ]
 

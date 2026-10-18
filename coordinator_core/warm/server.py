@@ -752,7 +752,7 @@ def _run_joining_handler(coro):
 
 
 #: A task running longer than this leaves every thread's stack in its worker's
-#: stderr log (`faulthandler.dump_traceback_later`, which works on every OS).
+#: stderr log (`_arm_stall_dump`, a GIL-holding timer thread; works on every OS).
 #: Well under `_POOL_RESULT_DEADLINE_SECS` so a hung op is on disk before the
 #: caller's -32004 is minted.
 STALL_DUMP_SECS = 10.0
@@ -820,18 +820,44 @@ def _pool_dispatch_worker(
     claim = _claim_path(claim_dir, dispatch_key)
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
-    armed = False
-    if _WORKER_STDERR_FILE is not None and stall_secs > 0:
-        try:
-            faulthandler.dump_traceback_later(stall_secs, repeat=False, file=_WORKER_STDERR_FILE)
-            armed = True
-        except Exception:  # noqa: BLE001 -- diagnostics never stop an op
-            pass
+    disarm = _arm_stall_dump(stall_secs)
     try:
         return _pool_dispatch_worker_body(msg, caller)
     finally:
-        if armed:
-            faulthandler.cancel_dump_traceback_later()
+        disarm()
+
+
+def _arm_stall_dump(stall_secs: float) -> Callable[[], None]:
+    """Dump every thread's stack to the worker stderr log once `stall_secs`
+    pass; the returned callable disarms it. Never raises.
+
+    A Python timer thread calls `faulthandler.dump_traceback`, which holds the
+    GIL. `faulthandler.dump_traceback_later` walks the op thread's live frames
+    from a C thread without the GIL and access-violates (0xC0000005) when the
+    op frees a frame-stack chunk mid-walk.
+
+    Trap: the timer needs the GIL to fire, so an op wedged inside a C call that
+    never releases it gets no dump; that case surfaces only as the caller's
+    -32004.
+    """
+    stderr = _WORKER_STDERR_FILE
+    if stderr is None or stall_secs <= 0:
+        return lambda: None
+    done = threading.Event()
+
+    def _watch() -> None:
+        if done.wait(stall_secs):
+            return
+        try:
+            faulthandler.dump_traceback(file=stderr, all_threads=True)
+        except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+            pass
+
+    try:
+        threading.Thread(target=_watch, name="stall-dump", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        return lambda: None
+    return done.set
 
 
 def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> dict:

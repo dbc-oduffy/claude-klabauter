@@ -1,4 +1,4 @@
-"""Parity of claude-klabauter's design-registry reader with DoE's reference reader on DoE's shared fixtures.
+"""Parity of the engine's design-registry reader with DoE's reference reader on DoE's shared fixtures.
 
 Source: coordinator-content-repo at 5eba5f50de, `coordinator/tests/fixtures/design-registry/{registry.yaml,malformed.yaml}`
 (byte copies in fixtures/design_registry/) and `coordinator/hooks/scripts/_design_registry_gate.py`.

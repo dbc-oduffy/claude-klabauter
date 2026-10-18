@@ -10,6 +10,9 @@ import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _STALE_REASON = "resume staged no dispatchable rows"
 _LANDED_PREFIX = "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows)"
@@ -30,7 +33,9 @@ def _lines(script: str) -> list[str]:
 def _drive(script: str, gate: dict, manifest: dict) -> dict:
     body = "\n".join(ln.replace("  else if (", "  if (", 1) for ln in _lines(script))
     program = _HARNESS % (json.dumps(gate), json.dumps(manifest), body)
-    out = subprocess.run(["node", "-e", program], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        ["node", "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout
     return json.loads(out)
 
 

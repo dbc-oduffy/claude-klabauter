@@ -17,7 +17,7 @@ _PACKAGE = pathlib.Path(driver.__file__).resolve().parent
 
 # Measured at implementation: git spawns from dispatch.emit and terminal_commit (the fixture's
 # Phase-1 stubs spawn nothing). A change means a spawn joined the chain's hot path.
-_EXPECTED_POPEN = 5
+_EXPECTED_POPEN = 3
 
 
 def _run_chain(chain, monkeypatch):

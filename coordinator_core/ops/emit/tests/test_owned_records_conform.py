@@ -1,4 +1,4 @@
-"""Oracle: every claude-klabauter-owned handoff, plan and cross-repo memo passes the emit filter and the pin.
+"""Oracle: every engine-owned handoff, plan and cross-repo memo passes the emit filter and the pin.
 
 Reads the live repo tree on purpose, as a regression guard: a hand-written record that lacks a
 Cockpit-required field turns this red and the failure message is the worklist. Read-only.

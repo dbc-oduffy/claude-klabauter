@@ -136,6 +136,17 @@ def test_a_stalled_worker_leaves_its_stacks_and_the_diagnosis_names_them(rig, mo
     monkeypatch.setattr(server, "_pool_dispatch_worker", _worker_with_blocking_body)
     monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.3)
 
+    # Spawn and import the worker before the 1.0s result deadline starts, so the
+    # claim is taken inside it and the reply is "running", not a withdrawn queue.
+    warm = pool.inner.submit(
+        _worker_with_probe_body, _msg(tmp_path, "warm", claim=str(tmp_path / "none")), None
+    )
+    assert warm.result(timeout=_WAIT) == {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {"claim_present": False},
+    }
+
     key = _admit()
     out = ctx._pool_dispatch(_msg(tmp_path, "stalled"), dispatch_key=key)
 
@@ -189,3 +200,52 @@ def test_an_unsafe_key_gets_no_reconcile_command():
     assert "reconcile_command" not in out["error"]["data"]
     safe = server._with_reconcile_route({"error": {"data": {}}}, "123-456")
     assert "123-456" in safe["error"]["data"]["reconcile_command"]
+
+
+def _recurse(depth):
+    return 0 if depth == 0 else 1 + _recurse(depth - 1)
+
+
+def test_stall_dump_is_a_gil_holding_timer_and_survives_a_frame_churning_op(tmp_path, monkeypatch):
+    import faulthandler
+
+    log = (tmp_path / "w.log").open("w")
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", log)
+
+    def _no_c_watchdog(*a, **k):
+        raise AssertionError("the C watchdog walks live frames without the GIL")
+
+    monkeypatch.setattr(faulthandler, "dump_traceback_later", _no_c_watchdog)
+
+    disarm = server._arm_stall_dump(0.2)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        _recurse(150)
+    disarm()
+    log.flush()
+
+    text = (tmp_path / "w.log").read_text()
+    assert "_recurse" in text or "test_stall_dump" in text
+    log.close()
+
+
+def test_a_disarmed_stall_dump_writes_nothing(tmp_path, monkeypatch):
+    log = (tmp_path / "w.log").open("w")
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", log)
+
+    server._arm_stall_dump(0.2)()
+    time.sleep(0.5)
+    log.flush()
+
+    assert (tmp_path / "w.log").read_text() == ""
+    log.close()
+
+
+def test_stall_dump_without_a_log_or_with_zero_secs_is_a_noop(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", None)
+    server._arm_stall_dump(0.2)()
+    log = (tmp_path / "w.log").open("w")
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", log)
+    server._arm_stall_dump(0)()
+    assert not [t for t in threading.enumerate() if t.name == "stall-dump"]
+    log.close()

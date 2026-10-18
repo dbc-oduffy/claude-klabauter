@@ -275,6 +275,8 @@ def test_pid_present_self_exits_0(real_core):
     assert _cli.main(["pid-present", str(os.getpid())]) == 0
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_pid_present_reaped_child_exits_1(real_core):
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait()
@@ -311,6 +313,8 @@ def test_pid_present_does_not_shell_out(real_core, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource module is POSIX-only")
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_pid_present_process_time_under_500ms():
     import resource
 

@@ -7,9 +7,12 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 import coordinator_core.sizing_assemble as sa
 from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 from coordinator_core.hooks import watchdog_undischarged_next_move as watchdog
+from coordinator_core.win_portability import no_console_creationflags
 
 _SID = "11111111-2222-3333-4444-555555555555"
 _REL = "state/sizings/2026-10-12-x.yaml"
@@ -17,7 +20,7 @@ _REL = "state/sizings/2026-10-12-x.yaml"
 
 @pytest.fixture()
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / _REL).write_text("schema: sizing-object\n", encoding="utf-8")
     monkeypatch.setattr(watchdog, "open_sizing_routed", lambda *a, **k: None)

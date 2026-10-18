@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _CLI = _BIN_DIR / "baseline-export.py"
 

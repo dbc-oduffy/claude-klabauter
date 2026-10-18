@@ -11,7 +11,7 @@ from coordinator_core.git.main_commit_policy import REMEDY
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SID = "11111111-2222-4333-8444-555555555555"
 

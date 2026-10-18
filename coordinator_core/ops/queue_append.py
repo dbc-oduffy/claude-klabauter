@@ -287,12 +287,20 @@ def _verify_override_session_ownership(override: str) -> None:
 
 
 def _is_swept_tmp_root(path: str) -> bool:
+    # "/tmp" only off Windows: realpath("/tmp") there anchors to the current drive root.
+    candidates = [tempfile.gettempdir(), tempfile.tempdir]
+    candidates += [os.environ.get(n) for n in ("TMPDIR", "TEMP", "TMP")]
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        candidates.append(os.path.join(local_app, "Temp"))
+    if os.name != "nt":
+        candidates.append("/tmp")
     try:
         real = os.path.realpath(path)
-        tmp = os.path.realpath(tempfile.gettempdir())
+        roots = {os.path.realpath(c) for c in candidates if c}
     except OSError:
         return False
-    under_tmp = real == tmp or real.startswith(tmp + os.sep)
+    under_tmp = any(real == tmp or real.startswith(tmp + os.sep) for tmp in roots)
     return under_tmp and not os.path.isdir(path)
 
 

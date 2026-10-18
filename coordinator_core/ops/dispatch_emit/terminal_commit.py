@@ -166,6 +166,11 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     plan_trailer_deliverable_ids,
     valid_deliverable_id,
 )
+from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+    CHECKPOINT_PLAN_LINE,
+    CHECKPOINT_SUBJECT,
+    is_stamp_commit,
+)
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 
@@ -1006,9 +1011,6 @@ def _predecessor_rows(worktree_root: Path, plan_path: Optional[str], resume: obj
     return {halt_sha: by_plan} if by_plan else {}
 
 
-_CHECKPOINT_SUBJECT = re.compile(r"^checkpoint\(wave [^)]*\): \d+ rows? — (?P<ids>.+)$")
-_CHECKPOINT_PLAN_LINE = re.compile(r"^Checkpoint-Plan: (?P<v>\S.*?)\s*$", re.M)
-
 
 def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list) -> dict:
     """Chunk id -> sha of the run's own ``checkpoint(wave N)`` commit that landed its writes.
@@ -1034,8 +1036,11 @@ def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: O
         if meta is None:
             break
         message = meta.get("message") or ""
-        subject = _CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
-        plan = _CHECKPOINT_PLAN_LINE.search(message)
+        if is_stamp_commit(message) and meta.get("parents"):
+            sha = meta["parents"][0]
+            continue
+        subject = CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
+        plan = CHECKPOINT_PLAN_LINE.search(message)
         if not subject or not meta.get("parents") or (plan_path and (not plan or plan.group("v") != plan_path)):
             break
         named = {i.strip() for i in subject.group("ids").split(",") if i.strip()}
@@ -3325,6 +3330,23 @@ def _close_block(ctx: dict, reply: dict) -> dict:
     return block
 
 
+def _release_siblings_at_landing(close_ctx: Optional[dict], sha: str) -> None:
+    """Mark the run landed in its sibling-status file the moment the product commit lands.
+
+    Runs before every post-commit leg so a worker death after the commit cannot strand the run's
+    ``after`` siblings; ``_close_block``'s later call rewrites landed as landed. Only when the close
+    applies (the predicate ``_close_block`` uses). A failure here never fails the landed commit.
+    """
+    if not close_ctx or not close_ctx.get("applies"):
+        return
+    from coordinator_core.ops.dispatch_emit.run_close import sibling_release
+
+    try:
+        sibling_release(Path(close_ctx["root"]), close_ctx.get("sibling_run_id") or close_ctx["run_id"], sha)
+    except Exception:  # noqa: BLE001 -- _close_block repeats the release; the commit stands
+        pass
+
+
 @register_op("dispatch.terminal_commit")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
@@ -4707,6 +4729,7 @@ def _terminal_commit_inner(
         )
     if reply.get("committed") and reply.get("sha"):
         token_state["landed"] = True
+        _release_siblings_at_landing(close_ctx, str(reply["sha"]))
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []

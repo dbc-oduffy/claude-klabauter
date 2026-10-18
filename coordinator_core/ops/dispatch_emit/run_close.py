@@ -480,6 +480,7 @@ def sibling_release(
     status is never rewritten as halted: that call returns ``None`` and writes nothing.
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import sibling_hold
     from coordinator_core.session import claimed_write
     from coordinator_core.warp_fire import fire_command
 
@@ -520,6 +521,9 @@ def sibling_release(
     for run in parent.runs:
         data = _read_json(base / contract.status_rel(run.run_id))
         status = data.get("status") if data else None
+        if status == contract.STATUS_RUNNING and run.run_id != run_id:
+            if sibling_hold.reconcile_running(base, run.run_id):
+                status = contract.STATUS_LANDED
         statuses[run.run_id] = status if status in contract.RUN_STATUSES else run.status
         if status == contract.STATUS_HALTED and (
             data.get(ROWS_COMMITTED_KEY) is True or data.get(contract.CLOSED_BY_KEY)

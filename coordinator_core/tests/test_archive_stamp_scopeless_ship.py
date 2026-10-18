@@ -78,6 +78,8 @@ def test_cascade_ship_passes_held_sha_as_fallback(monkeypatch, tmp_path):
     assert seen["kind"] == "scope-derived" and seen["fallback_sha"] == "abcdef1234"
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_ship_handoff_without_sha_uses_deliverable_id_commit(monkeypatch, tmp_path):
     import subprocess
 

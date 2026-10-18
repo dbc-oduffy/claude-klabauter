@@ -121,6 +121,7 @@ def gate(
     writes: Sequence[str] = (),
     baton: Optional[str] = None,
     mint_design_rows: bool = False,
+    landed_sink: Optional[list] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
@@ -128,6 +129,7 @@ def gate(
     no baton, so it refuses one. A non-halted verdict carries the design-registry brief for the
     sizing's scope; a malformed registry with a non-empty scope halts `registry-unparseable`.
     `mint_design_rows` (a run-bound call) also appends one design row per hit to the register.
+    `landed_sink`, when given, receives the row resume's `ResumePlan.landed_open`.
     """
     from coordinator_core import design_registry as dr
     from coordinator_core.ops.dispatch_emit import design_conformance as dc
@@ -148,7 +150,7 @@ def gate(
         shown = None
     if error:
         return replace(_halt(HALT_REFUSAL, f"{error}: repair {shown or registry}"), design_route=route_payload)
-    verdict = _arm_verdict(root, sizing_rel, writes=writes, baton=baton)
+    verdict = _arm_verdict(root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink)
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
     if verdict.halt is not None or not scope:
@@ -161,7 +163,8 @@ def gate(
 
 
 def _arm_verdict(
-    repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None
+    repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
+    landed_sink: Optional[list] = None,
 ) -> GateVerdict:
     """The arm-or-halt verdict, before the design-registry leg."""
     from coordinator_core import sizing_assemble as sa
@@ -274,6 +277,8 @@ def _arm_verdict(
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
+    if landed_sink is not None and resume_rows:
+        landed_sink.extend(resume.landed_open)
 
     if arm != ARM_M_PLUS:
         # roadmap mints no baton: roadmap-blitz stubs are the batons
@@ -482,10 +487,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if refused is not None:
             return _halt(HALT_REFUSAL, refused).to_json()
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
+    landed: list = []
     verdict = gate(
         root, sizing_rel, writes=writes, baton=params.get("baton"),
-        mint_design_rows=bool(params.get("run_id")),
+        mint_design_rows=bool(params.get("run_id")), landed_sink=landed,
     )
+    if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
+        _stamp_landed_rows(root, verdict.resume_plan, landed)
     if params.get("run_id"):
         _record_resume_snapshot(root, params["run_id"], verdict)
     out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
@@ -504,6 +512,30 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         except (AskStageError, SizingFireRefused) as exc:
             out["manifest"] = {"error": str(exc)}
     return out
+
+
+def _stamp_landed_rows(root: Path, plan_rel: str, landed: Sequence) -> None:
+    """Stamp each `(row id, landing sha)` row `coded` with that sha in the plan, so the premise
+    check plan-blitz runs over the resumed plan does not re-verify rows a commit already landed.
+    A stamp that would break the spine's source check, or an unreadable plan, is not written. No
+    git spawn."""
+    from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+    from coordinator_core.session.claimed_write import replace_text
+
+    plan = root / plan_rel
+    try:
+        text = plan.read_text(encoding="utf-8")
+    except OSError:
+        return
+    updated = text
+    for sha in dict.fromkeys(s for _, s in landed):
+        updated, _ = _flip_rows_coded(updated, {i for i, s in landed if s == sha}, sha)
+    if updated == text:
+        return
+    if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:
+        return
+    replace_text(plan, updated)
 
 
 def _record_resume_snapshot(root: Path, run_id: str, verdict: GateVerdict) -> None:

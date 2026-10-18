@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_children as handoff_children_mod
 
@@ -45,6 +47,8 @@ def test_no_caller_session_keeps_refusing_live_claimant(tmp_path, monkeypatch):
     assert reason is not None and "claimed by live session" in reason
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_plan_cascade_entry_passes_attributable_session_as_caller(tmp_path, monkeypatch):
     """`plan_status_transition._run_cascade` -> the real handler threads the invoking session."""
     import subprocess

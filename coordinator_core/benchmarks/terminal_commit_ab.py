@@ -51,6 +51,7 @@ from coordinator_core.benchmarks.tests.test_terminal_commit_process_budget impor
     K_INVOCATIONS,
     SAMPLES,
 )
+from coordinator_core.git.run import run_git
 from coordinator_core.win_portability import no_console_creationflags
 
 DRIVER = "coordinator_core.benchmarks.terminal_commit_full_path"
@@ -254,10 +255,7 @@ def resolve_sha(repo: Path, ref: str) -> str:
     measured window)."""
     if _FULL_SHA.match(ref):
         return ref
-    done = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
-        cwd=str(repo), capture_output=True, text=True, check=False, **no_console_creationflags(),
-    )
+    done = run_git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=str(repo))
     sha = done.stdout.strip()
     if done.returncode != 0 or not _FULL_SHA.match(sha):
         raise ValueError(f"cannot resolve baseline {ref!r} to a commit: {done.stderr.strip()[:200]}")
@@ -305,11 +303,10 @@ def _extract_via_git_archive(repo: Path, sha: str, dest: Path) -> None:
     """Fallback when the object readers cannot walk the tree (e.g. a pack form they do not read).
     One `git archive` spawn (DR-344 per-use: no in-process equivalent exists for this case),
     outside the measured window; extracted with `tarfile`."""
-    done = subprocess.run(
-        ["git", "archive", "--format=tar", sha, TREE_ROOT],
-        cwd=str(repo), capture_output=True, check=True, **no_console_creationflags(),
-    )
-    with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
+    done = run_git(["archive", "--format=tar", sha, TREE_ROOT], cwd=str(repo), binary=True)
+    if not done.ok:
+        raise RuntimeError(f"git archive {sha} failed ({done.returncode}): {done.stderr.strip()[:200]}")
+    with tarfile.open(fileobj=io.BytesIO(done.stdout_bytes)) as tar:
         tar.extractall(dest, filter="data") if sys.version_info >= (3, 12) else tar.extractall(dest)
 
 

@@ -18,7 +18,7 @@ import pytest
 # C6's own tests git-init a scratch `tmp_path` project (`_git_init`) to give
 # the pre/post-spawn git snapshot something real to diff -- the module under
 # test's own `_git_snapshot` shells out to `git`, so this whole file spawns.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "coordinator-subsession.py"
 

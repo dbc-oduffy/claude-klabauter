@@ -479,13 +479,13 @@ def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra
     return payload
 
 
-def test_sizing_scout_is_denied_with_no_live_run_naming_the_ask_submission(tmp_path):
+def test_sizing_scout_is_denied_with_no_live_run_rerouting_to_the_sizing_skill_not_workflow(tmp_path):
     root = _repo(tmp_path)
     out = mod.sizing_scout_deny(_scout_payload(root))
     assert _hso(out)["permissionDecision"] == "deny"
     reason = _hso(out)["permissionDecisionReason"]
-    assert warp_fire.SUBMIT_WORKFLOW_NAME in reason
-    assert "ask:" in reason
+    assert "Skill(coordinator:sizing)" in reason
+    assert "Workflow(" not in reason
     bare = _scout_payload(root)
     del bare["session_id"]
     assert _hso(mod.sizing_scout_deny(bare))["permissionDecision"] == "deny"

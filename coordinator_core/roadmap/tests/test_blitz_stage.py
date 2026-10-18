@@ -57,6 +57,27 @@ def commit_calls(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def gate_calls(monkeypatch):
+    from coordinator_core.roadmap import gate_v2
+
+    calls = []
+
+    def fake(root, **kwargs):
+        calls.append({"root": root, **kwargs})
+        return {
+            "batons": [{
+                "id": "b1", "path": "state/handoffs/b1.md", "title": "t", "sized": True,
+                "plan": {"path": "docs/plans/p.md"}, "execution_gate": {"open": True, "blocking": []},
+                "sizing_objects": [],
+            }],
+            "waves": [["b1"]],
+        }
+
+    monkeypatch.setattr(gate_v2, "compute_gate_report", fake)
+    return calls
+
+
 def _make_roadmap(tmp_path: Path, roadmap_id: str, clusters: str) -> Path:
     (tmp_path / ".git").mkdir(exist_ok=True)
     run = tmp_path / "state" / "roadmap" / roadmap_id
@@ -348,9 +369,6 @@ def test_edge_free_stubs_share_a_wave_and_the_dependent_is_later(tmp_path, roadm
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     wave = {s["cluster"]: s["wave"] for s in reply["stubs"]}
     assert wave["C1"] == wave["C2"] == 1 and wave["C3"] == 2
-    report = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
-    assert all(isinstance(w, list) and all(isinstance(i, str) for i in w) for w in report["waves"])
-    assert sum(len(w) for w in report["waves"]) == 3
     assert len(reply["stubs"]) == 3
 
 
@@ -376,9 +394,6 @@ def test_unfoldable_small_stub_is_exempt_from_audit7_and_named(tmp_path, roadmap
     c4 = {s["cluster"]: s["stub_id"] for s in reply["stubs"]}["C4"]
     assert reply["unfoldable_small"] == [c4]
     assert any("Audit 7" in line and "unfoldable_small" in line and c4 in line for line in reply["audit"]["stdout"])
-    assert reply["gate_report_state"] == "frozen-now"
-    report = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
-    assert report["unfoldable_small"] == [c4]
     (baton,) = (tmp_path / "state" / "handoffs").glob(f"*roadmap-{c4}.md")
     assert "fold_flag: unfoldable-small" in baton.read_text(encoding="utf-8")
 
@@ -389,50 +404,62 @@ def test_unflagged_small_stub_still_fails_audit7(tmp_path, roadmap):
     victim = next(s for s in reply["stubs"] if s["cluster"] == "C3")
     path = tmp_path / victim["path"]
     path.write_text(path.read_text(encoding="utf-8").replace("loe: M", "loe: S"), encoding="utf-8")
-    (tmp_path / reply["gate_report_path"]).chmod(0o644)
-    (tmp_path / reply["gate_report_path"]).unlink()
     again = bs.stage_roadmap(tmp_path, str(roadmap))
     assert again["audit"]["passed"] is False
     assert any("Audit 7" in line and victim["stub_id"] in line for line in again["audit"]["stderr"])
-    assert again["gate_report_state"] == "deferred-audit-failed"
-    assert again["gate_report_path"] is None
 
 
-def test_gate_report_frozen_in_plan_gate_shape(tmp_path, roadmap):
+def test_staging_freezes_the_computed_gate_report(tmp_path, roadmap, gate_calls):
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    rel = "state/plan-blitz/rm-test/wave-1.gate-report.json"
     assert reply["gate_report_state"] == "frozen-now"
-    path = tmp_path / reply["gate_report_path"]
+    assert reply["gate_report_path"] == rel
+    assert gate_calls == [{"root": tmp_path, "roadmap_id": "rm-test"}]
+    frozen = json.loads((tmp_path / rel).read_text(encoding="utf-8"))
+    assert frozen["waves"] == [["b1"]]
+    (wave,) = reply["waves"]
+    (baton,) = wave["batons"]
+    assert baton["id"] == "b1" and baton["planPath"] == "docs/plans/p.md" and baton["executionOpen"] is True
+    assert len(reply["stubs"]) == 4
+
+
+def test_a_gate_read_refusal_is_the_staging_refusal_with_its_own_text(tmp_path, roadmap, monkeypatch):
+    from coordinator_core.roadmap import gate_v2
+
+    def refuse(*a, **k):
+        raise gate_v2.GateReadRefused("handoff dir unreadable")
+
+    monkeypatch.setattr(gate_v2, "compute_gate_report", refuse)
+    with pytest.raises(bs.BlitzStageRefused, match="handoff dir unreadable"):
+        bs.stage_roadmap(tmp_path, str(roadmap))
+    assert not (tmp_path / "state" / "plan-blitz").exists()
+
+
+def test_an_already_frozen_report_skips_the_compute(tmp_path, roadmap, gate_calls):
+    frozen = tmp_path / "state" / "plan-blitz" / "rm-test" / "wave-1.gate-report.json"
+    frozen.parent.mkdir(parents=True)
+    frozen.write_text(json.dumps({"batons": [], "waves": []}), encoding="utf-8")
+    assert bs.stage_roadmap(tmp_path, str(roadmap))["gate_report_state"] == "already-frozen"
+    assert gate_calls == []
+
+
+def test_an_already_frozen_report_is_still_returned(tmp_path, roadmap):
+    frozen = tmp_path / "state" / "plan-blitz" / "rm-test" / "wave-1.gate-report.json"
+    frozen.parent.mkdir(parents=True)
+    frozen.write_text(json.dumps({"batons": [{"id": "b1", "stub_id": "b1"}], "waves": [["b1"]]}), encoding="utf-8")
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert reply["gate_report_state"] == "already-frozen"
     assert reply["gate_report_path"] == "state/plan-blitz/rm-test/wave-1.gate-report.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    for key in ("batons", "waves", "cycles", "unresolved_blockers", "untracked", "counts"):
-        assert key in payload
-    assert "result" not in payload
-    assert {b["stub_id"] for b in payload["batons"]} >= {s["stub_id"] for s in reply["stubs"]}
-    assert not os.access(path, os.W_OK)
+    assert [[b["id"] for b in w["batons"]] for w in reply["waves"]] == [["b1"]]
 
 
-def test_rerun_duplicates_no_stub_and_keeps_the_frozen_report(tmp_path, roadmap):
+def test_rerun_duplicates_no_stub(tmp_path, roadmap):
     first = bs.stage_roadmap(tmp_path, str(roadmap))
-    report = tmp_path / first["gate_report_path"]
-    before = report.read_bytes()
     files_before = sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir())
     second = bs.stage_roadmap(tmp_path, str(roadmap))
     assert sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir()) == files_before
     assert all(s["created"] is False for s in second["stubs"])
     assert [s["stub_id"] for s in second["stubs"]] == [s["stub_id"] for s in first["stubs"]]
-    assert second["gate_report_state"] == "already-frozen"
-    assert report.read_bytes() == before
-
-
-def test_untracked_stubs_defer_the_gate_report(tmp_path, roadmap, monkeypatch):
-    from coordinator_core.roadmap import plan_gate
-
-    monkeypatch.setattr(plan_gate, "_tracked_paths", lambda root: (frozenset(), None))
-    reply = bs.stage_roadmap(tmp_path, str(roadmap), commit=False)
-    assert reply["gate_report_path"] is None
-    assert reply["gate_report_state"] == "deferred-untracked"
-    assert len(reply["untracked_stubs"]) == len(reply["stubs"])
-    assert not (tmp_path / "state" / "plan-blitz").exists()
 
 
 def test_cycle_is_refused(tmp_path, roadmap):
@@ -452,40 +479,12 @@ def test_op_wraps_the_library(tmp_path, roadmap):
         _handler({}, repo_root=tmp_path / ".git")
 
 
-def test_frozen_report_is_byte_identical_to_the_bare_plan_gate_op(tmp_path, roadmap):
-    from coordinator_core.invoke.__main__ import _dispatch_argv
-
-    reply = bs.stage_roadmap(tmp_path, str(roadmap))
-    frozen = (tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8")
-    out, _, code = _dispatch_argv(
-        ["roadmap.plan_gate", json.dumps({"roadmap_id": "rm-test"}), "--bare", "--repo", str(tmp_path)],
-        str(tmp_path),
-        allow_warm=False,
-    )
-    assert code == 0 and frozen == out
-    waves = json.loads(frozen)["waves"]
-    assert waves and all(isinstance(w, list) and all(isinstance(i, str) for i in w) for w in waves)
-
-
-def test_recycle_check_reads_the_frozen_waves(tmp_path, roadmap):
-    import importlib.util
-
-    reply = bs.stage_roadmap(tmp_path, str(roadmap))
-    spec = importlib.util.spec_from_file_location(
-        "recycle_check_for_blitz_stage", Path(bs.__file__).resolve().parents[2] / "coordinator" / "bin" / "recycle-check.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    ids, _ = mod._wave_ids(tmp_path / reply["gate_report_path"], 0)
-    assert len(ids) == 2
-
-
-def test_stubs_then_report_commit_with_explicit_paths(tmp_path, roadmap, commit_calls):
+def test_stubs_commit_with_explicit_paths_then_the_gate_report_commits_alone(tmp_path, roadmap, commit_calls):
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     assert len(commit_calls) == 2
     stub_and_sizing = [p for s in reply["stubs"] for p in (s["path"], s["sizing_object"]) if p]
     assert commit_calls[0]["paths"] == stub_and_sizing
-    assert commit_calls[1]["paths"] == [reply["gate_report_path"]]
+    assert commit_calls[1]["paths"] == ["state/plan-blitz/rm-test/wave-1.gate-report.json"]
     assert [c["sha"] for c in reply["commits"]] == ["sha1", "sha2"]
     assert reply["commit_error"] is None
 
@@ -503,13 +502,23 @@ def test_rerun_commits_nothing(tmp_path, roadmap, commit_calls):
 
 
 def test_a_failed_commit_is_reported_and_defers_the_report(tmp_path, roadmap, monkeypatch):
-    from coordinator_core.roadmap import plan_gate
+    from coordinator_core.roadmap import gate_v2
 
     monkeypatch.setattr(bs, "_commit_paths", lambda *a: {"committed": False, "error": "peer hold"})
-    monkeypatch.setattr(plan_gate, "_tracked_paths", lambda root: (frozenset(), None))
+    handoffs = tmp_path / "state" / "handoffs"
+    monkeypatch.setattr(
+        gate_v2,
+        "compute_gate_report",
+        lambda root, **k: {
+            "batons": [],
+            "waves": [],
+            "untracked": [{"path": p.relative_to(tmp_path).as_posix()} for p in handoffs.glob("*roadmap-*.md")],
+        },
+    )
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     assert reply["commit_error"] == "peer hold"
     assert reply["gate_report_path"] is None
+    assert reply["gate_report_state"] == "deferred-untracked"
 
 
 def test_each_sized_baton_gets_its_own_linked_sizing_object(tmp_path, roadmap):
@@ -545,12 +554,9 @@ APPROVED = {"verdict": "approved", "approver": "pm", "utterance": "ship it"}
 TRAIL = "scratch/warp/run-1/trail"
 
 
-def test_no_approval_reply_differs_from_today_only_by_waves(tmp_path, roadmap):
+def test_no_approval_reply_carries_no_approval_fields(tmp_path, roadmap):
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     assert not {"approval_record", "overview_stamped", "declined"} & set(reply)
-    assert [w["index"] for w in reply["waves"]] == list(range(len(reply["waves"])))
-    frozen = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
-    assert [[b["id"] for b in w["batons"]] for w in reply["waves"]] == frozen["waves"]
     assert "_report" not in reply
 
 
@@ -565,7 +571,7 @@ def test_approved_records_stamps_and_commits_roadmap_artifacts_with_the_stubs(tm
     assert 'approval_utterance: "ship it"' in fm and "roadmap_id: rm-test" in fm
     rel = roadmap.relative_to(tmp_path).as_posix()
     assert {f"{rel}/OVERVIEW.md", f"{rel}/clusters.md", f"{rel}/reconciliation.md"} <= set(commit_calls[0]["paths"])
-    assert reply["waves"]
+    assert [[b["id"] for b in w["batons"]] for w in reply["waves"]] == [["b1"]]
 
 
 def test_approval_by_ruling_stamps_the_ruling(tmp_path, roadmap):

@@ -54,9 +54,14 @@ from coordinator_core.testing.content_root import resolve_content_root
 
 _CONTENT_ROOT = resolve_content_root() or None
 _CONTENT_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
+# A quarantined HOME (the outer conftest's, inherited by a ratchet child) resolves
+# to a stub content root that carries no hooks/ tree: that is "no sibling", not a red.
+if _CONTENT_HOOKS_DIR is not None and not (_CONTENT_HOOKS_DIR / "_message_envelope.py").is_file():
+    _CONTENT_ROOT = None
 
 _SKIP_REASON = (
-    "opt-in fixture: no coordinator-content-repo sibling checkout resolved by "
+    "opt-in fixture: no coordinator-content-repo sibling checkout (with "
+    "coordinator/hooks/scripts/_message_envelope.py) resolved by "
     "resolve_content_root() -- this file compares the warm resolver's "
     "output against cold's own `_message_envelope.resolve_wiki_citation()`, "
     "which lives only in that sibling repo."

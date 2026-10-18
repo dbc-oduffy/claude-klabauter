@@ -91,6 +91,7 @@ def test_git_head_and_dirty_git_failure(monkeypatch):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_tee_survives_log_write_failure(tmp_path):
     import subprocess
     import sys

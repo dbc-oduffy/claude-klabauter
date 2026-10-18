@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
+from coordinator_core.win_portability import no_console_passthrough_kwargs
+
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_EXPORT_FAILED = 3
@@ -277,7 +279,9 @@ class _Group:
 
     def spawn(self, argv: tuple[str, ...], cwd: Path) -> subprocess.Popen:
         if not _IS_NT:
-            self.proc = subprocess.Popen(list(argv), cwd=cwd, start_new_session=True)
+            self.proc = subprocess.Popen(
+                list(argv), cwd=cwd, start_new_session=True, **no_console_passthrough_kwargs()
+            )
             return self.proc
         from coordinator_core.diagnostics import contained_run as cr
 
@@ -288,7 +292,9 @@ class _Group:
             | cr.CREATE_SUSPENDED
         )
         try:
-            self.proc = subprocess.Popen(list(argv), cwd=cwd, creationflags=flags)
+            passthrough = no_console_passthrough_kwargs()
+            passthrough["creationflags"] = flags
+            self.proc = subprocess.Popen(list(argv), cwd=cwd, **passthrough)
         except OSError:
             self.close_job()
             raise

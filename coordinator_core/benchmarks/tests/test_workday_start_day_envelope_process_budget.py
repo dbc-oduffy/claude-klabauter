@@ -17,7 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.benchmarks.process_time import IS_WINDOWS
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+from coordinator_core.win_portability import no_console_creationflags
 
 SAMPLES = 5
 BUDGET_MS = 500.0
@@ -55,14 +57,13 @@ print(json.dumps({
 
 
 def _sample() -> dict:
-    kwargs = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if IS_WINDOWS else {}
     done = subprocess.run(
         [sys.executable, "-c", _CHILD, str(REPO_ROOT)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=120,
-        **kwargs,
+        **no_console_creationflags(),
     )
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout.strip().splitlines()[-1])

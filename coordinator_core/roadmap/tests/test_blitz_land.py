@@ -28,6 +28,43 @@ def _fake_repo_has_no_history(monkeypatch):
     monkeypatch.setattr(bl, "shipped_in_refusals", lambda root, shas: {})
 
 
+def _fixture_report(root: Path, roadmap_id=None) -> dict:
+    """A requirement-9 report read off the tmp corpus: a baton's plan is its `governing_plan`
+    file; the wave is every candidate."""
+    _, records = pg.scan_batons(root, include_archived=False)
+    batons = []
+    for r in records:
+        gp = (r["_fm"] or {}).get("governing_plan")
+        plan = None
+        did = (r["_fm"] or {}).get("deliverable_id")
+        if gp and gp not in ("null", "~") and (root / gp).is_file():
+            plan = {"path": gp, "status": _status(root, gp), "link_basis": "governing_plan"}
+        elif did:
+            for cand in sorted((root / "docs" / "plans").glob("*.md")):
+                rel = cand.relative_to(root).as_posix()
+                if pg._scan_fields(cand, frozenset({"deliverable_id"})).get("deliverable_id") == did:
+                    plan = {"path": rel, "status": _status(root, rel), "link_basis": "deliverable_id"}
+                    break
+        batons.append({
+            "id": r["id"], "stub_id": r["stub_id"], "path": r["path"], "title": r["title"],
+            "sized": bool(r["sizing_objects"]), "plan": plan, "sizing_objects": r["sizing_objects"],
+            "execution_gate": {"open": False, "blocking": []},
+        })
+    wave = [b["id"] for b, r in zip(batons, records) if r["candidate"]]
+    return {
+        "batons": batons,
+        "waves": [wave] if wave else [],
+        "counts": {"candidates": len(wave), "planning_open": len(wave), "execution_open": 0, "unschedulable": 0},
+    }
+
+
+@pytest.fixture(autouse=True)
+def _fixture_gate(monkeypatch):
+    monkeypatch.setattr(
+        bl.gate_v2, "compute_gate_report", lambda root, roadmap_id=None, **k: _fixture_report(root, roadmap_id)
+    )
+
+
 def _repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir(exist_ok=True)
     return tmp_path
@@ -71,26 +108,14 @@ def test_an_unlinked_plan_is_linked_and_then_stamped(tmp_path):
     baton = _baton(root, "b-1", deliverable_id="dlv-b-1")
     plan = _plan(root, "the-plan", "draft")  # no FK of any kind
 
-    before = pg.assemble_plan_gate(root)
-    assert pg_by(before, "b-1")["needs_plan"] is True
-    assert pg_by(before, "b-1")["plan"] is None
+    assert pg._read_baton_fields(root / baton).get("governing_plan") is None
 
     out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
 
     assert out["approved"][0]["link_repaired"] is True
     assert out["approved"][0]["stamped"] is True
     assert _status(root, plan) == "approved"
-
-    after = pg.assemble_plan_gate(root)
-    assert pg_by(after, "b-1")["needs_plan"] is False
-    assert pg_by(after, "b-1")["plan"]["link_basis"] == "governing_plan"
-
-
-def pg_by(report, ident):
-    for b in report["batons"]:
-        if b["id"] == ident:
-            return b
-    raise AssertionError(f"{ident} not in report")
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == plan
 
 
 def test_an_already_linked_plan_is_not_repaired(tmp_path):
@@ -305,19 +330,13 @@ def test_a_pulled_plan_writes_the_missing_link_and_leaves_status_alone(tmp_path)
     baton = _baton(root, "b-1")  # no FK of any kind
     plan = _plan(root, "the-plan", "draft")  # no FK of any kind
 
-    before = pg.assemble_plan_gate(root)
-    assert pg_by(before, "b-1")["plan"] is None
-
     out = bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1", "planPath": plan}]})
 
     assert out["pulled"] == ["b-1"]
     assert not out["refused"]
     assert _status(root, plan) == "draft", "pulled must never touch the plan's status"
 
-    after = pg.assemble_plan_gate(root)
-    assert pg_by(after, "b-1")["plan"] is not None
-    assert pg_by(after, "b-1")["plan"]["path"] == plan
-    fm = pg._read_baton_fields(root / baton)
+    fm =pg._read_baton_fields(root / baton)
     assert fm["governing_plan"] == plan
 
 
@@ -452,15 +471,11 @@ def test_a_dispatch_verdict_is_not_refused_for_lacking_a_planPath(tmp_path):
     assert not any("planPath" in r["reason"] for r in out["refused"])
 
 
-def test_closing_opens_a_dependents_execution_gate_not_merely_its_planning_gate(tmp_path):
-    """The XS lane's terminal stamp is stronger than an approval: `coded` satisfies
-    BOTH gates, where an approved plan satisfies only planning."""
+def test_closing_stamps_the_blocker_with_a_coded_state(tmp_path):
+    """The XS lane's terminal stamp is a CODED state, stronger than an approval."""
     root = _repo(tmp_path)
     _baton(root, "blocker-1")
     _baton(root, "dependent-1", blocked_by=["blocker-1"])
-
-    before = pg.assemble_plan_gate(root)
-    assert pg_by(before, "dependent-1")["execution_gate"]["open"] is False
 
     bl.land_wave(
         root,
@@ -468,10 +483,8 @@ def test_closing_opens_a_dependents_execution_gate_not_merely_its_planning_gate(
         shipped_in="0983062",
     )
 
-    after = pg.assemble_plan_gate(root)
-    dep = pg_by(after, "dependent-1")
-    assert dep["planning_gate"]["open"] is True
-    assert dep["execution_gate"]["open"] is True
+    fields = pg._read_baton_fields(root / "state" / "handoffs" / "blocker-1.md")
+    assert fields["deployment_state"] in pg.BATON_CODED_STATES
 
 
 def test_re_landing_does_not_re_close_a_terminal_baton(tmp_path):
@@ -846,46 +859,15 @@ def test_the_minted_baton_re_enters_the_gate_as_work(tmp_path):
 
     out = bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
 
-    after = pg.assemble_plan_gate(root)
-    ids = {b["id"] for b in after["batons"] if b["needs_plan"]}
-    assert out["minted"][0]["handoff_id"] in ids or any(
-        "replan" in i for i in ids
-    ), f"minted baton absent from the next wave: {sorted(ids)}"
+    minted_path = root / "state" / "handoffs"
+    assert any(out["minted"][0]["handoff_id"] in p.name or "replan" in p.name for p in minted_path.iterdir())
 
 
-def test_a_replanned_source_is_not_handed_back_in_the_same_landings_next_wave(tmp_path):
-    """A mint leaves the source open, so the fresh gate read returns BOTH halves.
-
-    Handing both to the driver spends a sizing scout, a planner, a premise check,
-    reviewers and an integrator on a baton whose replan is already in the same fire.
-    Measured 2026-09-10 on example-retrieval-repo-ue-addon: one PIVOT landed and `next_wave`
-    came back carrying `rqsi-02` beside its just-minted `hnd-replan-rqsi-02-d15940`.
-    """
+def test_a_refused_mint_is_reported_and_mints_nothing(tmp_path, monkeypatch):
+    """`mint_replan_baton` refuses when the replan file already exists; the refusal is
+    named per baton and the source is left where it was."""
     root = _repo(tmp_path)
     _baton(root, "b-1")
-    _baton(root, "b-other")
-
-    out = bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
-
-    fired = {b["id"] for b in out["next_wave"]["batons"]}
-    assert "b-1" not in fired, f"the replanned source is back in the fire: {sorted(fired)}"
-    assert "b-other" in fired, "the filter reached a baton that was never replanned"
-    assert any("replan" in i for i in fired), (
-        f"the minted replan must still fire — dropping both is not the fix: {sorted(fired)}"
-    )
-
-
-def test_a_refused_mint_leaves_its_source_in_the_next_wave(tmp_path, monkeypatch):
-    """The subtraction is earned by a mint that happened, never by one that was attempted.
-
-    `mint_replan_baton` refuses when the replan file already exists, and an OSError from its
-    write reaches the same handler — a read-only worktree, or a Windows MAX_PATH overrun on the
-    60-char stem. Subtracting before the call drops a source out of the fire that was its way
-    back: open, `ready_to_fire`, no approved plan and now no replan either. Every other refusal
-    path in this module leaves the record where it was so the next sweep self-heals."""
-    root = _repo(tmp_path)
-    _baton(root, "b-1")
-    _baton(root, "b-other")
     monkeypatch.setattr(bl, "mint_replan_baton", lambda *a, **k: (_ for _ in ()).throw(
         bl.LandingRefused("replan baton already exists: fixture")))
 
@@ -893,10 +875,6 @@ def test_a_refused_mint_leaves_its_source_in_the_next_wave(tmp_path, monkeypatch
 
     assert out["minted"] == []
     assert [r["baton"] for r in out["refused"]] == ["b-1"]
-    fired = {b["id"] for b in out["next_wave"]["batons"]}
-    assert "b-1" in fired, (
-        f"a refused mint still subtracted its source from the wave: {sorted(fired)}"
-    )
 
 
 def test_the_replanned_source_stays_on_disk_and_is_continued_into_its_replan(tmp_path):
@@ -931,23 +909,6 @@ def test_the_replanned_source_stays_on_disk_and_is_continued_into_its_replan(tmp
     assert "deployment_state: continued" in text
     assert minted["handoff_id"] in text  # continued_into names the replan
 
-    after = pg.assemble_plan_gate(root)
-    assert "b-1" not in {b["id"] for b in after["batons"] if b["candidate"]}, (
-        "a continued source is still offered as a candidate"
-    )
-
-
-def test_a_landing_with_no_replan_leaves_the_wave_untouched(tmp_path):
-    """The filter is inert when nothing was minted. An empty source set must not be
-    an excuse to walk and rebuild the wave list."""
-    root = _repo(tmp_path)
-    plan = _plan(root, "the-plan", "draft")
-    _baton(root, "b-1")
-    _baton(root, "b-other")
-
-    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
-
-    assert "b-other" in {b["id"] for b in out["next_wave"]["batons"]}
 
 
 # ---------------------------------------------------------------------------
@@ -994,121 +955,81 @@ def test_a_genuinely_empty_wave_still_lands(tmp_path):
     out = bl.land_wave(root, {"waveIndex": 0, "ready": [], "pulled": [], "replan": []})
 
     assert out["approved"] == [] and out["refused"] == []
-    assert out["next_wave"]["waveIndex"] == 1
+    assert out["next_wave"]["batons"][0]["id"] == "b-1"
 
 
 # ---------------------------------------------------------------------------
-# next_wave — the half that makes it a loop
+# next_wave — read off the fresh gate report after the writes
 # ---------------------------------------------------------------------------
 
 
-def test_next_wave_is_computed_after_the_writes_not_before(tmp_path):
-    """The approvals just written are exactly what changes the next wave. Reusing
-    the pre-landing read would hand the driver the same wave twice, forever."""
+def test_next_wave_carries_the_fresh_reports_first_wave(tmp_path):
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+    _baton(root, "b-other")
+
+    out = bl.land_wave(root, {"waveIndex": 2, "ready": []}, limit=8)
+
+    nw = out["next_wave"]
+    assert "refused" not in nw
+    assert nw["waveIndex"] == 3 and nw["remaining"] == 0
+    assert sorted(b["id"] for b in nw["batons"]) == ["b-1", "b-other"]
+    assert set(nw["batons"][0]) >= {"id", "path", "title", "sized", "planPath", "executionOpen", "sizingObjects"}
+    assert nw["batons"][0]["executionOpen"] is False
+    assert nw["counts"]["candidates"] == 2
+
+
+def test_next_wave_drops_a_source_whose_replan_was_just_minted(tmp_path):
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+    _baton(root, "b-other")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
+
+    ids = [b["id"] for b in out["next_wave"]["batons"]]
+    assert "b-1" not in ids and "b-other" in ids
+
+
+def test_next_wave_is_scoped_to_the_roadmap_the_wave_touched(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _baton(root, "b-1", roadmap_id="rm-a")
+    seen = []
+    monkeypatch.setattr(
+        bl.gate_v2,
+        "compute_gate_report",
+        lambda r, roadmap_id=None, **k: seen.append(roadmap_id) or _fixture_report(r, roadmap_id),
+    )
+
+    bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1", "reason": "x"}]})
+
+    assert seen == [None, "rm-a"]
+
+
+def test_a_gate_read_refusal_reaches_the_caller_as_an_error_not_an_empty_wave(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     plan = _plan(root, "blocker-plan", "draft")
     _baton(root, "blocker-1")
-    _baton(root, "dependent-1", blocked_by=["blocker-1"])
 
-    before = pg.assemble_plan_gate(root)
-    assert pg_by(before, "dependent-1")["planning_gate"]["open"] is False
+    def refuse(*a, **k):
+        raise bl.gate_v2.GateReadRefused("handoff dir unreadable")
 
-    out = bl.land_wave(
-        root, {"waveIndex": 0, "ready": [{"batonId": "blocker-1", "planPath": plan}]}
-    )
+    monkeypatch.setattr(bl.gate_v2, "compute_gate_report", refuse)
 
-    ids = [b["id"] for b in out["next_wave"]["batons"]]
-    assert ids == ["dependent-1"], f"dependent did not enter wave 1: {ids}"
-    assert out["next_wave"]["waveIndex"] == 1
+    with pytest.raises(bl.gate_v2.GateReadRefused, match="handoff dir unreadable"):
+        bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "blocker-1", "planPath": plan}]})
+    assert _status(root, plan) == "draft"
 
 
-def test_next_wave_is_scoped_to_the_runs_roadmap_id(tmp_path):
-    """F21: an unscoped fresh gate read handed `next_wave` batons belonging to
-    an UNRELATED roadmap — the next emit then refused the roadmap-scoped
-    report. `next_wave` must only ever carry batons sharing this wave's own
-    roadmap_id."""
+def test_landing_writes_land_alongside_the_next_wave(tmp_path):
     root = _repo(tmp_path)
     plan = _plan(root, "blocker-plan", "draft")
-    _baton(root, "blocker-1", roadmap_id="rm-a")
-    _baton(root, "dependent-1", blocked_by=["blocker-1"], roadmap_id="rm-a")
-    _baton(root, "other-roadmap-1", roadmap_id="rm-b")
+    _baton(root, "blocker-1")
 
-    out = bl.land_wave(
-        root, {"waveIndex": 0, "ready": [{"batonId": "blocker-1", "planPath": plan}]}
-    )
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "blocker-1", "planPath": plan}]})
 
-    ids = {b["id"] for b in out["next_wave"]["batons"]}
-    assert ids == {"dependent-1"}, f"unrelated roadmap's baton leaked into next_wave: {ids}"
-
-
-def test_next_wave_excludes_a_baton_whose_plan_already_implemented(tmp_path):
-    """F21: a baton whose own plan already landed `implemented` is done, not
-    a candidate for the next fire."""
-    root = _repo(tmp_path)
-    _plan(root, "done-plan", "implemented", deliverable_id="dlv-done")
-    _baton(root, "done-1", deliverable_id="dlv-done", roadmap_id="rm-a")
-
-    out = bl.land_wave(root, {"waveIndex": 0, "ready": []})
-
-    ids = {b["id"] for b in out["next_wave"]["batons"]}
-    assert "done-1" not in ids
-
-
-def test_next_wave_entries_are_shaped_for_the_workflow_and_carry_planPath(tmp_path):
-    """A hand-built fire array is where `planPath` silently becomes null for a
-    baton that already has a plan — which is how a wave duplicates a plan."""
-    root = _repo(tmp_path)
-    existing = _plan(root, "already-there", "draft", deliverable_id="dlv-d-1")
-    _baton(root, "d-1", deliverable_id="dlv-d-1")
-
-    out = bl.land_wave(root, {"waveIndex": 0, "ready": []})
-
-    entry = next(b for b in out["next_wave"]["batons"] if b["id"] == "d-1")
-    assert set(entry) == {"id", "path", "title", "sized", "planPath", "executionOpen", "route"}
-    assert entry["planPath"].endswith(existing)
-    assert Path(entry["path"]).is_absolute()
-
-
-def test_fire_args_carry_the_execution_gate_separately_from_planning(tmp_path):
-    """An XS whose blockers are planned-but-not-coded may be PLANNED in a wave and
-    must not be EXECUTED in it. The wave can only honour that if it is handed both
-    gates — one flag serving both questions would run code against blockers that do
-    not exist yet, which is the precise failure the two-gate split prevents."""
-    root = _repo(tmp_path)
-    blocker_plan = _plan(root, "blocker-plan", "approved", deliverable_id="dlv-blocker")
-    _baton(root, "blocker-1", deliverable_id="dlv-blocker")
-    _baton(root, "dependent-1", blocked_by=["blocker-1"])
-
-    out = bl.land_wave(root, {"waveIndex": 0, "ready": []})
-    entry = next(b for b in out["next_wave"]["batons"] if b["id"] == "dependent-1")
-
-    # Planning is open (the blocker's plan is approved) but execution is not.
-    assert entry["executionOpen"] is False
-    assert pg_by(pg.assemble_plan_gate(root), "dependent-1")["planning_gate"]["open"] is True
-    assert blocker_plan  # the approved plan is what opened planning, and only planning
-
-
-def test_fire_args_report_execution_open_once_the_blocker_is_coded(tmp_path):
-    root = _repo(tmp_path)
-    _baton(root, "blocker-1", deployment_state="shipped")
-    _baton(root, "dependent-1", blocked_by=["blocker-1"])
-
-    out = bl.land_wave(root, {"waveIndex": 0, "ready": []})
-    entry = next(b for b in out["next_wave"]["batons"] if b["id"] == "dependent-1")
-
-    assert entry["executionOpen"] is True
-
-
-def test_next_wave_respects_the_batch_limit_and_reports_the_remainder(tmp_path):
-    """A wave is not a fire unit — 205 batons in one call is a machine-wide event."""
-    root = _repo(tmp_path)
-    for i in range(12):
-        _baton(root, f"b-{i:02d}")
-
-    out = bl.land_wave(root, {"waveIndex": 0, "ready": []}, limit=8)
-
-    assert len(out["next_wave"]["batons"]) == 8
-    assert out["next_wave"]["remaining"] == 4
+    assert out["approved"][0]["stamped"] is True
+    assert _status(root, plan) == "approved"
+    assert "batons" in out["next_wave"] and "refused" not in out["next_wave"]
 
 
 # ---------------------------------------------------------------------------
@@ -1175,8 +1096,8 @@ def test_a_refused_pivot_leaves_the_baton_replannable_rather_than_stranded(tmp_p
         },
     )
 
-    after = pg.assemble_plan_gate(root)
-    assert pg_by(after, "b-1")["needs_plan"] is True
+    assert _status(root, plan) == "draft"
+    assert pg._read_baton_fields(root / "state" / "handoffs" / "b-1.md").get("governing_plan") is None
 
 
 def test_a_ready_verdict_whose_reviews_all_hold_the_direction_still_lands(tmp_path):

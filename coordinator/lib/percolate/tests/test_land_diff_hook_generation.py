@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from percolate import diff_commit  # noqa: E402
 from percolate.diff_commit import DestWrite, land_diff  # noqa: E402
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 _STAMP = "coordinator_core/_engine_stamp"

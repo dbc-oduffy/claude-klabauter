@@ -349,8 +349,7 @@ def resolve_row(
     as a set/dict lookup (no per-row spawn, no per-row parse); dotted
     classes resolve by AST against the file the index locates (no per-row
     import); `op-name` classes resolve by exact membership against the
-    INJECTED `op_names` population (no derivation here -- see
-    `coordinator_core/tests/test_op_name_registers_resolve_or_declare.py`).
+    INJECTED `op_names` population (no derivation here; the caller owns it).
     `OPAQUE` rows always report unadjudicable.
 
     Passing `op_names=None` while resolving an `OP_NAME` row is a loud

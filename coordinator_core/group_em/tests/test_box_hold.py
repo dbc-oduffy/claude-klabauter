@@ -85,6 +85,7 @@ def test_expired_hold_clearable_by_anyone(tmp_path):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_import_closure_is_leaf():
     code = (
         "import sys; import coordinator_core.group_em.box_hold; "

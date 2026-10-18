@@ -69,6 +69,7 @@ def test_absent_dir_yields_empty(tmp_path):
 
 
 def test_gate_present_on_real_brief(monkeypatch):
+    monkeypatch.setattr(wc_brief, "head_branch", lambda _p: "work/x")
     monkeypatch.setattr(
         wc_brief,
         "resolve_operator_config",

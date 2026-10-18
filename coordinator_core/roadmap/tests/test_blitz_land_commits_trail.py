@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.roadmap import blitz_land as bl
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import _REVIEW_SLICES_GUARD,
 from coordinator_core.ops.review_mint.execute_review import NO_SLICES_HALT, PREP_BUSY_HALT, PREP_MALFORMED_HALT, REVIEW_MISSING_HALT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session.record_homes import record_path
+from coordinator_core.win_portability import no_console_creationflags
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -162,6 +163,8 @@ def test_ask_no_slices_guard_is_array_guarded_and_follows_the_slice_id_rebuild(m
     assert "(_reviewPrep.slices ?? [])" not in guard_line
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
 @pytest.mark.parametrize(
     ("slice_id", "halts"),
@@ -180,7 +183,9 @@ def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, 
         f"{fragment}\n"
         "process.stdout.write(JSON.stringify({ halted: _halted && _halted.halted, n: _reviewPrep.slices.length }));\n"
     )
-    out = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=20, check=True)
+    out = subprocess.run(
+        ["node", "-e", harness], capture_output=True, text=True, timeout=20, check=True, **no_console_creationflags()
+    )
     result = json.loads(out.stdout)
     assert bool(result["halted"] and result["halted"].startswith(NO_SLICES_HALT)) is halts
     if not halts:

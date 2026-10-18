@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -30,7 +31,9 @@ def _gap(manifest) -> str | None:
         ask_compose._ADMIT_MANIFEST_JS
         + f"\nlet _stagedManifest = null;\nprocess.stdout.write(JSON.stringify(_wholeManifestGap({json.dumps(manifest)})));\n"
     )
-    return json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    return json.loads(
+        subprocess.run([node, "-e", js], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
+    )
 
 
 def test_the_on_disk_manifest_shape_is_admitted():
@@ -111,7 +114,9 @@ def _adopt(manifest, soft: bool) -> str | None:
         + f"\nlet _stagedManifest = null;\n_adoptManifest({json.dumps(manifest)}, {json.dumps(soft)});\n"
         "process.stdout.write(JSON.stringify(_stageRefusal));\n"
     )
-    return json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    return json.loads(
+        subprocess.run([node, "-e", js], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
+    )
 
 
 def test_a_relayed_error_note_is_not_a_stage_refusal():

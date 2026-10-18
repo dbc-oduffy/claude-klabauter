@@ -157,7 +157,7 @@ def _bt_python3_invocation_cache_key() -> Optional[List[Any]]:
 #: Bumped whenever `_bt_render_interpreter_path` changes shape; folded into
 #: `_bt_python3_invocation_cache_key` so a warm cross-process cache cannot serve
 #: a string rendered by the previous scheme.
-_BT_INTERPRETER_RENDERING_VERSION = 2
+_BT_INTERPRETER_RENDERING_VERSION = 3
 
 
 def _bt_render_interpreter_path(python_bin: str) -> str:
@@ -192,14 +192,51 @@ def _bt_render_interpreter_path(python_bin: str) -> str:
 
     An interpreter outside the user's home carries no username to remove, so it is
     returned through `shlex.quote` exactly as before."""
+    import ctypes
+
     try:
-        home = os.path.expanduser("~")
-        rel = os.path.relpath(python_bin, home)
-    except (OSError, ValueError):
-        # ValueError: relpath across drives on Windows -- not under home.
+        home = None
+        if os.name == "nt":
+            # Process-token profile directory: HOME/USERPROFILE redirection
+            # does not move it. In-process, no spawn.
+            from ctypes import wintypes
+
+            k32, userenv, adv = ctypes.WinDLL("kernel32"), ctypes.WinDLL("userenv"), ctypes.WinDLL("advapi32")
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+            userenv.GetUserProfileDirectoryW.argtypes = [
+                wintypes.HANDLE, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+            tok = wintypes.HANDLE()
+            if adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0008, ctypes.byref(tok)):
+                size = wintypes.DWORD(0)
+                userenv.GetUserProfileDirectoryW(tok, None, ctypes.byref(size))
+                buf = ctypes.create_unicode_buffer(size.value or 1)
+                if userenv.GetUserProfileDirectoryW(tok, buf, ctypes.byref(size)):
+                    home = buf.value
+                k32.CloseHandle(tok)
+        else:
+            import pwd
+
+            home = pwd.getpwuid(os.getuid()).pw_dir
+        # The env home still counts (a redirected one carries no real username);
+        # the shallowest relative path across both homes wins.
+        rels = []
+        for h in (home, os.path.expanduser("~")):
+            if not h:
+                continue
+            try:
+                r = os.path.relpath(python_bin, h)
+            except ValueError:
+                continue
+            if not (r.startswith(os.pardir) or os.path.isabs(r)):
+                rels.append(r)
+    # ArgumentError: a ctypes signature mismatch; KeyError: no passwd entry for the uid.
+    except (OSError, KeyError, ctypes.ArgumentError):
         return shlex.quote(python_bin)
-    if rel.startswith(os.pardir) or os.path.isabs(rel):
+    if not rels:
         return shlex.quote(python_bin)
+    rel = min(rels, key=len)
     return '"$HOME/%s"' % rel.replace(os.sep, "/").replace("\\", "/")
 
 

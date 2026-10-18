@@ -180,7 +180,12 @@ def test_write_guard_named_alternatives_are_not_dead(guard):
 
 
 @pytest.mark.parametrize("guard", sorted(altlive.LIVE_TRIGGERS))
-def test_registered_trigger_fires(guard):
+def test_registered_trigger_fires(guard, tmp_path, monkeypatch):
+    if guard == "block_topic_branch":
+        # The guard exempts a clone under a repo's own `scratch/`; judge a non-scratch repo.
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
     result = altlive.fire_guard(guard)
     assert result.fired, (
         "%s's registered trigger did not fire (error=%r) -- broken registry row, "

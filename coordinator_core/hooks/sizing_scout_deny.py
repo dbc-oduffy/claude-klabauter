@@ -1,5 +1,5 @@
 """coordinator_core.hooks.sizing_scout_deny -- the main loop's hand dispatch of the sizing scout is
-always denied: naming the live run when this session has one, else the Workflow ask submission.
+always denied: naming the live run when this session has one, else rerouting to Skill(coordinator:sizing).
 
 Purpose: leaf of ``hooks.block_unenumerated_agent_type.check`` (the engine leg DoE's
 PreToolUse(Agent) fan-in already runs). Invariant: this module never imports
@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from coordinator_core.hooks._envelope import deny
-from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME
 
 GUARD_NAME = "submit-engine-ask"
 SIZING_SCOUT_TYPES = frozenset({"coordinator:sizing-scout", "sizing-scout"})
@@ -56,6 +55,6 @@ def sizing_scout_deny(payload: Mapping[str, Any], subagent_type: str) -> Optiona
     if live:
         reason = f"Run {live} is already sizing; its completion is your one wake. End the turn."
     else:
-        reason = f"Sizing runs in the ask workflow. Use Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {ARGS_SHAPE}}})."
+        reason = "Sizing runs in the ask workflow: Skill(coordinator:sizing) fires it."
     return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
 

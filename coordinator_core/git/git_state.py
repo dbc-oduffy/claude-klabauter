@@ -92,6 +92,7 @@ __all__ = [
     "IndexSnapshot",
     "IndexParseError",
     "read_index",
+    "read_index_paths",
     "read_index_stat_identity",
     "index_read_cache_scope",
     "head_branch",
@@ -252,37 +253,38 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
     return snapshot
 
 
+def read_index_paths(repo: Union[str, Path]) -> frozenset:
+    """The tracked path set of `resolve_git_dir(repo)/index`, without the per-entry objects
+    `read_index` builds. Raises `IndexParseError` on exactly the inputs `read_index` raises on;
+    an absent index file is the empty set. Always fresh: no cache scope is consulted or filled.
+    """
+    gitdir = resolve_git_dir(repo)
+    index_path = gitdir / "index"
+    try:
+        raw = _retry_transient_read(index_path.read_bytes)
+    except FileNotFoundError:
+        return frozenset()
+    except OSError as exc:
+        raise IndexParseError(f"could not read {index_path}: {exc}") from exc
+    for sibling in _iter_sharedindex_siblings(gitdir):
+        raise IndexParseError(
+            f"split index detected ({sibling.name} present alongside "
+            f"{index_path}); this module refuses to guess which half is "
+            "authoritative"
+        )
+    return frozenset(_parse_index_bytes(raw, index_path=index_path, paths_only=True))
+
+
 def read_index_stat_identity(repo: Union[str, Path]) -> Optional[StatIdentity]:
-    """`read_index(repo, fresh=True).stat_identity` WITHOUT reading or
-    parsing the index body -- for a caller (a compare-and-swap re-
-    observation) that only ever consulted `.stat_identity` and threw the
-    parsed entries away. `IndexSnapshot.stat_identity` (see that class) is
-    built purely from `index_path.stat()` -- three integers off the
-    filesystem -- so a caller that never touches `IndexSnapshot`'s `{path:
-    IndexEntry}` body has no reason to pay `_parse_index_bytes`'s full
-    five-figure-entry walk to obtain it.
+    """`read_index(repo, fresh=True).stat_identity` from a single `Path.stat()`, without
+    reading or parsing the index body -- for a CAS re-observation that only needs the identity.
 
-    Negative-spec (mirrors this module's own, see the module docstring):
-        - UNCONDITIONALLY FRESH. This function never consults
-          `_INDEX_CALL_CACHE` and never populates it -- there is no
-          `fresh` parameter, because there is no non-fresh mode to opt out
-          of. A cached stat identity here would defeat the one property a
-          CAS re-observation needs: proof that THIS call, not a memoised
-          one, touched the filesystem just now.
-        - Same split-index refusal as `read_index`: a `sharedindex.*`
-          sibling next to the index file raises `IndexParseError`, same as
-          the full reader. A CAS re-observation that silently succeeded
-          against a split index would be a new instance of the exact
-          defect C1 closed (a re-observation that cannot actually fail) --
-          refusing the same way `read_index` does is the conservative
-          choice, not a stricter one invented here.
-        - Returns `None` for a genuinely absent index file (no `.git/index`
-          at all -- an unborn repo), matching `read_index`'s own
-          `stat_identity=None` fold for that state, not a raise.
-
-    Reads `resolve_git_dir(repo)/index` (worktree-private, per this
-    module's own MANDATORY REUSE note) via a single `Path.stat()` call --
-    no `read_bytes()`, no `_parse_index_bytes()`.
+    Negative-spec:
+        - UNCONDITIONALLY FRESH: never consults or fills `_INDEX_CALL_CACHE`; a memoised
+          identity would defeat the proof that THIS call touched the filesystem.
+        - Same split-index refusal as `read_index`: a `sharedindex.*` sibling raises
+          `IndexParseError`, so a re-observation against a split index cannot silently succeed.
+        - `None` for an absent index file (unborn repo), matching `read_index`; not a raise.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -312,7 +314,9 @@ def _iter_sharedindex_siblings(gitdir: Path):
         return
 
 
-def _parse_index_bytes(raw: bytes, *, index_path: Path) -> Dict[str, IndexEntry]:
+def _parse_index_bytes(raw: bytes, *, index_path: Path, paths_only: bool = False) -> Dict[str, IndexEntry]:
+    """`paths_only` skips the mode and sha decode and maps each path to `None`; every
+    validation, including the unmerged-stage refusal, runs identically."""
     if len(raw) < 12:
         raise IndexParseError(f"{index_path}: truncated header ({len(raw)} bytes)")
 
@@ -338,8 +342,9 @@ def _parse_index_bytes(raw: bytes, *, index_path: Path) -> Dict[str, IndexEntry]
         if offset + _ENTRY_FIXED_LEN > len(raw):
             raise IndexParseError(f"{index_path}: truncated entry at offset {offset}")
 
-        mode = struct.unpack(">I", raw[offset + 24 : offset + 28])[0]
-        sha = raw[offset + 40 : offset + 60].hex()
+        if not paths_only:
+            mode = struct.unpack(">I", raw[offset + 24 : offset + 28])[0]
+            sha = raw[offset + 40 : offset + 60].hex()
         flags = struct.unpack(">H", raw[offset + 60 : offset + 62])[0]
         offset += _ENTRY_FIXED_LEN
 
@@ -383,7 +388,7 @@ def _parse_index_bytes(raw: bytes, *, index_path: Path) -> Dict[str, IndexEntry]
             )
 
         path = name.decode("utf-8", "surrogateescape")
-        entries[path] = IndexEntry(mode=mode, sha=sha, stage=stage)
+        entries[path] = None if paths_only else IndexEntry(mode=mode, sha=sha, stage=stage)
 
     _extension_region_start(raw, offset, index_path=index_path)
     _reject_link_extension(raw, offset, index_path=index_path)

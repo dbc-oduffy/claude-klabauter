@@ -10,7 +10,7 @@ import pytest
 
 from coordinator_core.warm import push_sweep_order as order
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:

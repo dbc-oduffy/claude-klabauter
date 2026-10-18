@@ -80,8 +80,8 @@ for the measurement that forces it and the corpus-census surface it routes to.
 
 Negative-spec:
   - Does NOT stamp, write, or mutate anything. A closed gate is REPORTED here;
-    refusing on it is the caller's act — the same doctrine ``plan_gate.py``
-    states, for the same reason: an authorization decision behind a derived read
+    refusing on it is the caller's act — the doctrine for any gate reader,
+    for the same reason: an authorization decision behind a derived read
     silently blocks work when the read goes stale rather than mis-reporting it.
   - Does NOT collapse the four classes into a boolean. The per-class split IS the
     product: the corpus's dominant defect (no spine block at all) and its rarest

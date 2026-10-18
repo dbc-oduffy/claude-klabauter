@@ -51,6 +51,7 @@ print("RESULT=" + json.dumps({"ok": ok, "loaded": [m for m in json.loads(sys.arg
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_plan_run_full_path_does_not_load_the_cut_modules(tmp_path):
     result = subprocess.run(
         [sys.executable, "-c", _PROBE, str(tmp_path), json.dumps(_ABSENT)],
@@ -89,6 +90,7 @@ _BRANCH_ABSENT = (
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_branch_gated_imports_stay_behind_their_branch(tmp_path):
     """A plan-mode marker never reaches inventory_mint; a chunk set with no stranded file never
     reaches the import-closure walk."""
@@ -122,6 +124,7 @@ _PREP_ABSENT = (
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_importing_review_prep_does_not_load_the_freeze_closure():
     """`_reconcile_prep` needs only `stored_reply_for_run`; the freeze/partition/product-files
     callables load on first use and a patched module global still wins."""

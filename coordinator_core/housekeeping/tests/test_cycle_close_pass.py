@@ -82,7 +82,8 @@ def test_a_nested_blocked_by_is_released_alongside_an_inline_one_in_one_commit(t
     for name in ("2026-08-01_00001_inline.md", "2026-08-02_00002_nested.md"):
         text = (root / "state" / "handoffs" / name).read_text(encoding="utf-8")
         assert "deployment_state: ready_to_fire" in text
-        assert "blocked_by" not in text and "sat-b1" not in text
+        assert "blocked_by: []" in text and "sat-b1" not in text
+        assert "\n  - " not in text
         assert "category: infra" in text
     assert _porcelain(root) == "", "every release is committed, none left dirty"
 

@@ -534,7 +534,9 @@ def test_brief_rejects_malformed_for_date() -> None:
     assert "error" in envelope2
 
 
-def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(tmp_path) -> None:
+def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(
+    tmp_path, monkeypatch
+) -> None:
     """The 8-key envelope's `preflight.consumes_manifest` field (what the
     surface actually announces it consumes) must be byte-identical to the
     module's own `CONSUMES_MANIFEST` constant -- catches a `brief()` author
@@ -543,7 +545,9 @@ def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(tmp_
 
     The injected env resolves the operator-config anchors inside `tmp_path`;
     without it `brief()` returns a bare `{"error": ...}` envelope with no
-    `preflight` key."""
+    `preflight` key. The branch is pinned: a detached or main checkout makes
+    `brief()` refuse before it reaches the envelope."""
+    monkeypatch.setattr(wc_brief, "head_branch", lambda _p: "work/x")
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     root = tmp_path / "root"

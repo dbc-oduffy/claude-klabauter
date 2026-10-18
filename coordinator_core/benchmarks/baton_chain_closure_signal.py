@@ -12,6 +12,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+
 LIVE = 577
 ARCHIVED = 1355
 PLANS = 749
@@ -92,6 +94,7 @@ def main(argv: list) -> int:
     if len(argv) != 1:
         print("usage: baton_chain_closure_signal <dir>", file=sys.stderr)
         return 2
+    declare_benchmark_origin()
     _repo, member = build_corpus(Path(argv[0]))
     print(member)
     return 0

@@ -4853,16 +4853,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7, D9
     "p4.session_state": OpClass.COMPUTE_ONLY,
 
-    # RECORD authz-unclassified-ops-at-head — seven registered ops missing
+    # roadmap.plan_gate — COMPUTE_ONLY: ops/roadmap_plan_gate.py wraps
+    # `roadmap.gate_v2.compute_gate_report`, a pure read. Module's own
+    # negative-spec: "Does NOT write, stamp, or mutate anything. ... Does
+    # NOT spawn."
+    "roadmap.plan_gate": OpClass.COMPUTE_ONLY,
+
+    # RECORD authz-unclassified-ops-at-head — six registered ops missing
     # from this registry, leaving the registration-quad and drift-guard
     # tests RED at HEAD.
     #
-    # roadmap.plan_gate — COMPUTE_ONLY: ops/roadmap_plan_gate.py wraps
-    # `roadmap.plan_gate.assemble_plan_gate`, a pure scan. Module's own
-    # negative-spec: "Does NOT write, stamp, or mutate anything. ... Does
-    # NOT spawn." beyond the in-process git-index membership read.
-    "roadmap.plan_gate": OpClass.COMPUTE_ONLY,
-
     # roadmap.blitz_land — MUTATING: ops/roadmap_blitz_land.py wraps
     # `roadmap.blitz_land.land_wave`, which lands a wave's verdicts as
     # real record writes ("Landing writes records" — module docstring's

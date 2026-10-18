@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.git.git_state import (  # noqa: E402
@@ -36,6 +38,7 @@ from coordinator_core.git.git_state import (  # noqa: E402
     head_sha,
     index_read_cache_scope,
     read_index,
+    read_index_paths,
     read_index_stat_identity,
     ref_tips_digest,
 )
@@ -228,6 +231,68 @@ def test_missing_index_file_returns_empty_snapshot_not_an_error(tmp_path):
     snap = read_index(repo)
     assert dict(snap) == {}
     assert snap.stat_identity is None
+
+
+@pytest.mark.parametrize("version", [2, 3, 4])
+def test_read_index_paths_matches_read_index_keys(tmp_path, version):
+    repo = _plain_repo(tmp_path)
+    entries = [
+        {"mode": 0o100644, "sha": "1" * 40, "name": "dir/alpha.txt", "extended": version == 3},
+        {"mode": 0o100755, "sha": "2" * 40, "name": "dir/alpha2.txt"},
+        {"mode": 0o100644, "sha": "3" * 40, "name": "has space/café.txt"},
+    ]
+    _write_index(repo / ".git", _build_index(entries, version=version))
+
+    paths = read_index_paths(repo)
+    assert paths == frozenset(read_index(repo, fresh=True))
+    assert "has space/café.txt" in paths
+
+
+def test_read_index_paths_missing_index_is_the_empty_set(tmp_path):
+    assert read_index_paths(_plain_repo(tmp_path)) == frozenset()
+
+
+def _paths_refusals(tmp_path):
+    """One repo per input `read_index` refuses, keyed by case name."""
+    cases = {}
+    for name, raw in {
+        "bad_signature": b"XXXX" + struct.pack(">II", 2, 0) + b"\x00" * 20,
+        "unsupported_version": _SIGNATURE + struct.pack(">II", 5, 0) + b"\x00" * 20,
+        "truncated_header": b"DIRC",
+        "unmerged": _build_index([{"mode": 0o100644, "sha": "d" * 40, "name": "c.txt", "stage": 1}]),
+        "link_extension": _build_index(
+            [{"mode": 0o100644, "sha": "e" * 40, "name": "f.txt"}],
+            extensions=b"link" + struct.pack(">I", 20) + b"\x00" * 20,
+        ),
+    }.items():
+        repo = tmp_path / name
+        repo.mkdir()
+        _write_index(_plain_repo(repo) / ".git", raw)
+        cases[name] = repo
+    shared = tmp_path / "sharedindex"
+    shared.mkdir()
+    gitdir = _plain_repo(shared) / ".git"
+    _write_index(gitdir, _build_index([{"mode": 0o100644, "sha": "f" * 40, "name": "g.txt"}]))
+    (gitdir / "sharedindex.abc123").write_bytes(b"\x00" * 12)
+    cases["sharedindex_sibling"] = shared
+    return cases
+
+
+def test_read_index_paths_raises_on_every_input_read_index_raises_on(tmp_path):
+    for name, repo in _paths_refusals(tmp_path).items():
+        with pytest.raises(IndexParseError):
+            read_index(repo)
+        with pytest.raises(IndexParseError):
+            read_index_paths(repo)
+
+
+def test_read_index_paths_ignores_an_open_cache_scope(tmp_path):
+    repo = _plain_repo(tmp_path)
+    _write_index(repo / ".git", _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}]))
+    with index_read_cache_scope():
+        read_index(repo)
+        _write_index(repo / ".git", _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "b.txt"}]))
+        assert read_index_paths(repo) == frozenset({"b.txt"})
 
 
 def test_path_with_space(tmp_path):

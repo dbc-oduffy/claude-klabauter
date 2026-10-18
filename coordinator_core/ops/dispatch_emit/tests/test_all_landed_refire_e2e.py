@@ -1,8 +1,11 @@
-"""The example-game-repo shape end to end: every plan row coded, a register row open, no ledger pointer. The real gate
-resumes it as an all-landed ledger resume; the composed script (agent legs stubbed under node) reaches verify
-then commit with no executor; a not_met judge lands a ledger-check halt whose pointer makes the next gate call
-a ledger resume bound to that run and carrying its remaining (every row stays coded, so the pointer reads as
-stale and the resume is kind all-landed), not the already-ran refusal."""
+"""The example-game-repo shape end to end, transcribed from the real run record: tshirt L, every plan row `open`, the
+non-em rows landed by a checkpoint commit, the `performer: em` rows discharged in the evidence sidecar, an
+earlier ledger-check halt commit whose `halted.json` now reads `refusal`, two rulable register rows, no ledger
+pointer. The real gate resumes it as an all-landed ledger resume at arm m_plus; the composed script (agent
+legs stubbed under node) reaches verify then commit with no plan or executor leg; a not_met judge lands a
+ledger-check halt whose pointer makes the next gate call a ledger resume bound to that run and carrying its
+remaining, not the already-ran refusal. Without the evidence sidecar the same plan is the row resume the
+real run took."""
 
 from __future__ import annotations
 
@@ -13,33 +16,35 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, terminal_commit
+from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
     RESUME_LEDGER_KIND_FIELD,
+    halted_record_message,
     ledger_halt_path,
     read_ledger_halt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, repo  # noqa: F401
+from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
-from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate import ALREADY_RAN, _landed_repo, _put_s
+from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate import ALREADY_RAN, _landed_repo
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _RUN = "ask-20261018T000000-aaaaaa"
+_PRIOR_RUN = "ask-20261017T231640-05b76d"
 _TOKEN = "0123456789abcdef0123456789abcdef"
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
-_REGISTER = {"rows": [{"id": "R1", "status": "open"}, {"id": "R2", "status": "met"}]}
-_CODED = (("A1", "coded"), ("A2", "coded"))
+_RULABLE = ("T2", "R2")
+_EM_ROWS = ("E1", "E2")
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
-_MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
-_UNMET = {"items": [{"id": "R1", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]}]}
+_MET = {"items": [{"id": i, "status": "met", "wired": True} for i in _RULABLE]}
+_UNMET = {"items": [{"id": "T2", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]}]}
 _NODE_PROGRAM = r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
@@ -65,19 +70,54 @@ def _git(root, *a):
 
 
 def _example_game_repo_shape(root):
-    """Every spine row coded and landed, a register row open, no ledger pointer; the sizing committed."""
-    _put_s(root, requirement_register=_REGISTER)
-    _landed_repo(root, _CODED)
+    """The real record: tshirt L / route plan, two open rulable register rows, plan rows all `open` (A1/A2
+    landed by one checkpoint commit, E1/E2 `performer: em` discharged in the evidence sidecar), an earlier
+    ledger-check halt commit landing A1 whose `halted.json` reads `refusal` beside a stale manifest, and
+    no ledger pointer."""
+    _put(
+        root, tshirt="L", route="plan", accepted=ACCEPTED, plan=PLAN_REL,
+        requirement_register={
+            "sources": [{"doc": REL, "ref": "ask"}],
+            "rows": [
+                {"id": i, "status": "open", "source_text": "t", "anchor": "relayed", "surface": "internal", "claimed_by": []}
+                for i in _RULABLE
+            ],
+        },
+    )
+    ids = ("A1", "A2", *_EM_ROWS)
+    _landed_repo(root, tuple((i, "open") for i in ids), landed=["A1", "A2"])
+    body = "".join(
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.py\n"
+        + ("  performer: em\n" if i in _EM_ROWS else "")
+        for i in ids
+    )
+    (root / PLAN_REL).write_text(
+        f"---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n", encoding="utf-8", newline="\n"
+    )
+    entries = "".join(f"  {i}:\n    recorded_at: '2026-10-17T00:00:00Z'\n    text: done by the EM\n" for i in _EM_ROWS)
+    (root / PLAN_REL).with_suffix(".evidence.yaml").write_text(
+        f"em_discharged:\n{entries}", encoding="utf-8", newline="\n"
+    )
     _git(root, "add", REL)
     _git(root, "commit", "-q", "-m", "sizing")
+    record = root / RECORD_DIR_ROOT / _PRIOR_RUN
+    record.mkdir(parents=True)
+    halted = {"halted": "refusal", "reason": "no folded stage manifest", "sizing_rel": REL}
+    (record / "halted.json").write_text(json.dumps(halted), encoding="utf-8")
+    manifest = {
+        "rows": [{"id": "A1"}], "owed": [{"id": i} for i in _EM_ROWS], "gated": [], "rulable_ids": list(_RULABLE),
+    }
+    (record / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _git(root, "add", "state")
+    message = halted_record_message(_PRIOR_RUN, {"halted": "ledger-check", "plan": PLAN_REL})
+    _git(root, "commit", "-q", "-m", message + "\nLands-Chunks: A1")
 
 
-def _run_composed(root, monkeypatch, verify) -> dict:
+def _run_composed(root, verify) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
     gate_reply = _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=root)
-    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "s")
     script = compose_ask_script(
         repo_root="REPO", prompt=None, sizing_rel=REL, run_id=_RUN, session_id=None,
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
@@ -95,31 +135,42 @@ def _run_composed(root, monkeypatch, verify) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_the_real_gate_resumes_the_example_game_repo_shape_with_a_whole_zero_row_manifest(repo):  # noqa: F811
+def test_the_real_gate_resumes_the_example_game_repo_shape_with_a_manifest_of_the_landed_rows(repo):  # noqa: F811
     _example_game_repo_shape(repo)
     out = _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=repo)
-    assert out["halt"] is None, out["halt"]
+    assert out["arm"] == "m_plus" and out["halt"] is None, out["halt"]
+    assert out.get("resume_rows") is None
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
-    assert out["manifest"].get("error") is None and out["manifest"]["rows"] == []
+    assert out["resume_ledger"]["blocking"] == list(_RULABLE)
+    assert out["manifest"].get("error") is None, out["manifest"]
+    assert [r["id"] for r in out["manifest"]["rows"]] == ["A1", "A2"]
 
 
-def test_an_all_done_refire_reaches_verify_then_commit_with_no_executor(repo, monkeypatch):  # noqa: F811
+def test_without_the_evidence_sidecar_the_gate_returns_the_row_resume_the_real_run_took(repo):  # noqa: F811
     _example_game_repo_shape(repo)
-    out = _run_composed(repo, monkeypatch, _MET)
+    (repo / PLAN_REL).with_suffix(".evidence.yaml").unlink()
+    out = _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=repo)
+    assert out["arm"] == "m_plus" and out.get("resume_ledger") is None
+    assert out["resume_plan"] == PLAN_REL and out["resume_rows"] == list(_EM_ROWS)
+
+
+def test_an_all_done_refire_reaches_verify_then_commit_with_no_executor(repo):  # noqa: F811
+    _example_game_repo_shape(repo)
+    out = _run_composed(repo, _MET)
     labels = [c["label"] for c in out["calls"]]
     res = out["result"]
     assert res["halted_by"] is None, res["halted_by"]
     assert "no folded stage manifest" not in json.dumps(res)
     assert labels.index("verify") < labels.index("commit")
-    assert not {"plan", "exec", "ledger-remaining", "ledger-replan"} & set(labels), labels
+    assert not {"plan", "prior-art", "exec", "ledger-remaining", "ledger-replan"} & set(labels), labels
     assert res["commit"]["committed"] is True
 
 
 def test_a_not_met_judge_lands_a_ledger_check_halt_and_the_next_gate_resumes_it_not_the_already_ran_refusal(
-    repo, monkeypatch  # noqa: F811
+    repo  # noqa: F811
 ):
     _example_game_repo_shape(repo)
-    out = _run_composed(repo, monkeypatch, _UNMET)
+    out = _run_composed(repo, _UNMET)
     halted_by = out["result"]["halted_by"]
     labels = [c["label"] for c in out["calls"]]
     assert halted_by["halted"] == "ledger-check", halted_by
@@ -134,11 +185,11 @@ def test_a_not_met_judge_lands_a_ledger_check_halt_and_the_next_gate_resumes_it_
     )
     assert landed["committed"] is True, landed
     pointer = read_ledger_halt(ledger_halt_path(repo, PLAN_REL))
-    assert pointer is not None and pointer.blocking == ("R1",)
+    assert pointer is not None and pointer.blocking == ("T2",)
 
     again = gate(repo, REL)
     assert again.halt is None, again.halt
     assert ALREADY_RAN not in json.dumps(again.to_json())
     resume = again.resume_ledger
-    assert resume is not None and resume["run_id"] == _RUN and resume["blocking"] == ["R1"]
-    assert resume["remaining"]["R1"]["remaining"] == ["the criterion is red"]
+    assert resume is not None and resume["run_id"] == _RUN and resume["blocking"] == list(_RULABLE)
+    assert resume["remaining"]["T2"]["remaining"] == ["the criterion is red"]

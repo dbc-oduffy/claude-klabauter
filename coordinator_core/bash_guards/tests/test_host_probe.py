@@ -257,6 +257,7 @@ def test_live_snapshot_contains_self_and_parent_link():
 
 @live
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_live_dead_pid_reads_dead():
     p = subprocess.Popen(
         [sys.executable, "-c", "pass"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

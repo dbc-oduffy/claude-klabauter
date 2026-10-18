@@ -341,6 +341,7 @@ def test_max_paths_reaches_record_and_absence_reaches_it_as_none(monkeypatch):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_bounded_batch_of_ceiling_minus_five_files_leaves_every_touch_event(monkeypatch, tmp_path):
     import subprocess
 

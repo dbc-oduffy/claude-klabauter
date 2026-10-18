@@ -13,6 +13,8 @@ import pytest
 
 import coordinator_core.benchmarks.terminal_commit_full_path as fp
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # name of file -> upper bound on opens in one call (measured post-cut, with headroom of zero
 # beyond the observed count so a re-introduced per-path read trips it)
 BOUNDS = {

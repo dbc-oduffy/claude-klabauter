@@ -44,9 +44,9 @@ def _epoch_to_filetime_ticks(epoch: float) -> int:
 
 class TestFiletimeConversion:
     def test_known_good_pair(self):
-        # 2026-08-08T00:00:00Z, verified independently: FILETIME ticks for
-        # this instant computed via (epoch + 11644473600) * 1e7.
-        epoch = 1783929600.0
+        # Clock-relative so the epoch stays inside the sanity band; ticks are
+        # (epoch + 11644473600) * 1e7.
+        epoch = float(int(time.time()) - 3600)
         ticks = _epoch_to_filetime_ticks(epoch)
         assert hr._proc_start_to_epoch(ticks) == pytest.approx(epoch, abs=1e-3)
 

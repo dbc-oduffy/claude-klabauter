@@ -885,6 +885,20 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/ceremony/close_background.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/close_background.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/close_review.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/close_review.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/ops/ceremony/detached_spawn.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/ceremony/detached_spawn.py",
     "mutates": [],
@@ -955,10 +969,9 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/completion_ops.py declares MUTATES = ['archive/completed/**/*.md', 'docs/plans/*.md'] (corpus mutator, no staleness contract)",
+    "detail": "coordinator_core/ops/completion_ops.py declares MUTATES = ['docs/plans/*.md'] (corpus mutator, no staleness contract)",
     "generator": "coordinator_core/ops/completion_ops.py",
     "mutates": [
-      "archive/completed/**/*.md",
       "docs/plans/*.md"
     ],
     "pairs": [],
@@ -1002,6 +1015,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/dispatch_emit/design_conformance.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/design_conformance.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/ops/dispatch_emit/emission_receipt.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/dispatch_emit/emission_receipt.py",
     "mutates": [],
@@ -1025,6 +1045,13 @@
   {
     "detail": "coordinator_core/ops/dispatch_emit/queue_select.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/dispatch_emit/queue_select.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/dispatch_emit/requirements_ledger.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
     "mutates": [],
     "pairs": [],
     "verdict": null
@@ -1344,9 +1371,18 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/plan_seam_check.py declares GENERATES = [] (declared-empty, no artifacts); coordinator_core/ops/plan_seam_check.py MUTATES pattern(s) match no currently-tracked path: ['docs/plans/*.seam.yaml']",
-    "generator": "coordinator_core/ops/plan_seam_check.py",
+    "detail": "coordinator_core/ops/plan_readiness_verdict.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_readiness_verdict.py",
     "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/plan_seam_check.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_seam_check.py",
+    "mutates": [
+      "docs/plans/*.seam.yaml"
+    ],
     "pairs": [],
     "verdict": null
   },
@@ -1478,6 +1514,18 @@
     "mutates": [
       "state/review-trail/diffs/*.diff",
       "state/review-trail/diffs/*.head.sha"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/review_prep.py declares MUTATES = ['state/review-trail/diffs/*.diff', 'state/review-trail/diffs/*.head.sha', '.coordinator-local/subagent-share/*/*.review-prep.md', '.coordinator-local/subagent-share/*/*.review-prep.lock'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/review_prep.py",
+    "mutates": [
+      "state/review-trail/diffs/*.diff",
+      "state/review-trail/diffs/*.head.sha",
+      ".coordinator-local/subagent-share/*/*.review-prep.md",
+      ".coordinator-local/subagent-share/*/*.review-prep.lock"
     ],
     "pairs": [],
     "verdict": "MUTATES_DECLARED"
@@ -1849,6 +1897,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/session/handoff_claim_index.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/handoff_claim_index.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/session/incident_claims.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/session/incident_claims.py",
     "mutates": [],
@@ -1932,6 +1987,13 @@
   {
     "detail": "coordinator_core/write_guards/block_confined_agent_write.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/write_guards/block_confined_agent_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/write_guards/block_cross_repo_agent_write.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/block_cross_repo_agent_write.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

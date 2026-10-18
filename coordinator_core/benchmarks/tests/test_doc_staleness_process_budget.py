@@ -99,7 +99,7 @@ def _graph_bearing_fixture(tmp_path_factory) -> Path:
     workdir = tmp_path_factory.mktemp("doc_staleness_budget")
     built = subprocess.run(
         [sys.executable, "-m", "coordinator_core.benchmarks.doc_staleness_full_path", str(workdir), "--build"],
-        capture_output=True, text=True, **no_console_creationflags(),
+        capture_output=True, text=True, cwd=_source_root(), **no_console_creationflags(),
     )
     assert built.returncode == 0, f"fixture build failed: {built.stderr}"
     return ensure_fixture(workdir)
@@ -109,7 +109,7 @@ def _graph_free_fixture(tmp_path_factory) -> Path:
     workdir = tmp_path_factory.mktemp("doc_staleness_budget_graph_free")
     built = subprocess.run(
         [sys.executable, "-m", "coordinator_core.benchmarks.workweek_complete_brief_full_path", str(workdir), "--build"],
-        capture_output=True, text=True, **no_console_creationflags(),
+        capture_output=True, text=True, cwd=_source_root(), **no_console_creationflags(),
     )
     assert built.returncode == 0, f"fixture build failed: {built.stderr}"
     return brief_fixture.ensure_fixture(workdir)

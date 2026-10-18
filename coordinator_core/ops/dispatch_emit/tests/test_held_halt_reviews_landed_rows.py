@@ -17,6 +17,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REVIEW_GUARD = "  if (!_halted || _haltedByHold) {\n"
 _TEST_GUARD = "  if (!_halted) {\n"
 _HOLD_LINE = "if (!_halted) { const _r = _heldDependentsReason(); if (_r) { _halted = _r; _haltedByHold = true; } }"

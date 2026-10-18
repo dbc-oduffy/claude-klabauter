@@ -63,6 +63,8 @@ import threading
 from dataclasses import replace
 from typing import Callable, Optional
 
+import pytest
+
 from coordinator_core.warm import server
 from coordinator_core.warm.caller_context import resolve_caller_context
 
@@ -151,9 +153,22 @@ def test_two_callers_are_served_warm_concurrently_through_the_real_pool(tmp_path
         ctx._dispatch_pool.shutdown(wait=True, cancel_futures=True)
 
 
-def test_the_check_discriminates_against_the_pre_fix_shape(tmp_path):
-    _register_echo_op()
+@pytest.fixture
+def _echo_op_scoped_to_this_process():
+    """Registers the echo op in the pytest process and removes it afterwards, so
+    later modules asserting on the op registry never see `test.echo_settings_home`."""
+    from coordinator_core import ipc
 
+    had_before = _ECHO_METHOD in ipc._REGISTRY
+    _register_echo_op()
+    try:
+        yield
+    finally:
+        if not had_before:
+            ipc._REGISTRY.pop(_ECHO_METHOD, None)
+
+
+def test_the_check_discriminates_against_the_pre_fix_shape(tmp_path, _echo_op_scoped_to_this_process):
     from coordinator_core.ipc import dispatch_message
 
     def _pre_fix_dispatch_call(msg: dict, home: str) -> dict:

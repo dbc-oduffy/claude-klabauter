@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 REPO = Path(__file__).resolve().parents[3]
 CLI = REPO / "coordinator" / "bin" / "pm-turns.py"

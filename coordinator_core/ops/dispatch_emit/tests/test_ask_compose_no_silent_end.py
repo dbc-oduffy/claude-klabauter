@@ -10,6 +10,9 @@ import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _compose
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _TAIL_PREFIXES = (
     "const _criterionOpen",
@@ -40,7 +43,9 @@ def _tail(script: str) -> str:
 
 def _drive(script: str, falsifier: dict | None, delivery: dict | None) -> object:
     program = _HARNESS % (json.dumps(falsifier), json.dumps(delivery), _tail(script))
-    out = subprocess.run(["node", "-e", program], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        ["node", "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout
     return json.loads(out)
 
 

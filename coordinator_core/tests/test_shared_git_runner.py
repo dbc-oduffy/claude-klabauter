@@ -182,11 +182,9 @@ _CONTRACT_EXEMPT_MODULES: frozenset[str] = frozenset(
     {
         "coordinator/bin/check-anchor-freshness.py",
         "coordinator/bin/check-decision-citations.py",
-        "coordinator/bin/check-watch-state-gitignore-fleet.py",
         "coordinator/bin/classify-legacy-engine-noun-references.py",
         "coordinator/bin/frontmatter-parse-check.py",
         "coordinator/bin/klabauter-reconcile.py",
-        "coordinator/bin/memo-outbox-tracking-guard.py",
         "coordinator/bin/plan-reversibility-eligibility.py",
         "coordinator/bin/pre_commit_corpus_artifact_guard.py",
         "coordinator/bin/remove-claude-klabauter-precommit-hook.py",
@@ -1539,7 +1537,7 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
     assert "encoding" not in recorded["kwargs"], "feeding stdin must not select text mode"
     assert "errors" not in recorded["kwargs"], "feeding stdin must not select text mode"
     assert recorded["kwargs"]["stdin"] == subprocess.PIPE, "fed stdin is a pipe"
-    assert recorded["argv"][0] == "git"
+    assert recorded["argv"][0] == git_run._git_exe()
     # Binary mode returns bytes; the seam decodes so callers still see str.
     assert result.stdout == "a/b\0c/d\0"
 

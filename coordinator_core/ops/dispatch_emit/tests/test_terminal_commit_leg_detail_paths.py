@@ -12,7 +12,7 @@ from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import run_close, terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PEER_PATH = "Z:/coordinator-content-repo/coordinator/x.md"  # abs-path-ok: literal token under test, a peer-repo spelling
 

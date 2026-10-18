@@ -302,7 +302,7 @@ RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # boundary, postusefailure_cross_repo_memo_remediate, session_start_
     # cloud_focus, session_start_watch_presence) closed AC10 coverage gaps
     # -- raw raised from 220 to ceil5(244.99)=245.
-    "directory:hooks": 180 + JITTER_ALLOWANCE_BYTES,
+    "directory:hooks": 170 + JITTER_ALLOWANCE_BYTES,
 }
 
 

@@ -14,6 +14,8 @@ from coordinator_core.canvas_harvest import api, model
 from coordinator_core.session import claimed_write, touch_record
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 URL = "https://claude.ai/artifact/abc"
 BOUND_KEY = ipc._SCOPE_TOUCH_MAX_PATHS_KEY
 

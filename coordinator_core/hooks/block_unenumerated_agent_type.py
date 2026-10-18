@@ -133,6 +133,12 @@ module's own result (`None` or an advisory-allow) is returned unchanged.
 Same "why compose here" reasoning as the pin leg: no new `PreToolUse(Agent)`
 registration needed, DoE-side wiring is untouched. See that module's own
 docstring for the Opus/Fable persona-or-grant rule it enforces.
+
+COMPOSITION WITH `hand_dispatch_deny`. `check()` runs
+`hooks.hand_dispatch_deny.hand_dispatch_deny` before the roster leg: a deny is
+returned at once (no roster read), a warn-level advisory is merged onto the
+later legs' result. It lives here because this is the one PreToolUse(Agent)
+engine leg DoE already runs; no new registration is needed.
 """
 
 from __future__ import annotations
@@ -927,11 +933,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     subagent_type = resolve_subagent_type(tool_input)
 
-    # The sizing agent's only entry is the EM's engine submission; carried by this leg because
-    # it is the engine call DoE's PreToolUse(Agent) fan-in already makes.
-    from coordinator_core.hooks.sizing_scout_deny import sizing_scout_deny
+    # A top-level sizing-scout or planner (plan-author, roadmap-planner) dispatch is hand-rolled;
+    # carried by this leg because it is the engine call DoE's PreToolUse(Agent) fan-in already makes.
+    from coordinator_core.hooks.hand_dispatch_deny import hand_dispatch_deny
 
-    scout = sizing_scout_deny(payload, subagent_type)
+    scout = hand_dispatch_deny(payload, subagent_type)
     if scout is None:
         return _gate_legs(payload, tool_input, subagent_type)
     if scout.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":

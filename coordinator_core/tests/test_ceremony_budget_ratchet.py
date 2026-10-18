@@ -135,6 +135,7 @@ def test_ceremony_package_membership_survives_a_cold_interpreter():
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_regenerate_cache_is_a_ceremony_op_in_a_cold_interpreter():
     import subprocess
     import sys

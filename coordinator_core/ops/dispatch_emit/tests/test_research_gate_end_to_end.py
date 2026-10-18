@@ -19,6 +19,8 @@ VENDORED = Path(__file__).parent / "fixtures" / "pipeline_research"
 _NOTEBOOKS = 8
 _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 @pytest.fixture
 def emitted(monkeypatch, tmp_path, capsys):

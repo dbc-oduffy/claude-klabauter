@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.distill.delete_guard import evaluate_candidate_detailed, prefetch_citations
 
 _COMPLETED = "archive/completed/2026-08/2026-08-01-thing-abc123.md"

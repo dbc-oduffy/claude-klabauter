@@ -58,6 +58,7 @@ def test_old_halt_string_and_emission_unchanged():
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 @pytest.mark.parametrize(
     "first,second,expect_halt",

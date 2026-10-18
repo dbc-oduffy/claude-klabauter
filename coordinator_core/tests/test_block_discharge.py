@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core import block_discharge as bd
+from coordinator_core.win_portability import no_console_creationflags
 
 
 class TestFireThenDischargeIsClean:
@@ -147,11 +148,9 @@ class TestWriterNeverStages:
     def test_fire_and_discharge_leave_the_index_untouched_and_ledger_untracked(self, tmp_path):
         import subprocess
 
-        nowin = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-
         def git(*args):
             return subprocess.run(
-                ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **nowin
+                ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **no_console_creationflags()
             ).stdout
 
         git("init", "-q", "-b", "work/p")

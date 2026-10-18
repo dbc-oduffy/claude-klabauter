@@ -10,7 +10,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import review_scale_inputs as rsi
 from coordinator_core.workstream_complete import session_history as sh
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "11111111-2222-3333-4444-555555555555"
 PEER = "99999999-8888-7777-6666-555555555555"

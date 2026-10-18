@@ -273,12 +273,12 @@ from coordinator_core.git import run as _git_run
 
 
 def _swap_child(monkeypatch, code: str) -> None:
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def run(argv, **kwargs):
-        return real_run([sys.executable, "-c", code], **kwargs)
+    def popen(argv, *args, **kwargs):
+        return real_popen([sys.executable, "-c", code], *args, **kwargs)
 
-    monkeypatch.setattr(_gs.subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", popen)
 
 
 @pytest.mark.slow

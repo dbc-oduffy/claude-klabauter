@@ -239,10 +239,21 @@ def _git_config(repo: Path, body: str) -> None:
     (repo / ".git" / "config").write_text(body, encoding="utf-8")
 
 
+def _hermetic_fleet_registry(box, *repos: Path) -> None:
+    """A fleet whose engine entry is a tmp stand-in, so the probe never reads the checkout's own
+    `.git/config` (a scratch clone or worker checkout may lack `core.untrackedCache`)."""
+    engine = _worktree_repo(box, "engine-standin")
+    _git_config(engine, "[core]\n\tuntrackedcache = true\n")
+    entries = {"repos.claude_klabauter": str(engine)}
+    for repo in repos:
+        entries[f"repos.{repo.name}"] = str(repo)
+    box.write_registry(entries)
+
+
 def test_req_h4_missing_untracked_cache_emits_fix_directive_without_spawning(box, monkeypatch):
     repo = _worktree_repo(box, "drifted")
     _git_config(repo, "[core]\n\tbare = false\n")
-    _fleet_registry(box, repo)
+    _hermetic_fleet_registry(box, repo)
     _forbid_spawns(monkeypatch)
     (d,) = _only(_health._git_perf_currency, "session", box.root).directives
     assert (d["id"], d["cli"], d["args"]) == (
@@ -253,7 +264,7 @@ def test_req_h4_missing_untracked_cache_emits_fix_directive_without_spawning(box
 
 def test_req_h4_current_fleet_is_silent_and_value_not_substring(box, monkeypatch):
     repo = _worktree_repo(box, "current")
-    _fleet_registry(box, repo)
+    _hermetic_fleet_registry(box, repo)
     _git_config(repo, "[core]\n\tuntrackedcache = true\n")
     _forbid_spawns(monkeypatch)
     assert _only(_health._git_perf_currency, "session", box.root).directives == []
@@ -524,7 +535,7 @@ def test_directives_carry_the_envelope_shape(box):
 def test_clean_session_collect_spawns_nothing(box, monkeypatch):
     repo = _worktree_repo(box, "healthy")
     _git_config(repo, "[core]\n\tuntrackedcache = true\n")
-    _fleet_registry(box, repo)
+    _hermetic_fleet_registry(box, repo)
     _forbid_spawns(monkeypatch)
     _run("session", box.root)
 
@@ -532,6 +543,6 @@ def test_clean_session_collect_spawns_nothing(box, monkeypatch):
 def test_week_collect_spawns_nothing_when_the_header_needs_no_git(box, monkeypatch):
     repo = _worktree_repo(box, "healthy")
     _git_config(repo, "[core]\n\tuntrackedcache = true\n")
-    _fleet_registry(box, repo)
+    _hermetic_fleet_registry(box, repo)
     _forbid_spawns(monkeypatch)
     _run("week", box.root)

@@ -6223,12 +6223,14 @@ class ResumeLanded(NamedTuple):
     halt commit naming the plan, else None. ``ledger_sha``: that same commit's full 40-hex sha.
     ``run_halts``: ``{run_id: (Lands-Chunks ids, newest sha)}`` of every ledger-check halt commit
     that names the plan or carries no ``Halt-Plan:`` trailer (a halt commit the ``Halt-Plan:``
-    match above cannot see), newest run first; ``sizing_fire._carry`` walks it for the halt chain."""
+    match above cannot see), newest run first; ``sizing_fire._carry`` walks it for the halt chain.
+    ``row_shas``: ``{row id: full sha}`` of the newest commit landing each id in ``rows``."""
 
     rows: frozenset
     ledger_run: Optional[str]
     ledger_sha: Optional[str] = None
     run_halts: Mapping = {}
+    row_shas: Mapping = {}
 
 
 def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
@@ -6263,27 +6265,36 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     ledger_run: Optional[str] = None
     ledger_sha: Optional[str] = None
     run_halts: dict = {}
+    row_shas: dict = {}
+
+    def _land(landed_ids, landing_sha: str) -> None:
+        ids.update(landed_ids)
+        if landing_sha:
+            for i in landed_ids:
+                row_shas.setdefault(i, landing_sha)
+
     for record in result.stdout.split("\x1e"):
         parts = record.strip("\r\n").split("\x1f")
         if len(parts) < 6:
             continue
         subject, checkpoint, halt_plan, halted_by, chunks, sha = parts[:6]
+        sha = sha.strip()
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
-            ids.update(plan_commit_row_ids(subject))
+            _land(plan_commit_row_ids(subject), sha)
         is_ledger_check = any(v.strip() == "ledger-check" for v in halted_by.split("\x1d"))
         named = [v for v in halt_plan.split("\x1d") if v.strip()]
         names_plan = any(checkpoint_plan_matches(v, plan) for v in named)
         chunk_ids = {i for i in re.split(r"[,\s\x1d]+", chunks) if i}
         run = halted_run_id(subject)
         if is_ledger_check and names_plan:
-            ids.update(chunk_ids)
+            _land(chunk_ids, sha)
             if ledger_run is None:
                 ledger_run = run
-                ledger_sha = sha.strip() or None
+                ledger_sha = sha or None
         if run is not None and is_ledger_check and (names_plan or not named):
             landed, first_sha = run_halts[run] if run in run_halts else (frozenset(), None)
             run_halts[run] = (landed | chunk_ids, first_sha or sha.strip() or None)
-    return ResumeLanded(frozenset(ids), ledger_run, ledger_sha, run_halts)
+    return ResumeLanded(frozenset(ids), ledger_run, ledger_sha, run_halts, row_shas)
 
 
 def deleted_in_range(

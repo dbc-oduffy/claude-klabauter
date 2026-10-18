@@ -920,6 +920,147 @@ def _reopen(plan_path: str, task_id: str, detail: str, worktree: Path, repo_root
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
+_DEPENDS_ON_WRITABLE_KINDS = ("output-consumption-runtime", "epistemic-premise")
+
+
+def _edge_target(edge: object) -> Optional[str]:
+    if isinstance(edge, dict):
+        return edge.get("chunk")
+    return edge if isinstance(edge, str) else None
+
+
+def _reaches(rows: list, start: str, goal: str) -> bool:
+    """True when ``goal`` is reachable from ``start`` over the rows' depends_on edges."""
+    deps = {
+        r.get("id"): [_edge_target(e) for e in (r.get("depends_on") or [])]
+        for r in rows
+        if isinstance(r, dict)
+    }
+    seen: set = set()
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        if node == goal:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(t for t in deps.get(node, []) if t)
+    return False
+
+
+def _depends_on(
+    plan_path: str,
+    task_id: str,
+    action: str,
+    chunk: str,
+    gate_kind: Optional[str],
+    note: Optional[str],
+    worktree: Path,
+    repo_root: Path,
+) -> dict:
+    """Apply the depends-on verb: add or remove ONE ``depends_on`` edge on row ``task_id``.
+
+    ``add`` writes the object form ``{chunk, gate_kind, note?}`` (``gate_kind`` one of
+    the two writable kinds; default ``output-consumption-runtime``). ``remove`` drops the
+    edge naming predecessor ``chunk``. Refuses, writing nothing: unknown source row,
+    unknown target, self-edge, duplicate add, absent-edge remove, an add that closes a
+    cycle. Touches no field but ``depends_on``.
+    """
+    try:
+        path = _resolve_path(plan_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"depends-on: {exc}")
+    if not task_id:
+        return _err("depends-on: 'id' is required")
+    if action not in ("add", "remove"):
+        return _err("depends-on: 'action' must be 'add' or 'remove'")
+    if not isinstance(chunk, str) or not chunk:
+        return _err("depends-on: 'chunk' (the predecessor row id) is required")
+    if action == "add":
+        gate_kind = gate_kind or "output-consumption-runtime"
+        if gate_kind not in _DEPENDS_ON_WRITABLE_KINDS:
+            return _err(
+                f"depends-on: gate_kind {gate_kind!r} is not writable; "
+                f"use one of {', '.join(_DEPENDS_ON_WRITABLE_KINDS)}"
+            )
+        if note is not None and not isinstance(note, str):
+            return _err("depends-on: 'note' must be a string")
+
+    _state: dict = {"applied": False, "message": "", "warnings": []}
+
+    def mutate(old_text: str) -> str:
+        result = locate_fenced_block(old_text)
+        if result.status is LocateStatus.MALFORMED:
+            raise MutateAbort("depends-on: task spine is malformed")
+        if result.status is LocateStatus.ABSENT:
+            raise MutateAbort("depends-on: task spine is absent — no row to edit")
+
+        plan_fm = parse_frontmatter(old_text).get("frontmatter")
+        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+        governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
+
+        rows = _parse_rows_or_abort(result.body, "depends-on")
+        original_rows = copy.deepcopy(rows)
+        ids = {r.get("id") for r in rows if isinstance(r, dict)}
+        row = next((r for r in rows if isinstance(r, dict) and r.get("id") == task_id), None)
+        if row is None:
+            raise MutateAbort(f"depends-on: task id not found: {task_id!r}")
+        edges = row.get("depends_on")
+        edges = list(edges) if isinstance(edges, list) else []
+        present = [i for i, e in enumerate(edges) if _edge_target(e) == chunk]
+
+        if action == "add":
+            if chunk == task_id:
+                raise MutateAbort(f"depends-on: {task_id!r} cannot depend on itself")
+            if chunk not in ids:
+                raise MutateAbort(f"depends-on: target chunk not found in this plan: {chunk!r}")
+            if present:
+                raise MutateAbort(f"depends-on: {task_id!r} already depends on {chunk!r}")
+            if _reaches(rows, chunk, task_id):
+                raise MutateAbort(
+                    f"depends-on: {task_id!r} -> {chunk!r} would create a cycle "
+                    f"({chunk!r} already depends, directly or transitively, on {task_id!r})"
+                )
+            edge = {"chunk": chunk, "gate_kind": gate_kind}
+            if note:
+                edge["note"] = note
+            edges.append(edge)
+        else:
+            if not present:
+                raise MutateAbort(f"depends-on: {task_id!r} has no depends_on edge to {chunk!r}")
+            edges = [e for i, e in enumerate(edges) if i not in present]
+
+        if edges:
+            row["depends_on"] = edges
+        else:
+            row.pop("depends_on", None)
+
+        try:
+            untouched_invalid = _validate_all(
+                rows, governed=governed, touched_ids={task_id}, plan_created=plan_created,
+            )
+        except MutateAbort as exc:
+            raise MutateAbort(f"depends-on: {exc.args[0] if exc.args else exc}") from exc
+
+        start, end = result.span
+        _state["applied"] = True
+        _state["message"] = f"depends-on: {action} {task_id!r} -> {chunk!r}"
+        _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
+        return old_text[:start] + _patch_body(result.body, original_rows, rows) + old_text[end:]
+
+    try:
+        locked_rmw(path, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return _err(f"depends-on: plan not found: {plan_path}")
+    except LockTimeout as exc:
+        return _err(f"depends-on: timed out waiting for file lock on {plan_path}: {exc}")
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "depends-on: mutation aborted")
+
+    return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
+
+
 EVIDENCE_SIDECAR_SUFFIX = ".evidence.yaml"
 
 
@@ -2365,11 +2506,16 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     in-place. Does NOT git-commit.
 
     Required params:
-        verb      (str) — one of: add-task | stamp | resolve | clear-gate.
+        verb      (str) — one of: add-task | stamp | resolve | reopen | depends-on | clear-gate | evidence-append | em-discharge.
         plan_path (str) — absolute or repo-relative path to the plan file
                            (must resolve under <worktree>/docs/plans/).
 
     Verb-specific required params:
+        depends-on : id (str), action ('add'|'remove'), chunk (str, predecessor
+                   row id), gate_kind (optional; output-consumption-runtime
+                   default | epistemic-premise), note (optional) — adds or
+                   removes one depends_on edge; refuses unknown row/target,
+                   self-edge, duplicate, absent edge and cycles.
         clear-gate : id (str), owner_repo (str), evidence (str, non-empty) —
                    sets cleared: true + closure_evidence on the one matching
                    external_gate entry (row-level, or frontmatter with row: id).
@@ -2450,7 +2596,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = (params.get("plan_path") or "").strip()
 
     if not verb:
-        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | clear-gate | evidence-append | em-discharge)")
+        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | depends-on | clear-gate | evidence-append | em-discharge)")
     if not plan_path:
         return _err("plan.tasks.mutate: 'plan_path' is required")
 
@@ -2523,6 +2669,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             repo_root,
         )
 
+    if verb == "depends-on":
+        return await asyncio.to_thread(
+            _depends_on,
+            plan_path,
+            (params.get("id") or "").strip(),
+            (params.get("action") or "").strip(),
+            (params.get("chunk") or "").strip(),
+            params.get("gate_kind"),
+            params.get("note"),
+            worktree,
+            repo_root,
+        )
+
     if verb == "evidence-append":
         return await asyncio.to_thread(
             _evidence_append,
@@ -2555,5 +2714,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, clear-gate, evidence-append, em-discharge"
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge"
     )

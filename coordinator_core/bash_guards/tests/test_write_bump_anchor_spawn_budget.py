@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core import _data_root
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
+from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.fixture
@@ -41,9 +42,11 @@ def popen_calls(monkeypatch):
     return calls
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_positive_control_counter_sees_a_spawn(popen_calls):
     with pytest.raises(OSError):
-        subprocess.run(["git", "--version"], check=False)
+        subprocess.run(["git", "--version"], check=False, **no_console_creationflags())
     assert len(popen_calls) == 1
 
 

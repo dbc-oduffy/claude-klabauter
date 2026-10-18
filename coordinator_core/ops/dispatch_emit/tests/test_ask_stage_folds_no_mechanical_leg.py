@@ -14,6 +14,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _ask, _ask_scripts
+from coordinator_core.win_portability import no_console_creationflags
 
 _RETIRED = ("manifest-read", "ledger-restage", "ready-restage", "run-base")
 _BLITZ_LEG = "blitz-stage-read"
@@ -70,7 +71,9 @@ def _node(program: str) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=60, check=True)
+    out = subprocess.run(
+        [node, "-e", program], capture_output=True, text=True, timeout=60, check=True, **no_console_creationflags()
+    )
     return json.loads(out.stdout)
 
 

@@ -265,8 +265,8 @@ def _skill_weight_leg(root, touched, changed, baseline_text_for):
             raise ValueError("skill-weight baseline absent or unreadable")
         baseline = json.loads(text)
 
-        admission = _load_by_path("_claude_klabauter_skill_weight_admission", admission_path)
-        harness = _load_by_path("_claude_klabauter_skill_weight_harness", root / _SW_HARNESS)
+        admission = _load_by_path("_engine_skill_weight_admission", admission_path)
+        harness = _load_by_path("_engine_skill_weight_harness", root / _SW_HARNESS)
 
         def resident(sizes: Dict[str, int]) -> Dict[str, int]:
             measured = harness.measure_all_skills(sizes=sizes)

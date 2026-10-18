@@ -7,13 +7,16 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.architecture_survey import attestation
+from coordinator_core.win_portability import no_console_creationflags
 
 SYS = "docs/architecture/systems"
 
 
 def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _page(stamp: str, nl: str) -> bytes:

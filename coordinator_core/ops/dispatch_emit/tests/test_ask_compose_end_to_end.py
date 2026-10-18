@@ -14,6 +14,7 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _NO_FOLD, _compose
+from coordinator_core.win_portability import no_console_creationflags
 
 _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
 
@@ -228,6 +229,8 @@ def test_the_run_token_is_read_from_args_never_written_into_the_script():
     assert not re.search(r"\b[0-9a-f]{32}\b", script)
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.parametrize("over", [{}, {"in_run_commit": True, "roadmap_blitz_text": _RB_TEXT}])
 def test_script_is_valid_and_parses(over, tmp_path):
     script = _compose(**over)
@@ -245,7 +248,7 @@ def test_script_is_valid_and_parses(over, tmp_path):
         "new (Object.getPrototypeOf(async function () {}).constructor)("
         "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
     )
-    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True)
+    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
 
 
@@ -408,7 +411,7 @@ def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshi
     if node is None:
         pytest.skip("node not on PATH")
     program = f"const _gate = {{ tshirt: {json.dumps(tshirt)} }}; console.log({ask_compose._fire_tier_js()});"
-    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30)
+    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert out.stdout.strip() == tier, out.stderr
 
 

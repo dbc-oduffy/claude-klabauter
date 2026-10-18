@@ -13,7 +13,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.ceremony import close_background
 from coordinator_core.ops.dispatch_emit import terminal_commit
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 OTHER_RUN = "ask-20990101T000000-aaaaaa"
 OPEN_TRAILER = "Requirement-Open: R1 withheld by out-of-scope ruling"

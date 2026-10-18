@@ -632,6 +632,16 @@ EXPECTED_READERS = (
     "coordinator_core.hooks.tests.test_sibling_hold_release_and_supersession_e2e",
     "coordinator_core.hooks.tests.test_size_stage_guard_run_scoped",
     "coordinator_core.hooks.tests.test_submit_engine_ask_live_overlap",
+    # All-landed / resume test modules: none names fleet-mode.json or imports
+    # the resolver; each reaches the record only through an importer of
+    # `ask_gate` / `op` / `submit_engine_ask`, already allowlisted above.
+    "coordinator_core.hooks.tests.test_submit_engine_ask_landed_predecessor",
+    "coordinator_core.hooks.tests.test_submit_engine_ask_session_root",
+    "coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_gate",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_all_landed_ledger",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_stamps_landed_rows_coded",
+    "coordinator_core.ops.dispatch_emit.tests.test_resume_landed_state_row_shas",
     "coordinator_core.hooks.tests.test_watchdog_research_sizing_repro",
     "coordinator_core.ops.dispatch_emit.tests.test_ask_checkpoint_trailer_runtime",
     "coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e",

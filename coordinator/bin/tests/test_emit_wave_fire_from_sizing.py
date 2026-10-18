@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BIN = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("emit_wave_fire_fs", _BIN / "emit-wave-fire.py")
 ewf = importlib.util.module_from_spec(_spec)

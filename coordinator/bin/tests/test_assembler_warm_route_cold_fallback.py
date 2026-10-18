@@ -56,6 +56,12 @@ _ROUTED_TARGETS = {
 
 
 @pytest.fixture(autouse=True)
+def _scrub_dispatching_session_identity(monkeypatch):
+    for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _decouple_from_real_engine_root(monkeypatch):
     monkeypatch.setattr(
         entry_point_shim,

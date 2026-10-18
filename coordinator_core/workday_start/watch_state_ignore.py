@@ -9,11 +9,10 @@ healthy.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 from coordinator_core.git.git_state import IndexParseError, read_index
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 WATCH_STATE_FILES: tuple[str, ...] = (
     "state/group-em-watch.json",
@@ -103,14 +102,12 @@ def _covered(rules: list[_Rule], path: str) -> bool:
 
 def _confirm_ignored(repo_root: Path, paths: list[str]) -> set[str]:
     """One batched `git check-ignore --stdin`; paths it echoes are ignored."""
-    done = subprocess.run(
-        ["git", "check-ignore", "--stdin"],
-        cwd=str(repo_root), input=("\n".join(paths) + "\n").encode(),
-        capture_output=True, **no_console_creationflags(),
+    done = run_git(
+        ["check-ignore", "--stdin"], cwd=str(repo_root), input=("\n".join(paths) + "\n").encode(),
     )
     if done.returncode > 1:
-        raise RuntimeError(f"git check-ignore failed ({done.returncode}): {done.stderr.decode(errors='replace').strip()}")
-    return {ln.strip() for ln in done.stdout.decode(errors="replace").splitlines() if ln.strip()}
+        raise RuntimeError(f"git check-ignore failed ({done.returncode}): {done.stderr.strip()}")
+    return {ln.strip() for ln in done.stdout.splitlines() if ln.strip()}
 
 
 def watch_state_ignore(repo_root: Path) -> tuple[int, str]:

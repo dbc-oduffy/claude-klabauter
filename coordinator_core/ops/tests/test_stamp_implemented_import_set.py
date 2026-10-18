@@ -24,7 +24,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # cwd pins which checkout the child imports; an installed twin elsewhere on sys.path would be measured otherwise.
 _REPO_ROOT = Path(__file__).resolve().parents[3]

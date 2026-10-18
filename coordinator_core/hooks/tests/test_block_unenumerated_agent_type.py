@@ -123,9 +123,9 @@ _SCOUT_WARN = {
 
 
 def _scout_at_warn(monkeypatch: pytest.MonkeyPatch, roster: "set[str]") -> None:
-    import coordinator_core.hooks.sizing_scout_deny as ask_mod
+    import coordinator_core.hooks.hand_dispatch_deny as ask_mod
 
-    monkeypatch.setattr(ask_mod, "sizing_scout_deny", lambda payload, subagent_type: _SCOUT_WARN)
+    monkeypatch.setattr(ask_mod, "hand_dispatch_deny", lambda payload, subagent_type: _SCOUT_WARN)
     monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: (roster, None))
     _patch_opus_gate_noop(monkeypatch)
 
@@ -164,13 +164,48 @@ def test_a_warned_scout_text_survives_when_the_later_legs_pass(monkeypatch: pyte
 
 
 def test_a_scout_deny_is_returned_before_the_roster_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    import coordinator_core.hooks.sizing_scout_deny as ask_mod
+    import coordinator_core.hooks.hand_dispatch_deny as ask_mod
 
     scout_deny = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                          "permissionDecisionReason": "run live"}}
-    monkeypatch.setattr(ask_mod, "sizing_scout_deny", lambda payload, subagent_type: scout_deny)
+    monkeypatch.setattr(ask_mod, "hand_dispatch_deny", lambda payload, subagent_type: scout_deny)
     monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: pytest.fail("roster read"))
     assert mod.check(_agent_payload("coordinator:sizing-scout")) is scout_deny
+
+
+def test_a_top_level_plan_author_is_denied_before_the_roster_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    import coordinator_core.machine_profile as profile_mod
+
+    monkeypatch.setattr(profile_mod, "apply_guard_level", lambda name, env: env)
+    monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: pytest.fail("roster read"))
+    out = mod.check(_agent_payload("coordinator:plan-author"))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Skill(coordinator:plan)" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_mise_prep_plan_author_passes_the_planner_leg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: ({"coordinator:plan-author"}, None))
+    _patch_opus_gate_noop(monkeypatch)
+    import coordinator_core.hooks.enforce_agent_model_pin as pin_mod
+
+    monkeypatch.setattr(pin_mod, "check", lambda payload: None)
+    out = mod.check(_agent_payload("coordinator:plan-author", prompt="mise-prep-gate: draft plan"))
+    assert out is None
+
+
+def test_a_warn_level_planner_advisory_survives_the_later_legs(monkeypatch: pytest.MonkeyPatch) -> None:
+    import coordinator_core.machine_profile as profile_mod
+
+    warn = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                   "additionalContext": "planner-warn"}}
+    monkeypatch.setattr(profile_mod, "apply_guard_level", lambda name, env: warn)
+    monkeypatch.setattr(mod, "resolve_roster", lambda *a, **k: ({"coordinator:plan-author"}, None))
+    _patch_opus_gate_noop(monkeypatch)
+    import coordinator_core.hooks.enforce_agent_model_pin as pin_mod
+
+    monkeypatch.setattr(pin_mod, "check", lambda payload: None)
+    out = mod.check(_agent_payload("coordinator:plan-author"))
+    assert out["hookSpecificOutput"]["additionalContext"] == "planner-warn"
 
 
 def test_resolve_roster_unions_all_three_sources(content_root: Path, plugin_home: Path) -> None:

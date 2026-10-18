@@ -36,10 +36,6 @@ def calls(monkeypatch, tmp_path):
             print("sizing not accepted", file=sys.stderr)
         return state["auth"]
 
-    def fake_gate(root, subject=None):
-        log.append("roadmap")
-        return {"batons": [{"path": subject, "execution_gate": state["roadmap"]}]}
-
     def fake_claim(slug, cwd=None, *, for_execution=False, plan_path=None):
         log.append("claim")
         assert for_execution and slug == "2026-10-08-demo" and plan_path == PLAN
@@ -50,7 +46,6 @@ def calls(monkeypatch, tmp_path):
 
     monkeypatch.setattr(pg, "stamp_check", fake_stamp)
     monkeypatch.setattr(pg.exec_auth_stamp, "main", fake_auth)
-    monkeypatch.setattr(pg, "assemble_plan_gate", fake_gate)
     monkeypatch.setattr(pg, "claim_plan", fake_claim)
     baton = tmp_path / "state/handoffs/b.md"
     baton.parent.mkdir(parents=True)
@@ -64,16 +59,13 @@ def _roadmap_baton(state):
     state["baton"].write_text("---\nroadmap_id: r1\n---\n", encoding="utf-8")
 
 
-def test_all_proceed_in_order_skips_roadmap_for_plain_baton(calls, tmp_path):
+def test_all_proceed_in_order_skips_roadmap_for_plain_baton(calls, tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("gate read for a baton with no roadmap_id")
+
+    monkeypatch.setattr(pg, "compute_gate_report", boom)
     assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
     assert calls["log"] == ["stamp", "auth", "claim"]
-
-
-def test_all_proceed_with_roadmap_baton_open(calls, tmp_path):
-    _roadmap_baton(calls)
-    calls["roadmap"] = {"open": True, "blocking": []}
-    assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
-    assert calls["log"] == ["stamp", "auth", "roadmap", "claim"]
 
 
 @pytest.mark.parametrize("verdict", ["match", "stale-bookkeeping", "absent"])
@@ -96,12 +88,51 @@ def test_authorize_refusal_carries_stderr(calls, tmp_path):
     assert calls["log"] == ["stamp", "auth"]
 
 
-def test_roadmap_gate_shut_halts(calls, tmp_path):
+def _report(open_, blocking=()):
+    return {"verdict": {"execution_gate": {"open": open_, "blocking": [{"blocker": b} for b in blocking]}}}
+
+
+def test_roadmap_baton_with_open_gate_proceeds_to_the_claim(calls, tmp_path, monkeypatch):
     _roadmap_baton(calls)
-    calls["roadmap"] = {"open": False, "blocking": [{"blocker": "other-baton"}]}
+    seen = {}
+
+    def fake(root, **kw):
+        seen.update(kw)
+        return _report(True)
+
+    monkeypatch.setattr(pg, "compute_gate_report", fake)
+    assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
+    assert seen == {"subject": "state/handoffs/b.md"}
+    assert calls["log"] == ["stamp", "auth", "claim"]
+
+
+def test_roadmap_baton_with_shut_gate_halts_listing_blockers(calls, tmp_path, monkeypatch):
+    _roadmap_baton(calls)
+    monkeypatch.setattr(pg, "compute_gate_report", lambda root, **kw: _report(False, ["b-1", "b-2"]))
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
-    assert h.halted_at == contract.HALTS["roadmap-gate-shut"] and "other-baton" in h.reason
-    assert calls["log"] == ["stamp", "auth", "roadmap"]
+    assert h.halted_at == contract.HALTS["roadmap-gate-shut"]
+    assert "b-1" in h.reason and "b-2" in h.reason and "kill" not in h.reason
+    assert calls["log"] == ["stamp", "auth"]
+
+
+def test_roadmap_baton_read_cannot_answer_halts_never_proceeds(calls, tmp_path, monkeypatch):
+    _roadmap_baton(calls)
+
+    def refuse(root, **kw):
+        raise pg.GateReadRefused("handoff dir unreadable")
+
+    monkeypatch.setattr(pg, "compute_gate_report", refuse)
+    h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
+    assert h.halted_at == contract.HALTS["roadmap-gate-shut"]
+    assert "handoff dir unreadable" in h.reason
+    assert calls["log"] == ["stamp", "auth"]
+
+
+def test_malformed_report_halts_never_proceeds(calls, tmp_path, monkeypatch):
+    _roadmap_baton(calls)
+    monkeypatch.setattr(pg, "compute_gate_report", lambda root, **kw: {})
+    h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
+    assert h.halted_at == contract.HALTS["roadmap-gate-shut"]
 
 
 def test_peer_claim_refusal_halts(calls, tmp_path):

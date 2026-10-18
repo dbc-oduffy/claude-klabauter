@@ -55,7 +55,6 @@ _SCRIPT_SOURCE = "export const meta = {\n  name: 'plan-blitz',\n  phases: [],\n}
 # import sites the Phase-1 modules call them through.
 _GATE_STUBS = {
     "stamp_check": lambda path, repo_root=None: (0, {"verdict": "match"}),
-    "assemble_plan_gate": lambda root, subject=None: {"batons": []},
     "claim_plan": lambda slug, cwd=None, *, for_execution=False, plan_path=None: True,
 }
 

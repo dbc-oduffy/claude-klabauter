@@ -13,7 +13,7 @@ from coordinator_core.ops import release_index
 from coordinator_core.ops.release_index import ReleaseIndexError, released_names, write_release_index
 from coordinator_core.session import declared_writes
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

@@ -3,7 +3,8 @@ coordinator_core.ops.baton_supersede — "baton.supersede" op.
 
 Purpose: the sanctioned writer for ``superseded_by`` on a live
 ``state/handoffs/*.md`` baton, recording that its work was folded into another
-baton. ``roadmap.plan_gate`` reads the field and treats the baton as terminal.
+baton. Contract of the field for any gate reader: a baton carrying ``superseded_by``
+is terminal.
 
 Params: ``baton`` (id of the baton to mark: stub_id, handoff_id or filename stem),
 ``superseded_by`` (id of the baton it was folded into). Both required.

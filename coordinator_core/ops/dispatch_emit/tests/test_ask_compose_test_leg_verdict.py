@@ -17,6 +17,9 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session.record_homes import record_path
 from coordinator_core.warp_fire import fire_command
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SIZING = "state/sizings/x.yaml"
 
@@ -58,7 +61,9 @@ def _run(testResult: str, owed: bool) -> object:
     snippet = _test_verdict_empty_halt_js(_SIZING).replace("TEST_GUARD", "_TEST_GUARD")
     body = snippet.split("&& (_TEST_GUARD) && ", 1)[1]
     program = _HARNESS % ("true" if owed else "false", testResult, body)
-    out = subprocess.run([node, "-e", program], capture_output=True, text=True, check=True).stdout.strip()
+    out = subprocess.run(
+        [node, "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout.strip()
     import json
 
     return json.loads(out)

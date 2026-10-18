@@ -11,6 +11,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _PLAN = """---
 title: "p"
 sizing_object: null

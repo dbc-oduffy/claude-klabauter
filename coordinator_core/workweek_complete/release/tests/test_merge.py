@@ -11,7 +11,7 @@ from coordinator_core.workweek_complete.release import contract, merge
 from coordinator_core.workweek_complete.release.merge import ARGV, Child, MergeRefused, merge_pinned
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(cwd, *args):

@@ -43,6 +43,7 @@ print("RESULT=" + json.dumps({
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_receipt_and_request_helpers_do_not_load_the_cut_modules(tmp_path):
     result = subprocess.run(
         [sys.executable, "-c", _PROBE, str(tmp_path), json.dumps(_ABSENT)],

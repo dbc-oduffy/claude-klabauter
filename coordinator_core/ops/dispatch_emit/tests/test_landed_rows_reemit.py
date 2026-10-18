@@ -7,6 +7,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit.emit import _drop_landed_rows, landed_rows_from_text
 from coordinator_core.ops.dispatch_emit.spine_read import EmitterRow
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _row(id_, deps=()):
     return EmitterRow(

@@ -98,7 +98,7 @@ def test_resumable_plan_none_without_a_plan(repo):  # noqa: F811
 def test_resumable_plan_follows_the_plan_edge_at_m_plus(repo):  # noqa: F811
     _plan(repo, rel="docs/plans/other.md")
     plan = resumable_plan({"plan": "docs/plans/other.md"}, REL, repo, "m_plus")
-    assert plan == ("docs/plans/other.md", ("A1",), None)
+    assert plan == ("docs/plans/other.md", ("A1",), None, ())
 
 
 def test_resumable_plan_refuses_an_edge_escaping_plans(repo):  # noqa: F811

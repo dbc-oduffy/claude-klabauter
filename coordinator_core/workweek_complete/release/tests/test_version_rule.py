@@ -36,6 +36,7 @@ def _raw_entry(root: Path, name: str, frontmatter: str, month: str = "2026-10") 
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_recommend_level_imports_neither_heavy_module(tmp_path):
     _header(tmp_path, "2026-10-05")
     _entry(tmp_path, "a", "roadmap")

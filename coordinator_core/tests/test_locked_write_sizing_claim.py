@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.session import declared_writes
 

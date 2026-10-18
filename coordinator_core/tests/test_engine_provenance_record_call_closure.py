@@ -26,6 +26,7 @@ print(json.dumps(before))
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_import_defers_closure_and_call_writes_one_record(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     proc = subprocess.run(

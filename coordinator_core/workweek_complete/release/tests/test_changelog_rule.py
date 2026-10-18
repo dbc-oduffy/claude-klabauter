@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workweek_complete.release import changelog_rule
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 OK_ROWS = [
     {"id": "backfill", "status": "ran", "exit_code": 0},

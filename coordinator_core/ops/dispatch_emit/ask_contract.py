@@ -656,11 +656,14 @@ def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:
 
 class ResumePlan(NamedTuple):
     """`sizing_fire.resumable_plan`'s return: the plan to resume and the ids of its rows still
-    to run, in spine order; ``ledger`` is the halt pointer a ledger-halted run resumes from."""
+    to run, in spine order; ``ledger`` is the halt pointer a ledger-halted run resumes from;
+    ``landed_open`` is ``(row id, landing sha)`` for each row still ``open`` on disk that a
+    commit landed."""
 
     plan_rel: str
     incomplete: tuple[str, ...]
     ledger: LedgerHalt | None = None
+    landed_open: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

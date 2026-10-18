@@ -95,6 +95,7 @@ def _stub_operator_config(monkeypatch) -> None:
 
 def test_brief_end_to_end_keeps_action_class_points_in_judgment_points(monkeypatch):
     _stub_operator_config(monkeypatch)
+    monkeypatch.setattr(wc_brief, "head_branch", lambda _p: "work/x")
     monkeypatch.setattr(wc_brief, "_compute_open_day_goals", lambda: _EMPTY_OPEN_DAY_GOALS)
     monkeypatch.setattr(wc_brief, "_compute_register_stall", lambda: StallReport())
     monkeypatch.setattr(

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "workweek-complete-doc-staleness.py"
 

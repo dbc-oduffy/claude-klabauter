@@ -183,6 +183,7 @@ AC3/AC4 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
 from __future__ import annotations
 
 import errno
+import itertools
 import json
 import os
 import sys
@@ -1126,6 +1127,21 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
         return
 
 
+#: Per-process call counter; `next()` on an `itertools.count` is atomic under the GIL.
+_dispatch_seq = itertools.count()
+
+
+def _mint_dispatch_key() -> str:
+    """A key unique to this call: `{pid}-{monotonic_ns}-{seq}`.
+
+    The sequence suffix keeps two calls distinct when a coarse monotonic clock
+    (Windows) returns the same tick twice; the server refuses a repeated key
+    with -32009, so a collision fails a legitimate second dispatch. The key is
+    opaque to the server and to `_poll_command_for`.
+    """
+    return f"{os.getpid()}-{time.monotonic_ns()}-{next(_dispatch_seq)}"
+
+
 def _try_warm_dispatch_inner(
     msg: dict, read_deadline_secs: Optional[float] = None
 ) -> Optional[dict]:
@@ -1171,13 +1187,9 @@ def _try_warm_dispatch_inner(
     # side-channel field `_serve_line` pops before dispatch. `time.monotonic_ns()`
     # is the clock C1's spike verdict picked on the executing (Linux) host as
     # ordered across independently-started interpreters; a Windows/Darwin
-    # reading is recorded there as owed, not assumed here. `time` is imported
-    # locally, matching this module's per-call-site import discipline: it sits
-    # on every invocation's cold-start preamble and is measured against
-    # `test_warm_reach_import_ceiling.py`'s budget.
-    import time as _time
-
-    dispatch_key = f"{os.getpid()}-{_time.monotonic_ns()}"
+    # reading is recorded there as owed, not assumed here; `_mint_dispatch_key`
+    # adds a per-process sequence so a coarse clock cannot repeat a key.
+    dispatch_key = _mint_dispatch_key()
     request["_dispatch_key"] = dispatch_key
     # Caller-identity seam (module docstring): one top-level `_caller` object, ADDED
     # 2026-08-30 (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md

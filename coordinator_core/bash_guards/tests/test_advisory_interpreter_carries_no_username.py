@@ -46,6 +46,40 @@ def test_home_relative_interpreter_drops_the_username():
     assert rendered.startswith('"$HOME/'), rendered
 
 
+def _account_home() -> str:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        k32, userenv, adv = ctypes.WinDLL("kernel32"), ctypes.WinDLL("userenv"), ctypes.WinDLL("advapi32")
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        userenv.GetUserProfileDirectoryW.argtypes = [
+            wintypes.HANDLE, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        tok = wintypes.HANDLE()
+        assert adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0008, ctypes.byref(tok))
+        size = wintypes.DWORD(0)
+        userenv.GetUserProfileDirectoryW(tok, None, ctypes.byref(size))
+        buf = ctypes.create_unicode_buffer(size.value)
+        assert userenv.GetUserProfileDirectoryW(tok, buf, ctypes.byref(size))
+        k32.CloseHandle(tok)
+        return buf.value
+    import pwd
+
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def test_redirected_home_env_still_drops_the_username(tmp_path, monkeypatch):
+    real = _account_home()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    py = os.path.join(real, "AppData", "Local", "Programs", "Python", "Python313", "python.exe")
+    rendered = _bt_render_interpreter_path(py)
+    assert os.path.basename(real) not in rendered, rendered
+    assert rendered.startswith('"$HOME/'), rendered
+
+
 def test_interpreter_outside_home_is_left_alone():
     outside = os.path.join("C:" + os.sep, "Program Files", "Python313", "python.exe")
     rendered = _bt_render_interpreter_path(outside)

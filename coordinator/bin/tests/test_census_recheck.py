@@ -106,6 +106,19 @@ def test_an_unexecutable_command_is_unrunnable(cr, tmp_path):
     assert cr.recheck_plan(plan, tmp_path, 10)["verdict"] == cr.UNRUNNABLE
 
 
+def test_no_posix_shell_on_path_is_unrunnable_not_a_cmd_exe_fallback(cr, tmp_path, monkeypatch):
+    monkeypatch.setattr(cr.shutil, "which", lambda name, *a, **k: None)
+    plan = _plan(tmp_path, 'census:\n  - question: q\n    command: "echo 1"\n    result: "1"\n')
+    out = cr.recheck_plan(plan, tmp_path, 10)
+    assert out["verdict"] == cr.UNRUNNABLE
+    assert "no POSIX shell" in out["rows"][0]["detail"]
+
+
+def test_a_system32_bash_is_never_taken_for_the_posix_shell(cr, monkeypatch):
+    monkeypatch.setattr(cr.shutil, "which", lambda name, *a, **k: "System32\\bash.exe")
+    assert cr._posix_shell() is None
+
+
 def test_non_utf8_output_does_not_crash_the_recheck(cr, tmp_path):
     """Undecodable stdout must be replaced, not raised: a locale codec (Windows cp1252)
     or a binary byte in a command's output would otherwise abort the whole census."""

@@ -62,11 +62,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 CURRENT = "CURRENT"
 DRIFT = "DRIFT"
@@ -133,6 +140,15 @@ def _is_prose(recorded: str) -> bool:
     return bool(_PROSE.search(recorded))
 
 
+def _posix_shell() -> str | None:
+    """A `census[].command` is POSIX shell; name the interpreter, never inherit `cmd.exe`."""
+    for name in ("bash", "sh"):
+        found = shutil.which(name)
+        if found and "system32" not in found.replace("\\", "/").lower():
+            return found
+    return None
+
+
 def recheck_entry(entry: dict, cwd: Path, timeout_s: int) -> dict:
     """A non-zero exit is NOT itself unrunnable (e.g. `grep -c` exits 1 on a zero
     count, a legitimate recorded premise); only a failed exec or non-termination is."""
@@ -147,10 +163,16 @@ def recheck_entry(entry: dict, cwd: Path, timeout_s: int) -> dict:
     if not command:
         row.update(state=UNRUNNABLE, observed="", detail="entry declares no command")
         return row
+    shell = _posix_shell()
+    if not shell:
+        row.update(state=UNRUNNABLE, observed="",
+                   detail="no POSIX shell on PATH (tried bash, sh)")
+        return row
     try:
         proc = subprocess.run(
-            command, shell=True, cwd=str(cwd), capture_output=True,
+            [shell, "-c", command], cwd=str(cwd), capture_output=True,
             text=True, encoding="utf-8", errors="replace", timeout=timeout_s,
+            **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
         row.update(state=UNRUNNABLE, observed="",

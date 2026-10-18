@@ -25,7 +25,7 @@ Domain vocabulary: wave result, landing, ready/pulled/replan verdict, link repai
 replan baton.
 
 Consumed by ``coordinator_core.ops.roadmap_blitz_land`` (the ``roadmap.blitz_land``
-op). Pure-ish: reads the corpus through ``plan_gate``, writes only the records the
+op). Pure-ish: scans batons through ``plan_gate.scan_batons``, writes only the records the
 wave result names, each under ``locked_rmw``.
 
 Spec backlink: coordinator-content-repo coordinator/skills/plan-blitz/SKILL.md § The flow, step 4.
@@ -74,11 +74,11 @@ from coordinator_core.frontmatter.primitives import (
     remove_fm_field,
 )
 from coordinator_core.roadmap.plan_gate import (
-    effective_sizing_route,
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
-    assemble_plan_gate,
 )
+
+from coordinator_core.roadmap import gate_v2
 
 GENERATES = []  # writes an authored roadmap/plan document to a per-run derived path — session output, not a regenerable artifact with a stamp
 
@@ -1222,7 +1222,8 @@ def land_wave(
 
     `next_wave` is computed from a FRESH gate read taken after the writes, not from
     the pre-landing report — the approvals just written are precisely what changes
-    it, and reusing the stale read would hand the driver the same wave twice.
+    it, and reusing the stale read would hand the driver the same wave twice. A
+    ``GateReadRefused`` from either read propagates as an error, never as an empty wave.
 
     It carries ONE subtraction from that read: a baton whose replan this landing just
     minted is dropped, because the mint leaves the source open and the fresh read
@@ -1231,7 +1232,7 @@ def land_wave(
     source, and succession is deliberately left unsettled.
     """
     wave_result = _unwrap_wave_result(wave_result)
-    report = assemble_plan_gate(worktree_root)
+    report = gate_v2.compute_gate_report(worktree_root)
     # Path resolution walks EVERY record, not just the candidates the report
     # carries: closing a baton makes it terminal and therefore a non-candidate, so
     # resolving against the report alone made an idempotent re-land fail with "no
@@ -1464,12 +1465,6 @@ def land_wave(
             # reason about.
             suffix = deliverable_id.rsplit("-", 1)[-1]
             source_path = _baton_path_for(entry, report)
-            # The subtraction below is earned by a mint that SUCCEEDED, so it is recorded after
-            # one. Adding it here would drop a source out of `next_wave` on a refused mint — a
-            # baton left open, `ready_to_fire`, carrying no approved plan and now no replan
-            # either, omitted from the fire that was its way back. Every other refusal path in
-            # this module leaves the record where it was so the next sweep self-heals; this one
-            # would not.
             entry_minted = mint_replan_baton(
                 worktree_root,
                 source_baton_path=source_path,
@@ -1495,20 +1490,14 @@ def land_wave(
         except (LandingRefused, OSError, KeyError) as exc:
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
-    # F21: scope the fresh gate read to THIS run's roadmap_id, derived from the
-    # batons this wave actually touched, never repo-wide — an unscoped read
-    # handed `next_wave` batons belonging to an unrelated roadmap, so the next
-    # emit refused the roadmap-scoped report and the operator needed
-    # `--take-remaining` every wave.
+    # Scoped to THIS run's roadmap_id, derived from the batons this wave touched, never
+    # repo-wide: an unscoped read handed `next_wave` batons of an unrelated roadmap.
     run_roadmap_id = _wave_roadmap_id(wave_result, all_records)
-    after = assemble_plan_gate(worktree_root, roadmap_id=run_roadmap_id)
+    after = gate_v2.compute_gate_report(worktree_root, roadmap_id=run_roadmap_id)
     wave = after["waves"][0] if after["waves"] else []
     by_id = {b["id"]: b for b in after["batons"]}
     wave = _without_replanned_sources(wave, by_id, replanned_sources)
-    # F21: a baton whose OWN plan already landed as `implemented` is done, not
-    # a candidate — exclude it explicitly rather than trust `needs_plan` alone,
-    # which is a property of the PLANNING gate and says nothing about a baton
-    # this pass should stop re-offering to fire.
+    # A baton whose OWN plan already landed as `implemented` is done, not a candidate.
     wave = [
         i
         for i in wave
@@ -1733,18 +1722,14 @@ def _baton_path_for(entry: Dict[str, Any], report: Dict[str, Any]) -> str:
 def _wave_roadmap_id(
     wave_result: Dict[str, Any], all_records: List[Dict[str, Any]]
 ) -> Optional[str]:
-    """The single ``roadmap_id`` every baton THIS wave touched shares, or
-    ``None`` if the wave names no batons, none resolve to a record, or (should
-    never happen for one honestly-fired wave) they disagree — an ambiguous
-    scope must fall back to the repo-wide read rather than guess one roadmap
-    and silently drop the other's batons from `next_wave`.
-    """
+    """The single ``roadmap_id`` every baton THIS wave touched shares, or ``None`` if the wave
+    names no batons, none resolve to a record, or they disagree — an ambiguous scope falls
+    back to the repo-wide read rather than guess one roadmap and drop the other's batons."""
     roadmap_id_by_baton = {r["id"]: r.get("roadmap_id") for r in all_records}
     seen: set = set()
     for lane in ("ready", "pulled", "replan", "surfacedToPm"):
         for entry in wave_result.get(lane) or []:
-            baton_id = entry.get("batonId")
-            rid = roadmap_id_by_baton.get(baton_id)
+            rid = roadmap_id_by_baton.get(entry.get("batonId"))
             if rid:
                 seen.add(rid)
     if len(seen) == 1:
@@ -1759,29 +1744,11 @@ def _without_replanned_sources(
 ) -> List[str]:
     """Drop, from the wave this landing hands back, any baton whose replan it just minted.
 
-    A `replan` verdict mints a NEW baton carrying the gate's brief and leaves the source
-    exactly as it was — open, `ready_to_fire`, carrying no approved plan. The fresh gate read
-    below therefore returns BOTH, and the driver's next fire spends a sizing scout, a planner,
-    a premise check, reviewers and an integrator on the source as well as on its replan.
-    Measured 2026-09-10 on example-retrieval-repo-ue-addon: the landing of one PIVOT returned `rqsi-02`
-    and `hnd-replan-rqsi-02-d15940` side by side, and the wave being landed had itself planned
-    both halves of two OLDER pairs (`inst-02`, `dlv-20260901-handoff-2a3d9e`) — in each case
-    the replan went ready and the source was pulled, after paying for it in full.
-
-    THE FILTER IS ON THE REPORT, NOT ON DISK, and that is the whole design. This module writes
-    no frontmatter it would then have to un-write: no `blocked_by` edge (which is
-    decision-dependency vocabulary, not workflow state, and which nothing here would ever
-    clear), no terminal stamp on the source (`continued` is a CODED state, so stamping it
-    would open a dependent's EXECUTION gate on work that never landed). The source keeps its
-    disk state, stays visible to the very next `roadmap.plan_gate` read, and is simply not
-    handed to the fire the driver is about to make.
-
-    So this stops the double-spend and does NOT settle succession. A replan is a successor in
-    everything but its frontmatter, and the durable answer is to mint it as one (DR-172's
-    `continued`/`continued_into` shape, with identity inherited so a dependent edge does not
-    resolve `coded` against unlanded work). That is a work-graph semantics change and wants a
-    decision record, not this patch. Until it exists, a pair already on disk from an EARLIER
-    landing is outside this filter's reach by construction — it only knows what it just minted.
+    A `replan` verdict mints a NEW baton and leaves the source open, so the fresh read returns
+    BOTH and the next fire would spend a full plan pass on the source as well. The filter is on
+    the report, not on disk: nothing is written to the source, it stays visible to the next
+    gate read, and succession is deliberately left unsettled. A pair already on disk from an
+    EARLIER landing is outside its reach.
     """
     if not replanned_sources:
         return wave
@@ -1789,11 +1756,13 @@ def _without_replanned_sources(
 
 
 def _fire_arg(baton: Dict[str, Any], worktree_root: Path) -> Dict[str, Any]:
-    """One `batons[]` entry, shaped exactly as the workflow's args contract wants.
+    """One `batons[]` entry, shaped as the workflow's args contract wants.
 
-    Emitted here rather than assembled by the caller so the fire arguments and the
-    gate that produced them cannot drift — a hand-built array is where `planPath`
-    silently becomes null for a baton that already has a plan.
+    Emitted here so the fire arguments and the gate that produced them cannot drift.
+    ``executionOpen`` is the EXECUTION gate, deliberately separate from anything
+    planning-related: an XS whose blockers are planned-but-not-coded may be PLANNED here and
+    must not be EXECUTED here. ``route`` is None: the v2 report carries ``sizing_objects``,
+    not a resolved route.
     """
     return {
         "id": baton["id"],
@@ -1803,13 +1772,9 @@ def _fire_arg(baton: Dict[str, Any], worktree_root: Path) -> Dict[str, Any]:
         "planPath": (
             (worktree_root / baton["plan"]["path"]).as_posix() if baton.get("plan") else None
         ),
-        # The EXECUTION gate, carried so the wave can finish XS work in-band. It is
-        # deliberately a separate field from anything planning-related: an XS whose
-        # blockers are planned-but-not-coded may be PLANNED here and must not be
-        # EXECUTED here, and a wave that read one gate for both questions would run
-        # code against blockers that do not exist yet.
         "executionOpen": baton["execution_gate"]["open"],
-        # Effective route: a PM-recorded `xl_exit: accept_multi_session` reads `plan`,
-        # so the wave plans the baton rather than re-adjudicating a settled exit.
-        "route": effective_sizing_route(worktree_root, baton.get("sizing_objects")),
+        "sizingObjects": baton.get("sizing_objects"),
+        "route": None,
     }
+
+

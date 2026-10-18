@@ -355,7 +355,10 @@ def _create_params_file(claude_klabauter_root: str) -> "tuple[int, str]":
     if directory is None:
         import tempfile
 
-        return tempfile.mkstemp(prefix="cc-invoke-params-")
+        # `tempfile` caches its directory on first use; re-reading the env here keeps a
+        # later TMPDIR/TEMP/TMP change (a test sandbox) from being ignored.
+        sys_temp = os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP")
+        return tempfile.mkstemp(prefix="cc-invoke-params-", dir=sys_temp)
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
     for _ in range(100):
         path = os.path.join(directory, "cc-invoke-params-" + os.urandom(8).hex())

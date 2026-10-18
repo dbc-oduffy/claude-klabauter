@@ -29,7 +29,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DOOR = _REPO_ROOT / "coordinator" / "bin" / "emit-dispatch-workflow.py"

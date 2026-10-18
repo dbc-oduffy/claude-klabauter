@@ -10,7 +10,6 @@ import asyncio
 import contextvars
 import importlib
 import json
-import shutil
 import sys
 import threading
 import time
@@ -170,7 +169,9 @@ def _measure_cold(
         stdout=read(out_path),
         stderr=read(err_path),
     )
-    shutil.rmtree(out_dir, ignore_errors=True)
+    from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+    rmtree_or_raise(out_dir, label="run-io")
     return outcome
 
 

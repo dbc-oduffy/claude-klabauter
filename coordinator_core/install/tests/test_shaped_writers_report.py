@@ -16,6 +16,7 @@ _REPO = Path(__file__).resolve().parents[3]
 #: writer_id -> why it is not an install-run writer.
 _NOT_AN_INSTALL_RUN_WRITER = {
     "forwarder-self-heal": "runs at session start, never inside an install run; journaling there would append to an install journal outside any install",
+    "plugin-cache-sessions": "runs at session start, never inside an install run; journaling there would append to an install journal outside any install",
 }
 
 

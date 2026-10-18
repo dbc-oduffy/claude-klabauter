@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import gate_owed
+from coordinator_core.win_portability import no_console_creationflags
 
 # (reply text, expected kind or None)
 CASES = [
@@ -40,7 +41,9 @@ def _kind_js(text):
         "const s = JSON.stringify(" + json.dumps(text) + ");"
         "const m = re.exec(s); process.stdout.write(JSON.stringify(m ? [m[1].toLowerCase(), m[2]] : null));"
     )
-    out = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout
     return json.loads(out)
 
 

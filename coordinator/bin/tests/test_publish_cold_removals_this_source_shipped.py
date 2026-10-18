@@ -30,7 +30,7 @@ publish = _load_publish_module()
 
 
 def _row(source_dir: Path) -> SimpleNamespace:
-    return SimpleNamespace(name="row", source_dir=source_dir)
+    return SimpleNamespace(name="row", source_dir=source_dir, allowlist="")
 
 
 def test_keeps_only_paths_this_repo_deleted(capsys):

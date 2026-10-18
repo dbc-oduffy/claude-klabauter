@@ -4328,6 +4328,127 @@ def test_reopen_refuses_a_row_that_is_not_coded_or_has_no_reason(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
+_PLAN_THREE_ROWS = """\
+---
+title: "Edge plan"
+status: draft
+---
+
+# Edge plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: First
+  change_kind: script-edit
+  surface: a.py
+  queue_scope: project
+  deferred: false
+  body: |
+    one
+- id: C2
+  title: Second
+  change_kind: script-edit
+  surface: b.py
+  queue_scope: project
+  deferred: false
+  depends_on:
+    - chunk: C1
+      gate_kind: output-consumption-runtime
+  body: |
+    two
+- id: C3
+  title: Third
+  change_kind: script-edit
+  surface: c.py
+  queue_scope: project
+  deferred: false
+  body: |
+    three
+```
+"""
+
+
+def _depends_on_call(repo, plan, **kw):
+    return _run(_handler(
+        {"verb": "depends-on", "plan_path": str(plan), **kw}, repo_root=repo / ".git",
+    ))
+
+
+def test_depends_on_add_writes_object_form_and_leaves_other_rows_alone(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "edge-add.md", _PLAN_THREE_ROWS)
+
+    res = _depends_on_call(
+        repo, plan, id="C3", action="add", chunk="C2",
+        gate_kind="epistemic-premise", note="needs C2 first",
+    )
+
+    assert res["exit_code"] == 0 and res["applied"] is True, res
+    text = plan.read_text(encoding="utf-8")
+    import yaml as _yaml
+    rows = _yaml.safe_load(text.split("```yaml plan-tasks\n")[1].split("```")[0])
+    c3 = next(r for r in rows if r["id"] == "C3")
+    assert c3["depends_on"] == [
+        {"chunk": "C2", "gate_kind": "epistemic-premise", "note": "needs C2 first"}
+    ]
+    assert text.count("    one\n") == 1 and "    two\n" in text
+
+
+def test_depends_on_add_defaults_gate_kind(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "edge-default.md", _PLAN_THREE_ROWS)
+    assert _depends_on_call(repo, plan, id="C3", action="add", chunk="C1")["exit_code"] == 0
+    assert "gate_kind: output-consumption-runtime" in plan.read_text(encoding="utf-8")
+
+
+def test_depends_on_remove_drops_edge_and_empty_key(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "edge-remove.md", _PLAN_THREE_ROWS)
+
+    res = _depends_on_call(repo, plan, id="C2", action="remove", chunk="C1")
+
+    assert res["exit_code"] == 0 and res["applied"] is True, res
+    assert "depends_on" not in plan.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "kw, needle",
+    [
+        ({"id": "C9", "action": "add", "chunk": "C1"}, "task id not found"),
+        ({"id": "C3", "action": "add", "chunk": "C9"}, "target chunk not found"),
+        ({"id": "C3", "action": "add", "chunk": "C3"}, "itself"),
+        ({"id": "C2", "action": "add", "chunk": "C1"}, "already depends"),
+        ({"id": "C3", "action": "remove", "chunk": "C1"}, "no depends_on edge"),
+        ({"id": "C1", "action": "add", "chunk": "C2"}, "cycle"),
+        ({"id": "C3", "action": "add", "chunk": "C1", "gate_kind": "bogus"}, "not writable"),
+        ({"id": "C3", "action": "toggle", "chunk": "C1"}, "'add' or 'remove'"),
+    ],
+)
+def test_depends_on_refusals_leave_the_plan_unchanged(tmp_path, kw, needle):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "edge-refuse.md", _PLAN_THREE_ROWS)
+    before = plan.read_text(encoding="utf-8")
+
+    res = _depends_on_call(repo, plan, **kw)
+
+    assert res["exit_code"] == 1 and needle in res["error"], res
+    assert plan.read_text(encoding="utf-8") == before
+
+
+def test_depends_on_refuses_a_transitive_cycle(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "edge-cycle.md", _PLAN_THREE_ROWS)
+    assert _depends_on_call(repo, plan, id="C3", action="add", chunk="C2")["exit_code"] == 0
+    before = plan.read_text(encoding="utf-8")
+
+    res = _depends_on_call(repo, plan, id="C1", action="add", chunk="C3")
+
+    assert res["exit_code"] == 1 and "cycle" in res["error"]
+    assert plan.read_text(encoding="utf-8") == before
+
+
 _PLAN_ROW_WITH_COMMENTS = """\
 ---
 title: "Test Plan — commented row"

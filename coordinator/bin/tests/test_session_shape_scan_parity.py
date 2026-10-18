@@ -299,7 +299,7 @@ def _ledger(repo: Path, handoff_name: str, sid: str) -> None:
     d = repo / ".git" / "coordinator-sessions" / "handoff-claims" / handoff_name
     d.mkdir(parents=True, exist_ok=True)
     (d / "session_id").write_text(sid, encoding="utf-8")
-    (d / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")
+    (d / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")  # dr084: ledger filename fixture write, not a frontmatter read
 
 
 def _memo(repo: Path, name: str, by: str, at: str, mtime: float, folder: str = "inbox") -> None:

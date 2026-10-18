@@ -20,7 +20,7 @@ from coordinator_core.ops.dispatch_emit import run_close, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SPINE_REL = "state/mise-inventory/run.spine.md"
 INVENTORY_REL = "state/mise-inventory/run.md"

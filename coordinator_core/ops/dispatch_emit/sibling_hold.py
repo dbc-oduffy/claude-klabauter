@@ -160,6 +160,65 @@ def predecessor_closed(root: Any, run_id: str) -> Optional[str]:
     return _implemented_plan(base, halted) or _landed_work(base, run_id, halted)
 
 
+_TERMINAL_AS_OF = "terminal-commit"
+
+
+def _terminal_landing_head(root: Path, run_id: str) -> Optional[str]:
+    """HEAD sha when HEAD's tree carries the run's ``usage.json`` stamped ``as_of: terminal-commit``
+    and no ``halted.json``; None otherwise. In-process object reads, zero spawns."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    try:
+        head = head_sha(root)
+        if not head:
+            return None
+        common = resolve_git_common_dir(root)
+        rec = f"{Path(RECORD_DIR_ROOT).as_posix()}/{run_id}"
+        halted = _blob_at_commit(common, head, f"{rec}/{HALTED_FILE}")
+        usage = _blob_at_commit(common, head, f"{rec}/usage.json")
+        if halted is None or usage is None or usage is ABSENT or halted is not ABSENT:
+            return None
+        obj = read_object(common, usage)
+        usage_doc = json.loads(obj[1].decode("utf-8")) if obj is not None else None
+    except (OSError, ValueError):
+        return None
+    if not isinstance(usage_doc, dict) or usage_doc.get("as_of") != _TERMINAL_AS_OF:
+        return None
+    return head
+
+
+def reconcile_running(root: Any, run_id: str) -> Optional[str]:
+    """Rewrite *run_id*'s ``running`` status as ``landed`` when its terminal commit is on HEAD; return the sha.
+
+    ``None``, with no write, when the status file is absent or not ``running``, the id is unsafe, HEAD
+    carries ``halted.json`` (that run defers to ``predecessor_closed``), or HEAD lacks a
+    ``usage.json`` stamped ``as_of: terminal-commit`` (a checkpoint or abandoned-run reap lands neither).
+    """
+    from coordinator_core.ops._path_guard import safe_id
+
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        return None
+    base = Path(root)
+    own = base / contract.status_rel(run_id)
+    prior = _read_json(own)
+    if prior is None or prior.get("status") != contract.STATUS_RUNNING:
+        return None
+    head = _terminal_landing_head(base, run_id)
+    if head is None:
+        return None
+    from coordinator_core.session import claimed_write
+
+    entry: dict = {"status": contract.STATUS_LANDED, "sha": head, "reconciled_from": contract.STATUS_RUNNING}
+    if isinstance(prior.get("parent_id"), str):
+        entry["parent_id"] = prior["parent_id"]
+    claimed_write.replace_text(own, json.dumps(entry, sort_keys=True) + "\n")
+    return head
+
+
 def supersede_refusal(root: Any, run_id: str, by: str) -> Optional[str]:
     """Refusal text for marking *run_id* superseded by *by*, else None.
 

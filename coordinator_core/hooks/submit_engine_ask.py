@@ -43,6 +43,7 @@ the emitted script. Never denies a Workflow call that does not name the stub.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -154,14 +155,32 @@ def _missing_context(root: Path, paths: list[str]) -> Optional[str]:
     return None
 
 
-def _repo_root(repo_arg: Optional[str], cwd: object) -> Optional[Path]:
+def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
+    """Root for the submission: absolute `repo`, else the session anchor's repo, else payload cwd.
+
+    A relative `repo` joins against the anchor; shell cwd is read only when no anchor resolves.
+    """
     from coordinator_core.git.repo_root import show_toplevel
 
-    base = cwd if isinstance(cwd, str) and cwd else None
-    start = repo_arg
-    if start and base and not Path(start).is_absolute():
-        start = str(Path(base) / start)
-    top = show_toplevel(start or base)
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else None
+    if repo_arg and Path(repo_arg).is_absolute():
+        top = show_toplevel(repo_arg)
+        return Path(top) if top else None
+
+    from coordinator_core.bash_guards._write_bump_applicability import resolve_launch_anchor
+
+    session_id = payload.get("session_id")
+    env = payload.get("env") if isinstance(payload.get("env"), dict) else None
+    anchor = None
+    if isinstance(session_id, str) and session_id:
+        if env and env.get("CLAUDE_PROJECT_DIR"):
+            anchor = resolve_launch_anchor(session_id, cwd, {**os.environ, **env})
+        else:
+            anchor = resolve_launch_anchor(session_id, cwd)
+    base = anchor or cwd
+    start = str(Path(base) / repo_arg) if repo_arg and base else (repo_arg or base)
+    top = show_toplevel(start)
     return Path(top) if top else None
 
 
@@ -257,6 +276,11 @@ def _status_of(root: Path, run_id: str) -> Optional[str]:
     except (OSError, ValueError):
         return None
     status = data.get("status") if isinstance(data, dict) else None
+    if status == "running":
+        from coordinator_core.ops.dispatch_emit.sibling_hold import reconcile_running
+
+        if reconcile_running(root, run_id):
+            return "landed"
     return status if isinstance(status, str) else None
 
 
@@ -448,7 +472,7 @@ def evaluate(
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
 
-    root = _repo_root(repo_arg, payload.get("cwd"))
+    root = _repo_root(repo_arg, payload)
     if root is None:
         where = repo_arg or payload.get("cwd") or "the session cwd"
         return _refuse(f"{where} is in no git repo. Add `repo: \"<abs path>\"` to args.")

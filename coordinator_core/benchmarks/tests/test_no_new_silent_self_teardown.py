@@ -66,11 +66,8 @@ _KNOWN_SELF_TEARDOWN: frozenset[tuple[str, str]] = frozenset({
     ("coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py", "_short_runtime_base"),
     ("coordinator_core/install/sandbox_check.py", "run_all"),
     ("coordinator_core/ops/new_project_scaffold.py", "main"),
-    ("coordinator_core/ops/tests/test_invoke_from_argv.py",
-     "test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd"),
     ("coordinator_core/percolate/engine.py", "mktcache_gate_env"),
     ("coordinator_core/tests/_fixtures.py", "isolated_svc_root_impl"),
-    ("coordinator_core/tests/test_invoke_main.py", "test_none_scoped_outside_git_tree"),
     ("coordinator_core/warm/tests/test_door_read_deadline_posix.py", "runtime_base"),
 })
 

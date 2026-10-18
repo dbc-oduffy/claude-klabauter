@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO = Path(__file__).resolve().parents[3]
 
 _PROBE = """

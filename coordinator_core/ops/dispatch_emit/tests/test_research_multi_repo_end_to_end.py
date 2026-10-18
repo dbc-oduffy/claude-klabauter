@@ -10,6 +10,8 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import pipeline_compose
 from coordinator_core.ops.dispatch_emit import op as op_module
@@ -85,6 +87,8 @@ def _close(repo: Path, reply: dict, scratch: Path) -> dict:
     return asyncio.run(_handler(params, repo / ".git"))
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_research_close_lands_the_comparison(monkeypatch, tmp_path, capsys, close_repo):  # noqa: F811
     _, reply = _emit(monkeypatch, tmp_path / "run", capsys, FIXTURE)
     scratch = tmp_path / "scratch"
@@ -95,6 +99,8 @@ def test_research_close_lands_the_comparison(monkeypatch, tmp_path, capsys, clos
     assert any(p.endswith("repo-compare/comparison.md") for p in tracked)
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_research_close_refuses_without_the_comparison(monkeypatch, tmp_path, capsys, close_repo):  # noqa: F811
     _, reply = _emit(monkeypatch, tmp_path / "run", capsys, FIXTURE)
     scratch = tmp_path / "scratch"

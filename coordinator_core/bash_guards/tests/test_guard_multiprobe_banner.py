@@ -352,7 +352,6 @@ class TestMultiProbeBannerVerdict:
 
 class TestSubagentOutlet:
 
-    @pytest.mark.pending_fix
     def test_subagent_gets_script_outlet_not_python3_dash_c_on_windows(self, monkeypatch):
         # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
@@ -366,7 +365,6 @@ class TestSubagentOutlet:
         assert "\"import os" not in ctx
         assert "'import os" not in ctx
 
-    @pytest.mark.pending_fix
     def test_subagent_gets_script_outlet_not_python3_dash_c_on_posix(self, monkeypatch):
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
         out = guard.check(

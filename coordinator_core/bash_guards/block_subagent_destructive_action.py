@@ -2272,6 +2272,9 @@ def _with_backslashes_restored(remaining: List[str]) -> List[str]:
     for raw_seg in _RAW_SEGMENT_SPLIT_RE.split(_RAW_CMD.get()):
         if "\\" not in raw_seg:
             continue
+        # An over-ceiling segment hangs the tokenizer; keep the shlex form.
+        if _exceeds_tokenizable_ceiling(raw_seg):
+            continue
         try:
             raw = shlex.split(raw_seg, posix=False)
         except ValueError:

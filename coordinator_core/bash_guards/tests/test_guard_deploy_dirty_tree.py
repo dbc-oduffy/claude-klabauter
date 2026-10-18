@@ -2,7 +2,10 @@ import subprocess
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.bash_guards import guard_deploy_dirty_tree as g
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _payload(cmd, cwd, tool="Bash"):
@@ -11,7 +14,7 @@ def _payload(cmd, cwd, tool="Bash"):
 
 @pytest.fixture
 def repo(tmp_path):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     return tmp_path
 
 
@@ -55,10 +58,10 @@ def test_powershell_tool_name_matches(repo):
 
 def test_tracked_modification_denies(repo):
     for k, v in (("user.email", "t@t"), ("user.name", "t")):
-        subprocess.run(["git", "-C", str(repo), "config", k, v], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", k, v], check=True, **no_console_creationflags())
     (repo / "a.txt").write_text("1")
-    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "c"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True, **no_console_creationflags())
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "c"], check=True, **no_console_creationflags())
     assert g.check(_payload("vercel deploy", repo)) is None
     (repo / "a.txt").write_text("2")
     assert g.check(_payload("vercel deploy", repo))
@@ -72,10 +75,11 @@ def test_ignored_files_pass(repo):
     (repo / ".gitignore").write_text("build/\n")
     (repo / "build").mkdir()
     (repo / "build" / "o.js").write_text("x")
-    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], check=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"],
         check=True,
+        **no_console_creationflags(),
     )
     assert g.check(_payload("firebase deploy", repo)) is None
 

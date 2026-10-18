@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.ops import gate_validate_invocable as gvi
 from coordinator_core.workweek_complete.release import merge_rule
 from coordinator_core.workweek_complete.release.contract import GATE_IDS, GateRecord

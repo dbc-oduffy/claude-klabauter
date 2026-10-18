@@ -20,7 +20,7 @@ from coordinator_core.ops.dispatch_emit import dirty_write_set, plan_route
 from coordinator_core.ops.dispatch_emit.sibling_split import WidthOverCapError
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _PLAN = (
     "---\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n"

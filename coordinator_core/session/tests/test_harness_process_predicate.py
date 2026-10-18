@@ -15,10 +15,22 @@ split into C2a/C2b by the EM; C2a covered predicate-consolidation only)
 and § C3 (this chunk — the field fix).
 """
 
+import ast
 import inspect
 import re
+from pathlib import Path
 
 from coordinator_core.session import core
+
+
+def _written_source(name):
+    """Source of top-level function ``name`` as written in core.py, immune to
+    a run-time rebind of the module attribute by another test."""
+    text = Path(core.__file__).read_text(encoding="utf-8")
+    for node in ast.parse(text).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return ast.get_source_segment(text, node)
+    raise AssertionError(f"{name} not defined at top level of core.py")
 
 
 class _FakeProcess:
@@ -70,13 +82,13 @@ def test_predicate_exact_match_semantics():
 
 
 def test_env_resolve_breadcrumb_vocabulary_unchanged():
-    source = inspect.getsource(core._resolve_claude_pid_from_env)
+    source = _written_source("_resolve_claude_pid_from_env")
     assert '"env-miss:name-mismatch"' in source
     assert "_is_harness_process(comm)" in source
 
 
 def test_windows_ancestor_walk_routes_through_predicate():
-    source = inspect.getsource(core._find_windows_claude_ancestor)
+    source = _written_source("_find_windows_claude_ancestor")
     assert "_is_harness_process(comm)" in source
     assert 'comm == "claude"' not in source
 
@@ -158,12 +170,8 @@ def test_fallback_name_exception_propagates_to_caller():
 def test_all_three_call_sites_route_through_harness_process_comm():
     """AC2 still holds: derivation is centralized in one helper, not
     reintroduced ad hoc at each site."""
-    for fn in (
-        core._find_windows_claude_ancestor,
-        core._resolve_claude_pid_from_env,
-        core.init,
-    ):
-        source = inspect.getsource(fn)
+    for name in ("_find_windows_claude_ancestor", "_resolve_claude_pid_from_env", "init"):
+        source = _written_source(name)
         assert "_harness_process_comm(" in source, (
-            f"{fn.__name__} does not route through _harness_process_comm"
+            f"{name} does not route through _harness_process_comm"
         )

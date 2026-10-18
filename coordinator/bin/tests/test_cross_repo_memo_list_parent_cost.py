@@ -35,6 +35,7 @@ _PROBE = textwrap.dedent(
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_list_makes_no_git_spawn_and_defers_unused_imports(tmp_path):
     (tmp_path / ".git").mkdir()
     proc = subprocess.run(

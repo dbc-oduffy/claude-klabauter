@@ -26,6 +26,7 @@ from typing import Optional
 from coordinator_core import _settings_home
 from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.ops.dispatch_emit.ask_contract import NO_PLAN_HAND_OFF_FLAG
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 SKIP_MESSAGE = "size skipped: a superseded predecessor already carries route-to-plan"
 
@@ -86,7 +87,7 @@ def _run_tool(argv: list[str], cwd: Path) -> int:
     return subprocess.run(
         argv,
         cwd=str(cwd),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **no_console_passthrough_kwargs(),
     ).returncode
 
 

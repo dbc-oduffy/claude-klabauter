@@ -1255,7 +1255,7 @@ def test_dirty_unclaimed_probe_treats_bracket_paths_literally(tmp_path):
     from coordinator_core.ops.session import scope_report
 
     rel = "src/app/(ddct)/ddct/e/[type]/[id]/page.tsx"
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     f = tmp_path / rel
     f.parent.mkdir(parents=True)
     f.write_text("x")
