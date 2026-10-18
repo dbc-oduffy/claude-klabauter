@@ -19,7 +19,7 @@
     ".gitignore": "45d77418c2e748ad3ef8e8392ee093acdd6fbacc",
     ".percolate-ignore": "8fa44ea6731e7674bb7600b1dc72e1cbbcdf79e4",
     "AGENTS.md": "652f1bfc85d6f069b8627460be2aee76a7a530fb",
-    "CHANGELOG.md": "6d7d3f41e988bd50761c7180a27fa53ced33451f",
+    "CHANGELOG.md": "2064627df2ebd5c90261a75e15fd875404997a1b",
     "CODE_OF_CONDUCT.md": "f51c850da3cfee5660264649bd0eeba166dabb1c",
     "COMMERCIAL.md": "f095cd8a91bc97b03bf3d5ae823a8c65e782332b",
     "CONTRIBUTING.md": "1a6336187077e622aa0ea6aa944c1a4bb43baa29",
@@ -2090,7 +2090,7 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "6f26e1e180c89b7a6347b652e9bc67a38ae92824",
+    "coordinator_core/_engine_published_at": "96e86f8b7cc602c3d2ec473278804356800f6721",
     "coordinator_core/_engine_stamp": "d64af9e15373d236f4d21abd2bbfd41522f28485",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
@@ -8303,5 +8303,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "ae59cf1bbe51bcc0d72b7a34e81de2bf34a75ca9"
+  "source_head": "ba35589541832bd0486405f67faee2a8250a25ef"
 }

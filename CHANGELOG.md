@@ -61,6 +61,14 @@ watch can be run as a single blocking wait.
 - **`reap_abandoned_runs` ends a tokenless run** that has been quiet for an hour, and an
   ownerless run token reads as ended past the unlaunched grace.
 - **`review_stamp` judge-only mint** writes the judged register rows back to the sizing.
+- **`plan.tasks.mutate` edits `depends_on` edges.** It adds and removes them, validates the
+  target and refuses a cycle.
+- **Checkpoint stamping.** A checkpoint commit's message is parsed and its open rows are coded
+  landed at its sha, so a halted run's resume credits its own checkpoints.
+- **Per-ask `route_preference` and `em_rationale`** are accepted on submit and persisted
+  through emit and compose as a strong prior for sizing.
+- **The price table is published as versioned JSON**, kept equal to `price_table.py` by a drift
+  test.
 
 ### Changed
 - **terminal_commit's worktree snapshot runs in process.** It no longer spawns `git status`,
@@ -108,6 +116,16 @@ watch can be run as a single blocking wait.
   sizing-object 1.42.0.
 - **`commit_paths` refuses a path** whose assembled blob or read bytes differ from the
   caller's declaration.
+- **Deleted under the 500ms kill bar:** the `roadmap.plan_gate` op (DR-344). It returns
+  rebuilt over `gate_v2`.
+- **The terminal commit carry excludes paths claimed by live sibling runs**, and never carries
+  a session's `.git/` scratch or a gitignored scratch file.
+- **Resume is ledger-aware.** An all-landed plan with rulable rows resumes as a ledger resume,
+  an EM-discharged row counts landed, and a running run whose terminal commit is on HEAD reads
+  landed.
+- **`engine.drift`** tells a floor absent from a full clone apart from a shallow clone or a git
+  error.
+- **Ceremony receipts** clip each section to 3 lines of at most 160 characters.
 
 ### Fixed
 - **terminal_commit stages what `git add` would.** CRLF content on an `autocrlf=true` checkout
@@ -154,6 +172,17 @@ watch can be run as a single blocking wait.
   cache.
 - **A null `run_base_sha`** is dropped at assembly rather than stamped into plans.
 - **A no-commit plan stamp** ships its baton on the product sha.
+- **Windows liveness probes no longer send Ctrl+C.** `os.kill(pid, 0)` is `CTRL_C_EVENT` on
+  Windows; `cloud_setup` and `backfill_initiative_fk` were killing console process groups
+  (exit 0xC000013A) instead of testing a pid.
+- **Warm-engine dispatch keys are unique per call**: the mint nanoseconds stay the key's last
+  field.
+- **`sizing.supersede` accepts a draft**, so an intake-minted draft whose work landed elsewhere
+  can close.
+- **A relayed stage reply's error note** is no longer read as a stage refusal.
+- **`residue_gate` ignores gitignored never-commit scratch.**
+- **A publish keeps a removal** that the row's allowlist now withholds.
+- **Install** retires only `reap-claims-for-repos`, and on Windows reaps bare leftovers.
 
 ## [0.3.0] — 2026-10-01
 
